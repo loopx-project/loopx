@@ -94,6 +94,7 @@ export function planQueuedChatSteering(input: JsonObject): QueueSteeringPlan {
   const held = reservation(turn.reservation);
   const reject = (code: string): QueueSteeringPlan => ({action: "reject", error_code: code});
   if (session.status === "closed") return reject("session_closed");
+  if (session.web_origin_only === true && turn.origin !== "web") return reject("queue_steering_source_unavailable");
   if (turn.mutation != null) return reject("queue_mutation_in_progress");
   if (held?.status === "pending" &&
       (held.client_ingress_id !== id || held.target_turn_id !== target)) {

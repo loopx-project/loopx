@@ -26,7 +26,7 @@
       "consumer_sites": [
         "loopx/attached_session.py::claim_attached_agent_turn",
         "loopx/attached_session.py::complete_attached_agent_turn",
-        "loopx/chat_runtime.py::ChatRuntimeController.resume_session"
+        "loopx/chat/session_open.py::ChatSessionLifecycleMixin.resume_session"
       ],
       "effect_boundary": "loopx/control_plane/goals/chat_session_lifecycle.ts::decideChatSessionLifecycle",
       "authority_role": "runtime_session_binding",

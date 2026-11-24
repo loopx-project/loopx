@@ -600,8 +600,6 @@ def _configure_autonomous_replan_fixture(
     project: Path,
     runtime: Path,
     registry_path: Path,
-    *,
-    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     state_path.write_text(
@@ -626,8 +624,6 @@ def _configure_autonomous_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
-    if stride_strategy is not None:
-        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -671,11 +667,41 @@ def _configure_autonomous_replan_fixture(
     )
 
 
+def _write_dead_monitor_replan_runs(runtime: Path) -> None:
+    runs_dir = runtime / "goals" / GOAL_ID / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    monitor_runs = []
+    for offset in range(6):
+        row = {
+            "generated_at": f"2026-01-01T02:{offset:02d}:00+00:00",
+            "goal_id": GOAL_ID,
+            "agent_id": AGENT_ID,
+            "classification": "quota_monitor_poll",
+            "delivery_outcome": "surface_only",
+            "todo_id": "todo_replan_monitor",
+            "target_key": "replan-settlement-fixture",
+            "monitor_target": {
+                "schema_version": "quota_monitor_target_v0",
+                "target_id": "replan-settlement-fixture",
+                "monitor_mode": "due_monitor_observed_without_material_transition",
+                "effective_action": "normal_run",
+                "agent_id": AGENT_ID,
+            },
+        }
+        jpath = runs_dir / f"monitor-{offset}.json"
+        mpath = runs_dir / f"monitor-{offset}.md"
+        jpath.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        mpath.write_text("# Monitor fixture\n", encoding="utf-8")
+        monitor_runs.append({**row, "json_path": str(jpath), "markdown_path": str(mpath)})
+    (runs_dir / "index.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in monitor_runs),
+        encoding="utf-8",
+    )
+
+
 def _configure_selected_todo_replan_fixture(
     project: Path,
     registry_path: Path,
-    *,
-    stride_strategy: str | None = None,
 ) -> None:
     state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
     todo_rows = "\n".join(
@@ -706,8 +732,6 @@ def _configure_selected_todo_replan_fixture(
     )
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["status"] = "active"
-    if stride_strategy is not None:
-        registry["goals"][0].setdefault("execution_profile", {})["stride_strategy"] = stride_strategy
     registry_path.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -810,7 +834,7 @@ def test_same_explicit_todo_retry_preserves_original_identity(
     """Retrying the retained planning choice reuses the admitted replan."""
 
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-same-explicit-todo-replan-retry"
@@ -2641,12 +2665,6 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         _initialize_git_checkout(project)
         todo_id = SELECTED_REPLAN_TODO_ID
     _initialize_fixture_authority(project, runtime, provider=provider)
-    if writeback_kind == "replan":
-        # This replay fixture supplies the ordinary typed replan delta. Keep
-        # its strategy explicit; Stride decision followthrough is tested separately.
-        rc, configured = _run_cli(registry, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                                  "--execution-stride-strategy", "off", "--execute")
-        assert rc == 0, configured
     turn_id = "turn-same-todo-writeback"
     host_args = ("--codex-app",) if host == "codex_app" else ("--runtime-profile", "generic_cli")
     guard_args = (
@@ -2669,7 +2687,7 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
         assert guard["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = ("--agent-id", AGENT_ID, "--todo-id", todo_id, "--turn-instance-id", turn_id)
     vision = project / "vision.json"
-    vision.write_text(json.dumps({
+    vision_payload: dict[str, Any] = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
         "vision_patch": {"acceptance_summary": "Verified fixture artifact; original work remains open."},
@@ -2681,7 +2699,10 @@ def test_same_todo_writeback_reentry_only_settles_original_turn(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
-    }), encoding="utf-8")
+    }
+    if writeback_kind == "replan":
+        vision_payload["stride_decision"] = guard["replan_action_packet"]["stride_control"]["minimal_example"]
+    vision.write_text(json.dumps(vision_payload), encoding="utf-8")
     refresh_args = (
         "refresh-state", "--goal-id", GOAL_ID, *identity,
         "--classification", "verified_fixture_work", "--delivery-batch-scale", "single_surface",
@@ -5109,13 +5130,19 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     )
 
 
-@pytest.mark.parametrize("profile", ["codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"])
-def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, profile: str) -> None:
+@pytest.mark.parametrize(
+    "profile",
+    [None, "generic_cli", "codex_app_ssh_goal", "codex_cli", "ark_managed_agent_goal"],
+)
+def test_unbound_visible_goal_selection_binds_the_chosen_todo(
+    tmp_path: Path, profile: str | None,
+) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     _initialize_fixture_authority(project, runtime)
+    profile_args = ("--runtime-profile", profile) if profile else ()
     rc, preview = _run_cli(
-        registry_path, runtime, "quota", "should-run", "--runtime-profile", profile,
+        registry_path, runtime, "quota", "should-run", *profile_args,
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
     )
     assert rc == 0, preview
@@ -5135,9 +5162,131 @@ def test_unbound_visible_goal_selection_binds_the_chosen_todo(tmp_path: Path, pr
     assert bound["interaction_contract"]["agent_channel"]["delivery_allowed"] is True
     identity = bound["heartbeat_receipt"]["settlement_identity"]
     assert identity["todo_id"] == ALTERNATIVE_TODO_ID
-    assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
+    if profile is None:
+        assert "settlement_plan" not in bound["interaction_contract"]["cli_channel"]
+    else:
+        assert bound["interaction_contract"]["cli_channel"]["settlement_plan"]["identity"] == identity
     assert _heartbeat_receipt_count(runtime, identity["turn_instance_id"]) == 1
     assert _spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_visible_goal_selection_before_hard_lease_preserves_spend_source(
+    tmp_path: Path, provider: str,
+) -> None:
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    _configure_selectable_alternative(project)
+    _initialize_fixture_authority(project, runtime, handoff_mode="hard_lease", provider=provider)
+
+    preview_rc, preview = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+    )
+    assert preview_rc == 0, preview
+    selection = preview["interaction_contract"]["cli_channel"]["selection_command"]
+    command = (
+        selection["route_prefix"] + " " + selection["command_args_template"]
+    ).replace("{todo_id}", ALTERNATIVE_TODO_ID)
+
+    selected_rc, selected = _run_generated_cli(command, registry_path=registry_path)
+    assert selected_rc == 0, selected
+    assert selected["execution_preparation"]["state"] == "claim_required"
+    identity = selected["heartbeat_receipt"]["settlement_identity"]
+    turn_instance_id = identity["turn_instance_id"]
+    receipt_events = _heartbeat_receipt_events(runtime, turn_instance_id)
+    assert receipt_events[-1]["details"]["quota_spend_source"] == "visible-goal"
+
+    claim_rc, claim = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "claim",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--claimed-by",
+        AGENT_ID,
+    )
+    assert claim_rc == 0 and claim["execution_managed"] is True, claim
+    ready_rc, ready = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "codex_app_ssh_goal",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+    assert ready_rc == 0, ready
+    assert ready["execution_preparation"]["state"] == "ready"
+    lease_proof = ready["execution_preparation"]["lease_proof"]
+
+    refresh_args = (
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--todo-id",
+        ALTERNATIVE_TODO_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+        "--classification",
+        "visible_goal_hard_lease_progress",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--delivery-boundary",
+        "in_flight_continuation",
+        "--delivery-workspace-path",
+        str(project),
+        "--progress-result-class",
+        "advanced",
+        "--progress-work-item-id",
+        ALTERNATIVE_TODO_ID,
+        "--progress-evidence-id",
+        "evidence:visible-goal-hard-lease",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+    )
+    before = rollout_event_log_path(runtime, GOAL_ID).read_bytes()
+    refused_rc, refused = _run_cli(registry_path, runtime, *refresh_args, cwd=project)
+    assert refused_rc == 1, refused
+    assert refused["error_code"] == "refresh_task_lease_unavailable"
+    assert refused["appended"] is False
+    assert refused["settlement_recovery"]["settlement_identity"] == identity
+    assert rollout_event_log_path(runtime, GOAL_ID).read_bytes() == before
+
+    # Manual writeback carries the proof returned by this same guard; it must
+    # not borrow a lease merely because the current Todo has an active holder.
+    refresh_rc, refresh = _run_cli(
+        registry_path, runtime, *refresh_args,
+        "--task-lease-idempotency-key", str(lease_proof["idempotency_key"]),
+        "--task-lease-expected-version", str(lease_proof["expected_version"]),
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["settlement_progress"]["quota_spend_source"] == "visible-goal"
+    assert "--source visible-goal" in refresh["settlement_owed"]["command"]
 
 
 @pytest.mark.parametrize("profile", ["generic_cli", "outer_controller", "codex_cli"])
@@ -6159,8 +6308,6 @@ def test_selection_added_after_pending_guard_reports_final_boundary(
         AGENT_ID,
         "--text",
         "Validate the new canonical task",
-        "--task-repository",
-        "git:github.com/example/read-only-settlement-fixture",
         "--required-write-scope",
         "loopx/**",
     )
@@ -6838,11 +6985,10 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
+    if not write_vision:
+        # Use dead_monitor_repeat (non-stride trigger) so the missing-vision
+        # branch still verifies vision_checkpoint_missing after settlement.
+        _write_dead_monitor_replan_runs(runtime)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["control_plane"] = {
         "periodic_report": {
@@ -6933,8 +7079,22 @@ def test_todoless_autonomous_replan_settles_quota_refresh_spend_chain(
                 "retained": ["The existing monitor and its due date."],
                 "evidence_refs": ["evidence-new"],
             },
+            "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
         }), encoding="utf-8")
-        refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
+        if "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>" in refresh_command:
+            refresh_command = refresh_command.replace(
+                "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>",
+                shlex.quote(str(vision_path)),
+            )
+            refresh_command += (
+                " --progress-result-class advanced"
+                " --progress-surface-id surface-new"
+                " --progress-hypothesis-id hypothesis-new"
+                " --progress-probe-kind probe-new"
+                " --progress-evidence-id evidence-new"
+            )
+        else:
+            refresh_command += f" --agent-vision-json {shlex.quote(str(vision_path))}"
     refresh_rc, refresh = _run_cli(
         registry_path,
         runtime,
@@ -7084,11 +7244,6 @@ def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, m
         isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
     _initialize_fixture_authority(project, runtime, provider=provider)
     stamp = "2026-01-01T00:00:00+00:00"
     prior = {
@@ -7121,9 +7276,11 @@ def test_blocked_replan_keeps_material_checkpoint_in_native_readback(tmp_path, m
         "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
         "vision_patch": {"vision_summary": "Continue after the source is available.",
                          "acceptance_summary": "The source is still unavailable; the outcome remains open."},
-        "path_delta": {"outcome": "wait", "prior_assumption": "The source may be available.",
+        "path_delta": {"outcome": "stop", "prior_assumption": "The source may be available.",
                        "observed_reality": "An independent read confirmed the source is unavailable.",
-                       "retained": ["Keep the outcome open."], "evidence_refs": ["evidence:source-unavailable"]},
+                       "stopped": ["Stop probing until the source is available."],
+                       "evidence_refs": ["evidence:source-unavailable"]},
+        "stride_decision": guard["replan_action_packet"]["stride_control"]["minimal_example"],
     }))
     rc, closed = _run_cli(
         registry_path, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -7165,11 +7322,9 @@ def test_todoless_blocked_replan_settles_read_only_external_evidence_without_wor
 ) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
     _configure_autonomous_replan_fixture(project, runtime, registry_path)
-    # This case owns ordinary settlement/recovery, independently of Stride.
-    # Enabled decision adoption has separate real native coverage.
-    rc, configured = _run_cli(registry_path, runtime, "configure-goal", "--goal-id", GOAL_ID,
-                              "--execution-stride-strategy", "off", "--execute")
-    assert rc == 0, configured
+    # Use a non-stride Todo-less obligation so this blocked writeback without
+    # agent_vision proceeds to the explicit spend-slot workspace-guard check.
+    _write_dead_monitor_replan_runs(runtime)
     _initialize_git_checkout(project)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
     registry["goals"][0]["coordination"]["registered_agents"].append(
@@ -7435,7 +7590,7 @@ def test_autonomous_replan_semantic_delta_keeps_accountable_receipt_chain(
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry_path = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry_path, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry_path)
     _initialize_git_checkout(project)
     turn_instance_id = "turn-autonomous-replan-semantic-1"
 
@@ -7830,10 +7985,9 @@ def test_runtime_capability_reentry_preserves_receipt_bound_autonomous_replan(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("stride", [False, True])
 @pytest.mark.parametrize("vision_gap", [False, True])
 def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, stride: bool, vision_gap: bool,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, vision_gap: bool,
 ) -> None:
     """Refreshing cumulative requirements must not rebind an admitted review."""
     if provider == "sqlite":
@@ -7862,9 +8016,6 @@ def test_replan_reentry_after_outcome_work_refinement_keeps_original_turn(
             "--agent-id", AGENT_ID, "--document", str(path), "--operation-id", operation,
             "--expected-provider-revision", current["provider_revision"], "--execute")
 
-    if stride:
-        call("configure-goal", "--goal-id", GOAL_ID,
-            "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
     refine({"outcome_id": "delivery", "owner_agent_id": AGENT_ID,
         "objective": "Deliver the requested artifact",
         "requirements": [{"id": "original", "description": "Retain the original evidence"}],
@@ -9285,7 +9436,7 @@ def test_exact_later_ack_executes_original_todo_settlement_commands(
     tmp_path: Path, provider: str, legacy_turn_ref: bool,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-todo-settlement"
@@ -9363,7 +9514,7 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
     tmp_path: Path, provider: str, order: str,
 ) -> None:
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-same-second"
@@ -9387,6 +9538,7 @@ def test_same_second_historical_ack_requires_writeback_after_admission(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": later_admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9486,7 +9638,7 @@ def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
     acceptance depends on the alias owner's own refresh following admission.
     """
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider="file")
     original_turn = "turn-historical-same-second"
@@ -9510,6 +9662,7 @@ def test_retired_instance_writeback_cannot_drop_same_second_historical_ack(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": later_admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9593,7 +9746,7 @@ def test_only_retired_instance_ack_keeps_the_original_replan(
     instance's later confirmation.
     """
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-retired-ack-only"
@@ -9650,6 +9803,7 @@ def test_only_retired_instance_ack_keeps_the_original_replan(
             "retained": ["Original requirements and the existing Todo."],
             "evidence_refs": ["evidence:fixture-check"],
         },
+        "stride_decision": admitted["replan_action_packet"]["stride_control"]["minimal_example"],
     }), encoding="utf-8")
     refresh_rc, refreshed = _run_cli(
         registry, runtime, "refresh-state", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -9796,7 +9950,7 @@ def test_same_turn_receipt_upgrade_keeps_historical_ack_admission(
     """
 
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_git_checkout(project)
     _initialize_fixture_authority(project, runtime, provider=provider)
     original_turn = "turn-historical-ack-after-upgrade"
@@ -9889,3 +10043,253 @@ def test_same_turn_receipt_upgrade_keeps_historical_ack_admission(
     rc, spent = _run_generated_cli(spend, registry_path=registry)
     assert rc == 0 and spent["ok"] is True, spent
     assert _spend_run_count(runtime) == before + 1
+
+
+def test_required_write_scopes_preserves_causality_and_workspace_proof_end_to_end(
+    tmp_path: Path,
+) -> None:
+    """Default-off selected_todo display must still keep workspace causality exact."""
+
+    # Case 1: required_write_scopes + same_agent_non_delivery must stay "required"
+    # end-to-end across should-run -> refresh-state -> spend-slot.
+    case1_root = tmp_path / "case1"
+    project, runtime, registry_path = _write_fixture(case1_root)
+    reg_obj = json.loads(registry_path.read_text(encoding="utf-8"))
+    reg_obj["goals"][0]["coordination"]["write_scope"] = ["**"]
+    registry_path.write_text(json.dumps(reg_obj, indent=2) + "\n", encoding="utf-8")
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate -->",
+            "action_kind=validate continuation_policy=same_agent_non_delivery "
+            "required_write_scopes=docs/** -->",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project, runtime)
+
+    guard_rc, guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+        cwd=project,
+    )
+    assert guard_rc == 0, guard
+    assert guard["effective_action"] == "normal_run", guard
+    assert "required_write_scopes" not in guard["selected_todo"]
+    assert guard["delivery_workspace_isolation"] == {
+        "identity_kind": "local_goal",
+        "peer_independent_worktree_required": False,
+    }
+    causality = guard["heartbeat_receipt"]["delivery_workspace_causality"]
+    assert causality["requirement"] == "required"
+    assert causality["reason"] == "declared_repository_or_write_contract"
+    turn_instance_id = guard["heartbeat_receipt"]["settlement_identity"]["turn_instance_id"]
+    binding = (
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        turn_instance_id,
+    )
+
+    complete_rc, complete = _run_cli(
+        registry_path,
+        runtime,
+        "todo",
+        "complete",
+        "--goal-id",
+        GOAL_ID,
+        *binding,
+        "--claimed-by",
+        AGENT_ID,
+        "--evidence",
+        "docs updated",
+        "--next-agent-todo",
+        "Continue after docs validation.",
+        "--next-claimed-by",
+        AGENT_ID,
+        "--next-action-kind",
+        "validate",
+    )
+    assert complete_rc == 0, complete
+
+    outside = case1_root / "outside"
+    outside.mkdir()
+    bad_refresh_rc, bad_refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "docs_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--delivery-workspace-path",
+        str(outside),
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=outside,
+    )
+    assert bad_refresh_rc != 0, bad_refresh
+
+    refresh_rc, refresh = _run_cli(
+        registry_path,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "docs_validated",
+        "--delivery-batch-scale",
+        "single_surface",
+        "--delivery-outcome",
+        "outcome_progress",
+        *binding,
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        cwd=project,
+    )
+    assert refresh_rc == 0, refresh
+    assert refresh["delivery_workspace"]["identity_kind"] == "local_goal"
+    assert refresh["delivery_workspace_causality"]["requirement"] == "required"
+
+    spend_rc, spend = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "spend-slot",
+        "--goal-id",
+        GOAL_ID,
+        "--slots",
+        "1",
+        "--source",
+        "heartbeat",
+        "--execute",
+        *binding,
+        cwd=project,
+    )
+    assert spend_rc == 0, spend
+    assert spend["delivery_workspace_validated"] is True
+    assert spend["delivery_workspace_causality"]["requirement"] == "required"
+    assert spend["delivery_workspace_causality"]["reason"] == "declared_repository_or_write_contract"
+
+    # Case 2: required_write_scopes alone (without task_repository or continuation_policy)
+    # must stay "required", never degrading to "unknown".
+    case2_root = tmp_path / "case2"
+    project2, runtime2, registry_path2 = _write_fixture(case2_root)
+    reg2_obj = json.loads(registry_path2.read_text(encoding="utf-8"))
+    reg2_obj["goals"][0]["coordination"]["write_scope"] = ["**"]
+    registry_path2.write_text(json.dumps(reg2_obj, indent=2) + "\n", encoding="utf-8")
+    state_path2 = project2 / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path2.write_text(
+        state_path2.read_text(encoding="utf-8").replace(
+            "action_kind=validate -->",
+            "action_kind=validate required_write_scopes=src/** -->",
+        ),
+        encoding="utf-8",
+    )
+    _initialize_fixture_authority(project2, runtime2)
+    guard2_rc, guard2 = _run_cli(
+        registry_path2,
+        runtime2,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+        cwd=project2,
+    )
+    assert guard2_rc == 0, guard2
+    assert "required_write_scopes" not in guard2["selected_todo"]
+    causality2 = guard2["heartbeat_receipt"]["delivery_workspace_causality"]
+    assert causality2["requirement"] == "required"
+    assert causality2["reason"] == "declared_repository_or_write_contract"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_required_write_scopes_blocks_canonical_git_checkout_on_file_and_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry_path = _write_fixture(tmp_path)
+    subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(project), "config", "user.email", "a@b.c"], check=True)
+    subprocess.run(["git", "-C", str(project), "config", "user.name", "Tester"], check=True)
+    subprocess.run(
+        ["git", "-C", str(project), "remote", "add", "origin", "https://github.com/example/repo.git"],
+        check=True,
+    )
+    reg_obj = json.loads(registry_path.read_text(encoding="utf-8"))
+    reg_obj["goals"][0]["coordination"]["registered_agents"] = [AGENT_ID, "peer-agent"]
+    reg_obj["goals"][0]["coordination"]["write_scope"] = ["**"]
+    registry_path.write_text(json.dumps(reg_obj, indent=2) + "\n", encoding="utf-8")
+    state_path = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+    state_path.write_text(
+        state_path.read_text(encoding="utf-8").replace(
+            "action_kind=validate -->",
+            "action_kind=validate required_write_scopes=docs/** -->",
+        ),
+        encoding="utf-8",
+    )
+    (project / ".gitignore").write_text(".loopx/\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(project), "commit", "-q", "-m", "init"], check=True)
+    worktree = tmp_path / "peer-worktree"
+    subprocess.run(["git", "-C", str(project), "worktree", "add", "-q", "-b", "peer-branch", str(worktree)], check=True)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+
+    canon_rc, canon = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        cwd=project,
+    )
+    assert canon_rc == 0, canon
+    assert canon["effective_action"] == "agent_workspace_repair", canon
+    assert canon["normal_delivery_allowed"] is False, canon
+    assert canon["workspace_guard"]["blocks_delivery"] is True, canon
+    assert canon["delivery_workspace_isolation"]["peer_independent_worktree_required"] is True, canon
+
+    wt_rc, wt = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+        cwd=worktree,
+    )
+    assert wt_rc == 0, wt
+    assert wt["effective_action"] == "normal_run", wt
+    assert wt["normal_delivery_allowed"] is True, wt
+    assert wt.get("workspace_guard") is None, wt
+    assert "required_write_scopes" not in wt["selected_todo"]

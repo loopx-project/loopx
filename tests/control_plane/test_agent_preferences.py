@@ -212,12 +212,13 @@ def test_invalid_requests_and_corrupt_storage_do_not_become_empty_memory(tmp_pat
     assert authority["interaction_contract"]["agent_channel"]["required_reads"] == []
     prompt = render_prompt(authority)
     rendered = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\n", 1)[0])
-    assert rendered["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["unavailable_context"] == unavailable
+    assert rendered["schema_version"] == "loopx_turn_model_context_v0"
+    assert rendered["task_context"]["interaction_contract"]["agent_channel"]["work_context"]["unavailable_context"] == unavailable
     assert "work_context" in prompt and "independent work retains existing authority" in prompt
     assert "Use a reviewer." not in prompt and "{broken" not in prompt
-    rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope, "--turn-envelope")
+    rc, quota_envelope = _run_cli(registry, runtime, "quota", "should-run", *scope)
     assert rc == 0, quota_envelope
-    assert quota_envelope["contract_capsule"]["unavailable_context"] == unavailable
+    assert quota_envelope["interaction_contract"]["agent_channel"]["work_context"]["unavailable_context"] == unavailable
     changed = deepcopy(failed_plan)
     del changed["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]["unavailable_context"]
     with pytest.raises(ValueError, match="complete Turn contract rejected"):

@@ -97,8 +97,7 @@ def test_rendered_task_bodies_keep_execution_obligation_authority() -> None:
 def test_codex_app_quiet_completion_is_host_control_not_chat(tmp_path) -> None:
     variants = [{mode: True} for mode in ("full", "compact", "brief", "thin")]
     variants.append({
-        "thin": True, "turn_envelope": True,
-        "decision_output_root": tmp_path, "turn_instance_id": "fixture-quiet-turn",
+        "thin": True, "decision_output_root": tmp_path, "turn_instance_id": "fixture-quiet-turn",
     })
     for variant in variants:
         body = build_heartbeat_prompt(
@@ -129,10 +128,9 @@ def test_all_heartbeat_modes_scope_no_spend_to_observation() -> None:
 
 def test_todo_closeout_does_not_invent_successors_or_skip_turn_settlement(tmp_path) -> None:
     # A completed Todo and an external wait are distinct from Goal termination.
-    # Even the captured-envelope carrier must defer to the admitted current plan.
+    # The captured thin prompt also defers to the admitted current plan.
     variants = [{mode: True} for mode in ("full", "compact", "brief", "thin")]
-    variants.append({"thin": True, "turn_envelope": True,
-                     "decision_output_root": tmp_path,
+    variants.append({"thin": True, "decision_output_root": tmp_path,
                      "turn_instance_id": "fixture-closeout-turn"})
     for variant in variants:
         body = build_heartbeat_prompt(

@@ -283,12 +283,13 @@ function receiptEffectIds(payload: Record<string, unknown>): string[] {
 
 function executablePlanArgs(
   steps: readonly Record<string, unknown>[],
-  kind: 'durable_writeback' | 'quota_spend',
+  kind: 'durable_writeback',
   replacements: Readonly<Record<string, string>> = {},
 ): string[] {
   const command = String(
     steps.find(step => step.kind === kind)?.command_template ?? '',
   )
+  expect(command).not.toBe('')
   const tokens = command.match(/'[^']*'|"[^"]*"|\S+/gu) ?? []
   expect(tokens.shift()).toBe('loopx')
   const args = tokens.map(token => replacements[token] ?? token.replace(/^(['"])(.*)\1$/u, '$2'))
@@ -522,6 +523,7 @@ describe('DSH admission-to-closeout integration', () => {
     expect(heartbeatReceipt.turn_instance_id).toBe(turnInstanceId)
     const cliChannel = record(record(guard.payload.interaction_contract).cli_channel)
     const rawPlan = record(cliChannel.settlement_plan)
+    expect(rawPlan.schema_version).toBe('quota_settlement_plan_v2')
     const identity = record(rawPlan.identity)
     const replayChannel = record(record(guardReplay.payload.interaction_contract).cli_channel)
     expect(record(record(replayChannel.settlement_plan).identity)).toEqual(identity)
@@ -530,16 +532,15 @@ describe('DSH admission-to-closeout integration', () => {
     expect(identity.todo_id).toBe(todoId)
     expect(JSON.stringify(rawPlan)).not.toContain('${LOOPX_TURN:?}')
     const steps = array(rawPlan.ordered_steps).map(record)
-    const writebackTemplate = String(
-      steps.find(step => step.kind === 'durable_writeback')?.command_template,
-    )
-    const spendTemplate = String(
-      steps.find(step => step.kind === 'quota_spend')?.command_template,
-    )
-    for (const command of [writebackTemplate, spendTemplate]) {
-      expect(command).toContain(`--turn-instance-id ${turnInstanceId}`)
-      expect(command).toContain(`--todo-id ${todoId}`)
-    }
+    const writebackStep = steps.find(step => step.kind === 'durable_writeback')
+    const spendStep = steps.find(step => step.kind === 'quota_spend')
+    const writebackTemplate = String(writebackStep?.command_template)
+    expect(writebackStep?.owner).toBe('agent')
+    expect(writebackTemplate).toContain(`--turn-instance-id ${turnInstanceId}`)
+    expect(writebackTemplate).toContain(`--todo-id ${todoId}`)
+    expect(writebackTemplate).toContain('--settle-turn')
+    expect(spendStep?.owner).toBe('runtime')
+    expect(spendStep?.command_template).toBeUndefined()
 
     const writeback = await runCli(testFixture, [
       ...executablePlanArgs(steps, 'durable_writeback', {
@@ -552,15 +553,25 @@ describe('DSH admission-to-closeout integration', () => {
     ])
     expect(writeback.exitCode, JSON.stringify(writeback.payload)).toBe(0)
     expect(new Set(receiptEffectIds(writeback.payload))).toEqual(new Set([effectId]))
+    expect(
+      array(record(writeback.payload.settlement_result).receipts)
+        .map(receipt => String(record(receipt).step_kind)),
+    ).toEqual(['validation', 'durable_writeback', 'quota_spend'])
 
-    const spendArgs = executablePlanArgs(steps, 'quota_spend')
-    const spend = await runCli(testFixture, spendArgs)
-    const spendReplay = await runCli(testFixture, spendArgs)
-    expect(spend.exitCode).toBe(0)
-    expect(spendReplay.exitCode).toBe(0)
+    const spendReplay = await runCli(testFixture, [
+      'quota', 'spend-slot',
+      '--goal-id', goalId,
+      '--slots', '1',
+      '--source', 'heartbeat',
+      '--execute',
+      '--todo-id', todoId,
+      '--agent-id', agentId,
+      '--turn-instance-id', turnInstanceId,
+    ])
+    expect(spendReplay.exitCode, JSON.stringify(spendReplay.payload)).toBe(0)
     expect(spendReplay.payload.idempotent_replay).toBe(true)
     expect(spendReplay.payload.appended).toBe(false)
-    expect(new Set(receiptEffectIds(spend.payload))).toEqual(new Set([effectId]))
+    expect(new Set(receiptEffectIds(spendReplay.payload))).toEqual(new Set([effectId]))
 
     const closeout = await runCli(testFixture, [
       'todo', 'complete',

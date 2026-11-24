@@ -20,7 +20,11 @@ from ..control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_view,
 )
 from ..file_lock import LockAcquireTimeoutError
-from ..rollout_event_log import RolloutAppendPreconditionChanged
+from ..rollout_event_log import (
+    RolloutAppendPreconditionChanged,
+    iter_rollout_events,
+    rollout_event_log_path,
+)
 
 if TYPE_CHECKING:
     from .quota_action_selection import RequestedQuotaActionSelection
@@ -176,6 +180,42 @@ def _can_upgrade_recovery_wait(
     return True
 
 
+def _check_vision_baseline_admission(
+    log_path: Path,
+    *,
+    goal_id: str,
+    goal_ref: Mapping[str, object] | None,
+    agent_id: str,
+) -> None:
+    """Serialize the once-only admission against the actual committed receipt."""
+    from ..control_plane.goals.source_session_registry_state import exact_goal_ref
+
+    expected_ref = (
+        exact_goal_ref(str(goal_ref["goal_id"]), str(goal_ref["goal_instance_id"]))
+        if goal_ref is not None else None
+    )
+    for event in iter_rollout_events(log_path, committed_only=True):
+        if (
+            event.get("event_kind") != "quota_should_run"
+            or event.get("goal_id") != goal_id
+            or event.get("agent_id") != agent_id
+            or event.get("status") != EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
+            or not isinstance(event.get("run_id"), str)
+            or not event["run_id"].strip()
+            or (event.get("goal_ref") != expected_ref if expected_ref is not None else "goal_ref" in event)
+        ):
+            continue
+        details = event.get("details")
+        if (
+            isinstance(details, Mapping)
+            and details.get("should_run") is True
+            and details.get("vision_baseline_initialization") is True
+        ):
+            raise RolloutAppendPreconditionChanged(
+                "The scoped Vision baseline admission was already committed."
+            )
+
+
 def _append_quota_heartbeat_receipt(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -218,6 +258,24 @@ def _append_quota_heartbeat_receipt(
             ),
         }
     )
+    baseline_admission = (
+        payload.get("vision_baseline_initialization") is True
+        and payload.get("ok") is True
+        and payload.get("should_run") is True
+        and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
+        and rollout_replan_obligation_id is not None
+    )
+    if baseline_admission:
+        rollout_details["vision_baseline_initialization"] = True
+
+    def check_baseline_commit() -> None:
+        _check_vision_baseline_admission(
+            rollout_event_log_path(runtime_root, args.goal_id),
+            goal_id=args.goal_id,
+            goal_ref=goal_ref,
+            agent_id=args.agent_id,
+        )
+
     try:
         with recovery_admission_append_precondition(
             payload,
@@ -227,7 +285,8 @@ def _append_quota_heartbeat_receipt(
             agent_id=args.agent_id,
             turn_instance_id=turn_instance_id,
             goal_ref=goal_ref,
-        ) as precondition:
+        ) as recovery_precondition:
+            precondition = check_baseline_commit if baseline_admission else recovery_precondition
             append_cli_rollout_event(
                 payload,
                 registry_path=registry_path,
@@ -290,12 +349,23 @@ def _append_quota_heartbeat_receipt(
         )
         return payload
     if (
-        precondition is not None
+        recovery_precondition is not None
         and receipt.get("status")
         != EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value
     ):
         raise RolloutAppendPreconditionChanged(
             "A different guard was recorded for this Turn."
+        )
+
+    receipt_details = receipt.get("details")
+    if baseline_admission and not (
+        isinstance(receipt_details, Mapping)
+        and receipt_details.get("vision_baseline_initialization") is True
+        and receipt_details.get("should_run") is True
+        and receipt.get("status") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
+    ):
+        raise RolloutAppendPreconditionChanged(
+            "A different guard was committed for this Vision initialization Turn."
         )
 
     rollout_event = payload.get("rollout_event")
@@ -461,6 +531,8 @@ def execute_quota_should_run(
                 turn_instance_id=heartbeat_turn_id,
                 existing=execution.heartbeat_receipt_existing,
                 goal_ref=goal_ref,
+                scheduler_execution_context=context.scheduler_context,
+                status_payload=status_payload,
             )
         else:
             (
@@ -592,6 +664,6 @@ def record_should_run_heartbeat_receipt(
             payload,
             turn_instance_id=heartbeat_turn_id,
             stall_observation=heartbeat_stall_observation,
-            reason="recovery admission changed repeatedly before append; retry the same Turn",
+            reason="heartbeat admission changed repeatedly before append; retry the same Turn",
         )
         return payload, False

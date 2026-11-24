@@ -102,6 +102,9 @@ export function projectGoalSourceStatus(input: JsonObject): JsonObject {
   // These are status projection routing fields, not source document contents.
   // All children of this status were read from the same qualified namespace.
   const route = (value: unknown, key = ""): unknown => {
+    // Agent decisions are opaque native documents, including future fields.
+    // Only the enclosing run participates in workspace routing.
+    if (key === "agent_vision") return value;
     if ((key === "goal_id" || key === "goal_filter") && value === originalId) return workspaceId;
     if (Array.isArray(value)) return value.map(item => key === "goal_ids" && item === originalId
       ? workspaceId : route(item));

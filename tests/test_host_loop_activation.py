@@ -641,6 +641,65 @@ def test_non_traex_identity_selection_preserves_v0_prompt_fields(
     assert choice["activation_input_command"] == choice["heartbeat_prompt_json"]
 
 
+def test_standalone_project_previews_use_their_declared_runtime_when_defaults_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from loopx import paths
+    from loopx.cli import main
+
+    monkeypatch.delenv("LOOPX_REGISTRY", raising=False)
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    for root in (paths.DEFAULT_RUNTIME_ROOT, paths.LEGACY_RUNTIME_ROOT):
+        root.mkdir(parents=True, exist_ok=True)
+        paths.global_registry_path(root).write_text('{"goals": []}', encoding="utf-8")
+    assert paths.default_runtime_route()["status"] == "conflict"
+
+    goal_id = "standalone-route"
+    project, _ = _write_onboarding_goal(
+        tmp_path, goal_id=goal_id, registered_agents=["local-agent", "other-agent"],
+    )
+    registry = project / ".loopx" / "registry.json"
+    configured = json.loads(registry.read_text(encoding="utf-8"))
+    configured["common_runtime_root"] = str(tmp_path / "project-runtime")
+    registry.write_text(json.dumps(configured), encoding="utf-8")
+    original = registry.read_bytes()
+
+    for command, options in (
+        ("agent-onboard", ["--agent-type", "codex-app"]),
+        ("agent-onboard", ["--agent-type", "antigravity-app", "--agent-id", "local-agent"]),
+        ("bootstrap-command-pack", ["--host-surface", "antigravity-app", "--agent-id", "local-agent"]),
+    ):
+        assert main(["--format", "json", command, "--project", str(project), "--goal-id", goal_id, *options]) == 0
+        packet = json.loads(capsys.readouterr().out)
+        assert packet["ok"] is True
+        connection = packet["project_connection"]
+        assert Path(connection["registry"]) == registry.resolve()
+        assert connection["connection_state"] == "connected"
+        assert connection["canonical_project_alias"]["applied"] is False
+        assert connection["canonical_project_alias"]["global_registry"] is None
+        guard = packet["commands"]["quota_guard"]
+        if "codex-app" in options:
+            assert guard is None
+            assert {choice["agent_id"] for choice in packet["identity_selection_gate"]["choices"]} == {
+                "local-agent", "other-agent",
+            }
+        else:
+            argv = shlex.split(guard)
+            assert Path(argv[argv.index("--registry") + 1]) == registry.resolve()
+    assert registry.read_bytes() == original
+
+    unconnected = tmp_path / "unconnected"
+    unconnected.mkdir()
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        main(["--format", "json", "agent-onboard", "--project", str(unconnected),
+              "--goal-id", goal_id, "--agent-type", "antigravity-app"])
+
+    subprocess.run(["git", "init", str(project)], check=True, capture_output=True)
+    with pytest.raises(ValueError, match="Both default LoopX registries exist"):
+        main(["--format", "json", "agent-onboard", "--project", str(project),
+              "--goal-id", goal_id, "--agent-type", "antigravity-app"])
+
+
 def test_new_agent_onboarding_gates_an_empty_agent_registry() -> None:
     packet = build_host_loop_activation_packet(
         agent_type="codex-app",

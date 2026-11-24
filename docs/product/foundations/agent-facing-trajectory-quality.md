@@ -66,7 +66,7 @@ Registry、active state、todo、gate、quota decision、run history 和可选 t
 - validation、writeback 与 quota spend policy；
 - scheduler action 和必要的 cadence acknowledgement。
 
-TurnEnvelope 是 additive read model，目前仍为 opt-in，不改变 quota selection、todo routing 或默认完整输出。协议见 [TurnEnvelope v0](../../reference/protocols/turn-envelope-v0.md)。
+当前 quota guard 使用 Complete Turn v1。历史 v0 是已决策 quota 的精简读模型。历史读取与现用契约见 [TurnEnvelope](../../reference/protocols/turn-envelope-v0.md)。
 
 ### 质量审计层
 
@@ -204,10 +204,10 @@ loopx history trajectory-hygiene \
 loopx quota should-run \
   --goal-id <goal-id> \
   --agent-id <agent-id> \
-  --turn-envelope
+  --context-delivery off --delta-delivery off
 ```
 
-第一条命令观察 compact history 的事件结构；第二条命令检查当前 Agent-facing envelope、byte budget 和 action signature。
+第一条命令观察 compact history 的事件结构；第二条命令检查当前 Agent-facing Complete Turn 决策。
 
 ### 分类
 

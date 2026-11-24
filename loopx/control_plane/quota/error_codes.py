@@ -32,6 +32,12 @@ class HeartbeatReceiptIdentityConflictError(ValueError):
     """Public-safe diagnostic for a same-turn settlement identity conflict."""
 
 
+class QuotaRunIndexConflict(ValueError):
+    """A quota spend was definitively rejected by the run-index CAS."""
+
+    reason_code = "index_digest_conflict"
+
+
 class QuotaIdentityPrecondition(StrEnum):
     """Typed identity admission preconditions for scoped quota decisions."""
 
@@ -233,6 +239,8 @@ def quota_error_code(exc: BaseException) -> str:
         return exc.error_code
     if isinstance(exc, HeartbeatReceiptIdentityConflictError):
         return "heartbeat_receipt_identity_conflict"
+    if isinstance(exc, QuotaRunIndexConflict):
+        return exc.reason_code
     if isinstance(exc, PermissionError):
         return "quota_state_permission_denied"
     if isinstance(exc, OSError):

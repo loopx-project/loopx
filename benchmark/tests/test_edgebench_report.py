@@ -55,6 +55,52 @@ def test_report_rejects_unbound_or_unknown_stride_version(trial, runner, profile
         export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
 
 
+def test_historical_stride_values_do_not_depend_on_the_live_schema(trial, monkeypatch):
+    from benchmark.edgebench import causal_attribution
+    from loopx.control_plane.work_items import stride_policy_codec
+
+    # Even if the live enum later drops "off", archived reports stay readable.
+    monkeypatch.setattr(stride_policy_codec, "stride_strategy_options",
+                        lambda: (stride_policy_codec.LIVE_STRIDE_STRATEGY,))
+    assert causal_attribution.historical_stride_strategy_options() == (
+        None, "off", "evidence_conditioned_v1")
+    runs, selection, output, task = trial
+    task = runs / "run" / "case"
+    for name in ("runtime-receipt", "worker-profile"):
+        path = task / (name + ".json")
+        value = json.loads(path.read_text())
+        value["stride_strategy"] = "off"
+        value["worker" if name == "runtime-receipt" else "profile"] = "heartbeat-resume"
+        write(path, value)
+    export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+    config = json.loads((output / "settings/run.json").read_text())
+    assert config["runner"]["stride_strategy"] == config["worker_profile"]["stride_strategy"] == "off"
+
+
+def test_report_rejects_explicit_null_stride_strategy(trial):
+    runs, selection, output, task = trial
+    task = runs / "run" / "case"
+    for name in ("runtime-receipt", "worker-profile"):
+        path = task / (name + ".json")
+        value = json.loads(path.read_text())
+        value["stride_strategy"] = None
+        write(path, value)
+    with pytest.raises(ValueError, match="stride_strategy"):
+        export(runs, selection, output, observed_at="2026-01-02T00:00:00+00:00")
+
+
+def test_causal_attribution_validates_historical_arm_stride_values():
+    from benchmark.edgebench.causal_attribution import ArmPerformance
+
+    common = dict(arm_id="a", profile="heartbeat-resume", feedback_mode="native", evaluator="e",
+                  best_score=1.0, last_score=1.0, runtime_minutes=1.0,
+                  agent_evaluations=1, auto_evaluations=0)
+    for value in (None, "off", "evidence_conditioned_v1"):
+        assert ArmPerformance(**common, stride_strategy=value).stride_strategy == value
+    with pytest.raises(ValueError, match="stride_strategy"):
+        ArmPerformance(**common, stride_strategy="future_policy")
+
+
 @pytest.fixture
 def trial(tmp_path):
     row = dict(

@@ -14,7 +14,7 @@
  * whose settlement already validates is answered by the preflight, so the
  * caller reads no bound facts for it.
  */
-import type { JsonObject } from "../effect_program.ts";
+import {settlementIdentity, type JsonObject} from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   jsonObject,
@@ -96,6 +96,7 @@ interface PreflightRequest {
   goal_id: string;
   agent_id: string;
   exclude_turn_instance_id: string | null;
+  inspect_current_execution_loss: boolean;
   owner: QuotaAccountingOwner;
   owner_projection: JsonObject;
   owner_action_id: string | null;
@@ -123,8 +124,12 @@ function decodePreflightRequest(value: unknown): PreflightRequest {
   if (request.borrow_source_admission === true && owner.kind !== "exact_source") {
     throw new EffectRuntimeRequestError("borrow_source_admission requires exact source admission");
   }
+  if (request.inspect_current_execution_loss !== undefined && typeof request.inspect_current_execution_loss !== "boolean") {
+    throw new EffectRuntimeRequestError("inspect_current_execution_loss must be a boolean");
+  }
   return {
     runtime_root: runtimeRoot,
+    inspect_current_execution_loss: request.inspect_current_execution_loss === true,
     goal_id: goalId,
     agent_id: requireNonEmptyString(request.agent_id, "agent_id"),
     exclude_turn_instance_id: optionalHeartbeatString(
@@ -237,12 +242,22 @@ async function preflightPriorHostTurnCloseoutForOwner(
   )?.filter((event) =>
     quotaOwnerOwnsProjection(request.owner, event.goal_ref)
   );
-  const { candidates, turnsValidated } = selectCloseoutCandidates(
+  const prior = selectCloseoutCandidates(
     receipts ?? [],
     request.goal_id,
     request.agent_id,
     request.exclude_turn_instance_id,
   );
+  // Ordinary prior-Turn selection excludes the replaying Turn and all its
+  // successors. Preserve prior debt precedence, then inspect the replaying
+  // Turn for a proven lost lease.
+  if (request.inspect_current_execution_loss && request.exclude_turn_instance_id) {
+    const boundReceipts = receipts?.filter(event => event.run_id === request.exclude_turn_instance_id) ?? [];
+    const bound = selectCloseoutCandidates(boundReceipts, request.goal_id, request.agent_id, null);
+    prior.candidates.push(...bound.candidates);
+    prior.turnsValidated += bound.turnsValidated;
+  }
+  const {candidates, turnsValidated} = prior;
   // Resolve one snapshot on the first candidate. The empty path needs only
   // the guard log, and unwritten replans may all drop out after validation.
   let settlementSnapshot: Awaited<ReturnType<typeof readQuotaSettlementSnapshot>> | undefined;
@@ -255,10 +270,13 @@ async function preflightPriorHostTurnCloseoutForOwner(
     const readback = readAdmittedQuotaSettlementFromSnapshot(
       settlementReadbackRequest(request, selected),
       settlementSnapshot,
+      {includeOriginalPreparedReceipt: true},
     );
     const missingReceipts = missingCloseoutReceipts(readback, requireWritebackForRecovery);
     if (missingReceipts === undefined) continue;
+    const currentTurn = selected.prior_turn_instance_id === request.exclude_turn_instance_id;
     if (missingReceipts === null) {
+      if (currentTurn) continue;
       // A newer settled Turn cannot hide an older missing closeout. Keep
       // scanning in persisted newest-first order until the first unsettled
       // candidate is found.
@@ -271,6 +289,19 @@ async function preflightPriorHostTurnCloseoutForOwner(
       }
       continue;
     }
+    let executionLoss: JsonObject | null = null;
+    const original = jsonObject(readback.original_prepared_receipt);
+    if (original && selected.binding_kind === "todo" && missingReceipts.length === 2
+        && readback.replay_phase === "open" && readback.writeback_run == null && readback.writeback_event == null
+        && readback.spend_run == null && readback.spend_event == null
+        && readback.completion_event == null && readback.supersede_event == null) {
+      const {observeFencedExecution} = await import("./execution_loss_closeout.ts");
+      executionLoss = await observeFencedExecution(request.runtime_root, settlementIdentity({
+        goal_id: request.goal_id, agent_id: request.agent_id, todo_id: selected.binding_id,
+        turn_instance_id: selected.prior_turn_instance_id,
+      }), original);
+    }
+    if (currentTurn && !executionLoss) continue;
     const monitorPoll = selected.binding_kind === "todo"
       ? committedMonitorPollFromSnapshot(settlementSnapshot, {
         goal_id: request.goal_id, agent_id: request.agent_id,
@@ -286,7 +317,8 @@ async function preflightPriorHostTurnCloseoutForOwner(
       turns_validated: turnsValidated,
       candidate: selected,
       missing_receipts: missingReceipts,
-      recovery_admissions: recoveryAdmissions(receipts ?? [], selected, missingReceipts, request),
+      recovery_admissions: { ...recoveryAdmissions(receipts ?? [], selected, missingReceipts, request),
+        ...(executionLoss === null ? {} : {execution_loss: executionLoss}) },
     };
   }
   return {
@@ -458,7 +490,7 @@ function acceptedLifecycleCloseout(todo: CandidateTodoFacts | null): AcceptedClo
   return settled ? "typed_blocker_or_lifecycle_transition" : null;
 }
 
-type RecoveryRepair = "monitor_poll" | "resume_prior_turn" | "lifecycle";
+type RecoveryRepair = "monitor_poll" | "resume_prior_turn" | "lifecycle" | "execution_loss_closeout";
 
 function recoveryRepair(
   bindingKind: HeartbeatReceiptBinding["binding_kind"],
@@ -595,11 +627,16 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     recovery.binding_target_key = todo.target_key;
     recovery.binding_cadence = todo.cadence;
   }
-  const repair = replanSpendOwed ? "resume_prior_turn" : recoveryRepair(selected.binding_kind, todo);
+  const admissions = jsonObject(request.recovery_admissions);
+  const executionLoss = jsonObject(admissions?.execution_loss);
+  const canReportExecutionLoss = executionLoss !== null && selected.binding_kind === "todo"
+    && todo?.task_class === "advancement_task" && todo.status === "open" && missingReceipts.length === 2;
+  const repair = canReportExecutionLoss ? "execution_loss_closeout"
+    : replanSpendOwed ? "resume_prior_turn" : recoveryRepair(selected.binding_kind, todo);
+  if (canReportExecutionLoss) recovery.execution_loss = executionLoss;
   // The typed repair lane lets the CLI renderer project its command list
   // without re-deriving which closeout family the Turn belongs to.
   recovery.repair = repair;
-  const admissions = jsonObject(request.recovery_admissions);
   const count = admissions?.count ?? 0;
   if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) {
     throw new EffectRuntimeRequestError("recovery admission count must be a nonnegative integer");
@@ -609,20 +646,32 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
   recovery.admission_checkpoint = checkpoint;
   recovery.admissions_without_progress = count;
   recovery.admission_limit = RECOVERY_ADMISSION_LIMIT;
-  const attention = count >= RECOVERY_ADMISSION_LIMIT;
+  const writerRequired = canReportExecutionLoss && executionLoss.current_control_writer_active !== true;
+  const attention = count >= RECOVERY_ADMISSION_LIMIT || writerRequired;
+  const attentionReason = writerRequired ? "execution_loss_control_writer_required"
+    : "unsettled_recovery_admission_limit";
   const obligation = recoveryObligation(repair, selected.binding_id);
   if (attention) {
     recovery.state = "attention_required";
-    recovery.reason_code = "unsettled_recovery_admission_limit";
+    recovery.reason_code = attentionReason;
     Object.assign(obligation, {
       must_attempt_work: false,
       notify: "NOTIFY",
-      reason_code: "unsettled_recovery_admission_limit",
+      reason_code: attentionReason,
       reason: "prior host Turn recovery exhausted its unchanged admission allowance",
       recommendation_reason: "recovery needs receipt progress or explicit owner resume",
       unsettled_reason: "unchanged prior host Turn recovery requires attention",
       recommended_action: "Repair the named original Turn's missing receipts, or explicitly stop and resume the Goal as owner to renew the recovery allowance; do not create a new debt or invent a closeout",
     });
+  }
+  if (canReportExecutionLoss) {
+    obligation.reason = "the original execution lease generation is fenced";
+    obligation.recommendation_reason = "execution-loss closeout requires current control-writer proof";
+    obligation.unsettled_reason = "the fenced original Turn needs an administrative closeout";
+    if (writerRequired) obligation.reason = "the original execution lease is fenced and the current control-writer proof is unavailable";
+    obligation.recommended_action = executionLoss.current_control_writer_active === true
+      ? "Use the original Turn and current control-writer proof for execution-loss closeout without debit. Verify the closeout before fresh work."
+      : "The original execution lease generation was replaced. Obtain authorized control-writer proof for the same Todo before execution-loss closeout. The replacement cannot resume the original business execution.";
   }
   return {
     schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,

@@ -18,7 +18,7 @@ from ...agent_registry import registered_agent_ids_from_registry
 from ...command_invocation import loopx_cli_argv
 from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
-from ..runtime.time import now_local_iso as now_local
+from ..runtime.time import now_local_iso
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     EffectRuntimeResponseAmbiguous,
@@ -191,6 +191,7 @@ def claim_canonical_todo_if_promoted(
     operation_id: str | None = None,
     task_lease_idempotency_key: str | None = None,
     task_lease_expected_version: int | None = None,
+    ttl_seconds: int | None = None,
     manage_execution: bool = False,
     expected_provider_revision: str | None = None,
     expected_registry_sha256: str | None = None,
@@ -202,6 +203,15 @@ def claim_canonical_todo_if_promoted(
     reviewed = expected_provider_revision is not None or expected_registry_sha256 is not None
     if reviewed and not (manage_execution and expected_provider_revision and expected_registry_sha256):
         raise ValueError("A reviewed managed claim requires both canonical revision and registry digest")
+    if ttl_seconds is not None and (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, int)
+        or ttl_seconds <= 0
+        or ttl_seconds > 86400
+    ):
+        raise ValueError("ttl seconds must be between 1 and 86400")
+    if ttl_seconds is not None and task_lease_idempotency_key is None and not manage_execution:
+        raise ValueError("ttl_seconds requires managed execution or task_lease_idempotency_key")
     with authority_registry_source(registry_path, routing_registry_witness=routing_registry_witness) as registry_source:
         registered = registered_agent_ids_from_registry(registry_path, goal_id)
     # This is only a candidate location. The lease owner observes physical
@@ -230,6 +240,11 @@ def claim_canonical_todo_if_promoted(
             ),
             **({"manage_execution": True} if manage_execution else {}),
             **(
+                {"ttl_seconds": ttl_seconds}
+                if task_lease_idempotency_key is None and ttl_seconds is not None
+                else {}
+            ),
+            **(
                 {"expected_provider_revision": expected_provider_revision,
                  "expected_registry_sha256": expected_registry_sha256}
                 if reviewed else {}
@@ -239,12 +254,12 @@ def claim_canonical_todo_if_promoted(
                 {
                     "idempotency_key": task_lease_idempotency_key,
                     "expected_version": task_lease_expected_version,
-                    "ttl_seconds": None,
+                    "ttl_seconds": ttl_seconds,
                 }
                 if task_lease_idempotency_key is not None
                 else None
             ),
-            "observed_at": now_local(),
+            "observed_at": now_local_iso(timespec="milliseconds"),
             "dry_run": dry_run,
         },
         timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,

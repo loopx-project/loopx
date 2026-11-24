@@ -27,6 +27,9 @@ from .quota_registration import (
 from .quota_reward_memory import attach_reward_memory_ingest_after_spend
 
 if TYPE_CHECKING:
+    from ..control_plane.scheduler.execution_context import (
+        SchedulerExecutionContextResolution,
+    )
     from .quota_action_selection import RequestedQuotaActionSelection
     from .quota_context import QuotaCommandContext
     from .quota_should_run import ShouldRunExecutionState
@@ -259,6 +262,7 @@ def _prepare_quota_result_context(
     *,
     registry_path: Path,
     heartbeat_turn_id: str | None,
+    attach_recall: bool = True,
 ) -> tuple[dict[str, object], dict[str, Any]]:
     from .quota_result_delivery import prepare_quota_result_context
 
@@ -267,6 +271,7 @@ def _prepare_quota_result_context(
         args,
         registry_path=registry_path,
         heartbeat_turn_id=heartbeat_turn_id,
+        attach_recall=attach_recall,
     )
 
 
@@ -442,7 +447,11 @@ def _execute_quota_command(
     heartbeat_stall_observation = "not_evaluated"
     detail_sections: frozenset[str] = frozenset()
     context: QuotaCommandContext | None = None
+    scheduler_context: (
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
+    ) = None
     goal_ref: dict[str, str] | None = None
+    status_payload: Mapping[str, object] | None = None
     reentry: tuple[argparse.Namespace, str | None] | None = None
     should_run_state: ShouldRunExecutionState | None = None
     try:
@@ -508,6 +517,19 @@ def _execute_quota_command(
                     include_presentation_projections=False,
                 ),
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command in {
             "scheduler-ack",
             "scheduler-ack-current",
@@ -545,6 +567,19 @@ def _execute_quota_command(
                 registry_path=registry_path,
                 goal_ref=goal_ref,
             )
+            if bool(args.execute) and payload.get("ok") and args.available_capabilities:
+                from ..control_plane.agents.capability_memory import (
+                    record_verified_agent_capability_observation,
+                )
+
+                record_verified_agent_capability_observation(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                    preserve_unavailable=False,
+                )
         elif args.quota_command == "void-slot":
             payload = _export("void_quota_slot")(
                 status_payload,
@@ -636,6 +671,8 @@ def _execute_quota_command(
             args,
             todo_id=rollout_todo_id,
             replan_obligation_id=rollout_replan_obligation_id,
+            scheduler_execution_context=scheduler_context,
+            status_payload=status_payload,
         )
         if heartbeat_turn_id and args.quota_command == "should-run":
             from .quota_should_run import record_should_run_heartbeat_receipt

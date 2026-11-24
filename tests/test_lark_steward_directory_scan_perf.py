@@ -1213,3 +1213,351 @@ def test_backlog_health_defers_recovery_body_reads_and_reuses_request_fingerprin
     reads.clear()
     assert transport.health()["b" * 24]["pending_count"] == 2
     assert set(reads) == {target_path}
+
+
+def test_noop_recovery_backoff_ignores_volatile_session_timestamps_and_ready_to_busy_pulses_but_resets_on_busy_to_ready_or_semantic_change(
+    tmp_path, monkeypatch
+):
+    import zlib
+
+    transport, deliv_path, _ext_path, inputs, clock = _noop_recovery_transport(tmp_path, monkeypatch)
+    jitter = zlib.crc32(deliv_path.name.encode("utf-8")) % 60
+    session_id = f"sess_{deliv_path.stem}"
+
+    # 1st noop sets +60s; 2nd noop arms streak=2 -> +120+jitter.
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 60.0
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    expected_due = clock[0] + 120.0 + jitter
+    assert transport._context_recovery_probe_at[deliv_path] == expected_due
+
+    # Volatile updated_at / last_activity_at changes must NOT reset backoff.
+    clock[0] += 10.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready", "updated_at": "2026-11-23T02:04:00Z", "last_activity_at": "2026-11-23T02:04:00Z"}),
+    )
+    assert transport.pending_delivery_paths() == []
+    assert transport._context_recovery_probe_at[deliv_path] == expected_due
+
+    # Transient ready -> busy pulse keeps the ready backoff intact, and streak increments without overwriting ready baseline.
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "busy", "active_turn_id": "turn_other", "updated_at": "2026-11-23T02:05:00Z"}),
+    )
+    assert transport.pending_delivery_paths() == []
+    clock[0] = expected_due
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 240.0 + jitter
+
+    # When a turn finishes (busy -> ready transition after a busy pulse OR directly), OR semantic field changes:
+    # Here we prove both busy -> ready from a busy baseline and upstream_thread_id change reset backoff immediately!
+    clock[0] += 5.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready", "upstream_thread_id": "new-thread-1"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+    # Also verify busy -> ready directly resets backoff when a prior noop was recorded while busy.
+    transport.reconcile_request(deliv_path)
+    clock[0] += 60.0
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "busy", "active_turn_id": "turn_busy"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+    assert transport.reconcile_request(deliv_path) == 0
+    clock[0] += 5.0
+    assert transport.pending_delivery_paths() == []
+    _replace_recovery_input(
+        inputs["session"],
+        json.dumps({"session_id": session_id, "status": "ready"}),
+    )
+    assert transport.pending_delivery_paths() == [deliv_path]
+
+
+def test_ineligible_delivered_requests_back_off_exponentially_when_unchanged_and_reset_on_change(
+    tmp_path, monkeypatch
+):
+    import zlib
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+    ref = _hex_ref(99)
+    session_id, turn_id = f"sess_{ref}", f"turn_{ref}"
+    deliv_path, ext_path = deliv_dir / f"{ref}.json", ext_dir / f"{ref}.json"
+    _atomic_write_json(deliv_path, {
+        "status": "delivered", "request_ref": ref, "session_id": session_id, "turn_id": turn_id,
+        "profile": "fixture", "event": {"message_id": f"om_{ref}"},
+    })
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted"})
+    store = _recovery_session_store(tmp_path)
+    inputs = _seed_recovery_inputs(store, session_id, turn_id)
+
+    clock = [2000.0]
+    observer_calls = 0
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport._web_projection_paths = lambda: []
+
+    def observe(_candidate_ref: str) -> bool:
+        nonlocal observer_calls
+        observer_calls += 1
+        return False
+
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        controller=SimpleNamespace(store=store),
+        context_recovery_observer=lambda: observe,
+    )
+    jitter = zlib.crc32(deliv_path.name.encode("utf-8")) % 60
+
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 1
+    assert transport._context_recovery_probe_at[deliv_path] == 2000.0 + 60.0 + jitter
+
+    # Volatile session timestamp change does not re-trigger observer before 60+jitter expires.
+    clock[0] += 30.0
+    _replace_recovery_input(inputs["session"], json.dumps({"session_id": session_id, "status": "ready", "updated_at": "2026-11-23T02:05:00Z"}))
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 1
+
+    # Second scan past 60+jitter backs off to 120+jitter.
+    clock[0] = 2000.0 + 60.0 + jitter
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 2
+    assert transport._context_recovery_probe_at[deliv_path] == clock[0] + 120.0 + jitter
+
+    # Mutating the external request resets backoff and immediately re-observes on next scan.
+    clock[0] += 5.0
+    _atomic_write_json(ext_path, {"request_ref": ref, "status": "accepted", "mutated": True})
+    assert transport.pending_delivery_paths() == []
+    assert observer_calls == 3
+
+
+def test_discovery_scandir_reuses_scanned_rows_for_web_projections_and_deduplicates_session_tokens(
+    tmp_path, monkeypatch
+):
+    from loopx.extensions.lark import private_conversations as private
+    from loopx.extensions.lark import private_delivery_discovery as pdd
+    from loopx.extensions.lark.private_delivery_discovery import PrivateDeliveryDiscovery
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    ext_dir = tmp_path / "external-requests"
+    deliv_dir.mkdir()
+    ext_dir.mkdir()
+    (deliv_dir / "web-projections").mkdir()
+
+    store = _recovery_session_store(tmp_path)
+    session_ids = ["sess_shared_a", "sess_shared_b"]
+    for sid in session_ids:
+        session_path = store._session_path(sid)
+        session_path.parent.mkdir(parents=True, exist_ok=True)
+        _replace_recovery_input(session_path, json.dumps({"session_id": sid, "status": "ready"}))
+
+    for idx in range(20):
+        ref = _hex_ref(500 + idx)
+        sid = session_ids[idx % 2]
+        tid = f"turn_{ref}"
+        _atomic_write_json(deliv_dir / f"{ref}.json", {
+            "status": "delivered", "request_ref": ref, "session_id": sid, "turn_id": tid,
+            "binding_id": "b1", "profile": "fixture", "event": {"chat_type": "p2p", "message_id": f"om_{ref}"},
+        })
+        _atomic_write_json(ext_dir / f"{ref}.json", {"request_ref": ref, "status": "accepted"})
+        turn_path = store._turn_path(sid, tid)
+        turn_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(turn_path, {"turn_id": tid, "status": "failed"})
+        store._event_path(sid, tid).write_text('{"kind":"turn.failed"}\n', encoding="utf-8")
+
+    clock = [3000.0]
+    monkeypatch.setattr(private, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    import loopx.extensions.lark.private_web_projection as web_proj_mod
+    monkeypatch.setattr(web_proj_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]), raising=False)
+
+    glob_calls = 0
+    stat_calls = 0
+    orig_glob = Path.glob
+    orig_stat = Path.stat
+
+    def counted_glob(self: Path, pattern: str):
+        nonlocal glob_calls
+        if self == deliv_dir:
+            glob_calls += 1
+        return orig_glob(self, pattern)
+
+    def counted_stat(self: Path, *args, **kwargs):
+        nonlocal stat_calls
+        if self.parent == deliv_dir and self.suffix == ".json":
+            stat_calls += 1
+        return orig_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "glob", counted_glob)
+    monkeypatch.setattr(Path, "stat", counted_stat)
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport._context_recovery_probe_at = {}
+    transport._historical_image_probe_at = {}
+    transport._web_projection_scan_at = 0.0
+    transport._web_projection_snapshots = {}
+    transport._delivery_discovery = PrivateDeliveryDiscovery(deliv_dir)
+    transport.bindings = SimpleNamespace(read=lambda: {"bindings": []})
+    transport.core = SimpleNamespace(
+        root=ext_dir,
+        controller=SimpleNamespace(store=store),
+        context_recovery_observer=lambda: (lambda _ref: False),
+    )
+
+    session_tok_calls = 0
+    orig_tok = pdd.session_recovery_backoff_token
+
+    def counted_tok(session_path: Path, cache: dict):
+        nonlocal session_tok_calls
+        session_tok_calls += 1
+        return orig_tok(session_path, cache)
+
+    monkeypatch.setattr(pdd, "session_recovery_backoff_token", counted_tok)
+
+    # First pass scans once (reused for _web_projection_paths without a second discovery scan)
+    # and resolves session tokens only once per distinct session (2 instead of 20).
+    orig_rows_with_fp = transport._delivery_discovery.rows_with_fingerprints
+    scan_calls = 0
+
+    def counted_scan():
+        nonlocal scan_calls
+        scan_calls += 1
+        return orig_rows_with_fp()
+
+    monkeypatch.setattr(transport._delivery_discovery, "rows_with_fingerprints", counted_scan)
+
+    assert transport.pending_delivery_paths() == []
+    assert scan_calls == 1
+    assert glob_calls == 0
+    assert session_tok_calls == 2
+
+    # Warm pass triggers zero Path.glob or extra Path.stat calls on deliv_dir JSON files,
+    # and still resolves session tokens only once per distinct session.
+    stat_calls = 0
+    session_tok_calls = 0
+    clock[0] += 10.0
+    transport._web_projection_scan_at = 0.0
+    assert transport.pending_delivery_paths() == []
+    assert scan_calls == 2
+    assert glob_calls == 0
+    assert stat_calls == 0
+    assert session_tok_calls == 2
+
+    # In-place mutation and deletion are still detected accurately.
+    target = deliv_dir / f"{_hex_ref(500)}.json"
+    _atomic_write_json(target, {
+        "status": "delivered", "request_ref": _hex_ref(500), "session_id": "sess_shared_a",
+        "turn_id": f"turn_{_hex_ref(500)}", "binding_id": "b1", "profile": "fixture",
+        "event": {"chat_type": "p2p", "message_id": "om_edited"},
+    })
+    (deliv_dir / f"{_hex_ref(501)}.json").unlink()
+    assert len(list(transport._delivery_discovery.rows())) == 19
+
+
+def test_deliver_completed_answer_image_retries_backoff_and_skip_impossible_remote_urls(
+    tmp_path, monkeypatch
+):
+    from datetime import datetime as real_datetime, timezone as real_timezone
+    from loopx.extensions.lark import private_conversations as private
+
+    deliv_dir = tmp_path / "lark-private-deliveries"
+    deliv_dir.mkdir()
+    ref = _hex_ref(701)
+    path = deliv_dir / f"{ref}.json"
+    sid, tid = "sess_img", "turn_img"
+
+    now_ts = [10_000.0]
+
+    class _FakeDateTime:
+        @staticmethod
+        def now(_tz=None):
+            return real_datetime.fromtimestamp(now_ts[0], tz=real_timezone.utc)
+
+    monkeypatch.setattr(private, "datetime", _FakeDateTime)
+
+    transport = private.LarkPrivateConversations.__new__(private.LarkPrivateConversations)
+    transport.root = deliv_dir
+    transport.reaction_feedback = False
+    transport.runtime_root = tmp_path
+    transport.core = SimpleNamespace(
+        controller=SimpleNamespace(store=SimpleNamespace(load_turn=lambda _s, _t: {"turn_id": tid, "status": "completed"})),
+        read_request=lambda _ref: {
+            "request_ref": ref, "status": "accepted", "binding_id": "b1",
+            "source": {"private_human_message": True, "source_ref": "s1", "sender_ref": "u1"},
+            "session_id": sid, "turn_id": tid,
+        },
+    )
+    monkeypatch.setattr(private, "resumable_answer_image_session", lambda _c, _n, _t: {"session_id": sid})
+
+    authority_calls = 0
+
+    def fake_authority(*_args, **_kwargs):
+        nonlocal authority_calls
+        authority_calls += 1
+        return ("Test", True)
+
+    transport._source_authority = fake_authority
+
+    delivered_phases: list[str] = []
+
+    def fake_deliver(rec_path: Path, record: dict, phase: str, *_args, **_kwargs):
+        delivered_phases.append(phase)
+        record["deliveries"][phase] = {"started": True, "verified": True}
+        _atomic_write_json(rec_path, record)
+        return True
+
+    transport._deliver = fake_deliver
+
+    record = {
+        "request_ref": ref, "status": "accepted", "binding_id": "b1", "profile": "steward",
+        "source": {"private_human_message": True, "source_ref": "s1", "sender_ref": "u1"},
+        "session_id": sid, "turn_id": tid,
+        "event": {"chat_id": "oc_1", "chat_type": "p2p", "message_type": "text",
+                  "message_id": "om_1", "content": "Publish the HTML summary page"},
+        "deliveries": {},
+    }
+    _atomic_write_json(path, record)
+
+    answer_text = "Here is the guide\n\n![Diagram](local_diagram.png)"
+    # Initial pass delivers the terminal text body first and stages answer_images as pending.
+    assert transport._deliver_completed_answer(path, json.loads(path.read_text(encoding="utf-8")),
+                                               answer_text, inbox=lambda: tmp_path / "inbox.json") is False
+    assert delivered_phases == ["terminal"]
+
+    expected_deltas = [300.0, 600.0, 1200.0, 2400.0, 3600.0, 3600.0]
+    for idx, expected_delay in enumerate(expected_deltas, start=1):
+        current = json.loads(path.read_text(encoding="utf-8"))
+        assert transport._deliver_completed_answer(
+            path, current, answer_text, inbox=lambda: tmp_path / "inbox.json"
+        ) is False
+        updated = json.loads(path.read_text(encoding="utf-8"))
+        assert updated["answer_images"]["status"] == "unverified"
+        assert updated["answer_images"]["retry_count"] == idx
+        assert updated["answer_images"]["next_check_at"] == now_ts[0] + expected_delay
+        assert authority_calls == 0
+        assert delivered_phases == ["terminal", "answer_image_notice.terminal"]
+        # Before next_check_at expires, retry is skipped without modifying retry_count.
+        now_ts[0] += expected_delay - 1.0
+        assert transport._deliver_completed_answer(
+            path, updated, answer_text, inbox=lambda: tmp_path / "inbox.json"
+        ) is False
+        assert json.loads(path.read_text(encoding="utf-8"))["answer_images"]["retry_count"] == idx
+        now_ts[0] += 1.0

@@ -310,9 +310,10 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
         AGENT_ID,
         "--claimed-by",
         AGENT_ID,
+        "--turn-instance-id",
+        turn,
         "--evidence",
         "read-only fixture delivery validated",
-        "--no-follow-up",
         "--task-lease-idempotency-key",
         "primary-execution",
         "--task-lease-expected-version",
@@ -333,6 +334,10 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             *binding,
             "--todo-id",
             TODO_ID,
+            "--task-lease-idempotency-key",
+            "primary-execution",
+            "--task-lease-expected-version",
+            "3",
             "--classification",
             "fixture_delivery_validated",
             "--delivery-batch-scale",
@@ -449,26 +454,35 @@ def test_completed_advancement_retains_auxiliary_monitor_admission(
             }.get(token, token)
             for token in _projected_cli_args(writeback_command, turn_instance_id=turn)
         )
-        rc, refresh = _run_cli(
-            registry_path,
-            runtime,
-            *args,
-            "--delivery-workspace-path",
-            str(project),
-            "--no-global-sync",
-            "--suppress-external-sinks",
-        )
-        assert rc == 0, refresh
-        spend_command = refresh["settlement_owed"]["command"]
+        for replay_refresh in (False, True):
+            rc, refresh = _run_cli(
+                registry_path,
+                runtime,
+                *args,
+                "--delivery-workspace-path",
+                str(project),
+                "--no-global-sync",
+                "--suppress-external-sinks",
+            )
+            assert rc == 0, refresh
+            assert "settlement_owed" not in refresh
+            assert refresh["settlement_progress"]["state"] == "settled"
+            assert [row["step_kind"] for row in refresh["settlement_result"]["receipts"]] == [
+                "validation",
+                "durable_writeback",
+                "quota_spend",
+            ]
+            assert refresh.get("idempotent_replay", False) is replay_refresh
+        assert _spend_run_count(runtime) == 1
     else:
         assert resume["next_step"]["kind"] == "quota_spend"
         spend_command = poll["settlement_owed"]["command"]
-    spend_args = _projected_cli_args(spend_command, turn_instance_id=turn)
-    for _ in range(2):
-        rc, spend = _run_cli(registry_path, runtime, *spend_args)
-        assert rc == 0, spend
-        assert spend["settlement_identity"]["todo_id"] == TODO_ID
-    assert _spend_run_count(runtime) == 1
+        spend_args = _projected_cli_args(spend_command, turn_instance_id=turn)
+        for _ in range(2):
+            rc, spend = _run_cli(registry_path, runtime, *spend_args)
+            assert rc == 0, spend
+            assert spend["settlement_identity"]["todo_id"] == TODO_ID
+        assert _spend_run_count(runtime) == 1
     rc, replay = _run_cli(registry_path, runtime, *poll_args)
     assert rc == 0, replay
     assert replay["replayed"] is True

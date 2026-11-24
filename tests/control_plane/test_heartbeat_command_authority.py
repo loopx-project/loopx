@@ -53,8 +53,7 @@ def test_current_selection_and_settlement_override_goal_command(tmp_path, provid
     captures = []
     settlement_identities = []
     receipt_counts = []
-    for name, view in (("default", ()), ("detail", ("--include-detail", "all")),
-                       ("envelope-alias", ("--turn-envelope",)), ("complete-alias", ("--complete-turn",))):
+    for name, view in (("default", ()), ("detail", ("--include-detail", "all"))):
         capture = tmp_path / (name + "-capture")
         code, current = cli._run_cli(registry, runtime, *args, *binding, *view,
                                      "--decision-output-dir", str(capture), cwd=project)

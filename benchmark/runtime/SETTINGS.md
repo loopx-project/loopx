@@ -48,7 +48,7 @@ These are recommendations, not automatically launched experiments.
 | Reference | `--worker heartbeat-resume --task-entry loopx-planned --replan-after-turns 6` | Planned entry with effective-turn replanning |
 | Seeded | Replace only `--task-entry` with `seeded-todo` | Does initial task decomposition help? |
 | Explore | Replace only `--worker` with `heartbeat-explore` | Are recorded evidence and subsequent route choices useful? |
-| Historical Short envelope | Use the recorded product and runner revisions with `--turn-envelope`; the current worker verifies v0 before launch | Does short input with reachable original detail reduce overhead while preserving decisions? |
+| Historical Short envelope | Use the recorded product and runner revisions and check the original v0 receipt | Does short input with reachable original detail reduce overhead while preserving decisions? |
 | Todo cadence | Replace `--replan-after-turns 6` with `--replan-after-todos 3` | How do units and thresholds change interruptions? This is a combined ablation. |
 | No LoopX | `--worker official`; omit LoopX-specific flags | What is the net effect of the whole LoopX treatment? |
 

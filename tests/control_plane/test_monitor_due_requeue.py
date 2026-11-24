@@ -87,12 +87,12 @@ def test_poll(tmp_path, monkeypatch, provider, scoped_gate, bound_turn):
     assert not any(row["classification"] in {"quota_slot_spent", "state_refreshed"} for row in rows)
 
 
-@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "envelope"])
+@pytest.mark.parametrize("mode", ["full", "compact", "brief", "thin", "captured_thin"])
 def test_common_prompt_retains_settlement_and_defers_monitor_details(mode, tmp_path):
     from loopx.heartbeat_prompt import build_heartbeat_prompt
 
-    options = ({"thin": True, "turn_envelope": True, "decision_output_root": tmp_path}
-        if mode == "envelope" else {mode: True})
+    options = ({"thin": True, "decision_output_root": tmp_path}
+        if mode == "captured_thin" else {mode: True})
     prompt = build_heartbeat_prompt(goal_id=GOAL_ID, agent_id=AGENT_ID,
         runtime_profile="generic_cli", turn_instance_id="prompt-turn", **options)
     body = prompt["task_body"]

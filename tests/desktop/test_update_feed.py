@@ -4,8 +4,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -126,8 +128,9 @@ class FeedTests(unittest.TestCase):
             "- name: Build signed Windows NSIS updater installer", 1
         )[1].split("- name: Collect native updater artifacts", 1)[0]
         self.assertIn("if: runner.os == 'macOS'", macos_step)
-        self.assertIn('\\"createUpdaterArtifacts\\":true', macos_step)
-        self.assertIn('\\"signingIdentity\\":\\"-\\"', macos_step)
+        self.assertIn("scripts/desktop_macos_signing.py build", macos_step)
+        self.assertIn("--create-updater-artifacts", macos_step)
+        self.assertIn("Verify macOS updater bundle", macos_step)
         self.assertIn("if: runner.os == 'Windows'", windows_step)
         self.assertIn('\\"createUpdaterArtifacts\\":true', windows_step)
         self.assertNotIn("signingIdentity", windows_step)
@@ -252,7 +255,7 @@ class FeedTests(unittest.TestCase):
                 return candidate
         self.skipTest("a working bash is required for the upload-step regression")
 
-    def _run_upload_step(self, channel, version, tag, include_windows):
+    def _run_upload_step(self, channel, version, tag, include_windows, *, channel_qualified=True):
         bash = self._working_bash()
         script = self._upload_step_script()
         case_dir = self.root / f"upload-{channel}-{int(include_windows)}"
@@ -288,9 +291,20 @@ class FeedTests(unittest.TestCase):
             "GH_LOG": str(gh_log),
             "RELEASE_TAG": tag,
             "SOURCE_REF": "source-ref",
-            "EVENT_NAME": "release",
+            "EVENT_NAME": "workflow_dispatch" if channel == "main" else "release",
             "CHANNEL": channel,
+            "PYTHONPATH": str(WORKFLOW.parents[2]),
         }
+        interpreter = shlex.quote(sys.executable)
+        if channel_qualified:
+            qualify_channel = (
+                "import sys; from loopx.cli_commands import update_artifact; "
+                "update_artifact._ARTIFACT_DEFAULT_CONTRACTS['public_channel'] = 'current'; "
+                "exec(compile(sys.stdin.read(), '<publisher>', 'exec'))"
+            )
+            script = f"python() {{ {interpreter} -c {shlex.quote(qualify_channel)}; }}\n" + script
+        else:
+            script = f"python() {{ {interpreter} \"$@\"; }}\n" + script
         result = subprocess.run(
             [bash, "-c", script],
             cwd=case_dir,
@@ -343,6 +357,22 @@ class FeedTests(unittest.TestCase):
             if line.startswith("release upload desktop-main ")
         )
         self.assertLess(feed_upload, pointer_upload)
+
+    def test_unqualified_c1_desktop_candidate_does_not_advance_main_channel(self):
+        tag = "desktop-main-123-1"
+        calls = self._run_upload_step(
+            "main", "0.0.0-main.123.1", tag, True, channel_qualified=False
+        )
+        self.assertTrue(any(call.startswith(f"release create {tag} --prerelease --latest=false") for call in calls))
+        self.assertIn(f"release upload {tag} dist/updater/desktop-updater.json --clobber", calls)
+        self.assertFalse(any(call.split()[2] == "desktop-main" for call in calls))
+
+    def test_unqualified_c1_desktop_candidate_does_not_advance_stable_channel(self):
+        tag = "v1.2.4"
+        calls = self._run_upload_step("stable", "1.2.4", tag, False, channel_qualified=False)
+        self.assertIn(f"release upload {tag} dist/updater/LoopX.app.tar.gz", calls)
+        self.assertIn(f"release upload {tag} dist/updater/desktop-updater.json --clobber", calls)
+        self.assertFalse(any(call.split()[2] == "desktop-stable" for call in calls))
 
     def test_upload_step_rejects_main_without_windows_artifact(self):
         case_dir = self.root / "upload-main-missing"

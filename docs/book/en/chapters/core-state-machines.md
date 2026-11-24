@@ -786,7 +786,7 @@ therefore not a state you can decide on; it has to be proven item by item.
 services, and extensions do not align to that number. What actually binds is the typed owner, the protocol
 schema, and the transition rules.
 
-The owner in the diagram and the
+**Boundary two: this map does not replace the migration boundary.** The owner in the diagram and the
 implementation language are separate dimensions. When a semantic is already carried by a TypeScript
 owner, rebuilding it in Python from this teaching map creates a second source of truth.
 
@@ -795,7 +795,7 @@ durable journal, an `effect_ref`, and a provider readback resolver carry that gu
 external call is not automatically deduplicated because this chapter mentions reconciliation; settlement
 fails closed when the resolver is missing or returns an unknown state.
 
-The diagrams here explain. Before changing a rule, confirm the current typed owner, protocol schema,
+**Boundary four: the diagram does not go to the front line.** The diagrams here explain the architecture rather than specifying the implementation. Before changing a rule, confirm the current typed owner, protocol schema,
 characterization fixture, and migration boundary.
 
 ## Named failures: where the handoff breaks
@@ -815,7 +815,7 @@ been replaced continuing to write. `needs_rebase` exists as the rejection path f
 while the source stays unchanged. The symptom is a persistent UI/CLI disagreement that returns to the old
 value on every refresh. Repair the source or builder, then read back.
 
-**Failure four:** A stopped Goal, paused quota, or blocked peer
+**Failure four: the reason to stop is not the same as closure.** A stopped Goal, paused quota, or blocked peer
 coordination can each stop polling; each is a legal stop. Only
 `terminal_no_followup` means "stopped because validated Goal closure was derived." Collapsing them lets a
 paused Goal look finished.
@@ -832,7 +832,7 @@ paused Goal look finished.
    caller handles the rejection.
 5. **Terminal is a conjunction.** Complete and closed Todo sources, no unresolved frontier, and a
    structured `no_followup` intent must all hold.
-6. Change a rule only after confirming the typed owner,
+6. **A teaching map is not an implementation spec.** Change a rule only after confirming the typed owner,
    protocol schema, characterization fixture, and migration boundary.
 
 These six answer one question: **when the mechanisms are split across nine families that can only speak

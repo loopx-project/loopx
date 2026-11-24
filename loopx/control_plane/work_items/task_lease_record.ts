@@ -32,6 +32,12 @@ export class TaskLeaseAcquireError extends Error {
   }
 }
 
+/** Preserve observed event order for receipt-bound recovery. Lease deadlines
+ * keep their existing whole-second wire semantics. */
+export function leaseEventTimestamp(at: Date): string {
+  return at.toISOString().replace(/\.000Z$/u, "Z");
+}
+
 export function leaseInteger(
   lease: LeaseRecord | null,
   field: "version" | "lease_epoch" | "acquire_ttl_seconds",

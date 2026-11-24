@@ -1,17 +1,18 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { type AgentInfo, type Api, type ChangedFile, type Coordination, type OutputFile, type ThreadStats } from '../api';
+import { type AgentInfo, type Api, type ChangedFile, type Coordination, type OutputFile, type Thread, type ThreadStats } from '../api';
 import { deliveredPreview, progressState } from '../timeline';
 import { relativePath } from '../paths';
 import { t } from '../i18n';
+import { waitingLabel } from '../notices';
 import { memberStatus } from './AgentPanel';
 import { PlanList, PlanRing, planProgress, type PlanItem } from './PlanPanel';
 import { Lightbox } from './Lightbox';
 import { compactTokens, speedLabel } from './SessionStats';
 import { useOverviewReading } from '../overview-reading';
-import { AgentMark, IconAgents, IconBack, IconChevron, IconChevronRight, IconEdit, IconFile, IconImage, IconPreview, IconRefresh, IconSearch } from './icons';
+import { AgentMark, IconAgents, IconBack, IconChevron, IconChevronRight, IconEdit, IconFile, IconHandover, IconImage, IconPreview, IconRefresh, IconSearch } from './icons';
 
 /** The parts of the overview, in the order they are shown. */
-export type Section = 'agents' | 'plan' | 'changes' | 'images' | 'files';
+export type Section = 'chain' | 'agents' | 'plan' | 'changes' | 'images' | 'files';
 
 /** Which sections the user folded (true) or unfolded (false) by hand, kept on this device. */
 export type Choices = Partial<Record<Section, boolean>>;
@@ -63,7 +64,10 @@ const dirName = (path: string) => { const at = path.lastIndexOf('/'); return at 
 
 type PreviewLimit = 0 | 1 | 3;
 export type OverviewSection = Section | 'all';
+/** The segments of the handover chain the thread is in, newest first, and which one the reading is at. */
+export type OverviewChain = { rows: Thread[]; latestId: string; viewingId: string; onOpen: (id: string) => void };
 type OverviewProps = {
+  chain?: OverviewChain;
   api: Api; threadId: string; updatedAt: string; active: boolean;
   team: Coordination | null; agents: AgentInfo[]; plan: PlanItem | null; roots: string[];
   loadFile: (path: string) => Promise<Blob>;
@@ -71,6 +75,7 @@ type OverviewProps = {
   onOpenDiff: (file: ChangedFile) => void;
   onOpenFile: (path: string) => Promise<void>;
   onPreview: (path: string) => void;
+  onOpenPicture?: (path: string, name: string) => void;
   onOpenTrace: () => void;
   onClose: () => void;
   onViewAll: (section: OverviewSection, returnToPreview?: boolean) => void;
@@ -79,12 +84,14 @@ type OverviewProps = {
   detail?: OverviewSection;
   /** Drawn above the sections: what the conversation is on besides files and agents (its LoopX Goal). */
   goal?: ReactNode;
+  /** Expanded Goal readers use a bounded scroll region instead of the pinned preview height. */
+  goalExpanded?: boolean;
 };
 type Layout = { height: number; sections: Section[]; counts: Partial<Record<Section, number>> };
 
 /** Preview counts are chosen once per opening; refreshes keep the same slots and footer. */
 export function ThreadOverview(props: OverviewProps) {
-  const { api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail, goal } = props;
+  const { chain, api, threadId, updatedAt, active, team, agents, plan, roots, loadFile, onOpenMember, onOpenDiff, onOpenFile, onPreview, onOpenPicture, onOpenTrace, onClose, onViewAll, onLoadingChange, persistent = false, detail, goal, goalExpanded = false } = props;
   const reading = useOverviewReading(api, threadId, updatedAt, active);
   const { outputs, stats, loading, failed } = reading;
   const ready = Boolean(outputs || failed);
@@ -105,7 +112,7 @@ export function ThreadOverview(props: OverviewProps) {
   const changes = outputs?.changes;
   const files = outputs?.files ?? [];
   const progress = plan ? planProgress(plan) : null;
-  const counts: Record<Section, number> = { agents: members.length, plan: plan?.entries.length ?? 0, changes: changes?.files.length ?? 0, images: pictures.length, files: files.length };
+  const counts: Record<Section, number> = { chain: chain && chain.rows.length > 1 ? chain.rows.length : 0, agents: members.length, plan: plan?.entries.length ?? 0, changes: changes?.files.length ?? 0, images: pictures.length, files: files.length };
   const available = (Object.keys(counts) as Section[]).filter(id => counts[id] > 0);
   const sections = detail ? detail === 'all' ? available : [detail] : layout?.sections ?? available;
   const slots = (id: Section) => detail ? counts[id] : Math.min(limit, layout?.counts[id] ?? counts[id]);
@@ -134,7 +141,7 @@ export function ThreadOverview(props: OverviewProps) {
   }, [detail]);
 
   useLayoutEffect(() => {
-    if (detail || !ready || !root.current) return;
+    if (detail || goalExpanded || !ready || !root.current) return;
     // The sections are pinned per opening so refreshes keep their slots — but the panel must
     // still grow when what it holds grows: a section that lands late (the team usually arrives
     // after the outputs) or a group that gains a row (the team goes from one member to two).
@@ -177,7 +184,12 @@ export function ThreadOverview(props: OverviewProps) {
     let rows: ReactNode;
     let matched = 0;
     let summary: ReactNode = String(counts[id]);
-    if (id === 'agents') {
+    if (id === 'chain' && chain) {
+      const selected = take(id, detail ? chain.rows.filter(row => matches(`${row.title} ${agentName(agents, row.agent)}`)) : chain.rows);
+      matched = selected.length;
+      summary = t('handover.group.count', chain.rows.length);
+      rows = <>{selected.map(row => <ChainRow key={row.id} thread={row} agents={agents} latest={row.id === chain.latestId} viewing={row.id === chain.viewingId} onOpen={action(() => chain.onOpen(row.id))} />)}{pad(id, selected.length)}</>;
+    } else if (id === 'agents') {
       const selected = take(id, detail ? members.filter(member => matches(`${member.name} ${member.latest?.text ?? ''} ${member.latest?.result ?? ''}`)) : members);
       matched = selected.length;
       summary = attention ? <span className="overview-attention">{attention}</span> : team?.paused ? t('team.paused') : running ? t('team.running', running) : t('team.count', members.length);
@@ -199,14 +211,14 @@ export function ThreadOverview(props: OverviewProps) {
       const selected = take(id, detail ? pictures.filter(file => matches(rel(file.path))) : pictures);
       matched = selected.length;
       summary = gonePictures.length ? t('overview.missingImages', gonePictures.length) : String(pictures.length);
-      rows = <>{selected.map(file => file.missing ? <FileLine key={file.path} path={rel(file.path)} full={file.path} missing locked onOpen={() => {}} /> : <Picture key={file.path} path={file.path} name={rel(file.path)} load={loadFile} enabled={Boolean(detail || layout)} />)}{pad(id, selected.length)}</>;
+      rows = <>{selected.map(file => file.missing ? <FileLine key={file.path} path={rel(file.path)} full={file.path} missing locked onOpen={() => {}} /> : <Picture key={file.path} path={file.path} name={rel(file.path)} load={loadFile} onOpen={onOpenPicture} enabled={Boolean(detail || layout)} />)}{pad(id, selected.length)}</>;
     } else {
       const selected = take(id, detail ? files.filter(file => matches(rel(file.path))) : files);
       matched = selected.length;
       rows = <>{selected.map(file => <FileLine key={file.path} path={rel(file.path)} full={file.path} missing={file.missing} locked={file.missing} onOpen={action(() => { void onOpenFile(file.path); })}
         preview={previewable(file) ? action(() => onPreview(file.path)) : undefined} />)}{pad(id, selected.length)}</>;
     }
-    const icons = { agents: <IconAgents size={14} />, plan: <PlanRing done={progress?.total ? progress.completed / progress.total : 0} size={14} />, changes: <IconEdit size={14} />, images: <IconImage size={14} />, files: <IconFile size={14} /> };
+    const icons = { chain: <IconHandover size={14} />, agents: <IconAgents size={14} />, plan: <PlanRing done={progress?.total ? progress.completed / progress.total : 0} size={14} />, changes: <IconEdit size={14} />, images: <IconImage size={14} />, files: <IconFile size={14} /> };
     if (detail) return <section key={id} className="overview-detail-group"><h2>{t(`overview.${id}`)}<span>{summary}</span></h2>{rows}{matched === 0 && <p className="overview-empty">{t(search.trim() ? 'common.noMatch' : 'overview.sectionEmpty')}</p>}</section>;
     return <Group key={id} id={id} open={limit > 0 && !choices[id]} onToggle={limit === 0 ? section => viewAll(section)() : toggle} icon={icons[id]} label={t(`overview.${id}`)} summary={summary}>
       {rows}<button type="button" className="overview-more" onClick={viewAll(id)}>{t('overview.viewAll')}<IconChevronRight size={12} /></button>
@@ -228,7 +240,7 @@ export function ThreadOverview(props: OverviewProps) {
       {!outputs && <p className="overview-empty" role={failed ? 'alert' : 'status'}>{t(failed ? 'overview.failed' : 'common.loading')}</p>}{content}{!available.length && outputs && !failed && <p className="overview-empty">{t('overview.empty')}</p>}
     </div>
   </div>;
-  return <div ref={root} className="thread-overview" data-ready={ready && Boolean(layout)} data-limit={limit} aria-busy={loading} style={{ height: layout?.height }}>
+  return <div ref={root} className={`thread-overview${goalExpanded ? ' with-goal-details' : ''}`} data-ready={ready && (goalExpanded || Boolean(layout))} data-limit={limit} aria-busy={loading} style={{ height: goalExpanded ? undefined : layout?.height }}>
     <div className="overview-content">{goal}{content}{failed && !outputs && <p className="overview-empty" role="status">{t('overview.failed')}</p>}{!sections.length && !goal && ready && !failed && <p className="overview-empty">{t(available.length ? 'overview.newContent' : 'overview.empty')}</p>}</div>{footer}
   </div>;
 }
@@ -272,6 +284,20 @@ function Group({ id, open, onToggle, icon, label, summary, children }: {
     </div>
     {open && <div className="overview-body">{children}</div>}
   </section>;
+}
+
+const agentName = (agents: AgentInfo[], id: string) => agents.find(a => a.id === id)?.label ?? id;
+
+/** One segment of the chain on one line, like a member: its mark, its title, and on the right where the reading is, or else whose it was. */
+function ChainRow({ thread, agents, latest, viewing, onOpen }: { thread: Thread; agents: AgentInfo[]; latest: boolean; viewing: boolean; onOpen: () => void }) {
+  const icon = agents.find(a => a.id === thread.agent)?.icon;
+  const state = thread.waiting ? 'waiting' : thread.status === 'running' ? 'running' : '';
+  const word = state === 'waiting' ? waitingLabel(thread) : state === 'running' ? t('status.running') : latest ? t('handover.group.current') : viewing ? t('handover.group.viewing') : agentName(agents, thread.agent);
+  return <button type="button" role="menuitem" className="overview-member" aria-current={viewing ? 'true' : undefined} title={thread.title} onClick={onOpen}>
+    <span className="overview-member-mark">{icon ? <AgentMark path={icon} size={14} /> : <IconAgents size={14} />}</span>
+    <span className="overview-member-name">{thread.title}</span>
+    <span className={`overview-state ${state}`}>{word}</span>
+  </button>;
 }
 
 /** One member on one line: its mark, its name, and the word its last report ended with. What it
@@ -341,7 +367,7 @@ function PathName({ path }: { path: string }) {
 
 /** A thumbnail, fetched while it is on screen; the full picture opens over everything. A file that
  *  exists but cannot be read keeps its square, grey, with the reason on hover. */
-function Picture({ path, name, load, enabled = true }: { path: string; name: string; load: (path: string) => Promise<Blob>; enabled?: boolean }) {
+function Picture({ path, name, load, onOpen, enabled = true }: { path: string; name: string; load: (path: string) => Promise<Blob>; onOpen?: (path: string, name: string) => void; enabled?: boolean }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [large, setLarge] = useState(false);
@@ -359,7 +385,7 @@ function Picture({ path, name, load, enabled = true }: { path: string; name: str
   // on the picture background instead, with room around it.
   const vector = /\.svgz?$/i.test(path);
   return <>
-    <button type="button" className={`overview-row overview-picture-row${vector ? ' vector' : ''}${error ? ' failed' : ''}`} title={error ? `${name}\n${error}` : name} disabled={!url} onClick={() => setLarge(true)}>
+    <button type="button" className={`overview-row overview-picture-row${vector ? ' vector' : ''}${error ? ' failed' : ''}`} title={error ? `${name}\n${error}` : name} disabled={!url} onClick={() => (onOpen ? onOpen(path, name) : setLarge(true))}>
       <span className="overview-picture-mini">{url ? <img src={url} alt="" /> : <IconImage size={15} />}</span><PathName path={name} />{error && <span className="overview-gone">{t('view.noPreview')}</span>}
     </button>
     {large && url && <Lightbox url={url} name={name} onClose={() => setLarge(false)} />}

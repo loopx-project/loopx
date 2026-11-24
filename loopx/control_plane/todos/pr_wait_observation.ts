@@ -7,7 +7,7 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
 import { evaluateTodoResumeConditions, normalizeTodoResumeWhen,
   TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION,
-  readTodoResumeRolloutEvents,
+  readTodoResumeRolloutEvents, todoDoneResumeTargetId,
 } from "./resume_condition.ts";
 
 export const PR_WAIT_OBSERVATION_REQUEST = "todo_pr_wait_observation_request_v0";
@@ -31,11 +31,35 @@ export function planPrWaitObservations(value: unknown): JsonObject {
   const actor = requireNonEmptyString(request.agent_id, "agent_id");
   const now = clock(request.generated_at);
   if (now === null) throw new EffectRuntimeRequestError("PR observation requires a timezone-aware clock");
-  const items = request.items.map(row => requireJsonObject(row, "PR wait Todo"))
-    .filter(row => row.role === "agent" && ["open", "deferred"].includes(String(row.status))
-      && row.task_class === "advancement_task" && (row.archive_state == null || row.archive_state === "active")
-      && (!row.claimed_by || row.claimed_by === actor)
-      && !(Array.isArray(row.excluded_agents) && row.excluded_agents.includes(actor)));
+  const activeRows = request.items.map(row => requireJsonObject(row, "PR wait Todo"))
+    .filter(row => row.role === "agent" && ["open", "deferred", "blocked"].includes(String(row.status))
+      && row.task_class === "advancement_task"
+      && (row.archive_state == null || row.archive_state === "active"));
+  const byId = new Map<string, JsonObject>();
+  for (const row of activeRows) {
+    if (typeof row.todo_id === "string" && row.todo_id.trim()) {
+      byId.set(row.todo_id.trim().toLowerCase(), row);
+    }
+  }
+  const notExcluded = (row: JsonObject): boolean =>
+    !(Array.isArray(row.excluded_agents) && row.excluded_agents.includes(actor));
+  const actorOwnedOrUnclaimed = (row: JsonObject): boolean =>
+    (!row.claimed_by || row.claimed_by === actor) && notExcluded(row);
+  const reachablePrerequisites = new Set<string>();
+  const queue = activeRows.filter(actorOwnedOrUnclaimed)
+    .map(row => todoDoneResumeTargetId(row.resume_when))
+    .filter((id): id is string => id !== null);
+  while (queue.length > 0) {
+    const nextId = queue.shift()!;
+    if (reachablePrerequisites.has(nextId)) continue;
+    reachablePrerequisites.add(nextId);
+    const target = byId.get(nextId);
+    const upstream = target && notExcluded(target) ? todoDoneResumeTargetId(target.resume_when) : null;
+    if (upstream && !reachablePrerequisites.has(upstream)) queue.push(upstream);
+  }
+  const items = activeRows.filter(row => notExcluded(row)
+    && (actorOwnedOrUnclaimed(row)
+      || (typeof row.todo_id === "string" && reachablePrerequisites.has(row.todo_id.trim().toLowerCase()))));
   const evaluation = evaluateTodoResumeConditions({schema_version: TODO_RESUME_EVALUATION_REQUEST_SCHEMA_VERSION,
     items, source_items: [], rollout_events: request.rollout_events, kinds: ["pr_merged"]});
   const targets = new Map<string, JsonObject>();

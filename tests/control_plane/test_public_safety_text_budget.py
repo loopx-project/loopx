@@ -79,3 +79,8 @@ def test_a_credential_inside_the_kept_prefix_is_still_refused() -> None:
     assert public_safe_compact_text("note ordinary prose", limit=40) == (
         "note ordinary prose"
     )
+
+
+def test_http_link_with_path_shaped_parts_survives_compaction() -> None:
+    value = "https://[2001:db8::1]/home/overview?next=/tmp/a"
+    assert public_safe_compact_text(value, limit=200) == value

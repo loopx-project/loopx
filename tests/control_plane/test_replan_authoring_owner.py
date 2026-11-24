@@ -201,11 +201,18 @@ def test_real_capture_authoring_read_does_not_repeat_work_or_spend(tmp_path, mon
         "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, result
     source = json.loads((capture / "decision.json").read_text())
-    authoring = deepcopy(source["replan_action_packet"]["writeback_contract"]["vision_authoring"])
+    assert source["replan_action_packet"]["writeback_contract"]["vision_authoring_ref"] == (
+        "$.interaction_contract.cli_channel.settlement_plan.ordered_steps[1].vision_authoring"
+    )
+    authoring = deepcopy(source["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]["vision_authoring"])
     authoring.pop("minimal_example", None)
     shared = shared_packet(source)
     before = state.read_bytes()
-    run = cli_writer(project, shared, source_digest(shared))
+    run = cli_writer(
+        project,
+        shared,
+        build_turn_envelope(shared)["action_signature"]["source_decision_hash"],
+    )
     assert run.returncode == 0, run.stdout + run.stderr
     assert json.loads(run.stdout)["writeback_contract"]["vision_authoring"] == authoring
     assert state.read_bytes() == before

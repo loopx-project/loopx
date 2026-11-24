@@ -638,3 +638,103 @@ def test_source_cli_preserves_receipt_clocks_and_idempotent_ledger(
         assert "recorded_at" not in direct_row and "publication_date" not in direct_row
     finally:
         restart_effect_runtime()
+
+
+def test_zero_flag_discover_and_plan_auto_detect_local_evidence_capabilities(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from loopx.extensions import public_github_research as gh_provider
+
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    monkeypatch.delenv("LOOPX_OFFLINE", raising=False)
+
+    payloads: list[dict] = []
+
+    def emit(payload, *_):
+        payloads.append(payload)
+
+    try:
+        # 1. Zero-flag discover automatically projects local methods + default connector registry.
+        discover_args = argparse.Namespace(
+            command="external-evidence",
+            external_evidence_action="discover",
+            provider_inventory_json=None,
+            connector_registry=None,
+            auto_detect=True,
+        )
+        assert (
+            cli.handle_external_evidence_command(
+                discover_args,
+                output_format=lambda _: "json",
+                print_payload=emit,
+            )
+            == 0
+        )
+        discovered = payloads[-1]
+        assert discovered["schema_version"] == "loopx_external_evidence_discovery_v0"
+        assert discovered["status"] == "ready"
+        assert discovered["summary"]["method_count"] == 4
+        assert discovered["summary"]["connector_count"] >= 1
+        assert "method:public-github" in discovered["ready_provider_ids"]
+        assert "method:public-source-reader" in discovered["ready_provider_ids"]
+        assert discovered["truth_contract"]["execution_observed"] is False
+
+        # 2. Under network-disabled sandbox, zero-flag discover reports inventory_only with zero ready methods.
+        monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+        assert (
+            cli.handle_external_evidence_command(
+                discover_args,
+                output_format=lambda _: "json",
+                print_payload=emit,
+            )
+            == 0
+        )
+        sandboxed = payloads[-1]
+        assert sandboxed["status"] == "inventory_only"
+        assert sandboxed["summary"]["ready_count"] == 0
+        monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+
+        # 3. Zero-flag plan with pinned GitHub source refs auto-probes public-github without --public-github.
+        monkeypatch.setattr(
+            gh_provider,
+            "_read",
+            lambda url: b'{"private": false}'
+            if url.startswith("https://api.github.com/")
+            else b"Pinned content\n",
+        )
+        pinned_source = (
+            "https://github.com/example/public/blob/" + "c" * 40 + "/README.md"
+        )
+        plan_args = argparse.Namespace(
+            command="external-evidence",
+            external_evidence_action="plan",
+            objective="Inspect pinned public behavior",
+            user_activity="Auto-detect ready evidence method",
+            decision="Whether to adopt",
+            evidence_kind=["current_behavior"],
+            constraint=[],
+            provider_inventory_json=None,
+            public_github=False,
+            source=[pinned_source],
+            search_term=["Pinned"],
+            connector_registry=None,
+            preferred_provider_id=None,
+            auto_detect=True,
+        )
+        assert (
+            cli.handle_external_evidence_command(
+                plan_args,
+                output_format=lambda _: "json",
+                print_payload=emit,
+            )
+            == 0
+        )
+        planned = payloads[-1]
+        assert planned["schema_version"] == "loopx_external_evidence_plan_v0"
+        assert planned["status"] == "ready"
+        assert planned["selected_provider"]["provider_id"] == "method:public-github"
+    finally:
+        restart_effect_runtime()

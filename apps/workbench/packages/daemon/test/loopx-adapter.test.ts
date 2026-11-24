@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { corePermission, fromCorePermission, goalAgentFor, LoopxBindings, permissionAvailable, type LoopxBinding } from '../src/adapters/loopx/binding.js';
+import { corePermission, fromCorePermission, goalAgentFor, goalThreadMode, LoopxBindings, permissionAvailable, type GoalAdapter, type LoopxBinding } from '../src/adapters/loopx/binding.js';
 import { goalContextBlock } from '../src/adapters/loopx/context.js';
 import { goalCreateRequest, goalLocale, workspaceRef } from '../src/adapters/loopx/core.js';
 import { GoalStateCache, GoalStatusUnavailable, projectGoalState, readGoalState } from '../src/adapters/loopx/status.js';
@@ -46,13 +46,21 @@ test('state reads are shared, remembered briefly and never cache a failure', asy
   assert.equal(reads, 4);
 });
 
-test('only codex may write inside the workspace; only codex and claude can hold a Goal', () => {
-  assert.deepEqual(permissionAvailable('codex', 'workspace_auto'), { ok: true });
-  assert.equal(permissionAvailable('claude', 'workspace_auto').ok, false);
-  assert.equal(permissionAvailable('claude', 'read_only').ok, true);
-  assert.equal(goalAgentFor('codex'), 'codex');
-  assert.equal(goalAgentFor('claude'), 'claude-code');
-  assert.equal(goalAgentFor('pi'), null);
+test('every Goal agent may write; read only needs an agent that asks first', () => {
+  const agent = (id: string, permissionModes: string[]) => ({ id, capabilities: { permissionModes } }) as unknown as GoalAdapter;
+  const codex = agent('codex', ['ask', 'auto_edit', 'full_access']);
+  const claude = agent('claude', ['ask', 'auto_edit', 'full_access']);
+  const agy = agent('agy', ['auto_edit', 'full_access']);
+  const dsh = agent('dsh', []);
+  for (const a of [codex, claude, agy, dsh]) assert.equal(permissionAvailable(a, 'workspace_auto').ok, true, a.id);
+  assert.equal(permissionAvailable(claude, 'read_only').ok, true);
+  assert.equal(permissionAvailable(agy, 'read_only').ok, false, 'it cannot ask, so read only would not hold');
+  assert.equal(goalThreadMode(codex, 'workspace_auto'), 'ask', 'codex keeps its sandbox policy');
+  assert.equal(goalThreadMode(claude, 'read_only'), 'ask');
+  assert.equal(goalThreadMode(claude, 'workspace_auto'), 'full_access');
+  assert.equal(goalThreadMode(agy, 'workspace_auto'), 'full_access');
+  assert.equal(goalThreadMode(dsh, 'workspace_auto'), undefined);
+  assert.deepEqual(['codex', 'claude', 'agy', 'dsh', 'traex', 'pi'].map(goalAgentFor), ['codex', 'claude-code', 'antigravity', 'dsh', null, null]);
   assert.equal(corePermission('workspace_auto'), 'workspace_write_on_confirmation');
   assert.equal(fromCorePermission('read_only'), 'read_only');
   assert.equal(fromCorePermission('workspace_auto'), null);

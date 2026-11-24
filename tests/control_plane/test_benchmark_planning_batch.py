@@ -132,7 +132,7 @@ raise SystemExit(response.returncode)
     code, admitted = fixture._run_cli(
         source, runtime, "quota", "should-run", "--goal-id", fixture.GOAL_ID,
         "--agent-id", fixture.AGENT_ID, "--todo-id", ids[0], "--runtime-profile", "generic_cli",
-        "--complete-turn", "--context-delivery", "off", "--delta-delivery", "off",
+        "--context-delivery", "off", "--delta-delivery", "off",
         "--turn-instance-id", "batch-fixture-execution", cwd=project,
     )
     assert code == 0 and admitted["should_run"] and admitted["selected_todo"]["todo_id"] == ids[0]

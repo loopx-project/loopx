@@ -759,6 +759,8 @@ def refresh_state_run(
     goal_ref: dict[str, str] | None = None,
     goal_acceptance_preview: dict[str, Any] | None = None,
     task_lease_proof: dict[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
@@ -939,13 +941,16 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            checkpoint_replay = None
             if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
-                inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
+                checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
+                if checkpoint_replay is not None:
+                    recovery_payload.update({key: checkpoint_replay[key] for key in ("json_path", "markdown_path")})
                 return recover_refresh_todo_projection(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
@@ -1089,10 +1094,6 @@ def refresh_state_run(
                 existing_agent_vision=existing_agent_vision,
                 merge_patch=merge_agent_vision_patch,
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
-                allow_terminal_stride_path=(
-                    (effective_replan_goal.get("execution_profile") or {}).get("stride_strategy")
-                    == "evidence_conditioned_v1"
-                ),
             )
         generated_at = now_local()
         # Next Action is now an actor/Todo-bound recommendation in the existing
@@ -1614,6 +1615,8 @@ def refresh_state_run(
                         requested_proof=task_lease_proof,
                         settlement=settlement_readback,
                         locked_goal=current_goal if normalized_next_action else None,
+                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(

@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import base64
 import hashlib
+import json
 from pathlib import Path
 import re
 import sys
@@ -506,7 +507,7 @@ def reply_image_workspace(session: dict[str, Any], turn: dict[str, Any]) -> Path
 
 
 def _check_reply_image(data: bytes, mime: str) -> None:
-    from ...chat_attachments import CHAT_IMAGE_MAX_BYTES
+    from ...chat.attachments import CHAT_IMAGE_MAX_BYTES
 
     if not data or len(data) > CHAT_IMAGE_MAX_BYTES:
         raise ValueError("reply image is empty or exceeds its size bound")
@@ -538,7 +539,7 @@ def read_reply_image(workspace: Path, turn_id: str, name: str) -> tuple[str, byt
 
 def capture_reply_image_plan(workspace: Path, turn_id: str, targets: list[str]) -> list[str | dict[str, Any] | None]:
     """Pin exact local bytes without keeping host paths in Chat responses."""
-    from ...chat_attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
+    from ...chat.attachments import CHAT_IMAGE_MAX_COUNT, CHAT_IMAGE_MAX_TOTAL_BYTES
 
     if all(target.startswith("https://") for target in targets):
         return []  # The original remote-image path remains authoritative.
@@ -563,3 +564,93 @@ def capture_reply_image_plan(workspace: Path, turn_id: str, targets: list[str]) 
         except (OSError, ValueError):
             result.append(None)
     return result
+
+
+class _DeferredBacklogRequest(dict[str, Any]):
+    """Bounded backlog request view carrying its observed file fingerprint."""
+
+    __slots__ = ("req_fp", "needs_full_read")
+
+    def __init__(
+        self,
+        data: Mapping[str, Any],
+        *,
+        req_fp: tuple[int, ...] | None,
+        needs_full_read: bool,
+    ) -> None:
+        super().__init__(data)
+        self.req_fp = req_fp
+        self.needs_full_read = needs_full_read
+
+
+def _preparation_image_identity(value: Any) -> dict[str, Any] | None:
+    """Fingerprint already normalized Core images without exporting their bytes."""
+    from ...chat.attachments import normalize_chat_image_attachments
+
+    if not isinstance(value, list) or not value:
+        return None
+    try:
+        images = normalize_chat_image_attachments(value)
+        if images != value:
+            return None
+        encoded = json.dumps(images, sort_keys=True, separators=(",", ":")).encode()
+        return {"count": len(images), "sha256": hashlib.sha256(encoded).hexdigest()}
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _project_source_request_digest(_path: Path, item: dict[str, Any]) -> dict[str, Any]:
+    canonical = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return {
+        "request_ref": item.get("request_ref"),
+        "binding_id": item.get("binding_id"),
+        "source": item.get("source"),
+        "sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
+def _project_user_message_hint(message: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: message[key]
+        for key in ("role", "turn_id", "text", "origin", "created_at")
+        if key in message
+    }
+
+
+class _RecoveryDiscoveryReads:
+    """Lazy facts for one queue-discovery pass, never recovery admission.
+
+    Historical requests share Session history. Retain queue/control/history
+    hints, never provider identity or a recovery decision. A new
+    pass builds new observations; normal admission never receives this object.
+    """
+
+    def __init__(self, core: Any) -> None:
+        self.core = core
+        self.queues: dict[str, bool] = {}
+        self.histories: dict[str, list[dict[str, Any]]] = {}
+        self.message_indexes: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self.controls: list[dict[str, Any]] | None = None
+
+    def queued(self, session_id: str) -> bool:
+        if session_id not in self.queues:
+            self.queues[session_id] = bool(self.core.controller.store.queued_turns(session_id))
+        return self.queues[session_id]
+
+    def user_messages(self, session_id: str) -> list[dict[str, Any]]:
+        if session_id not in self.histories:
+            self.histories[session_id] = list(self.core._cached_user_messages(session_id))
+        return self.histories[session_id]
+
+    def source_controls(self) -> list[dict[str, Any]]:
+        if self.controls is None:
+            self.controls = self.core.source_controls()
+        return self.controls
+
+    def matching_user_messages(self, session_id: str, text: str) -> list[dict[str, Any]]:
+        if session_id not in self.message_indexes:
+            index: dict[str, list[dict[str, Any]]] = {}
+            for row in self.user_messages(session_id):
+                index.setdefault(row.get("text", ""), []).append(row)
+            self.message_indexes[session_id] = index
+        return self.message_indexes[session_id].get(text, [])

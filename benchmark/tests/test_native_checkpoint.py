@@ -927,6 +927,18 @@ def test_interrupted_cursor_requires_exact_unreleased_final_guard(
     rendered[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
         "LOOPX_TURN=turn-1\n" + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
     _verify_interrupted_guard(rendered, guard)
+    rendered_prequota = copy.deepcopy(turns)
+    prequota_argv = [guard["cli"], "--registry", guard["registry"], "--runtime-root", guard["runtime_root"],
+                     "heartbeat-prequota", "-g", "research", "-a", "worker"]
+    rendered_prequota[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
+        "LOOPX_TURN=turn-1\n" + shlex.join(prequota_argv) + "\n"
+        + shlex.join(argv).replace("--turn-instance-id turn-1", '--turn-instance-id "${LOOPX_TURN:?}"')])
+    _verify_interrupted_guard(rendered_prequota, guard)
+    mismatched_prequota = copy.deepcopy(turns)
+    mismatched_prequota[-1]["items"][-1]["command"] = shlex.join(["/bin/bash", "-lc",
+        shlex.join([*prequota_argv[:-3], "other", "-a", "worker"]) + "\n" + shlex.join(argv)])
+    with pytest.raises(ValueError, match="prequota route|invalid"):
+        _verify_interrupted_guard(mismatched_prequota, guard)
     for setting in ("off", "on"):
         explicit = copy.deepcopy(turns)
         explicit[-1]["items"][-1]["command"] = shlex.join([
@@ -1028,7 +1040,6 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
 
     from benchmark.runtime.checkpoint import held_quota_decision
     from benchmark.runtime.checkpoint_wake import CheckpointWake
-    from benchmark.runtime.codex import turn_envelope_receipt
     from benchmark.runtime.worker import heartbeat_body
     from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.codex_agent_session import CodexAgentSession
@@ -1062,14 +1073,12 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
            "LOOPX_REGISTRY": str(registry), "LOOPX_RUNTIME_ROOT": str(runtime), "LOOPX_CLI": str(cli),
            "LOOPX_GOAL_ID": GOAL_ID, "LOOPX_AGENT_ID": AGENT_ID,
            "LOOPX_WAKE_LOG_DIR": str(tmp_path / "wakes"), "LOOPX_CHECKPOINT_REQUEST": str(declaration),
-           "LOOPX_CONTEXT_DELIVERY": "off", "LOOPX_TURN_ENVELOPE": "0",
-           "LOOPX_COMPLETE_TURN": "1"}
+           "LOOPX_CONTEXT_DELIVERY": "off"}
     session = CodexAgentSession(env, context="resume", sandbox="read-only", receipt={})
     _store_codex_cli_session(runtime, lineage=session.lineage, session_scope="agent",
         session_id="fixture-session", goal_ref=session.goal_ref, session_profile_digest=session.digest)
     receipt = {"mode": "heartbeat", "stage": "execute", "turn_id": TURN_ID,
-        "session": {"session_id": "fixture-session"},
-        **turn_envelope_receipt(explicit=False, complete=True)}
+        "session": {"session_id": "fixture-session"}}
     (tmp_path / "wakes" / TURN_ID).mkdir(parents=True)
 
     with CheckpointWake(env, receipt) as host:
@@ -1077,8 +1086,8 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
         block = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
         command = shlex.join(["/bin/bash", "-lc", block])
         original = _guard_cli_arguments(command, {"cli": str(cli), "turn_instance_id": TURN_ID})
-        assert "--complete-turn" in original and "--turn-envelope" not in original
-        observed = original if mode_matches else [word for word in original if word != "--complete-turn"]
+        assert "--complete-turn" not in original and "--turn-envelope" not in original
+        observed = original if mode_matches else [*original, "--complete-turn"]
         item = {"type": "commandExecution", "id": "pending-guard", "cwd": str(project),
                 "command": shlex.join(["/bin/bash", "-lc", shlex.join([str(cli), *observed])]),
                 "status": "failed", "exitCode": 137, "aggregatedOutput": None}
@@ -1092,6 +1101,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
                     agent_id=AGENT_ID, turn_instance_id=TURN_ID,
                     deadline=time.monotonic() + 30) as held:
                 assert held["quota"]["ok"] is True and held["intent"]["capture"] is True
+                assert held["quota"]["schema_version"] == "loopx_turn_envelope_v1"
                 quota = held["quota"]["heartbeat_receipt"]
                 assert quota["turn_instance_id"] == TURN_ID
                 digest = hashlib.sha256(held["path"].read_bytes()).hexdigest()
@@ -1105,7 +1115,7 @@ def test_held_complete_guard_checkpoint_binds_original_settlement_mode(tmp_path,
                     assert result["sha256"] == captured["sha256"]
                     manifest = json.loads((point / "checkpoint.json").read_bytes())["point_metadata"]
                     stored = manifest["native_session"]["interrupted_guard"]
-                    assert stored["complete_turn"] is True and stored["turn_envelope"] is False
+                    assert stored["complete_turn"] is False and stored["turn_envelope"] is False
                     assert stored["turn_instance_id"] == TURN_ID and stored["native_call_id"] == item["id"]
                     assert stored["decision_sha256"] == digest
                     assert (point / "components" / manifest["held_decision_component_id"]).read_bytes() == held["path"].read_bytes()

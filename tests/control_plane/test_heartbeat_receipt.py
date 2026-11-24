@@ -13,6 +13,8 @@ from loopx.control_plane.quota.heartbeat_receipt import (
     retain_pending_heartbeat_action_selection,
     upgrade_identityless_heartbeat_receipt,
 )
+from loopx.control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
+from loopx.control_plane.quota.settlement import read_heartbeat_settlement
 from loopx.rollout_event_log import (
     append_rollout_event,
     build_rollout_event,
@@ -25,6 +27,66 @@ AGENT_ID = "codex-heartbeat-receipt"
 TURN_ID = "turn-heartbeat-receipt-1"
 TODO_ID = "todo_heartbeat_receipt"
 EFFECT_ID = f"{GOAL_ID}:{AGENT_ID}:{TODO_ID}:{TURN_ID}"
+
+
+@pytest.mark.parametrize("todo_id", ["todo_BAD_ID", "not_a_todo", "todo_a", "todo_" + "x" * 65])
+def test_receipt_reader_rejects_the_same_illegal_binding_as_settlement(
+    tmp_path: Path, todo_id: str,
+) -> None:
+    _append_receipt(tmp_path, todo_id=todo_id, effect_id=f"{GOAL_ID}:{AGENT_ID}:{todo_id}:{TURN_ID}")
+    path = rollout_event_log_path(tmp_path, GOAL_ID)
+    original = path.read_bytes()
+    typed = read_heartbeat_settlement(
+        tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=None,
+        turn_instance_id=TURN_ID, resolve_original_binding=True,
+    )
+    assert typed is not None and typed.identity.failure is not None
+    reason = "heartbeat receipt declares a Todo binding that is not a legal Todo id"
+    assert typed.identity.failure.reason == reason
+    with pytest.raises(HeartbeatReceiptIdentityConflictError, match="not a legal Todo id") as rejected:
+        find_heartbeat_receipt(tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=TURN_ID)
+    assert str(rejected.value) == reason
+    assert path.read_bytes() == original
+
+
+def test_binding_projection_does_not_cache_or_roundtrip_receipt_details(tmp_path: Path) -> None:
+    # Two fresh logs have identical binding facts and different unconsumed
+    # details. A pure selection may be reused; the event must be read afresh.
+    for ordinal in (1, 2):
+        runtime = tmp_path / str(ordinal)
+        event = build_rollout_event(
+            goal_id=GOAL_ID, event_kind="quota_should_run", agent_id=AGENT_ID,
+            run_id=TURN_ID, status="normal_run", details={
+                "todo_id": TODO_ID, "settlement_effect_id": EFFECT_ID,
+                "opaque_observation": ordinal, "exact_integer": 2**60 + ordinal,
+            },
+        )
+        recorded = append_rollout_event(rollout_event_log_path(runtime, GOAL_ID), event)
+        read = find_heartbeat_receipt(runtime, goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=TURN_ID)
+        assert read == recorded
+        assert read["details"]["opaque_observation"] == ordinal
+        assert read["details"]["exact_integer"] == 2**60 + ordinal
+
+
+@pytest.mark.parametrize("binding_details", [
+    {"replan_obligation_id": "replan-2222222222222222"},
+    {"request_id": "a" * 64, "request_revision": 1,
+     "request_digest": "b" * 64, "execution_scope_sha256": "c" * 64},
+])
+def test_shared_binding_outranks_a_later_unbound_receipt(
+    tmp_path: Path, binding_details: dict[str, object],
+) -> None:
+    path = rollout_event_log_path(tmp_path, GOAL_ID)
+    bound = append_rollout_event(path, build_rollout_event(
+        goal_id=GOAL_ID, event_kind="quota_should_run", agent_id=AGENT_ID,
+        run_id=TURN_ID, status="normal_run", details=binding_details,
+    ))
+    _append_receipt(tmp_path)
+    before = path.read_bytes()
+    assert find_heartbeat_receipt(
+        tmp_path, goal_id=GOAL_ID, agent_id=AGENT_ID, turn_instance_id=TURN_ID,
+    ) == bound
+    assert path.read_bytes() == before
 
 
 def _append_receipt(
@@ -374,22 +436,22 @@ def test_cli_reentry_distinguishes_admission_timer_from_later_wait(
     # Both routes still owe the same result, writeback and exactly one debit.
     (project / "validated-result.txt").write_text("Synthetic result validated before closeout.\n")
     plan = reentry["interaction_contract"]["cli_channel"]["settlement_plan"]
+    assert plan["schema_version"] == "quota_settlement_plan_v2"
     command = next(s["command_template"] for s in plan["ordered_steps"] if s["kind"] == "durable_writeback")
     command = command.replace("<validated_progress>", "admission_timer_validated").replace(
         "<scale>", "single_surface").replace("<outcome>", "outcome_progress")
     command += (" --delivery-boundary in_flight_continuation --progress-result-class advanced"
                 f" --progress-work-item-id {work} --progress-evidence-id evidence:synthetic-result"
                 " --no-global-sync --suppress-external-sinks")
-    rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
-    assert rc == 0, written
-    spend = written["settlement_owed"]["command"]
     for attempt in range(2):
-        rc, settled = _run_generated_cli(spend, registry_path=registry, cwd=project)
-        assert rc == 0, settled
-        assert settled["settlement_result"]["ok"] is True
-        if attempt:
-            assert settled["idempotent_replay"] is True
-            assert settled["appended"] is False
+        rc, written = _run_generated_cli(command, registry_path=registry, cwd=project)
+        assert rc == 0, written
+        assert written["settlement_result"]["ok"] is True
+        assert written["settlement_progress"]["state"] == "settled"
+        assert [row["step_kind"] for row in written["settlement_result"]["receipts"]] == [
+            "validation", "durable_writeback", "quota_spend",
+        ]
+        assert written.get("idempotent_replay", False) is bool(attempt)
     assert _spend_run_count(runtime) == 1
     rc, replay = _run_cli(registry, runtime, *guard)
     assert rc == 0, replay

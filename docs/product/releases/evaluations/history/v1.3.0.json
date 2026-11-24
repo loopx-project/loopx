@@ -1,0 +1,61 @@
+{
+  "schema_version": "loopx_release_evaluation_v0",
+  "rubric_version": "rubric_v0",
+  "generation_status": "eol",
+  "evaluation_mode": "retrospective_git_audit",
+  "semver": {
+    "major": 1,
+    "minor": 3,
+    "patch": 0
+  },
+  "source": {
+    "package_version": "1.3.0",
+    "version_tag": "v1.3.0",
+    "git_commit": "e1dd9e519c3057fda4b3765d0c93e7ae793608bf",
+    "git_tree": "92ecd2e76d8bb72cfc7d87487363edecc20990da",
+    "committed_at": "2026-10-06T08:30:02+08:00",
+    "git_dirty": false,
+    "series_patch_span": {
+      "first_tag": "v1.3.0",
+      "last_tag": "v1.3.1",
+      "last_commit": "7445ae360aaf330e0067959a5e0084ffd9f76de4",
+      "last_committed_at": "2026-10-06T16:06:20+08:00",
+      "tag_count": 2
+    }
+  },
+  "qualification_evidence": {
+    "receipt_schema_version": null,
+    "claims_net_benchmark_uplift": false,
+    "audit_basis": "retrospective_git_audit",
+    "evidence_refs": [
+      "v1.3.0",
+      "v1.3.1"
+    ]
+  },
+  "a_scale": {
+    "score": 25.9,
+    "delta_from_prior": 1.6,
+    "domain_scores": {
+      "D1": 29.5,
+      "D2": 22.0,
+      "D3": 20.5,
+      "D4": 24.0,
+      "D5": 32.0,
+      "D6": 28.5,
+      "D7": 21.0,
+      "D8": 35.0
+    }
+  },
+  "b_scale": {
+    "generation_major": 1,
+    "battleline_count": null,
+    "score": null,
+    "delta_from_prior": null,
+    "domain_scores": null,
+    "note": "Retrospective git audit calibrated on the unified 41-battleline a-Scale; formal 30-line 2.x b-Scale started at v2.3.0."
+  },
+  "battleline_breakdown_scope": "domain_aggregate",
+  "battlelines": [],
+  "summary": "Introduced replan context owner (#5718), preserved managed Chat storage/timeouts (#5714), and patched markdown URL policy in v1.3.1 (#5755).",
+  "summary_zh": "确立重规划上下文单主（#5718）、守护 Chat 存储超时（#5714）并修复 v1.3.1 Markdown 链接策略（#5755）。"
+}

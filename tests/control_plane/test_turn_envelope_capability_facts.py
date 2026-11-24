@@ -65,7 +65,7 @@ def test_real_captured_guard_preserves_required_and_missing_capabilities(
     code, envelope = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "turn-capability-facts", "--codex-app", *capabilities,
-        "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
+        "--decision-output-dir", str(capture), cwd=project)
     assert code == (0 if network_available else 1), envelope
     full = json.loads((capture / "decision.json").read_text())
     assert envelope == full and full["schema_version"] == "loopx_turn_envelope_v1"
@@ -139,7 +139,7 @@ def test_captured_vision_contract_preserves_closeout_and_original_observation(
     code, envelope = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "vision-contract-turn", "--codex-app",
-        "--available-capability", "filesystem_read", "--turn-envelope",
+        "--available-capability", "filesystem_read",
         "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, envelope
     saved = capture / "decision.json"

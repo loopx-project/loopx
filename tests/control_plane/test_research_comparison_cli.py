@@ -97,7 +97,7 @@ def test_measured_comparison_generates_and_adopts_a_program_with_original_accept
         return packet
 
     cli("configure-goal", "--goal-id", fixture.GOAL_ID, "--explore-mode", "planning",
-        "--execution-replan-after-turns", "3", "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execution-replan-after-turns", "3", "--execute")
     # The owner defines three search families and a complete implementation
     # task, not a winning expression or a prewritten next-route Todo. Links are
     # part of that initial work declaration; later result capture adds evidence.

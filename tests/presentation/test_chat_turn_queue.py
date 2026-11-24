@@ -65,6 +65,10 @@ def test_edit_cancel_and_admission_retries_keep_exact_input_history_and_active_t
     sid, active, queued, original = held_queue(ordinary)
     path = f"/api/chat/sessions/{sid}/queue/{queued}/input"
     before = capture.read_bytes()
+    code, queue = request(f"/api/chat/sessions/{sid}/queue")
+    assert code == 200
+    pending, = queue["turns"]
+    assert pending["turn_id"] == queued and pending["input_mutation_allowed"] is True
     assert request(path)[0] == 404
     assert store.load_turn(sid, queued)["message"] == original["message"]  # GET never mutates.
     body = queue_input_body()
@@ -512,12 +516,20 @@ def test_proven_non_delivery_preserves_fifo_and_fresh_attempt_can_steer(ordinary
     sid, active, queued, _ = held_queue(ordinary)
     path = f"/api/chat/sessions/{sid}/queue/{queued}/steer"
     body = {"target_turn_id": active, "client_ingress_id": "not-attached"}
-    adapter = runtime.adapters.pop(sid)
+    with runtime.lock:
+        adapter = runtime.adapters.pop(sid)
     try:
+        # Hold across multiple 50ms queue-drain poll cycles while the active worker
+        # is still running; the drain loop must not fail the live active Turn.
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert store.load_turn(sid, active)["status"] in {"starting", "running"}
         assert request(path, body)[1]["error_code"] == "live_steering_session_not_attached"
         assert [t["turn_id"] for t in store.queued_turns(sid)] == [queued]
     finally:
-        runtime.adapters[sid] = adapter
+        with runtime.lock:
+            runtime.adapters[sid] = adapter
     assert request(path, {**body, "client_ingress_id": "recovered"})[0] == 200
     assert request(path, body)[0] == 409
     assert store.load_turn(sid, queued)["_queue_steering"]["status"] == "delivered"

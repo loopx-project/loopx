@@ -25,7 +25,7 @@ The following is a **hypothetical faulty policy**, not a claim that current impl
 | 11:00 | M1 | M1's second unchanged observation | Switch again and start counting again |
 | 11:30 | M1 and M2 are each due | Update each observation independently | Depends on processing order rather than actual stagnation |
 
-Conflating different targets. Preserve each Monitor's identity and count instead of repeatedly lowering the threshold. Conversely, without a usable Host executing due observations, correct counters remain static records: that is a liveness gap, not no-change evidence.
+The problem is conflating different targets. Preserve each Monitor's identity and count instead of repeatedly lowering the threshold. Conversely, without a usable Host executing due observations, correct counters remain static records: that is a liveness gap, not no-change evidence.
 
 ## Choose an observation frequency while waiting for CI {#running-wait}
 

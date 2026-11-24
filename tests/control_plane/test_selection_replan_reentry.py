@@ -36,7 +36,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     if initial_replan:
-        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+        _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-preempted"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -54,10 +54,10 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
             trigger["kind"] for trigger in first["autonomous_replan_obligation"]["triggers"]
         }
     if binding == "todo":
-        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+        _configure_selected_todo_replan_fixture(project, registry)
         selected_id = SELECTED_REPLAN_TODO_ID
     else:
-        _configure_autonomous_replan_fixture(project, runtime, registry, stride_strategy="off")
+        _configure_autonomous_replan_fixture(project, runtime, registry)
         selected_id = TODO_ID
     _advance_frontier(project, runtime, "fixture-frontier-after-selection")
     rc, selected = _run_cli(registry, runtime, *guard, "--todo-id", selected_id)
@@ -123,7 +123,7 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
         assert replay_cli["replan_settlement_contract"] == cli["replan_settlement_contract"]
         assert _heartbeat_receipt_count(runtime, turn) == expected_after_resume
     refresh = next(c for c in cli["next_cli_actions"] if "refresh-state" in c)
-    if binding == "todo":
+    if "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>" in refresh:
         decision = tmp_path / "selection-replan-vision.json"
         decision.write_text(
             json.dumps(
@@ -153,6 +153,9 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
                         "changed": ["Proceed with the first validation slice"],
                         "evidence_refs": ["evidence:selection-replan"],
                     },
+                    "stride_decision": resumed["replan_action_packet"][
+                        "stride_control"
+                    ]["minimal_example"],
                 }
             )
             + "\n",
@@ -203,10 +206,12 @@ def test_replan_selection_recovers_inline_or_refuses_ineligible_choice_and_settl
     assert _spend_run_count(runtime) == 1
 
 
-def _settle_replan_from_captured_actions(project, registry, runtime, turn, actions, identity):
+def _settle_replan_from_captured_actions(
+    project, registry, runtime, turn, actions, identity, *, stride_decision=None,
+):
     refresh = next(c for c in actions if "refresh-state" in c)
     decision = project.parent / "retained-selection-replan.json"
-    decision.write_text(json.dumps({
+    payload = {
         "schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed",
         "vision_patch": {
@@ -222,7 +227,10 @@ def _settle_replan_from_captured_actions(project, registry, runtime, turn, actio
             "changed": ["Complete the review before a fresh delivery Turn"],
             "evidence_refs": ["evidence:recommendation-drift"],
         },
-    }) + "\n", encoding="utf-8")
+    }
+    if stride_decision is not None:
+        payload["stride_decision"] = stride_decision
+    decision.write_text(json.dumps(payload) + "\n", encoding="utf-8")
     refresh = refresh.replace("<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", str(decision))
     for key, value in {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
                        "<surface-id>": "accepted-artifact", "<hypothesis-id>": "adoption",
@@ -245,7 +253,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     project, runtime, registry = _write_fixture(tmp_path)
     _configure_selectable_alternative(project)
     if initial_replan:
-        _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+        _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider="sqlite")
     turn = "turn-selection-recommendation-drift"
     guard = ("quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
@@ -264,7 +272,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
 
     # The original explicit choice leaves the refreshed frontier while a
     # different recommended Todo becomes visible under a hard replan.
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _advance_frontier(project, runtime, "fixture-recommendation-drift")
     retained_todo_id = "todo_chain_000000000001"
     rc, resumed = _run_cli(
@@ -297,6 +305,7 @@ def test_reentry_never_replaces_retained_selection_with_recommended_todo(tmp_pat
     _settle_replan_from_captured_actions(
         project, registry, runtime, turn,
         resumed["interaction_contract"]["cli_channel"]["next_cli_actions"], identity,
+        stride_decision=resumed["replan_action_packet"]["stride_control"]["minimal_example"],
     )
     rc, conflict = _run_cli(
         registry, runtime, *guard, "--todo-id", SELECTED_REPLAN_TODO_ID
@@ -453,7 +462,7 @@ def test_first_inline_result_binds_the_complete_replan_contract(tmp_path, discov
         rc, first = _run_cli(registry, runtime, *guard)
         assert rc == 0 and first["interaction_contract"]["cli_channel"]["selection_required"]
     rc, decision = _run_cli(registry, runtime, *guard,
-                            "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-envelope")
+                            "--todo-id", SELECTED_REPLAN_TODO_ID)
     assert rc == 0, decision
     assert_complete_turn_decision(decision)
     contract = decision["interaction_contract"]
@@ -543,7 +552,7 @@ def test_inline_replan_failure_reports_the_actual_receipt(
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-inline-replan-publication"
     retained = "todo_chain_000000000001"
@@ -758,7 +767,10 @@ def test_inline_replan_failure_reports_the_actual_receipt(
     assert _heartbeat_receipt_count(runtime, turn) == 1
 
     # Use the captured settlement, without a replacement admission.
-    _settle_replan_from_captured_actions(project, registry, runtime, turn, actions, receipt["settlement_identity"])
+    _settle_replan_from_captured_actions(
+        project, registry, runtime, turn, actions, receipt["settlement_identity"],
+        stride_decision=json.loads(original)["replan_action_packet"]["stride_control"]["minimal_example"],
+    )
     assert _heartbeat_receipt_count(runtime, turn) == 1
 
 
@@ -819,13 +831,26 @@ def test_native_first_selection_publishes_only_final_bound_capture(tmp_path, mon
     assert _spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize(("provider", "peer_goal"), [("file", False), ("sqlite", False), ("sqlite", True)])
+def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_path, monkeypatch, provider, peer_goal):
+    from loopx.control_plane.quota.settlement_workspace_causality import (
+        build_delivery_workspace_causality, delivery_workspace_causality_event_fields,
+    )
     from loopx.control_plane.turn_driver.codex_context import codex_context_hook
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
-    _configure_selected_todo_replan_fixture(project, registry, stride_strategy="off")
+    _configure_selected_todo_replan_fixture(project, registry)
+    if peer_goal:
+        config = json.loads(registry.read_text())
+        config["goals"][0]["coordination"]["registered_agents"].append("settlement-peer")
+        registry.write_text(json.dumps(config))
+        _initialize_git_checkout(project)
+        subprocess.run(["git", "-c", "user.name=LoopX Test", "-c", "user.email=test@example.invalid",
+            "commit", "--quiet", "--allow-empty", "-m", "fixture"], cwd=project, check=True)
+        producing_worktree = tmp_path / "producing worktree"
+        subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(producing_worktree)],
+            cwd=project, check=True)
     _initialize_fixture_authority(project, runtime, provider=provider)
     turn = "turn-captured-composed-replan"
     retained = "todo_chain_000000000001"
@@ -837,18 +862,35 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
     codex_context_hook(str(native), dict(session_id="captured-composed-replan", cwd=str(project),
         hook_event_name="SessionStart", source="startup"))
     cli = str(Path(sys.executable).with_name("loopx"))
-    rc, shown = _run_cli(registry, runtime, "--cli-bin", cli, "quota", "should-run", "--codex-app", "--complete-turn",
+    guard = ("--cli-bin", cli, "quota", "should-run", "--codex-app",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn,
         "--todo-id", retained, "--context-delivery", "on", "--codex-context-dir", str(native),
-        "--decision-output-dir", str(capture), "--max-page-output-bytes", "64000", cwd=project)
+        "--max-page-output-bytes", "64000")
+    rc, shown = _run_cli(registry, runtime, *guard, "--decision-output-dir", str(capture), cwd=project)
     assert rc == 0 and shown["ok"], shown
+    if peer_goal:
+        # Emulate a historical guard that carried a selected Todo's workspace
+        # causality on the autonomous replan receipt. The current admission
+        # path above defers the Todo without attaching that causality.
+        log = runtime / "goals" / GOAL_ID / "rollout-event-log.jsonl"
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        [event] = [row for row in events if row["event_kind"] == "quota_should_run" and row["run_id"] == turn]
+        causality = build_delivery_workspace_causality({"todo_id": "todo_chain_000000000002"})
+        event["details"].update(delivery_workspace_causality_event_fields(causality))
+        log.write_text("".join(json.dumps(row) + "\n" for row in events))
+        capture = tmp_path / "captured-history"
+        rc, shown = _run_cli(registry, runtime, *guard, "--decision-output-dir", str(capture), cwd=project)
+        assert rc == 0 and shown["ok"], shown
     path = capture / "decision.json"
     raw = path.read_bytes()
     original = json.loads(raw)
     assert original["schema_version"] == "loopx_turn_envelope_v1"
     receipt = original["heartbeat_receipt"]
     identity = receipt["settlement_identity"]
-    assert receipt["status"] == "committed" and identity["binding_kind"] == "autonomous_replan"
+    assert receipt["status"] == ("replayed" if peer_goal else "committed")
+    assert identity["binding_kind"] == "autonomous_replan"
+    if peer_goal:
+        assert receipt["delivery_workspace_causality"]["requirement"] == "unknown"
     assert receipt["pending_action_selection"]["todo_id"] == retained
     assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
@@ -875,6 +917,7 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
         "path_delta": {"outcome": "replan", "prior_assumption": "The existing route was supported.",
             "observed_reality": "The validation found an independent alternate route.",
             "changed": ["Review before a fresh delivery."], "evidence_refs": ["evidence:independent-validation"]},
+        "stride_decision": writer["stride_control"]["minimal_example"],
     }))
     placeholder = "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>"
     args = [str(vision) if token == placeholder else token for token in shlex.split(writer["settlement_command"])]
@@ -885,7 +928,19 @@ def test_captured_direct_replan_command_composes_semantic_writeback_once(tmp_pat
     withheld = [token if token != str(vision) else str(vision.with_name("missing decision.json")) for token in args]
     refusal = run(withheld, expected=1)
     assert not refusal["ok"] and _spend_run_count(runtime) == 0
+    if peer_goal:
+        wrong_workspace = run(args, expected=1)
+        assert "independent git worktree" in json.dumps(wrong_workspace).lower()
+        assert _spend_run_count(runtime) == 0
+        usage = writer["settlement_usage"]
+        assert "independent Git worktree" in usage and "produced" in usage
+        assert "--delivery-workspace-path" in usage
+        args += ["--delivery-workspace-path", str(producing_worktree)]
     settled = run(args)
+    if peer_goal:
+        assert settled["delivery_workspace"]["workspace_kind"] == "independent_git_worktree"
+    else:
+        assert "--delivery-workspace-path" not in writer["settlement_usage"]
     assert settled["settlement_progress"]["state"] == "settled"
     assert settled["settlement_identity"] == identity and settled["quota_spend"]["appended"]
     assert settled["autonomous_replan_ack"]["semantic_delta"]["accepted"]

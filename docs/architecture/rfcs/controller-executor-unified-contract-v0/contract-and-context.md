@@ -22,13 +22,20 @@ qualification of model cost and long-horizon benefit.
 
 The ordinary CLI cutover composes every decided `quota should-run` through the
 existing TypeScript `composeCompleteTurnDecision` owner **before** capture.
-Default calls and the compatibility aliases `--turn-envelope` / `--complete-turn`
-share this source. Explicit context-delivery off returns that complete source
+Current guards use one source. The `--turn-envelope` and `--complete-turn`
+selectors are retired. Explicit context-delivery off returns that complete source
 inline; it does not choose an older format or enable progressive delivery.
 Full Goal material is collected independently of that presentation choice.
 The active CLI selection between its compactor and `buildTurnEnvelope` is
-removed. Status, plan and scheduler-observation retain their separate purposes;
-historical readers and other remaining callers are not retired by this slice.
+removed. Status, plan and scheduler-observation retain their separate purposes.
+Saved captures keep their original version, digest and recovery identity.
+The ordinary CLI cutover removes the JSON-only format exception from guard
+context collection and from composition before capture. Scheduler observation
+continues to use its separate read-only projection. New runtime archives
+independently verify C1 as the committed and installed default. Supported-profile
+adoption and matched single-session outcome and full-cost acceptance remain
+separate evidence requirements.
+
 The current model-behavior portfolio also composes its should-run inputs through
 this complete-source owner; it no longer exercises the retired CLI compactor as
 the product default. Candidate context, planning relations, task continuation and
@@ -38,14 +45,10 @@ diagnostics stay intact. The crowded regression's pretty JSON changes from
 the new full carrier. Wire/page limits and the terminal actor's ten-call budget
 do not change. Frozen raw/v0 model comparison controls remain separate.
 
-The benchmark worker checks an explicit historical Short request before
-starting a planning or execution model. It previews the pinned CLI's quota
-response without admission and records the expected and observed source versions
-and eligibility in the wake receipt. A v1 or unavailable response refuses the
-Short treatment. A fresh-replan checkpoint preloads a different input and cannot
-qualify as direct Short. Current ordinary and Complete requests continue through
-the shared C1 producer. Historical experiments retain their recorded sources
-and receipts.
+The benchmark worker rejects explicit historical display selections before
+starting a model. Reproduce historical treatments with the recorded product
+and runner revisions. Current heartbeat and checkpoint preparation use the
+shared C1 producer.
 
 Todo completion, replan-successor return and blocked-completion recovery use the
 existing TypeScript settlement composer for their current continuation plans.
@@ -154,6 +157,17 @@ observations reject promoting the existing bounded envelope unchanged into the
 complete contract. They do **not** establish a current authority-loss bug: the
 recommendation is diagnostic, the unknown field is synthetic, and the complete
 source commitment still distinguishes both inputs. No model benefit is measured.
+
+The release-only host-prompt decision probe composes its realistic external-wait
+case through the existing complete-source TypeScript owner. Thin and brief modes
+receive one checked source instance per probe batch, including complete task and
+stop text; the scenario validator reads the source portfolio directly instead
+of constructing an old compact packet. The four small independent decision
+controls remain synthetic. The frozen raw/v0 model corpus and supported history
+readers are unchanged. This migrates qualification input, not the ordinary CLI
+writer or installed Host: provider execution remains explicitly release opt-in,
+and scripted probe passes do not qualify model behavior, settlement, accepted
+outcomes or complete cost.
 
 ### Differential context
 

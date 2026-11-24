@@ -374,7 +374,7 @@ def test_explore_results_api_skips_double_validation_matches_goal_and_returns_40
 
 
 def test_chat_attachments_rejects_bool_and_list_sizes() -> None:
-    from loopx.chat_attachments import normalize_chat_image_attachments
+    from loopx.chat.attachments import normalize_chat_image_attachments
 
     data = base64.b64encode(b"img").decode("ascii")
     for bad_size in (True, False, [3], "3"):

@@ -140,7 +140,7 @@ async function planWriteback(input: NormalizedMonitorPollInput, head: JsonObject
   const monitor = indexed.todos.get(String(writeback.todo_id));
   if (!monitor) throw new Error("Monitor target is unavailable in the commit snapshot");
   await assertMonitorWait(input, monitor, todos);
-  return {mutations: result.mutations as {kind: "todo_upsert"; todo: JsonObject}[], writeback};
+  return {mutations: result.mutations, writeback};
 }
 
 export async function executeCoordinationMonitorPoll(store: AuthorityStore,

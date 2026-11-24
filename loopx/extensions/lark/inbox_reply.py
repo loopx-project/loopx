@@ -6,8 +6,9 @@ import re
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
+from enum import Enum, auto
 from pathlib import Path
+from time import monotonic, time
 from typing import Any
 
 from .event_inbox import (
@@ -67,9 +68,42 @@ def _default_runner(args: Sequence[str], *, cwd: Path | None = None) -> Mapping[
 def _call(runner: CommandRunner, args: Sequence[str]) -> Mapping[str, Any]:
     try:
         return runner(args)
+    except (FileNotFoundError, PermissionError):
+        return {"returncode": 1, "spawn_failed": True}
     except (OSError, subprocess.SubprocessError):
         return {"returncode": 1}
 
+
+class _WorkerSendFailure(Enum):
+    REJECTED = auto()
+    RESPONSE_LOST = auto()
+    UNVERIFIED = auto()
+
+
+def _worker_send_failure(result: Mapping[str, Any]) -> _WorkerSendFailure:
+    if result.get("spawn_failed") is True:
+        return _WorkerSendFailure.REJECTED
+    if result.get("timed_out") is True:
+        return _WorkerSendFailure.RESPONSE_LOST
+    for stream in ("stdout", "stderr"):
+        error = _json_object(result.get(stream)).get("error")
+        if not isinstance(error, Mapping):
+            continue
+        category, subtype = error.get("type"), error.get("subtype")
+        if category in ("validation", "authentication", "authorization", "config", "confirmation"):
+            return _WorkerSendFailure.REJECTED
+        if category == "api" and (
+            subtype in ("rate_limit", "invalid_parameters", "not_found", "quota_exceeded",
+                        "cross_tenant", "cross_brand", "ownership_mismatch", "feature_not_available")
+            or error.get("code") in (429, 230020, 99991400)
+        ):
+            return _WorkerSendFailure.REJECTED
+        if category == "network" or (category == "internal" and subtype == "invalid_response"):
+            return _WorkerSendFailure.RESPONSE_LOST
+        # A policy may suppress output after publication. Keep the original
+        # request unverified without replaying a policy or unclassified error.
+        return _WorkerSendFailure.UNVERIFIED
+    return _WorkerSendFailure.RESPONSE_LOST
 
 def _json_object(value: Any) -> Mapping[str, Any]:
     try:
@@ -265,7 +299,7 @@ def _result(
     receipt: str | None,
     identity_verified: bool = False,
     membership_verified: bool = False,
-    write_performed: bool = False,
+    write_performed: bool | None = False,
     readback_performed: bool = False,
     reply_verified: bool = False,
     reaction_cleanup_verified: bool = False,
@@ -310,6 +344,48 @@ def _private_root_readback_matches(message: Mapping[str, Any], chat_id: str) -> 
         and message.get("root_id") in (None, "", message.get("message_id")))
 
 
+def _captured_source_event(config: Mapping[str, Any], source_message_id: str) -> Mapping[str, Any] | None:
+    if not source_message_id:
+        return None
+    inbox = config["inbox_path"]
+    return next(
+        (
+            event
+            for path in (inbox.glob("*.json") if isinstance(inbox, Path) and inbox.is_dir() else [])
+            if path.name != "processed.json"
+            if (event := _event_from_file(path)) is not None
+            if event.get("message_id") == source_message_id
+        ),
+        None,
+    )
+
+
+def _explicit_placement_readback_matches(
+    message: Mapping[str, Any],
+    *,
+    chat_id: str,
+    reply_placement: str | None,
+    source_message_id: str,
+    source_event: Mapping[str, Any] | None,
+) -> bool:
+    if reply_placement is None:
+        return True
+    if reply_placement == "chat_root":
+        return _private_root_readback_matches(message, chat_id)
+    if reply_placement == "source_thread":
+        expected_root = str(
+            (source_event or {}).get("root_id")
+            or (source_event or {}).get("parent_id")
+            or source_message_id
+        )
+        return (
+            message.get("chat_id") == chat_id
+            and bool(message.get("parent_id"))
+            and message.get("root_id") == expected_root
+        )
+    return False
+
+
 def _deliver_lark_inbox_outbound(
     *,
     project: str | Path,
@@ -325,6 +401,8 @@ def _deliver_lark_inbox_outbound(
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
+    recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -348,27 +426,13 @@ def _deliver_lark_inbox_outbound(
     source_message_id = str(message_id or "").strip()
     if source_message_id and not MESSAGE_ID_PATTERN.fullmatch(source_message_id):
         raise ValueError("lark inbox reply requires a valid message id")
-    inbox = config["inbox_path"]
-    source_event = (
-        next(
-            (
-                event
-                for path in (inbox.glob("*.json") if inbox.is_dir() else [])
-                if path.name != "processed.json"
-                if (event := _event_from_file(path)) is not None
-                if event.get("message_id") == source_message_id
-            ),
-            None,
-        )
-        if source_message_id
-        else None
-    )
+    source_event = _captured_source_event(config, source_message_id)
     if source_message_id and source_event is None:
         raise ValueError(
             "lark inbox reply source message is not captured by this inbox"
         )
     if reply_placement is not None and (
-        reply_placement != "chat_root" or source_event is None
+        reply_placement not in {"chat_root", "source_thread"} or source_event is None
     ):
         raise ValueError("a new result requires its captured authorization source")
     if content_format not in {"text", "markdown"}:
@@ -409,7 +473,9 @@ def _deliver_lark_inbox_outbound(
         source_event and (source_event.get("parent_id") or source_event.get("root_id"))
     )
     placement = (
-        "chat_root"
+        "source_thread"
+        if reply_placement == "source_thread"
+        else "chat_root"
         if reply_placement == "chat_root" or source_event is None
         or (
             reply_config["placement_policy"] == "source_context"
@@ -637,10 +703,22 @@ def _deliver_lark_inbox_outbound(
             provider_preview_verified=True,
         )
 
-    send = _call(
-        runner,
-        provider_args,
-    )
+    if before_provider_send is not None:
+        before_provider_send()
+    started = (time(), monotonic()) if recover_ambiguous_send else None
+    send = _call(runner, provider_args)
+    failure = _worker_send_failure(send) if started is not None and send.get("returncode") != 0 else None
+    if failure is _WorkerSendFailure.RESPONSE_LOST and started is not None and before_send is not None:
+        # Replay the frozen UUID once while this process still has its start
+        # time and can recheck the original source and grant. Leave a full
+        # CLI timeout before the provider's one-hour deduplication limit.
+        try:
+            authorized = all(verify_source()) and scoped_hook(intent_digest).get("continue_delivery") is True
+        except (OSError, ValueError, KeyError, RuntimeError):
+            authorized = False
+        elapsed = (time() - started[0], monotonic() - started[1])
+        if authorized and all(0 <= seconds < 3600 - 30 for seconds in elapsed):
+            send = _call(runner, provider_args)
     if send.get("returncode") != 0:
         return {**_result(
             status="gate_required",
@@ -650,6 +728,7 @@ def _deliver_lark_inbox_outbound(
             identity_verified=True,
             membership_verified=True,
             placement=placement,
+            write_performed=None if failure in (_WorkerSendFailure.RESPONSE_LOST, _WorkerSendFailure.UNVERIFIED) else False,
             blocker="lark_inbox_reply_provider_failed",
             format_preflight_passed=True,
             provider_preview_performed=True,
@@ -750,7 +829,13 @@ def _deliver_lark_inbox_outbound(
     verified = bool(
         readback.get("returncode") == 0
         and readback_message is not None
-        and (reply_placement is None or _private_root_readback_matches(readback_message, chat_id))
+        and _explicit_placement_readback_matches(
+            readback_message,
+            chat_id=chat_id,
+            reply_placement=reply_placement,
+            source_message_id=source_message_id,
+            source_event=source_event,
+        )
         and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
                                           attachment_names=attachment_names, image_keys=image_keys)
              if markdown else lark_readback_matches_outbound(
@@ -828,6 +913,8 @@ def reply_lark_event_inbox(
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
     overlap_source_preflight: bool = False,
+    recover_ambiguous_send: bool = False,
+    before_provider_send: Callable[[], None] | None = None,
     before_send: Callable[[str], Mapping[str, Any]] | None = None,
     delivery_attempt_recorder: Callable[[Mapping[str, str | None]], None] | None = None,
     short_message_limit: int | None = DEFAULT_LARK_TEXT_LIMIT,
@@ -837,6 +924,10 @@ def reply_lark_event_inbox(
     image_keys: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Reply with the explicit inbox-configured bot and placement policy.
+
+    Worker returns can replay one ambiguous send with the original provider key
+    and fresh source authorization. A second lost response exposes an unknown
+    write outcome to the durable return owner.
 
     An answer delivery passes ``short_message_limit=None`` to declare that it is
     bounded by the provider's request limit rather than by the compact
@@ -873,6 +964,8 @@ def reply_lark_event_inbox(
         source_membership_verifier=source_membership_verifier,
         source_authority_verifier=source_authority_verifier,
         overlap_source_preflight=overlap_source_preflight,
+        recover_ambiguous_send=recover_ambiguous_send,
+        before_provider_send=before_provider_send,
         before_send=before_send,
         delivery_attempt_recorder=delivery_attempt_recorder,
         short_message_limit=short_message_limit,
@@ -1054,7 +1147,15 @@ def verify_lark_inbox_reply(
             verified_bot_aliases=bot_aliases or {},
         )
     )
-    if not verified or (reply_placement is not None and not _private_root_readback_matches(message, chat_id)):
+    source_message_id = str(message_id or "").strip()
+    source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
+    if not verified or not _explicit_placement_readback_matches(
+        message,
+        chat_id=chat_id,
+        reply_placement=reply_placement,
+        source_message_id=source_message_id,
+        source_event=source_event,
+    ):
         return {
             "ok": False,
             "verification_performed": True,
@@ -1087,6 +1188,7 @@ def _verified_reply_result(*, project: str | Path, config_path: str | Path, mess
 def update_lark_inbox_reply(
     *, project: str | Path, config_path: str | Path, message_id: str,
     text: str, previous_text: str, attempt: Mapping[str, Any],
+    reply_placement: str | None = None,
     runner: CommandRunner = _default_runner,
     source_membership_verifier: Callable[[], bool] | None = None,
     source_authority_verifier: SourceAuthorityVerifier | None = None,
@@ -1112,7 +1214,8 @@ def update_lark_inbox_reply(
     profile, chat_id = str(reply["sender_profile"]), str(reply["chat_id"])
     base = ["lark-cli", "--profile", profile]
     prior = reply_lark_event_inbox(project=project, config_path=config_path,
-        message_id=message_id, text=previous_text, content_format="markdown", execute=False)
+        message_id=message_id, text=previous_text, content_format="markdown",
+        reply_placement=reply_placement, execute=False)
     prior_receipt = str(prior.get("idempotency_key") or "")
     if (set(attempt) != {"schema_version", "provider", "message_ref", "intent_digest", "provider_receipt"}
             or attempt.get("schema_version") != "manager_return_delivery_attempt_v0"
@@ -1127,7 +1230,8 @@ def update_lark_inbox_reply(
         # verify and retire that sequence before creating a separate final.
         return {"ok": False, "reply_verified": False, "blocker": "provider_update_format_unsupported"}
     desired = reply_lark_event_inbox(project=project, config_path=config_path,
-        message_id=message_id, text=text, content_format="markdown", execute=False)
+        message_id=message_id, text=text, content_format="markdown",
+        reply_placement=reply_placement, execute=False)
     # Rich mentions use the existing identity-verified text sender instead.
     if desired.get("content_format") != "markdown":
         return {"ok": False, "reply_verified": False, "blocker": "provider_update_format_unsupported"}
@@ -1153,7 +1257,16 @@ def update_lark_inbox_reply(
     message = _message(_json_object(readback.get("stdout")), ref)
     if readback.get("returncode") != 0 or message is None:
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    source_message_id = str(message_id or "").strip()
+    source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
     if (message.get("chat_id") != chat_id
+            or not _explicit_placement_readback_matches(
+                message,
+                chat_id=chat_id,
+                reply_placement=reply_placement,
+                source_message_id=source_message_id,
+                source_event=source_event,
+            )
             or not isinstance(message.get("sender"), Mapping)
             or message["sender"].get("sender_type") != "app"):
         return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}

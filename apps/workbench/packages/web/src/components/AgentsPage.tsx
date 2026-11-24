@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, type AgentInfo, type AgentLogin, type AgentReferences, type Api } from '../api';
 import { AgentAccountDialog } from './AgentAccountDialog';
-import { AgentLoginDialog } from './AgentLoginDialog';
+import { AgentLoginPanel } from './AgentLoginPanel';
 import { AgentSettingsDialog } from './AgentSettingsDialog';
 import { t } from '../i18n';
 import { Dialog } from './Dialog';
@@ -39,13 +39,19 @@ const total = (references: AgentReferences): number =>
  */
 export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
   const [adding, setAdding] = useState(false);
-  const [signingIn, setSigningIn] = useState<{ agent: AgentInfo; login: AgentLogin } | null>(null);
+  const [logins, setLogins] = useState<Record<string, AgentLogin>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [settings, setSettings] = useState<AgentInfo | null>(null);
   const [renaming, setRenaming] = useState<AgentInfo | null>(null);
   const [removing, setRemoving] = useState<{ agent: AgentInfo; references: AgentReferences } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const groups = useMemo(() => groupsOf(agents), [agents]);
+  const reloadRef = useRef(onReload); reloadRef.current = onReload;
+
+  useEffect(() => {
+    void reloadRef.current();
+  }, []);
 
   const fail = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
 
@@ -116,14 +122,59 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
 
   const login = async (agent: AgentInfo) => {
     setError(null);
+    if (agent.login === 'wizard') {
+      const current = logins[agent.id] ?? agent.activeLogin;
+      if (current && ['starting', 'waiting', 'submitting'].includes(current.status)) {
+        setLogins((prev) => ({ ...prev, [agent.id]: current }));
+        setExpanded((prev) => ({ ...prev, [agent.id]: true }));
+        return;
+      }
+      setBusy(agent.id);
+      try {
+        const started = await api.startAgentLogin(agent.id);
+        setLogins((prev) => ({ ...prev, [agent.id]: started }));
+        setExpanded((prev) => ({ ...prev, [agent.id]: true }));
+        void onReload();
+      } catch (e) {
+        fail(e);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
     setBusy(agent.id);
     try {
-      if (agent.login === 'wizard') setSigningIn({ agent, login: await api.startAgentLogin(agent.id) });
-      else await onLogin(agent);
+      await onLogin(agent);
     } catch (e) {
       fail(e);
     } finally {
       setBusy(null);
+    }
+  };
+
+  const dismissLogin = (agentId: string) => {
+    setExpanded((prev) => {
+      const next = { ...prev };
+      delete next[agentId];
+      return next;
+    });
+    setLogins((prev) => {
+      const next = { ...prev };
+      delete next[agentId];
+      return next;
+    });
+  };
+
+  const created = async (accountId?: string) => {
+    try {
+      if (accountId) {
+        const agent = (await api.agents()).find(agent => agent.id === accountId);
+        if (agent?.login) await login(agent);
+      }
+    } catch (e) { fail(e); }
+    finally {
+      setAdding(false);
+      try { await onReload(); } catch (e) { fail(e); }
     }
   };
 
@@ -152,8 +203,13 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
           {groups.map((group) => (
             <section key={group.key} className="agents-group" aria-label={group.label}>
               {group.agents.length > 1 && <h2 className="agents-group-title">{group.label} · {group.agents.length}</h2>}
-              {group.agents.map((agent) => (
-                <article key={agent.id} className="agents-row">
+              {group.agents.map((agent) => {
+                const activeLogin = logins[agent.id] ?? agent.activeLogin;
+                const pendingLogin = !!activeLogin && ['starting', 'waiting', 'submitting'].includes(activeLogin.status);
+                const isExpanded = !!expanded[agent.id] && !!activeLogin;
+                return (
+                <div key={agent.id} className="agents-row-wrap">
+                <article className="agents-row">
                   <span className="agents-mark" aria-hidden="true">
                     {agent.icon ? <AgentMark path={agent.icon} size={18} /> : <IconAgents size={18} />}
                   </span>
@@ -161,7 +217,13 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
                     <div className="agents-row-name">
                       <strong>{agent.label}</strong>
                       {agent.hidden && <span className="agents-hidden">{t('agents.hidden')}</span>}
-                      {!agent.available && <span className="agents-unavailable">{t('agents.unavailable')}</span>}
+                      {!agent.available && <span className="agents-unavailable">{agent.unavailableReason ?? t('agents.unavailable')}</span>}
+                      {pendingLogin && (
+                        <span className="agents-login-pending">
+                          <span className="agents-login-dot" aria-hidden="true" />
+                          {t(activeLogin?.input === 'none' ? 'agentLogin.browserWaitingBadge' : 'agentLogin.waitingBadge')}
+                        </span>
+                      )}
                     </div>
                     <span className="agents-row-meta">
                       {agent.account === null ? t('agentAccount.needsLogin') : agent.account ?? t('agents.localAccount')}
@@ -170,15 +232,25 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
                   </div>
                   <div className="agents-row-actions">
                     {agent.login && (
-                      <button
-                        type="button"
-                        className="ghost agents-login"
-                        disabled={busy === agent.id}
-                        onClick={() => void login(agent)}
-                      >
-                        <IconSignIn size={15} />
-                        {t('agents.login')}
-                      </button>
+                      isExpanded ? (
+                        <button
+                          type="button"
+                          className="ghost agents-login"
+                          onClick={() => setExpanded((prev) => ({ ...prev, [agent.id]: false }))}
+                        >
+                          {t('agentLogin.collapse')}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className={`${pendingLogin ? 'primary' : 'ghost'} agents-login`}
+                          disabled={busy === agent.id}
+                          onClick={() => void login(agent)}
+                        >
+                          {!pendingLogin && <IconSignIn size={15} />}
+                          {t(pendingLogin ? 'agentLogin.resume' : 'agents.login')}
+                        </button>
+                      )
                     )}
                     <Popover
                       label={t('agents.actions')}
@@ -234,15 +306,28 @@ export function AgentsPage({ api, agents, onAdd, onReload, onLogin }: Props) {
                     </Popover>
                   </div>
                 </article>
-              ))}
+                {isExpanded && activeLogin && (
+                  <AgentLoginPanel
+                    key={activeLogin.id}
+                    api={api}
+                    agent={agent}
+                    initial={activeLogin}
+                    onState={(next) => setLogins((prev) => ({ ...prev, [agent.id]: next }))}
+                    onReload={onReload}
+                    onCollapse={() => setExpanded((prev) => ({ ...prev, [agent.id]: false }))}
+                    onDismiss={() => dismissLogin(agent.id)}
+                  />
+                )}
+                </div>
+                );
+              })}
             </section>
           ))}
         </div>
       )}
 
-      {adding && <AgentAccountDialog api={api} agents={agents} onClose={() => setAdding(false)} onDiscover={() => { setAdding(false); onAdd(); }} onCreated={async () => { setAdding(false); try { await onReload(); } catch (e) { fail(e); } }} />}
+      {adding && <AgentAccountDialog api={api} agents={agents} onClose={() => setAdding(false)} onDiscover={() => { setAdding(false); onAdd(); }} onCreated={created} />}
       {settings && <AgentSettingsDialog api={api} agent={settings} onReload={onReload} onClose={() => setSettings(null)} />}
-      {signingIn && <AgentLoginDialog api={api} agent={signingIn.agent} initial={signingIn.login} onReload={onReload} onClose={() => setSigningIn(null)} />}
 
       {renaming && (
         <Dialog

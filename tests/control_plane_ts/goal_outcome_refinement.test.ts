@@ -27,6 +27,23 @@ function outcomeGaps(head: JsonObject, acceptance: JsonObject = {}): JsonObject[
   return projectGoalOutcomes(head, goal, acceptance)!.acceptance_gaps as JsonObject[];
 }
 
+test("an outcome records missing registration only against the observed roster of its own lifetime", () => {
+  const base = fixture();
+  const head = {...base, goal_outcomes: refineGoalOutcome(base, goal, null, "author", patch())};
+  const registered = projectGoalOutcomes(head, goal, {}, ["author", "peer"])!;
+  const unknown = projectGoalOutcomes(head, goal, {})!;
+  assert.deepEqual(unknown, registered);
+  for (const roster of [[], ["peer"]]) {
+    const projected = projectGoalOutcomes(head, goal, {}, roster)!;
+    const [observed] = projected.outcomes as JsonObject[];
+    const {owner_registration_missing, ...retained} = observed;
+    assert.equal(owner_registration_missing, true);
+    assert.deepEqual(retained, (registered.outcomes as JsonObject[])[0]);
+    assert.deepEqual(projected.acceptance_gaps, registered.acceptance_gaps);
+  }
+  assert.deepEqual(projectGoalOutcomes(head, goal, {}, ["author"]), unknown);
+});
+
 function outcomeAck(gaps: JsonObject[]): JsonObject {
   return {recorded: true, agent_id: "author", generated_at: "2026-08-01T00:00:00Z",
     semantic_delta: {accepted: true, obligation_id: "replan-1111111111111111",
@@ -198,7 +215,10 @@ for (const provider of ["file", "sqlite"] as const) test(`${provider}: recreated
   const successor = {...goalRef, goal_instance_id: "ginst_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"};
   assert.equal((await transitionGoalAcceptanceLifecycle(store, {goal_id: goal, actor_agent_id: null,
     operation_id: "retire", transition: {kind: "retire", goal_ref: goalRef}})).status, "applied");
-  const retiring = await inspectGoalAcceptance(store, goal, undefined, goalRef);
+  const retiring = await inspectGoalAcceptance(store, goal, undefined, goalRef, true, undefined, ["peer"]);
+  const historical = (retiring.goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
+  assert.equal(historical.current_lifetime, false);
+  assert.equal((historical.outcomes as JsonObject[])[0].owner_registration_missing, undefined);
   assert.equal((await refineGoalAcceptanceOutcome(store, {...first, operation_id: "during-retirement",
     expected_provider_revision: retiring.provider_revision})).reason_code, "goal_acceptance_goal_retiring");
   assert.equal((await transitionGoalAcceptanceLifecycle(store, {goal_id: goal, actor_agent_id: null,

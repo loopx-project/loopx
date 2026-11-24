@@ -548,8 +548,8 @@ native blocked/resume rules; it does not become a hosted heartbeat.
 
 Generate the normal bootstrap with `heartbeat-prompt --thin --codex-app
 --bootstrap`, its existing Goal/Agent/registry arguments, and
-`--context-delivery on`; optionally add `--turn-envelope` or explicit private paths. The loader preserves
-these options without freezing a Turn ID. Each wake loads current instructions
+`--context-delivery on` and explicit private paths when needed. The loader
+preserves these options and binds a fresh Turn ID on each wake. Each wake loads current instructions
 and binds the existing `LOOPX_TURN` before its generated guard. Selection keeps
 the same transport. An unset wake identity fails in the shell before admission.
 
@@ -707,7 +707,7 @@ If `automation_update` is unavailable in the session and
 `fallback_hint.cli_args` (`loopx-apply-rrule`) once instead. The fallback
 requires the projected registered `--agent-id`; there is no implicit Agent
 default. It backs up
-`codex-dev.db`, syncs the automation TOML and SQLite row, and runs the bound
+the selected database (`codex.db`, or `codex-dev.db` on legacy installs), syncs the automation TOML and SQLite row, and runs the bound
 ACK; direct SQLite edits bypass the app API, so this is a bounded fallback and
 never the routine path. The bridge reuses the provided parent Turn for its
 internal `quota should-run` query. That same-Turn replay preserves the committed

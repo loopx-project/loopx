@@ -168,6 +168,59 @@ def test_real_sqlite_upgrade_preserves_schedule_binding_model_and_history(tmp_pa
         assert connection.execute("SELECT * FROM automations").fetchone() == before
 
 
+@pytest.mark.parametrize("legacy_present", [True, False])
+def test_current_store_wins_and_upgrade_ignores_stale_legacy_prompt(tmp_path, legacy_present):
+    from loopx.control_plane.heartbeat import installed_prompt_update as lifecycle
+
+    home, path, legacy, registry, prompt = fixture(tmp_path)
+    current = legacy.with_name("codex.db")
+    legacy.rename(current)
+    if legacy_present:
+        with sqlite3.connect(current) as source, sqlite3.connect(legacy) as old:
+            source.backup(old)
+            old.execute("UPDATE automations SET prompt='stale legacy prompt'")
+    plan = lifecycle.snapshot(registry=registry, home=home)
+    entry, = plan["entries"]
+    assert plan["database_name"] == current.name
+    assert entry["current_prompt"] == prompt
+    upgrade.apply_offline(home=home, automation_id="watch",
+        expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"],
+        expected_database=plan["database_name"])
+    with sqlite3.connect(current) as active:
+        assert active.execute("SELECT prompt FROM automations").fetchone()[0] == entry["desired_prompt"]
+    assert tomllib.loads(path.read_text())["prompt"] == entry["desired_prompt"]
+    upgrade.recover_offline(home=home, automation_id="watch", rollback=True)
+    with sqlite3.connect(current) as active:
+        assert active.execute("SELECT prompt FROM automations").fetchone()[0] == prompt
+    if legacy_present:
+        with sqlite3.connect(legacy) as old:
+            assert old.execute("SELECT prompt FROM automations").fetchone()[0] == "stale legacy prompt"
+    else:
+        assert not legacy.exists()
+
+
+def test_store_switch_invalidates_preview_and_legacy_recovery_journal(tmp_path):
+    home, path, legacy, registry, _ = fixture(tmp_path)
+    entry, = upgrade.build_plan(registry=registry, home=home)["entries"]
+    applied = upgrade.apply_offline(home=home, automation_id="watch",
+        expected_prompt_sha256=entry["prompt_sha256"], desired_prompt=entry["desired_prompt"])
+    journal = Path(applied["backup"])
+    saved = json.loads(journal.read_text())
+    del saved["database_name"]  # Journals from before the App store migration.
+    journal.write_text(json.dumps(saved))
+    with sqlite3.connect(legacy) as old, sqlite3.connect(legacy.with_name("codex.db")) as current:
+        old.backup(current)
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="database changed after preview"):
+        upgrade.apply_offline(home=home, automation_id="watch",
+            expected_prompt_sha256=entry["desired_sha256"], desired_prompt="unexpected",
+            expected_database=legacy.name)
+    with pytest.raises(ValueError, match="database changed since migration"):
+        upgrade.recover_offline(home=home, automation_id="watch", rollback=True)
+    assert path.read_bytes() == original
+    assert journal.exists()
+
+
 def test_bootstrap_reads_real_current_cli_thin_contract(tmp_path):
     home, _, _, registry, _ = fixture(tmp_path)
     item = upgrade.build_plan(registry=registry, home=home)["entries"][0]
@@ -439,22 +492,40 @@ def test_mirror_failure_rolls_back_db_and_is_journal_recoverable(tmp_path, monke
     assert upgrade.recover_offline(home=home, automation_id="watch")["status"] == "recovered"
 
 
-def test_running_app_defers_to_native_api_without_touching_cached_scheduler(tmp_path, monkeypatch):
+@pytest.mark.parametrize("saved_alias", [None, "--turn-envelope", "--complete-turn"])
+def test_running_app_defers_to_native_api_without_touching_cached_scheduler(tmp_path, monkeypatch, saved_alias):
     from loopx.control_plane.heartbeat import installed_prompt_update as lifecycle
     home, path, database, registry, _ = fixture(tmp_path)
     prompt = upgrade.bootstrap_prompt(registry=registry, goal_id="fixture-goal", agent_id="agent-a")
-    legacy = prompt.replace(upgrade.BOOTSTRAP, upgrade._LEGACY_BOOTSTRAP, 1).removesuffix(
-        upgrade._BOOTSTRAP_INSTRUCTION) + upgrade._LEGACY_INSTRUCTION
+    if saved_alias is None:
+        legacy = prompt.replace(upgrade.BOOTSTRAP, upgrade._LEGACY_BOOTSTRAP, 1).removesuffix(
+            upgrade._BOOTSTRAP_INSTRUCTION) + upgrade._LEGACY_INSTRUCTION
+    else:
+        from loopx.control_plane.testing.terminal_settlement_tool_behavior import (
+            TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID,
+            TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID,
+            _build_fixture,
+        )
+
+        managed = _build_fixture(tmp_path / "managed-goal")
+        registry = managed.global_registry_path
+        goal_id = TERMINAL_SETTLEMENT_FIXTURE_GOAL_ID
+        command = ["loopx", "--format", "json", "--registry", str(registry),
+                   "heartbeat-prompt", "--thin", "--codex-app", "--goal-id", goal_id,
+                   "--agent-id", TERMINAL_SETTLEMENT_FIXTURE_AGENT_ID,
+                   "--context-delivery", "off", saved_alias]
+        legacy = ("LoopX managed heartbeat bootstrap v2\n每次唤醒先执行：\n```sh\n"
+                  + shlex.join(command) + "\n```\n" + _PUBLISHED_BOOTSTRAP_INSTRUCTION)
     _set_fixture_prompt(path, database, legacy)
     before = lifecycle.snapshot(registry=registry, home=home)
-    monkeypatch.setattr(lifecycle.sys, "platform", "darwin")
     probes = []
     def running(command, **kwargs):
         probes.append(command)
         return subprocess.CompletedProcess(command, 0, stdout=b"123\n")
-    monkeypatch.setattr(lifecycle.subprocess, "run", running)
     original = path.read_bytes()
-    with sqlite3.connect(database) as observer:
+    with sqlite3.connect(database) as observer, monkeypatch.context() as host:
+        host.setattr(lifecycle.sys, "platform", "darwin")
+        host.setattr(lifecycle.subprocess, "run", running)
         row = observer.execute("SELECT * FROM automations").fetchone()
         result = lifecycle.reconcile(before=before, registry=registry, home=home)
         assert not result["ok"] and result["results"][0]["status"] == "deferred"
@@ -462,10 +533,36 @@ def test_running_app_defers_to_native_api_without_touching_cached_scheduler(tmp_
     assert path.read_bytes() == original
     assert probes and all(command[:2] == ["/usr/bin/pgrep", "-x"] for command in probes)
     request = result["api_updates"][0]["arguments"]
-    assert request["prompt"] == prompt
     assert request["id"] == "watch" and request["targetThreadId"] == "thread-a"
     assert request["status"] == "PAUSED"
     assert not (home / "loopx-automation-backups").exists()
+    if saved_alias is None:
+        assert request["prompt"] == prompt
+        return
+
+    revised = shlex.split(request["prompt"].split("```sh\n", 1)[1].split("\n```", 1)[0])
+    assert saved_alias not in revised
+    assert revised[revised.index("--context-delivery") + 1] == "off"
+    saved = tomllib.loads(path.read_text())["prompt"]
+    unchanged_loader = shlex.split(saved.split("```sh\n", 1)[1].split("\n```", 1)[0])
+    assert unchanged_loader == command
+    monkeypatch.setenv("CODEX_HOME", str(home))
+    cli = [sys.executable, "-m", "loopx.entrypoint"]
+    wake = subprocess.run([*cli, *unchanged_loader[1:]], capture_output=True, text=True, timeout=60)
+    assert wake.returncode == 0, wake.stdout + wake.stderr
+    payload = json.loads(wake.stdout)
+    assert payload["ok"] and payload["schema_version"] == "heartbeat_agent_input_v1"
+    body = payload["task_body"]
+    assert "--turn-envelope" not in body and "--complete-turn" not in body
+    guard = next(line for line in body.splitlines() if " quota should-run " in line)
+    guard = guard.replace('${LOOPX_TURN:?}', "first-wake-after-upgrade")
+    guarded = subprocess.run([*cli, *shlex.split(guard)[1:]], capture_output=True, text=True, timeout=60)
+    assert guarded.returncode == 0, guarded.stdout + guarded.stderr
+    decision = json.loads(guarded.stdout)
+    assert decision["ok"] and decision["schema_version"] == "loopx_turn_envelope_v1"
+    assert decision["goal_id"] == goal_id
+    assert decision["heartbeat_receipt"]["turn_instance_id"] == "first-wake-after-upgrade"
+    assert decision["heartbeat_receipt"]["status"] == "committed"
 
 
 def test_concurrent_manifest_change_before_write_is_not_overwritten(tmp_path, monkeypatch):
@@ -550,7 +647,7 @@ def test_unsupported_schema_and_missing_database_fail_without_creating(tmp_path)
     home = tmp_path / "host"
     home.mkdir()
     with pytest.raises(sqlite3.Error):
-        upgrade._connect(home)
+        upgrade._connect(home / "sqlite/codex.db")
     assert list(home.iterdir()) == []
 
 

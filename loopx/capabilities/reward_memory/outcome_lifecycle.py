@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import tempfile
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from typing import Any
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from ...history import load_registry
 from ...materials import find_registry_goal, goal_repo
+from ...paths import PATH_SEGMENT_UNSAFE_RE
 from ..context_providers.base import ContextProvider
 from .experiment import (
     resolve_reward_memory_experiment,
@@ -37,7 +37,6 @@ TURN_REWARD_MEMORY_SIDECAR_SCHEMA_VERSION = "turn_reward_memory_sidecar_v0"
 LEGACY_PENDING_MIGRATION_SCHEMA_VERSION = (
     "turn_reward_memory_legacy_pending_migration_v0"
 )
-_SAFE_PATH_TOKEN = re.compile(r"[^A-Za-z0-9._-]+")
 _PENDING_PROVIDER_STATUSES = {
     "committed_pending",
     "provider_unavailable",
@@ -92,7 +91,7 @@ def _base(
 
 
 def _identity_token(value: str, *, fallback: str) -> str:
-    readable = _SAFE_PATH_TOKEN.sub("-", str(value or "")).strip("-") or fallback
+    readable = PATH_SEGMENT_UNSAFE_RE.sub("-", str(value or "")).strip("-") or fallback
     digest = hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()[:12]
     return f"{readable[:60]}-{digest}"
 

@@ -39,6 +39,7 @@ DECISION_REVIEW_DISPOSITIONS = {
     "reject",
     "defer",
     "no_change",
+    "observed",
 }
 
 # Refs #5136, direction 3: "does this text carry a local path?" is decided once
@@ -480,11 +481,12 @@ def build_decision_review_receipt(
     gate_todo_id: str | None = None,
     source_event_id: str | None = None,
 ) -> dict[str, Any]:
-    """Record one reviewed proposal or an explicit semantic no-change result.
+    """Record a proposal decision or an evidence-only semantic review.
 
     Review settlement is deliberately separate from outcome observation. A
     user may approve, reject, or defer a proposal before its real-world outcome
-    exists, while a semantic no-change result needs no user authority at all.
+    exists. Observing new facts and recording no material change both need no
+    user-gate authority; neither authorizes an action.
     """
 
     normalized_disposition = _compact_token(
@@ -493,9 +495,9 @@ def build_decision_review_receipt(
     )
     if normalized_disposition not in DECISION_REVIEW_DISPOSITIONS:
         raise ValueError(
-            "disposition must be approve, reject, defer, or no_change"
+            "disposition must be approve, reject, defer, no_change, or observed"
         )
-    gated = normalized_disposition != "no_change"
+    gated = normalized_disposition in {"approve", "reject", "defer"}
     gated_values = {
         "proposal_packet_ref": proposal_packet_ref,
         "gate_todo_id": gate_todo_id,
@@ -512,7 +514,7 @@ def build_decision_review_receipt(
             )
     elif any(value is not None for value in gated_values.values()):
         raise ValueError(
-            "no_change review receipt must not reference a proposal or user gate"
+            f"{normalized_disposition} review receipt must not reference a proposal or user gate"
         )
 
     packet: dict[str, Any] = {

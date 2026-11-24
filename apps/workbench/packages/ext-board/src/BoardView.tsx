@@ -1,15 +1,15 @@
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import type { WorkProjection } from '@calli/extension-api';
 import type { ExtensionViewProps, WebHost } from '@calli/extension-api/web';
-import { BACKLOG_OPEN_KEY, parseBacklogOpen, buildColumns, COLUMN_IDS, FILTERS_VERSION, GONE_PROJECT, machineOptions, markAllDone, emptyFilters, firstColumn, newThreadOptions, parseFilters, projectKey, projectLabels, projectOptions, showStaleWarning, staleMachines, cardFor, type BoardCard, type BoardFilters, type ColumnId } from './columns';
+import { BACKLOG_OPEN_KEY, parseBacklogOpen, buildColumns, COLUMN_IDS, FILTERS_VERSION, FILTERS_KEY, GONE_PROJECT, machineOptions, markAllDone, emptyFilters, firstColumn, newThreadOptions, parseFilters, projectKey, projectLabels, projectOptions, showStaleWarning, staleMachines, cardFor, type BoardCard, type BoardFilters, type ColumnId } from './columns';
 import { buildSummary } from './assist';
 import { applyDrop, createLongPress, dropAction, withGuesses, type DropAction, type Guess } from './drag';
 import { machineName, reasonOf } from './reason';
 import { parsePins, PINS_KEY, pillFilter, pillSelected, pinCount, togglePin } from './pins';
 import { t } from './i18n';
+import { goalLabel, goalStatus } from './goal';
 import { collectTags, parseTitleTags } from './tags';
 
-const FILTERS_KEY = 'filters.v1';
 
 function readFilters(host: WebHost): BoardFilters {
   try {
@@ -53,6 +53,8 @@ function ThreadCard({ card, host, now, work, tagLabels, projects, drag }: { card
   const parsed = parseTitleTags(thread.title);
   const title = parsed.title || t(locale, 'untitled');
   const tags = parsed.tags.map(tag => tagLabels.get(tag.toLowerCase()) ?? tag);
+  const goal = goalLabel(thread.goal, locale);
+  const goalState = thread.goal ? goalStatus(thread.goal.status, locale) : null;
   const note = card.reason.kind === 'report' ? thread.report?.note.trim() : '';
   const project = projectKey(thread);
   const projectLabel = projects.label(project);
@@ -98,7 +100,8 @@ function ThreadCard({ card, host, now, work, tagLabels, projects, drag }: { card
         <button type="button" className="ext-board-open" onClick={() => host.narrow ? host.navigate.openThread(thread.id) : host.navigate.peekThread(thread.id)}>
           <span className="ext-board-card-title">{title}</span>
         </button>
-        {tags.length > 0 && <span className="ext-board-tags">
+        {(goal || tags.length > 0) && <span className="ext-board-tags">
+          {goal && <span className="ext-board-tag ext-board-goal" title={goal} data-goal-id={thread.goal!.goalId}><span className="ext-board-goal-name">{thread.goal!.title || thread.goal!.goalId}</span>{goalState && <span className="ext-board-goal-status"> · {goalState}</span>}</span>}
           {tags.slice(0, 2).map(tag => <span className="ext-board-tag" key={tag} title={tag}>{tag}</span>)}
           {tags.length > 2 && <span className="ext-board-tag" title={tags.slice(2).join(', ')}>{t(locale, 'moreTags', tags.length - 2)}</span>}
         </span>}
@@ -275,7 +278,7 @@ export function BoardView({ host }: ExtensionViewProps) {
   const current = selectedColumn ?? firstColumn(columns);
   const empty = columns.every((column) => column.total === 0);
   const showMachines = machines.length > 1 || threads.some((thread) => thread.machine);
-  const hasFilters = filters.tags.length + filters.project.length + filters.agent.length + filters.scheduled.length + (showMachines ? filters.machine.length : 0) > 0;
+  const hasFilters = filters.goalOnly || filters.tags.length + filters.project.length + filters.agent.length + filters.scheduled.length + (showMachines ? filters.machine.length : 0) > 0;
   const tags = collectTags(threads);
   const tagLabels = new Map(tags.map(tag => [tag.key, tag.label]));
   const tagCounts = new Map(tags.map(tag => [tag.key, tag.count]));
@@ -367,6 +370,7 @@ export function BoardView({ host }: ExtensionViewProps) {
           {filter('project', t(locale, 'project'), filters.project, projectChoices.map((option) => option.key), projects.label, (project) => updateFilters({ ...filters, project }), (key) => projectCounts.get(key) ?? 0)}
           {showMachines && filter('machine', t(locale, 'machine'), filters.machine, machineChoices.map((option) => option.key), (key) => machineInfo.get(key)?.label || t(locale, 'localMachine'), (machine) => updateFilters({ ...filters, machine }), (key) => machineInfo.get(key)?.count ?? t(locale, 'countUnknown'))}
           {filter('agent', t(locale, 'agent'), filters.agent, agents, (agent) => agentLabels.get(agent) ?? agent, (agent) => updateFilters({ ...filters, agent }))}
+          <button type="button" className={`ext-board-filter${filters.goalOnly ? ' ext-board-filter-active' : ''}`} aria-pressed={filters.goalOnly} onClick={() => updateFilters({ ...filters, goalOnly: !filters.goalOnly })}>{t(locale, 'goalOnly')}</button>
           {filter('scheduled', t(locale, 'scheduledFilter'), filters.scheduled, [true, false], (scheduled) => t(locale, scheduled ? 'scheduled' : 'notScheduled'), (scheduled) => updateFilters({ ...filters, scheduled }))}
           {hasFilters && <button type="button" className="ext-board-clear" onClick={() => updateFilters(emptyFilters())}>{t(locale, 'clearFilters')}</button>}
           </>}

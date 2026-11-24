@@ -67,6 +67,13 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
   const openCitation = useRef(onCitation);
   openCitation.current = onCitation;
   const [missingAnchor, setMissingAnchor] = useState("");
+  const missingAnchorNotice = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (!active || !missingAnchor) return;
+    const notice = missingAnchorNotice.current;
+    notice?.focus({preventScroll: true});
+    notice?.scrollIntoView({block: "center"});
+  }, [active, missingAnchor]);
   const {url, goalId, packId, namespace, follow} = navigation;
   const prefix = `${caseChapterHashPrefix.slice(1)}${namespace ? namespace + '-' : ''}${packId}-`;
   // A reread can replace the study object while the saved version and address
@@ -144,7 +151,7 @@ export function ResearchCaseStudy({study, zh, historical, active, scope, navigat
       <div className="case-lead"><MarkdownText text={study.summary}/></div>
       {historical ? <p className="case-read-warning" role="status">{zh ? '来源已变化或暂不可读。下文保留注册时的解读与证据快照，不能视作当前结果。' : 'The source changed or is unavailable. This reading and its evidence snapshot describe the registered version, not current results.'}</p> : null}
       {study.language !== (zh ? 'zh' : 'en') ? <p className="case-original-language">{zh ? '显示已保存的英文原文。' : 'Showing the saved Chinese original.'}</p> : null}
-      {missingAnchor ? <p className="case-read-warning" role="status">{missingAnchor.includes('~')
+      {missingAnchor ? <p ref={missingAnchorNotice} className="case-read-warning" role="status" tabIndex={-1}>{missingAnchor.includes('~')
         ? (zh ? '这条链接在所选解读中找不到原文。可从下方的依据入口选择。' : 'This link does not identify an original in the selected study. Choose a source below.')
         : (zh ? '这条链接在所选解读中找不到章节。可从目录选择。' : 'This link does not identify a chapter in the selected study. Choose a chapter from the contents.')}</p> : null}
       <details className="case-provenance"><summary>{zh ? '结论依据与范围' : 'Conclusion evidence and scope'}</summary>

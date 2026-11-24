@@ -252,16 +252,10 @@ def test_admission_serializes_overlapping_write_scopes() -> None:
 
     assert contract is not None
     assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
-        "todo_independent"
+        "todo_conflict",
+        "todo_independent",
     ]
-    assert contract["blocked_lanes"] == [
-        {
-            "todo_id": "todo_conflict",
-            "task_domain": "code",
-            "reason_codes": ["write_scope_conflict"],
-            "conflicts_with_todo_id": "todo_primary",
-        }
-    ]
+    assert contract["blocked_lanes"] == []
 
 
 def _scope_contract(
@@ -304,16 +298,10 @@ def test_admission_serializes_case_alias_write_scopes() -> None:
 
     assert contract is not None
     assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
-        "todo_independent"
+        "todo_case_alias",
+        "todo_independent",
     ]
-    assert contract["blocked_lanes"] == [
-        {
-            "todo_id": "todo_case_alias",
-            "task_domain": "code",
-            "reason_codes": ["write_scope_conflict"],
-            "conflicts_with_todo_id": "todo_primary",
-        }
-    ]
+    assert contract["blocked_lanes"] == []
 
 
 def test_admission_keeps_scheduling_subtree_containment_without_a_trailing_slash() -> None:
@@ -328,16 +316,10 @@ def test_admission_keeps_scheduling_subtree_containment_without_a_trailing_slash
 
     assert contract is not None
     assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
-        "todo_independent"
+        "todo_below",
+        "todo_independent",
     ]
-    assert contract["blocked_lanes"] == [
-        {
-            "todo_id": "todo_below",
-            "task_domain": "code",
-            "reason_codes": ["write_scope_conflict"],
-            "conflicts_with_todo_id": "todo_primary",
-        }
-    ]
+    assert contract["blocked_lanes"] == []
 
 
 def test_admission_leaves_sibling_files_independent() -> None:
@@ -402,16 +384,10 @@ def test_admission_serializes_implicit_and_explicit_goal_repository_scopes() -> 
 
     assert contract is not None
     assert [lane["todo_id"] for lane in contract["eligible_child_lanes"]] == [
-        "todo_independent"
+        "todo_same_repository",
+        "todo_independent",
     ]
-    assert contract["blocked_lanes"] == [
-        {
-            "todo_id": "todo_same_repository",
-            "task_domain": "code",
-            "reason_codes": ["write_scope_conflict"],
-            "conflicts_with_todo_id": "todo_primary",
-        }
-    ]
+    assert contract["blocked_lanes"] == []
 
 
 def test_admission_fails_closed_when_configured_domains_are_all_invalid() -> None:

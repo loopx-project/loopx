@@ -123,6 +123,13 @@ review/check results. The local owner can **Add a requirement** and read the
 canonical result. Refresh a stale view before rebasing; an unconfirmed write
 retains its operation for retry. No model starts and no check command runs.
 
+When handing work to another Agent, inspect the original Goal. In JSON, a
+current outcome with `owner_registration_missing: true` names an owner absent
+from the observed Goal roster. Its ID, requirements, work, sources and previous
+reviews remain available for the handoff inventory. In the App, expand the
+outcome and open **Linked work and sources** to see the recorded owner. An
+inspection without the current roster omits the marker.
+
 Outcome maintenance and evidence review are default, without a feature switch.
 Current storage/readback has no `enabled` switch. Every upgraded Goal uses the
 same feedback loop. An Agent review does
@@ -163,7 +170,9 @@ Goal 完成；要求／工作变化使依据过期，产物修改后须重新核
 
 Native `goal-acceptance` and outcome-update `refresh-state` rejections retain
 their stable error code. A known outcome validation rule also supplies optional
-`error_detail`, such as `source ref must be an opaque identifier`, in JSON and
+`error_detail`, such as
+`source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`,
+in JSON and
 Markdown. This detail contains fixed rule text and validator-measured byte
 counts, never the rejected value or provider/IO context. Validation rejection
 writes nothing: after confirming that result, correct the document and retry
@@ -183,7 +192,7 @@ other available Goals.
 
 中文：原生 `goal-acceptance` 和成果更新 `refresh-state` 拒绝保留稳定错误码。
 已知成果校验规则还会在 JSON 与 Markdown 中提供可选 `error_detail`，例如
-`source ref must be an opaque identifier`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
+`source ref must be an opaque identifier (ASCII letters/digits and . _ : @ -, no '/' paths or spaces)`。详情只包含固定规则及校验器实测字节数，不回显被拒值或
 provider/IO 上下文。校验拒绝不写入状态；确认这一结果后，修正文档并沿用原操作和
 仍有效的 provider revision 重试。写入结果不确定时继续遵循原有回执与恢复规则。
 成功操作和未标记错误保持既有行为。
@@ -301,6 +310,16 @@ Concurrent or repeated apply does not rerun a consumed intent; if a started chec
 has no matching native receipt, the result stays uncertain until explicitly
 reconciled. Readback never runs checks. A stored successful receipt cannot
 certify changed files, independent reviewer identity, adoption or Goal completion.
+Managed Chat preparation uses `loopx:python` to bind a pinned `.py` checker to
+the interpreter running LoopX. Resolution happens only at execution; the saved
+definition contains no machine path. Retrying an older saved preparation keeps
+its original argv and review basis.
+If a check contract selects a single Task and that Task passes every criterion
+with recorded oracle versions, its completion also records verification for
+that exact selected scope. Overview reads the original operation and artifact
+versions without running the checker again. A changed or unreadable artifact
+still invalidates the current pass in Overview. A broader contract or an
+incomplete set of versioned checks keeps its existing verification.
 A later finished/cancelled plan does not resurrect an older draft.
 
 Prepared plans bind the reviewed acceptance configuration and declared work,
@@ -342,7 +361,12 @@ Goal、Agent 与运行目录由宿主固定，暂停、过期 Turn 或撤销配�
 概览将同一个交付检查交互放在“方向”正文中，先于工作和成果列表；目标、条件和当前结果
 使用同一验收读回。桌面展开检查细节，窄屏默认折叠条件、版本记录与高级迁移入口，但不折叠
 必需动作、命令影响或失败反馈。已有配置的重查使用次要按钮，待采用方案保留明确的采用决定。
+当检查合同只选中一个任务，且该任务完成时通过全部条件并记录检查器与产物版本，任务完成会同步
+保存该范围的检查结果。概览直接读回原操作和产物版本。产物已变化或读不到时，概览会反映
+当前状态。范围更广或版本证据不全的合同保留已有验证记录。
 待采用方案绑定实际审阅的验收规则与工作声明；备注或明确范围外的工作变化，不要求重复准备。
+托管会话准备检查时用 `loopx:python` 将固定的 `.py` 检查器绑定到运行 LoopX 的解释器；
+执行时才解析，保存的定义不含本机路径。重试旧的已存方案仍保留其原命令与审阅依据。
 覆盖任务要求、所有者配置或 Goal 实例变化仍使方案失效。TypeScript 判断依据，写入继续使用
 当前 provider CAS；原操作与配置依据由原生回执保留。旧方案维持原来的严格版本检查。
 
@@ -1061,3 +1085,28 @@ execution response, not an alternative acceptance ledger.
 本次不授予替换、撤销、跨 Agent 采用或完成验收的权限。已确认拒绝后改变意图需新
 operation；结果不明时先恢复原操作。旧运行时不能读写新格式，回滚须使用兼容版本，
 不能用旧备份覆盖新要求。
+
+### Transfer selected outcomes after an Agent retires
+
+In the local Goal's supporting outcomes, expand **Transfer retired Agent outcomes**,
+select the retired identity, its successor and the individual outcomes, then
+preview and apply. Refresh ownership to see the receiver and original declaration.
+Each Agent continues to refine only the outcomes it owns.
+
+The equivalent local owner command is `loopx goal-acceptance handoff --goal-id GOAL
+--document selection.json --expected-provider-revision REV --operation-id ID`.
+Take the provider revision and each outcome revision from the same fresh
+`goal-acceptance inspect`. The selection document is:
+
+```json
+{"from_agent_id":"retired","to_agent_id":"receiver","outcomes":[{"id":"export","revision":2}]}
+```
+
+The default previews the complete selection. Add `--execute` to commit it
+atomically. After an uncertain response, retry with the same document, revision
+and operation ID to recover its receipt. For a rejected or changed selection,
+inspect again and prepare a new operation. A current source Agent, an unregistered
+receiver or a stale outcome prevents the whole handoff. Historical reviews retain
+their original lane. Checks, Todos, leases and quota history remain under their
+existing owners. The first handoff introduces attribution metadata in the outcome
+state; older runtimes that cannot read it need a compatible upgrade.

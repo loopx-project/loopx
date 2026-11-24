@@ -99,11 +99,16 @@ proposal 必须引用 evidence packet 的稳定指纹，并显式标记
 
 ### `decision_review_receipt_v0`
 
-结算层记录四种 disposition：
+结算层记录五种 disposition：
 
 - `approve`、`reject`、`defer` 必须精确回读现有 `user_gate` event，且 gate scope
   必须是 `direction:action:<proposal-packet-ref>`；
-- `no_change` 必须有显式 semantic rebase 证明，不创建 gate。
+- `no_change` 必须有显式无实质变化的 semantic rebase 证明，不创建 gate；
+- `observed` 记录已评审的新事实，不提出或授权动作；必须有 material-change
+  rebase，且不能携带 proposal 或 gate 引用。
+
+空 rebase 不能结算。采集或读取来源本身不证明语义评审；预览与执行使用相同的证据链
+校验，在任何写入前拒绝不完整或不匹配的证明。
 
 该 receipt 只证明“这批证据已评审或没有实质影响”，允许在 lifecycle writeback
 验证后推进私有 source cursor；它不是 outcome，也不创造动作权限。

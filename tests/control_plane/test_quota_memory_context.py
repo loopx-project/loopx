@@ -339,3 +339,60 @@ def test_real_guard_complete_memory_rejects_changed_source_without_provider_repl
         quota_capability_automation_source(damaged)
     assert memory.calls == 1
     assert json.dumps(source, ensure_ascii=False, sort_keys=True) == before
+
+
+def test_attach_complete_turn_context_preserves_tokenless_and_numeric_roundtrip() -> None:
+    from loopx.control_plane.effect_runtime import source_number_tokens
+    from loopx.control_plane.quota.turn_envelope import (
+        assert_complete_turn_decision,
+        attach_complete_turn_context,
+        compose_turn_decision,
+    )
+
+    guard, _ = quota_context()
+    assert not source_number_tokens(guard)
+    base = compose_turn_decision(guard)
+    assert not source_number_tokens(base)
+
+    tokenless_addition = {"reward_memory_recall": {"status": "empty"}}
+    assert not source_number_tokens(tokenless_addition)
+    tokenless_attached = attach_complete_turn_context(base, tokenless_addition)
+    assert tokenless_attached["reward_memory_recall"] == {"status": "empty"}
+    assert_complete_turn_decision(tokenless_attached)
+
+    big_int = 2**80
+    numeric_attached = attach_complete_turn_context(
+        tokenless_attached,
+        {"post_attach_recall": {"val": 1.0, "big": big_int}},
+    )
+    post_attach = numeric_attached["post_attach_recall"]
+    assert isinstance(post_attach["val"], float)
+    assert post_attach["val"] == 1.0
+    assert type(post_attach["big"]) is int
+    assert post_attach["big"] == big_int
+    assert_complete_turn_decision(numeric_attached)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_real_guard_complete_memory_accepts_auto_context_delivery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    registry, route = quota_fixture(tmp_path, monkeypatch, provider)
+    enable_live_memory(registry, recall=True, ingest=True)
+    _, config = resolve_reward_memory_experiment(
+        registry_path=registry, goal_id=GOAL_ID, agent_id=AGENT_ID)
+    memory = RecallProvider(active_record(config, expires_at="2099-01-01T00:00:00+00:00"))
+    monkeypatch.setattr(
+        "loopx.capabilities.agent_turn_recall.run_configured_agent_turn_recall_fail_open",
+        lambda **kwargs: run_configured_agent_turn_recall_fail_open(**kwargs, provider=memory))
+    guard = run_cli(
+        route + [
+            "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+            "--turn-instance-id", "auto-delivery-memory-check",
+            "--context-delivery", "auto", "--available-capability", "filesystem_read",
+        ],
+    )
+    assert guard["should_run"] is True
+    assert guard["reward_memory_recall"]["status"] == "applied"
+    assert memory.calls == 1
+    assert project_turn_context(guard)["reward_memory_recall"]["context"]["guidance"]

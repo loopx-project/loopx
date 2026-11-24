@@ -200,6 +200,30 @@ export class ExtensionHost {
     return this.state(manifest, record);
   }
 
+  /**
+   * Installs the built-ins that come installed, each once per machine: `seeded` lists the ones done
+   * before, so one the person uninstalled stays uninstalled. One already installed counts as done
+   * and keeps its own state. Those in `freshOnly` act on their own (they ask agents), so they are
+   * installed only on a fresh machine: on an older one a missing record may be the person's own
+   * uninstall, and they are marked done untouched. Returns the new seeded list.
+   */
+  installDefaults(ids: readonly string[], seeded: readonly string[], opts: { fresh?: boolean; freshOnly?: readonly string[] } = {}): string[] {
+    const done = new Set(seeded);
+    for (const id of ids) {
+      if (done.has(id)) continue;
+      if (opts.freshOnly?.includes(id) && !opts.fresh) { done.add(id); continue; }
+      const manifest = this.catalog.find(m => m.id === id);
+      if (!manifest) continue;
+      try {
+        if (!this.store.get(id)) this.install(id, manifest.permissions);
+        done.add(id);
+      } catch (err) {
+        console.warn(`[extensions] could not install ${id} by default: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    return [...done];
+  }
+
   uninstall(id: string): void {
     if (this.external?.has(id)) return this.external.uninstall(id);
     this.manifest(id);

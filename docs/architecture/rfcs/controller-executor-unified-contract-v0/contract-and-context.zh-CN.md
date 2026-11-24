@@ -15,12 +15,16 @@ readiness 路径，不补造 Turn。这只是有界的 Host 交接修复，不�
 采用，或模型费用与长程收益已取得资格。
 
 普通 CLI 切换让每个已形成决策的 `quota should-run` 在 capture **之前**复用既有
-TypeScript `composeCompleteTurnDecision` owner。默认调用及兼容别名
-`--turn-envelope` / `--complete-turn` 使用同一来源。显式关闭 context delivery 时，
+TypeScript `composeCompleteTurnDecision` owner。当前 guard 使用同一来源，
+已退役 `--turn-envelope` 和 `--complete-turn`。显式关闭 context delivery 时，
 完整来源以内联形式返回，不选择旧格式，也不打开渐进交付；完整 Goal 材料的取得与
 此展示选择分开。CLI 中选择 compactor 或 `buildTurnEnvelope` 的活跃分支删除。
-Status、plan 与 scheduler-observation 保留各自用途；本切片不退役历史 reader 或
-其他剩余调用方。
+Status、plan 与 scheduler-observation 保留各自用途。已保存捕获保留原版本、摘要
+与恢复身份。
+普通 CLI 切换同时删除准入上下文收集和捕获前组合里仅为 JSON 调用保留的格式例外。
+调度观察继续使用独立的只读展示。新运行时包独立核对提交源码和安装端默认 C1。
+受支持配置采用、匹配单会话成果及全成本仍各自需要验收证据。
+
 当前 model-behavior portfolio 的 should-run 输入也复用该完整来源 owner，不再把
 已退役 CLI compactor 当作产品默认路径。候选上下文、规划关系、任务续接与诊断事实
 保留。Crowded 回归的 pretty JSON 从压缩后的 86,172 字节变为完整的 121,318 字节
@@ -28,11 +32,8 @@ Status、plan 与 scheduler-observation 保留各自用途；本切片不退役�
 新的完整 carrier。Wire/page 上限和终态 actor 的十次调用预算不变。冻结的 raw/v0
 模型对照继续独立保留。
 
-Benchmark worker 在启动规划或执行模型前核实显式历史 Short 请求。它从已固定
-的 CLI 只读预演 quota 响应，不准入工作，并在 wake 回执记录预期与实际版本及
-资格。v1 或无法核实的响应会拒绝 Short。Fresh-replan checkpoint 会预载另一种
-输入，不能算作直接 Short。当前普通与 Complete 请求继续复用 C1 producer。
-历史实验保留原版本与回执。
+Benchmark worker 在启动模型前拒绝显式历史交付选项。历史实验使用原记录的产品
+与 runner 版本复现；当前 heartbeat 和 checkpoint 准备共用 C1 producer。
 
 Todo 验收完成、replan-successor 返回及 blocked-completion 恢复的当前续接计划复用
 既有 TypeScript 结算 composer，保留原身份、路由与已提供的 lease 证明。JSON 与
@@ -116,6 +117,13 @@ settlement plan 在投影中保留，改变其 Turn 身份会改变 action signa
 排除了直接把现有有界 envelope 原样提升成完整契约的路线，**不证明当前发生权限丢失**：
 recommendation 属于诊断，未知字段是合成输入，完整来源承诺仍能区分两份输入。
 没有测量模型收益。
+
+发布用宿主提示决策探针的真实 external-wait 场景，经既有完整来源 TypeScript owner
+组合。Thin 与 brief 在每批探针中接收同一份已检查来源，保留完整任务和停止正文；
+场景校验器直接读取来源 portfolio，不再构造旧压缩包。四个独立的小型决策对照仍为
+合成输入，冻结的 raw/v0 模型语料和受支持历史 reader 不变。这只迁移资格验证输入，
+不切换普通 CLI writer，也不证明已安装 Host 采用；provider 执行仍须显式 release
+opt-in，脚本探针通过不代表模型行为、结算、验收成果或完整成本已经取得资格。
 
 ### 差分上下文
 

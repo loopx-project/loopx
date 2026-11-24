@@ -7,6 +7,7 @@ import hashlib
 from datetime import datetime, timezone
 from itertools import groupby
 import json
+from pathlib import Path
 import shlex
 
 import pytest
@@ -117,7 +118,7 @@ def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypa
     project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=scope)
     run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID,
         "--execution-replan-after-turns", "1",
-        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execute")
     finding = attachment()
     profiles = finding["work_yardstick_decision"]
     profiles["proxy"]["comparison_scope"] = "validation:screen-slice"
@@ -194,7 +195,7 @@ def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypa
     prepared = run(project, runtime, path, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
         "--available-capability", "shell", "--available-capability", "filesystem_write",
-        "--decision-output-dir", str(opening), "--prepared-capture-reference", "--complete-turn",
+        "--decision-output-dir", str(opening), "--prepared-capture-reference",
         "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation")
     original = opening / "decision.json"
     original_bytes = original.read_bytes()
@@ -584,17 +585,18 @@ def test_yardstick_opening_keeps_the_current_cue_with_a_multi_page_write_scope(t
     assert guidance == graph["work_yardstick_capture"]["guidance"]
     assert cue == graph["work_yardsticks"][0] and cue["todo_id"] == TODO_ID
 
-    _, reference = read_context_read_reference(opening["reference_file"])
-    assert reference["sha256"] == hashlib.sha256(original).hexdigest()
+    expected_sha256 = hashlib.sha256(original).hexdigest()
+    assert opening["sha256"] == opening["navigation"]["recovery"]["sha256"] == expected_sha256
+    assert Path(opening["navigation"]["recovery"]["path"]) == saved
     chunks = [content]
     offset = len(content.encode())
     page = opening
     while not page["eof"]:
         assert page["next_offset"] == offset
         words = shlex.split(page["next_command"])
+        assert words[words.index("--capture-sha256") + 1] == expected_sha256
         page = run(project, runtime, path, *words[words.index("quota"):])
-        _, follow = read_context_read_reference(page["reference_file"])
-        assert follow["path"] == reference["path"] and follow["sha256"] == reference["sha256"]
+        assert page["sha256"] == expected_sha256
         assert page["offset"] == offset
         chunks.append(page["content"])
         offset += len(page["content"].encode())
@@ -876,7 +878,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
         "--document", str(acceptance), "--operation-id", "declare-encoding", "--expected-provider-revision",
         before["provider_revision"], "--execute")
     run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
-        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execute")
     payload = ["repeated-entry"] * 24 + ["other-entry"] * 24
 
     def encode(value):

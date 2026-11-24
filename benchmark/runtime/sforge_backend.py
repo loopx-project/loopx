@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from copy import copy
+import errno
 import inspect
 import ipaddress
 import json
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -15,6 +18,71 @@ from sforge.harness.network_isolation import AllowedEndpoint, resolve_hostname
 
 from .harbor import _CODEX_HOME, _CONTROL, _LOOPX_RUNTIME
 from .provider_failure import observe_terminal_provider_failure
+from .research_artifacts import archive_member_content, is_excluded_tar_member
+
+_RESEARCH_DISK_HEADROOM_FLOOR_BYTES = 10 * 1024**3
+
+
+class InsufficientDiskHeadroomError(OSError):
+    """Raised before optional research collection breaches the host disk floor."""
+
+
+def _minimum_free_bytes(*paths: Path) -> int:
+    return min(shutil.disk_usage(path).free for path in paths)
+
+
+def _require_research_headroom(paths: tuple[Path, Path], pending_bytes: int = 0) -> None:
+    free = _minimum_free_bytes(*paths)
+    available = free - _RESEARCH_DISK_HEADROOM_FLOOR_BYTES
+    if available <= 0 or pending_bytes > available:
+        raise InsufficientDiskHeadroomError(errno.ENOSPC, "insufficient host disk headroom for research collection")
+
+
+class _ResearchExtractionReader:
+    """Check uncompressed bytes before tarfile copies the next block to disk."""
+
+    def __init__(self, archive: tarfile.TarFile, paths: tuple[Path, Path]) -> None:
+        source = archive.fileobj
+        self._read = source.read
+        self._paths = paths
+        self.seek = source.seek
+        self.tell = source.tell
+        self.close = source.close
+        self.write = source.write
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._read(size)
+        _require_research_headroom(self._paths, len(data))
+        return data
+
+
+def _filter_research_members(
+    archive: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+) -> list[tarfile.TarInfo]:
+    """Keep real research outputs while omitting confirmed dumps and ephemeral build dirs."""
+    kept: list[tarfile.TarInfo] = []
+    by_path = {str(PurePosixPath(member.name)): member for member in members}
+    retained_names: dict[str, str] = {}
+    for member in members:
+        parts = PurePosixPath(member.name).parts
+        content = archive_member_content(member, by_path)
+        if len(parts) > 1 and is_excluded_tar_member(archive, content, parts[1:]):
+            continue
+
+        if content.isfile():
+            first_name = retained_names.setdefault(content.name, member.name)
+            if first_name == member.name and member.islnk():
+                # Its original data-bearing name was filtered or has not been seen.
+                regular = copy(content)
+                regular.name, regular.mode = member.name, member.mode
+                member = regular
+            elif first_name != member.name and member.linkname != first_name:
+                # Preserve hardlinks and charge the disk budget only once per retained group.
+                member = copy(member)
+                member.type, member.linkname, member.size = tarfile.LNKTYPE, first_name, 0
+        kept.append(member)
+    return kept
 
 
 class RecordingDockerBackend(DockerBackend):
@@ -191,19 +259,46 @@ class RecordingDockerBackend(DockerBackend):
             raise RuntimeError("Best-only publisher is unavailable")
         self.feedback.start(self, handle)
 
-    def _extract_artifact_archive(self, handle, remote, target):
+    def _extract_artifact_archive(
+        self,
+        handle,
+        remote,
+        target,
+        *,
+        research_cleanup: bool = False,
+    ):
         """Collect one native archive without materializing it as Python bytes."""
+        paths = (Path(tempfile.gettempdir()), target.parent)
+        if research_cleanup:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _require_research_headroom(paths)
         chunks, _ = self._raw(handle).get_archive(str(remote))
         try:
             # A seekable spool preserves the existing tar extraction/filter
             # behavior. Its lifetime is independent of TarFile reference cycles.
-            with tempfile.TemporaryFile() as archive_file:
+            # Unbuffered research writes make the previous chunk visible to the next free-space check.
+            spool = tempfile.TemporaryFile(buffering=0) if research_cleanup else tempfile.TemporaryFile()
+            with spool as archive_file:
                 for chunk in chunks:
+                    if research_cleanup:
+                        _require_research_headroom(paths, len(chunk))
                     archive_file.write(chunk)
                 archive_file.seek(0)
                 target.mkdir(exist_ok=True)
                 with tarfile.open(fileobj=archive_file) as archive:
-                    archive.extractall(target, filter="data")
+                    if not research_cleanup:
+                        archive.extractall(target, filter="data")
+                    else:
+                        members = _filter_research_members(archive, archive.getmembers())
+                        extract_bytes = sum(m.size for m in members if m.isfile())
+                        _require_research_headroom(paths, extract_bytes)
+                        source = archive.fileobj
+                        archive.fileobj = _ResearchExtractionReader(archive, paths)
+                        try:
+                            archive.extractall(target, members=members, filter="data")
+                            _require_research_headroom(paths)
+                        finally:
+                            archive.fileobj = source
         finally:
             close = getattr(chunks, "close", None)
             if close is not None:
@@ -242,8 +337,19 @@ class RecordingDockerBackend(DockerBackend):
                 for remote, name in sources:
                     try:
                         self._extract_artifact_archive(
-                            handle, PurePosixPath(remote), self.log_dir / name)
+                            handle,
+                            PurePosixPath(remote),
+                            self.log_dir / name,
+                            research_cleanup=(name == "research"),
+                        )
                         observations.append({"artifact": name, "collected": True})
+                    except InsufficientDiskHeadroomError as error:
+                        observations.append({
+                            "artifact": name,
+                            "collected": False,
+                            "error_kind": type(error).__name__,
+                            "reason": "insufficient_host_disk_headroom",
+                        })
                     except Exception as error:
                         observations.append({"artifact": name, "collected": False,
                                              "error_kind": type(error).__name__})

@@ -456,6 +456,58 @@
           }
         ]
       }
+    },
+    "watch-only-monitor": {
+      "scope": "manager",
+      "coverage": {
+        "complete": true
+      },
+      "goals": [
+        {
+          "goal_id": "example-product",
+          "description": "Maintains the example product and reviews its changes.",
+          "activation_state": "active",
+          "current_todos": [
+            {
+              "text": "Watch PR 42 checks and review readiness",
+              "status": "open",
+              "task_class": "continuous_monitor",
+              "watch_only": true,
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-09-01T12:00:00Z"
+            },
+            {
+              "text": "Repair rendering regression and verify PR 42 before merge",
+              "status": "open",
+              "task_class": "advancement_task",
+              "claimed_by": "product-owner",
+              "recorded_at": "2026-08-31T12:00:00Z"
+            }
+          ]
+        }
+      ],
+      "context_delegation": {
+        "mode": "context_only",
+        "targets": [
+          {
+            "goal_id": "example-product",
+            "agent_id": "product-owner"
+          }
+        ]
+      },
+      "fixture_boundary": "Synthetic authoritative read; a watch-only monitor tick is not a completed task or merge.",
+      "external_observations": [
+        {
+          "ref": "monitor-tick-1",
+          "read_status": "verified_current",
+          "kind": "continuous_monitor_tick",
+          "watch_only": true,
+          "status": "unchanged",
+          "summary": "Watch-only monitor tick recorded: PR 42 remains OPEN with failing checks; no task completion or merge occurred.",
+          "observed_at": "2026-09-01T12:05:00Z"
+        }
+      ],
+      "evaluation_time": "2026-09-01T12:05:00Z"
     }
   },
   "cases": [
@@ -668,6 +720,21 @@
         "agent_id": "product-owner"
       },
       "context_ref": "qualified-recipient-without-exact-todo"
+    },
+    {
+      "id": "unconfirmed-pr-merge-status-only",
+      "request": "PR 42 现在已经合并了吗？当前状态和检查情况如何？",
+      "expected": "answer",
+      "context_ref": "open-object"
+    },
+    {
+      "id": "watch-only-monitor-not-completed",
+      "request": "监控刚记了一笔检查，这件事现在算完成了吗？",
+      "expected": "answer",
+      "context_ref": "watch-only-monitor",
+      "required_evidence_refs": [
+        "monitor-tick-1"
+      ]
     }
   ]
 }

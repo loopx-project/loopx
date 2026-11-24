@@ -68,8 +68,6 @@ def make_progress_cli_fixture(root: Path, provider: str, scenario: str) -> dict:
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
         "domain": "synthetic-typed-progress",
-        # Individual comparison journeys explicitly enable Stride below.
-        "execution_profile": {"stride_strategy": "off"},
         "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
         "quota": {"compute": 1.0, "window_hours": 24},
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
@@ -208,13 +206,39 @@ def test_captured_replan_preserves_scoped_memory_without_trusting_reader_locatio
         source = json.loads(captured)
         assert source["replan_action_packet"]["decision"] == "replan_required"
         assert source["reward_memory_recall"]["status"] == "applied" and memory.calls == 1
+        from loopx.capabilities.turn_context import attach_turn_context
+        from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
+
         projected = project_turn_context(source)
         assert projected["reward_memory_recall"]["context"]["guidance"]
-        relocated = {**source, "replan_read_path": str(tmp_path / "other-location.json")}
-        assert project_turn_context(relocated) == projected
+        # Signed complete captures reject direct top-level edits, while Host plan
+        # carrier detail_ref relocation preserves exact capability binding.
+        assert project_turn_context({**source, "replan_read_path": str(tmp_path / "other-location.json")}) == {}
+        plan = build_loopx_turn_plan(source, host="codex-cli", execution_mode="isolated-headless")
+        attach_turn_context(
+            plan,
+            registry_path=registry,
+            goal_id=GOAL,
+            agent_id=AGENT,
+            decision=source,
+            turn_instance_id=TURN,
+        )
+        plan_projected = project_turn_context(plan)
+        assert plan_projected["reward_memory_recall"]["context"]["guidance"]
+        relocated = deepcopy(plan)
+        relocated["detail_ref"] = {
+            "captured_decision": {
+                "path": str(tmp_path / "other-location.json"),
+                "turn_key": plan["transaction"]["turn_key"],
+                "goal_id": GOAL,
+                "agent_id": AGENT,
+                "source_hash_ref": "$.source_decision_hash",
+            }
+        }
+        assert project_turn_context(relocated) == plan_projected
         changed = deepcopy(relocated)
-        plan = changed["interaction_contract"]["cli_channel"]["settlement_plan"]
-        plan["ordered_steps"][1]["command_template"] += " --evidence substituted"
+        settlement = changed["work_contract"]["interaction_contract"]["cli_channel"]["settlement_plan"]
+        settlement["ordered_steps"][1]["command_template"] += " --evidence substituted"
         assert project_turn_context(changed) == {}
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -310,14 +334,13 @@ def test_stateless_progressive_replan_uses_the_saved_decision(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("envelope", [(), ("--complete-turn",)], ids=["quota", "complete"])
-def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider, envelope):
+def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     # An installed CLI can carry a long, quoted registry and runtime path.
     root = tmp_path / ("source with apostrophe's permission " + "x" * 110)
     root.mkdir()
     fixture = make_progress_cli_fixture(root, provider, "advanced")
-    scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT, *envelope)
+    scope = ("quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT)
 
     def read(command, expected=0):
         result = subprocess.run(shlex.split(command), cwd=fixture["project"], capture_output=True,
@@ -370,9 +393,28 @@ def test_progressive_replan_stages_read_private_projection(tmp_path, monkeypatch
         argv = shlex.split(delivered_writer)
         assert argv == shlex.split(original_writer)
         assert "--turn-instance-id" not in argv
-        values = {"<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
-                  "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
-                  "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current"}
+        vision = tmp_path / "progressive-vision.json"
+        vision.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "agent_id": AGENT,
+            "state": "active",
+            "vision_patch": {"acceptance_summary": "Validate the original artifact."},
+            "path_delta": {
+                "schema_version": "goal_path_delta_v0",
+                "outcome": "continue",
+                "prior_assumption": "Prior probe left the validation open.",
+                "observed_reality": "Independent probe supplies fresh evidence.",
+                "retained": ["Original validation scope."],
+                "evidence_refs": ["evidence-current"],
+            },
+            "stride_decision": writer["stride_control"]["minimal_example"],
+        }))
+        values = {
+            "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>": str(vision),
+            "<advanced|blocked|exploration_exhausted|no_followup>": "advanced",
+            "<surface-id>": "surface-existing", "<hypothesis-id>": "hypothesis-existing",
+            "<probe-kind>": "probe-independent", "<evidence-id>": "evidence-current",
+        }
         index_before = fixture["index"].read_bytes()
         dry_run = read(shlex.join([sys.executable, "-m", "loopx.entrypoint",
             *[values.get(arg, arg) for arg in argv[1:]], "--dry-run", "--no-global-sync",
@@ -471,7 +513,38 @@ def test_typed_progress_cli_preserves_replan_authority(
         original = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
         original_events = _quota_events(fixture["runtime"])
         authority = _authority(fixture)
-        result = call_progress_cli(fixture, *fixture["refresh"],
+        stride_decision = bound["replan_action_packet"]["stride_control"]["minimal_example"]
+        refresh = list(fixture["refresh"])
+        if "--agent-vision-json" in refresh:
+            vision_path = Path(refresh[refresh.index("--agent-vision-json") + 1])
+            vision_data = json.loads(vision_path.read_text())
+            vision_data["stride_decision"] = stride_decision
+            vision_path.write_text(json.dumps(vision_data))
+        else:
+            vision_path = tmp_path / "typed-progress-stride-vision.json"
+            inconsistent = scenario == "terminal_inconsistent"
+            vision_path.write_text(json.dumps({
+                "schema_version": "goal_vision_replan_contract_v0",
+                "goal_id": GOAL,
+                "agent_id": AGENT,
+                "state": "active",
+                "vision_patch": {"acceptance_summary": "Review the stalled validation route."},
+                "path_delta": {
+                    "schema_version": "goal_path_delta_v0",
+                    "outcome": "continue" if inconsistent else "stop",
+                    "prior_assumption": "Prior probe left the validation unchanged.",
+                    "observed_reality": "Reviewing typed progress under live stride.",
+                    **({"retained": ["Keep probing while inconsistent terminal claim is checked."]}
+                       if inconsistent else {"stopped": ["Stop repeating the unchanged probe."]}),
+                    "evidence_refs": ["evidence-current"],
+                },
+                "stride_decision": stride_decision,
+            }))
+            if "--vision-unchanged-reason" in refresh:
+                idx = refresh.index("--vision-unchanged-reason")
+                del refresh[idx:idx + 2]
+            refresh.extend(["--agent-vision-json", str(vision_path)])
+        result = call_progress_cli(fixture, *refresh,
             expected_code=0 if expected_outcomes else 1)
         if expected_outcomes:
             assert result["ok"] is True and result["appended"] is True
@@ -485,7 +558,7 @@ def test_typed_progress_cli_preserves_replan_authority(
             assert delta == {
                 "schema_version": "replan_semantic_delta_v0", "accepted": True,
                 "outcomes": expected_outcomes, "satisfying_outcomes": expected_outcomes,
-                "required_any_of": ["new_surface", "new_hypothesis", "new_probe_family",
+                "required_any_of": ["fresh_vision_path_outcome", "new_surface", "new_hypothesis", "new_probe_family",
                     "new_runnable_successor", "coverage_backed_exploration_exhausted",
                     "new_concrete_blocker", "coverage_backed_no_followup"],
                 "observation_fingerprint": fingerprint,
@@ -499,7 +572,7 @@ def test_typed_progress_cli_preserves_replan_authority(
             compact = json.loads(fixture["index"].read_text().splitlines()[-1])
             assert compact["autonomous_replan_ack"]["semantic_delta"] == delta
             restart_effect_runtime(wait_for_exit=True)
-            replay = call_progress_cli(fixture, *fixture["refresh"])
+            replay = call_progress_cli(fixture, *refresh)
             assert replay["appended"] is False and replay["idempotent_replay"] is True
         else:
             assert result["ok"] is False and result["appended"] is False
@@ -515,7 +588,7 @@ def test_typed_progress_cli_preserves_replan_authority(
             assert "settlement_owed" not in recovery
             assert rejection["next_cli_actions"] == recovery["next_cli_actions"]
             restart_effect_runtime(wait_for_exit=True)
-            assert call_progress_cli(fixture, *fixture["refresh"], expected_code=1) == result
+            assert call_progress_cli(fixture, *refresh, expected_code=1) == result
             [command] = rejection["next_cli_actions"]
             code, recovered = _run_generated_cli(
                 command, registry_path=fixture["registry"], cwd=fixture["project"])
@@ -568,8 +641,7 @@ def test_stalled_stride_review_drives_an_executed_mechanism_comparison(
             "--slots", "1", "--source", "heartbeat", "--execute")
 
     try:
-        call("configure-goal", "--goal-id", GOAL, "--execution-replan-after-turns", "1",
-             "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        call("configure-goal", "--goal-id", GOAL, "--execution-replan-after-turns", "1", "--execute")
         if comparison_binding:
             call("configure-goal", "--goal-id", GOAL, "--explore-mode", "planning", "--execute")
             call("explore", "node", "--goal-id", GOAL, "--agent-id", AGENT,

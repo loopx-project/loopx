@@ -16,6 +16,48 @@ When the observed execution used the finding's tested input revision, result
 attachments can bind it once and select the evidence to reuse. Readback and
 standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
 
+## Read execution evidence in the App
+
+Open a Goal's **Research / 研究** view, select its question in the history,
+then expand **Read saved findings / 阅读已保存的结论** and select the finding. Expand
+**Actual execution and resource observations / 实际执行与资源观测** to compare
+the planned and executed methods, read the change reason, elapsed time and
+limit, iterations, stop reason, and the input, candidate and result references.
+The history detail uses the same reader.
+
+![Research history and saved evidence entry](assets/execution-feedback-entry.png)
+
+Keep execution detail closed while browsing conclusions; open it when checking
+whether a result belongs to the intended execution. The example below records
+a change from `broad-search` to `targeted-check`. Its elapsed time is measured,
+while the iteration count is unknown. **Not measured / 未测量** stays unknown;
+a finding without an observation has no execution detail. A rejected response
+shows an error and hides stale result facts; use **Refresh evidence / 刷新证据**
+after the source or transport is repaired.
+
+![Execution detail with measured and unknown values](assets/execution-feedback-detail.png)
+
+On a narrow screen, references wrap within the reader. The same controls and
+unknown-value distinctions remain available.
+
+![Execution evidence on a narrow screen](assets/execution-feedback-narrow.png)
+
+These illustrations use synthetic findings with a packaged App and isolated
+SQLite backend. Reading evidence does not run a method or enable a capability.
+Recorded execution alone does not prove model adoption, method effectiveness,
+or an independently accepted outcome.
+
+### A saved finding has no execution detail
+
+First check whether that finding's source actually records an observation.
+Omission is valid and must not be replaced with guessed values. Older App
+builds can also omit recorded observations in saved findings while retaining
+them in research history. If the same source has execution detail in history
+but the saved finding looks like this earlier reader, update the App and
+refresh the evidence. Updating a reader does not execute the method again.
+
+![Earlier saved-finding reader omitting recorded execution detail](assets/execution-feedback-legacy-reader.png)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing

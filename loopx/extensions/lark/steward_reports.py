@@ -9,12 +9,14 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from ...chat_store import _read_json
 from ...file_lock import try_exclusive_file_lock
 from ...file_lock import exclusive_file_lock
 from ...registry import atomic_write_json
+from ...capabilities.native_chat.steward_monitor import steward_monitor_delivery_dir
 from ...capabilities.native_chat.steward_reports import StewardReports
 from ...capabilities.native_chat.steward_turn import report_turn
 from ...capabilities.periodic_report.cadence_journal import read_cadence_journal
@@ -43,9 +45,40 @@ class LarkStewardReports:
             "session_id": actor["session_id"], "provider_ref": binding["provider_ref"],
             "operator_ref": binding["operator_ref"]}
 
+    def _pending_monitor_report_paths(self, actor: dict[str, Any]) -> list[Path]:
+        goal_id = str(actor.get("goal_id") or "").strip()
+        if not goal_id:
+            return []
+        try:
+            delivery_dir = steward_monitor_delivery_dir(self.reports.root, goal_id)
+        except ValueError:
+            return []
+        if not delivery_dir.is_dir():
+            return []
+        pending: list[Path] = []
+        for path in sorted(delivery_dir.glob("*.json")):
+            try:
+                item = _read_json(path)
+            except (OSError, ValueError):
+                continue
+            if (isinstance(item, dict)
+                    and item.get("schema_version") == "steward_monitor_report_delivery_v0"
+                    and item.get("goal_id") == goal_id
+                    and item.get("agent_id") == actor.get("agent_id")
+                    and item.get("session_id") == actor.get("session_id")
+                    and item.get("delivery_status") in {"pending", "unconfirmed"}
+                    and str(item.get("markdown") or "").strip()):
+                pending.append(path)
+        return pending
+
     def pending(self) -> bool:
-        return any(row.get("managed_actor") and self.reports.health(row["binding_id"]).get("enabled")
-            for row in self.transport.bindings.read()["bindings"])
+        return any(
+            row.get("managed_actor") and (
+                self.reports.health(row["binding_id"]).get("enabled")
+                or self._pending_monitor_report_paths(row["managed_actor"])
+            )
+            for row in self.transport.bindings.read()["bindings"]
+        )
 
     def _committed_turn(self, actor: dict[str, Any], window: dict[str, Any]) -> dict[str, Any] | None:
         # Same stable client identity as the original native host. Reading a
@@ -69,12 +102,93 @@ class LarkStewardReports:
             return turn
         return None
 
+    def _reconcile_monitor_reports(self, binding: dict[str, Any], actor: dict[str, Any]) -> int:
+        verified = 0
+        for path in self._pending_monitor_report_paths(actor):
+            try:
+                with try_exclusive_file_lock(path.with_suffix(".lock"), operation="return_steward_monitor_report") as acquired:
+                    if not acquired or not path.exists():
+                        continue
+                    item = _read_json(path)
+                    if (not isinstance(item, dict)
+                            or item.get("delivery_status") not in {"pending", "unconfirmed"}
+                            or item.get("goal_id") != actor.get("goal_id")
+                            or item.get("agent_id") != actor.get("agent_id")
+                            or item.get("session_id") != actor.get("session_id")
+                            or not str(item.get("markdown") or "").strip()):
+                        continue
+                    turn_id = str(item.get("turn_id") or "").strip()
+                    if not turn_id:
+                        continue
+                    turn = self.controller.store.load_turn(actor["session_id"], turn_id)
+                    if not turn:
+                        continue
+                    req = turn.get("loopx_request") or {}
+                    if (turn.get("origin") != "native_loopx"
+                            or turn.get("loopx_execution") is not True
+                            or req.get("actor") != actor):
+                        raise ValueError("the monitor report Turn changed identity")
+                    native = (turn.get("response") or {}).get("native_loopx") or {}
+                    committed = native.get("status") == "committed" or any(
+                        row.get("kind") == "native_loopx.result"
+                        and isinstance(row.get("payload"), dict)
+                        and row["payload"].get("status") == "committed"
+                        for row in self.controller.store.events_after(actor["session_id"], turn_id, None)
+                    )
+                    if not committed:
+                        continue
+                    def current() -> bool:
+                        try:
+                            selected = self.reports.selected(binding["binding_id"])
+                        except (OSError, ValueError, KeyError, TypeError):
+                            return False
+                        return bool(selected["binding"].get("enabled") is True and selected["actor"] == actor)
+                    if not current():
+                        continue
+                    saved_route = item.get("original_route")
+                    route = self._original_route(binding, actor, saved_route)
+                    if saved_route is not None and saved_route != route:
+                        raise ValueError("the frozen monitor report changed its original audience")
+                    if "source" not in item or "event" not in item or "original_route" not in item:
+                        original = _read_json(self.transport.root / (route["request_ref"] + ".json"))
+                        base = {k: deepcopy(v) for k, v in original.items()
+                                if k not in {"deliveries", "stream", "recovery_streams", "context_recovery"}}
+                        record = {**base, **item}
+                        record["deliveries"] = dict(item.get("deliveries") or {})
+                        record["original_route"] = route
+                        atomic_write_json(path, record)
+                    else:
+                        record = item
+                    phase = f"steward_monitor_report.{turn_id}"
+                    delivered = self.transport._deliver(
+                        path,
+                        record,
+                        phase,
+                        str(record["markdown"]),
+                        inbox=lambda r=record: self.transport._inbox(r),
+                        authorization_check=current,
+                        reply_placement="chat_root",
+                        finalize_source=False,
+                    )
+                    record["delivery_status"] = "delivered" if delivered else "unconfirmed"
+                    atomic_write_json(path, record)
+                    if not delivered or not current():
+                        continue
+                    proof = (record.get("deliveries") or {}).get(phase) or {}
+                    if proof.get("verified") is not True:
+                        raise ValueError("the monitor report reply has no verified provider receipt")
+                    verified += 1
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+                continue
+        return verified
+
     def reconcile(self) -> int:
         verified = 0
         for binding in self.transport.bindings.read()["bindings"]:
             actor = binding.get("managed_actor")
             if not actor:
                 continue
+            verified += self._reconcile_monitor_reports(binding, actor)
             try:
                 subscription = self.reports.subscription(binding["binding_id"])
                 if subscription is None:

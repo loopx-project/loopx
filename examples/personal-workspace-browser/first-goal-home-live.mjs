@@ -100,6 +100,8 @@ export const firstGoalHomeLiveScenario = {
       await drawer.getByText("新 Goal · 待你确认", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
       // The snapshot readback completes shortly after the card appears; a stale-card notice must not remain.
       await drawer.getByText("提案状态刷新失败", { exact: false }).waitFor({ state: "hidden", timeout: 15_000 });
+      const isApplyResponse = (response) => response.request().method() === "POST" && /^\/api\/actions\/[^/]+\/apply$/.test(new URL(response.url()).pathname);
+      const firstApply = page.waitForResponse(isApplyResponse);
       await drawer.locator(".personal-primary-action").click();
       const applyButton = drawer.getByRole("button", { name: "确认并应用", exact: true });
       if (await applyButton.count()) await applyButton.click();
@@ -107,7 +109,25 @@ export const firstGoalHomeLiveScenario = {
       const outcome = (await drawer.innerText()).replace(/\s+/g, " ");
       assert.match(outcome, /Goal 初始化尚未完成/, `the service names what is not finished: ${outcome.slice(0, 300)}`);
       assert.match(outcome, /Goal ID: goal-[0-9a-f-]+ · 已应用/, "the Goal itself was registered before the first Turn failed");
-      assert.ok(await drawer.getByRole("button", { name: "重试原操作", exact: true }).count(), "the original operation can be retried");
+      const applyPath = new URL((await firstApply).url()).pathname;
+      const proposalUrl = backend + applyPath.slice(0, -"/apply".length);
+      const readSteps = async () => {
+        const response = await fetch(proposalUrl);
+        assert.ok(response.ok, "the original proposal can be read back");
+        return (await response.json()).proposal.checkpoint.steps;
+      };
+      const before = await readSteps();
+      assert.equal(before.todos_created.todo_ids.length, 1);
+      assert.equal(before.first_turn_started, undefined);
+      const [retried] = await Promise.all([
+        page.waitForResponse(isApplyResponse),
+        drawer.getByRole("button", { name: "重试原操作", exact: true }).click(),
+      ]);
+      assert.equal(new URL(retried.url()).pathname, applyPath, "retry applies the original proposal");
+      const afterRetry = await readSteps();
+      assert.equal(afterRetry.goal_bootstrapped.goal_id, before.goal_bootstrapped.goal_id);
+      assert.deepEqual(afterRetry.todos_created.todo_ids, before.todos_created.todo_ids);
+      assert.equal(afterRetry.first_turn_started, undefined, "the unavailable Agent still has no started Turn");
       await page.screenshot({ path: resolve(outputDir, "first-goal-home-live-applied.png"), animations: "disabled" });
 
       // The real service now has a registry with exactly this Goal, and the

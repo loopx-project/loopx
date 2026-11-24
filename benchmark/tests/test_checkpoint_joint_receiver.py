@@ -157,8 +157,8 @@ def test_captured_point_continues_with_fresh_authority(
         agent + "=active",
         *(
             [
-                "--execution-stride-strategy",
-                "evidence_conditioned_v1",
+                # evidence_conditioned_v1 is always live; this receiver only
+                # tightens the cadence and enables Explore planning.
                 "--execution-replan-after-turns",
                 "1",
                 "--explore-mode",

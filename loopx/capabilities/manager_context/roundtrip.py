@@ -71,6 +71,10 @@ class ReturnResolutionBlocked(ValueError, RuntimeError):
         super().__init__(message)
 
 
+class ReturnTransportUnavailable(RuntimeError):
+    """The adapter lacks a compatible transport for this delivery."""
+
+
 def _verification_decision(outcome):
     return dict(
         effect_runtime_result(
@@ -692,7 +696,7 @@ def _return_transaction(host, path, phase, request):
         "exact": exact, "facts": observed, **payload,
     }, retry_safe=False)
     if (not isinstance(result, dict) or result.get("schema_version") != RETURN_DELIVERY_TRANSACTION
-            or result.get("action") not in {"skip", "private", "verify", "send"}
+            or result.get("action") not in {"skip", "private", "verify", "send", "reconcile_private"}
             or type(result.get("processed")) is not int or result["processed"] not in {0, 1}):
         raise RuntimeError("return delivery transaction result shape mismatch")
     return result
@@ -725,6 +729,10 @@ def _return_provider(plan, source, sender, record_attempt):
         sent = sender(route, session, turn, plan["text"])
     else:
         return {"kind": "sender_unavailable"}
+    if sent.get("provider_write_attempted") is True and sent.get("external_write_performed", False) is None:
+        # The provider may already have published this result. A later drain
+        # cannot recover a missing locator by starting a new outbound send.
+        return {"kind": "locator_unavailable"}
     if isinstance(sent.get("verification"), dict) and sent.get("external_write_performed") is False:
         # A provider outbox may already own publication. Its adapter records the
         # existing attempt before returning a readback, including unavailable
@@ -733,6 +741,27 @@ def _return_provider(plan, source, sender, record_attempt):
     return {"kind": "sent", "reply_verified": sent.get("reply_verified"),
             "external_write_performed": sent.get("external_write_performed"),
             "idempotency_key": sent.get("idempotency_key")}
+
+
+class _ReturnAttemptRecorder:
+    """Keep dispatch and locator checkpoints fenced to the same return."""
+
+    def __init__(self, transact, checkpoint, exact):
+        self.transact = transact
+        self.checkpoint = checkpoint
+        self.exact = exact
+
+    def _save(self, phase, **payload):
+        result = self.transact(phase, **payload)
+        self.checkpoint.update({key: result[key] for key in ("revision", "token")})
+
+    def before_provider_send(self):
+        # Exact returns already persisted their sending admission at prepare.
+        if not self.exact:
+            self._save("dispatch")
+
+    def __call__(self, attempt):
+        self._save("attempt", attempt=dict(attempt))
 
 
 def _deliver_return(host, path, sender, frozen_route):
@@ -753,9 +782,17 @@ def _deliver_return(host, path, sender, frozen_route):
             return _return_transaction(host, path, phase,
                 {"facts": current, **checkpoint, **payload})
 
-    def record_attempt(attempt):
-        saved = transact("attempt", attempt=dict(attempt))
-        checkpoint.update({key: saved[key] for key in ("revision", "token")})
+    if plan["action"] == "reconcile_private":
+        try:
+            original = store.read_history_message(source["route"]["session_id"], plan["message_id"])
+        except (OSError, ValueError, KeyError):
+            return 0
+        if cancelled():
+            return 0
+        recovered = transact("settle", private_readback=original)
+        return recovered["processed"]
+
+    record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
 
     try:
         store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
@@ -766,6 +803,8 @@ def _deliver_return(host, path, sender, frozen_route):
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}
+    except ReturnTransportUnavailable:
+        outcome = {"kind": "verification_error" if plan["action"] == "verify" else "sender_unavailable"}
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         outcome = {"kind": "verification_error" if plan["action"] == "verify" else "error",
                    "blocker": exc.reason if isinstance(exc, ReturnResolutionBlocked) else None}

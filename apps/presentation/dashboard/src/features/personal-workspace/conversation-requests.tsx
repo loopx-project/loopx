@@ -117,11 +117,21 @@ export function OriginalProjectRequests({sessionId, refreshKey}: {sessionId: str
   </div>;
 }
 
-function requestStage(row: ConversationRequest, zh: boolean) {
+function returnNeedsVerification(row: ConversationRequest) {
+  return row.unfinished
+    && row.returns.some(delivery => delivery.phase === "conclusion" && delivery.error === "manager_return_payload_conflict");
+}
+
+function requestStage(row: ConversationRequest, zh: boolean, verifyReturn: boolean) {
   if (!row.unfinished) return row.control_state === "cancelled" ? (zh ? "已取消" : "Cancelled")
     : (zh ? "已回传" : "Returned");
+  if (row.control_state === "effect_pending" && row.agenda?.step === "reconcile_reservation") {
+    return zh ? "原操作待收尾" : "Original operation settling";
+  }
   switch (row.agenda?.step) {
-    case "recover_evidence": return zh ? "待恢复" : "Readback unavailable";
+    case "recover_evidence": return verifyReturn
+      ? (zh ? "回传待核对" : "Return needs verification")
+      : (zh ? "待恢复" : "Readback unavailable");
     case "reconcile_reservation": return zh ? "取消待收尾" : "Cancellation settling";
     case "await_return_delivery": return zh ? "待送达" : "Awaiting delivery";
     case "consume_peer_result": case "await_peer_consumption": return zh ? "结果待核对" : "Result awaiting readback";
@@ -158,7 +168,7 @@ export function ConversationReplyContext({context, zh}: {context?: ChatReplyCont
   </details>;
 }
 
-function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest; zh: boolean; revision: number; active: boolean}) {
+function OriginalRequest({row, zh, revision, active, verifyReturn}: {row: ConversationRequest; zh: boolean; revision: number; active: boolean; verifyReturn: boolean}) {
   const [messages, setMessages] = useState<ChatVisibleMessage[] | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState(false);
@@ -182,7 +192,9 @@ function OriginalRequest({row, zh, revision, active}: {row: ConversationRequest;
     }).catch(() => {if (!abort.signal.aborted) {setMessages(null); setError(true);}});
     return () => abort.abort();
   }, [open, active, row.source_session_id, row.source_turn_id, revision]);
-  return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{zh ? "原对话" : "Original conversation"}</summary>
+  return <details onToggle={event => {focusOnRead.current = event.currentTarget.open; setOpen(event.currentTarget.open);}}><summary>{verifyReturn
+      ? (zh ? "核对原对话" : "Check original conversation")
+      : (zh ? "原对话" : "Original conversation")}</summary>
     <div ref={content} tabIndex={-1}>{error ? <p role="alert">{zh ? "原对话暂时无法读取，请重新打开重试。" : "Original conversation unavailable. Reopen to retry."}</p>
         : messages ? messages.map(message => <article key={message.message_id}>
           <strong>{message.role === "user" ? (zh ? "你" : "You") : "LoopX"}</strong><MarkdownText text={message.reply_context?.source_text ?? message.text}/>
@@ -417,8 +429,11 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
             : (zh ? "当前没有待跟进的委派。" : "No delegations awaiting follow-up.")}</p> : null}
         {recipients.map(recipient => {const [goal, agent] = recipient.split("\n"); return <section key={recipient} className="conversation-requests-group">
           <h3>{agent}<span>{goal}</span></h3>
-          {rows.filter(row => row.goal_id === goal && row.agent_id === agent).map(row => <details key={row.request_id} className="conversation-request-row">
-            <summary><ChevronRight className="conversation-request-toggle" aria-hidden size={15}/><strong>{row.brief?.purpose ?? (row.read_status === "unavailable" ? (zh ? "交办内容待恢复" : "Brief needs recovery") : row.source_question)}</strong><span>{requestStage(row, zh)}</span>
+          {rows.filter(row => row.goal_id === goal && row.agent_id === agent).map(row => {
+            const verifyReturn = returnNeedsVerification(row);
+            return <details key={row.request_id} className="conversation-request-row">
+            <summary><ChevronRight className="conversation-request-toggle" aria-hidden size={15}/><strong>{row.brief?.purpose ?? (row.read_status === "unavailable" ? (zh ? "交办内容待恢复" : "Brief needs recovery") : row.source_question)}</strong><span>{requestStage(row, zh, verifyReturn)}
+              {verifyReturn && row.agenda?.step !== "recover_evidence" ? <span className="conversation-request-return-verification">{zh ? "回传待核对" : "Return needs verification"}</span> : null}</span>
               {row.last_event_at ? <time dateTime={row.last_event_at} aria-label={zh ? "最近记录" : "Latest record"}>{new Date(row.last_event_at).toLocaleString(locale, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})}</time> : null}</summary>
             <div className="conversation-request-detail">
               {row.agenda?.remaining_work ? <section>
@@ -432,9 +447,9 @@ export function ConversationRequests({sessionId, ownerFallback, refreshKey}: {se
                 <h4>{zh ? "需要回传" : "Expected return"}</h4><p>{row.brief.return_requirement}</p>
                 {row.brief.inputs.length ? <details><summary>{zh ? "输入材料" : "Inputs"}</summary><ul>{row.brief.inputs.map((input, index) => <li key={index}>{input.description} <code>{input.ref}</code></li>)}</ul></details> : null}</> : null}
               <LinkedRequestWork row={row} zh={zh} active={open} revision={originalRevision}/>
-              <OriginalRequest key={`${row.source_session_id}:${row.source_turn_id}`} row={row} zh={zh} revision={originalRevision} active={open}/>
+              <OriginalRequest key={`${row.source_session_id}:${row.source_turn_id}`} row={row} zh={zh} revision={originalRevision} active={open} verifyReturn={verifyReturn}/>
             </div>
-          </details>)}
+          </details>;})}
         </section>;})}
       </div>
       <footer className="conversation-requests-pagination" aria-label={zh ? "委派分页" : "Delegation pagination"}>

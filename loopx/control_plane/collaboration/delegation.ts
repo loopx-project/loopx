@@ -236,6 +236,7 @@ export function delegationRequestDecision(params: JsonObject): JsonObject {
   cli.spend_policy = "spend once after independent request validation and durable writeback";
   const contract = requireJsonObject(packet.interaction_contract, "interaction contract");
   const agent = requireJsonObject(contract.agent_channel, "agent channel");
+  for (const key of ["selection_required", "action_portfolio_ref", "suggested_action_count"]) delete agent[key];
   const work = requireJsonObject(agent.work_context, "work context");
   if (Array.isArray(work.sources)) work.sources = work.sources.filter(raw =>
     requireJsonObject(raw, "work source").source !== "selected_todo");
