@@ -814,9 +814,23 @@ def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_tod
     assert replacement_lease["lease_epoch"] > admitted["execution_preparation"]["lease_epoch"]
     before_retry = journal.read_bytes()
 
-    code, refused = _guard(project, runtime, registry)
-    assert code != 0 and refused["ok"] is False, refused
-    assert refused["error_code"] == "heartbeat_receipt_identity_conflict", refused
+    code, recovery = _guard(project, runtime, registry)
+    assert code == 0 and recovery["ok"], recovery
+    assert recovery["normal_delivery_allowed"] is False
+    assert recovery["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+    debt = recovery["unsettled_host_turn_recovery"]
+    assert debt["prior_turn_instance_id"] == cli.TURN_ID
+    assert debt["repair"] == "execution_loss_closeout"
+    assert debt["execution_loss"]["original_prepared_epoch"] == admitted["execution_preparation"]["lease_epoch"]
+    assert journal.read_bytes() == before_retry
+
+    code, refused = _refresh(
+        project, runtime, registry,
+        "--task-lease-idempotency-key", replacement_lease["idempotency_key"],
+        "--task-lease-expected-version", str(replacement_lease["version"]),
+    )
+    assert code == 1 and refused["error_code"] == "refresh_task_lease_unavailable", refused
+    assert not refused["appended"]
     assert journal.read_bytes() == before_retry
     readback = read_heartbeat_settlement(
         runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID, todo_id=cli.TODO_ID,
@@ -854,6 +868,47 @@ def test_unprepared_turn_does_not_become_admitted_after_deferral(tmp_path, provi
     assert readback is not None and readback.prepared_lease_required and readback.prepared_lease is None
     assert not readback.writeback.receipts and not readback.spend.receipts
     assert cli._spend_run_count(runtime) == 0
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_open_todo_with_committed_run_only_recovers_its_receipt(tmp_path, provider):
+    project, runtime, registry = cli._write_fixture(tmp_path)
+    cli._initialize_fixture_authority(project, runtime, provider=provider)
+    code, initial = _guard(project, runtime, registry)
+    assert code == 0 and initial["normal_delivery_allowed"]
+    identity = initial["heartbeat_receipt"]["settlement_identity"]
+    code, written = _refresh(project, runtime, registry)
+    assert code == 0 and written["appended"]
+    # Retain the real Run and original admission at the durable boundary just
+    # before the CLI records its refresh event.
+    path = rollout_event_log_path(runtime, cli.GOAL_ID)
+    rows = [json.loads(line) for line in path.read_bytes().splitlines()]
+    retained = [row for row in rows if row["event_kind"] != "refresh_state"]
+    assert len(retained) + 1 == len(rows)
+    path.write_text("".join(json.dumps(row) + "\n" for row in retained))
+    for explicit in (False, True):
+        code, guard = cli._run_cli(
+            registry, runtime, "quota", "should-run", "--codex-app",
+            "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID, "--turn-instance-id", cli.TURN_ID,
+            *(["--todo-id", cli.TODO_ID] if explicit else []), cwd=project,
+        )
+        assert code == 0 and guard["normal_delivery_allowed"] is False
+        assert guard["unsettled_host_turn_recovery"]["repair"] == "durable_writeback"
+        assert guard["settlement_progress"]["state"] == "writeback_receipt_required"
+        channel = guard["interaction_contract"]["cli_channel"]
+        assert channel["settlement_plan"]["identity"] == identity
+        assert channel["spend_allowed_now"] is False and "settlement_owed" not in guard
+    template, = channel["next_cli_actions"]
+    command = (template.replace("<validated_progress>", written["classification"])
+               .replace("<scale>", written["delivery_batch_scale"])
+               .replace("<outcome>", written["delivery_outcome"]))
+    code, repaired = _execute(command, project, runtime, registry)
+    assert code == 0 and repaired["settlement_progress"]["state"] == "settled", repaired
+    assert repaired["appended"] is False and repaired["settlement_identity"] == identity
+    code, replay = _refresh(project, runtime, registry, "--settle-turn", "--settlement-receipt")
+    assert code == 0 and not replay["appended"] and replay["settlement_progress"]["state"] == "settled"
+    assert cli._classification_count(runtime, "validated_progress") == 1
+    assert cli._spend_run_count(runtime) == 1
 
 
 def test_returned_command_settles_and_repairs_receipts_without_another_debit(tmp_path):

@@ -495,9 +495,15 @@ def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str
                                     resume_verified: bool = False,
                                     resume_sections: Mapping[str, str] | None = None) -> dict[str, Any]:
     """Native IO adapter; the shared typed owner reduces continuity assumptions."""
-    return _turn_envelope_result("native_context_lifecycle", state=dict(state),
+    source = dict(state)
+    result = _turn_envelope_result("native_context_lifecycle", state=source, source_edits=True,
         event=dict(event), new_epoch=new_epoch, pages=pages, pages_verified=pages_verified,
         resume_verified=resume_verified, **({"resume_sections": dict(resume_sections)} if resume_sections else {}))
+    try:
+        return _apply_context_projection_changes(source, result)
+    except RuntimeError as error:
+        # The native hook retires an invalid reduction under the journal lock.
+        raise ValueError("Invalid native context journal edits") from error
 
 
 def restore_context_delivery(

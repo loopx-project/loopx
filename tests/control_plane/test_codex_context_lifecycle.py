@@ -828,7 +828,7 @@ def test_primary_write_failure_preserves_small_recovery_and_does_not_create_ack(
 
 
 @pytest.mark.parametrize("event_name", ["SessionStart", "PreCompact", "PostCompact"])
-@pytest.mark.parametrize("failure", ["read", "reduction"])
+@pytest.mark.parametrize("failure", ["read", "reduction", "invalid_edits"])
 def test_hook_failure_under_lock_cannot_resurrect_a_completed_baseline(tmp_path, monkeypatch, event_name, failure):
     from loopx.cli_commands.quota_capture import read_context_capture
     from argparse import Namespace
@@ -847,10 +847,13 @@ def test_hook_failure_under_lock_cannot_resurrect_a_completed_baseline(tmp_path,
     with monkeypatch.context() as failed:
         if failure == "read":
             failed.setattr(context, "_state", unavailable)
+        elif failure == "invalid_edits":
+            failed.setattr("loopx.control_plane.quota.turn_envelope._turn_envelope_result",
+                           lambda *args, **kwargs: {"changes": [{"path": ["missing", "key"], "value": True}]})
         else:
             failed.setattr("loopx.control_plane.quota.turn_envelope.update_native_context_lifecycle", unavailable)
         result = context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": event_name, "source": "compact"})
-    if event_name == "SessionStart" and failure == "reduction":
+    if event_name == "SessionStart" and failure != "read":
         assert recovery["command"] in result["hookSpecificOutput"]["additionalContext"]
     else:
         assert result == {}

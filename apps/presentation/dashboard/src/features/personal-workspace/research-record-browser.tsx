@@ -51,7 +51,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
   reading: ReturnType<typeof useResearchRecordsLocation>;
 }) {
-  const {query, status, limit, expanded} = reading.value;
+  const {query, status, limit, expanded, focused} = reading.value;
   const {consumeFocusRestore} = reading;
   const root = useRef<HTMLDivElement>(null);
   const [downloadFailed, setDownloadFailed] = useState(false);
@@ -63,18 +63,19 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   const allGroups = useMemo(() => researchRecordGroups(events, complete ? nodes : []), [events, nodes, complete]);
   useEffect(() => {
     if (!complete || busy || !consumeFocusRestore()) return;
-    const row = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])]
-      .find(element => expanded.includes(element.dataset.researchRecord!));
+    const rows = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])];
+    const row = rows.find(element => element.dataset.researchRecord === focused)
+      ?? rows.find(element => expanded.includes(element.dataset.researchRecord!));
     const target = row?.querySelector<HTMLElement>("summary");
     target?.focus({preventScroll: true}); target?.scrollIntoView({block: "nearest"});
-  }, [complete, busy, consumeFocusRestore, groups, expanded]);
+  }, [complete, busy, consumeFocusRestore, groups, expanded, focused]);
   const missing = complete && expanded.some(id => !allGroups.some(group => group.id === id));
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录 · ${groupCount}` : `${matches.length} matches in ${events.length} loaded records · ${groupCount}`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
   const updateFilters = (filters: Partial<Pick<ResearchRecordsLocation, "query" | "status">>) => {
-    reading.update({...filters, limit: 50, expanded: []});
+    reading.update({...filters, limit: 50, expanded: [], focused: undefined});
   };
   const toggle = (id: string, open: boolean) => {
     if (expanded.includes(id) === open) return;
@@ -150,7 +151,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
     <ol className="research-history-records">{groups.slice(0, limit).map(group => {
       const event = group.events[0]!;
       const shown = displayed.get(event.event_id) ?? event;
-      return <li key={group.id} data-research-record={group.id}>
+      return <li key={group.id} data-research-record={group.id} onFocus={() => reading.update({focused: group.id})}>
         {group.node && group.events.length > 1
           ? <GroupedResearchRecord title={(displayed.get(group.node.latest.event_id) ?? group.node.latest).title}
             events={group.events} displayed={displayed} renderRecord={originalContent} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}

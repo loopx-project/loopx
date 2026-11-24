@@ -149,6 +149,29 @@ CLI from becoming another reader of the legacy guidance field.
 事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
 capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
+#### Agent-efficiency vs. storage-engineering boundary
+
+Consistent with the overall roadmap's Track A/Track B prioritization, runtime work on
+`loopx_turn_envelope_v1` and `progressive_context` prioritizes direct **Agent-facing
+efficiency and effectiveness wins (Track A)** ahead of SQLite/capture storage refactors
+(Track B):
+
+- Shipped intra-envelope sharing (`#9328`): `outcome_requirements_ref` across differing
+  outer `goal_objective` carriers alongside exact source-identity readbacks. Separately,
+  per the ordinary quota CLI rule above, the existing ordinary CLI display projection can
+  emit `blocked_priority_fallback_ref` when `heartbeat_recommendation.blocked_priority_fallback`
+  matches the root diagnostic, while raw complete Turn decisions (`compose_complete` /
+  `loopx_turn_envelope_v1`), saved captures, and `--include-detail agent-todos` retain
+  both inline fallback diagnostics.
+- Shipped bounded normal-run CLI inline openings (`#9253`): inlines verified
+  `work_opening` and `before_work` facts within output budgets while retaining
+  digest-bound cold-path `first_read_command` / `recovery` fallbacks; remaining work
+  targets over-budget openings and other admission entrypoints beyond that CLI route.
+- Remaining Track A work: preserving intra-epoch prefix KV-cache stability (`KeepRaw` /
+  `FoldToReceipt` / `EpochReset`) over mid-trajectory prefix mutations.
+
+中文：遵循总路线图 Track A/Track B 分层原则，`loopx_turn_envelope_v1` 与 `progressive_context` 优先推进直接改善 **Agent 效率与效果（Track A）** 的优化，而非先重构 SQLite 或 capture 存储（Track B）：其中 `#9328` 已落地 `goal_objective` 不同时仍共享同内容 `outcome_requirements_ref` 及精确源身份读回（既有普通 quota CLI 展示投影按上文规则在等值时输出 `blocked_priority_fallback_ref`，而 `compose_complete` / `loopx_turn_envelope_v1` 原始完整决策、保存 capture 与 `--include-detail agent-todos` 仍保留两份内联 fallback 诊断），且 `#9253` 已落地有界普通 CLI 轮次内联 `work_opening` / `before_work` 并保留摘要绑定回退读取；剩余推进聚焦超预算情形与其余准入入口的启动压缩，以及 epoch 内前缀 KV-Cache 单调稳定（`KeepRaw` / `FoldToReceipt` / `EpochReset`）。
+
 ### Captured replan reads / 捕获后的重规划读取
 
 For a successful replan with `--decision-output-dir` or `--decision-output-root`,
