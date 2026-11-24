@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from loopx.cli_commands import registry_admin
 
 from tests.source_cli import run_source_cli
@@ -215,6 +217,83 @@ def test_cli_rejects_a_delimiter_only_request_and_exits_nonzero(
     for path in (source_registry, global_registry):
         goal = json.loads(path.read_text(encoding="utf-8"))["goals"][0]
         assert "coordination" not in goal
+
+
+@pytest.mark.parametrize(
+    ("agent_ids", "error_kind"),
+    [([","], "agent_identity_empty"), (["代理甲"], "agent_identity_invalid")],
+)
+def test_identity_error_recovery_accepts_an_existing_idempotent_retry(
+    tmp_path: Path,
+    agent_ids: list[str],
+    error_kind: str,
+) -> None:
+    runtime_root, source_registry, global_registry = _fixture(tmp_path)
+    before = {path: path.read_bytes() for path in (source_registry, global_registry)}
+
+    failed = registry_admin.register_agent_via_source_registry(
+        runtime_root_arg=str(runtime_root),
+        goal_id=GOAL_ID,
+        agent_ids=agent_ids,
+        require_new=True,
+        execute=True,
+    )
+
+    assert failed["ok"] is False, failed
+    assert failed["error_kind"] == error_kind
+    assert failed["written"] is False
+    for path in before:
+        assert path.read_bytes() == before[path]
+
+    retried = registry_admin.register_agent_via_source_registry(
+        runtime_root_arg=str(runtime_root),
+        goal_id=GOAL_ID,
+        agent_ids=["codex-existing"],
+        execute=True,
+    )
+
+    assert retried["ok"] is True, retried
+    assert retried["changed"] is False
+    assert retried["written"] is False
+    assert retried["requested_agents"] == ["codex-existing"]
+    assert "codex-existing" in retried["registered_agents"]
+    for path in before:
+        assert path.read_bytes() == before[path]
+        assert "codex-existing" in _registered_agents(path)
+
+    fresh = registry_admin.register_agent_via_source_registry(
+        runtime_root_arg=str(runtime_root),
+        goal_id=GOAL_ID,
+        agent_ids=["peer-new"],
+        execute=True,
+    )
+
+    assert fresh["ok"] is True, fresh
+    assert fresh["changed"] is True
+    assert fresh["written"] is True
+    assert fresh["registration_readback"]["verified"] is True
+
+
+def test_cli_markdown_shows_the_verified_readback_for_a_new_id(
+    tmp_path: Path,
+) -> None:
+    runtime_root, source_registry, _ = _fixture(tmp_path)
+
+    result = run_source_cli(
+        [
+            "--runtime-root", str(runtime_root),
+            "--registry", str(source_registry),
+            "--format", "markdown",
+            "register-agent",
+            "--goal-id", GOAL_ID,
+            "--agent-id", "peer-new",
+            "--execute",
+        ],
+        check=False,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "- registration_readback_verified: `True`" in result.stdout
 
 
 def test_cli_reports_the_rejected_id_and_exits_nonzero(tmp_path: Path) -> None:

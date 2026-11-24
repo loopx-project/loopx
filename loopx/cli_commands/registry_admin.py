@@ -121,6 +121,14 @@ def _fresh_agent_collision_payload(
     }
 
 
+_AGENT_REGISTRATION_CONTINUATION = (
+    "continue when the execute result reports ok=true and every requested id "
+    "appears in registered_agents; an already-registered id is an idempotent "
+    "success with changed=false and written=false, while a newly added id also "
+    "requires changed=true, written=true and registration_readback.verified=true"
+)
+
+
 def _empty_agent_request_payload(
     *,
     execute: bool,
@@ -150,9 +158,9 @@ def _empty_agent_request_payload(
         "recommended_action": (
             "rerun with at least one lowercase public-safe agent id per token "
             "(letters, digits, dot, underscore, colon, at-sign or hyphen); use "
-            "configure-goal --registered-agent to replace or clear an existing roster, "
-            "and continue only after the execute result reports ok=true, changed=true, "
-            "and written=true"
+            "configure-goal --registered-agent to replace or clear an existing roster; "
+            "drop --require-new when the corrected id is already registered; "
+            f"{_AGENT_REGISTRATION_CONTINUATION}"
         ),
     }
 
@@ -194,8 +202,8 @@ def _invalid_agent_identity_payload(
         "recommended_action": (
             "rerun with one lowercase public-safe agent id per token (letters, "
             "digits, dot, underscore, colon, at-sign or hyphen) and inspect "
-            "rejected_agents; continue only after the execute result reports "
-            "ok=true, changed=true, and written=true"
+            "rejected_agents; drop --require-new when the corrected id is already "
+            f"registered; {_AGENT_REGISTRATION_CONTINUATION}"
         ),
     }
 
