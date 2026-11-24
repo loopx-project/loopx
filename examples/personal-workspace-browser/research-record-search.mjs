@@ -141,11 +141,40 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(all.goal_id, "synthetic-record-search");
       assert.equal(all.records.length, 79, "Download includes matches beyond both HTTP and display paging");
       assert.deepEqual(all.coverage, {loaded_records: 79, exported_records: 79, history_complete: true, refresh_failed: false});
+      // A date slice must find originals beyond the 50-row display page and
+      // use the same selection in both downloads, without losing the read scope.
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-01-03");
+      const dateSlice = await download();
+      assert.equal(dateSlice.records.length, 2);
+      assert.deepEqual(dateSlice.filters, {query: "", status: "", from: "2026-01-02", to: "2026-01-03"});
+      assert.equal(dateSlice.coverage.loaded_records, 79);
+      assert(dateSlice.records.every(row => row.result_id === "retained-finding"));
+      const dateReport = await report();
+      assert.match(dateReport, /Recorded dates.*UTC/);
+      assert.equal((dateReport.match(/^## \d+\./gm) ?? []).length, 2);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await results.evaluate(element => element.scrollIntoView({block: "start"}));
+        assert(await results.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await page.screenshot({path: resolve(outputDir, `research-record-dates-${width}.png`), animations: "disabled"});
+      }
+      await page.reload();
+      await results.getByLabel("Recorded from (UTC)").waitFor();
+      assert.equal(await results.getByLabel("Recorded from (UTC)").inputValue(), "2026-01-02");
+      assert.equal((await download()).records.length, 2);
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-04");
+      await results.getByRole("alert").getByText("The start date must not be after the end date.").waitFor();
+      assert(await downloadButton.isDisabled());
+      await results.getByRole("button", {name: "Clear filters", exact: true}).click();
+      await page.setViewportSize({width: 1440, height: 900});
       const fullReport = await report();
       assert.equal((fullReport.match(/^## \d+\./gm) ?? []).length, 79);
       assert.match(fullReport, /\*\*Value:\*\* Unknown/);
       assert.match(fullReport, /\*\*Value:\*\* 0/);
       assert.match(fullReport, /candidate:amber-v3/);
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-01-03");
       await search.fill("AMBER-V1 run:old");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal(await results.locator("li").count(), 1, "Search reaches beyond both the display limit and HTTP page boundary");
@@ -166,7 +195,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       await results.locator(".research-history-records > li > details > summary").click();
       const selected = await download();
-      assert.deepEqual(selected.filters, {query: "AMBER-V1 run:old", status: "refuted"});
+      assert.deepEqual(selected.filters, {query: "AMBER-V1 run:old", status: "refuted", from: "2026-01-02", to: "2026-01-03"});
       assert.equal(selected.records.length, 1);
       assert.equal(selected.records[0].summary, "质量下降 — original negative evidence for candidate amber.");
       assert.deepEqual(selected.records[0].evidence_refs, ["candidate:amber-v1"]);
@@ -253,6 +282,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
       assert.equal(stale.coverage.refresh_failed, true);
+      assert.deepEqual(stale.filters, selected.filters);
       assert.equal(await history.locator(".research-phase").count(), 3, "A failed refresh retains the last complete time range");
       assert.match(await report(), /Failed; previously read records retained/);
       await comparisonSummary.click();

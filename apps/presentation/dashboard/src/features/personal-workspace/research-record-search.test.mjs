@@ -91,3 +91,28 @@ test("matches the reader's translated narrative alongside original text and iden
   assert.deepEqual(searchResearchRecords(events, "负向观察"), [], "An absent/stale display never supplies cached aliases");
   assert.equal(original.title, "Negative observation");
 });
+
+test("UTC recorded-day range includes both days, intersects status/text and excludes unknown timestamps", () => {
+  const records = [
+    record({event_id: "before", recorded_at: "2026-01-01T23:59:59.999Z"}),
+    record({event_id: "start", recorded_at: "2026-01-02T00:00:00Z", summary: "target"}),
+    record({event_id: "end", recorded_at: "2026-01-03T23:59:59.999Z", summary: "target"}),
+    record({event_id: "offset", recorded_at: "2026-01-04T01:00:00+02:00", summary: "target"}),
+    record({event_id: "after", recorded_at: "2026-01-04T00:00:00Z"}),
+    record({event_id: "unknown", recorded_at: "unknown"}),
+    record({event_id: "unqualified-clock", recorded_at: "2026-01-03T12:00:00"}),
+  ];
+  const range = {from: "2026-01-02", to: "2026-01-03"};
+  assert.deepEqual(searchResearchRecords(records, "target", "tentative", undefined, range).map(row => row.event_id), ["start", "end", "offset"]);
+  assert.equal(searchResearchRecords(records, "", "", undefined, {from: "2026-01-04", to: "2026-01-02"}).length, 0);
+  assert.equal(searchResearchRecords(records, "", "", undefined, {from: "2026-02-30"}).length, 0);
+  assert.equal(searchResearchRecords(records, "").length, records.length);
+  assert.deepEqual(searchResearchRecords(records, "", "", undefined, {to: "2026-01-01"}).map(row => row.event_id), ["before"]);
+});
+
+test("date bookmarks stay scoped and preserve reversed bounds for visible correction", () => {
+  const state = {...defaultResearchRecordsLocation, open: true, from: "2026-02-02", to: "2026-02-01"};
+  const url = writeResearchRecordsLocation(new URLSearchParams(), "source-goal", state);
+  assert.deepEqual(readResearchRecordsLocation(url, "source-goal"), state);
+  assert.deepEqual(readResearchRecordsLocation(url, "other-source"), defaultResearchRecordsLocation);
+});

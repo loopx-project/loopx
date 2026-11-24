@@ -10,7 +10,10 @@ export type ResearchRecordDisplay = {
 
 /** Local reading selection, fenced to the same Goal and physical source. It
  * carries no records, status judgment, source connection or execution grant. */
-export type ResearchRecordsLocation = {open: boolean; query: string; status: string; expanded: string[]; focused?: string; limit: number};
+export type ResearchRecordsLocation = {
+  open: boolean; query: string; status: string; expanded: string[]; focused?: string; limit: number;
+  from?: string; to?: string;
+};
 export const defaultResearchRecordsLocation: ResearchRecordsLocation = {open: false, query: "", status: "", expanded: [], limit: 50};
 
 export function readResearchRecordsLocation(search: URLSearchParams, scope: string): ResearchRecordsLocation {
@@ -22,7 +25,9 @@ export function readResearchRecordsLocation(search: URLSearchParams, scope: stri
         || typeof value.status !== "string" || !Array.isArray(value.expanded)
         || !value.expanded.every((id: unknown) => typeof id === "string" && id)
         || !Number.isSafeInteger(value.limit) || value.limit < 50) return {...defaultResearchRecordsLocation};
-    return {open: value.open, query: value.query, status: value.status, expanded: [...new Set<string>(value.expanded)],
+    if ((value.from !== undefined && !validResearchDate(value.from)) || (value.to !== undefined && !validResearchDate(value.to))) return {...defaultResearchRecordsLocation};
+    return {...(value.from ? {from: value.from} : {}), ...(value.to ? {to: value.to} : {}),
+      open: value.open, query: value.query, status: value.status, expanded: [...new Set<string>(value.expanded)],
       ...(typeof value.focused === "string" && value.focused ? {focused: value.focused} : {}), limit: value.limit};
   } catch {return {...defaultResearchRecordsLocation};}
 }
@@ -56,13 +61,35 @@ export function researchRecordGroups(matches: readonly ExploreHistoryEvent[], no
   return [...groups.values()];
 }
 
+export type ResearchDateRange = {from?: string; to?: string};
+
+/** Calendar days refer to recorded-at UTC, never an inferred execution period. */
+export function validResearchDate(value: unknown): value is string {
+  if (value === "") return true;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const time = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value;
+}
+
+export function validResearchDateRange({from, to}: ResearchDateRange): boolean {
+  return validResearchDate(from ?? "") && validResearchDate(to ?? "") && !(from && to && from > to);
+}
+
 /** Search source records, including superseded revisions, before display paging.
  * Optional display text broadens matching; results remain the original records.
  * Tokens are literal, case-insensitive AND terms; no inferred evidence or status. */
-export function searchResearchRecords(events: readonly ExploreHistoryEvent[], query: string, status = "", display?: ResearchRecordDisplay) {
+export function searchResearchRecords(events: readonly ExploreHistoryEvent[], query: string, status = "", display?: ResearchRecordDisplay, range: ResearchDateRange = {}) {
+  if (!validResearchDateRange(range)) return [];
+  const from = range.from ? Date.parse(`${range.from}T00:00:00Z`) : -Infinity;
+  const until = range.to ? Date.parse(`${range.to}T00:00:00Z`) + 86400000 : Infinity;
   const terms = query.trim().toLowerCase().split(/\s+/u).filter(Boolean);
   return events.filter(event => {
     if (status && event.status !== status) return false;
+    if (range.from || range.to) {
+      // An offset-free wall clock cannot identify a UTC day reliably.
+      const recorded = /(?:Z|[+-]\d{2}:\d{2})$/i.test(event.recorded_at) ? Date.parse(event.recorded_at) : NaN;
+      if (!Number.isFinite(recorded) || recorded < from || recorded >= until) return false;
+    }
     if (!terms.length) return true;
     const translated = display?.events?.get(event.event_id);
     const sections = display?.sections?.get(event.event_id);

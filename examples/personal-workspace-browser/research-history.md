@@ -377,6 +377,32 @@ claim matched evaluations, improved quality or acceptance. Partial/stale history
 retains the reader's coverage warning; refresh to retry. Closing and reopening the
 comparison does not change either source record.
 
+To review a fixed part of a long-running study, use **Recorded from (UTC)** and
+**Recorded through (UTC)** inside the records drawer. Both calendar days are
+included; either bound can be left empty. This filters the original recorded-at
+time, not execution time or the timeline's relative thirds. A timestamp without
+an explicit timezone cannot be assigned to a UTC day and does not match while a
+date filter is active. Text and status filters intersect with this interval.
+
+For example, January 2 through January 3 retains both the earlier negative result
+and its later observation from a 79-record study. Both downloads include all
+matching originals beyond the visible page, and disclose the date bounds and
+partial/stale coverage. Reloading the same Goal/source restores the selection.
+An end date before the start date shows a correction message and disables the
+empty download; **Clear filters** restores all loaded originals.
+
+长程研究可在记录抽屉中按 **UTC 起止记录日期**读取，包含起止两日，可只填一端。
+日期、文字与状态取交集；没有明确时区的记录不匹配日期条件。该日期是记录时间，
+不是执行时间。重新载入保留同一 Goal／来源的筛选，JSON 与 Markdown 下载使用相同
+原始记录及范围说明，历史不完整或刷新失败仍会披露。起止倒置时需先纠正，或清除筛选。
+
+![A fixed UTC study interval retains both original observations on desktop](../../docs/images/research-record-dates-desktop.png)
+
+![Date selection and downloads remain usable on a narrow viewport](../../docs/images/research-record-dates-narrow.png)
+
+These guide illustrations use synthetic records and the packaged workspace over
+the real local history reader; they do not show installed native App qualification.
+
 Choose **Reading report (Markdown)** in **Download format**, then **Download reading
 report** to read the matching evidence outside the workbench. The report includes
 original text, blocked reasons, source/revision identities, execution observations
