@@ -563,9 +563,9 @@ Self-service:
    ```bash
    node=<supported node binary> &&
    node_qualifies() {
-     normalized="$(printf '%s' "$1" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+     normalized="$(node_trim "$1")"
      case "$normalized" in
-       '' | *$'\n'*) return 1 ;;
+       '' | *$'\n'* | *$'\r'*) return 1 ;;
      esac
      printf '%s\n' "$normalized" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || return 1
      printf '%s\n' "$normalized" | awk '
@@ -585,40 +585,62 @@ Self-service:
          exit 0
        }'
    }
+   node_trim() {
+     n="${1#"${1%%[![:space:]]*}"}"
+     printf '%s' "${n%"${n##*[![:space:]]}"}"
+   }
    "$node" --version &&
-   node_ver="$("$node" --version)" &&
+   node_ver="$(node_trim "$("$node" --version)")" &&
    node_qualifies "$node_ver" &&
    node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
    "$node" --version &&
-   node_ver="$("$node" --version)" &&
+   node_ver="$(node_trim "$("$node" --version)")" &&
    node_qualifies "$node_ver" &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    mkdir "$backup" &&
-   mv ~/.local/bin/node "$backup/node" &&
-   if ln -s "$node" ~/.local/bin/node &&
-      installed_ver="$("$HOME/.local/bin/node" --version)" &&
-      node_qualifies "$installed_ver"; then
-     echo "Node launcher updated to $node (previous entry kept in $backup)"
+   if [ -e ~/.local/bin/node ] || [ -L ~/.local/bin/node ]; then
+     mv ~/.local/bin/node "$backup/node" &&
+     if ln -s "$node" ~/.local/bin/node &&
+        installed_ver="$(node_trim "$("$HOME/.local/bin/node" --version)")" &&
+        node_qualifies "$installed_ver"; then
+       echo "Node launcher updated to $node (previous entry kept in $backup)"
+     else
+       mv "$backup/node" ~/.local/bin/node &&
+       rmdir "$backup" &&
+       echo "The candidate failed the final check; the original launcher was restored." &&
+       exit 1
+     fi
    else
-     mv "$backup/node" ~/.local/bin/node &&
-     rmdir "$backup" &&
-     echo "The candidate failed the final check; the original launcher was restored." &&
-     exit 1
+     if ln -s "$node" ~/.local/bin/node &&
+        installed_ver="$(node_trim "$("$HOME/.local/bin/node" --version)")" &&
+        node_qualifies "$installed_ver"; then
+       echo "Node launcher created at ~/.local/bin/node (remove the link to undo)"
+     else
+       rm -f ~/.local/bin/node &&
+       echo "The candidate failed the final check; nothing was changed." &&
+       exit 1
+     fi
    fi
    ```
 
-   `node_qualifies` is the single version judgment shared by the candidate
-   and the installed link, and it follows `probe_node()`'s order: the whole
-   captured output is trimmed of its surrounding whitespace and carriage
-   returns first, and the single-line, shape, and floor checks then run on
-   that normalized result — a CRLF or whitespace-padded launcher output
-   qualifies exactly as the plain form does. Extra non-empty lines inside
-   the output still fail, the base triple must reach 22.22.3, and a base
-   sitting exactly on the minimum is rejected when a prerelease is present,
-   while `22.22.3+build-5`, whose hyphen belongs to the build metadata,
-   still qualifies. The installed link is qualified through the same
-   function after the swap, with the `else` branch above as the undo path.
-   The two `--version` lines remain as the readback prints.
+   `node_trim` follows `probe_node()`'s boundary handling: it removes the
+   leading and trailing whitespace of the whole captured output — including
+   CRLF endings and blank leading lines — and leaves every interior
+   character alone, so an interior carriage return fails the shape check
+   exactly as it fails Core's fullmatch. `node_qualifies` is the single
+   version judgment shared by the candidate and the installed link: the
+   normalized output must be exactly one `v?[maj.min.pat]` line with an
+   optional prerelease after `-` and an optional build after `+`; malformed
+   fields or missing segments fail. The base triple must reach 22.22.3, and
+   a base sitting exactly on the minimum is rejected when a prerelease is
+   present, while `22.22.3+build-5`, whose hyphen belongs to the build
+   metadata, still qualifies. The installed link is qualified through the
+   same function after the swap; the two failure branches above are the undo
+   paths, and the `--version` lines remain as the readback prints. When
+   `~/.local/bin/node` does not exist yet — an nvm-managed old Node can be
+   first in the search order with no local launcher — the `else` branch
+   creates the link for the first time, and removing that link undoes the
+   whole step.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
