@@ -19,7 +19,7 @@ from typing import Any
 
 from ...chat.attachments import normalize_chat_image_attachments
 
-from ...chat_ingress import (
+from ...chat.ingress import (
     STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,
     ensure_external_admission_scope,
     resolve_external_admission_source,

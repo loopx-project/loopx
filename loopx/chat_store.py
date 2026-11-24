@@ -27,7 +27,7 @@ from .capabilities.native_chat.model_settings import (
 )
 from .chat.event_cache import ChatEventCache, ChatEventStreamMixin
 from .chat.journal import decode_chat_journal
-from .chat_ingress import (
+from .chat.ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
     SESSION_QUEUE_TTL_SECONDS as SESSION_QUEUE_TTL_SECONDS,

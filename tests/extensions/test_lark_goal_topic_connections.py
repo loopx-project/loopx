@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from loopx.chat_lark_api import LarkChatRequestMixin
+from loopx.chat.lark_api import LarkChatRequestMixin
 from loopx.control_plane.quota.goal_boundary import goal_boundary
 from loopx.extensions.lark.goal_channel_contracts import (
     GOAL_CHANNEL_BINDING_SCHEMA_VERSION,

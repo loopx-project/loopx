@@ -156,7 +156,7 @@ class PrivateConversationRequestMixin:
 
     def _private_conversation_connect(self) -> None:
         from .goal_topic_runtime import _active_profile_configs
-        from ...chat_lark_api import build_lark_goal_topic_runtime_snapshot
+        from ...chat.lark_api import build_lark_goal_topic_runtime_snapshot
         try:
             response = parse_qs(urlsplit(getattr(self, "path", "")).query, keep_blank_values=True).get("response")
             if response is not None and response != ["minimal"]:
@@ -185,7 +185,7 @@ class PrivateConversationRequestMixin:
                 group_refs = [identity_ref(observed["provider_ref"], chat) for chat in requested]
             elif "group_ids" in body or "audience" in body:
                 raise ValueError("unsupported conversation audience")
-            from ...chat_lark_api import _app_identity_for_private_guard
+            from ...chat.lark_api import _app_identity_for_private_guard
             group_apps = {other_profile: _app_identity_for_private_guard(
                 other_profile, self._lark_runner(), self._require_lark_cli())
                 for other_profile in existing}
