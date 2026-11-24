@@ -530,7 +530,8 @@ export function sessionEnvironment(base: Record<string, string>, context?: Recor
     ...process.env, ...base, LOOCHAT_TEAM_SOCKET: undefined, LOOCHAT_TEAM_KEY: undefined, LOOCHAT_BIN_DIR: undefined,
     LOOCHAT_HANDOVER_SOCKET: undefined, LOOCHAT_HANDOVER_KEY: undefined,
     LOOCHAT_TODO_SOCKET: undefined, LOOCHAT_TODO_KEY: undefined,
-    LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined, LOOCHAT_TOKEN: undefined, ...context,
+    LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined, LOOCHAT_TOKEN: undefined,
+    LOOPX_WORKBENCH_STEWARD_CREDENTIAL: undefined, LOOCHAT_STEWARD_SOCKET: undefined, ...context,
   };
   if (context?.LOOCHAT_BIN_DIR) env.PATH = `${context.LOOCHAT_BIN_DIR}${process.platform === 'win32' ? ';' : ':'}${base.PATH ?? process.env.PATH ?? ''}`;
   return env;

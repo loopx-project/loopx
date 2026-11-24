@@ -33,6 +33,7 @@ import { ThreadManager } from './threads.js';
 import { Workdirs } from './workdirs.js';
 import { BorrowingService } from './borrowing.js';
 import { borrowingServer } from './borrowing-server.js';
+import { StewardLedgerService, stewardServer } from './steward-ledger.js';
 import { VoiceService } from './voice-service.js';
 import { displayForDesktop, PersonalBrowser } from './personal-browser.js';
 import { WorkerReports } from './worker-reports.js';
@@ -170,6 +171,15 @@ async function main(): Promise<void> {
   const borrowing = new BorrowingService(store, manager, adapters, config.dataDir, toolsPath);
   const toolsServer = borrowingServer(borrowing);
   if (!await listenPrivate(toolsServer, toolsPath)) throw new Error('Tool socket is already in use');
+  const stewardLedger = new StewardLedgerService({
+    store,
+    manager,
+    localSessions,
+    adapters,
+    dataDir: config.dataDir,
+  });
+  const stewardSocketServer = stewardServer(stewardLedger);
+  if (!await listenPrivate(stewardSocketServer, stewardLedger.socketPath)) throw new Error('Steward socket is already in use');
   // Extensions start after recovery, scheduling and collaboration, and before anything is served,
   // so the first thing they hear is a machine that is ready.
   const extensions = new ExtensionHost({
@@ -221,7 +231,7 @@ async function main(): Promise<void> {
   // Login links (wl_… tokens) live with the rest of this daemon's state, so they survive a restart.
   const linkTokens = new LinkTokens(config.dataDir);
   await linkTokens.load();
-  const server = createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, linkTokens, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
+  const server = createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, hosts, scheduler, extensions, voice, autotitle, localSessions, stewardLedger, machineUsage: machineUsage ?? undefined, linkTokens, token: config.token, webDir: config.webDir, version: VERSION, previewPort });
   // Same requests, other origin: preview frames load from here so their pages cannot reach the
   // app, while their own CSS and scripts load same-origin. Without the port, previews say so.
   const preview = createHttpServer({ manager, registry, terminals, hosts, scheduler, extensions, token: config.token, webDir: null, version: VERSION, previewPort });
@@ -230,7 +240,7 @@ async function main(): Promise<void> {
   });
   preview.listen(previewPort, config.host, () => console.log(`previews on http://${config.host}:${previewPort}`));
   // The same API on a socket only this user can open: how a hub on another machine reaches this one.
-  const local = config.socket ? createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, scheduler, extensions, voice, autotitle, localSessions, machineUsage: machineUsage ?? undefined, trusted: true, token: config.token, webDir: null, version: VERSION }) : null;
+  const local = config.socket ? createHttpServer({ manager, loopx, push, feishu, registry, terminals, desktop, scheduler, extensions, voice, autotitle, localSessions, stewardLedger, machineUsage: machineUsage ?? undefined, trusted: true, token: config.token, webDir: null, version: VERSION }) : null;
   let ownsSocket = false;
   if (local && config.socket) {
     listenPrivate(local, config.socket)
@@ -293,6 +303,8 @@ async function main(): Promise<void> {
     await borrowing.dispose();
     toolsServer.close();
     rmSync(toolsPath, { force: true });
+    stewardSocketServer.close();
+    stewardLedger.dispose();
     personal.close();
     rmSync(personalPath, { force: true });
     registry.dispose();

@@ -12,6 +12,7 @@ import type { AgentRegistry } from './agents.js';
 import type { StoredEvent } from './events.js';
 import type { HistoryEvent } from './history.js';
 import type { LocalSessions } from './local-sessions.js';
+import type { StewardLedgerService } from './steward-ledger.js';
 import type { MachineUsageMeter } from './machine-usage.js';
 import { refuse, type Desktop } from './desktop.js';
 import { HttpError } from './errors.js';
@@ -57,6 +58,8 @@ export interface HttpDeps {
   autotitle?: import('./autotitle.js').AutoTitle;
   /** This machine's agent sessions that are not threads here. Optional so tests need none. */
   localSessions?: LocalSessions;
+  /** Read-only Steward open-work ledger & session lookup across Workbench threads and local sessions. */
+  stewardLedger?: StewardLedgerService;
   /** This machine's token usage, metered off the agents' transcripts. */
   machineUsage?: MachineUsageMeter;
   /** Host-owned native voice; absent on deployments that do not provide it. */
@@ -914,6 +917,46 @@ export function createHttpServer(deps: HttpDeps): Server {
       if (!localSessions) throw new HttpError(404, 'this daemon does not list local sessions');
       localSessions.ensureFresh();
       return sendJson(res, 200, localSessions.page(url.searchParams.get('limit'), url.searchParams.get('cursor')));
+    }
+
+    if (method === 'GET' && path === '/api/steward/ledger') {
+      if (!deps.stewardLedger) throw new HttpError(404, 'steward ledger unavailable');
+      const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
+      return sendJson(res, 200, deps.stewardLedger.ledgerRead({
+        cursor: url.searchParams.get('cursor'),
+        limit,
+        includeDoneSince: url.searchParams.get('includeDoneSince'),
+      }));
+    }
+
+    if (method === 'GET' && path === '/api/steward/sessions/find') {
+      if (!deps.stewardLedger) throw new HttpError(404, 'steward session lookup unavailable');
+      const limit = url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : undefined;
+      return sendJson(res, 200, await deps.stewardLedger.sessionsFind({
+        query: url.searchParams.get('q') ?? '',
+        repo: url.searchParams.get('repo'),
+        agent: url.searchParams.get('agent'),
+        cursor: url.searchParams.get('cursor'),
+        limit,
+      }));
+    }
+
+    if (method === 'GET' && path === '/api/steward/sessions/read') {
+      if (!deps.stewardLedger) throw new HttpError(404, 'steward session read unavailable');
+      const kind = url.searchParams.get('kind');
+      if (kind !== 'workbench_thread' && kind !== 'local_session') throw new HttpError(400, 'invalid_target_kind');
+      const id = url.searchParams.get('id') ?? '';
+      if (!id) throw new HttpError(400, 'missing_target_id');
+      const maxChars = url.searchParams.has('maxChars') ? Number(url.searchParams.get('maxChars')) : undefined;
+      const rawMode = url.searchParams.get('mode');
+      return sendJson(res, 200, await deps.stewardLedger.sessionRead({
+        kind,
+        id,
+        agent: url.searchParams.get('agent'),
+        mode: rawMode === 'outline' || rawMode === 'recent_turns' || rawMode === 'turn_range' ? rawMode : null,
+        cursor: url.searchParams.get('cursor') ?? url.searchParams.get('turnCursor'),
+        maxChars,
+      }));
     }
 
     // GET /api/machine-usage?hours=1|24|168&model=&launcher=: this machine's tokens by minute,

@@ -1437,7 +1437,7 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
         managed_read_default: bool = False) -> CodexAppServerAdapter:
     """Build the native adapter from already-authorized runtime arguments."""
     from ...chat_manager import MANAGER_AGENT_GOAL_ID
-    from ..manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL
+    from ..manager_context.inspection import READ_TOOL, CONTEXT_READ_TOOL, STEWARD_LEDGER_TOOLS
     from ...chat_loopx_mode import TOOL as COLLABORATION_TOOL
     from ...chat.coordination import check_preparation_tool
     review_context = metadata_review_context or answer_review_context
@@ -1474,7 +1474,7 @@ def start_runtime_adapter(controller: ChatRuntimeController, *, work_dir: Path, 
         reasoning_effort=model_config.get("reasoning_effort"),
         service_tier=model_config.get("service_tier"),
         dynamic_tools=[READ_TOOL] if answer_review_context else (
-            [READ_TOOL] if goal_id == MANAGER_AGENT_GOAL_ID
+            [READ_TOOL, *(STEWARD_LEDGER_TOOLS if manager_profile is not None and manager_profile.get("channel_audience") != "external" else [])] if goal_id == MANAGER_AGENT_GOAL_ID
             else [CONTEXT_READ_TOOL, *([COLLABORATION_TOOL] if loopx_tools else
                 [check_preparation_tool()] if check_preparation and resume_thread_id is None
                     and working_continuation is None else [])]

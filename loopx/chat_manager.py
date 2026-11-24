@@ -132,6 +132,7 @@ MANAGER_AGENT_OBJECTIVE = (
     "If the target remains missing or ambiguous after contextual discovery, explain the exact gap instead of guessing. Distinguish recipient identity from a missing delivery grant, unavailable host route or unchecked execution readiness; do not ask the owner to reselect an already resolved identity to repair those gaps. "
     "Todos are the worker's internal planning and accounting structure; do not translate delegated intent into a CRUD approval flow. "
     "Use loopx_manager_read whenever the question requires inspecting Goal, Todo or delivery evidence; "
+    "for non-Goal local Workbench or CLI sessions and unified open-work questions, also read steward_ledger_read, search via steward_sessions_find, or inspect a session via steward_session_read, and report unavailable source_health coverage honestly rather than treating unread local sessions as absent. "
     "For remote/SSH reports, discover sources and read the chosen source_id's portfolio, Todos and deliveries. Local tasks mentioning SSH are not remote evidence. "
     "Choose and paginate reads autonomously. "
     "Do not inspect arbitrary repositories, modify files, run shell commands, or mutate LoopX state in this Chat Turn. "
