@@ -1614,3 +1614,228 @@ def test_tilde_prose_goal_begin_turn_single_json_and_post_settlement_prune(
     assert not turn1_dir.exists()
     assert turn2_dir.is_dir()
     assert turn3_dir.is_dir()
+
+
+def _make_512kib_dir(parent: Path, name: str, *, mtime: float) -> Path:
+    path = parent / name
+    path.mkdir(parents=True, exist_ok=True)
+    target = path / "decision.json"
+    digest = _write_owned_json(
+        target,
+        {"ok": True, "decision": "wait", "blob": "x" * (512 * 1024)},
+        mtime=mtime,
+    )
+    _write_owned_json(
+        path / "decision.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(target),
+            "sha256": digest,
+        },
+        mtime=mtime,
+    )
+    os.utime(path, (mtime, mtime))
+    return path
+
+
+def test_aged_512kib_backlog_inspection_bounds_and_fail_closed_ref_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import loopx.cli_commands.context_delivery_retention as retention_mod
+
+    root = tmp_path / "context-delivery"
+    root.mkdir(mode=0o700)
+    now = 12_000_000.0
+    very_old = now - 200_000.0
+
+    for index in range(192):
+        _make_512kib_dir(root, f"decision-aged-{index:03d}", mtime=very_old + index)
+
+    opened_json_paths: list[Path] = []
+    real_reader = retention_mod._read_regular_json_object
+
+    def spy_reader(
+        path: Path, *, uid: int | None, max_bytes: int = retention_mod._MAX_CAPTURE_JSON_BYTES
+    ) -> tuple[dict[str, object], bytes] | None:
+        opened_json_paths.append(path)
+        return real_reader(path, uid=uid, max_bytes=max_bytes)
+
+    monkeypatch.setattr(retention_mod, "_read_regular_json_object", spy_reader)
+
+    # 1. max_delete=1 parses at most 1 reclaimable aged capture (<= 2 JSON files).
+    res_one = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=64,
+        max_delete_per_sweep=1,
+        min_sweep_interval_seconds=0.0,
+        now=now,
+    )
+    assert res_one.swept is True
+    assert res_one.deleted == 1
+    assert not (root / "decision-aged-000").exists()
+    assert len(opened_json_paths) <= 2
+
+    # 2. Fail closed when max_ref_scan_bytes_per_sweep is smaller than kept_shallow size.
+    opened_json_paths.clear()
+    res_fail_closed = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=64,
+        max_delete_per_sweep=1,
+        max_ref_scan_bytes_per_sweep=1024,
+        min_sweep_interval_seconds=0.0,
+        now=now + 1.0,
+    )
+    assert res_fail_closed.swept is True
+    assert res_fail_closed.deleted == 0
+    assert (root / "decision-aged-001").is_dir()
+
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MAX_REF_SCAN_BYTES", "1024")
+    res_env_closed = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=64,
+        max_delete_per_sweep=1,
+        min_sweep_interval_seconds=0.0,
+        now=now + 2.0,
+    )
+    assert res_env_closed.deleted == 0
+    assert (root / "decision-aged-001").is_dir()
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY_MAX_REF_SCAN_BYTES")
+
+    # 3. Default 8 MiB inspect budget with max_delete=128 makes bounded progress (1..16 deletions).
+    opened_json_paths.clear()
+    res_bounded = maybe_prune_context_delivery_root(
+        root,
+        min_age_seconds=86400.0,
+        keep_recent_per_prefix=64,
+        max_delete_per_sweep=128,
+        min_sweep_interval_seconds=0.0,
+        now=now + 3.0,
+    )
+    assert res_bounded.swept is True
+    assert 1 <= res_bounded.deleted <= 16
+    assert len(opened_json_paths) <= 32
+
+
+def test_sqlite_aged_512kib_backlog_peak_rss_bounded_across_should_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    def run_measured_begin_turn(extra_env: dict[str, str]) -> tuple[dict[str, object], float]:
+        cmd = [
+            sys.executable,
+            "-m",
+            "loopx.entrypoint",
+            "--registry",
+            str(registry),
+            "--runtime-root",
+            str(runtime),
+            "--format",
+            "json",
+            "quota",
+            "should-run",
+            "--codex-app",
+            "--goal-id",
+            GOAL_ID,
+            "--agent-id",
+            AGENT_ID,
+            "--todo-id",
+            TODO_ID,
+            "--begin-turn",
+        ]
+        probe_script = (
+            "import json, resource, subprocess, sys;"
+            "p = subprocess.run(sys.argv[1:], capture_output=True, text=True);"
+            "rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss;"
+            "mib = rss / (1024 * 1024) if sys.platform == 'darwin' else rss / 1024;"
+            "print(json.dumps({'rc': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr, 'rss_mib': mib}))"
+        )
+        wrapper = subprocess.run(
+            [sys.executable, "-c", probe_script, *cmd],
+            cwd=project,
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": str(ROOT), **extra_env},
+        )
+        measured = json.loads(wrapper.stdout)
+        assert measured["rc"] == 0, measured["stderr"] or measured["stdout"]
+        decoder = json.JSONDecoder()
+        stripped = str(measured["stdout"]).lstrip()
+        payload, end_idx = decoder.raw_decode(stripped)
+        assert not stripped[end_idx:].strip()
+        assert isinstance(payload, dict) and payload.get("ok") is True
+        return payload, float(measured["rss_mib"])
+
+    # Create one active unsettled capture that must remain readable across sweeps.
+    active_guard, _ = run_measured_begin_turn({"LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0"})
+    active_ref = Path(str(active_guard["reference_file"]))
+
+    old_mtime = time.time() - 200_000.0
+    seeded_names: list[str] = []
+    for index in range(192):
+        name = f"decision-backlog-{index:03d}"
+        _make_512kib_dir(managed_root, name, mtime=old_mtime + index)
+        seeded_names.append(name)
+
+    def count_existing_seeded() -> int:
+        return sum(1 for name in seeded_names if (managed_root / name).exists())
+
+    # Baseline with deletion disabled.
+    _, baseline_rss_mib = run_measured_begin_turn(
+        {
+            "LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0",
+            "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0",
+        }
+    )
+    assert count_existing_seeded() == 192
+
+    # max_delete=1 drains 1 dir and keeps peak RSS bounded near baseline.
+    _, one_rss_mib = run_measured_begin_turn(
+        {
+            "LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "1",
+            "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0",
+        }
+    )
+    assert count_existing_seeded() == 191
+    assert one_rss_mib < baseline_rss_mib + 30.0, (
+        f"max_delete=1 RSS exceeded bound: {one_rss_mib:.1f} MiB vs baseline {baseline_rss_mib:.1f} MiB"
+    )
+    rc_read1, read1 = _run_cli(
+        registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
+    )
+    assert rc_read1 == 0 and read1["ok"] is True
+
+    # max_delete=128 drains 1..16 dirs under 8 MiB inspect budget without RSS growth.
+    _, batch_rss_mib = run_measured_begin_turn(
+        {
+            "LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "128",
+            "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0",
+        }
+    )
+    deleted_batch = 191 - count_existing_seeded()
+    assert 1 <= deleted_batch <= 16
+    assert batch_rss_mib < baseline_rss_mib + 30.0, (
+        f"max_delete=128 RSS exceeded bound: {batch_rss_mib:.1f} MiB vs baseline {baseline_rss_mib:.1f} MiB"
+    )
+    rc_read2, read2 = _run_cli(
+        registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
+    )
+    assert rc_read2 == 0 and read2["ok"] is True

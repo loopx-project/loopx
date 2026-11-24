@@ -36,11 +36,20 @@ DEFAULT_MIN_AGE_SECONDS = 86400.0
 DEFAULT_KEEP_RECENT_PER_PREFIX = 64
 DEFAULT_MAX_DELETE_PER_SWEEP = 128
 DEFAULT_MIN_SWEEP_INTERVAL_SECONDS = 300.0
+DEFAULT_MAX_INSPECT_PER_SWEEP = 128
+DEFAULT_MAX_INSPECT_BYTES_PER_SWEEP = 8 * 1024 * 1024
+DEFAULT_MAX_REF_SCAN_BYTES_PER_SWEEP = 256 * 1024 * 1024
 
 ENV_MIN_AGE_SECONDS = "LOOPX_CONTEXT_DELIVERY_MIN_AGE_SECONDS"
 ENV_KEEP_RECENT_PER_PREFIX = "LOOPX_CONTEXT_DELIVERY_KEEP_RECENT"
 ENV_MAX_DELETE_PER_SWEEP = "LOOPX_CONTEXT_DELIVERY_MAX_DELETE"
 ENV_MIN_SWEEP_INTERVAL_SECONDS = "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS"
+ENV_MAX_INSPECT_PER_SWEEP = "LOOPX_CONTEXT_DELIVERY_MAX_INSPECT"
+ENV_MAX_INSPECT_BYTES_PER_SWEEP = "LOOPX_CONTEXT_DELIVERY_MAX_INSPECT_BYTES"
+ENV_MAX_REF_SCAN_BYTES_PER_SWEEP = "LOOPX_CONTEXT_DELIVERY_MAX_REF_SCAN_BYTES"
+
+_REF_SCAN_CHUNK_BYTES = 64 * 1024
+_REF_SCAN_OVERLAP_MIN_BYTES = 256
 
 _KNOWN_CAPTURE_DATA_FILENAMES: frozenset[str] = frozenset(
     {
@@ -65,72 +74,28 @@ _DECISION_OWNERSHIP_KEYS: tuple[str, ...] = (
 _MAX_CAPTURE_JSON_BYTES = 64 * 1024 * 1024
 _CAPTURE_REFERENCE_LEAF_KEYS: frozenset[str] = frozenset(
     {
-        "path",
-        "capture_path",
-        "capture_file",
-        "decision_capture_path",
-        "decision_file",
-        "reference_file",
-        "source_path",
-        "baseline_path",
-        "recovery_path",
-        "replan_read_path",
-        "captured_decision_path",
-        "context_path",
-        "delivery_path",
-        "result_path",
-        "command",
-        "first_read_command",
-        "remaining_read_command",
-        "index_command",
-        "select_command",
-        "read_command",
-        "recovery_command",
-        "next_command",
-        "command_template",
-        "selection_command_args_template",
-        "command_args_template",
-        "ready_context_command_template",
-        "full_decision",
-        "full_packet",
-        "sha256",
-        "capture_sha256",
-        "source_sha256",
-        "claim_source_sha256",
-        "digest",
-        "capture_digest",
-        "selection_sha256",
-        "baseline_sha256",
+        "path", "capture_path", "capture_file", "decision_capture_path",
+        "decision_file", "reference_file", "source_path", "baseline_path",
+        "recovery_path", "replan_read_path", "captured_decision_path",
+        "context_path", "delivery_path", "result_path",
+        "command", "first_read_command", "remaining_read_command",
+        "index_command", "select_command", "read_command", "recovery_command",
+        "next_command", "command_template", "selection_command_args_template",
+        "command_args_template", "ready_context_command_template",
+        "full_decision", "full_packet",
+        "sha256", "capture_sha256", "source_sha256", "claim_source_sha256",
+        "digest", "capture_digest", "selection_sha256", "baseline_sha256",
     }
 )
 _CAPTURE_REFERENCE_CONTAINER_KEYS: frozenset[str] = frozenset(
     {
-        "baseline",
-        "baseline_reference",
-        "candidate",
-        "capture",
-        "captured_decision",
-        "captured_recovery",
-        "cli_channel",
-        "comparison_base",
-        "context_details",
-        "context_recovery",
-        "detail_ref",
-        "execution_preparation",
-        "first_read",
-        "host_execution_preparation",
-        "interaction_contract",
-        "navigation",
-        "observed_first_read",
-        "pending",
-        "ready_capture",
-        "recovery",
-        "references",
-        "required",
-        "result_details",
-        "selection",
-        "selection_command",
-        "session",
+        "baseline", "baseline_reference", "candidate", "capture",
+        "captured_decision", "captured_recovery", "cli_channel",
+        "comparison_base", "context_details", "context_recovery", "detail_ref",
+        "execution_preparation", "first_read", "host_execution_preparation",
+        "interaction_contract", "navigation", "observed_first_read",
+        "pending", "ready_capture", "recovery", "references", "required",
+        "result_details", "selection", "selection_command", "session",
         "source_recovery",
     }
 )
@@ -156,14 +121,27 @@ class _ShallowDirectory:
 
 
 @dataclass(frozen=True, slots=True)
+class _AdmissionIdentity:
+    runtime_root: str | None
+    goal_id: str | None
+    turn_instance_id: str | None
+    agent_id: str | None
+    todo_id: str | None
+    replan_obligation_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class _CandidateDirectory:
     mtime: float
     name: str
     path: Path
     prefix: str
-    data_payloads: dict[str, dict[str, object]]
-    data_digests: dict[str, str]
-    reader_payloads: dict[str, dict[str, object]]
+    data_digests: frozenset[str]
+    reader_digests: frozenset[str]
+    admissions: tuple[_AdmissionIdentity, ...]
+    referenced_names: frozenset[str]
+    referenced_digests: frozenset[str]
+    byte_size: int
 
 
 def _read_env_non_negative_float(name: str, default: float) -> float:
@@ -233,6 +211,14 @@ def _resolve_min_sweep_interval_seconds(value: float | None) -> float:
             DEFAULT_MIN_SWEEP_INTERVAL_SECONDS,
         )
     return _validate_non_negative_float(value, label="min_sweep_interval_seconds")
+
+
+def _resolve_budget_int(
+    value: int | None, *, env_name: str, default: int, label: str
+) -> int:
+    if value is None:
+        return _read_env_non_negative_int(env_name, default)
+    return _validate_non_negative_int(value, label=label)
 
 
 def _resolve_now(value: float | None) -> float:
@@ -479,62 +465,59 @@ def _reader_reference_is_valid(
     )
 
 
-def _prefix_ownership_matches(
+@dataclass(frozen=True, slots=True)
+class _MeasuredEntry:
+    name: str
+    path: Path
+    is_reader: bool
+    size: int
+
+
+def _prefix_ownership_summary_matches(
     prefix: str,
     *,
-    data_payloads: Mapping[str, dict[str, object]],
+    data_flags: Mapping[str, tuple[bool, bool, bool]],
     has_verified_reader: bool,
 ) -> bool:
+    """Verify capture prefix ownership using compact per-file boolean summaries."""
     if prefix == "decision-":
-        decision = data_payloads.get("decision.json")
+        decision = data_flags.get("decision.json")
         if decision is not None:
-            return (
-                any(key in decision for key in _DECISION_OWNERSHIP_KEYS)
-                or has_verified_reader
-            )
-        failure = data_payloads.get("failure.json")
-        return failure is not None and bool(failure) and has_verified_reader
+            _, has_decision_keys, _ = decision
+            return has_decision_keys or has_verified_reader
+        failure = data_flags.get("failure.json")
+        return failure is not None and failure[0] and has_verified_reader
     if prefix == "recovery-":
-        required = data_payloads.get("required-context.json")
-        return required is not None and bool(required)
+        required = data_flags.get("required-context.json")
+        return required is not None and required[0]
     if prefix == "settlement-":
-        for name in ("result.json", "settlement.json"):
-            payload = data_payloads.get(name)
-            if payload is not None and bool(payload):
-                return True
-        return False
+        return any(
+            (flags := data_flags.get(name)) is not None and flags[0]
+            for name in ("result.json", "settlement.json")
+        )
     if prefix == "context-":
-        for name in ("projection.json", "required-context.json"):
-            payload = data_payloads.get(name)
-            if payload is not None and bool(payload):
-                return True
-        delivery = data_payloads.get("delivery.json")
-        if delivery is not None and bool(delivery):
-            return (
-                has_verified_reader
-                or delivery.get("schema_version") == "context_delivery_v1"
-                or any(key in delivery for key in _DECISION_OWNERSHIP_KEYS)
-            )
+        if any(
+            (flags := data_flags.get(name)) is not None and flags[0]
+            for name in ("projection.json", "required-context.json")
+        ):
+            return True
+        delivery = data_flags.get("delivery.json")
+        if delivery is not None and delivery[0]:
+            _, has_decision_keys, is_delivery_v1 = delivery
+            return has_verified_reader or is_delivery_v1 or has_decision_keys
         return False
     return False
 
 
-def _inspect_owned_capture_dir(
+def _measure_candidate_dir(
     candidate_path: Path,
     *,
-    name: str,
-    prefix: str,
-    mtime: float,
     uid: int | None,
-) -> _CandidateDirectory | None:
-    """Verify strict LoopX capture ownership without mutating non-capture dirs."""
-    try:
-        candidate_resolved = candidate_path.resolve(strict=True)
-    except (OSError, RuntimeError):
-        return None
-    data_payloads: dict[str, dict[str, object]] = {}
-    data_digests: dict[str, str] = {}
-    reader_payloads: dict[str, dict[str, object]] = {}
+) -> tuple[list[_MeasuredEntry], int] | None:
+    """Stat candidate capture files before reading JSON bytes."""
+    entries_out: list[_MeasuredEntry] = []
+    has_data = False
+    total_bytes = 0
     try:
         with os.scandir(candidate_path) as entries:
             for entry in entries:
@@ -555,32 +538,110 @@ def _inspect_owned_capture_dir(
                     return None
                 if uid is not None and entry_stat.st_uid != uid:
                     return None
-                loaded = _read_regular_json_object(Path(entry.path), uid=uid)
-                if loaded is None:
+                if (
+                    entry_stat.st_size <= 0
+                    or entry_stat.st_size > _MAX_CAPTURE_JSON_BYTES
+                ):
                     return None
-                parsed, raw = loaded
-                if is_reader:
-                    reader_payloads[entry_name] = parsed
-                else:
-                    data_payloads[entry_name] = parsed
-                    data_digests[entry_name] = hashlib.sha256(raw).hexdigest()
+                if is_data:
+                    has_data = True
+                total_bytes += entry_stat.st_size
+                entries_out.append(
+                    _MeasuredEntry(
+                        name=entry_name,
+                        path=Path(entry.path),
+                        is_reader=is_reader,
+                        size=entry_stat.st_size,
+                    )
+                )
     except OSError:
         return None
-
-    if not data_payloads:
+    if not has_data:
         return None
-    data_names = frozenset(data_payloads)
-    for reader_payload in reader_payloads.values():
+    return entries_out, total_bytes
+
+
+def _inspect_owned_capture_dir(
+    candidate_path: Path,
+    *,
+    name: str,
+    prefix: str,
+    mtime: float,
+    uid: int | None,
+    abs_root: Path | None = None,
+    resolved_root: Path | None = None,
+    measured: tuple[list[_MeasuredEntry], int] | None = None,
+) -> _CandidateDirectory | None:
+    """Verify strict LoopX capture ownership and release JSON dicts immediately."""
+    try:
+        candidate_resolved = candidate_path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if measured is None:
+        measured = _measure_candidate_dir(candidate_path, uid=uid)
+    if measured is None:
+        return None
+    measured_entries, total_bytes = measured
+    if abs_root is None or resolved_root is None:
+        abs_root, resolved_root = _resolved_variants(candidate_path.parent)
+
+    data_flags: dict[str, tuple[bool, bool, bool]] = {}
+    reader_digests: set[str] = set()
+    reader_meta: list[tuple[bool, object, object]] = []
+    data_digests: set[str] = set()
+    admissions: list[_AdmissionIdentity] = []
+    referenced_names: set[str] = set()
+    referenced_digests: set[str] = set()
+
+    for item in measured_entries:
+        loaded = _read_regular_json_object(item.path, uid=uid)
+        if loaded is None:
+            return None
+        parsed, raw = loaded
+        found_names, found_digests = _extract_capture_names_and_digests(
+            parsed, abs_root=abs_root, resolved_root=resolved_root
+        )
+        referenced_names.update(found_names)
+        referenced_digests.update(found_digests)
+        if item.is_reader:
+            sha = parsed.get("sha256")
+            if isinstance(sha, str) and BARE_SHA256_PATTERN.fullmatch(sha) is not None:
+                reader_digests.add(sha)
+            reader_meta.append(
+                (
+                    parsed.get("schema_version") == "context_capture_read_reference_v1",
+                    parsed.get("sha256"),
+                    parsed.get("path"),
+                )
+            )
+        else:
+            data_flags[item.name] = (
+                bool(parsed),
+                any(key in parsed for key in _DECISION_OWNERSHIP_KEYS),
+                parsed.get("schema_version") == "context_delivery_v1",
+            )
+            data_digests.add(hashlib.sha256(raw).hexdigest())
+            identity = _extract_admission_identity(parsed)
+            if identity is not None:
+                admissions.append(identity)
+
+    data_names = frozenset(data_flags)
+    for valid_schema, digest_val, raw_target in reader_meta:
+        reader_stub: dict[str, object] = {
+            "schema_version": "context_capture_read_reference_v1" if valid_schema else "",
+            "sha256": digest_val,
+            "path": raw_target,
+        }
         if not _reader_reference_is_valid(
-            reader_payload,
+            reader_stub,
             candidate_resolved=candidate_resolved,
             data_filenames=data_names,
         ):
             return None
-    if not _prefix_ownership_matches(
+    if not _prefix_ownership_summary_matches(
         prefix,
-        data_payloads=data_payloads,
-        has_verified_reader=bool(reader_payloads),
+        data_flags=data_flags,
+        has_verified_reader=bool(reader_meta),
     ):
         return None
     return _CandidateDirectory(
@@ -588,9 +649,12 @@ def _inspect_owned_capture_dir(
         name=name,
         path=candidate_path,
         prefix=prefix,
-        data_payloads=data_payloads,
-        data_digests=data_digests,
-        reader_payloads=reader_payloads,
+        data_digests=frozenset(data_digests),
+        reader_digests=frozenset(reader_digests),
+        admissions=tuple(admissions),
+        referenced_names=frozenset(referenced_names),
+        referenced_digests=frozenset(referenced_digests),
+        byte_size=total_bytes,
     )
 
 
@@ -774,46 +838,62 @@ def _collect_active_continuity_references(
     uid: int | None,
     abs_root: Path,
     resolved_root: Path,
-) -> tuple[set[str], set[str]]:
+    max_scan_bytes: int,
+) -> tuple[set[str], set[str], int] | None:
+    """Read active continuity JSONs under a strict byte budget; return None to fail closed."""
     protected: set[str] = set()
     active_digests: set[str] = set()
+    bytes_used = 0
     for subdir in non_ephemeral_dirs:
         for filename in _CONTINUITY_FILENAMES:
-            loaded = _read_regular_json_object(subdir / filename, uid=uid)
-            if loaded is None:
+            path = subdir / filename
+            try:
+                file_stat = os.lstat(path)
+            except FileNotFoundError:
                 continue
+            except OSError:
+                return None
+            if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(
+                file_stat.st_mode
+            ):
+                return None
+            if uid is not None and file_stat.st_uid != uid:
+                return None
+            if file_stat.st_size <= 0 or file_stat.st_size > _MAX_CAPTURE_JSON_BYTES:
+                return None
+            if bytes_used + file_stat.st_size > max_scan_bytes:
+                return None
+            loaded = _read_regular_json_object(path, uid=uid)
+            if loaded is None:
+                return None
+            bytes_used += file_stat.st_size
             parsed, _ = loaded
             found_names, found_digests = _extract_capture_names_and_digests(
                 parsed, abs_root=abs_root, resolved_root=resolved_root
             )
             protected.update(found_names)
             active_digests.update(found_digests)
-    return protected, active_digests
+    return protected, active_digests, bytes_used
 
 
 def _match_active_digests(
     candidates: Iterable[_CandidateDirectory],
     active_digests: set[str],
 ) -> set[str]:
-    matched: set[str] = set()
     if not active_digests:
-        return matched
-    for candidate in candidates:
-        if any(
-            isinstance(reader.get("sha256"), str)
-            and reader["sha256"] in active_digests
-            for reader in candidate.reader_payloads.values()
-        ) or any(digest in active_digests for digest in candidate.data_digests.values()):
-            matched.add(candidate.name)
-    return matched
+        return set()
+    return {
+        candidate.name
+        for candidate in candidates
+        if (candidate.reader_digests & active_digests)
+        or (candidate.data_digests & active_digests)
+    }
 
 
 def _expand_protected_closure(
     seed_names: set[str],
     *,
     owned_by_name: Mapping[str, _CandidateDirectory],
-    abs_root: Path,
-    resolved_root: Path,
 ) -> set[str]:
     protected = set(seed_names)
     queue: deque[str] = deque(seed_names)
@@ -822,14 +902,10 @@ def _expand_protected_closure(
         candidate = owned_by_name.get(current)
         if candidate is None:
             continue
-        for payload in (*candidate.data_payloads.values(), *candidate.reader_payloads.values()):
-            referenced, _ = _extract_capture_names_and_digests(
-                payload, abs_root=abs_root, resolved_root=resolved_root
-            )
-            for ref_name in referenced:
-                if ref_name not in protected:
-                    protected.add(ref_name)
-                    queue.append(ref_name)
+        for ref_name in candidate.referenced_names:
+            if ref_name not in protected:
+                protected.add(ref_name)
+                queue.append(ref_name)
     return protected
 
 
@@ -854,19 +930,45 @@ def _has_admission_receipt(payload: Mapping[str, object]) -> Mapping[str, object
     return None
 
 
-def _is_turn_settled(
-    payload: Mapping[str, object],
-    receipt: Mapping[str, object],
+def _extract_admission_identity(payload: Mapping[str, object]) -> _AdmissionIdentity | None:
+    receipt = _has_admission_receipt(payload)
+    if receipt is None:
+        return None
+    settlement_identity = receipt.get("settlement_identity")
+    identity_map = settlement_identity if isinstance(settlement_identity, Mapping) else {}
+    agent_identity = payload.get("agent_identity")
+    agent_map = agent_identity if isinstance(agent_identity, Mapping) else {}
+    selected_todo = payload.get("selected_todo")
+    todo_map = selected_todo if isinstance(selected_todo, Mapping) else {}
+    replan_obligation = payload.get("autonomous_replan_obligation")
+    replan_map = replan_obligation if isinstance(replan_obligation, Mapping) else {}
+    return _AdmissionIdentity(
+        runtime_root=_non_empty_str(payload.get("runtime_root")),
+        goal_id=_non_empty_str(payload.get("goal_id"))
+        or _non_empty_str(identity_map.get("goal_id")),
+        turn_instance_id=_non_empty_str(receipt.get("turn_instance_id"))
+        or _non_empty_str(identity_map.get("turn_instance_id"))
+        or _non_empty_str(payload.get("turn_instance_id")),
+        agent_id=_non_empty_str(agent_map.get("agent_id"))
+        or _non_empty_str(identity_map.get("agent_id"))
+        or _non_empty_str(payload.get("agent_id")),
+        todo_id=_non_empty_str(todo_map.get("todo_id"))
+        or _non_empty_str(identity_map.get("todo_id"))
+        or _non_empty_str(payload.get("todo_id")),
+        replan_obligation_id=_non_empty_str(identity_map.get("replan_obligation_id"))
+        or _non_empty_str(replan_map.get("obligation_id")),
+    )
+
+
+def _is_admission_settled(
+    admission: _AdmissionIdentity,
     *,
     runtime_root: Path | None,
     settlement_cache: dict[tuple[str, str, str, str], bool],
 ) -> bool:
-    if runtime_root is None:
+    if runtime_root is None or admission.runtime_root is None:
         return False
-    raw_runtime = _non_empty_str(payload.get("runtime_root"))
-    if raw_runtime is None:
-        return False
-    payload_runtime = _expand_user_safe(raw_runtime)
+    payload_runtime = _expand_user_safe(admission.runtime_root)
     target_runtime = _expand_user_safe(runtime_root)
     if payload_runtime is None or target_runtime is None:
         return False
@@ -877,44 +979,15 @@ def _is_turn_settled(
         return False
     if resolved_payload != resolved_target:
         return False
-    target_runtime = resolved_target
-
-    settlement_identity = receipt.get("settlement_identity")
-    identity_map = settlement_identity if isinstance(settlement_identity, Mapping) else {}
-    goal_id = _non_empty_str(payload.get("goal_id")) or _non_empty_str(
-        identity_map.get("goal_id")
-    )
-    turn_instance_id = (
-        _non_empty_str(receipt.get("turn_instance_id"))
-        or _non_empty_str(identity_map.get("turn_instance_id"))
-        or _non_empty_str(payload.get("turn_instance_id"))
-    )
-    if goal_id is None or turn_instance_id is None:
+    if admission.goal_id is None or admission.turn_instance_id is None:
         return False
 
-    agent_identity = payload.get("agent_identity")
-    agent_map = agent_identity if isinstance(agent_identity, Mapping) else {}
-    agent_id = (
-        _non_empty_str(agent_map.get("agent_id"))
-        or _non_empty_str(identity_map.get("agent_id"))
-        or _non_empty_str(payload.get("agent_id"))
+    cache_key = (
+        admission.goal_id,
+        admission.turn_instance_id,
+        admission.agent_id or "",
+        admission.todo_id or "",
     )
-
-    selected_todo = payload.get("selected_todo")
-    todo_map = selected_todo if isinstance(selected_todo, Mapping) else {}
-    todo_id = (
-        _non_empty_str(todo_map.get("todo_id"))
-        or _non_empty_str(identity_map.get("todo_id"))
-        or _non_empty_str(payload.get("todo_id"))
-    )
-
-    replan_obligation = payload.get("autonomous_replan_obligation")
-    replan_map = replan_obligation if isinstance(replan_obligation, Mapping) else {}
-    replan_obligation_id = _non_empty_str(
-        identity_map.get("replan_obligation_id")
-    ) or _non_empty_str(replan_map.get("obligation_id"))
-
-    cache_key = (goal_id, turn_instance_id, agent_id or "", todo_id or "")
     cached = settlement_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -923,12 +996,12 @@ def _is_turn_settled(
 
     try:
         readback = read_heartbeat_settlement(
-            target_runtime,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todo_id=todo_id,
-            turn_instance_id=turn_instance_id,
-            replan_obligation_id=replan_obligation_id,
+            resolved_target,
+            goal_id=admission.goal_id,
+            agent_id=admission.agent_id,
+            todo_id=admission.todo_id,
+            turn_instance_id=admission.turn_instance_id,
+            replan_obligation_id=admission.replan_obligation_id,
             include_record_bodies=False,
             tolerate_malformed_history=True,
         )
@@ -956,24 +1029,20 @@ def _candidate_has_unsettled_admission(
     runtime_root: Path | None,
     settlement_cache: dict[tuple[str, str, str, str], bool],
 ) -> bool:
-    for payload in candidate.data_payloads.values():
-        receipt = _has_admission_receipt(payload)
-        if receipt is None:
-            continue
-        if not _is_turn_settled(
-            payload,
-            receipt,
+    return any(
+        not _is_admission_settled(
+            admission,
             runtime_root=runtime_root,
             settlement_cache=settlement_cache,
-        ):
-            return True
-    return False
+        )
+        for admission in candidate.admissions
+    )
 
 
 def _partition_shallow_candidates(
     shallow_by_prefix: Mapping[str, list[_ShallowDirectory]],
     *,
-    protected_names: frozenset[str],
+    protected_names: frozenset[str] | set[str],
     current_now: float,
     min_age_seconds: float,
     keep_recent_per_prefix: int,
@@ -1005,47 +1074,187 @@ def _partition_shallow_candidates(
             else:
                 kept_shallow.append(candidate)
         kept_shallow.extend(group[excess:])
+    aged_shallow.sort(key=lambda item: (item.mtime, item.name))
     return aged_shallow, kept_shallow
 
 
-def _inspect_shallow_group(
-    items: Iterable[_ShallowDirectory],
+def _file_contains_any_needle(
+    path: Path,
     *,
+    needles: tuple[bytes, ...],
+    overlap: int,
     uid: int | None,
-) -> tuple[dict[str, _CandidateDirectory], int]:
-    owned_by_name: dict[str, _CandidateDirectory] = {}
-    invalid_count = 0
-    for item in items:
-        owned = _inspect_owned_capture_dir(
-            item.path,
-            name=item.name,
-            prefix=item.prefix,
-            mtime=item.mtime,
-            uid=uid,
-        )
-        if owned is None:
-            invalid_count += 1
-            continue
-        owned_by_name[item.name] = owned
-    return owned_by_name, invalid_count
+    expected_size: int,
+    budget_remaining: int,
+) -> tuple[str, int]:
+    """Stream a regular file in 64 KiB chunks; fail closed on unreadable or budget overrun."""
+    if expected_size > budget_remaining:
+        return "budget_exceeded", 0
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, os.O_RDONLY | nofollow)
+    except FileNotFoundError:
+        return "unreadable", 0
+    except OSError:
+        return "unreadable", 0
+    bytes_read = 0
+    try:
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return "not_capture", 0
+            if uid is not None and info.st_uid != uid:
+                return "not_capture", 0
+            if info.st_size <= 0 or info.st_size > _MAX_CAPTURE_JSON_BYTES:
+                return "not_capture", 0
+            if info.st_size > budget_remaining:
+                return "budget_exceeded", 0
+            tail = b""
+            while True:
+                chunk = stream.read(_REF_SCAN_CHUNK_BYTES)
+                if not chunk:
+                    break
+                bytes_read += len(chunk)
+                if bytes_read > budget_remaining:
+                    return "budget_exceeded", bytes_read
+                window = tail + chunk
+                if any(needle in window for needle in needles):
+                    return "match", bytes_read
+                tail = window[-overlap:] if overlap > 0 else b""
+            return "miss", bytes_read
+    except OSError:
+        return "unreadable", bytes_read
 
 
-def _candidate_references_any(
-    candidate: _CandidateDirectory,
+def _scan_dir_for_needles(
+    shallow: _ShallowDirectory,
     *,
-    target_names: set[str],
+    needles: tuple[bytes, ...],
+    overlap: int,
+    uid: int | None,
+    budget_remaining: int,
+) -> tuple[str, list[_MeasuredEntry] | None, int, int]:
+    measured = _measure_candidate_dir(shallow.path, uid=uid)
+    if measured is None:
+        return "not_capture", None, 0, 0
+    entries, total_bytes = measured
+    scanned_bytes = 0
+    for item in entries:
+        file_status, used = _file_contains_any_needle(
+            item.path,
+            needles=needles,
+            overlap=overlap,
+            uid=uid,
+            expected_size=item.size,
+            budget_remaining=budget_remaining - scanned_bytes,
+        )
+        scanned_bytes += used
+        if file_status == "match":
+            return "match", entries, total_bytes, scanned_bytes
+        if file_status in ("budget_exceeded", "unreadable", "not_capture"):
+            return file_status, entries, total_bytes, scanned_bytes
+    return "miss", entries, total_bytes, scanned_bytes
+
+
+def _verify_targets_via_ref_scan(
+    preliminary_reclaimable: list[_CandidateDirectory],
+    *,
+    inspected_by_name: dict[str, _CandidateDirectory],
+    unscanned_dirs: dict[str, _ShallowDirectory],
+    protected: set[str],
+    active_digests: set[str],
+    runtime_root: Path | None,
     abs_root: Path,
     resolved_root: Path,
-) -> bool:
-    if not target_names:
-        return False
-    for payload in (*candidate.data_payloads.values(), *candidate.reader_payloads.values()):
-        found_refs, _ = _extract_capture_names_and_digests(
-            payload, abs_root=abs_root, resolved_root=resolved_root
+    uid: int | None,
+    ref_scan_remaining: int,
+    settlement_cache: dict[tuple[str, str, str, str], bool],
+) -> tuple[list[_CandidateDirectory], int] | None:
+    """Confirm no kept or uninspected capture protects any candidate target; fail closed on overrun."""
+    invalid_found = 0
+    protected.update(
+        _expand_protected_closure(protected, owned_by_name=inspected_by_name)
+    )
+    remaining_targets = [
+        item for item in preliminary_reclaimable if item.name not in protected
+    ]
+    if not remaining_targets:
+        return [], invalid_found
+
+    frontier: set[str] = {item.name for item in remaining_targets}
+    first_round = True
+    while frontier and unscanned_dirs:
+        needle_bytes = [name.encode("utf-8") for name in frontier]
+        if first_round and active_digests:
+            needle_bytes.extend(digest.encode("ascii") for digest in active_digests)
+        first_round = False
+        needles = tuple(sorted(set(needle_bytes)))
+        if not needles:
+            break
+        overlap = max(
+            _REF_SCAN_OVERLAP_MIN_BYTES,
+            max(len(needle) for needle in needles) - 1,
         )
-        if found_refs & target_names:
-            return True
-    return False
+        next_frontier: set[str] = set()
+        for dir_name in list(unscanned_dirs):
+            shallow = unscanned_dirs[dir_name]
+            status, entries, total_bytes, used_bytes = _scan_dir_for_needles(
+                shallow,
+                needles=needles,
+                overlap=overlap,
+                uid=uid,
+                budget_remaining=ref_scan_remaining,
+            )
+            ref_scan_remaining -= used_bytes
+            if status in ("budget_exceeded", "unreadable") or ref_scan_remaining < 0:
+                return None
+            if status == "not_capture":
+                invalid_found += 1
+                unscanned_dirs.pop(dir_name, None)
+                continue
+            if status == "miss":
+                continue
+            assert entries is not None
+            owned = _inspect_owned_capture_dir(
+                shallow.path,
+                name=shallow.name,
+                prefix=shallow.prefix,
+                mtime=shallow.mtime,
+                uid=uid,
+                abs_root=abs_root,
+                resolved_root=resolved_root,
+                measured=(entries, total_bytes),
+            )
+            unscanned_dirs.pop(dir_name, None)
+            if owned is None:
+                invalid_found += 1
+                continue
+            inspected_by_name[owned.name] = owned
+            if (
+                owned.name in protected
+                or (owned.data_digests & active_digests)
+                or (owned.reader_digests & active_digests)
+                or _candidate_has_unsettled_admission(
+                    owned,
+                    runtime_root=runtime_root,
+                    settlement_cache=settlement_cache,
+                )
+            ):
+                protected.add(owned.name)
+            elif owned.referenced_names & frontier:
+                next_frontier.add(owned.name)
+
+        protected.update(
+            _expand_protected_closure(protected, owned_by_name=inspected_by_name)
+        )
+        remaining_targets = [
+            item for item in remaining_targets if item.name not in protected
+        ]
+        if not remaining_targets:
+            return [], invalid_found
+        frontier = next_frontier - protected
+
+    return remaining_targets, invalid_found
 
 
 def _select_prune_targets(
@@ -1060,12 +1269,43 @@ def _select_prune_targets(
     min_age_seconds: float,
     keep_recent_per_prefix: int,
     max_delete_per_sweep: int,
+    max_inspect_per_sweep: int,
+    max_inspect_bytes_per_sweep: int,
+    max_ref_scan_bytes_per_sweep: int,
 ) -> tuple[list[_CandidateDirectory], int]:
-    if max_delete_per_sweep <= 0:
+    if (
+        max_delete_per_sweep <= 0
+        or max_inspect_per_sweep <= 0
+        or max_inspect_bytes_per_sweep <= 0
+    ):
         return [], 0
-    aged_shallow, kept_shallow = _partition_shallow_candidates(
+    initial_aged, _ = _partition_shallow_candidates(
         shallow_by_prefix,
         protected_names=caller_protected_names,
+        current_now=current_now,
+        min_age_seconds=min_age_seconds,
+        keep_recent_per_prefix=keep_recent_per_prefix,
+    )
+    if not initial_aged:
+        return [], 0
+
+    abs_root, resolved_root = _resolved_variants(root)
+    continuity = _collect_active_continuity_references(
+        non_ephemeral_dirs,
+        uid=uid,
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+        max_scan_bytes=max_ref_scan_bytes_per_sweep,
+    )
+    if continuity is None:
+        return [], 0
+    active_refs, active_digests, continuity_bytes = continuity
+    ref_scan_remaining = max_ref_scan_bytes_per_sweep - continuity_bytes
+
+    protected = set(caller_protected_names) | active_refs
+    aged_shallow, kept_shallow = _partition_shallow_candidates(
+        shallow_by_prefix,
+        protected_names=protected,
         current_now=current_now,
         min_age_seconds=min_age_seconds,
         keep_recent_per_prefix=keep_recent_per_prefix,
@@ -1073,122 +1313,89 @@ def _select_prune_targets(
     if not aged_shallow:
         return [], 0
 
-    aged_by_name, invalid_aged = _inspect_shallow_group(aged_shallow, uid=uid)
-    if not aged_by_name:
-        return [], invalid_aged
-
-    abs_root, resolved_root = _resolved_variants(root)
-    active_refs, active_digests = _collect_active_continuity_references(
-        non_ephemeral_dirs,
-        uid=uid,
-        abs_root=abs_root,
-        resolved_root=resolved_root,
-    )
-    preliminary_seeds = (
-        set(caller_protected_names)
-        | active_refs
-        | _match_active_digests(aged_by_name.values(), active_digests)
-    )
+    inspected_by_name: dict[str, _CandidateDirectory] = {}
+    preliminary_reclaimable: list[_CandidateDirectory] = []
+    invalid_aged = 0
+    inspected_aged_dirs = 0
+    inspected_bytes = 0
     settlement_cache: dict[tuple[str, str, str, str], bool] = {}
-    for candidate in aged_by_name.values():
-        if candidate.name not in preliminary_seeds and _candidate_has_unsettled_admission(
-            candidate,
-            runtime_root=runtime_root,
-            settlement_cache=settlement_cache,
+    uninspected_aged: list[_ShallowDirectory] = []
+
+    for index, shallow in enumerate(aged_shallow):
+        if (
+            len(preliminary_reclaimable) >= max_delete_per_sweep
+            or inspected_aged_dirs >= max_inspect_per_sweep
+            or inspected_bytes >= max_inspect_bytes_per_sweep
         ):
-            preliminary_seeds.add(candidate.name)
-    preliminary_protected = _expand_protected_closure(
-        preliminary_seeds,
-        owned_by_name=aged_by_name,
-        abs_root=abs_root,
-        resolved_root=resolved_root,
-    )
-    if all(name in preliminary_protected for name in aged_by_name):
-        return [], invalid_aged
-
-    kept_by_name, invalid_kept = _inspect_shallow_group(kept_shallow, uid=uid)
-    invalid_total = invalid_aged + invalid_kept
-    all_owned_by_name = {**aged_by_name, **kept_by_name}
-    initial_protected = _expand_protected_closure(
-        set(caller_protected_names)
-        | active_refs
-        | _match_active_digests(all_owned_by_name.values(), active_digests),
-        owned_by_name=all_owned_by_name,
-        abs_root=abs_root,
-        resolved_root=resolved_root,
-    )
-
-    by_prefix: dict[str, list[_CandidateDirectory]] = {
-        prefix: [] for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES
-    }
-    for candidate in all_owned_by_name.values():
-        by_prefix[candidate.prefix].append(candidate)
-
-    cutoff = current_now - min_age_seconds
-    aged_excess: list[_CandidateDirectory] = []
-    kept_candidates: list[_CandidateDirectory] = []
-    for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
-        group = [
-            item for item in by_prefix[prefix] if item.name not in initial_protected
-        ]
-        if not group:
+            uninspected_aged.extend(aged_shallow[index:])
+            break
+        measured = _measure_candidate_dir(shallow.path, uid=uid)
+        if measured is None:
+            invalid_aged += 1
             continue
-        group.sort(key=lambda item: (item.mtime, item.name))
-        excess = len(group) - keep_recent_per_prefix
-        if excess <= 0:
-            kept_candidates.extend(group)
-            continue
-        for candidate in group[:excess]:
-            if candidate.mtime <= cutoff:
-                aged_excess.append(candidate)
-            else:
-                kept_candidates.append(candidate)
-        kept_candidates.extend(group[excess:])
-
-    if not aged_excess:
-        return [], invalid_total
-    aged_excess.sort(key=lambda item: (item.mtime, item.name))
-    excess_names = {item.name for item in aged_excess}
-
-    unsettled_seeds: set[str] = set()
-    for kept in kept_candidates:
-        if _candidate_references_any(
-            kept,
-            target_names=excess_names,
+        entries, dir_bytes = measured
+        if inspected_bytes + dir_bytes > max_inspect_bytes_per_sweep:
+            uninspected_aged.extend(aged_shallow[index:])
+            break
+        inspected_aged_dirs += 1
+        inspected_bytes += dir_bytes
+        owned = _inspect_owned_capture_dir(
+            shallow.path,
+            name=shallow.name,
+            prefix=shallow.prefix,
+            mtime=shallow.mtime,
+            uid=uid,
             abs_root=abs_root,
             resolved_root=resolved_root,
-        ) and _candidate_has_unsettled_admission(
-            kept,
-            runtime_root=runtime_root,
-            settlement_cache=settlement_cache,
-        ):
-            unsettled_seeds.add(kept.name)
-
-    reclaimable: list[_CandidateDirectory] = []
-    for candidate in aged_excess:
-        if _candidate_has_unsettled_admission(
-            candidate,
-            runtime_root=runtime_root,
-            settlement_cache=settlement_cache,
-        ):
-            unsettled_seeds.add(candidate.name)
-            continue
-        reclaimable.append(candidate)
-
-    if unsettled_seeds:
-        initial_protected.update(
-            _expand_protected_closure(
-                unsettled_seeds,
-                owned_by_name=all_owned_by_name,
-                abs_root=abs_root,
-                resolved_root=resolved_root,
-            )
+            measured=(entries, dir_bytes),
         )
+        if owned is None:
+            invalid_aged += 1
+            continue
+        inspected_by_name[owned.name] = owned
+        if (
+            owned.name in protected
+            or (owned.data_digests & active_digests)
+            or (owned.reader_digests & active_digests)
+            or _candidate_has_unsettled_admission(
+                owned,
+                runtime_root=runtime_root,
+                settlement_cache=settlement_cache,
+            )
+        ):
+            protected.add(owned.name)
+            continue
+        preliminary_reclaimable.append(owned)
 
-    final_targets = [
-        item for item in reclaimable if item.name not in initial_protected
-    ]
-    return final_targets[:max_delete_per_sweep], invalid_total
+    if not preliminary_reclaimable:
+        return [], invalid_aged
+
+    unscanned_dirs: dict[str, _ShallowDirectory] = {
+        item.name: item for item in (*kept_shallow, *uninspected_aged)
+    }
+    verified = _verify_targets_via_ref_scan(
+        preliminary_reclaimable,
+        inspected_by_name=inspected_by_name,
+        unscanned_dirs=unscanned_dirs,
+        protected=protected,
+        active_digests=active_digests,
+        runtime_root=runtime_root,
+        abs_root=abs_root,
+        resolved_root=resolved_root,
+        uid=uid,
+        ref_scan_remaining=ref_scan_remaining,
+        settlement_cache=settlement_cache,
+    )
+    if verified is None:
+        return [], invalid_aged
+    final_targets, invalid_scanned = verified
+    return final_targets[:max_delete_per_sweep], invalid_aged + invalid_scanned
+
+
+def _skipped_result(reason: str, *, failed: int = 0) -> ContextDeliveryPruneResult:
+    return ContextDeliveryPruneResult(
+        swept=False, skipped_reason=reason, scanned=0, deleted=0, failed=failed
+    )
 
 
 def _run_prune_sweep(
@@ -1199,6 +1406,9 @@ def _run_prune_sweep(
     effective_keep_recent: int,
     effective_max_delete: int,
     effective_interval: float,
+    effective_max_inspect: int,
+    effective_max_inspect_bytes: int,
+    effective_max_ref_scan_bytes: int,
     current_now: float,
     protected_names: frozenset[str],
 ) -> ContextDeliveryPruneResult:
@@ -1207,29 +1417,11 @@ def _run_prune_sweep(
     try:
         root_stat = os.lstat(root)
     except OSError:
-        return ContextDeliveryPruneResult(
-            swept=False,
-            skipped_reason="missing_or_unreadable",
-            scanned=0,
-            deleted=0,
-            failed=0,
-        )
+        return _skipped_result("missing_or_unreadable")
     if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-        return ContextDeliveryPruneResult(
-            swept=False,
-            skipped_reason="invalid_root",
-            scanned=0,
-            deleted=0,
-            failed=0,
-        )
+        return _skipped_result("invalid_root")
     if uid is not None and root_stat.st_uid != uid:
-        return ContextDeliveryPruneResult(
-            swept=False,
-            skipped_reason="unowned_root",
-            scanned=0,
-            deleted=0,
-            failed=0,
-        )
+        return _skipped_result("unowned_root")
 
     marker_path = root / RETENTION_SWEEP_MARKER_NAME
     skip_reason = _check_sweep_marker(
@@ -1239,13 +1431,7 @@ def _run_prune_sweep(
         uid=uid,
     )
     if skip_reason is not None:
-        return ContextDeliveryPruneResult(
-            swept=False,
-            skipped_reason=skip_reason,
-            scanned=0,
-            deleted=0,
-            failed=0,
-        )
+        return _skipped_result(skip_reason)
 
     with _acquire_sweep_lock(
         root,
@@ -1255,23 +1441,11 @@ def _run_prune_sweep(
         uid=uid,
     ) as lock_skip_reason:
         if lock_skip_reason is not None:
-            return ContextDeliveryPruneResult(
-                swept=False,
-                skipped_reason=lock_skip_reason,
-                scanned=0,
-                deleted=0,
-                failed=0,
-            )
+            return _skipped_result(lock_skip_reason)
 
         collected = _collect_root_entries(root, uid=uid)
         if collected is None:
-            return ContextDeliveryPruneResult(
-                swept=False,
-                skipped_reason="scan_failed",
-                scanned=0,
-                deleted=0,
-                failed=1,
-            )
+            return _skipped_result("scan_failed", failed=1)
         shallow_by_prefix, non_ephemeral_dirs, scanned = collected
         targets, invalid_inspected = _select_prune_targets(
             shallow_by_prefix,
@@ -1284,6 +1458,9 @@ def _run_prune_sweep(
             min_age_seconds=effective_min_age,
             keep_recent_per_prefix=effective_keep_recent,
             max_delete_per_sweep=effective_max_delete,
+            max_inspect_per_sweep=effective_max_inspect,
+            max_inspect_bytes_per_sweep=effective_max_inspect_bytes,
+            max_ref_scan_bytes_per_sweep=effective_max_ref_scan_bytes,
         )
         scanned = max(0, scanned - invalid_inspected)
 
@@ -1306,11 +1483,7 @@ def _run_prune_sweep(
                 failed += 1
 
         return ContextDeliveryPruneResult(
-            swept=True,
-            skipped_reason=None,
-            scanned=scanned,
-            deleted=deleted,
-            failed=failed,
+            swept=True, skipped_reason=None, scanned=scanned, deleted=deleted, failed=failed
         )
 
 
@@ -1322,22 +1495,36 @@ def maybe_prune_context_delivery_root(
     keep_recent_per_prefix: int | None = None,
     max_delete_per_sweep: int | None = None,
     min_sweep_interval_seconds: float | None = None,
+    max_inspect_per_sweep: int | None = None,
+    max_inspect_bytes_per_sweep: int | None = None,
+    max_ref_scan_bytes_per_sweep: int | None = None,
     now: float | None = None,
     protected_names: frozenset[str] = frozenset(),
 ) -> ContextDeliveryPruneResult:
     """Opportunistically prune expired, settled LoopX capture dirs under ``root``.
 
     Throttled via a lightweight ``.retention-sweep`` timestamp marker so hot
-    capture calls skip in sub-millisecond time. Fails closed on symlinks,
-    non-LoopX/unexpected directories, active ``session.json``/``claim-source.json``
-    references and their dependencies, or turns whose admission receipts are
-    missing/unsettled.
+    capture calls skip in sub-millisecond time. Enforces strict per-sweep
+    inspection and chunked reference-scan budgets so backlogs drain safely
+    with constant ``O(1 file)`` heap retention, failing closed on symlinks,
+    non-LoopX/unexpected directories, active references/digests, budget
+    overruns, or unsettled Turn admission receipts.
     """
     effective_min_age = _resolve_min_age_seconds(min_age_seconds)
     effective_keep_recent = _resolve_keep_recent_per_prefix(keep_recent_per_prefix)
     effective_max_delete = _resolve_max_delete_per_sweep(max_delete_per_sweep)
-    effective_interval = _resolve_min_sweep_interval_seconds(
-        min_sweep_interval_seconds
+    effective_interval = _resolve_min_sweep_interval_seconds(min_sweep_interval_seconds)
+    effective_max_inspect = _resolve_budget_int(
+        max_inspect_per_sweep, env_name=ENV_MAX_INSPECT_PER_SWEEP,
+        default=DEFAULT_MAX_INSPECT_PER_SWEEP, label="max_inspect_per_sweep",
+    )
+    effective_max_inspect_bytes = _resolve_budget_int(
+        max_inspect_bytes_per_sweep, env_name=ENV_MAX_INSPECT_BYTES_PER_SWEEP,
+        default=DEFAULT_MAX_INSPECT_BYTES_PER_SWEEP, label="max_inspect_bytes_per_sweep",
+    )
+    effective_max_ref_scan_bytes = _resolve_budget_int(
+        max_ref_scan_bytes_per_sweep, env_name=ENV_MAX_REF_SCAN_BYTES_PER_SWEEP,
+        default=DEFAULT_MAX_REF_SCAN_BYTES_PER_SWEEP, label="max_ref_scan_bytes_per_sweep",
     )
     current_now = _resolve_now(now)
 
@@ -1349,14 +1536,11 @@ def maybe_prune_context_delivery_root(
             effective_keep_recent=effective_keep_recent,
             effective_max_delete=effective_max_delete,
             effective_interval=effective_interval,
+            effective_max_inspect=effective_max_inspect,
+            effective_max_inspect_bytes=effective_max_inspect_bytes,
+            effective_max_ref_scan_bytes=effective_max_ref_scan_bytes,
             current_now=current_now,
             protected_names=protected_names,
         )
     except Exception:  # noqa: BLE001 - best-effort sweep fails safely after arg validation.
-        return ContextDeliveryPruneResult(
-            swept=False,
-            skipped_reason="sweep_failed",
-            scanned=0,
-            deleted=0,
-            failed=1,
-        )
+        return _skipped_result("sweep_failed", failed=1)
