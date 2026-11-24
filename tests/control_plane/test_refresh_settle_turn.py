@@ -603,6 +603,79 @@ def test_combined_settlement_uses_producing_worktree_and_originating_cli(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_rejected_writeback_preserves_the_explicit_workspace_for_reentry(tmp_path, monkeypatch, provider):
+    from contextlib import chdir, redirect_stdout
+    from io import StringIO
+    from tests.control_plane.codex_checkpoint_fixture import read_cli_policy_payload
+
+    from loopx.cli_commands import project_lifecycle_refresh_state as refresh_command
+    from loopx.entrypoint import main
+    from loopx.file_lock import LockAcquireTimeoutError
+    from loopx.state_refresh import render_state_refresh_markdown
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry, delivery = _repository_delivery(tmp_path, provider)
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["registered_agents"].append("fixture-peer")
+    config["goals"][0]["workspace_guard_policy"] = {"peer_independent_worktree_required": True}
+    registry.write_text(json.dumps(config))
+    scope = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID]
+    turn = ["--turn-instance-id", TURN_ID]
+
+    def invoke(cwd, arguments):
+        stdout = StringIO()
+        with chdir(cwd), redirect_stdout(stdout):
+            code = main(arguments)
+        return code, read_cli_policy_payload(stdout.getvalue(), returncode=code)
+
+    route = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
+    code, admitted = invoke(delivery, [*route, "quota", "should-run", "--codex-app",
+                                       "--context-delivery", "off", *scope, *turn])
+    assert code == 0 and admitted["normal_delivery_allowed"], admitted
+    identity = admitted["heartbeat_receipt"]["settlement_identity"]
+    refresh = ["refresh-state", *scope, "--classification", "verified_worktree",
+               "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+               "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+               "--delivery-workspace-path", "../producing workspace", "--settle-turn"]
+
+    def unavailable_lock(**_):
+        raise LockAcquireTimeoutError(
+            incident={"operator_action": "retry the original writeback"},
+            incident_recorded=False, incident_channel="fixture",
+        )
+
+    with monkeypatch.context() as fault:
+        fault.setattr(refresh_command, "refresh_state_run", unavailable_lock)
+        code, refused = invoke(project, [*route, *refresh, *turn])
+        missing_workspace = refresh.copy()
+        missing_workspace[missing_workspace.index("--delivery-workspace-path") + 1] = "unavailable"
+        missing_code, missing = invoke(project, [*route, *missing_workspace, *turn])
+    assert code == 1 and refused["appended"] is False, refused
+    assert refused["error_code"] == "lock_acquire_timeout", refused
+    recovery = refused["settlement_recovery"]
+    assert missing_code == 1 and missing["appended"] is False, missing
+    assert "delivery_workspace_path" not in missing["settlement_recovery"]
+    assert missing["settlement_recovery"]["next_cli_actions"] == recovery["next_cli_actions"]
+    assert recovery["settlement_identity"] == identity
+    command = shlex.split(recovery["next_cli_actions"][0])
+    code, wrong_workspace = invoke(project, command[1:])
+    assert code == 0 and wrong_workspace["effective_action"] == "agent_workspace_repair", wrong_workspace
+    assert _spend_run_count(runtime) == 0
+
+    working_directory = Path(recovery["delivery_workspace_path"])
+    assert working_directory.is_absolute() and working_directory.samefile(delivery)
+    assert str(working_directory) in render_state_refresh_markdown(refused)
+    code, reentered = invoke(working_directory, command[1:])
+    assert code == 0 and reentered["normal_delivery_allowed"], reentered
+    assert reentered["heartbeat_receipt"]["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 0
+    code, settled = invoke(project, [*route, *refresh, *turn])
+    assert code == 0 and settled["settlement_progress"]["state"] == "settled", settled
+    assert settled["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery(
     tmp_path, monkeypatch, provider,
 ):

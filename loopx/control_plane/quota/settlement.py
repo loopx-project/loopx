@@ -252,6 +252,8 @@ def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
     if isinstance(recovery, dict):
         identity = recovery["settlement_identity"]
         lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        if workspace := recovery.get("delivery_workspace_path"):
+            lines.append(f"- Run the recovery guard from `{workspace}`.")
         for command in recovery["next_cli_actions"]:
             lines.extend(["", "```sh", command, "```"])
         return lines

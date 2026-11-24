@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,20 @@ def attach_refresh_settlement_recovery(
             next_cli_actions=[owed["command"] if isinstance(owed, dict) else command],
             instruction="This response does not settle the original Turn. Follow its recovery with the same identity; "
                         "state-only updates and installation maintenance cannot replace accountable writeback.")
+        workspace = getattr(args, "delivery_workspace_path", None)
+        if (
+            workspace
+            and (readback.progress or {}).get("state") == "writeback_required"
+            and (readback.workspace_causality or {}).get("requirement") == "required"
+        ):
+            # Keep recovery available even when the caller's directory moved.
+            with suppress(OSError, RuntimeError):
+                path = Path(workspace).expanduser().resolve(strict=True)
+                if path.is_dir():
+                    recovery["delivery_workspace_path"] = str(path)
+                    recovery["instruction"] += (
+                        " Use delivery_workspace_path as the recovery guard's working directory."
+                    )
         payload["settlement_recovery"] = recovery
     except (OSError, RuntimeError, ValueError) as error:
         # Preserve the original write result, including an already committed
