@@ -563,14 +563,15 @@ Self-service:
    ```bash
    node=<supported node binary> &&
    "$node" --version &&
-   "$node" -e "const [maj,min,pat]=process.versions.node.split('.').map(Number);process.exit(maj>22||(maj===22&&(min>22||(min===22&&pat>=3)))?0:1)" &&
+   printf '%s\n' "$("$node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;exit !(a[1]>22||(a[1]==22&&(a[2]>22||(a[2]==22&&a[3]>=3))))}' &&
    node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
    "$node" --version &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    mkdir "$backup" &&
    mv ~/.local/bin/node "$backup/node" &&
    if ln -s "$node" ~/.local/bin/node &&
-      "$HOME/.local/bin/node" --version; then
+      "$HOME/.local/bin/node" --version &&
+      printf '%s\n' "$("$HOME/.local/bin/node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;exit !(a[1]>22||(a[1]==22&&(a[2]>22||(a[2]==22&&a[3]>=3))))}'; then
      echo "Node launcher updated to $node (previous entry kept in $backup)"
    else
      mv "$backup/node" ~/.local/bin/node &&
@@ -580,22 +581,21 @@ Self-service:
    fi
    ```
 
-   The final `--version` runs through the installed link while the original
-   entry is safely inside the backup directory. Some candidates only pass the
-   earlier checks: an alias that points back at the launcher being replaced
-   turns the new link into a loop, and a wrapper that locates Node relative to
-   its own directory stops working from `~/.local/bin`. Either makes the final
-   check fail, and the `else` branch then restores the original entry — `mv`
-   keeps its entry type, so a symlink route or regular file comes back
-   exactly as it was — and exits nonzero. On success the original entry stays
-   in the backup directory as the recovery artifact.
-
-   The chain normalizes the candidate to an absolute path before anything is
-   moved: a relative value such as `./toolchain/node` works in the Terminal's
-   current directory but would dangle from `~/.local/bin`, where the link
-   actually lives. The second `--version` runs the normalized path and the
-   final line runs the installed launcher link as its own readback — both must
-   succeed, and any failure stops before the original launcher is moved.
+   The final two checks run through the installed link while the original
+   entry is safely inside the backup directory: `--version` proves the entry
+   executes, and the numeric guard re-checks the same 22.22.3 floor through
+   it — a wrapper that runs but resolves an older Node fails the second line
+   and is treated exactly like an execution failure. Some candidates only
+   pass the earlier checks: an alias that points back at the launcher being
+   replaced turns the new link into a loop, and a wrapper that locates Node
+   relative to its own directory stops working from `~/.local/bin`. Either
+   makes the final check fail, and the `else` branch then restores the
+   original entry — `mv` keeps its entry type, so a symlink route or regular
+   file comes back exactly as it was — and exits nonzero. On success the
+   original entry stays in the backup directory as the recovery artifact.
+   The pre-move checks qualify the candidate from the Terminal; the installed
+   link is qualified after the swap, with the restore above as the undo path
+   for that last step.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
