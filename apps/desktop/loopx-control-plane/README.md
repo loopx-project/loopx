@@ -569,9 +569,26 @@ Self-service:
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    mkdir "$backup" &&
    mv ~/.local/bin/node "$backup/node" &&
-   ln -s "$node" ~/.local/bin/node &&
-   "$HOME/.local/bin/node" --version
+   if ln -s "$node" ~/.local/bin/node &&
+      "$HOME/.local/bin/node" --version; then
+     echo "Node launcher updated to $node (previous entry kept in $backup)"
+   else
+     mv "$backup/node" ~/.local/bin/node &&
+     rmdir "$backup" &&
+     echo "The candidate failed the final check; the original launcher was restored." &&
+     exit 1
+   fi
    ```
+
+   The final `--version` runs through the installed link while the original
+   entry is safely inside the backup directory. Some candidates only pass the
+   earlier checks: an alias that points back at the launcher being replaced
+   turns the new link into a loop, and a wrapper that locates Node relative to
+   its own directory stops working from `~/.local/bin`. Either makes the final
+   check fail, and the `else` branch then restores the original entry — `mv`
+   keeps its entry type, so a symlink route or regular file comes back
+   exactly as it was — and exits nonzero. On success the original entry stays
+   in the backup directory as the recovery artifact.
 
    The chain normalizes the candidate to an absolute path before anything is
    moved: a relative value such as `./toolchain/node` works in the Terminal's
