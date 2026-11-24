@@ -251,6 +251,8 @@ def test_package_scans_large_text_assets_before_certifying_them_public_safe(
         ("config.yaml", "token: {token}\n"),
         (".env", "OPENAI_API_KEY={token}\n"),
         ("Dockerfile", "ENV GITHUB_TOKEN={token}\n"),
+        ("app.js.map", '{"sourcesContent": ["const token = \\"{token}\\";"]}'),
+        ("tsconfig.tsbuildinfo", '{"token": "{token}"}'),
     ],
 )
 def test_package_scans_text_assets_outside_the_former_suffix_allow_list(
@@ -277,6 +279,51 @@ def test_package_scans_a_bom_marked_utf16_capture_before_publication(
     destination = tmp_path / "publish"
 
     with pytest.raises(StaticSiteContractError, match="public boundary scan failed"):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
+def test_package_fails_closed_on_bomless_utf16_text(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    (site / "capture.txt").write_bytes(
+        ("GITHUB_TOKEN=" + token + "\n").encode("utf-16-le")
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(
+        StaticSiteContractError, match="content is not reviewable text"
+    ):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
+def test_package_fails_closed_on_nul_bearing_text(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    (site / "notes.txt").write_bytes(
+        ("GITHUB_TOKEN=" + token + "\x00tail\n").encode("utf-8")
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(
+        StaticSiteContractError, match="content is not reviewable text"
+    ):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
+def test_package_fails_closed_on_undecodable_text(tmp_path: Path) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    (site / "notes.txt").write_bytes(
+        b"GITHUB_TOKEN=" + token.encode("utf-8") + b"\xff\n"
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(
+        StaticSiteContractError, match="content is not decodable as utf-8"
+    ):
         _package(site, destination, tmp_path / "state")
     assert not destination.exists()
 

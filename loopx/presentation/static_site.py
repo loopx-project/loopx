@@ -50,6 +50,12 @@ _BOM_CODECS = (
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
 
+# The outbound scanner's deny-list is conservative for a tree walk and classifies
+# these two JSON text formats as binary. A site bundle can copy them, and a
+# source map can carry local source paths, so they stay reviewable here.
+_TEXT_SUFFIXES_IN_BINARY_DENYLIST = frozenset({".map", ".tsbuildinfo"})
+_BINARY_ASSET_SUFFIXES = BINARY_SUFFIXES - _TEXT_SUFFIXES_IN_BINARY_DENYLIST
+
 
 class StaticSiteContractError(ValueError):
     """Raised when a static presentation input violates the publish contract."""
@@ -90,9 +96,8 @@ def _paths_overlap(left: Path, right: Path) -> bool:
 def _scan_public_text(path: Path, relative_path: str, content: bytes) -> None:
     # A filename allow-list certified every text asset outside it (`.env`,
     # `Dockerfile`, `.csv` data) without reading a byte. Excluding only the
-    # binary formats the outbound public-safe scanner already refuses to read as
-    # text leaves every other copied asset as reviewable text.
-    if path.suffix.lower() in BINARY_SUFFIXES:
+    # true binary formats leaves every other copied asset as reviewable text.
+    if path.suffix.lower() in _BINARY_ASSET_SUFFIXES:
         return
     for bom, encoding in _BOM_CODECS:
         if content.startswith(bom):
@@ -101,11 +106,20 @@ def _scan_public_text(path: Path, relative_path: str, content: bytes) -> None:
         encoding = "utf-8"
     # A size exemption would certify an unscanned tail as public-safe, so scan
     # every byte of the text the caller already read for this asset's digest.
-    text = content.decode(encoding, errors="replace")
+    # Replacement decoding would review a mangled copy while certifying the
+    # original, so undecodable bytes fail publication instead.
+    try:
+        text = content.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise StaticSiteContractError(
+            f"public boundary scan failed for {relative_path}: content is not decodable as {encoding}"
+        ) from exc
     if "\x00" in text:
-        # NUL-bearing bytes are not reviewable text; a BOM-less UTF-16 capture
-        # and a known-binary asset both land here instead of certifying clean.
-        return
+        # A BOM-less UTF-16 capture and a mislabelled binary asset both land
+        # here; neither is text this boundary can review, so neither is certified.
+        raise StaticSiteContractError(
+            f"public boundary scan failed for {relative_path}: content is not reviewable text"
+        )
     for label, pattern in _PUBLIC_BOUNDARY_PATTERNS:
         if pattern.search(text):
             raise StaticSiteContractError(
