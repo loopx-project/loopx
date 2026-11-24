@@ -44,9 +44,9 @@ def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypat
     original_history = index.read_bytes()
     code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", "agent-a", registry_path=paths["registry"])
-    # The current quota contract reports a missing source as a health-blocked
-    # decision packet rather than a transport-level command failure.
-    assert code == 0 and result["status_health_ok"] is False, result
+    assert code == 1 and result["ok"] is False, result
+    assert result["decision"] == "skip" and result["should_run"] is False
+    assert result["reason"] == "Complete Goal source is required before host dispatch"
     assert not paths["state_file"].exists()
     assert index.read_bytes() == original_history
     assert active_state_todo_fields(goal, runtime_root=paths["runtime"])["agent_todos"] == summary

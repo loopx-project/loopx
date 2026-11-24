@@ -214,7 +214,7 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
 @pytest.mark.parametrize("body", ["## Arbitrary Goal\nRead everything.\n",
     "## Agent Todo\n- [ ] Legacy work.\n\nKeep this final condition.\n",
     section("user", "User Todo", "Old decision.") + "## Agent Todo\n- [ ] Unmarked work.\n"])
-def test_unmarked_or_mixed_ownership_keeps_full_progressive_read(tmp_path, monkeypatch, provider, body):
+def test_unmarked_or_mixed_ownership_keeps_exact_goal_source(tmp_path, monkeypatch, provider, body):
     runtime, registry, state, _todo = fixture(tmp_path, monkeypatch, provider)
     document = "---\nstatus: active\n---\n# Goal\n" + archive_summaries() + body
     state.write_bytes(document.encode())
@@ -225,8 +225,12 @@ def test_unmarked_or_mixed_ownership_keeps_full_progressive_read(tmp_path, monke
         goal_id="context-goal", todo_id="todo_work", inline_goal_source=True)
     assert full["full_source"] and full["text"] == document
     channel = guard(runtime, registry)["interaction_contract"]["agent_channel"]
-    assert any(r.get("source") == "goal_state" for r in channel["required_reads"])
-    assert not any(r.get("source") == "goal_state" for r in channel["work_context"]["sources"])
+    delivered = next(
+        row["content"] for row in channel["work_context"]["sources"] if row["source"] == "goal_state"
+    )
+    assert delivered == full
+    assert not any(row.get("source") == "goal_state" for row in channel["required_reads"])
+    assert state.read_bytes() == document.encode()
 
 
 @pytest.mark.parametrize("damage", ["missing_end", "mismatched", "narrative", "invalid_utf8", "missing_file"])

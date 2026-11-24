@@ -372,9 +372,9 @@ def test_session_resume_preserves_live_model_free_watch_after_client_restart(ste
     import loopx.chat_manager_context as contexts
 
     store, runtime, _, _, _, capture, _ = steward
-    sid, _, _ = prepared(steward, tmp_path, monkeypatch, provider)
+    foreground_id, _, _ = prepared(steward, tmp_path, monkeypatch, provider)
     # A restored host can run a model-free watch before ever opening Codex.
-    runtime.adapters.pop(sid).close_session()
+    runtime.adapters.pop(foreground_id).close_session()
     entered, released = threading.Event(), threading.Event()
     collect = contexts.collect_manager_turn_context
 
@@ -386,6 +386,8 @@ def test_session_resume_preserves_live_model_free_watch_after_client_restart(ste
     monkeypatch.setattr(contexts, "collect_manager_turn_context", slow_collection)
     calls = capture.read_bytes()
     turn = pump_steward_monitors(runtime)[0]
+    sid = turn["session_id"]
+    assert sid != foreground_id
     server, result = None, None
     try:
         assert entered.wait(10)
@@ -520,47 +522,45 @@ def interrupt_unstarted_watch(store, turn):
 
 def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
     import loopx.chat_manager_context as context_owner
-    store, runtime, _, transport, *_ = steward
-    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    _, runtime, _, transport, *_ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
     transport.reconcile()
-    scope_id = context_owner.manager_authorization_scope_id_for_registry
-
-    def changed_snapshot(*args, **kwargs):
-        # Exercise the production collector's refusal of a changed registry
-        # snapshot, then the real Chat worker and typed observation owner.
-        return None if kwargs.get("expected_inventory_revision") else scope_id(*args, **kwargs)
+    def changed_snapshot(*_args, **_kwargs):
+        # Inject the collector's typed scope refusal into the real watch worker.
+        return context_owner.unavailable_manager_context("external_authorization_changed")
 
     with monkeypatch.context() as changed:
-        changed.setattr(context_owner, "manager_authorization_scope_id_for_registry", changed_snapshot)
+        changed.setattr(context_owner, "collect_manager_turn_context", changed_snapshot)
         original_turn = pump_steward_monitors(runtime)[0]
         failed = finish(runtime, original_turn)
     assert failed["status"] == "failed"
     assert failed["error"] == "the portfolio observation omitted authorized Goals"
-    return sid, actor, monitor.current(actor)["todo_id"], failed
+    return original_turn["session_id"], actor, monitor.current(actor)["todo_id"], failed
 
 
 def identity_refused_watch(steward, tmp_path, monkeypatch, provider):
     import loopx.chat_manager_context as context_owner
-    store, runtime, source, transport, *_ = steward
-    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
-    transport.reconcile()
-    collect = context_owner.collect_manager_turn_context
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
 
-    def fail_during_collection(*args, **kwargs):
-        # Admission and scope collection verify the provider. Fail the later
-        # commission-evidence read before the host publishes its context.
-        context = collect(*args, **kwargs)
+    store, runtime, source, transport, *_ = steward
+    foreground_id, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    transport.reconcile()
+
+    def fail_during_collection(*_args, **_kwargs):
+        # Reproduce an identity refusal before the collector publishes context.
         source.bot_ready = False
-        return context
+        return ChatExternalConversations(runtime).commission_evidence(store.load_session(foreground_id))
 
     try:
         with monkeypatch.context() as changed:
             changed.setattr(context_owner, "collect_manager_turn_context", fail_during_collection)
-            failed = finish(runtime, pump_steward_monitors(runtime)[0])
+            original_turn = pump_steward_monitors(runtime)[0]
+            failed = finish(runtime, original_turn)
     finally:
         source.bot_ready = True
     assert failed["status"] == "failed"
     assert failed["error"] == "the selected App identity could not be verified"
+    sid = original_turn["session_id"]
     events = store.events_after(sid, failed["turn_id"], None)
     assert [row["kind"] for row in events] == ["turn.queued", "agent.phase", "turn.failed"]
     return sid, actor, monitor.current(actor)["todo_id"], failed
@@ -891,6 +891,8 @@ def test_reopened_controller_recovers_only_the_persisted_untouched_watch(steward
 @pytest.mark.parametrize("unreadable", ["session", "queued_turn"])
 @pytest.mark.parametrize("storage_provider", ["file", "sqlite"])
 def test_unreadable_conversation_does_not_starve_another_native_monitor(steward, tmp_path, monkeypatch, unreadable, storage_provider):
+    from loopx.capabilities.native_chat.steward_monitor import steward_background_session_id
+
     store, runtime, provider, transport, binding, capture, _ = steward
     sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, storage_provider)
     retained = monitor.current(actor)
@@ -915,7 +917,7 @@ def test_unreadable_conversation_does_not_starve_another_native_monitor(steward,
     path.write_bytes(b"\xff")
     try:
         turns = pump_steward_monitors(runtime)
-        assert len(turns) == 1 and turns[0]["session_id"] == accepted["session_id"]
+        assert len(turns) == 1 and turns[0]["session_id"] == steward_background_session_id(other["binding_id"])
         completed = finish(runtime, turns[0])
         assert completed["status"] == "completed", completed
         assert completed["response"]["native_loopx"]["monitor"]["result_hash"] == monitor.current(other_actor)["result_hash"]
@@ -923,12 +925,11 @@ def test_unreadable_conversation_does_not_starve_another_native_monitor(steward,
         assert capture.read_bytes() == calls
     finally:
         path.write_bytes(original_bytes)
-    recovered = pump_steward_monitors(runtime)
-    if unreadable == "session":
-        assert len(recovered) == 1 and recovered[0]["session_id"] == sid
-        assert finish(runtime, recovered[0])["status"] == "completed"
-    else:
-        assert not recovered and store.queued_turns(sid)[0]["turn_id"] == queued["turn_id"]
+    recovered, = pump_steward_monitors(runtime)
+    assert recovered["session_id"] == steward_background_session_id(binding["binding_id"])
+    assert finish(runtime, recovered)["status"] == "completed"
+    if unreadable == "queued_turn":
+        assert store.queued_turns(sid)[0]["turn_id"] == queued["turn_id"]
     assert capture.read_bytes() == calls
 
 
@@ -1092,16 +1093,27 @@ def test_native_goal_stop_blocks_observation_and_owner_can_still_pause_the_monit
 
 
 @pytest.mark.parametrize("busy", ["active", "queued"])
-def test_due_watch_retains_deadline_behind_original_user_work(steward, tmp_path, monkeypatch, busy):
+def test_due_background_watch_preserves_original_user_work(steward, tmp_path, monkeypatch, busy):
     store, runtime, _, _, _, capture, _ = steward
     sid, actor, monitor = prepared(steward, tmp_path, monkeypatch)
     before, calls = monitor.current(actor), capture.read_bytes()
     if busy == "active":
         store.update_session(sid, active_turn_id="original-user-work")
     else:
-        store.create_queued_turn(sid, client_turn_id="original-followup", message="Handle me first", origin="web")
-    assert not pump_steward_monitors(runtime)
-    assert monitor.current(actor) == before and capture.read_bytes() == calls
+        queued, _ = store.create_queued_turn(
+            sid, client_turn_id="original-followup", message="Handle me first", origin="web",
+        )
+    turn, = pump_steward_monitors(runtime)
+    assert turn["session_id"] != sid
+    completed = finish(runtime, turn)
+    assert completed["status"] == "completed"
+    assert completed["response"]["native_loopx"]["status"] == "observed"
+    assert monitor.current(actor)["next_due_at"] != before["next_due_at"]
+    if busy == "active":
+        assert store.load_session(sid)["active_turn_id"] == "original-user-work"
+    else:
+        assert store.queued_turns(sid)[0]["turn_id"] == queued["turn_id"]
+    assert capture.read_bytes() == calls
 
 
 def test_unknown_accepted_watch_is_read_back_without_replay(steward, tmp_path, monkeypatch):
@@ -1411,7 +1423,7 @@ def test_transient_zero_effect_monitor_failures_recover_once(
     from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
 
     store, runtime, *_ = steward
-    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
     default_watch = monitor.current(actor)
     todo_id = default_watch["todo_id"]
     due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
@@ -1422,6 +1434,7 @@ def test_transient_zero_effect_monitor_failures_recover_once(
         first = pump_steward_monitors(runtime)
         assert len(first) == 1
         failed_turn = first[0]
+    sid = failed_turn["session_id"]
     turn_id = failed_turn["turn_id"]
     if fail_before_context:
         runtime._fail_turn(
@@ -1465,7 +1478,7 @@ def test_chained_transient_monitor_recovery_waits_for_cooldown_then_recovers(
     from loopx.capabilities.native_chat.steward_turn import MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS, StewardTurnHost
 
     store, runtime, *_ = steward
-    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
     default_watch = monitor.current(actor)
     todo_id = default_watch["todo_id"]
     due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
@@ -1475,6 +1488,7 @@ def test_chained_transient_monitor_recovery_waits_for_cooldown_then_recovers(
         paused.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: True)
         runtime._steward_monitor_next_check.clear()
         initial = pump_steward_monitors(runtime)[0]
+    sid = initial["session_id"]
     store.append_event(sid, initial["turn_id"], kind="agent.phase", payload={"phase": "manager_context"})
     store.append_event(sid, initial["turn_id"], kind="manager.context",
         payload={"schema_version": "manager_turn_context_v1", "goals": []})
@@ -1522,7 +1536,7 @@ def test_session_queue_drain_preserves_active_and_queued_observation_only_monito
     import threading
 
     store, runtime, *_ = steward
-    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
     default_watch = monitor.current(actor)
     todo_id = default_watch["todo_id"]
     due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
@@ -1533,6 +1547,7 @@ def test_session_queue_drain_preserves_active_and_queued_observation_only_monito
         paused.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: True)
         runtime._steward_monitor_next_check.clear()
         queued_watch = pump_steward_monitors(runtime)[0]
+    sid = queued_watch["session_id"]
     turn_id = queued_watch["turn_id"]
     store.update_session(sid, active_turn_id=None)
     queued_doc = store.load_turn(sid, turn_id)

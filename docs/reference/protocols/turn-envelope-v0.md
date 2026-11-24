@@ -724,8 +724,9 @@ selected view is bounded, the full canonical detail stays in
 omit only an actually duplicate body; if there are no other fields to retain,
 `work_context.selected_todo_authority` carries the source and revision. All exact
 commands remain in `required_reads`.
-The mixed Goal document remains an exact progressive full read; quota checks
-source availability rather than automatically copying unrelated tasks/history.
+Ordinary quota and heartbeat execution load the exact full mixed Goal document
+before host dispatch. The progressive source reader can also return the source
+reference for a separate read. A missing complete source refuses dispatch.
 No heading heuristic replaces Goal intent. `work_context.complete` does not
 settle pending read obligations. Full delivered sources and related User
 obligations survive budget overflow. Missing,
