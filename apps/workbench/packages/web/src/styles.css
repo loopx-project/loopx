@@ -1381,6 +1381,7 @@ html.list-open body {
 .thread-note.waiting { color: var(--warn); }
 .thread-note.error { color: var(--danger); }
 .thread-note.external { color: var(--muted); }
+.thread-note.snoozed { color: var(--muted); }
 
 /* A conversation the agent already has, sitting among the threads until someone opens it. The
    title reads like any thread's; what is quieted is the trim — the agent mark is faded and a
@@ -1459,6 +1460,12 @@ html.list-open body {
 /* Something to look at: a finished turn nobody has opened yet. */
 .dot.unread {
   background: var(--text);
+}
+
+/* Unsent draft in the thread's composer: a quiet grey dot with the same soft ring. */
+.dot.draft {
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 22%, transparent);
 }
 
 .sidebar .dot.waiting {
@@ -4227,6 +4234,10 @@ input.picker-search {
   align-items: center;
   gap: 2px;
   margin-right: 2px;
+}
+
+.group-count {
+  color: var(--faint);
 }
 
 .group-head-row:hover .group-add,

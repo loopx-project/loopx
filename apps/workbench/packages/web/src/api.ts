@@ -299,6 +299,8 @@ export interface Thread {
   projectGone?: boolean;
   /** A turn finished and nobody has looked at the result yet. */
   unread: boolean;
+  /** The person asked not to be bothered about this thread until this time; null when off. Missing from older daemons. */
+  snoozedUntil?: string | null;
   /** The newest thing the user asked, shown under the title. Null until the first ask. */
   preview: string | null;
   /** The scheduled task that started this thread, if any. Missing from older daemons. */
@@ -1794,6 +1796,8 @@ export class Api {
       /** null takes the thread out of its section. */
       sectionId?: string | null;
       unread?: boolean;
+      /** A future ISO time the thread goes quiet until (no attention, no pushes); null wakes it. */
+      snoozedUntil?: string | null;
       done?: boolean;
       /** Places the thread on the board by hand; clears done. */
       stage?: ProgressReport['stage'];

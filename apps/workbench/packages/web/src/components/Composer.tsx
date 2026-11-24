@@ -2,12 +2,12 @@ import { pastedQuote } from '../clipboard';
 import { attachedReferences, recoverNoteReferences, replaceAutomaticReference, sameReferencedMessage, referencePreview, mergeReferences, withReferences, type ContextReference, type ReferenceAction } from '../context-references';
 import { parseReferenceDraft } from '../reference-drafts';
 import { ReferenceChips, ReferencePicker, type ReferenceSource } from './ContextReferences';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { ApiError, MAX_QUEUED, type AgentMention, type ModelQueue, type OutgoingImage, type QueuedMessage, type SlashCommand } from '../api';
 import { commandDraft, searchCommands, slashQuery, type HubAction, type MenuRow } from '../commands';
 import { useIsNarrow, useIsTouch } from '../hooks';
-import { readDrafts, SendCancelled, writeDraft, type Sending } from '../drafts';
+import { DRAFTS_KEY, hasDraftContent, readDrafts, SendCancelled, storedDraftKeys, writeDraft, type Sending } from '../drafts';
 import { sizeLabel } from '../files';
 import { mentionAt } from '../mentions';
 import { takeoverMention } from '../handover';
@@ -96,6 +96,10 @@ const noteId = () => `note-${Date.now()}-${++noteSeq}`;
  * kept on the device and outlast a reload; pictures only last as long as the page.
  */
 const drafts = new Map<string, Draft>();
+const draftListeners = new Set<() => void>();
+/** Live presence reported by mounted composers so the list updates before the storage debounce. */
+const liveDrafts = new Map<symbol, { key: string; present: boolean }>();
+let cachedDraftKeys: ReadonlySet<string> | null = null;
 
 const storage = (): Storage | null => {
   try {
@@ -104,6 +108,67 @@ const storage = (): Storage | null => {
     return null;
   }
 };
+
+function computeDraftKeys(): ReadonlySet<string> {
+  const keys = new Set<string>();
+  const store = storage();
+  if (store) {
+    for (const key of storedDraftKeys(store)) keys.add(key);
+  }
+  for (const [key, draft] of drafts) {
+    if (hasDraftContent(draft)) keys.add(key);
+  }
+  const liveByKey = new Map<string, boolean>();
+  for (const { key, present } of liveDrafts.values()) {
+    liveByKey.set(key, (liveByKey.get(key) ?? false) || present);
+  }
+  for (const [key, present] of liveByKey) {
+    if (present) keys.add(key);
+    else keys.delete(key);
+  }
+  return keys;
+}
+
+function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+
+function notifyDraftKeys(): void {
+  const next = computeDraftKeys();
+  if (cachedDraftKeys && setsEqual(cachedDraftKeys, next)) return;
+  cachedDraftKeys = next;
+  for (const listener of draftListeners) listener();
+}
+
+function getDraftKeysSnapshot(): ReadonlySet<string> {
+  if (!cachedDraftKeys) cachedDraftKeys = computeDraftKeys();
+  return cachedDraftKeys;
+}
+
+/** Reactive set of composer draft keys that currently hold unsent content. */
+export function useDraftKeys(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    (listener) => {
+      draftListeners.add(listener);
+      const onStorage = (event: StorageEvent) => {
+        if (event.key === null || event.key === DRAFTS_KEY) notifyDraftKeys();
+      };
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener('storage', onStorage);
+      }
+      return () => {
+        draftListeners.delete(listener);
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('storage', onStorage);
+        }
+      };
+    },
+    getDraftKeysSnapshot,
+    getDraftKeysSnapshot,
+  );
+}
 
 function loadDraft(key: string): Draft | undefined {
   const inMemory = drafts.get(key);
@@ -116,10 +181,11 @@ function loadDraft(key: string): Draft | undefined {
 }
 
 function keepDraft(key: string, draft: Draft | null): void {
-  if (draft && (draft.text.trim() || draft.notes.length || draft.images.length || draft.videos?.length || draft.mentions?.length || draft.references?.length)) drafts.set(key, draft);
+  if (hasDraftContent(draft) && draft) drafts.set(key, draft);
   else drafts.delete(key);
   const store = storage();
   if (store) writeDraft(store, key, draft);
+  notifyDraftKeys();
 }
 
 /** Restore metadata as visible attachments, including permissions owned by a quoted note. */
@@ -666,6 +732,25 @@ export function Composer({
     if (draftKey !== undefined) keepDraft(draftKey, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unsettled, lastSent?.turnId, lastSent?.text, draftKey]);
+  const draftSlot = useRef<symbol | null>(null);
+  if (draftSlot.current === null) draftSlot.current = Symbol('composer-draft');
+  const hasDraftBox = hasDraftContent({ text, notes, images, videos, mentions, references });
+  useEffect(() => {
+    const slot = draftSlot.current!;
+    if (draftKey === undefined) {
+      if (liveDrafts.delete(slot)) notifyDraftKeys();
+      return;
+    }
+    const previous = liveDrafts.get(slot);
+    if (previous?.key !== draftKey || previous.present !== hasDraftBox) {
+      liveDrafts.set(slot, { key: draftKey, present: hasDraftBox });
+      notifyDraftKeys();
+    }
+    return () => {
+      if (liveDrafts.delete(slot)) notifyDraftKeys();
+    };
+  }, [draftKey, hasDraftBox]);
+
   // Without a draft to keep them, thumbnails left in the box are released when it goes away.
   useEffect(
     () => () => {

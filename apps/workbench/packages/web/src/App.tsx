@@ -57,7 +57,7 @@ import { newerBuildAvailable } from './version';
 import { AppearancePanel } from './components/AppearancePanel';
 import { ActionSheet, type SheetTarget } from './components/ActionSheet';
 import { ArchivePanel } from './components/ArchivePanel';
-import { Composer, prefillComposerDraft, replaceAutomaticComposerReference, type DraftNote } from './components/Composer';
+import { Composer, prefillComposerDraft, replaceAutomaticComposerReference, useDraftKeys, type DraftNote } from './components/Composer';
 import { HandToAssistant, type MessageSnapshot } from './components/MessageActions';
 import { pendingThreadReference, type ContextReference } from './context-references';
 import { CollaborationMenu } from './components/CollaborationMenu';
@@ -873,6 +873,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [restore, setRestore] = useState<{ text: string; nonce: number; mentions?: AgentMention[] } | null>(null);
   // Text quoted out of a message by selecting it.
   const composerDraftKey = hostId ? `host:${hostId}:${selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new')}` : selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new');
+  const draftKeys = useDraftKeys();
   const [draftGeneration, setDraftGeneration] = useState(0);
   const draftGenerationRef = useRef(0);
   const composerScope = JSON.stringify([composerDraftKey, draftGeneration]);
@@ -3076,6 +3077,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           desktopRunning={desktop === 'minimized'}
           schedulesActive={onSchedules}
           extensionNav={extensionNav}
+          draftKeys={draftKeys}
           notice={demo && compact ? showcase ? showcase.notice(selectedId, extWant) : <DemoBar compact onConnect={askToConnect} /> : undefined}
           footerNotice={!showcase ? <>
             <PwaInstallPromotion onHelp={() => openSettings('install')} />
@@ -3106,7 +3108,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           thread, and the pages, stay centred where they are. */}
       <main className={`main${(selected || threadPending) && !onPage && hostUp && !compact ? ' lean' : ''}${overviewRoom || (activeOverviewDetail && overviewDock && overviewOpen && !dockOpen) ? ' overview-room' : ''}`} ref={mainRef}>
         {compact && selected && !listOpen && !onPage && hostUp && (
-          <ThreadQuickSwitch threads={topLevelThreads} selectedId={selected.id} agents={agents} onSelect={pick} />
+          <ThreadQuickSwitch threads={topLevelThreads} selectedId={selected.id} agents={agents} onSelect={pick} hostId={hostId} draftKeys={draftKeys} />
         )}
         {!onSettings && <header className="topbar">
           {/* In a member's thread the way back is to the thread that sent it, not to the list. */}

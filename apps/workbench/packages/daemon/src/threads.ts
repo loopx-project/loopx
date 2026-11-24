@@ -1464,7 +1464,12 @@ export class ThreadManager {
     let archived = 0;
     for (const thread of this.store.listThreads()) {
       const updatedAt = Date.parse(thread.updatedAt);
-      if (!Number.isFinite(updatedAt) || updatedAt >= cutoff) continue;
+      // A thread the person marked done is closed by its own clock: N days after it was finished it
+      // goes, however much later touches followed. New work reopens it (doneAt cleared) before this.
+      const doneAt = thread.doneAt ? Date.parse(thread.doneAt) : NaN;
+      const aged = (Number.isFinite(updatedAt) && updatedAt < cutoff)
+        || (Number.isFinite(doneAt) && doneAt < cutoff);
+      if (!aged) continue;
       if (thread.pinned || thread.unread || thread.status === 'running') continue;
       if (this.view(thread).waiting) continue;
       try {
@@ -1476,6 +1481,19 @@ export class ThreadManager {
       }
     }
     return archived;
+  }
+
+  /**
+   * Wakes the threads whose snooze ran out: each leaves quiet mode and, having something to look
+   * at again, is marked unread — a waiting thread says so on its own the moment it wakes. The
+   * records carry the snooze that ended, so callers can say which time came due.
+   */
+  async wakeSnoozedThreads(now = new Date()): Promise<ThreadRecord[]> {
+    const due = this.store.listSnoozeDue(now.toISOString());
+    for (const thread of due) {
+      await this.updateThread(thread.id, { snoozedUntil: null, unread: true });
+    }
+    return due;
   }
 
   threadView(id: string): ThreadView {
@@ -1946,6 +1964,8 @@ export class ThreadManager {
       archived?: boolean;
       sectionId?: string | null;
       unread?: boolean;
+      /** A future time the thread goes quiet until; null wakes it at once. */
+      snoozedUntil?: string | null;
       done?: boolean;
       /** The person places the thread on the board; it stands until a later turn reports again. */
       stage?: ProgressStage;
@@ -2007,6 +2027,13 @@ export class ThreadManager {
     if (updates.unread !== undefined) {
       if (typeof updates.unread !== 'boolean') throw new HttpError(400, 'unread must be true or false');
       patch.unread = updates.unread;
+    }
+    if (updates.snoozedUntil !== undefined) {
+      // Only a time still to come quiets a thread; a wrong type or a past time is refused, not rounded.
+      if (updates.snoozedUntil !== null && typeof updates.snoozedUntil !== 'string') throw new HttpError(400, 'snoozedUntil must be a time or null');
+      const at = updates.snoozedUntil === null ? null : Date.parse(updates.snoozedUntil);
+      if (at !== null && (!Number.isFinite(at) || at <= Date.now())) throw new HttpError(400, 'snoozedUntil must be a future time');
+      patch.snoozedUntil = at === null ? null : new Date(at).toISOString();
     }
     if (updates.workMode !== undefined) {
       const mode = this.validateWorkMode(thread.agent, updates.workMode);

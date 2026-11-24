@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExternalSession, Section, Thread } from '../src/api.js';
-import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, forkGroupsByRoot, handoverGroups, isLoopxRow, markTerms, ownRows, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
+import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, forkGroupsByRoot, handoverGroups, isLoopxRow, markTerms, ownRows, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, snoozeTimeLabel, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
 import { threadMark } from '../src/notices.js';
 
 let clock = 0;
@@ -80,6 +80,22 @@ test('a thread whose section no longer exists goes back under its project', () =
   assert.deepEqual(model.projects.map((p) => ids(p.threads)), [['x']]);
 });
 
+test('done threads gather at the bottom, finished first, ahead of any pin or section', () => {
+  const model = buildSidebar([
+    thread('fresh', { pinned: true }),
+    thread('newer-done', { doneAt: '2026-01-03T10:00:00Z', pinned: true, sectionId: 's1' }),
+    thread('older-done', { doneAt: '2026-01-01T10:00:00Z', cwd: '/work/other' }),
+  ], sections, '');
+  assert.deepEqual(ids(model.done), ['newer-done', 'older-done']);
+  assert.deepEqual(ids(model.pinned), ['fresh']);
+  assert.deepEqual(model.sections.map((s) => ids(s.threads)), [[], []]);
+  assert.deepEqual(model.projects.map((p) => ids(p.threads)), []);
+  assert.equal(model.count, 3);
+  const found = buildSidebar([thread('newer-done', { doneAt: '2026-01-03T10:00:00Z' }), thread('fresh')], sections, 'newer');
+  assert.deepEqual(ids(found.done), ['newer-done']);
+  assert.deepEqual(ids(found.pinned), []);
+});
+
 test('projects are ordered by their most recent thread', () => {
   const newest = thread('n', { cwd: '/work/b' });
   const older = thread('o', { cwd: '/work/a' });
@@ -150,7 +166,24 @@ test('by activity: what wants attention or is at work comes first, the rest by t
   const found = buildActivity(list, 'UNREAD', now, null);
   assert.deepEqual(found.groups.map((g) => [g.label, ids(g.threads)]), [['优先级', ['unread-new', 'unread-old']]]);
   assert.equal(found.count, 2);
-  assert.deepEqual(buildActivity([], '', now, null), { groups: [], count: 0 });
+  assert.deepEqual(buildActivity([], '', now, null), { groups: [], done: [], count: 0 });
+});
+
+test('by activity: finished threads leave the day order for the bottom fold, newest finish first', () => {
+  const now = new Date(2026, 9, 12, 15, 0);
+  const at = (daysAgo: number, hour = 12) => new Date(2026, 9, 12 - daysAgo, hour).toISOString();
+  const list = [
+    thread('busy', { updatedAt: at(0, 10) }),
+    thread('newer-done', { doneAt: at(0, 9), updatedAt: at(0, 9), status: 'error' }),
+    thread('older-done', { doneAt: at(3), updatedAt: at(3) }),
+  ];
+  const model = buildActivity(list, '', now, null);
+  assert.deepEqual(model.groups.map((g) => [g.label, ids(g.threads)]), [['今天', ['busy']]]);
+  assert.deepEqual(ids(model.done), ['newer-done', 'older-done']);
+  assert.equal(model.count, 3);
+  const hit = buildActivity(list, 'NEWER', now, null);
+  assert.deepEqual(ids(hit.done), ['newer-done']);
+  assert.deepEqual(hit.groups.map((g) => ids(g.threads)), []);
 });
 
 test('by activity: a handover chain stays together under its most pressing member, and folds into one row', () => {
@@ -309,6 +342,24 @@ test('the merged list puts every machine in one activity order, names where each
   assert.equal(model.count, 5, 'the member is under its lead, not a row of its own');
   assert.deepEqual(model.notes.map((n) => `${n.hostId}:${n.state}`), ['gpu:offline', 'new:loading'], 'a remembered list being refreshed needs no note');
   assert.deepEqual(buildMerged(sources, 'there', now, null).groups.flatMap((g) => g.items.map((i) => i.thread.id)), ['there']);
+  const finished = buildMerged([
+    { hostId: null, label: '本机', state: 'live', at: null, threads: [th('local-done', '2026-10-21T11:00:00', { doneAt: '2026-10-21T10:00:00' })] },
+    { hostId: 'devbox', label: 'devbox', state: 'live', at: null, threads: [th('remote-done', '2026-10-20T11:00:00', { doneAt: '2026-10-20T11:30:00' })] },
+  ], '', now, null);
+  assert.deepEqual(finished.done.map((i) => `${i.hostId}:${i.thread.id}`), ['null:local-done', 'devbox:remote-done']);
+  assert.deepEqual(finished.groups.flatMap((g) => g.items), []);
+});
+
+test('snooze: a quiet thread joins no attention surface until its time passes, then it is back', () => {
+  const until = new Date(Date.now() + 3600_000).toISOString();
+  assert.equal(threadAttention(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until }), null), null);
+  assert.equal(threadAttention(thread('a', { unread: true, snoozedUntil: until }), null), null);
+  assert.equal(boardStage(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until })), 'review', 'the board does not count a snoozed wait as blocked');
+  assert.equal(threadMark(thread('a', { unread: true, snoozedUntil: until }), false), null, 'no dot while quiet');
+  assert.deepEqual(threadAttention(thread('a', { unread: true, snoozedUntil: new Date(Date.now() - 1000).toISOString() }), null), { kind: 'unread' });
+  assert.deepEqual(threadAttention(thread('a', { unread: true }), null), { kind: 'unread' });
+  assert.equal(snoozeTimeLabel(new Date('2026-01-02T09:05:00').toISOString(), new Date('2026-01-02T08:00:00')), '09:05');
+  assert.equal(snoozeTimeLabel(new Date('2026-01-03T09:00:00').toISOString(), new Date('2026-01-02T08:00:00')), '1/3 09:00');
 });
 
 test("a machine's sessions mix into the list by their time, as threads of their directory", () => {

@@ -9,14 +9,14 @@ import { clockLabel } from '../timeline';
 import { useInTitlebar, useLongPress, useStoredFlag, useStoredSet } from '../hooks';
 import { attentionCount, threadMark, waitingLabel, type ThreadMark } from '../notices';
 import { folderName } from '../paths';
-import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type ForkSubchatItem, type HostSource } from '../sidebar';
+import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, snoozed, snoozeTimeLabel, taggedAgents, withExternalSessions, type ForkSubchatItem, type HostSource } from '../sidebar';
 import { timeAgo } from '../sessions';
 import { deliveredPreview } from '../timeline';
 import { HostSwitcher } from './Hosts';
 import { Menu } from './Menu';
 import type { HostIconName } from '@calli/extension-api';
 import { HostIcon } from '../extensions/ui';
-import { AgentMark, IconAgents, IconBell, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFork, IconHandover, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
+import { AgentMark, IconAgents, IconBell, IconCheck, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFork, IconHandover, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
 import { t } from '../i18n';
 import './fork-subchat.css';
 
@@ -121,13 +121,15 @@ interface Props {
   /** More external sessions are known but not shown; the call brings the next page. */
   moreExternal?: boolean;
   onLoadMoreExternal?: () => void;
+  /** Composer draft keys that currently hold unsent content, for the quiet grey draft dot. */
+  draftKeys?: ReadonlySet<string>;
   /** A line over the list, such as the demo's way to connect. */
   notice?: ReactNode;
 }
 
 /** In the merged list, the machine a row's thread is on when that is not the hub's own, and how to open it if it is not the one on screen. */
 /** `agents`: that machine's, by id, when the row is another machine's; null while not known. */
-interface Elsewhere { label?: string; offline?: string; open?: () => void; agents?: Map<string, AgentMarkInfo> | null }
+interface Elsewhere { hostId?: string | null; label?: string; offline?: string; open?: () => void; agents?: Map<string, AgentMarkInfo> | null }
 
 /** Where a menu opened from a "more" button should appear: just under the button. */
 function below(e: MouseEvent<HTMLElement>): [number, number] {
@@ -199,6 +201,7 @@ export function Sidebar({
   externalError = null,
   moreExternal = false,
   onLoadMoreExternal,
+  draftKeys,
 }: Props) {
   const [search, setSearch] = useState('');
   // What was said, looked up a moment after the typing stops. `for` is the search the hits answer.
@@ -230,6 +233,10 @@ export function Sidebar({
   const [collapsed, toggle] = useStoredSet(`${storagePrefix}.collapsed`);
   // The other way to read the list: by what is going on, not by where a thread is filed. Like Codex's activity view.
   const [byActivity, setByActivity] = useStoredFlag(`${storagePrefix}.activity`);
+  // Finished work folds away closed on arrival — it is storage, not news — the count still saying
+  // how much is in there, and the choice sticking per device. Like T3's Settled shelf.
+  const [doneOpen, setDoneOpen] = useStoredFlag(`${storagePrefix}.doneOpen`);
+  const doneFoldOpen = () => Boolean(search.trim()) || doneOpen;
   // This machine's sessions that are not threads yet mix into the list by their time; every
   // machine's own list (the merged view) shows threads only.
   const everyRow = merged ? threads : withExternalSessions(threads, external);
@@ -247,7 +254,8 @@ export function Sidebar({
   // While searching, everything is expanded so matches are never hidden inside a closed group.
   const isOpen = (key: string) => Boolean(search.trim()) || !collapsed.has(key);
 
-  const MARK_LABELS = { waiting: t('notices.unknown.label'), running: t('status.running'), error: t('status.error'), unread: t('sidebar.unread') } as const;
+  const MARK_LABELS = { waiting: t('notices.unknown.label'), running: t('status.running'), error: t('status.error'), unread: t('sidebar.unread'), draft: t('sidebar.draft') } as const;
+  const hasDraft = (threadId: string, onHost: string | null = hostId) => Boolean(draftKeys?.has(onHost ? `host:${onHost}:${threadId}` : threadId));
   const agentById = new Map((agents ?? []).map((a) => [a.id, a]));
   const tagged = taggedAgents(agents ?? []);
 
@@ -281,7 +289,7 @@ export function Sidebar({
    */
   const row = (thread: Thread, title = thread.title, preview = thread.preview, chain?: Thread[], on?: Elsewhere) => {
     const open = on?.open;
-    const mark = threadMark(thread, thread.id === selectedId);
+    const mark = threadMark(thread, thread.id === selectedId, hasDraft(thread.id, on ? (on.hostId ?? null) : hostId));
     const offline = on?.offline ?? (!on && hostDown ? t('sidebar.hostDown') : undefined);
     // A row of another machine is marked by that machine's agents, not by the ones on screen.
     const theirs = on && on.agents !== undefined;
@@ -295,9 +303,10 @@ export function Sidebar({
     const from = chain ? byId.get(chain.find((m) => m.id === thread.handover?.sourceId)?.agent ?? thread.handover?.agent ?? '') : undefined;
     // Filed by project, the list is for scanning: a title per row, as in Codex. The latest ask
     // shows where it helps finding something, by activity and in a search. A thread that needs a
-    // hand says so in every view.
+    // hand says so in every view; one told to come back later says when.
     const detail = flat || query ? preview : null;
-    const note = mark === 'waiting' ? waitingLabel(thread) : mark === 'error' ? t('sidebar.failed') : null;
+    const back = snoozed(thread);
+    const note = mark === 'waiting' ? waitingLabel(thread) : mark === 'error' ? t('sidebar.failed') : back ? t('sidebar.snoozedNote', snoozeTimeLabel(back)) : null;
     return (
     <div
       key={thread.id}
@@ -314,8 +323,8 @@ export function Sidebar({
         <span className="thread-text">
           <span className="thread-head">
             <span className="thread-title">{title}</span>
-            {/* Beside the title, so the row stays one line like the rest. */}
-            {note && <span className={`thread-note ${mark}`}>{note}</span>}
+            {/* Beside the title, so the row stays one line like the rest. The class follows the note's own kind, not the row's dot. */}
+            {note && <span className={`thread-note ${mark === 'waiting' || mark === 'error' ? mark : 'snoozed'}`}>{note}</span>}
             {/* Out of its project group, a thread says where it is. */}
             {flat && on?.label && <span className="thread-host" title={on.label}>{on.label}</span>}
             {flat && <span className="thread-dir">{folderName(projectDir(thread).cwd)}</span>}
@@ -366,10 +375,10 @@ export function Sidebar({
       {chips.length > shown.length && <span className="stack-more" aria-hidden="true">+{chips.length - shown.length}</span>}
     </span>;
   };
-  // One dot stands for the whole run: waiting, then error, unread, running; none when all is quiet.
+  // One dot stands for the whole run: waiting, then error, unread, running, draft; none when all is quiet.
   const runDot = (list: Thread[]) => {
-    const marks = [...new Set(list.map((m) => threadMark(m, m.id === selectedId)).filter(Boolean))] as ThreadMark[];
-    const mark = (['waiting', 'error', 'unread', 'running'] as const).find((m) => marks.includes(m));
+    const marks = [...new Set(list.map((m) => threadMark(m, m.id === selectedId, hasDraft(m.id))).filter(Boolean))] as ThreadMark[];
+    const mark = (['waiting', 'error', 'unread', 'running', 'draft'] as const).find((m) => marks.includes(m));
     return mark ? <span className={`dot ${mark}`} role="img" aria-label={MARK_LABELS[mark]} title={MARK_LABELS[mark]} /> : null;
   };
 
@@ -463,7 +472,7 @@ export function Sidebar({
     const sortedTeam = [...team].sort(teamOrder);
     return <div className="handover-members">
       {forkItems.map(({ thread: f, handedOver }) => {
-        const mark = threadMark(f, f.id === selectedId);
+        const mark = threadMark(f, f.id === selectedId, hasDraft(f.id));
         return <button
           key={f.id}
           className={`handover-member${f.id === selectedId ? ' active' : ''}`}
@@ -482,7 +491,7 @@ export function Sidebar({
       })}
       {sortedTeam.map((m) => {
         const agent = agentById.get(m.agent);
-        const mark = threadMark(m, m.id === selectedId);
+        const mark = threadMark(m, m.id === selectedId, hasDraft(m.id));
         return <button
           key={m.id}
           className={`handover-member${m.id === selectedId ? ' active' : ''}`}
@@ -525,9 +534,9 @@ export function Sidebar({
     if (members.length === 1) return entry(latest);
     const storageKey = `${hostId ?? 'local'}:${key}`;
     const expanded = Boolean(search.trim()) || expandedHandovers.has(storageKey);
-    const marks = [...new Set(members.filter((thread) => thread.id !== latest.id).map((thread) => threadMark(thread, thread.id === selectedId)).filter(Boolean))] as ThreadMark[];
+    const marks = [...new Set(members.filter((thread) => thread.id !== latest.id).map((thread) => threadMark(thread, thread.id === selectedId, hasDraft(thread.id))).filter(Boolean))] as ThreadMark[];
     const chainStack = stackLine(members, false);
-    const chainDot = (['waiting', 'error', 'unread', 'running'] as const).find((m) => marks.includes(m));
+    const chainDot = (['waiting', 'error', 'unread', 'running', 'draft'] as const).find((m) => marks.includes(m));
     // The team and grouped forks move along with a handover, so any segment on the chain carries them.
     const lead = members.find((thread) => teamOf(thread)?.length) ?? latest;
     const team = teamOf(lead) ?? [];
@@ -567,7 +576,7 @@ export function Sidebar({
       })()}
       {expanded && <div className="handover-members handover-chain">{members.map((thread) => {
         const agent = agentById.get(thread.agent);
-        const mark = threadMark(thread, thread.id === selectedId);
+        const mark = threadMark(thread, thread.id === selectedId, hasDraft(thread.id));
         return <button
           key={thread.id}
           className={`handover-member${thread.id === selectedId ? ' active' : ''}`}
@@ -602,6 +611,24 @@ export function Sidebar({
     </section>
   );
 
+  // The one bottom fold for finished threads, the same in every sidebar view. While folded, the
+  // thread on screen stays listed — the fold must not hide where you are.
+  const doneShown = (list: Thread[]) => (doneFoldOpen() ? list : list.filter((t) => t.id === selectedId));
+  const doneFold = (count: number, rows: React.ReactNode) =>
+    count > 0 && (
+      <section className="thread-group">
+        <div className="group-head-row">
+          <button className="group-head" aria-expanded={doneFoldOpen()} onClick={() => setDoneOpen(!doneOpen)}>
+            <span className="group-chevron"><IconChevron size={13} open={doneFoldOpen()} /></span>
+            <IconCheck size={13} />
+            <span className="group-name">{t('sidebar.done')}</span>
+            <span className="group-count">{count}</span>
+          </button>
+        </div>
+        {rows}
+      </section>
+    );
+
   const empty = (
     <p className="group-empty top" role={loading ? 'status' : undefined}>
       {loading ? t('sidebar.loading') : search.trim() ? t('sidebar.noMatch') : compact ? t('sidebar.emptyPhone') : t('sidebar.empty')}
@@ -632,6 +659,7 @@ export function Sidebar({
           {g.items.map(({ thread, hostId: on }) => (
             <Fragment key={`${on ?? ''}:${thread.id}`}>
               {entry(thread, {
+                hostId: on,
                 // The hub's own machine is the usual one; only threads elsewhere are named.
                 label: on === null ? undefined : labelOf.get(on),
                 offline: offlineOf.get(on),
@@ -642,6 +670,22 @@ export function Sidebar({
           ))}
         </section>
       ))}
+      {doneFold(
+        mergedModel.done.length,
+        mergedModel.done
+          .filter(({ thread }) => doneFoldOpen() || thread.id === selectedId)
+          .map(({ thread, hostId: on }) => (
+            <Fragment key={`${on ?? ''}:${thread.id}`}>
+              {entry(thread, {
+                hostId: on,
+                label: on === null ? undefined : labelOf.get(on),
+                offline: offlineOf.get(on),
+                open: on === hostId ? undefined : () => onOpenElsewhere?.(on, thread.id),
+                agents: on === hostId ? undefined : agentsOf.get(on) ?? null,
+              })}
+            </Fragment>
+          )),
+      )}
     </nav>
   ) : activity ? (
     <nav className="thread-groups activity" aria-label={t('sidebar.threadsByActivity')}>
@@ -652,6 +696,7 @@ export function Sidebar({
           {groupedRows(g.threads, true)}
         </section>
       ))}
+      {doneFold(activity.done.length, groupedRows(doneShown(activity.done), true))}
     </nav>
   ) : (
     <nav className="thread-groups" aria-label={t('sidebar.threads')}>
@@ -716,6 +761,7 @@ export function Sidebar({
           model.scratch,
           <GroupAdd label={t('sidebar.newScratch')} onClick={() => onNewIn({ scratch: true })} />,
         )}
+      {doneFold(model.done.length, groupedRows(doneShown(model.done)))}
     </nav>
   );
 

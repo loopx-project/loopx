@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AgentInfo, Thread } from '../api';
+import { threadDraftKey } from '../drafts';
 import { useStoredFlag } from '../hooks';
 import { folderName } from '../paths';
 import { projectDir } from '../sidebar';
@@ -8,11 +9,13 @@ import { t } from '../i18n';
 import { AgentMark, IconArrowLeft } from './icons';
 
 const QUICK_SWITCH_SIDE = 10;
-export function ThreadQuickSwitch({ threads, selectedId, agents, onSelect }: {
+export function ThreadQuickSwitch({ threads, selectedId, agents, onSelect, hostId = null, draftKeys }: {
   threads: Thread[];
   selectedId: string;
   agents: AgentInfo[];
   onSelect: (id: string) => void;
+  hostId?: string | null;
+  draftKeys?: ReadonlySet<string>;
 }) {
   const selectedIndex = threads.findIndex((thread) => thread.id === selectedId);
   const items = useMemo(() => selectedIndex < 0 ? [] : threads.slice(Math.max(0, selectedIndex - QUICK_SWITCH_SIDE), Math.min(threads.length, selectedIndex + QUICK_SWITCH_SIDE + 1)), [threads, selectedIndex]);
@@ -122,6 +125,7 @@ export function ThreadQuickSwitch({ threads, selectedId, agents, onSelect }: {
                   {thread.status === 'running' && <span className="dot running" aria-label={t('status.running')} />}
                   {thread.waiting && <span className="dot waiting" aria-label={t('notices.unknown.label')} />}
                   {thread.unread && !isCurrent && <span className="dot unread" aria-label={t('sidebar.unread')} />}
+                  {thread.status !== 'running' && !thread.waiting && !(thread.unread && !isCurrent) && draftKeys?.has(threadDraftKey(thread.id, hostId)) && <span className="dot draft" aria-label={t('sidebar.draft')} />}
                 </span>
               </button>
             );

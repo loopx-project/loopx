@@ -73,10 +73,47 @@ export function readDrafts(storage: Storage): Record<string, StoredDraft> {
   }
 }
 
+export interface DraftContent {
+  text: string;
+  notes: readonly unknown[];
+  images?: readonly unknown[];
+  videos?: readonly unknown[];
+  mentions?: readonly unknown[];
+  references?: readonly unknown[];
+}
+
+/** Whether a draft holds anything unsent in the composer box. */
+export function hasDraftContent(draft: DraftContent | null | undefined): boolean {
+  return Boolean(
+    draft && (
+      draft.text.trim()
+      || draft.notes.length
+      || draft.images?.length
+      || draft.videos?.length
+      || draft.mentions?.length
+      || draft.references?.length
+    ),
+  );
+}
+
+/** Keys of persisted drafts that currently hold unsent content. */
+export function storedDraftKeys(storage: Storage): Set<string> {
+  const keys = new Set<string>();
+  for (const [key, value] of Object.entries(readDrafts(storage))) {
+    if (hasDraftContent(value)) keys.add(key);
+  }
+  return keys;
+}
+
+/** Draft key a thread's composer uses on a given host (`null` for the hub's own host). */
+export function threadDraftKey(threadId: string, hostId: string | null = null): string {
+  return hostId ? `host:${hostId}:${threadId}` : threadId;
+}
+
 /** Keeps `draft` under `key`, or forgets it when there is nothing left to keep. */
 export function writeDraft(storage: Storage, key: string, draft: { text: string; notes: StoredDraft['notes']; sending?: Sending; mentions?: AgentMention[]; references?: ContextReference[] } | null, now = Date.now()): void {
   const all = readDrafts(storage);
-  if (draft && (draft.text.trim() || draft.notes.length || draft.mentions?.length || draft.references?.length)) {
+  if (hasDraftContent(draft) && draft) {
     all[key] = {
       text: draft.text,
       ...(draft.references?.length ? { references: draft.references } : {}),

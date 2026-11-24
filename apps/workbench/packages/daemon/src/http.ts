@@ -1223,6 +1223,7 @@ export function createHttpServer(deps: HttpDeps): Server {
             archived: body.archived,
             sectionId: body.sectionId,
             unread: body.unread,
+            snoozedUntil: body.snoozedUntil,
             done: body.done,
             stage: body.stage,
             forkTag: body.forkTag,

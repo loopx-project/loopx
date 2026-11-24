@@ -73,6 +73,8 @@ export interface ThreadRecord {
   worktree: ThreadWorktree | null;
   /** A turn finished and nobody has looked at the result yet. */
   unread: boolean;
+  /** The person asked not to be bothered about this thread until this time; null when off. */
+  snoozedUntil: string | null;
   /** When the hub last started a turn here. Compared with `externalAt` for the terminal warning. */
   hubTurnAt: string | null;
   /** When syncing last found turns the terminal added to this session. */
@@ -380,6 +382,7 @@ interface ThreadRow {
   handover: string | null;
   worktree: string | null;
   unread: number;
+  snoozed_until: string | null;
   hub_turn_at: string | null;
   external_at: string | null;
   preview: string | null;
@@ -421,6 +424,7 @@ const toThread = (r: ThreadRow): ThreadRecord => ({
   handover: r.handover ? JSON.parse(r.handover) : null,
   worktree: r.worktree ? (JSON.parse(r.worktree) as ThreadWorktree) : null,
   unread: r.unread === 1,
+  snoozedUntil: r.snoozed_until ?? null,
   hubTurnAt: r.hub_turn_at,
   externalAt: r.external_at,
   preview: r.preview,
@@ -558,6 +562,8 @@ export class Store {
     if (!cols.some((c) => c.name === 'worktree')) this.db.exec('ALTER TABLE threads ADD COLUMN worktree TEXT');
     // Migration: unread marker.
     if (!cols.some((c) => c.name === 'unread')) this.db.exec('ALTER TABLE threads ADD COLUMN unread INTEGER NOT NULL DEFAULT 0');
+    // Migration: snooze — the thread leaves the person's attention until this time.
+    if (!cols.some((c) => c.name === 'snoozed_until')) this.db.exec('ALTER TABLE threads ADD COLUMN snoozed_until TEXT');
     if (!cols.some(c => c.name === 'work_mode')) this.db.exec("ALTER TABLE threads ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'execute'");
     if (!cols.some(c => c.name === 'speed')) this.db.exec('ALTER TABLE threads ADD COLUMN speed TEXT');
     // Migration: the schedule a thread was started by, if any, as JSON { id, name }.
@@ -943,6 +949,7 @@ export class Store {
       | 'forkedFrom'
       | 'worktree'
       | 'unread'
+      | 'snoozedUntil'
       | 'hubTurnAt'
       | 'externalAt'
       | 'preview'
@@ -1008,6 +1015,13 @@ export class Store {
   getThread(id: string): ThreadRecord | null {
     const row = this.db.prepare('SELECT * FROM threads WHERE id = ?').get(id) as ThreadRow | undefined;
     return row ? toThread(row) : null;
+  }
+
+  /** Threads whose snooze has run out, not archived, earliest wake first. */
+  listSnoozeDue(nowIso: string): ThreadRecord[] {
+    return (this.db
+      .prepare('SELECT * FROM threads WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND archived_at IS NULL ORDER BY snoozed_until')
+      .all(nowIso) as unknown as ThreadRow[]).map(toThread);
   }
 
   /** The thread tied to an agent-side session, archived or not. Used to avoid importing one twice. */
@@ -1082,6 +1096,7 @@ export class Store {
         | 'archivedAt'
         | 'sectionId'
         | 'unread'
+        | 'snoozedUntil'
         | 'preview'
         | 'hubTurnAt'
         | 'externalAt'
@@ -1100,7 +1115,7 @@ export class Store {
     const next = { ...current, ...patch, updatedAt: opts.touch ? new Date().toISOString() : current.updatedAt };
     this.db
       .prepare(
-        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ?, fork_group = ?, fork_tag = ? WHERE id = ?',
+        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, snoozed_until = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ?, fork_group = ?, fork_tag = ? WHERE id = ?',
       )
       .run(
         next.title,
@@ -1113,6 +1128,7 @@ export class Store {
         next.archivedAt,
         next.sectionId,
         next.unread ? 1 : 0,
+        next.snoozedUntil ?? null,
         next.preview,
         next.hubTurnAt,
         next.externalAt,
