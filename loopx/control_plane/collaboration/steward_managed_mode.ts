@@ -24,6 +24,8 @@ import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.t
  * still checks ownership, deadline, permissions and user work. */
 const WORKER_EXITED_ERROR =
   "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+const FILE_LOCK_TIMEOUT_ERROR_PATTERN =
+  /^file lock acquisition timed out \((?:recorded holder pid [1-9]\d*|lock busy, current holder unknown)\)$/;
 const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
 const REPORT_VALIDATOR_PREFIX =
   "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
@@ -116,17 +118,19 @@ function admitMonitorRestartRecovery(
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   // Post-context monitor failures (external signal outage, daemon worker exit,
-  // storage I/O error, or runtime unavailability) before any poll receipt or
-  // upstream model turn may recover once immediately and retry only after a
-  // bounded cooldown when strict single-context and zero-effect journal proofs
-  // hold; pre-context unknown worker launches remain closed.
+  // storage I/O or file lock timeout, or runtime unavailability) before any poll
+  // receipt or upstream model turn may recover once immediately and retry only
+  // after a bounded cooldown when strict single-context and zero-effect journal
+  // proofs hold; pre-context unknown worker launches remain closed.
   const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
     original.error_code === "runtime_unavailable"
+    || original.error_code === "lock_acquire_timeout"
     || original.error_code === "runtime_error" && (
       original.error === "steward monitor external signal source temporarily unavailable"
       || original.error === "the portfolio scope changed after observation"
       || original.error === "disk I/O error"
       || original.error === WORKER_EXITED_ERROR
+      || (typeof original.error === "string" && FILE_LOCK_TIMEOUT_ERROR_PATTERN.test(original.error))
     )
   );
   const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;

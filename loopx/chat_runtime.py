@@ -53,7 +53,7 @@ from .chat.endpoint_catalog import builtin_chat_endpoints
 from .chat.endpoints import AgentEndpointRegistry
 from .control_plane.chat_turn_acceptance import managed_turn_recovery_allowed
 from .file_lock import (
-    LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED,
+    LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED, LockAcquireTimeoutError,
     _lock_id, lock_holder_host_label, lock_holder_liveness, process_is_alive, try_exclusive_file_lock,
 )
 from .kiro_cli_goal_mode import KIRO_CLI_BIN
@@ -1187,7 +1187,8 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     "Chat worker I/O failure: turn=%s phase=publish_saved_answer errno=%s", turn_id, exc.errno)
                 return
             event_buffer.close()
-            self._fail_turn(session_id, turn_id, "runtime_error", str(exc), status="failed")
+            error_code = exc.code if isinstance(exc, LockAcquireTimeoutError) else "runtime_error"
+            self._fail_turn(session_id, turn_id, error_code, str(exc), status="failed")
         finally:
             event_buffer.close()
             with self.lock:
