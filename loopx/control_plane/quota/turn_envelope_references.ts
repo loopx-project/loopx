@@ -327,7 +327,7 @@ function summaryOutcomeIndexRow(ref: string, outcome: JsonObject): JsonObject | 
   return {
     outcome_ref: ref,
     id: outcome.id,
-    ...pickOwn(outcome, ["owner_agent_id", "basis_digest", "revision", "todo_count", "cold_read_command"]),
+    ...pickOwn(outcome, ["owner_agent_id", "basis_digest", "revision", "todo_count", "capture_read_command", "read_modes", "cold_read_command"]),
     summary_only: true,
   };
 }

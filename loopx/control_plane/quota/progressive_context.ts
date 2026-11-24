@@ -589,10 +589,17 @@ export function progressiveContextPlan(request: JsonObject,
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
     });
   }
-  if (at(payload, ["deferred_settlement_details"]) !== undefined) {
+  const deferredDetails = jsonObject(at(payload, ["deferred_settlement_details"]));
+  if (deferredDetails !== null) {
+    const hasGoalAcceptance = Object.hasOwn(deferredDetails, "goal_acceptance");
+    const hasOptionalAttachments = Object.hasOwn(deferredDetails, "optional_attachments");
     deferred.push({
       path: ["deferred_settlement_details"],
-      read_instruction: "Complete optional settlement attachment details stay in the original capture; use optional_attachments[].cold_read_command when needed.",
+      read_instruction: hasGoalAcceptance
+        ? (hasOptionalAttachments
+          ? "Admission-time goal_acceptance outcomes and optional settlement attachment details stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command / optional_attachments[].cold_read_command for live inspection."
+          : "Admission-time goal_acceptance outcomes stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command for live inspection.")
+        : "Complete optional settlement attachment details stay in the original capture; use optional_attachments[].cold_read_command when needed.",
     });
   }
   for (const scope of scopes) {
@@ -1261,7 +1268,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
         "schema_version", "revision", "outcome_revision", "current_lifetime",
         "projection_mode", "full_outcome_count", "inline_outcome_count",
         "compacted_outcome_count", "full_outcomes_sha256",
-        "cold_read_command", "cold_read_instruction",
+        "capture_read_command", "cold_read_command", "cold_read_instruction",
       ]) {
         if (Object.hasOwn(requirements, field)) include(...requirementsPath, field);
       }
@@ -1287,7 +1294,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       if (suggested && !deferSuggested) { include(...outcome); return; }
       include(...outcome, "id");
       if (row?.summary_only === true) {
-        for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "cold_read_command"]) {
+        for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "capture_read_command", "read_modes", "cold_read_command"]) {
           if (Object.hasOwn(row, key)) include(...outcome, key);
         }
       }

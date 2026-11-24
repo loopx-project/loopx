@@ -104,8 +104,8 @@ def register_quota_command(
             "Include one command-specific cold-path detail section. Status/plan default "
             "to bounded Todo summaries; use agent-todos or user-todos for full lists. For `quota "
             "should-run`: scheduler, agent-todos, user-todos, goal-boundary, "
-            "goal_acceptance, or vision. For `quota monitor-poll`: decisions. Repeat for multiple "
-            "sections or use `all`."
+            "goal_acceptance (expands current live Goal acceptance at invocation time, not historical capture replay; use quota context-read on the original capture for admission-time readback), or vision. "
+            "For `quota monitor-poll`: decisions. Repeat for multiple sections or use `all`."
         ),
     )
     quota_parser.add_argument(

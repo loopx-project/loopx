@@ -64,6 +64,21 @@ function goalAcceptanceColdReadCommand(options: {
   return `${prefix} goal-acceptance inspect --goal-id ${shellQuote(options.goalId)}`;
 }
 
+function goalAcceptanceCaptureReadCommand(options: {
+  cliArgv: readonly string[];
+  captureReferenceFile: string;
+  selectPointer: string;
+}): string {
+  const argv = options.cliArgv.length > 0 ? options.cliArgv : ["loopx"];
+  return [
+    ...argv.map(shellQuote),
+    "--format", "json",
+    "quota", "context-read",
+    "--reference-file", shellQuote(options.captureReferenceFile),
+    "--select", shellQuote(options.selectPointer),
+  ].join(" ");
+}
+
 function cliPrefix(
   cliArgv: readonly string[],
   registry: unknown,
@@ -210,9 +225,18 @@ function collectAcceptanceGaps(
 export function compactOutcomeIndexEntry(
   outcome: JsonObject,
   goalId: string,
-  options: ScopeGoalAcceptanceOptions = {},
+  options: ScopeGoalAcceptanceOptions & {outcomeIndex?: number} = {},
 ): JsonObject {
   const todoIds = Array.isArray(outcome.todo_ids) ? outcome.todo_ids : [];
+  const cliArgv = options.cliArgv ?? ["loopx"];
+  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
+  const captureReadCommand = captureReferenceFile && options.outcomeIndex !== undefined && options.outcomeIndex >= 0
+    ? goalAcceptanceCaptureReadCommand({
+      cliArgv,
+      captureReferenceFile,
+      selectPointer: `/deferred_settlement_details/goal_acceptance/outcome_requirements/outcomes/${options.outcomeIndex}`,
+    })
+    : null;
   return {
     id: outcome.id,
     owner_agent_id: outcome.owner_agent_id ?? null,
@@ -220,8 +244,12 @@ export function compactOutcomeIndexEntry(
     revision: outcome.revision ?? null,
     todo_count: todoIds.length,
     summary_only: true,
+    ...(captureReadCommand ? {
+      capture_read_command: captureReadCommand,
+      read_modes: "capture_read_command=immutable admission baseline; cold_read_command=live workspace inspect",
+    } : {}),
     cold_read_command: goalAcceptanceColdReadCommand({
-      cliArgv: options.cliArgv ?? ["loopx"],
+      cliArgv,
       registry: options.registry,
       runtimeRoot: options.runtimeRoot,
       goalId,
@@ -357,17 +385,30 @@ export function scopeTurnGoalAcceptance(
   const cliArgv = options.cliArgv ?? ["loopx"];
   const registry = options.registry ?? payload.registry;
   const runtimeRoot = options.runtimeRoot ?? payload.runtime_root;
-  const coldReadOptions: ScopeGoalAcceptanceOptions = {cliArgv, registry, runtimeRoot};
+  const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
+  const coldReadOptions: ScopeGoalAcceptanceOptions = {
+    cliArgv,
+    registry,
+    runtimeRoot,
+    ...(captureReferenceFile ? {captureReferenceFile} : {}),
+  };
   const coldReadCommand = goalAcceptanceColdReadCommand({
     cliArgv,
     registry,
     runtimeRoot,
     goalId,
   });
+  const captureReadCommand = captureReferenceFile
+    ? goalAcceptanceCaptureReadCommand({
+      cliArgv,
+      captureReferenceFile,
+      selectPointer: "/deferred_settlement_details/goal_acceptance",
+    })
+    : null;
 
   let compactedCount = 0;
   const scopedOutcomes: unknown[] = [];
-  for (const rawOutcome of outcomes) {
+  for (const [outcomeIndex, rawOutcome] of outcomes.entries()) {
     const outcome = jsonObject(rawOutcome);
     if (!outcome) return payload;
     const outcomeId = nonEmptyString(outcome.id);
@@ -395,7 +436,7 @@ export function scopeTurnGoalAcceptance(
       scopedOutcomes.push(rawOutcome);
     } else {
       compactedCount += 1;
-      scopedOutcomes.push(compactOutcomeIndexEntry(outcome, goalId, coldReadOptions));
+      scopedOutcomes.push(compactOutcomeIndexEntry(outcome, goalId, {...coldReadOptions, outcomeIndex}));
     }
   }
 
@@ -410,12 +451,22 @@ export function scopeTurnGoalAcceptance(
     compacted_outcome_count: compactedCount,
     outcome_revision: requirements.revision ?? null,
     full_outcomes_sha256: fullDigest,
+    ...(captureReadCommand ? {capture_read_command: captureReadCommand} : {}),
     cold_read_command: coldReadCommand,
-    cold_read_instruction:
-      "cold_read_command queries current live Goal acceptance in the bound workspace registry and runtime root (check outcome_revision/full_outcomes_sha256); use the original capture or --include-detail goal_acceptance for immutable Turn-baseline readback.",
+    cold_read_instruction: captureReadCommand
+      ? "capture_read_command reads immutable admission-time goal_acceptance from this Turn capture (verify outcome_revision and full_outcomes_sha256); cold_read_command and --include-detail goal_acceptance query current live workspace state rather than replaying historical Turn state."
+      : "cold_read_command and --include-detail goal_acceptance query current live workspace Goal acceptance in the bound registry and runtime root (check outcome_revision/full_outcomes_sha256 for drift), not immutable historical replay.",
     outcomes: scopedOutcomes,
   };
-  return replaceInlineOutcomeRequirements(payload, owner, scopedRequirements);
+  const scopedPayload = replaceInlineOutcomeRequirements(payload, owner, scopedRequirements);
+  if (!captureReferenceFile) return scopedPayload;
+  return {
+    ...scopedPayload,
+    deferred_settlement_details: {
+      ...object(scopedPayload.deferred_settlement_details),
+      goal_acceptance: owner.contract,
+    },
+  };
 }
 
 function compactExploreGraphBoilerplate(

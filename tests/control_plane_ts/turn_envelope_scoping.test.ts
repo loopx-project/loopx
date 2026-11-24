@@ -270,9 +270,12 @@ test("scoped per-Turn goal_acceptance shrinks 33+ outcomes while retaining relev
   assert.equal(reqs.compacted_outcome_count, 29);
   assert.equal(reqs.outcome_revision, 33);
   assert.equal(reqs.full_outcomes_sha256, expectedDigest);
+  assert.equal(reqs.capture_read_command, undefined);
   assert.equal(reqs.cold_read_command, "loopx --format json goal-acceptance inspect --goal-id g1");
   assert.match(String(reqs.cold_read_instruction), /--include-detail goal_acceptance/);
-  assert.match(String(reqs.cold_read_instruction), /bound workspace registry and runtime root/);
+  assert.match(String(reqs.cold_read_instruction), /bound registry and runtime root/);
+  assert.match(String(reqs.cold_read_instruction), /not immutable historical replay/);
+  assert.equal(composed.deferred_settlement_details, undefined);
 
   const outcomes = reqs.outcomes as JsonObject[];
   assert.equal(outcomes.length, 33);
@@ -549,8 +552,9 @@ test("scoped goal_acceptance cold_read_command binds original cli_argv, registry
   assert.equal(wcReqs.full_outcome_count, 9);
   assert.equal(wcReqs.outcome_revision, 33);
   assert.equal(wcReqs.full_outcomes_sha256, expectedOutcomesSha);
+  assert.equal(wcReqs.capture_read_command, undefined);
   assert.equal(wcReqs.cold_read_command, expectedCmd);
-  assert.match(String(wcReqs.cold_read_instruction), /immutable Turn-baseline/i);
+  assert.match(String(wcReqs.cold_read_instruction), /not immutable historical replay/i);
 
   const compactRows = (wcReqs.outcomes as JsonObject[]).filter(row => row.summary_only === true);
   assert.equal(compactRows.length, 8);
@@ -615,4 +619,112 @@ test("scoped goal_acceptance cold_read_command binds original cli_argv, registry
   );
   assert.equal(anchored.registry, "state/ws a/registry.json");
   assert.equal(anchored.runtime_root, "state/ws a/runtime");
+});
+
+test("captured scoped goal_acceptance preserves full admission outcomes in deferred_settlement_details and separates capture_read_command from live cold_read_command", () => {
+  const source = baseNormalPayload(9);
+  source.registry = "state/ws a/registry.json";
+  source.runtime_root = "state/ws a/runtime";
+  const originalContract = structuredClone(
+    ((((source.interaction_contract as JsonObject).agent_channel as JsonObject)
+      .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject,
+  ).goal_acceptance_contract as JsonObject;
+  const originalReqs = originalContract.outcome_requirements as JsonObject;
+  const expectedOutcomesSha = canonicalHash(originalReqs.outcomes);
+
+  const captured = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: source,
+    scheduler_execution_args: "",
+    cli_argv: ["/opt/custom loopx", "--cli-bin", "/opt/custom loopx"],
+    capture_reference_file: "state/captures/decision.reader.json",
+  });
+
+  // 1. Captured decision preserves BOTH optional_attachments and unmodified admission-time goal_acceptance.
+  const deferred = captured.deferred_settlement_details as JsonObject;
+  assert.deepEqual(deferred.optional_attachments, [exploreResultWritebackAffordance()]);
+  assert.deepEqual(deferred.goal_acceptance, originalContract);
+
+  // 2. Summary & summary_only rows distinguish immutable capture_read_command from live cold_read_command.
+  const wcReqs = ((((((captured.interaction_contract as JsonObject).agent_channel as JsonObject)
+    .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
+    .goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
+  const expectedSummaryCaptureCmd =
+    "'/opt/custom loopx' --cli-bin '/opt/custom loopx' --format json quota context-read --reference-file state/captures/decision.reader.json --select /deferred_settlement_details/goal_acceptance";
+  const expectedLiveCmd =
+    "'/opt/custom loopx' --cli-bin '/opt/custom loopx' --registry 'state/ws a/registry.json' --runtime-root 'state/ws a/runtime' --format json goal-acceptance inspect --goal-id g1";
+  assert.equal(wcReqs.capture_read_command, expectedSummaryCaptureCmd);
+  assert.equal(wcReqs.cold_read_command, expectedLiveCmd);
+  assert.equal(wcReqs.full_outcomes_sha256, expectedOutcomesSha);
+  assert.equal(wcReqs.outcome_revision, 33);
+  assert.match(String(wcReqs.cold_read_instruction), /capture_read_command reads immutable admission-time goal_acceptance/);
+  assert.match(String(wcReqs.cold_read_instruction), /cold_read_command and --include-detail goal_acceptance query current live workspace state/);
+
+  const compactRows = (wcReqs.outcomes as JsonObject[]).filter(row => row.summary_only === true);
+  assert.equal(compactRows.length, 8);
+  compactRows.forEach((row, idx) => {
+    const outcomeIndex = idx + 1;
+    assert.equal(
+      row.capture_read_command,
+      `'/opt/custom loopx' --cli-bin '/opt/custom loopx' --format json quota context-read --reference-file state/captures/decision.reader.json --select /deferred_settlement_details/goal_acceptance/outcome_requirements/outcomes/${outcomeIndex}`,
+    );
+    assert.equal(row.cold_read_command, expectedLiveCmd);
+    assert.match(String(row.read_modes), /capture_read_command=immutable admission baseline/);
+    assert.match(String(row.read_modes), /cold_read_command=live workspace inspect/);
+  });
+
+  // 3. Consumer validation, build, progressive_context_delivery, and replanGoalContext keep deferred_settlement_details pruned in first read.
+  assert.deepEqual(evaluateTurnEnvelope({operation: "complete_consumer", payload: captured}), {ok: true});
+  const env = evaluateTurnEnvelope({operation: "build", payload: captured, scheduler_execution_args: ""});
+  assert.equal((env.action_signature as JsonObject).matches, true);
+
+  const stripped = structuredClone(captured);
+  delete stripped.schema_version;
+  delete stripped.contract_binding;
+  const plan = progressiveContextPlan({payload: stripped, surface: "quota_packet"});
+  const deferredEntry = (plan.deferred as JsonObject[]).find(
+    entry => JSON.stringify(entry.path) === JSON.stringify(["deferred_settlement_details"]),
+  )!;
+  assert.match(String(deferredEntry.read_instruction), /capture_read_command/);
+
+  const deliveryInput = {
+    operation: "progressive_context_delivery",
+    surface: "complete_turn",
+    context: captured,
+    native_projection: {path: "state/captures/decision.json", sha256: "a".repeat(64)},
+  };
+  const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>(
+    (row, key) => (row as Record<string | number, unknown>)[key],
+    root,
+  );
+  const delivered = structuredClone(deliveryInput);
+  for (const change of evaluateTurnEnvelope(deliveryInput).changes as JsonObject[]) {
+    const path = change.path as (string | number)[];
+    const parent = at(delivered, path.slice(0, -1)) as Record<string | number, unknown>;
+    const key = path.at(-1)!;
+    if (change.remove) delete parent[key];
+    else parent[key] = structuredClone(change.from ? at(deliveryInput, change.from as (string | number)[]) : change.value);
+  }
+  assert.equal((delivered.context as JsonObject).deferred_settlement_details, undefined);
+  const deliveredReqs = (((((((delivered.context as JsonObject).interaction_contract as JsonObject)
+    .agent_channel as JsonObject).work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
+    .goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
+  assert.equal(deliveredReqs.capture_read_command, expectedSummaryCaptureCmd);
+  assert.equal(deliveredReqs.cold_read_command, expectedLiveCmd);
+  assert.equal(deliveredReqs.cold_read_instruction, wcReqs.cold_read_instruction);
+  const deliveredCompact = (deliveredReqs.outcomes as JsonObject[]).filter(row => row.summary_only === true);
+  assert.equal(deliveredCompact.length, 8);
+  assert.equal(deliveredCompact[0].capture_read_command, compactRows[0].capture_read_command);
+  assert.equal(deliveredCompact[0].read_modes, compactRows[0].read_modes);
+
+  const gaContract = (((((captured.interaction_contract as JsonObject).agent_channel as JsonObject)
+    .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject).goal_acceptance_contract as JsonObject;
+  const indexed = replanGoalContext({
+    ...captured,
+    autonomous_replan_obligation: {replan_context: {core_goal: {acceptance_contract: gaContract}}},
+  }, {acceptance: "loopx quota replan-view --decision-file d.json"});
+  const indexRows = ((indexed.acceptanceIndex as JsonObject).outcomes as JsonObject[]).filter(r => r.summary_only === true);
+  assert.equal(indexRows.length, 8);
+  assert.equal(indexRows[0].capture_read_command, compactRows[0].capture_read_command);
+  assert.equal(indexRows[0].read_modes, compactRows[0].read_modes);
 });

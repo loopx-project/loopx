@@ -221,8 +221,12 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     _, req_ref = read_context_read_reference(view["recovery"]["reference_file"])
     required_ctx = json.loads(Path(req_ref["path"]).read_bytes())
 
-    assert decision_path.stat().st_size < 100_000
-    assert Path(req_ref["path"]).stat().st_size < 100_000
+    # required-context.json omits deferred_settlement_details and stays lean; decision.json preserves admission-time goal_acceptance.
+    assert Path(req_ref["path"]).stat().st_size < decision_path.stat().st_size * 0.38
+    assert "deferred_settlement_details" not in required_ctx
+    deferred_ga = decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]
+    assert len(deferred_ga["outcomes"]) == 33
+    assert all("requirements" in row and "sources" in row for row in deferred_ga["outcomes"])
     wc_ga = next(s["content"]["goal_acceptance_contract"]
                  for s in decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
                  if s.get("source") == "goal_acceptance")
@@ -233,14 +237,20 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     assert reqs["compacted_outcome_count"] == 32
     assert isinstance(reqs["full_outcomes_sha256"], str) and reqs["full_outcomes_sha256"].startswith("sha256:")
     assert reqs["outcome_revision"] == reqs["revision"]
+    assert "--reference-file" in reqs["capture_read_command"]
+    assert "--select /deferred_settlement_details/goal_acceptance" in reqs["capture_read_command"]
     assert "--include-detail goal_acceptance" in reqs["cold_read_instruction"]
     assert str(env["registry"]) in reqs["cold_read_command"]
     assert str(env["runtime"]) in reqs["cold_read_command"]
     assert f"goal-acceptance inspect --goal-id {goal_id}" in reqs["cold_read_command"]
     assert len(reqs["outcomes"]) == 33
     assert reqs["outcomes"][0]["id"] == "outcome-current" and "requirements" in reqs["outcomes"][0]
-    assert all(row["summary_only"] is True and row["cold_read_command"] == reqs["cold_read_command"]
-               for row in reqs["outcomes"][1:])
+    assert all(
+        row["summary_only"] is True
+        and row["cold_read_command"] == reqs["cold_read_command"]
+        and f"/deferred_settlement_details/goal_acceptance/outcome_requirements/outcomes/{idx}" in row["capture_read_command"]
+        for idx, row in enumerate(reqs["outcomes"][1:], start=1)
+    )
     assert len(required_ctx.get("context_details", {}).get("unread_context_index", {}).get("pointers", [])) < 20
 
     step1 = decision["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
@@ -355,6 +365,13 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
         "--turn-instance-id", "turn-routine",
     )
     assert "deferred_settlement_details" not in uncaptured
+    assert len(json.dumps(uncaptured).encode("utf-8")) < 100_000
+    uncaptured_ga_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in uncaptured["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert "capture_read_command" not in uncaptured_ga_reqs
     uncaptured_step1 = uncaptured["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"][1]
     assert uncaptured_step1["vision_authoring"] == detail_step1["vision_authoring"]
     uncaptured_explore_read = subprocess.run(
@@ -380,6 +397,7 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     )
     ga_full_reqs = ga_full["outcome_requirements"]
     assert "projection_mode" not in ga_full_reqs
+    assert Path(req_ref["path"]).stat().st_size < len(json.dumps(ga_detail).encode("utf-8")) * 0.45
     assert len(ga_full_reqs["outcomes"]) == 33
     assert all("requirements" in row and "sources" in row and "summary_only" not in row for row in ga_full_reqs["outcomes"])
 
@@ -564,3 +582,152 @@ def test_scoped_acceptance_cold_read_binds_original_workspace_across_sibling_cwd
     rel_outcomes = json.loads(rel_cold_proc.stdout)["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
     assert len(rel_outcomes) == 9
     assert all(row["objective"].startswith("Workspace A outcome") for row in rel_outcomes[1:])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_captured_turn_recovers_admission_time_outcomes_after_goal_advances(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    env = _seed_mature_goal(
+        tmp_path,
+        monkeypatch,
+        provider=provider,
+        outcome_count=9,
+        goal_id="drift-goal",
+        objective_prefix="Admitted outcome",
+    )
+    cli = env["cli"]
+    _claim_current_todo(env)
+
+    _, before_inspect = cli("goal-acceptance", "inspect", "--goal-id", "drift-goal")
+    admitted_rev = before_inspect["goal_acceptance_contract"]["outcome_requirements"]["revision"]
+    provider_rev = before_inspect["provider_revision"]
+    orig_hist0 = before_inspect["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][1]
+    assert orig_hist0["id"] == "outcome-hist-0"
+    orig_req_ids = [req["id"] for req in orig_hist0["requirements"]]
+    assert len(orig_req_ids) == 8
+
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", f"drift-{provider}")
+    codex_context_hook(
+        str(native),
+        {"hook_event_name": "SessionStart", "session_id": f"drift-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+
+    # 1. Admit Turn 1 with capture + progressive delivery.
+    _, view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", "drift-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-drift", "--codex-context-dir", str(native),
+        "--decision-output-root", str(captures),
+    )
+    decision_path = next(captures.rglob("decision.json"))
+    decision = json.loads(decision_path.read_text())
+    _, req_ref = read_context_read_reference(view["recovery"]["reference_file"])
+    required_ctx = json.loads(Path(req_ref["path"]).read_bytes())
+
+    assert "deferred_settlement_details" not in required_ctx
+    assert Path(req_ref["path"]).stat().st_size < decision_path.stat().st_size * 0.6
+    req_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in required_ctx["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert req_reqs["projection_mode"] == "turn_scoped_v0"
+    assert req_reqs["outcome_revision"] == admitted_rev
+    row1 = req_reqs["outcomes"][1]
+    assert row1["id"] == "outcome-hist-0" and row1["summary_only"] is True
+    assert "capture_read_command" in req_reqs and "capture_read_command" in row1
+    assert "cold_read_command" in req_reqs and "cold_read_command" in row1
+
+    # 2. Advance live Goal acceptance after Turn 1 admission by adding a new requirement.
+    refine_doc = tmp_path / "advance-outcome.json"
+    refine_doc.write_text(json.dumps({
+        "outcome_id": "outcome-hist-0",
+        "owner_agent_id": "peer-0",
+        "objective": orig_hist0["objective"],
+        "todo_ids": orig_hist0["todo_ids"],
+        "storage_format": "records",
+        "source": {"ref": "spec:post-admission", "summary": "Post-admission requirement provenance."},
+        "requirements": [
+            {"id": req["id"], "description": req["description"]}
+            for req in orig_hist0["requirements"]
+        ] + [
+            {"id": "hreq-post-admission", "description": "Post-admission requirement added after Turn 1."},
+        ],
+    }))
+    _, refined = cli(
+        "goal-acceptance", "refine",
+        "--goal-id", "drift-goal",
+        "--agent-id", "peer-0",
+        "--document", str(refine_doc),
+        "--operation-id", "op-advance-after-turn1",
+        "--expected-provider-revision", provider_rev,
+        "--execute",
+    )
+    assert refined["ok"] is True
+    live_reqs = refined["goal_acceptance_contract"]["outcome_requirements"]
+    assert live_reqs["revision"] == admitted_rev + 1
+
+    # 3. Immutable capture readback (both summary and compacted row capture_read_command)
+    #    recovers the exact admission-time outcomes/requirements (NO post-admission requirement).
+    summary_capture_proc = subprocess.run(
+        shlex.split(req_reqs["capture_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert summary_capture_proc.returncode == 0, summary_capture_proc.stdout + summary_capture_proc.stderr
+    summary_page = json.loads(summary_capture_proc.stdout)
+    assert summary_page["ok"] is True and summary_page["eof"] is True
+    captured_ga = json.loads(summary_page["content"])["selections"][0]["value"]
+    captured_reqs = captured_ga["outcome_requirements"]
+    assert captured_reqs["revision"] == admitted_rev
+    assert len(captured_reqs["outcomes"]) == 9
+    assert [r["id"] for r in captured_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+    assert all(r["id"] != "hreq-post-admission" for r in captured_reqs["outcomes"][1]["requirements"])
+
+    row_capture_proc = subprocess.run(
+        shlex.split(row1["capture_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert row_capture_proc.returncode == 0, row_capture_proc.stdout + row_capture_proc.stderr
+    row_page = json.loads(row_capture_proc.stdout)
+    assert row_page["ok"] is True and row_page["eof"] is True
+    captured_row = json.loads(row_page["content"])["selections"][0]["value"]
+    assert captured_row["id"] == "outcome-hist-0"
+    assert [r["id"] for r in captured_row["requirements"]] == orig_req_ids
+
+    # 4. Live cold_read_command and --include-detail goal_acceptance inspect current live revision.
+    live_proc = subprocess.run(
+        shlex.split(req_reqs["cold_read_command"]),
+        cwd=env["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert live_proc.returncode == 0, live_proc.stdout + live_proc.stderr
+    live_inspect_reqs = json.loads(live_proc.stdout)["goal_acceptance_contract"]["outcome_requirements"]
+    assert live_inspect_reqs["revision"] == admitted_rev + 1
+    assert "hreq-post-admission" in [r["id"] for r in live_inspect_reqs["outcomes"][1]["requirements"]]
+
+    _, live_detail = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "off",
+        "--include-detail", "goal_acceptance",
+        "--goal-id", "drift-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-drift",
+    )
+    detail_reqs = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in live_detail["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert detail_reqs["revision"] == admitted_rev + 1
+    assert "hreq-post-admission" in [r["id"] for r in detail_reqs["outcomes"][1]["requirements"]]
+    assert decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["revision"] == admitted_rev
