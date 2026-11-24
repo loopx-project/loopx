@@ -22,17 +22,30 @@ def test_periodic_result_has_its_own_private_message_without_retargeting_history
     _, _, provider, transport, _, capture, _ = steward
 
     def threaded_original(fixture):
+        from loopx.extensions.lark import private_conversations, private_topic_lanes
         from loopx.extensions.lark.conversation_identity import identity_ref
-        _, runtime, source, adapter, binding, _, _ = fixture
+        store, runtime, source, adapter, binding, _, _ = fixture
         parent = source.event("steward-app", "earlier-question", "An unrelated earlier question")
         event = source.event("steward-app", "original", "Retain the original private conversation")
         thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_earlier")
         event.update(thread)
         source.messages[event["message_id"]].update(thread)
-        adapter.admit("steward-app", event)
-        # Referenced-source context changes the admitted text, not its identity.
+        # A retained source predates topic lanes. Keep the provider thread in
+        # the original record and restore the Lobby as its saved Session.
+        resolve_lane = private_conversations.resolve_private_steward_lane
+
+        def resolve_historical_lane(**kwargs):
+            lane_event = {key: value for key, value in kwargs["event"].items() if key not in thread}
+            return resolve_lane(**{**kwargs, "event": lane_event})
+
+        with monkeypatch.context() as historical:
+            historical.setattr(private_conversations, "resolve_private_steward_lane", resolve_historical_lane)
+            historical.setattr(private_topic_lanes, "resolve_private_steward_lane", resolve_historical_lane)
+            adapter.admit("steward-app", event)
         row = adapter.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
         assert finish(runtime, row)["status"] == "completed"
+        session = store.load_session(row["session_id"])
+        assert not session["steward_context"].get("topic_ref")
         return row["session_id"], adapter.managed_steward
 
     monkeypatch.setattr("test_native_steward_reports.original", threaded_original)
