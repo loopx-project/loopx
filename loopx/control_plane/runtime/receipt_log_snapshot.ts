@@ -152,8 +152,19 @@ export async function readReceiptLogSnapshot(
   }
   const completeBytes = bytes.lastIndexOf(10) + 1;
   const prior = prefixes.get(key);
-  const reusable = prior !== undefined && prior.bytes <= completeBytes &&
-    digest(bytes.subarray(0, prior.bytes)) === prior.digest ? prior : null;
+  let reusable: Prefix | null = null;
+  let completeDigest: string | undefined;
+  if (prior !== undefined && prior.bytes <= completeBytes) {
+    const hash = createHash("sha256").update(bytes.subarray(0, prior.bytes));
+    const hasSuffix = prior.bytes < completeBytes;
+    // Check the current prefix before reusing decoded rows. If more rows follow,
+    // finalize a copy so the full digest can continue from those exact bytes.
+    const prefixDigest = (hasSuffix ? hash.copy() : hash).digest("hex");
+    if (prefixDigest === prior.digest) reusable = prior;
+    completeDigest = hasSuffix
+      ? hash.update(bytes.subarray(prior.bytes, completeBytes)).digest("hex")
+      : prefixDigest;
+  }
   let prefix: Prefix;
   if (reusable !== null && reusable.bytes === completeBytes) {
     prefix = reusable;
@@ -209,7 +220,7 @@ export async function readReceiptLogSnapshot(
       recordLines: Object.freeze(recordLines),
       malformedLines: Object.freeze(malformedLines),
       firstErrorLine, lines, unterminatedRecordLine: null,
-      bytes: completeBytes, digest: digest(bytes.subarray(0, completeBytes)),
+      bytes: completeBytes, digest: completeDigest ?? digest(bytes.subarray(0, completeBytes)),
     });
   }
   remember(key, prefix);
