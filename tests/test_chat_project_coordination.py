@@ -88,7 +88,7 @@ def test_stop_during_native_start_binds_current_turn_without_borrowing_previous_
     adapter = CodexAppServerAdapter(native)
     calls = []
 
-    def send(message, *, on_event):
+    def send(message, *, on_event, **_transport_options):
         starting.set()
         assert bind.wait(3)
         on_event("turn.started", {"upstream_turn_id": "current-native"})
@@ -107,7 +107,7 @@ def test_stop_during_native_start_binds_current_turn_without_borrowing_previous_
         turn, _ = controller.submit_turn(session_id=sid, client_turn_id="starting-stop", message="run",
             work_dir=tmp_path, objective="sample")
         tid = turn["turn_id"]
-        assert starting.wait(2)
+        assert starting.wait(2), store.load_turn(sid, tid)
         result, errors = [], []
         def stop():
             try:
