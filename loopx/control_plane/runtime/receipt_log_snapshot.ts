@@ -56,6 +56,7 @@ const MAX_RETAINED_BYTES = 128 * 1024 * 1024;
 const MAX_RETAINED_LOGS = 4;
 const prefixes = new Map<string, Prefix>();
 let retainedBytes = 0;
+const decoding = new Map<string, { bytes: Buffer; result: Promise<ReceiptLogSnapshot> }>();
 
 function digest(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -150,6 +151,26 @@ export async function readReceiptLogSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+  // Each caller owns a fresh read. Only coalesce large, byte-identical reads
+  // with the same decode contract while the original parse is still running.
+  if (bytes.length < 1024 * 1024 || bytes.length > MAX_RETAINED_BYTES) {
+    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
+  }
+  const active = decoding.get(key);
+  if (active && bytes.equals(active.bytes)) return active.result;
+  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
+  if (active || decoding.size >= MAX_RETAINED_LOGS) return result;
+  decoding.set(key, { bytes, result });
+  try {
+    return await result;
+  } finally {
+    decoding.delete(key);
+  }
+}
+
+async function parseSnapshot(
+  bytes: Buffer, key: string, schemaVersion: string | undefined, recoveryKeys: readonly string[],
+): Promise<ReceiptLogSnapshot> {
   const completeBytes = bytes.lastIndexOf(10) + 1;
   const prior = prefixes.get(key);
   let reusable: Prefix | null = null;
