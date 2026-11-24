@@ -361,7 +361,8 @@ def _skill_mutation_paths(skills_dir: Path) -> list[Path]:
         cli_bin="loopx",
         codex_home=str(codex_home),
     )
-    for item in slash_plan.get("installed", []):
+    raw_installed = slash_plan.get("installed")
+    for item in raw_installed if isinstance(raw_installed, list) else ():
         if not isinstance(item, dict) or not item.get("path"):
             continue
         path = Path(str(item["path"]))
