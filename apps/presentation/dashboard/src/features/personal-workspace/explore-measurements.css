@@ -26,3 +26,12 @@
   .explore-measurement-comparison { justify-content: flex-start; }
   .explore-measurement-sources dl > div { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 8px; }
 }
+
+.research-candidate-leaders { margin-block: 12px 20px; }
+.research-candidate-leaders h4 { margin: 0 0 4px; }
+.research-candidate-leaders summary { min-height: 44px; align-content: center; cursor: pointer; overflow-wrap: anywhere; }
+.research-candidate-row { border-bottom: 1px solid var(--pw-line); }
+.research-candidate-row summary { padding-block: 6px; }
+.research-candidate-row summary > * { margin-inline-end: 0.65em; }
+.research-candidate-row summary > span:last-child { color: var(--pw-muted); }
+.research-candidate-row dd { overflow-wrap: anywhere; }

@@ -247,7 +247,9 @@ class PrivateWebProjectionMixin:
             enabled = {row["binding_id"] for row in self.bindings.read()["bindings"]
                        if row.get("enabled") is True and row.get("audience", "owner") == "owner"}
             sources: dict[str, Path] = {}
-            for path, row, _ in self._delivery_discovery.rows():
+            cached_rows = getattr(self, "_web_projection_scan_rows", None)
+            discovery_rows = cached_rows if cached_rows is not None else self._delivery_discovery.rows()
+            for path, row, _ in discovery_rows:
                 if _projection_source_eligible(row, enabled):
                     sources.setdefault(row["session_id"], path)
             store = self.core.controller.store

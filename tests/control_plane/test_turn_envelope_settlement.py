@@ -103,12 +103,9 @@ def test_generated_c1_commands_settle_original_turn_once(tmp_path, profile_args)
     args = ("quota", "should-run", *profile_args, *binding)
     rc, default = _run_cli(registry, runtime, *args)
     assert rc == 0 and default["schema_version"] == "loopx_turn_envelope_v1", default
-    rc, alias = _run_cli(registry, runtime, *args, "--turn-envelope")
-    assert rc == 0 and alias["schema_version"] == "loopx_turn_envelope_v1", alias
-    plan = alias["interaction_contract"]["cli_channel"]["settlement_plan"]
-    assert plan == default["interaction_contract"]["cli_channel"]["settlement_plan"]
+    plan = default["interaction_contract"]["cli_channel"]["settlement_plan"]
     identity = default["heartbeat_receipt"]["settlement_identity"]
-    assert plan["identity"] == alias["heartbeat_receipt"]["settlement_identity"] == identity
+    assert plan["identity"] == identity
     assert plan["schema_version"] == "quota_settlement_plan_v2"
     assert [step["kind"] for step in plan["ordered_steps"]] == [
         "validation", "durable_writeback", "quota_spend", "terminal_closeout",

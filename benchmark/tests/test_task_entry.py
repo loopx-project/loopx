@@ -44,16 +44,15 @@ def test_task_entry_defaults_to_planning_only_for_loopx_modes(mode):
 
 
 @pytest.mark.parametrize("entry", ["loopx-planned", "seeded-todo"])
-@pytest.mark.parametrize("strategy", [None, "off", "evidence_conditioned_v1"])
-def test_execution_observation_keeps_task_entry_and_stride_independent(tmp_path, entry, strategy):
+def test_execution_observation_keeps_task_entry_and_stride_independent(tmp_path, entry):
     pytest.importorskip("harbor")
     from benchmark.runtime.harbor import BenchmarkCodex
 
     agent = BenchmarkCodex(logs_dir=tmp_path, model_name="fixture", task_entry=entry,
-        stride_strategy=strategy, execution_observation="local_probe")
+        execution_observation="local_probe")
     env = agent._worker_env(cwd=str(tmp_path))
     assert agent.execution.task_entry == entry
-    assert agent.stride_strategy == strategy
+    assert agent.stride_strategy == "evidence_conditioned_v1"
     assert env["LOOPX_EXECUTION_OBSERVATION"] == "local_probe"
     assert "LOOPX_RESEARCH_LOOP" not in env
 
@@ -100,7 +99,7 @@ def test_observation_guidance_is_optional_without_a_research_stage(tmp_path):
     plain_env = ordinary._worker_env(cwd=str(tmp_path))
     assert "LOOPX_RESEARCH_LOOP" not in plain_env
     assert "LOOPX_EXECUTION_OBSERVATION" not in plain_env
-    assert ordinary.stride_strategy is None
+    assert ordinary.stride_strategy == "evidence_conditioned_v1"
     observed = BenchmarkCodex(logs_dir=tmp_path / "observed", model_name="fixture",
         execution_observation="local_probe")
     observed_env = observed._worker_env(cwd=str(tmp_path))
@@ -220,7 +219,7 @@ def test_install_records_and_exposes_only_the_selected_observation_producer(tmp_
     assert receipt.get("execution_observation") == ("local_probe" if selected else None)
     assert "research_loop" not in receipt
     assert receipt["task_entry"] == "loopx-planned"
-    assert receipt.get("stride_strategy") is None
+    assert receipt["stride_strategy"] == "evidence_conditioned_v1"
     if entry == "workspace-shadow":
         candidate = tmp_path / "candidate.py"
         candidate.write_text("print('real probe kept the task cwd')")
@@ -658,7 +657,7 @@ def test_goal_bootstrap_preserves_original_objective_without_inventing_stages(
             Path(target).write_bytes(Path(source).read_bytes())
 
     agent = harbor.BenchmarkCodex(logs_dir=tmp_path / "logs", model_name="fixture",
-        execution_observation=producer, stride_strategy="off", task_objective=objective)
+        execution_observation=producer, task_objective=objective)
     monkeypatch.setattr(agent, "_profile_env", lambda: env)
     task = ("Start from the supplied solution.py and compare one alternative against it.\n"
         "First preserve correctness, then minimize operations. Retain useful negative results.\n"
@@ -1084,9 +1083,7 @@ def test_sforge_planning_failed_host_has_no_execution_handoff(planning_env):
     ({"planning_horizon_goal": False}, "replan_after_effective_turns", 6),
     ({"replan_after_turns": 2}, "replan_after_effective_turns", 2),
     ({"replan_after_todos": 3}, "replan_after_completed_todos", 3),
-    ({"stride_strategy": "off"}, "replan_after_effective_turns", 6),
-    ({"stride_strategy": "evidence_conditioned_v1"}, "replan_after_effective_turns", 6),
-    ({"stride_strategy": "evidence_conditioned_v1", "replan_after_todos": 2}, "replan_after_completed_todos", 2),
+    ({"replan_after_todos": 2}, "replan_after_completed_todos", 2),
 ])
 def test_runner_cadence_persists_through_real_configure_goal(
     planning_env, tmp_path, monkeypatch, settings, field, value
@@ -1127,13 +1124,12 @@ def test_runner_cadence_persists_through_real_configure_goal(
     other = ("replan_after_completed_todos" if field == "replan_after_effective_turns"
              else "replan_after_effective_turns")
     assert other not in profile
-    strategy = settings.get("stride_strategy")
-    assert profile.get("stride_strategy", "off") == (strategy or "off")
+    # Cadence-pinned Goals no longer fall back to "off"; any recorded value is v1.
+    assert profile.get("stride_strategy", "evidence_conditioned_v1") == "evidence_conditioned_v1"
     horizon = settings.get("planning_horizon_goal", True)
     assert profile["planning_horizon_goal"] is horizon
     assert agent._replan_receipt() == {field: value,
-        "planning_horizon_goal": horizon, **({"stride_strategy": strategy}
-                                                    if strategy is not None else {})}
+        "planning_horizon_goal": horizon, "stride_strategy": "evidence_conditioned_v1"}
 
 
 def test_sforge_planning_entry_retries_a_dropped_planning_wake_within_budget(planning_env, monkeypatch):
@@ -1188,25 +1184,15 @@ def test_sforge_planning_entry_stops_retrying_after_the_attempt_limit(planning_e
     assert len(calls) == entry.PLANNING_WAKE_ATTEMPTS
 
 
-@pytest.mark.parametrize(
-    ("context", "producer", "complete", "checkpoint_preflight"),
-    [
-        ("fresh", None, False, False),
-        ("fresh", "local_probe", True, False),
-        ("fresh", "local_probe", False, True),
-        ("resume", None, True, True),
-        ("resume", "local_probe", False, False),
-        ("resume", None, False, True),
-    ],
-)
+@pytest.mark.parametrize("context", ["fresh", "resume"])
+@pytest.mark.parametrize("producer", [None, "local_probe"])
+@pytest.mark.parametrize("checkpoint_preflight", [False, True])
 def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
-        planning_env, context, producer, complete, checkpoint_preflight):
+        planning_env, context, producer, checkpoint_preflight):
     """Exercise the real worker/heartbeat CLI and capture its model transport input."""
     from benchmark.runtime.research_probe import execution_observation_guidance
 
     env = planning_env | {"LOOPX_ITERATION_CONTEXT": context}
-    if complete:
-        env["LOOPX_COMPLETE_TURN"] = "1"
     if producer is not None:
         env["LOOPX_EXECUTION_OBSERVATION"] = producer
     if checkpoint_preflight:
@@ -1248,9 +1234,9 @@ def test_execute_wake_keeps_host_clocks_out_of_fresh_and_resumed_input(
         assert "Research-loop execution evidence:" not in body
         assert receipt["session"]["action"] == ("resume" if context == "resume" else "start_new")
         assert "turn_envelope" not in receipt
-        assert receipt.get("complete_turn") is (True if complete else None)
+        assert "complete_turn" not in receipt
         assert "--complete-turn" not in body and "--turn-envelope" not in body
-        assert ("--decision-output-root" in body) is (complete or checkpoint_preflight)
+        assert ("--decision-output-root" in body) is checkpoint_preflight
         if checkpoint_preflight:
             original = Path(env["LOOPX_WAKE_LOG_DIR"]) / receipt["turn_id"] / "checkpoint-start-guard.json"
             assert json.loads(original.read_bytes())["schema_version"] == "loopx_turn_envelope_v1"
@@ -1388,6 +1374,7 @@ def _run_plan_runtime_root_probe(
         observed["wake_rt"] = wake_env["LOOPX_RUNTIME_ROOT"]
         return SimpleNamespace(
             session_id="sess-" + context,
+            binding={"session_id": "sess-resume"} if context == "resume" else None,
             receipt={"action": "start_new" if context == "fresh" else "resume", "session_id": "sess-" + context},
             goal_ref=None,
             admission=None,

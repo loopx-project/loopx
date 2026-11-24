@@ -2,11 +2,12 @@ import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_pr
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
 import {
-  contextReadSectionDigests, initialContextReadPointers, normalWorkReadContext,
+  contextReadSectionDigests, inlineNormalWorkOpening, initialContextReadPointers, normalWorkReadContext,
   prepareProgressiveContext, prepareProgressiveContextDelivery, progressiveContextPlan,
   type PreparationScopeDetail, type ReusableExactBody,
 } from "./progressive_context.ts";
 import type { LoopXTurnRouteValue } from "../turn_driver/turn_contract_generated.ts";
+import {turnSessionPlan} from "../turn_driver/session_binding.ts";
 import { EffectiveAction, type QuotaEffectiveActionValue } from "./effective_action.generated.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {
@@ -44,13 +45,13 @@ import {
   shellQuote, text, textList,
 } from "./turn_envelope_codec.ts";
 import {
-  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, type ReplanReadPrecision, bindReplanSuccessorContract,
-  deferredReplanWriteback, nativeReplanPresentation, referenceCurrentTaskTitle,
-  referenceExploreGuidance, referenceGoalAcceptance, referenceReplanAuthoring,
-  referenceVisionContinuation, replanActionPacket, replanAuthoringContract, replanCliView,
-  replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
-  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision, resolveExploreGuidance,
-  responsePlan, selectedTodo, unboundExploreReplan, userChannel,
+  WORK_CONTEXT_GOAL_ACCEPTANCE_REF_PATTERN, WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN,
+  type ReplanReadPrecision, bindReplanSuccessorContract, deferredReplanWriteback, inlineOutcomeRequirements,
+  nativeReplanPresentation, referenceCurrentTaskTitle, referenceExploreGuidance, referenceGoalAcceptance,
+  referenceReplanAuthoring, referenceVisionContinuation, replanActionPacket, replanAuthoringContract,
+  replanCliView, replanGoalContext, replanReadCommands, replanReadPrecision, replanView, replanWorkContext,
+  requiredReads, requireCompleteDecisionSource, requireCompleteTurnDecision,
+  resolveExploreGuidance, responsePlan, selectedTodo, unboundExploreReplan, userChannel,
 } from "./turn_envelope_references.ts";
 
 export { TURN_ENVELOPE_BUDGET_BYTES } from "./turn_envelope_budget.ts";
@@ -582,19 +583,90 @@ function turnActionProjection(payload: JsonObject, precision?: ReplanReadPrecisi
     }};
     projection.action = action;
   }
-  if (Object.keys(acceptance).length > 0 && Array.isArray(sources)) {
-    const index = sources.findIndex((value) => {
-      const source = object(value);
-      return source.source === "goal_acceptance"
-        && (object(source.content).status === undefined || object(source.content).status === "loaded")
-        && canonicalHash(object(object(source.content).goal_acceptance_contract)) === canonicalHash(acceptance);
-    });
-    if (index >= 0) {
-      const compactCore = {...core};
-      delete compactCore.acceptance_contract;
-      compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
-      action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+  if (Object.keys(acceptance).length > 0) {
+    if ("outcome_requirements" in acceptance && "outcome_requirements_ref" in acceptance) {
+      throw new EffectRuntimeRequestError("Outcome requirements reference conflicts with inline outcome_requirements");
+    }
+    if ("outcome_requirements_ref" in acceptance && !("outcome_requirements" in acceptance)) {
+      const match = typeof acceptance.outcome_requirements_ref === "string"
+        ? WORK_CONTEXT_OUTCOME_REQUIREMENTS_REF_PATTERN.exec(acceptance.outcome_requirements_ref) : null;
+      const index = match ? Number(match[1]) : -1;
+      const source = object(Array.isArray(sources) ? sources[index] : null);
+      const content = object(source.content);
+      const sourceContract = object(content.goal_acceptance_contract);
+      if (match && source.source === "goal_acceptance"
+        && (content.status === undefined || content.status === "loaded")
+        && Object.keys(object(sourceContract.outcome_requirements)).length > 0
+        && !("outcome_requirements_ref" in sourceContract)) {
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: {...core, acceptance_contract: {
+          ...acceptance,
+          outcome_requirements_ref: `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`,
+        }}};
+        projection.action = action;
+        return projection;
+      }
+      const inlinedAcceptance = {...acceptance};
+      delete inlinedAcceptance.outcome_requirements_ref;
+      inlinedAcceptance.outcome_requirements = inlineOutcomeRequirements(payload, acceptance.outcome_requirements_ref);
+      action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+        ...core, acceptance_contract: inlinedAcceptance,
+      }};
       projection.action = action;
+      return projection;
+    }
+    if (Array.isArray(sources)) {
+      // The parsed values can coincide after numeric rounding. Compare the
+      // original carrier identities before replacing either signed field.
+      const identity = precision?.identity ?? contextSourceIdentity(payload);
+      const horizonPath = ["planning_horizon", "core_goal", "acceptance_contract"];
+      const contractPath = (index: number) => [
+        "interaction_contract", "agent_channel", "work_context", "sources", index,
+        "content", "goal_acceptance_contract",
+      ];
+      const horizonIdentity = identity(acceptance, horizonPath);
+      const index = sources.findIndex((value, index) => {
+        const source = object(value);
+        const content = object(source.content);
+        return source.source === "goal_acceptance"
+          && (content.status === undefined || content.status === "loaded")
+          && identity(object(content.goal_acceptance_contract), contractPath(index)) === horizonIdentity;
+      });
+      if (index >= 0) {
+        const compactCore = {...core};
+        delete compactCore.acceptance_contract;
+        compactCore.acceptance_contract_ref = `$.work_context.sources[${index}].content.goal_acceptance_contract`;
+        action.planning_horizon = {...object(action.planning_horizon), core_goal: compactCore};
+        projection.action = action;
+        return projection;
+      }
+      const requirements = object(acceptance.outcome_requirements);
+      if (Object.keys(requirements).length > 0 && !("outcome_requirements_ref" in acceptance)) {
+        const requirementsIdentity = identity(requirements, [...horizonPath, "outcome_requirements"]);
+        const requirementsBytes = Buffer.byteLength(JSON.stringify(requirements), "utf8");
+        const reqIndex = sources.findIndex((value, index) => {
+          const source = object(value);
+          const content = object(source.content);
+          const contract = object(content.goal_acceptance_contract);
+          const ref = `$.work_context.sources[${index}].content.goal_acceptance_contract.outcome_requirements`;
+          return source.source === "goal_acceptance"
+            && (content.status === undefined || content.status === "loaded")
+            && !("outcome_requirements_ref" in contract)
+            && Object.keys(object(contract.outcome_requirements)).length > 0
+            && requirementsBytes > ref.length + 24
+            && identity(object(contract.outcome_requirements),
+              [...contractPath(index), "outcome_requirements"]) === requirementsIdentity;
+        });
+        if (reqIndex >= 0) {
+          const compactAcceptance = {...acceptance};
+          delete compactAcceptance.outcome_requirements;
+          compactAcceptance.outcome_requirements_ref =
+            `$.work_context.sources[${reqIndex}].content.goal_acceptance_contract.outcome_requirements`;
+          action.planning_horizon = {...object(action.planning_horizon), core_goal: {
+            ...core, acceptance_contract: compactAcceptance,
+          }};
+          projection.action = action;
+        }
+      }
     }
   }
   // The context owner already bounds these contributions. Replacing them with
@@ -1311,6 +1383,14 @@ function turnPlanInspectionPaths(decision: JsonObject, route: "ready_for_host" |
   return paths;
 }
 
+function readyWorkOpening(context: JsonObject): JsonObject | undefined {
+  return inlineNormalWorkOpening(context, {
+    work_lane_contract: context.work_lane_contract, goal_boundary: context.goal_boundary,
+    goal_acceptance: context.goal_acceptance, task_scope: context.task_scope,
+    latest_run_recommended_action: context.latest_run_recommended_action,
+  });
+}
+
 /** Navigation over captured facts, never a summary or a source-read receipt. */
 function capturedDecisionSelection(request: JsonObject): JsonObject {
   const normalOnly = request.normal_work_initial_read === undefined ? false
@@ -1320,8 +1400,10 @@ function capturedDecisionSelection(request: JsonObject): JsonObject {
     ? {...request, include_initial_read_plan: false} : request;
   const initial = request.initial_read === true || request.list_fields === true
     && Array.isArray(request.select) && request.select.length === 1 && request.select[0] === "";
-  return capturedContextSelection(scoped, initial ? initialContextReadPointers(
+  const selection = capturedContextSelection(scoped, initial ? initialContextReadPointers(
     context ?? requireJsonObject(request.context, "captured context"), INITIAL_CONTEXT_DECISION_FIELDS) : []);
+  const opening = context && selection.initial_read_plan ? readyWorkOpening(context) : undefined;
+  return opening ? {...selection, inline_opening: opening} : selection;
 }
 
 /** Only the exact list can carry forward. Current boundary controls stay inline. */
@@ -1410,8 +1492,17 @@ const resolveViewWriteback = (
 ): JsonObject => object(actionProjection(payload, false, precision, verifiedSourceHash).writeback);
 
 export function evaluateTurnEnvelope(value: unknown): JsonObject {
-  const request = requireJsonObject(value, "turn envelope request");
+  let request = requireJsonObject(value, "turn envelope request");
   const operation = request.operation;
+  if (Object.hasOwn(request, "source_transport") && (operation === "compose_complete" ||
+      operation === "attach_complete_turn_context" || operation === "context_delivery")) {
+    const field = operation === "context_delivery" ? "context" : "payload";
+    const source = decodeTurnSource(request, field);
+    // Projection edits must still address the caller's original inline shape.
+    const {source_transport: _transport, ...options} = request;
+    request = {...options, [field]: source};
+  }
+  if (operation === "session_plan") return turnSessionPlan(request);
   if (operation === "planning_facts") return completePlanningFacts(request);
   if (operation === "recorded_plan_lineage") {
     const {work, decision} = checkedTurnPlanSource(
@@ -1622,10 +1713,17 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }
+    const context = requireJsonObject(request.context, "current projection");
     return prepareProgressiveContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS, INITIAL_CONTEXT_DECISION_FIELDS,
-      checkedContextPresentationPlan(request), readyWriteScope(requireJsonObject(request.context, "current projection")));
+      checkedContextPresentationPlan(request), readyWriteScope(context),
+      request.include_initial_read_plan === true ? readyWorkOpening(context) : undefined);
   }
-  if (operation === "native_context_lifecycle") return updateNativeContextLifecycle(request);
+  if (operation === "native_context_lifecycle") {
+    const journal = updateNativeContextLifecycle(request);
+    return request.source_edits === true
+      ? contextProjectionChanges(requireJsonObject(request.state, "native context journal"), journal)
+      : journal;
+  }
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

@@ -30,6 +30,16 @@ from .report_failure_proof import (
     verify_report_window_failure,
 )
 from .steward_managed_mode import ManagedSessionTurn, ManagedTaskValidationUnavailable, StewardManagedMode
+from .steward_monitor import (
+    STEWARD_BACKGROUND_CHANNEL_PREFIX as STEWARD_BACKGROUND_CHANNEL_PREFIX,
+    STEWARD_BACKGROUND_SESSION_PREFIX as STEWARD_BACKGROUND_SESSION_PREFIX,
+    actor_steward_binding_id,
+    ensure_steward_background_session,
+    load_steward_monitor_turn_by_id,
+    lookup_steward_monitor_turn,
+    steward_background_channel_id,
+    steward_background_session_id,
+)
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
 _WORKER_EXITED_ERROR = (
@@ -38,6 +48,7 @@ _WORKER_EXITED_ERROR = (
 )
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
+    "the portfolio scope changed after observation",
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })
@@ -240,6 +251,20 @@ class StewardTurnHost:
         self.bindings = controller.project_contexts.conversation_bindings
         self.managed = StewardManagedMode(controller, self.bindings)
 
+    @staticmethod
+    def background_session_id(binding_id: str) -> str:
+        return steward_background_session_id(binding_id)
+
+    @staticmethod
+    def background_channel_id(binding_id: str) -> str:
+        return steward_background_channel_id(binding_id)
+
+    def _lookup_monitor_turn(self, binding_id: str, actor: Mapping[str, Any], client_id: str) -> dict[str, Any] | None:
+        return lookup_steward_monitor_turn(self.store, binding_id, actor["session_id"], client_id)
+
+    def _ensure_background_session(self, binding_id: str, parent_session: Mapping[str, Any]) -> dict[str, Any]:
+        return ensure_steward_background_session(self.store, binding_id, parent_session)
+
     def _monitor_selection_failed_before_poll(self, turn: dict[str, Any]) -> bool:
         # The earlier adapter lost the command's structured rejection at the
         # Chat boundary. Recognize only this exact pre-poll failure, never an
@@ -267,7 +292,7 @@ class StewardTurnHost:
             sender_ref=saved["operator_ref"], private_human_message=False, session_context=saved)
 
     def _admit(self, request: dict[str, Any], *, turn: dict[str, Any] | None = None,
-               observed: dict[str, Any] | None = None,
+               observed: dict[str, Any] | None = None, carrier_session: dict[str, Any] | None = None,
                prepare_context: bool = False, settlement_recovery: dict[str, Any] | None = None,
                frozen_contract_recovery: dict[str, Any] | None = None,
                launch_recovery: dict[str, Any] | None = None,
@@ -304,6 +329,16 @@ class StewardTurnHost:
         monitor = (next((row for row in StewardMonitor(self.controller).todos(canonical_actor)
                          if row["todo_id"] == request.get("todo_id") and row.get("task_class") == "continuous_monitor"), None)
                    if canonical_actor and request.get("work_kind") == "monitor" and request.get("todo_id") else None)
+        if request.get("work_kind") == "monitor" and carrier_session is None:
+            bg_sid = self.background_session_id(saved["binding_id"])
+            if turn is not None and turn.get("session_id") == bg_sid:
+                carrier_session = self.store.load_session(bg_sid)
+                if carrier_session is None:
+                    raise ValueError("the steward background watch Session is unavailable")
+            elif turn is None:
+                existing_bg = self.store.load_session(bg_sid)
+                if existing_bg is not None and isinstance(existing_bg.get("steward_background_context"), Mapping):
+                    carrier_session = existing_bg
         report = {}
         if request.get("work_kind") == "report":
             from .steward_reports import StewardReports
@@ -311,23 +346,28 @@ class StewardTurnHost:
             todos = StewardMonitor(self.controller).todos(canonical_actor) if canonical_actor else []
             report = {"report_window": window, "report_subscription": subscription,
                 "report_todo": next((row for row in todos if row["todo_id"] == request.get("todo_id")), None)}
-        scope = None
+        scope, observed_scope_id = None, None
         if turn is not None:
             from ...chat_manager_context import manager_authorization_scope_id_for_registry
             goal_ids = self.bindings.steward_scope(session)
             if goal_ids is None:
                 raise ValueError("the original portfolio scope is unavailable")
-            def scope_id(ids):
+            def scope_id(ids, *, channel_id=session["channel_id"]):
                 return manager_authorization_scope_id_for_registry(self.controller.registry_path, ids,
-                    runtime_root=self.controller.coordination_runtime_root, channel_id=session["channel_id"])
+                    runtime_root=self.controller.coordination_runtime_root, channel_id=channel_id)
             scope = {"current": scope_id(goal_ids),
                 "without_actor": scope_id([value for value in goal_ids if value != actor["goal_id"]])}
+            observed_scope_id = (scope_id(goal_ids, channel_id=carrier_session["channel_id"])
+                if carrier_session is not None else scope["current"])
         admitted = self.bindings._core("collaboration.steward.managed_turn.admit", {
             "binding": selected["binding"], "session": session, "observation": selected["observation"],
             "workspace_path": str(self.managed._workspace(session)),
             "queued_turn_count": len(self.store.queued_turns(session["session_id"])),
             "goal": self.managed._goal(actor["goal_id"]), "goal_active": bool(goal and goal.get("status") == "active" and not goal_is_stopped(goal)),
             "request": request, "turn": turn, "scope": scope, "monitor_todo": monitor,
+            **({"carrier_session": carrier_session,
+                "carrier_queued_turn_count": len(self.store.queued_turns(carrier_session["session_id"]))}
+               if carrier_session is not None else {}),
             **({"report_settlement_recovery": settlement_recovery} if settlement_recovery is not None else {}),
             **({"report_frozen_contract_recovery": frozen_contract_recovery} if frozen_contract_recovery is not None else {}),
             **({"report_launch_recovery": launch_recovery} if launch_recovery is not None else {}),
@@ -336,9 +376,11 @@ class StewardTurnHost:
             **self.report_timeout_basis(request),
             **self.monitor_restart_basis(request),
             **({"preparing_model_context": True} if prepare_context else {}), **report})
-        if admitted["refresh_original_scope"]:
+        if admitted["refresh_original_scope"] and scope is not None:
             self.store.update_session(session["session_id"], manager_authorization_scope_id=scope["current"])
-        return {**admitted, "observed_scope_id": scope["current"] if scope else None}
+            if carrier_session is not None and observed_scope_id:
+                self.store.update_session(carrier_session["session_id"], manager_authorization_scope_id=observed_scope_id)
+        return {**admitted, "observed_scope_id": observed_scope_id if scope else None}
 
     def monitor_restart_basis(self, request: Mapping[str, Any]) -> dict[str, Any]:
         """Read original worker/journals without dispatching or repairing effects.
@@ -353,15 +395,16 @@ class StewardTurnHost:
         from ...control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
         from .steward_commands import native_command
         actor = request["actor"]
-        original = self.store.load_turn(actor["session_id"], recovery["original_turn_id"])
+        original = load_steward_monitor_turn_by_id(self.store, actor, recovery["original_turn_id"])
         if original is None:
             raise ValueError("the original stopped watch is unavailable")
+        original_session_id = str(original["session_id"])
         root = self.controller.coordination_runtime_root
-        with exclusive_file_lock(self.store.turn_execution_lock_path(actor["session_id"], original["turn_id"]),
+        with exclusive_file_lock(self.store.turn_execution_lock_path(original_session_id, original["turn_id"]),
                 timeout_seconds=0, operation="observe_stopped_native_watch"):
             # Strict reads are essential: an unreadable/compacted journal is
             # unknown, never an empty observation or proof that work did not run.
-            events = _read_jsonl(self.store._event_path(actor["session_id"], original["turn_id"]),
+            events = _read_jsonl(self.store._event_path(original_session_id, original["turn_id"]),
                 raise_on_error=True, strict=True)
             rows = _read_jsonl(root / "goals" / actor["goal_id"] / "runs" / "index.jsonl",
                 raise_on_error=True, strict=True)
@@ -417,9 +460,11 @@ class StewardTurnHost:
         request = self.monitor_restart_request(original)
         if request is None:
             return None
+        actor = (original.get("loopx_request") or {}).get("actor")
+        binding_id = actor_steward_binding_id(actor) if isinstance(actor, Mapping) else None
         base = client_id + ".restart-recovery"
         next_client_id = base
-        while (carrier := self.store.turn_for_client(original["session_id"], next_client_id)) is not None:
+        while (carrier := lookup_steward_monitor_turn(self.store, binding_id, original["session_id"], next_client_id)) is not None:
             if ((carrier.get("loopx_request") or {}).get("monitor_restart_recovery")
                     != request["monitor_restart_recovery"]):
                 raise ValueError("native watch continuation identity conflict")
@@ -1057,7 +1102,11 @@ class StewardTurnHost:
             request.update(report_window_id=report_window["window_id"],
                 report_subscription_revision=report_window["subscription_revision"])
         client_id = native_steward_client_id(actor, turn_instance_id)
-        existing = self.store.turn_for_client(actor["session_id"], client_id)
+        existing = (
+            self._lookup_monitor_turn(binding["binding_id"], actor, client_id)
+            if work_kind == "monitor"
+            else self.store.turn_for_client(actor["session_id"], client_id)
+        )
         if quota_observation is not None:
             if binding != quota_observation["binding"]:
                 raise ValueError("the original steward authorization changed during quota observation")
@@ -1114,7 +1163,11 @@ class StewardTurnHost:
             # failure. Retain the failed Chat Turn and original native
             # observation identity; that poll's owner remains idempotent.
             client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
-            retry = self.store.turn_for_client(actor["session_id"], client_id)
+            retry = (
+                self._lookup_monitor_turn(binding["binding_id"], actor, client_id)
+                if work_kind == "monitor"
+                else self.store.turn_for_client(actor["session_id"], client_id)
+            )
             if retry is not None:
                 if work_kind != "report":
                     return {"turn": retry}
@@ -1188,13 +1241,18 @@ class StewardTurnHost:
                 raise ValueError("the original native steward submission changed during identity verification")
             request, client_id = current["request"], current["client_id"]
             actor = request["actor"]
+            session = self.store.load_session(actor["session_id"])
+            if not session or not session.get("steward_context"):
+                raise ValueError("the original steward Session is unavailable")
+            carrier = self._ensure_background_session(binding_id, session) if work_kind == "monitor" else None
             if work_kind == "monitor":
                 request.update(monitor_deadline=monitor_deadline,
                     monitor_lease_version=retained["version"] if retained else 0)
-            admitted = self._admit(request, observed=observed,
+            admitted = self._admit(request, observed=observed, carrier_session=carrier,
                 launch_recovery=current["launch_recovery"], selection_recovery=current["selection_recovery"])
-            session = self.store.load_session(actor["session_id"])
-            accepted = self.store.accept_managed_turn(actor["session_id"], client_turn_id=client_id,
+            target_session = carrier if carrier is not None else session
+            target_session_id = target_session["session_id"]
+            accepted = self.store.accept_managed_turn(target_session_id, client_turn_id=client_id,
                 message="Advance the currently admitted native LoopX work.",
                 display_message="检查授权工作状态。" if work_kind == "monitor" else
                     "生成本期授权项目日报。" if work_kind == "report" else "推进管家的 LoopX 任务。", origin="native_loopx",
@@ -1213,17 +1271,17 @@ class StewardTurnHost:
                         origin="native_loopx")
                 if admitted["observation_only"]:
                     from .steward_monitor import StewardObservationAdapter
-                    adapter = StewardObservationAdapter(session.get("upstream_thread_id"))
+                    adapter = StewardObservationAdapter(target_session.get("upstream_thread_id"))
                 else:
                     adapter = controller._ensure_adapter_locked(session,
                         work_dir=Path(admitted["workspace_path"]),
                         objective="Maintain the original steward's authorized monitoring work.",
                         accepted_turn_id=accepted.turn["turn_id"])
-                controller._start_accepted_turn_worker(session_id=actor["session_id"],
+                controller._start_accepted_turn_worker(session_id=target_session_id,
                     turn_id=accepted.turn["turn_id"], message=accepted.turn["message"],
                     attachments=[], adapter=adapter, loopx_execution=True)
             except Exception as exc:
-                controller._fail_queue_preparation(actor["session_id"], accepted.turn["turn_id"], exc)
+                controller._fail_queue_preparation(target_session_id, accepted.turn["turn_id"], exc)
                 raise
             return accepted.turn, accepted.created
 
@@ -1280,8 +1338,12 @@ class StewardTurnHost:
 
         model_input = authority.get("_model_input")
         detail_ref = model_input.get("detail_ref") if isinstance(model_input, Mapping) else None
-        packet = authority.get("replan_action_packet") or (
-            detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        detail_packet = detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        auth_packet = authority.get("replan_action_packet")
+        packet = (
+            detail_packet
+            if isinstance(detail_packet, Mapping) and ("review" in detail_packet or "writeback" in detail_packet)
+            else auth_packet
         )
 
         def _read_stage(cmd_str: Any) -> dict[str, Any] | None:
@@ -1672,7 +1734,7 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                    if (report_work or steward_advancement or governance_work) and isinstance(adapter, AntigravityAdapter):
                         from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC
                         response = adapter.start_turn(
                             prompt,

@@ -594,6 +594,21 @@ loopx register-agent \
   --execute
 ```
 
+`--agent-id` is repeatable, and each value may also be a comma-separated list.
+Registration is all-or-nothing: an id outside the public token shape (a lowercase
+first letter, then letters, digits, `.`, `_`, `:`, `@` or `-`) fails the preview
+or execute with `error_kind=agent_identity_invalid` and the raw
+`rejected_agents` before either the source or the global registry changes. A
+request that parses to no usable id (only empty or delimiter-only values) fails
+with `error_kind=agent_identity_empty` before any write, including on a Goal that
+has no existing roster. Clearing a roster remains `configure-goal`'s explicit
+replacement, not an empty registration. An execute that adds a new id reports
+`changed=true`, `written=true`, and `registration_readback.verified=true` after
+reading both rosters back. An id that is already registered is an idempotent
+success with `changed=false`, `written=false`, and the id in `registered_agents`.
+Error recovery uses the same condition, so correcting the input to an existing id
+can continue without a new write.
+
 Then claim through the dedicated command. `--claimed-by` records the durable
 owner, while `--agent-id` attributes the peer performing this mutation. For a
 self-claim they are both required and must name the same registered agent:

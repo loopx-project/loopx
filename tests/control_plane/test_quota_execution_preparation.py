@@ -129,6 +129,7 @@ def _run(
     context_delivery: str = "off",
     goal_suffix: str = "",
     write_scopes: list[str] | None = None,
+    guard_cwd: Path | None = None,
 ):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     runtime = tmp_path / "runtime"
@@ -169,7 +170,7 @@ def _run(
         "quota", "should-run", "--goal-id", GOAL, "--agent-id", AGENT,
         "--context-delivery", context_delivery,
         *guard_args,
-        registry_path=registry, runtime_root=runtime,
+        registry_path=registry, runtime_root=runtime, cwd=guard_cwd,
     )
     assert code == 0, json.dumps(packet, ensure_ascii=False, indent=2)
     return packet
@@ -649,8 +650,6 @@ def test_prepared_hook_refuses_a_replaced_ready_capture_without_reclaim(
 
     def observe_guard(command, **kwargs):
         prepared = "--prepared-capture-reference" in command
-        if prepared and replace_stage == "version":
-            command = [*command, "--complete-turn"]
         result = run(command, **kwargs)
         if prepared:
             verified["writer"] = json.loads(result.stdout)
@@ -929,6 +928,7 @@ def test_native_hook_replays_the_original_claim_after_guard_timeout(
         else:
             source_marker = native / "claim-source.json"
             marker_before = source_marker.read_bytes()
+            assert receipt["readiness_workdir"] == str(Path(__file__).resolve().parents[2])
             guard = shlex.split(receipt["readiness_command"])
             assert "should-run" in guard and "--begin-turn" not in guard
             assert guard[guard.index("--registry") + 1] == str(registry)
@@ -1313,6 +1313,94 @@ def test_codex_lifecycle_hook_uses_captured_authority_from_another_project(
         timeout=15,
     )
     assert repeated.returncode == 0 and json.loads(repeated.stdout) == {}
+
+
+@pytest.mark.parametrize(("provider", "workspace_state"), [
+    ("file", "admitted"), ("sqlite", "admitted"), ("sqlite", "replaced"), ("file", "legacy-marker"),
+])
+def test_native_hook_prepares_repository_work_in_the_admitted_worktree(tmp_path, monkeypatch, provider, workspace_state):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from test_quota_settlement_cli import _initialize_git_checkout, _spend_run_count
+
+    project = tmp_path.resolve() / "project"
+    project.mkdir()
+    _initialize_git_checkout(project)
+    subprocess.run(["git", "-c", "user.name=LoopX Test", "-c", "user.email=test@example.invalid",
+                    "commit", "--allow-empty", "--quiet", "-m", "fixture"], cwd=project, check=True)
+    worktree = tmp_path.resolve() / "delivery worktree"
+    subprocess.run(["git", "worktree", "add", "--quiet", "--detach", str(worktree)], cwd=project, check=True)
+    native = project / "native"
+    native.mkdir(mode=0o700)
+    capture = project / "capture"
+    scenario, turn = "codex_app_heartbeat", "repository-preparation"
+    session = "repository-preparation-session"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    event = {"session_id": session, "cwd": str(project)}
+    assert codex_context_hook(str(native), {**event, "hook_event_name": "SessionStart", "source": "startup"}) == {}
+    todo = {**_todo(), "task_repository": "git:github.com/example/read-only-settlement-fixture"}
+    before = _run(project, monkeypatch, provider, [], "--runtime-profile", scenario,
+                  "--turn-instance-id", turn, "--todo-id", TODO, "--defer-context-presentation",
+                  "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
+                  todos=[todo], context_delivery="on", guard_cwd=worktree)
+    assert before["execution_preparation"]["state"] == "claim_required"
+    marker = native / "claim-source.json"
+    if workspace_state == "legacy-marker":
+        saved = json.loads(marker.read_bytes())
+        saved.pop("workspace")
+        marker.write_text(json.dumps(saved))
+    elif workspace_state == "replaced":
+        worktree.rename(tmp_path / "original-worktree")
+        worktree.mkdir()
+    digest = _present_saved_guard(project, native, capture, scenario, turn)
+    hook = [sys.executable, "-m", "loopx.entrypoint", "--registry", str(project / "registry.json"),
+            "--runtime-root", str(project / "runtime"), "--format", "json", "quota", "context-hook",
+            "--runtime-profile", scenario, "--context-delivery", "on", "--codex-context-dir", str(native)]
+    def post(response=None):
+        payload = {**event, "hook_event_name": "PostToolUse", "tool_response": response}
+        result = subprocess.run(hook, cwd=project, input=json.dumps(payload),
+                                capture_output=True, text=True, check=True, timeout=30)
+        return json.loads(result.stdout)
+
+    facts = json.loads(post()["hookSpecificOutput"]["additionalContext"].rsplit("Receipt: ", 1)[1])
+    assert facts["claim_operation_id"] == f"todo-claim:codex-capture:{digest}"
+    assert facts["turn_instance_id"] == turn and facts["todo_id"] == TODO
+    registry, runtime = project / "registry.json", project / "runtime"
+    assert _spend_run_count(runtime, goal_id=GOAL) == 0
+    if workspace_state != "admitted":
+        assert facts["event"] == "host_execution_preparation_readback_required"
+        assert "readiness_workdir" not in facts
+        inspection = subprocess.run(shlex.split(facts["lease_command"]), cwd=project,
+                                    capture_output=True, text=True, check=True, timeout=30)
+        assert json.loads(inspection.stdout)["active"] is (workspace_state == "legacy-marker")
+        assert ("readiness_command" in facts) is (workspace_state == "legacy-marker")
+        return
+    assert facts["event"] == "host_execution_prepared"
+    assert facts["execution_preparation"]["state"] == "ready" and facts["context"]["ok"]
+    # The checked reader, the subsequent writeback, and its replay keep
+    # the selected Turn identity and the delivery from the linked checkout.
+    reader = shlex.split(facts["context"]["recovery"]["command"])
+    selected = subprocess.run([*reader, "--select", "/heartbeat_receipt/settlement_identity"], cwd=project,
+                              capture_output=True, text=True, check=True, timeout=30)
+    page = json.loads(selected.stdout)
+    identity = json.loads(page["content"])["selections"][0]["value"]
+    assert identity == before["heartbeat_receipt"]["settlement_identity"]
+    assert post(page) == {} and post() == {}
+    proof = facts["execution_preparation"]["lease_proof"]
+    close = ["refresh-state", "--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO,
+             "--turn-instance-id", turn, "--classification", "fixture_workspace_preparation",
+             "--delivery-batch-scale", "single_surface", "--delivery-outcome", "outcome_progress",
+             "--delivery-boundary", "in_flight_continuation", "--progress-result-class", "advanced",
+             "--progress-work-item-id", TODO, "--progress-evidence-id", "fixture:workspace-preparation",
+             "--task-lease-idempotency-key", proof["idempotency_key"],
+             "--task-lease-expected-version", str(proof["expected_version"]),
+             "--settle-turn", "--settlement-receipt", "--no-global-sync", "--suppress-external-sinks"]
+    for _ in range(2):
+        code, receipt = run_json_cli_result(*close, registry_path=registry, runtime_root=runtime, cwd=worktree)
+        assert code == 0 and receipt["settlement_identity"] == identity
+        assert receipt["settlement_progress"]["state"] == "settled"
+    rows = [json.loads(line) for line in (runtime / "goals" / GOAL / "rollout-event-log.jsonl").read_text().splitlines()]
+    assert [row["event_kind"] for row in rows if row["event_kind"] in {"refresh_state", "quota_spend"}] == [
+        "refresh_state", "quota_spend"]
 
 
 def _writeback_guard_fixture(

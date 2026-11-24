@@ -358,6 +358,32 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await grouped.getByText("synthetic:negative", {exact: true}).waitFor();
       await groupSummary.press("Escape");
       assert(await groupSummary.evaluate(element => element === document.activeElement && !element.parentElement.open));
+      // Revisit an earlier row while several entries remain open. The order
+      // they were expanded and the position of the keyboard reader can differ.
+      const otherSummaries = results.locator(".research-record-entry > summary");
+      await otherSummaries.first().press("Enter");
+      const expansion = await otherSummaries.evaluateAll(summaries => {
+        for (const summary of summaries.slice(1)) summary.click();
+        summaries[1].focus();
+        const state = JSON.parse(new URL(location.href).searchParams.get("research_records"));
+        return {
+          expected: summaries.map(summary => summary.closest("[data-research-record]").dataset.researchRecord),
+          persisted: state.expanded,
+        };
+      });
+      assert.deepEqual(expansion.persisted, expansion.expected, "Reload can recover every activated entry immediately");
+      const readingSummary = otherSummaries.nth(1);
+      await readingSummary.focus();
+      const readingId = await readingSummary.evaluate(el => el.closest("[data-research-record]").dataset.researchRecord);
+      const hasReadingFocus = id => document.activeElement?.tagName === "SUMMARY"
+        && document.activeElement.closest("[data-research-record]")?.dataset.researchRecord === id;
+      await page.reload();
+      await page.waitForFunction(hasReadingFocus, readingId);
+      assert.equal(await results.locator(".research-record-entry[open]").count(), 3);
+      await page.goto(owner.base + "/healthz");
+      await page.goBack();
+      await page.waitForFunction(hasReadingFocus, readingId);
+      assert.equal(await results.locator(".research-record-entry[open]").count(), 3);
       const other = await download();
       assert.equal(other.goal_id, "synthetic-other-research");
       assert.deepEqual(other.coverage, {loaded_records: 4, exported_records: 4, history_complete: true, refresh_failed: false});

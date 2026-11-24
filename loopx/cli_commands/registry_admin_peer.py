@@ -21,6 +21,9 @@ def render_register_agent_markdown(payload: dict[str, object]) -> str:
         lines.append(f"- error: {payload.get('error')}")
     lines.append(f"- existing_agents: `{', '.join(payload.get('existing_agents') or [])}`")
     lines.append(f"- registered_agents: `{', '.join(payload.get('registered_agents') or [])}`")
+    readback = payload.get("registration_readback")
+    if isinstance(readback, dict) and readback.get("performed"):
+        lines.append(f"- registration_readback_verified: `{readback.get('verified')}`")
     sync_payload = payload.get("global_sync")
     if isinstance(sync_payload, dict):
         lines.append(f"- global_sync_wrote: `{sync_payload.get('wrote')}`")

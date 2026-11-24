@@ -104,6 +104,16 @@ test("signal-unavailable custom monitors admit exactly one zero-effect recovery 
     request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
     monitor_todo: monitor, monitor_restart_basis: basis};
   assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  assert.equal(
+    admitStewardManagedTurn({
+      ...input,
+      monitor_restart_basis: {
+        ...basis,
+        original: {...original, error: "the portfolio scope changed after observation"},
+      },
+    }).observation_only,
+    true,
+  );
 
   for (const changed of [
     {contexts: []},

@@ -864,6 +864,7 @@ def normalize_agent_response(
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
     image_targets: list[str] | None = None,
+    reply_documents: bool = False,
 ) -> dict[str, Any]:
     """Normalize one structured provider response to the public Chat contract."""
 
@@ -905,6 +906,13 @@ def normalize_agent_response(
         protected_paths=protected,
         image_targets=image_targets,
     ).strip()
+    documents = []
+    if reply_documents and payload.get("attachments"):
+        from .chat.attachments import normalize_reply_documents
+        try:
+            documents = normalize_reply_documents(payload["attachments"], message=message, protected_paths=protected)
+        except ValueError:
+            message = (message + "\n\nThe requested file could not be attached.").strip()
     goal_draft = _normalize_goal_draft(payload, protected_paths=protected)
     # A worker's bounded progress report, never a grant or a retry decision.
     # Legacy prose and incomplete/ambiguous objects cannot request continuation.
@@ -923,6 +931,7 @@ def normalize_agent_response(
     return {
         "schema_version": CHAT_AGENT_RESPONSE_SCHEMA_VERSION,
         "message": message,
+        **({"attachments": documents} if documents else {}),
         **({"memory_preferences": memory_prefs} if memory_prefs else {}),
         **({"unfinished_work": unfinished} if unfinished else {}),
         **({"goal_draft": goal_draft} if goal_draft else {}),
@@ -946,6 +955,7 @@ def parse_agent_response(
     protected_paths: Iterable[Path | str] = (),
     team_plan_context: Mapping[str, Any] | None = None,
     image_targets: list[str] | None = None,
+    reply_documents: bool = False,
 ) -> dict[str, Any]:
     protected = tuple(protected_paths)
     openings, _, uncertain = _review_openings(raw_text)
@@ -972,6 +982,7 @@ def parse_agent_response(
                     protected_paths=protected,
                     team_plan_context=team_plan_context,
                     image_targets=image_targets,
+                    reply_documents=reply_documents,
                 )
             except ValueError:
                 # A bad action envelope must not discard an already generated
@@ -1403,6 +1414,7 @@ def _turn_prompt(
     project_work: bool = False,
     public_source_read_context: str = "",
     reply_image_directory: Path | None = None,
+    reply_documents: bool = False,
 ) -> str:
     direct_work = runtime_profile == "trusted_owner" and not execution_mode and not project_work
     try:
@@ -1461,6 +1473,11 @@ def _turn_prompt(
         role
         + "The operator message below is the current task. Answer it directly and do not replace it "
         + "with an autonomous project task. "
+        + ("For a requested downloadable .md or .txt file, include its actual UTF-8 bytes in the final "
+           "review JSON attachments array. Each entry has name (basename), mime_type (text/markdown or "
+           "text/plain), size (byte count), and data_url (matching base64 data URL). Keep the combined "
+           "envelope under 64 KB. Preserve original bytes. If unavailable, explain in the answer. "
+           if reply_documents else "")
         + planning_limits
         + trusted_manager_limits
         + public_source_read_context

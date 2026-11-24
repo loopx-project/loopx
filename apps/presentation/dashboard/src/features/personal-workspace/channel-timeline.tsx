@@ -21,7 +21,7 @@ import {ManagerTeamResult} from "./manager-team-result";
 import { compareProposalRecency } from "./proposal-recency";
 import { conversationOrder } from "./conversation-order";
 import { ConversationFind, conversationMessageKey } from "./conversation-find";
-import type { WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
+import type { PersonalWorkspaceCallbacks, WorkspaceActionPreview, WorkspaceDrawerSelection, WorkspaceGoal, WorkspaceTimelineItem } from "./personal-workspace-model";
 
 function answerLink(sessionId: string, messageId: string, turnId?: string) {
   const url = new URL(window.location.href);
@@ -68,7 +68,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   onApplyGoalDraft,
   goalDraftPreparationContext,
   onSuggestReply,
-  onOpenGoalEvidence,
+  onOpenGoalChat,
   onInterruptTurn,
   onAdjustTurn,
   onCancelPreparation,
@@ -96,7 +96,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
   onApplyGoalDraft?: (proposal: WorkspaceActionPreview) => Promise<WorkspaceActionPreview>;
   goalDraftPreparationContext?: string;
   onSuggestReply?: (text: string) => void;
-  onOpenGoalEvidence?: (goalId: string) => void;
+  onOpenGoalChat?: PersonalWorkspaceCallbacks["onOpenGoal"];
   onInterruptTurn?: (turnId: string) => Promise<void>;
   onAdjustTurn?: (turnId: string) => void;
 }) {
@@ -258,9 +258,9 @@ export const ChannelTimeline = memo(function ChannelTimeline({
           <b>{taskReceipt ? t("feedback.taskStartRequested")
             : item.proposal.status === "gated" && item.proposal.actionKind !== "operation.execute" ? t("timeline.review")
             : item.proposal.primaryLabel ?? t("timeline.reviewAndConfirm")}</b>
-        </button>{showManagerTeamResults && onOpenGoalEvidence && appliedTeamPlan
+        </button>{showManagerTeamResults && onOpenGoalChat && appliedTeamPlan
           && item.proposal.goalId && item.proposal.teamPlanTodoIds?.length
-          ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalEvidence}/>
+          ? <ManagerTeamResult goalId={item.proposal.goalId} todoIds={item.proposal.teamPlanTodoIds} zh={locale === "zh-CN"} onOpenGoalEvidence={onOpenGoalChat}/>
           : null}</Fragment>
       );
     }
@@ -295,7 +295,7 @@ export const ChannelTimeline = memo(function ChannelTimeline({
             : null}
           {item.message.role !== "user" && (item.message.pending || item.message.sourceTurnId || item.message.activity?.length || item.message.steps?.length) ? <MessageActivity message={item.message} onCancelPreparation={onCancelPreparation} onInterruptTurn={onInterruptTurn} onAdjustTurn={onAdjustTurn}/> : null}
           {item.message.role === "assistant" && !item.message.pending && item.message.goalDraft
-            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onSuggest={onSuggestReply}/> : null}
+            ? <GoalDraftCard draftId={`${item.message.sourceSessionId ?? ""}:${item.message.id}`} preparationContext={goalDraftPreparationContext} draft={item.message.goalDraft} onReview={onReviewGoalDraft ? reviewDraft : undefined} onApply={onApplyGoalDraft} onOpenGoalChat={onOpenGoalChat} onSuggest={onSuggestReply}/> : null}
           <CollaborationCards request={item.message.collaboration} requests={item.message.collaborations} />
         </div>
       </article>

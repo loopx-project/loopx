@@ -61,11 +61,20 @@ def test_quota_diagnoses_exact_gate_conflict_from_complete_provider(tmp_path, na
     if display == "missing":
         paths["state_file"].unlink()
     before = paths["state_file"].read_bytes() if paths["state_file"].exists() else None
-    code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", "agent-a", registry_path=paths["registry"])
+    guard = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", "agent-a")
+    if display == "missing":
+        # The registered file also supplies Goal intent. Complete Turn cannot
+        # dispatch work with it missing, even with a complete Todo provider.
+        work_code, work = run_json_cli_result(*guard, "--context-delivery", "off", registry_path=paths["registry"])
+        assert work_code != 0 and work["should_run"] is False, work
+        assert "Complete Goal source" in work["reason"]
+        guard += ("--scheduler-observation",)
+    code, result = run_json_cli_result(*guard, registry_path=paths["registry"])
     assert code == 0, result
     assert result["effective_action"] == "todo_decision_scope_projection_repair", result
-    assert "required_decision_scope_target_mismatch" in json.dumps(result)
+    assert result["decision"] == "self_repair"
+    if display != "missing":
+        assert "required_decision_scope_target_mismatch" in json.dumps(result)
     assert (paths["state_file"].read_bytes() if paths["state_file"].exists() else None) == before
 
 

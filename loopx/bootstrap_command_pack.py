@@ -22,6 +22,7 @@ from .control_plane.goals.start_contract import (
 )
 from .control_plane.goals.start_goal_todo_delta import (
     existing_runnable_agent_frontier,
+    start_goal_initial_batch_applicable,
     todo_authoring_steps,
 )
 from .control_plane.scheduler.execution_context import (
@@ -1645,6 +1646,18 @@ def build_start_goal_guided_packet(
         and not isinstance(identity_selection_gate, dict)
         else None
     )
+    guided_batch_applicable = (
+        start_goal_initial_batch_applicable(
+            project_connection,
+            resolved_goal_id=str(command_pack.get("goal_id") or ""),
+            runtime_root_arg=runtime_root_arg,
+            registry_payload=snapshot[1],
+        )
+        if isinstance(project_connection, dict)
+        and not isinstance(identity_selection_gate, dict)
+        and not guided_frontier
+        else False
+    )
     ordered_steps = [
         {
             "id": "inspect_connection",
@@ -1668,6 +1681,7 @@ def build_start_goal_guided_packet(
             runtime_root=command_pack.get("command_runtime_root"),
             goal_id=str(command_pack.get("goal_id") or ""),
             agent_id=command_pack.get("agent_id"),
+            batch_applicable=guided_batch_applicable,
         ),
         {
             "id": "refresh_state",

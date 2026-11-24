@@ -5,6 +5,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 
+import pytest
+
 from loopx.capabilities.native_chat.steward_monitor import (
     StewardMonitor,
     pump_steward_monitors,
@@ -1279,6 +1281,7 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
     created_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
 
     recorded_invocations: list[tuple[str, str]] = []
+    recorded_isolated_flags: list[object] = []
 
     class _EmittingAntigravityAdapter(AntigravityAdapter):
         def healthcheck(self) -> bool:
@@ -1288,6 +1291,7 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
             return None
 
         def start_turn(self, message: str, event_sink=None, **_kwargs):
+            recorded_isolated_flags.append(_kwargs.get("isolated_cascade"))
             guard = self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()
             with guard:
                 marker = "Steward governance replan context (data):"
@@ -1490,3 +1494,255 @@ def test_scoped_signal_monitor_antigravity_inline_replan_isolates_native_result(
     assert len(deltas) == 1 and "## 可直接合并 PR" in deltas[0]
     assert not any("steward_periodic_review_settled" in text or "replan_required" in text for text in deltas)
     assert len(finals) == 1 and "## 可直接合并 PR" in str(finals[0])
+    assert recorded_isolated_flags and all(flag is True for flag in recorded_isolated_flags)
+
+
+@pytest.mark.parametrize("conflict_at", ["held", "acquire", "update", "release"])
+def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
+    steward, tmp_path, monkeypatch, conflict_at,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, managed = original(steward)
+    storage(runtime, "sqlite")
+    plan = managed.prepare(binding["binding_id"], session_id=sid)["plan"]
+    actor = managed.prepare(
+        binding["binding_id"],
+        session_id=sid,
+        expected_plan_id=plan["plan_id"],
+        execute=True,
+    )["actor"]
+    monitor = StewardMonitor(runtime)
+    enable_plan = monitor.configure(binding["binding_id"], operation="enable", cadence_minutes=30)["plan"]
+    monitor.configure(
+        binding["binding_id"],
+        operation="enable",
+        cadence_minutes=30,
+        expected_plan_id=enable_plan["plan_id"],
+        execute=True,
+    )
+    default_watch = monitor.current(actor)
+    edit_local_watch(
+        runtime,
+        actor,
+        default_watch["todo_id"],
+        "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+
+    import loopx.capabilities.native_chat.steward_monitor as monitor_mod
+    from loopx.capabilities.native_chat.steward_monitor import (
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        advancement_turn_id,
+        is_exhausted_zero_write_followup_todo,
+        resolve_advancement_turn_id,
+    )
+    from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+
+    actions = transport.core.actions
+    preview = actions.preview({
+        "action_kind": "monitor.create",
+        "summary": "只读聚合巡检 acme/widgets 停滞 PR 并发送 steward_owner_report",
+        "normalized_parameters": {
+            "goal_id": actor["goal_id"],
+            "agent_id": actor["agent_id"],
+            "target": "只读聚合巡检 acme/widgets 停滞 PR 并发送 steward_owner_report。",
+            "target_key": "steward-rearm-pr-monitor",
+            "task_repository": "acme/widgets",
+            "cadence": "every_1_hour",
+            "timezone": "Asia/Shanghai",
+            "stop_condition": "watch_only",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {"exclude_drafts": True},
+            },
+        },
+        "context": {"kind": "goal", "goal_id": actor["goal_id"]},
+        "idempotency_key": "create-rearm-pr-monitor",
+    })
+    assert preview["status"] == "preview_ready"
+    monitor_todo_id = actions.apply(preview["proposal_id"])["proposal"]["receipt"]["resource_ids"]["todo_id"]
+    edit_local_watch(
+        runtime,
+        actor,
+        monitor_todo_id,
+        "--next-due-at",
+        (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+    )
+    monkeypatch.setattr(monitor_mod, "_observe_github_repository_prs", lambda repo, **_kw: {
+        "status": "ok",
+        "repository": repo,
+        "items": [{
+            "number": 9201,
+            "title": "Stalled PR",
+            "url": "https://github.com/acme/widgets/pull/9201",
+            "headRefOid": "head9201",
+            "isDraft": False,
+            "mergeable": "MERGEABLE",
+            "updatedAt": "2026-11-20T09:00:00Z",
+            "author": {"login": "alice"},
+            "checks_summary": {"state": "SUCCESS", "total": 1, "passing": 1, "failing": 0, "pending": 0},
+            "bypassed_gates": [],
+            "review_summary": {
+                "effective_verdict": "REQUEST_CHANGES",
+                "has_review_conflict": False,
+                "stale_review_count": 0,
+                "exact_head_reviews": [],
+            },
+        }],
+    })
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["status"] == "completed"
+
+    def _current_followup() -> dict:
+        rows = list_goal_todos(
+            registry_path=runtime.registry_path,
+            runtime_root_arg=str(runtime.coordination_runtime_root),
+            goal_id=actor["goal_id"],
+            role="agent",
+        )["todos"]
+        return next(row for row in rows if row.get("target_key") == f"steward-monitor-followup:{monitor_todo_id}")
+
+    adv_todo = _current_followup()
+    base_token = advancement_turn_id(adv_todo)
+    aged_completed = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
+    zero_write_failure = {
+        "native_loopx": {
+            "ok": False,
+            "status": "failed",
+            "result_kind": "host_failure",
+            "receipt": {"commit_eligibility": {"writeback": False, "quota_spend": False, "scheduler_ack": False}},
+            "effects": {
+                "host_invoked": True,
+                "state_written": False,
+                "quota_spent": False,
+                "scheduler_acknowledged": False,
+            },
+        },
+    }
+    for tok in (base_token, base_token + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX):
+        cid = native_steward_client_id(actor, tok)
+        failed_turn = store.accept_managed_turn(
+            sid,
+            client_turn_id=cid,
+            message="Advance the currently admitted native LoopX work.",
+            origin="native_loopx",
+            loopx_execution=True,
+            loopx_request={
+                "operation": "native_turn",
+                "host": "codex-app-server",
+                "actor": actor,
+                "turn_instance_id": tok,
+                "todo_id": adv_todo["todo_id"],
+                "work_kind": "native_turn",
+                "validation_command": None,
+            },
+        ).turn
+        store.update_turn(
+            sid,
+            failed_turn["turn_id"],
+            status="completed",
+            completed_at=aged_completed,
+            response=zero_write_failure,
+        )
+        store.release_active_turn(sid, failed_turn["turn_id"], last_activity_at=aged_completed, last_error_code=None)
+
+    assert resolve_advancement_turn_id(store, actor, adv_todo) is None
+    assert is_exhausted_zero_write_followup_todo(store, actor, adv_todo) is True
+    # Any side effect must block re-arm eligibility.
+    with monkeypatch.context() as side_effect_check:
+        base_cid = native_steward_client_id(actor, base_token)
+        dirty_turn = {
+            **store.turn_for_client(sid, base_cid),
+            "response": {**zero_write_failure, "steward_owner_report_queued": True},
+        }
+        side_effect_check.setattr(
+            store, "turn_for_client",
+            lambda s, c: dirty_turn if (s == sid and c == base_cid) else None,
+        )
+        assert is_exhausted_zero_write_followup_todo(store, actor, adv_todo) is False
+
+    # Before the monitor's next due poll, pump stays idle instead of spinning.
+    runtime._steward_monitor_next_check.clear()
+    assert pump_steward_monitors(runtime) == []
+
+    # Use the real lease owner at each boundary of the child transition.
+    native = monitor_mod.native_command
+    route = ["--goal-id", actor["goal_id"], "--todo-id", adv_todo["todo_id"]]
+    held = None
+    if conflict_at == "held":
+        held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+    else:
+        def contend(controller, argv):
+            nonlocal held
+            if (held is None and argv[1] == conflict_at and adv_todo["todo_id"] in argv
+                    and any(arg.startswith("rearm-followup.") for arg in argv)):
+                if conflict_at == "acquire":
+                    held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+                else:
+                    current = native(controller, ["task-lease", "inspect", *route])["lease"]
+                    held = native(controller, ["task-lease", "renew", *route,
+                        "--owner", actor["agent_id"], "--idempotency-key", current["idempotency_key"],
+                        "--ttl-seconds", "600", "--expected-version", str(current["version"])])["lease"]
+            return native(controller, argv)
+
+        monkeypatch.setattr(monitor_mod, "native_command", contend)
+    try:
+        due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at", due)
+        watched, = pump_steward_monitors(runtime)
+        observed = finish(runtime, watched)
+        assert observed["status"] == "completed", observed.get("error")
+        evidence = [event for event in store.events_after(watched["session_id"], watched["turn_id"], None)
+                    if event["kind"] == "native_loopx.monitor_poll"]
+        assert len(evidence) == 1
+        assert evidence[0]["payload"]["receipt"] == observed["response"]["native_loopx"]["receipt"]
+        assert local_watch_row(runtime, actor, monitor_todo_id)["next_due_at"] != due
+        assert held is not None
+        current = native(runtime, ["task-lease", "inspect", *route])["lease"]
+        assert (current["idempotency_key"], current["version"]) == (held["idempotency_key"], held["version"])
+        if conflict_at == "release":
+            assert _current_followup()["note"] == "rearm-followup:" + watched["loopx_request"]["turn_instance_id"]
+        else:
+            assert _current_followup().get("note") == adv_todo.get("note")
+            assert pump_steward_monitors(runtime) == []
+    finally:
+        if held is not None:
+            monitor._release(actor, adv_todo, held)
+
+    # A committed update already enabled advancement. An uncommitted one retries at its next cadence.
+    if conflict_at != "release":
+        edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at",
+                         (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat())
+        next_poll, = pump_steward_monitors(runtime)
+        assert next_poll["loopx_request"]["work_kind"] == "monitor"
+        assert finish(runtime, next_poll)["status"] == "completed"
+
+    rearmed = _current_followup()
+    assert str(rearmed.get("note") or "").startswith("rearm-followup:")
+    rearmed_token = advancement_turn_id(rearmed)
+    assert rearmed_token != base_token
+    assert resolve_advancement_turn_id(store, actor, rearmed) == rearmed_token
+
+    _configure_codex_response(runtime, sid, {
+        "result_kind": "validated_completion",
+        "classification": "steward_rearmed_followup_completed",
+        "summary": "Delivered aggregated report after next cadence re-arm.",
+        "next_action": "Resume silent cadence.",
+        "delivery_batch_scale": "single_surface",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["Evaluated refreshed PR snapshot 9201"],
+        "validation_evidence": ["Verified zero duplicate report"],
+        "path_delta_mode": "unchanged",
+        "vision_unchanged_reason": "Monitor route unchanged.",
+        "steward_owner_report": "### 恢复后停滞 PR 汇总\n- [#9201](https://github.com/acme/widgets/pull/9201)",
+    })
+    runtime._steward_monitor_next_check.clear()
+    rearmed_turns = pump_steward_monitors(runtime)
+    assert len(rearmed_turns) == 1
+    assert rearmed_turns[0]["loopx_request"]["turn_instance_id"] == rearmed_token
+    rearmed_done = finish(runtime, rearmed_turns[0])
+    assert rearmed_done["status"] == "completed", rearmed_done
+    assert rearmed_done["response"]["native_loopx"]["status"] == "committed"
+    assert rearmed_done["response"]["steward_owner_report_queued"] is True

@@ -10,7 +10,6 @@ import { monitorIsActive } from "../todos/summary_lanes.ts";
 import { authorityUnicodeCompare } from "../coordination/authority_store_codec.ts";
 import { qualifySettlementHistory } from "../quota/settlement_phase.ts";
 import { MONITOR_TARGET_SCHEMA } from "../scheduler/monitor_successor.ts";
-import { normalizeStrideStrategy } from "./stride_policy.ts";
 
 export const PROGRESS_RESULT_CLASSES = [
   "advanced", "unchanged", "blocked", "exploration_exhausted", "no_followup",
@@ -69,7 +68,6 @@ interface Request {
   neutral: ReadonlySet<string>;
   stall: number;
   periodic: number;
-  stride: string;
   monitor: number;
   streak: number;
   monitorSchema: string;
@@ -146,7 +144,6 @@ function decode(value: unknown): Request {
       "replan_noop", "repair_noop"]),
     stall: integer(raw.stall_threshold, "stall_threshold", 2),
     periodic: integer(raw.periodic_threshold, "periodic_threshold", 1),
-    stride: normalizeStrideStrategy(raw.stride_strategy),
     monitor: integer(raw.monitor_threshold, "monitor_threshold", 1),
     streak: integer(raw.streak_threshold, "streak_threshold", 1),
     monitorSchema: requireNonEmptyString(raw.monitor_schema, "monitor_schema"),

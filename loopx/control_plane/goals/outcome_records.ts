@@ -64,6 +64,7 @@ export function decodeOutcomeRecords(state: JsonObject): JsonObject {
   const outcomes = headers.map(value => {
     const row = canonicalAuthorityObject(value, "outcome header");
     check(hasExactAuthorityKeys(row, ["id", "owner_agent_id", "objective", "revision", "collection_digest",
+      ...(Object.hasOwn(row, "declaration_owner_agent_id") ? ["declaration_owner_agent_id"] : []),
       ...(Object.hasOwn(row, "review_basis_digest") ? ["review_basis_digest"] : [])]), "outcome header has unsupported fields");
     const {review_basis_digest, collection_digest, ...header} = row;
     check(typeof collection_digest === "string", "outcome record inventory digest is missing");

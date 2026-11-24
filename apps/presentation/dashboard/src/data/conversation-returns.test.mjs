@@ -224,3 +224,13 @@ assert.deepEqual(conversationPendingReturnSessions(revised), []);
 
 revised[0].collaborations[0].returns.unshift({phase: "conclusion", status: "superseded", request_revision: 2});
 assert.deepEqual(conversationPendingReturnSessions(revised), [], "A superseded result cannot hide the delivered current conclusion");
+
+const documentSource = {role: "agent", session_id: "local", turn_id: "first", message_id: "managed.first.completed",
+  text: "Your checklist", attachments: [{id: "artifact", name: "checklist.md", mime_type: "text/markdown",
+    size: 3, data_url: "data:text/markdown;base64,YWJj"}]};
+const liveReply = {role: "assistant", pending: false, sourceSessionId: "local", sourceTurnId: "first", text: "Your checklist"};
+const attach = source => reconcileConversationReturns([liveReply], "local", [source], createReply)[0].attachments;
+assert.equal(attach(documentSource)[0].dataUrl, documentSource.attachments[0].data_url);
+assert.equal(attach({...documentSource, session_id: "other"}), undefined);
+assert.equal(attach({...documentSource, message_id: "commentary"}), undefined);
+assert.equal(attach({...documentSource, attachments: [{...documentSource.attachments[0], data_url: "https://example.com/file"}]}), undefined);

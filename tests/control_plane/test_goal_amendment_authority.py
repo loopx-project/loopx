@@ -13,17 +13,26 @@ from loopx.control_plane.goals.goal_amendment_proposal import _derive_open_repla
 from loopx.control_plane.projects.registry_codec import load_project_registry
 
 
-def _configure_fixture_stride(runtime: Path, strategy: str) -> None:
-    from loopx.capabilities.machine_configuration.builtins import build_builtin_machine_configuration_registry
-    from loopx.capabilities.machine_configuration.store import configure_machine_configuration
-
-    owner = build_builtin_machine_configuration_registry()
-    configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
-        "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
-            "count_unit": "effective_turns", "count": 6, "stride_strategy": strategy}}}
-    preview = configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=configuration)
-    configure_machine_configuration(runtime_root=runtime, registry=owner, configuration=configuration,
-        execute=True, expected_plan_revision=preview["plan_revision"])
+def _monitor_repeat_runs(*, goal_ref: dict, count: int = 6) -> list[dict]:
+    return [
+        {
+            "generated_at": f"2026-01-01T02:{offset:02d}:00+00:00",
+            "classification": "quota_monitor_poll",
+            "agent_id": "agent-a",
+            "delivery_outcome": "surface_only",
+            "todo_id": "todo_due_monitor",
+            "target_key": "monitor-current-route",
+            "goal_ref": goal_ref,
+            "monitor_target": {
+                "schema_version": "quota_monitor_target_v0",
+                "target_id": "monitor-current-route",
+                "monitor_mode": "due_monitor_observed_without_material_transition",
+                "effective_action": "normal_run",
+                "agent_id": "agent-a",
+            },
+        }
+        for offset in range(count)
+    ]
 
 
 @pytest.fixture(params=["file", "sqlite"])
@@ -192,9 +201,20 @@ def test_timed_out_commit_cannot_arrive_after_source_goal_recreation(source_goal
 @pytest.mark.parametrize("claim_agent", ["agent-a", "agent-b"])
 def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp_path, capsys, claim_agent):
     f = source_goal
-    # This journey verifies the direct successor acknowledgement and lease
-    # replay. The periodic journey below covers the distinct Stride gate.
-    _configure_fixture_stride(f["runtime"], "off")
+    # Use a non-stride obligation (dead_monitor_repeat) to verify direct
+    # successor acknowledgement and lease replay; the periodic journey below
+    # verifies that cadence/stall stride reviews never auto-settle on claim.
+    monitor_rows = _monitor_repeat_runs(goal_ref=f["ref"])
+    f["runs"].write_text("".join(json.dumps(row) + "\n" for row in monitor_rows))
+    goal = load_project_registry(f["registry"])["goals"][0]
+    derived = _derive_open_replan_obligation_inventory(
+        runtime_root=f["runtime"], goal_id=f["ref"]["goal_id"],
+        goal=goal, state_text="", goal_ref=f["ref"],
+    )
+    inventory = _open_replan_obligation_inventory(
+        goal_id=f["ref"]["goal_id"], registered_agents=["agent-a", "agent-b"], status_item=derived,
+    )
+    f["obligation"] = next(row["obligation_id"] for row in inventory if "agent-a" in row["bound_agent_ids"])
     view = _call(f, tmp_path, capsys, "inspect")[1]
     root = _root(view)
     assert _call(f, tmp_path, capsys, "configure", root, agent=None, operation_id="root", execute=True)[0] == 0
@@ -236,8 +256,7 @@ def test_claimed_successor_is_consumed_by_existing_replan_owner(source_goal, tmp
     assert original["receipts"][0]["result"]["replan_settlement"] == "pending"
 
 
-@pytest.mark.parametrize("strategy", ["off", "evidence_conditioned_v1"])
-def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_path, capsys, strategy):
+def test_periodic_successor_readback_enforces_unconditional_stride(source_goal, tmp_path, capsys):
     from loopx.capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 
     f = source_goal
@@ -249,11 +268,10 @@ def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_p
         row["progress_observation"].update(result_class="advanced",
             surface_id=f"coverage-{index}", hypothesis_id=f"hypothesis-{index}")
     f["runs"].write_text("".join(json.dumps(row) + "\n" for row in rows))
-    _configure_fixture_stride(f["runtime"], strategy)
     goal = load_project_registry(f["registry"])["goals"][0]
     assert "stride_strategy" not in goal.get("execution_profile", {})
     effective = resolve_todo_replan_cadence_goal(goal, f["runtime"])
-    assert effective["execution_profile"].get("stride_strategy", "off") == strategy
+    assert "stride_strategy" not in effective.get("execution_profile", {})
     derived = _derive_open_replan_obligation_inventory(runtime_root=f["runtime"], goal_id=f["ref"]["goal_id"],
         goal=goal, state_text="", goal_ref=f["ref"])
     candidates = list(derived.get("autonomous_replan_obligations_by_agent", {}).values())
@@ -283,12 +301,8 @@ def test_periodic_successor_readback_uses_live_machine_stride(source_goal, tmp_p
     assert code == 0, claimed
     observation = next(row for row in claimed["current_projection"]["replan_observations"]
         if row["obligation_id"] == f["obligation"] and row["agent_id"] == "agent-a")
-    if strategy == "off":
-        assert observation["state"] == "settled"
-        assert observation["acknowledgement"]["source"] == "todo_replan_successor_transition"
-    else:
-        assert observation["state"] == "pending"
-        assert observation["acknowledgement"] is None
+    assert observation["state"] == "pending"
+    assert observation["acknowledgement"] is None
     # The source observation neither fabricates a decision nor rewrites history.
     assert f["runs"].read_text() == "".join(json.dumps(row) + "\n" for row in rows)
 

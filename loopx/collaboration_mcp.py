@@ -27,18 +27,15 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
 from .file_lock import (
+    LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE,
+    LOCK_HOLDER_RELEASED, LockAcquireTimeoutError, LockAcquisitionPolicy,
     exclusive_file_lock, lock_holder_host_label, lock_holder_liveness,
-    LOCK_HOLDER_ABSENT, LOCK_HOLDER_DEAD, LOCK_HOLDER_RELEASED,
-    LOCK_HOLDER_FOREIGN_HOST, LOCK_HOLDER_LIVE, LockAcquisitionPolicy, LockAcquireTimeoutError,
 )
 from .control_plane.effect_runtime import (
-    effect_runtime_request_scope, effect_runtime_result, EffectRuntimeRemoteError,
+    EffectRuntimeRemoteError, effect_runtime_request_scope, effect_runtime_result,
 )
 from .control_plane.runtime.validation_command import noninteractive_validation
-from .control_plane.turn_driver.journal_store import (
-    load_turn_journal,
-    turn_journal_path,
-)
+from .control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
 from .control_plane.turn_driver.host_binding import turn_host_arg_option
 from .control_plane.turn_driver.host_process_transport import (
     HOST_PROCESS_DRAINING, HOST_PROCESS_RECORD_ENV,
@@ -48,38 +45,29 @@ from .control_plane.turn_driver.lane_fence import (
     TURN_LANE_ABSENT, TURN_LANE_DEAD, TURN_LANE_LIVE, TURN_LANE_RELEASED,
     turn_lane_liveness, turn_lane_target,
 )
-from .control_plane.collaboration.delegation_stop_signal import (
-    DelegationFenced, DelegationStopRequested, WorkerStopSignal, install_worker_stop_signal,
-)
-from .control_plane.collaboration.inbox import _hash, _read, _write, _root, _receipt
+from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
 from .control_plane.collaboration.delegation_inventory import (
     DELEGATION_HOST_PROCESS_SUFFIX, DELEGATION_STOP_RECEIPT_SUFFIX,
 )
-from .control_plane.collaboration.peers import return_result
-from .control_plane.collaboration.inbox import acknowledge, _entry, normalize_request
-from .control_plane.collaboration.goal_instance_scope import (
-    capture_collaboration_goal_ref,
-    collaboration_goal_scope,
-    decide_collaboration_lifecycle,
+from .control_plane.collaboration.delegation_stop_signal import (
+    DelegationFenced, DelegationStopRequested, WorkerStopSignal, install_worker_stop_signal,
 )
-from .control_plane.collaboration import delegation_results, delegation_stop_lease, delegation_validation
+from .control_plane.collaboration.goal_instance_scope import (
+    capture_collaboration_goal_ref, collaboration_goal_scope, decide_collaboration_lifecycle,
+)
+from .control_plane.collaboration.inbox import (
+    _entry, _hash, _read, _receipt, _root, _write, acknowledge, normalize_request,
+)
+from .control_plane.collaboration.peers import (
+    InboxReadResponseAmbiguous, _goal, consume_return, read_inbox,
+    read_turn_peer_returns, request, require_operation_id, return_result,
+)
 from .control_plane.collaboration.source_grant_observation import (
     read_delegation_source_execution, verify_delegation_source_execution,
 )
 from .control_plane.collaboration.source_policy_fence import source_policy_fence
-from .control_plane.collaboration.peers import (
-    InboxReadResponseAmbiguous,
-    _goal,
-    consume_return,
-    read_inbox,
-    request,
-    require_operation_id,
-    read_turn_peer_returns,
-)
 from .presentation.answer_instruction import (
-    collaboration_answer_instruction,
-    collaboration_brief_instruction,
-    conversation_answer_instruction,
+    collaboration_answer_instruction, collaboration_brief_instruction, conversation_answer_instruction,
 )
 
 
@@ -111,8 +99,7 @@ def _pinned_release_environment() -> dict[str, str]:
     environment = os.environ.copy()
     release_root = str(_release_root())
     inherited = [
-        entry
-        for entry in environment.get("PYTHONPATH", "").split(os.pathsep)
+        entry for entry in environment.get("PYTHONPATH", "").split(os.pathsep)
         if entry and Path(entry).resolve(strict=False) != Path(release_root)
     ]
     environment["PYTHONPATH"] = os.pathsep.join([release_root, *inherited])
@@ -127,24 +114,13 @@ def _python_module_command(module: str) -> list[str]:
 def _pinned_module_command(module: str, *, interpreter: str | None = None) -> list[str]:
     """Build a self-contained module argv for hosts that sanitize env vars."""
 
-    return [
-        interpreter or sys.executable,
-        "-P",
-        "-c",
-        _PINNED_MODULE_LAUNCHER,
-        str(_release_root()),
-        module,
-    ]
+    return [interpreter or sys.executable, "-P", "-c", _PINNED_MODULE_LAUNCHER, str(_release_root()), module]
 
 
 def _mcp_python_candidates() -> tuple[Path, ...]:
     configured = os.environ.get("LOOPX_MCP_PYTHON")
     managed = (
-        Path.home()
-        / ".local"
-        / "share"
-        / "loopx"
-        / "mcp-venv"
+        Path.home() / ".local/share/loopx/mcp-venv"
         / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     )
     values: list[Path] = []
@@ -174,17 +150,9 @@ def _mcp_python_executable() -> str:
             continue
         try:
             probe = subprocess.run(
-                [
-                    str(candidate),
-                    "-P",
-                    "-c",
-                    "from mcp.server.fastmcp import FastMCP",
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=_pinned_release_environment(),
-                timeout=10,
+                [str(candidate), "-P", "-c", "from mcp.server.fastmcp import FastMCP"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=_pinned_release_environment(), timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -200,10 +168,7 @@ def _mcp_module_command() -> list[str]:
     # Codex intentionally sanitizes PYTHONPATH for stdio MCP children.  Carry
     # the admitted release root in argv and rebuild sys.path inside the child
     # rather than trusting ambient process state.
-    return _pinned_module_command(
-        "loopx.collaboration_mcp",
-        interpreter=_mcp_python_executable(),
-    )
+    return _pinned_module_command("loopx.collaboration_mcp", interpreter=_mcp_python_executable())
 
 
 def _bound_work_turn_identity(goal_id: str, agent_id: str, workspace: Path) -> str | None:
@@ -231,29 +196,20 @@ def create_server(
 
     server = FastMCP("loopx-collaboration")
     register_collaboration_tools(
-        server,
-        root,
-        registry,
-        goal_id,
-        agent_id,
-        workspace,
+        server, root, registry, goal_id, agent_id, workspace,
         turn_instance_id=_bound_work_turn_identity(goal_id, agent_id, workspace),
     )
     if execution_config is not None:
-        register_delegation_tools(server, Delegations(
-            root, registry, goal_id, agent_id, execution_config, reuse_preview=True,
-        ))
+        register_delegation_tools(
+            server, Delegations(root, registry, goal_id, agent_id, execution_config, reuse_preview=True),
+        )
     return server
 
 
 def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, goal_id: str,
                                  agent_id: str, workspace: Path, *,
                                  turn_instance_id: str | None = None) -> None:
-    caller_goal_ref = capture_collaboration_goal_ref(
-        registry,
-        goal_id=goal_id,
-        agent_id=agent_id,
-    )
+    caller_goal_ref = capture_collaboration_goal_ref(registry, goal_id=goal_id, agent_id=agent_id)
 
     def check_scope():
         # Revocation is read on every tool call, including a long-lived server.
@@ -269,14 +225,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         """
         try:
             result = read_inbox(
-                root,
-                registry,
-                goal_id,
-                agent_id,
-                workspace=workspace,
-                cursor=cursor,
-                turn_instance_id=turn_instance_id,
-                caller_goal_ref=caller_goal_ref,
+                root, registry, goal_id, agent_id, workspace=workspace, cursor=cursor,
+                turn_instance_id=turn_instance_id, caller_goal_ref=caller_goal_ref,
             )
         except InboxReadResponseAmbiguous as exc:
             from mcp.server.fastmcp.exceptions import ToolError
@@ -308,15 +258,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         """Record your independent decision; this does not change task ownership or priority."""
         check_scope()
         return acknowledge(
-            root,
-            goal_id,
-            agent_id,
-            request_id,
-            decision,
-            reason,
-            registry=registry,
-            caller_goal_ref=caller_goal_ref,
-            request_revision=request_revision,
+            root, goal_id, agent_id, request_id, decision, reason, registry=registry,
+            caller_goal_ref=caller_goal_ref, request_revision=request_revision,
             request_revision_digest=request_digest,
         )
 
@@ -353,15 +296,8 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
     ) -> dict:
         check_scope()
         return request(
-            root,
-            registry,
-            goal_id,
-            agent_id,
-            peer_agent_id,
-            operation_id,
-            brief,
-            parent_request_id,
-            caller_goal_ref=caller_goal_ref,
+            root, registry, goal_id, agent_id, peer_agent_id, operation_id,
+            brief, parent_request_id, caller_goal_ref=caller_goal_ref,
         )
 
     @server.tool(description=(
@@ -389,19 +325,10 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         from .capabilities.manager_context.roundtrip import report
 
         return report(
-            root,
-            goal_id,
-            agent_id,
-            request_id,
-            "conclusion",
-            text,
-            update_id=update_id,
-            attachment_refs=attachment_refs,
-            request_revision=request_revision,
-            remaining_work=remaining_work,
-            workspace=workspace,
-            registry=registry,
-            caller_goal_ref=caller_goal_ref,
+            root, goal_id, agent_id, request_id, "conclusion", text,
+            update_id=update_id, attachment_refs=attachment_refs,
+            request_revision=request_revision, remaining_work=remaining_work,
+            workspace=workspace, registry=registry, caller_goal_ref=caller_goal_ref,
         )
 
     if caller_goal_ref is not None:
@@ -417,11 +344,9 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
             not revoke committed Goal work or grant new execution permission.
             """
             from .control_plane.collaboration.request_amendment import control_request
-            from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 
             check_scope()
             return control_request(registry_path=registry, runtime_root=root, goal_ref=caller_goal_ref,
-                replan_configuration_reader=resolve_todo_replan_cadence_goal,
                 receiver_agent_id=receiver_agent_id, request_id=request_id, actor_agent_id=agent_id,
                 operation=operation, parameters=parameters, execute=execute)
 
@@ -460,16 +385,9 @@ def register_collaboration_tools(server: FastMCP, root: Path, registry: Path, go
         if turn_instance_id is None:
             raise ValueError("peer result acknowledgement requires a host-bound work Turn")
         return consume_return(
-            root,
-            goal_id,
-            agent_id,
-            request_id,
-            result_key=result_key,
-            turn_instance_id=turn_instance_id,
-            disposition=disposition,
-            read_token=read_token,
-            registry=registry,
-            caller_goal_ref=caller_goal_ref,
+            root, goal_id, agent_id, request_id, result_key=result_key,
+            turn_instance_id=turn_instance_id, disposition=disposition, read_token=read_token,
+            registry=registry, caller_goal_ref=caller_goal_ref,
         )
 
 
@@ -517,6 +435,19 @@ def record_wake(path: Path, decide) -> dict | None:
     return updated
 
 
+def _result_error(payload: dict, fallback: str, *, include_reason_code: bool = False) -> str:
+    reason_code = payload.get("reason_code") if include_reason_code else None
+    return str(payload.get("error") or payload.get("reason") or reason_code or fallback)
+
+
+def _wait_until(predicate, *, deadline: float, interval: float) -> bool:
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
 class Delegations:
     """Host IO for bound peer work; typed grants and observations stay in TS.
 
@@ -539,11 +470,7 @@ class Delegations:
 
             self._preview_transport = DelegationPreviewTransport()
         try:
-            self.goal_ref = capture_collaboration_goal_ref(
-                self.registry,
-                goal_id=self.goal_id,
-                agent_id=self.agent_id,
-            )
+            self.goal_ref = capture_collaboration_goal_ref(self.registry, goal_id=self.goal_id, agent_id=self.agent_id)
         except FileNotFoundError:
             self.goal_ref = None
 
@@ -553,11 +480,43 @@ class Delegations:
         with self._goal_ref_lock:
             if self.goal_ref is None:
                 self.goal_ref = capture_collaboration_goal_ref(
-                    self.registry,
-                    goal_id=self.goal_id,
-                    agent_id=self.agent_id,
+                    self.registry, goal_id=self.goal_id, agent_id=self.agent_id,
                 )
         return self.goal_ref
+
+    def _inspect_request_entry(
+        self, agent_id: str, request_id: str, *, read_decision: bool = False,
+    ) -> tuple[dict, dict, str | None]:
+        with collaboration_goal_scope(
+            self.registry, goal_id=self.goal_id, agents=(), caller_goal_ref=self._caller_goal_ref(),
+        ) as scope:
+            entry = _entry(self.root, self.goal_id, agent_id, request_id, scope=scope)
+            decide_collaboration_lifecycle(scope, operation="history_inspect", record=entry)
+            decision, error = _receipt(self.root, "decisions", entry) if read_decision else ({}, None)
+        return entry, decision, error
+
+    def _service_cli_flags(self, *, agent_id: str | None = None) -> list[str]:
+        return [
+            "--runtime-root", str(self.root), "--registry", str(self.registry),
+            "--goal-id", self.goal_id, "--agent-id", agent_id or self.agent_id,
+        ]
+
+    def _cli_arguments(self, *args: str) -> list[str]:
+        return ["--registry", str(self.registry), "--runtime-root", str(self.root), "--format", "json", *args]
+
+    def _run_turn_once(
+        self, path: Path, row: dict, binding: dict, *pre_args: str,
+        post_args: tuple[str, ...] = (), execution: list[str] | None = None, with_lease: bool = False,
+    ) -> dict:
+        exec_args = execution if execution is not None else self._execution_arguments(
+            binding, row["identity"]["operation_id"],
+        )
+        return self._cli(
+            binding, "turn", "run-once", "--goal-id", self.goal_id, "--agent-id", binding["agent_id"],
+            *pre_args, *exec_args, *post_args, "--execute", timeout=binding["timeout_seconds"] + 60,
+            delegated_lease=self._delegated_lease_context(row, binding) if with_lease else None,
+            host_record=self._host_process_record(path),
+        )
 
     def binding(self, binding_id: str, *, require_active: bool = False) -> dict:
         _goal(self.registry, self.goal_id, self.agent_id, require_active=require_active)
@@ -573,8 +532,7 @@ class Delegations:
         config = _read(self.config)
         bindings = [self.binding(row["id"]) for row in config["bindings"]
                     if self.agent_id in row.get("requesters", [])]
-        return {"bindings": [{key: row[key] for key in ("id", "agent_id", "todo_id")}
-                             for row in bindings]}
+        return {"bindings": [{key: row[key] for key in ("id", "agent_id", "todo_id")} for row in bindings]}
 
     def path(self, operation_id: str) -> Path:
         return execution_row_path(self.root, self.goal_id, self.agent_id, operation_id)
@@ -596,9 +554,7 @@ class Delegations:
     @staticmethod
     def _read_stop(path: Path) -> dict | None:
         stop_path = Delegations._stop_path(path)
-        if not stop_path.exists():
-            return None
-        return _read(stop_path)
+        return _read(stop_path) if stop_path.exists() else None
 
     def operations(self, *, limit: int = 20, cursor: str | None = None) -> dict:
         from .control_plane.collaboration.delegation_inventory import read_delegation_inventory
@@ -636,28 +592,31 @@ class Delegations:
         if any(item.get("delegation", {}).get("operation_id") == operation_id for item in brief["inputs"]):
             raise ValueError("delegation cannot depend on itself")
         if source_request_id is not None:
-            with collaboration_goal_scope(self.registry, goal_id=self.goal_id, agents=(),
-                                          caller_goal_ref=self._caller_goal_ref()) as scope:
-                original = _entry(self.root, self.goal_id, binding["agent_id"], source_request_id, scope=scope)
-                decide_collaboration_lifecycle(scope, operation="history_inspect", record=original)
+            original, _, _ = self._inspect_request_entry(binding["agent_id"], source_request_id)
             if original.get("brief") != brief:
                 raise ValueError("source request brief does not match delegated work")
         path = self.path(operation_id)
         with exclusive_file_lock(path.with_suffix(".dispatch")):
             exists = path.exists()
             if exists and source_request_id is not None:
-                return read_delegation_source_execution(self, binding_id, operation_id,
-                    source_request_id=source_request_id, brief=brief, conversation=conversation or {})
+                return read_delegation_source_execution(
+                    self, binding_id, operation_id,
+                    source_request_id=source_request_id, brief=brief, conversation=conversation or {},
+                )
             if not exists:
                 delegation_results.require_dependencies(self, binding, brief)
-            delivered = request(self.root, self.registry, self.goal_id, self.agent_id,
-                                binding["agent_id"], operation_id, brief, parent_request_id,
-                                caller_goal_ref=self._caller_goal_ref())
+            delivered = request(
+                self.root, self.registry, self.goal_id, self.agent_id,
+                binding["agent_id"], operation_id, brief, parent_request_id,
+                caller_goal_ref=self._caller_goal_ref(),
+            )
             identity = {"binding": binding, "request_id": delivered["request_id"], "operation_id": operation_id}
             if source_request_id is not None:
                 identity["source_request_id"] = source_request_id
             if binding["todo_id"] is None:
-                identity["request_subject"] = delegation_validation.ordinary_request_subject(self, {"identity": identity}, binding)
+                identity["request_subject"] = delegation_validation.ordinary_request_subject(
+                    self, {"identity": identity}, binding,
+                )
             if confirmed_operation_id is not None:
                 # Internal callback adapter only: a canonical locator/CAS fence,
                 # not an executor identity or domain execution permission.
@@ -670,8 +629,7 @@ class Delegations:
                           if conversation else None)
                 prepare_host_process_record(self._host_process_record(path))
                 _write(path, {"identity": identity, "status": "prepared", "created_at": time.time(),
-                              "work_context_required": True,
-                              **({"conversation": origin} if origin else {})})
+                              "work_context_required": True, **({"conversation": origin} if origin else {})})
                 if not _defer_worker:
                     self._spawn(operation_id)
         return self.read(operation_id)
@@ -681,11 +639,10 @@ class Delegations:
         # scoped resume retains the durable execution and its single-flight fence.
         operation_id = require_operation_id(operation_id)
         precondition = [] if prepared_source_request_id is None else ["--prepared-source-request-id", prepared_source_request_id]
-        subprocess.Popen([*_python_module_command("loopx.collaboration_mcp"),
-            "--delegation-action", "worker", "--runtime-root", str(self.root),
-            "--registry", str(self.registry), "--goal-id", self.goal_id,
-            "--agent-id", self.agent_id, "--execution-config", str(self.config), "--operation-id=" + operation_id,
-            *precondition,
+        subprocess.Popen([
+            *_python_module_command("loopx.collaboration_mcp"), "--delegation-action", "worker",
+            *self._service_cli_flags(), "--execution-config", str(self.config),
+            "--operation-id=" + operation_id, *precondition,
         ], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, close_fds=True, env=_pinned_release_environment())
 
@@ -697,9 +654,7 @@ class Delegations:
         if self._read_stop(path) is not None:
             raise ValueError(DELEGATION_STOPPED_MESSAGE)
         try:
-            with exclusive_file_lock(
-                path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT
-            ):
+            with exclusive_file_lock(path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
                 row = _read(path)
                 binding = self._bound(row)
                 if prepared_source_request_id is not None and row["identity"].get("source_request_id") != prepared_source_request_id:
@@ -766,12 +721,10 @@ class Delegations:
                 delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
                 row.setdefault("validation_failure", failure)
                 self._fenced_write(path, row)  # Durable intent precedes the effect.
-                result = self._cli(binding, "turn", "run-once", "--goal-id", self.goal_id,
-                    "--agent-id", binding["agent_id"], "--resume-turn-key", failure["turn_key"],
-                    *self._execution_arguments(binding, operation_id), "--retry-failed-turn", "--execute",
-                    timeout=binding["timeout_seconds"] + 60,
-                    delegated_lease=self._delegated_lease_context(row, binding),
-                    host_record=self._host_process_record(path))
+                result = self._run_turn_once(
+                    path, row, binding, "--resume-turn-key", failure["turn_key"],
+                    post_args=("--retry-failed-turn",), with_lease=True,
+                )
                 if result.get("status") == "committed":
                     delegation_validation.record_revalidation_result(self, path, row, binding, result)
                     recovered = True
@@ -793,20 +746,19 @@ class Delegations:
                 raise ValueError("delegation request revision or execution scope changed; reconcile original execution")
         if require_active and "source_request_id" in row["identity"]:
             try:
-                verify_delegation_source_execution(self, binding["id"], row["identity"]["operation_id"],
+                verify_delegation_source_execution(
+                    self, binding["id"], row["identity"]["operation_id"],
                     source_request_id=row["identity"]["source_request_id"],
                     brief=delegation_results.operation_brief(self, row), conversation=row.get("conversation", {}),
-                    policy_locked=policy_locked)
+                    policy_locked=policy_locked,
+                )
             except OSError as exc:
                 raise ValueError("original source execution provenance unavailable") from exc
         return binding
 
     @staticmethod
     def _turn_instance_id(row: dict) -> str:
-        return str(
-            row.get("turn_instance_id")
-            or "delegation-" + row["identity"]["request_id"][:32]
-        )
+        return str(row.get("turn_instance_id") or "delegation-" + row["identity"]["request_id"][:32])
 
     def adopt_result(self, operation_id: str, consumer_operation_id: str) -> dict:
         return delegation_results.adopt_result(self, operation_id, consumer_operation_id)
@@ -829,7 +781,7 @@ class Delegations:
         binding = self._bound(row)
         try:
             with exclusive_file_lock(
-                path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT, operation=_DELEGATION_STATUS_READ
+                path, policy=LockAcquisitionPolicy.SINGLE_FLIGHT, operation=_DELEGATION_STATUS_READ,
             ):
                 active = False
         except LockAcquireTimeoutError:
@@ -1104,18 +1056,14 @@ class Delegations:
         # Poll the release facts the decision needs; the deadline only bounds this
         # call, and a Host still draining when it passes leaves the stop open.
         deadline = time.monotonic() + DELEGATION_STOP_GRACE_SECONDS
-        while time.monotonic() < deadline:
-            if self._operation_lock_free(path):
-                self._await_host_drain(path, deadline)
-                return
-            time.sleep(0.2)
+        if _wait_until(lambda: self._operation_lock_free(path), deadline=deadline, interval=0.2):
+            self._await_host_drain(path, deadline)
+            return
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
             return
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and not self._operation_lock_free(path):
-            time.sleep(0.1)
+        _wait_until(lambda: self._operation_lock_free(path), deadline=time.monotonic() + 2.0, interval=0.1)
         # The Host supervisor sits outside the worker's group and cleans up on its own.
         self._await_host_drain(path, time.monotonic() + DELEGATION_STOP_GRACE_SECONDS)
 
@@ -1130,8 +1078,7 @@ class Delegations:
 
     def _await_host_drain(self, path: Path, deadline: float) -> None:
         """Wait, never kill: the TS Host supervisor owns terminating its process group."""
-        while self._host_drain(path) == HOST_PROCESS_DRAINING and time.monotonic() < deadline:
-            time.sleep(0.1)
+        _wait_until(lambda: self._host_drain(path) != HOST_PROCESS_DRAINING, deadline=deadline, interval=0.1)
 
     def _acknowledge_stop(self, path: Path, row: dict, binding: dict, *, source: str) -> None:
         """Acknowledge under the operation lock; resource readback releases the lease later.
@@ -1153,9 +1100,7 @@ class Delegations:
                     or current["status"] in DELEGATION_TERMINAL_STATUSES):
                 return
             observed = current["status"]
-            transition = effect_runtime_result("collaboration.delegation.observe", {
-                "from": observed, "to": "stopped",
-            })
+            transition = effect_runtime_result("collaboration.delegation.observe", {"from": observed, "to": "stopped"})
             # This process holds the operation lock; its lane, Host drain and lease are read later.
             phase = effect_runtime_result("collaboration.delegation.stop", {
                 "phase": stop["phase"], "acknowledged": True,
@@ -1217,11 +1162,8 @@ class Delegations:
     def _wake_requester(self, row: dict) -> dict:
         """Requester and exact result identity for the typed wake intent."""
         return {
-            "goal_id": self.goal_id,
-            "agent_id": self.agent_id,
-            "goal_ref": self._caller_goal_ref(),
-            "operation_id": row["identity"]["operation_id"],
-            "request_id": row["identity"]["request_id"],
+            "goal_id": self.goal_id, "agent_id": self.agent_id, "goal_ref": self._caller_goal_ref(),
+            "operation_id": row["identity"]["operation_id"], "request_id": row["identity"]["request_id"],
             "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]],
             "conversation": row.get("conversation"),
         }
@@ -1231,14 +1173,15 @@ class Delegations:
         path = self.path(require_operation_id(operation_id))
         if not path.exists():
             return None
+
         def observe(wake: dict) -> dict | None:
             decision = effect_runtime_result("collaboration.delegation.observe_wake", {
                 "intent": wake,
                 "observer": {"session_id": session_id, "goal_id": self.goal_id,
                              "agent_id": self.agent_id, "goal_ref": self._caller_goal_ref()},
             })
-            return (wake_receipt(wake, "observed_in_turn", observed_at=time.time())
-                    if decision["observed"] else None)
+            return wake_receipt(wake, "observed_in_turn", observed_at=time.time()) if decision["observed"] else None
+
         try:
             return record_wake(path, observe)
         except LockAcquireTimeoutError:
@@ -1256,46 +1199,40 @@ class Delegations:
             # the worker independently rejects execution/resume/retargeting.
             # Mutating commands keep the original one-shot or leased Host path.
             return self._preview_transport.preview(
-                command=_python_module_command(
-                    "loopx.control_plane.collaboration.delegation_preview_worker"
-                ), workspace=Path(binding["workspace"]), release=_release_root(),
-                environment=_pinned_release_environment(), registry=self.registry,
-                runtime_root=self.root, goal_id=self.goal_id,
-                agent_id=binding["agent_id"], todo_id=binding["todo_id"],
+                command=_python_module_command("loopx.control_plane.collaboration.delegation_preview_worker"),
+                workspace=Path(binding["workspace"]), release=_release_root(),
+                environment=_pinned_release_environment(), registry=self.registry, runtime_root=self.root,
+                goal_id=self.goal_id, agent_id=binding["agent_id"], todo_id=binding["todo_id"],
                 argv=args, timeout=timeout,
             )
-        arguments = [
-            "--registry", str(self.registry),
-            "--runtime-root", str(self.root), "--format", "json", *args,
-        ]
+        arguments = self._cli_arguments(*args)
         environment = _pinned_release_environment()
         environment.pop(HOST_PROCESS_RECORD_ENV, None)
         if host_record is not None:
             # The Turn's Host transport names the process group its supervisor owns.
             environment[HOST_PROCESS_RECORD_ENV] = str(host_record)
         if delegated_lease is None:
-            completed = subprocess.run([*_python_module_command("loopx.cli"), *arguments],
+            completed = subprocess.run(
+                [*_python_module_command("loopx.cli"), *arguments],
                 cwd=binding["workspace"], capture_output=True, text=True, encoding="utf-8",
                 # Requests are entirely in argv; never inherit the caller's MCP/HTTP pipe.
-                stdin=subprocess.DEVNULL, timeout=timeout, env=environment)
+                stdin=subprocess.DEVNULL, timeout=timeout, env=environment,
+            )
             stdout, returncode = completed.stdout, completed.returncode
         else:
             from .control_plane.turn_driver.host_process_transport import run_host_process
 
-            chunks = []
-            nested_record_args = []
-            if host_record is not None:
-                # The transport records its leased supervisor beside this record;
-                # only our private CLI re-arms it for the actual Host it starts.
-                # Never pass it through an arbitrary user Host.
-                nested_record_args = ["--host-process-record", str(host_record)]
+            chunks: list[str] = []
+            # The transport records its leased supervisor beside this record;
+            # only our private CLI re-arms it for the actual Host it starts.
+            # Never pass it through an arbitrary user Host.
+            nested_record_args = ["--host-process-record", str(host_record)] if host_record is not None else []
             try:
                 observation = run_host_process(
                     [*_python_module_command("loopx.control_plane.turn_driver.delegated_cli"),
                      *nested_record_args, *arguments],
                     project=Path(binding["workspace"]), input_text="", timeout_seconds=timeout,
-                    environment=environment, delegated_lease=delegated_lease,
-                    on_stdout=chunks.append,
+                    environment=environment, delegated_lease=delegated_lease, on_stdout=chunks.append,
                 )
             except RuntimeError as exc:
                 raise ValueError("delegation managed CLI supervision unavailable; reconcile the original Turn") from exc
@@ -1311,14 +1248,7 @@ class Delegations:
         except ValueError as exc:
             raise ValueError("delegation CLI returned no structured result") from exc
         if returncode and "turn" not in args:
-            raise ValueError(
-                str(
-                    value.get("error")
-                    or value.get("reason")
-                    or value.get("reason_code")
-                    or "delegation canonical command rejected"
-                )
-            )
+            raise ValueError(_result_error(value, "delegation canonical command rejected", include_reason_code=True))
         return value
 
     def _validate(self, binding: dict) -> dict:
@@ -1327,6 +1257,19 @@ class Delegations:
 
     def _accepted(self, binding: dict) -> dict:
         return delegation_results.accepted_result(self, binding)
+
+    def _record_execution_error(self, path: Path, row: dict, exc: BaseException) -> None:
+        row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
+        self._fenced_write(path, row)
+
+    def _settle_committed_turn(
+        self, path: Path, row: dict, binding: dict, execution: list[str], *,
+        already_locked: bool, fallback: str,
+    ) -> None:
+        result = self._run_turn_once(path, row, binding, "--resume-turn-key", row["turn_key"], execution=execution)
+        self._record_turn_result(path, row, result, publish=False, already_locked=already_locked)
+        if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
+            raise ValueError(_result_error(result, fallback))
 
     def execute(self, operation_id: str, *, prepared_source_request_id: str | None = None) -> None:
         path = self.path(operation_id)
@@ -1357,8 +1300,7 @@ class Delegations:
                 with exclusive_file_lock(task_lock, policy=LockAcquisitionPolicy.SINGLE_FLIGHT):
                     self._execute(path, row, binding)
             except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
-                row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
-                self._fenced_write(path, row)
+                self._record_execution_error(path, row, exc)
                 if row["status"] == "prepared":
                     self._observe(path, row, "rejected")
             except DelegationStopRequested as stop:
@@ -1374,11 +1316,11 @@ class Delegations:
         # the admitted release root in argv just like the native MCP command;
         # PYTHONPATH pinning on the parent CLI is not a durable validator
         # identity and may be removed by the host boundary.
-        validator = [*_pinned_module_command("loopx.collaboration_mcp"),
-                     "--delegation-action", "validate", "--runtime-root", str(self.root),
-                     "--registry", str(self.registry), "--goal-id", self.goal_id,
-                     "--agent-id", self.agent_id, "--execution-config", str(self.config),
-                     "--workspace", binding["workspace"], "--operation-id", operation_id]
+        validator = [
+            *_pinned_module_command("loopx.collaboration_mcp"), "--delegation-action", "validate",
+            *self._service_cli_flags(), "--execution-config", str(self.config),
+            "--workspace", binding["workspace"], "--operation-id", operation_id,
+        ]
         native_tools: list[str] = []
         if turn_host_arg_option(binding["host_args"], "--host") == "codex-cli":
             from .control_plane.turn_driver.codex_cli import LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME
@@ -1386,19 +1328,9 @@ class Delegations:
             mcp_server = {
                 "schema_version": "codex_stdio_mcp_server_v0",
                 "name": LOOPX_DELEGATION_CODEX_MCP_SERVER_NAME,
-                "command": [*_mcp_module_command(),
-                    "--runtime-root",
-                    str(self.root),
-                    "--registry",
-                    str(self.registry),
-                    "--goal-id",
-                    self.goal_id,
-                    "--agent-id",
-                    binding["agent_id"],
-                    "--workspace",
-                    binding["workspace"],
-                    "--execution-config",
-                    str(self.config),
+                "command": [
+                    *_mcp_module_command(), *self._service_cli_flags(agent_id=binding["agent_id"]),
+                    "--workspace", binding["workspace"], "--execution-config", str(self.config),
                 ],
             }
             native_tools = ["--codex-mcp-server-json", json.dumps(mcp_server)]
@@ -1408,68 +1340,31 @@ class Delegations:
             confirmed = _read(path)["identity"].get("confirmed_operation_id")
             if confirmed is not None:
                 continuation = ["--codex-confirmed-operation-id", require_operation_id(confirmed)]
-        return ["--execution-mode", "isolated-headless", "--project", binding["workspace"],
-                     "--no-global-sync",
-                     "--timeout-seconds", str(binding["timeout_seconds"]),
-                     "--validation-command-json", json.dumps(validator),
-                     "--validation-failure-kind", "repair_required", *native_tools,
-                     *binding["host_args"], *continuation]
+        return [
+            "--execution-mode", "isolated-headless", "--project", binding["workspace"], "--no-global-sync",
+            "--timeout-seconds", str(binding["timeout_seconds"]), "--validation-command-json", json.dumps(validator),
+            "--validation-failure-kind", "repair_required", *native_tools, *binding["host_args"], *continuation,
+        ]
 
     def _record_turn_result(
         self, path: Path, row: dict, result: dict, *, publish: bool = True,
         already_locked: bool = False, unstarted_turn: bool = False,
     ) -> None:
         # Keep the bound service seam used by existing recovery/fault-injection callers.
-        delegation_validation.record_turn_result(self, path, row, result, publish=publish,
-            already_locked=already_locked, unstarted_turn=unstarted_turn)
+        delegation_validation.record_turn_result(
+            self, path, row, result, publish=publish,
+            already_locked=already_locked, unstarted_turn=unstarted_turn,
+        )
 
     def _receiver_adopted(self, row: dict, binding: dict) -> bool:
-        request_id = row["identity"]["request_id"]
-        with collaboration_goal_scope(
-            self.registry,
-            goal_id=self.goal_id,
-            agents=(),
-            caller_goal_ref=self._caller_goal_ref(),
-        ) as goal_scope:
-            entry = _entry(
-                self.root,
-                self.goal_id,
-                binding["agent_id"],
-                request_id,
-                scope=goal_scope,
-            )
-            decide_collaboration_lifecycle(
-                goal_scope,
-                operation="history_inspect",
-                record=entry,
-            )
-            decision, error = _receipt(
-                self.root,
-                "decisions",
-                entry,
-            )
+        _, decision, error = self._inspect_request_entry(
+            binding["agent_id"], row["identity"]["request_id"], read_decision=True,
+        )
         return not error and bool(decision) and decision["decision"] == "adopt"
 
     def _delegation_bootstrap(self, row: dict, binding: dict) -> dict:
         request_id = row["identity"]["request_id"]
-        with collaboration_goal_scope(
-            self.registry,
-            goal_id=self.goal_id,
-            agents=(),
-            caller_goal_ref=self._caller_goal_ref(),
-        ) as goal_scope:
-            entry = _entry(
-                self.root,
-                self.goal_id,
-                binding["agent_id"],
-                request_id,
-                scope=goal_scope,
-            )
-            decide_collaboration_lifecycle(
-                goal_scope,
-                operation="history_inspect",
-                record=entry,
-            )
+        entry, _, _ = self._inspect_request_entry(binding["agent_id"], request_id)
         source_id = row["identity"].get("source_request_id")
         source_instruction = (
             " Original owner inbox request " + source_id + ": read its original context, "
@@ -1478,8 +1373,7 @@ class Delegations:
             "to the original conversation. Final prose is not a receipt."
         ) if source_id else ""
         return {
-            "request_id": request_id,
-            "brief": entry["brief"],
+            "request_id": request_id, "brief": entry["brief"],
             **({"source_request_id": source_id} if source_id else {}),
             "instruction": (
                 "Use the loopx_delegation tools to read_context and call "
@@ -1503,9 +1397,7 @@ class Delegations:
         expected = self._delegation_bootstrap(row, binding)
         if path.exists():
             if _read(path) != expected:
-                raise ValueError(
-                    "delegation bootstrap path is occupied by another request"
-                )
+                raise ValueError("delegation bootstrap path is occupied by another request")
             return
         _write(path, expected)
 
@@ -1516,14 +1408,10 @@ class Delegations:
         if not path.exists():
             return
         if _read(path) != self._delegation_bootstrap(row, binding):
-            raise ValueError(
-                "delegation bootstrap changed while the delegated host was running"
-            )
+            raise ValueError("delegation bootstrap changed while the delegated host was running")
         path.unlink()
 
-    def _acquire_delegation_lease(
-        self, path: Path, row: dict, binding: dict
-    ) -> dict:
+    def _acquire_delegation_lease(self, path: Path, row: dict, binding: dict) -> dict:
         """Acquire the promoted hard lease before worker or completion effects."""
 
         if binding["todo_id"] is None:
@@ -1535,8 +1423,9 @@ class Delegations:
 
         from .control_plane.work_items.task_lease import inspect_task_lease
 
-        observed = inspect_task_lease(registry_path=self.registry, runtime_root=self.root,
-                                      goal_id=self.goal_id, todo_id=binding["todo_id"])
+        observed = inspect_task_lease(
+            registry_path=self.registry, runtime_root=self.root, goal_id=self.goal_id, todo_id=binding["todo_id"],
+        )
         support = observed.get("execution_policy")
         if not isinstance(support, dict) or type(support.get("supported")) is not bool:
             raise RuntimeError("lease inspection omitted typed execution-policy support")
@@ -1546,55 +1435,27 @@ class Delegations:
         if handoff_mode != "hard_lease":
             if row.get("task_lease", {}).get("required") is True:
                 raise ValueError("delegation authority mode changed; reconcile the original execution")
-            row["task_lease"] = {
-                "required": False,
-                "handoff_mode": handoff_mode,
-            }
+            row["task_lease"] = {"required": False, "handoff_mode": handoff_mode}
             self._fenced_write(path, row)
             return row["task_lease"]
         lease_key = self._turn_instance_id(row)
-        claim = self._delegation_claim_arguments(row, binding)
-        result = self._cli(binding, *claim)
+        result = self._cli(binding, *self._delegation_claim_arguments(row, binding))
         lease = result.get("lease")
-        if (
-            result.get("ok") is not True
-            or not isinstance(lease, dict)
-            or lease.get("owner") != binding["agent_id"]
-            or lease.get("idempotency_key") != lease_key
-            or lease.get("status") != "active"
-            or not isinstance(lease.get("version"), int)
-        ):
-            raise ValueError(
-                str(
-                    result.get("error")
-                    or result.get("reason")
-                    or "delegation task lease acquisition rejected"
-                )
-            )
-        row["task_lease"] = {
-            "required": True,
-            "handoff_mode": "hard_lease",
-            "lease": lease,
-        }
+        if (result.get("ok") is not True or not isinstance(lease, dict)
+                or lease.get("owner") != binding["agent_id"]
+                or lease.get("idempotency_key") != lease_key
+                or lease.get("status") != "active" or not isinstance(lease.get("version"), int)):
+            raise ValueError(_result_error(result, "delegation task lease acquisition rejected"))
+        row["task_lease"] = {"required": True, "handoff_mode": "hard_lease", "lease": lease}
         self._fenced_write(path, row)
         return row["task_lease"]
 
     def _delegation_claim_arguments(self, row: dict, binding: dict) -> list[str]:
         return [
-            "todo",
-            "claim",
-            "--goal-id",
-            self.goal_id,
-            "--todo-id",
-            binding["todo_id"],
-            "--claimed-by",
-            binding["agent_id"],
-            "--agent-id",
-            binding["agent_id"],
-            "--claim-operation-id",
-            "delegation-claim-" + row["identity"]["request_id"][:32],
-            "--task-lease-idempotency-key",
-            self._turn_instance_id(row),
+            "todo", "claim", "--goal-id", self.goal_id, "--todo-id", binding["todo_id"],
+            "--claimed-by", binding["agent_id"], "--agent-id", binding["agent_id"],
+            "--claim-operation-id", "delegation-claim-" + row["identity"]["request_id"][:32],
+            "--task-lease-idempotency-key", self._turn_instance_id(row),
         ]
 
     def _delegated_lease_context(self, row: dict, binding: dict) -> dict | None:
@@ -1602,12 +1463,10 @@ class Delegations:
         lease = row.get("task_lease", {})
         if lease.get("required") is not True:
             return None
-        prefix = [*_python_module_command("loopx.cli"), "--registry", str(self.registry),
-                  "--runtime-root", str(self.root), "--format", "json"]
+        prefix = [*_python_module_command("loopx.cli"), *self._cli_arguments()]
         selected = ["--goal-id", self.goal_id, "--todo-id", binding["todo_id"]]
         return {
-            "lease": lease["lease"],
-            "ttl_seconds": lease["lease"].get("acquire_ttl_seconds"),
+            "lease": lease["lease"], "ttl_seconds": lease["lease"].get("acquire_ttl_seconds"),
             "renew_argv": [*prefix, "task-lease", "renew", *selected, "--owner", binding["agent_id"],
                            "--idempotency-key", lease["lease"]["idempotency_key"]],
             "read_argv": [*prefix, *self._delegation_claim_arguments(row, binding)],
@@ -1621,20 +1480,10 @@ class Delegations:
         if not isinstance(lease, dict):
             raise ValueError("delegation Todo completion requires its acquired task lease")
         arguments = [
-            "todo",
-            "complete",
-            "--goal-id",
-            self.goal_id,
-            "--agent-id",
-            binding["agent_id"],
-            "--todo-id",
-            binding["todo_id"],
-            "--claimed-by",
-            binding["agent_id"],
-            "--turn-instance-id",
-            self._turn_instance_id(row),
-            "--note",
-            "Bounded delegated work; requester owns synthesis.",
+            "todo", "complete", "--goal-id", self.goal_id, "--agent-id", binding["agent_id"],
+            "--todo-id", binding["todo_id"], "--claimed-by", binding["agent_id"],
+            "--turn-instance-id", self._turn_instance_id(row),
+            "--note", "Bounded delegated work; requester owns synthesis.",
         ]
         if lease.get("required") is True:
             # Atomic claim replay verifies current eligibility and the original
@@ -1675,10 +1524,8 @@ class Delegations:
                 row["completion_lease_version"] = current["version"]
                 _write(self.path(row["identity"]["operation_id"]), row)
             arguments += [
-                "--task-lease-idempotency-key",
-                str(lease["lease"]["idempotency_key"]),
-                "--task-lease-expected-version",
-                str(row["completion_lease_version"]),
+                "--task-lease-idempotency-key", str(lease["lease"]["idempotency_key"]),
+                "--task-lease-expected-version", str(row["completion_lease_version"]),
             ]
         # A bounded member task returns to its requester; it is not terminal
         # Goal intent. Ordinary completion may precede its original Turn's
@@ -1686,13 +1533,10 @@ class Delegations:
         # no-follow-up, which correctly requires already-settled receipts.
         result = self._cli(binding, *arguments)
         if result.get("ok") is not True:
-            raise ValueError(
-                str(result.get("error") or result.get("reason") or "delegation Todo completion rejected")
-            )
+            raise ValueError(_result_error(result, "delegation Todo completion rejected"))
 
     def _execute(self, path: Path, row: dict, binding: dict) -> None:
         request_id = row["identity"]["request_id"]
-        common = ["--goal-id", self.goal_id, "--agent-id", binding["agent_id"]]
         execution = self._execution_arguments(binding, row["identity"]["operation_id"])
         try:
             self._raise_if_stop_requested(path)
@@ -1719,19 +1563,16 @@ class Delegations:
                 self._write_delegation_bootstrap(row, binding)
                 turn_key = delegation_validation.matching_turn_key(self, row, binding)
                 selector = (
-                    ["--resume-turn-key", turn_key]
-                    if turn_key
-                    else [*( ["--todo-id", binding["todo_id"]] if binding["todo_id"] is not None else []),
+                    ["--resume-turn-key", turn_key] if turn_key
+                    else [*((["--todo-id", binding["todo_id"]]) if binding["todo_id"] is not None else []),
                           "--turn-instance-id", self._turn_instance_id(row)]
                 )
                 from .control_plane.collaboration.delegation_context import delegated_turn_context_arguments
                 context = delegated_turn_context_arguments(self, row) if turn_key is None else []
-                result = self._cli(binding, "turn", "run-once", *common, *selector, *execution, *context,
-                                   "--execute", timeout=binding["timeout_seconds"] + 60,
-                                   delegated_lease=self._delegated_lease_context(row, binding),
-                                   host_record=self._host_process_record(path))
-                self._record_turn_result(path, row, result,
-                    unstarted_turn=turn_key is None and "turn_key" not in row)
+                result = self._run_turn_once(
+                    path, row, binding, *selector, post_args=tuple(context), execution=execution, with_lease=True,
+                )
+                self._record_turn_result(path, row, result, unstarted_turn=turn_key is None and "turn_key" not in row)
                 if row["status"] == "prepared":
                     return  # Native lane refused before this operation launched a Host.
         finally:
@@ -1742,16 +1583,12 @@ class Delegations:
         try:
             result = row["turn_result"]
             needs_settlement = result.get("status") != "committed" or result.get("result_kind") != "validated_progress"
-            if needs_settlement:
-                journal = delegation_validation.validated_turn_journal(self, row, binding)
-                if journal is None:
-                    row["error"] = str(
-                        result.get("error")
-                        or result.get("reason")
-                        or "delegation Turn rejected; inspect the original Turn before retrying"
-                    )[:180]
-                    self._observe(path, row, "rejected")
-                    return
+            if needs_settlement and delegation_validation.validated_turn_journal(self, row, binding) is None:
+                row["error"] = _result_error(
+                    result, "delegation Turn rejected; inspect the original Turn before retrying",
+                )[:180]
+                self._observe(path, row, "rejected")
+                return
             if not self._receiver_adopted(row, binding):
                 row["error"] = "delegation receiver did not adopt the request"
                 self._observe(path, row, "rejected")
@@ -1764,12 +1601,10 @@ class Delegations:
                 # The request's native settlement adapter owns the original
                 # Stop/source fences. Do not hold a parent policy lock while a
                 # child process reacquires it to resume the same transaction.
-                result = self._cli(binding, "turn", "run-once", *common,
-                    "--resume-turn-key", row["turn_key"], *execution, "--execute",
-                    timeout=binding["timeout_seconds"] + 60, host_record=self._host_process_record(path))
-                self._record_turn_result(path, row, result, publish=False)
-                if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
-                    raise ValueError(str(result.get("error") or result.get("reason") or "request settlement remains incomplete"))
+                self._settle_committed_turn(
+                    path, row, binding, execution, already_locked=False,
+                    fallback="request settlement remains incomplete",
+                )
                 needs_settlement = False
             # Both effects commit inside the dispatch lock that a stop also
             # takes, so the two sides linearize: either a stop is written first
@@ -1780,83 +1615,46 @@ class Delegations:
             # a validated journal uses this same completion entry, retaining the
             # fence through settlement, result publication and acceptance.
             source_request_id = row["identity"].get("source_request_id")
-            source_guard = (
-                source_policy_fence(_root(self.root) / "policy.json")
-                if source_request_id
-                else nullcontext()
-            )
+            source_guard = source_policy_fence(_root(self.root) / "policy.json") if source_request_id else nullcontext()
             # Hold the same policy fence used by source revocation until both
             # canonical completion and original-Turn settlement commit. A
             # revocation therefore linearizes either before this check or
             # after these effects, never between the last check and effects.
             with exclusive_file_lock(self._dispatch_lock(path)), source_guard:
                 self._raise_if_stop_requested(path)
-                self._bound(
-                    row,
-                    require_active=True,
-                    policy_locked=source_request_id is not None,
-                )
+                self._bound(row, require_active=True, policy_locked=source_request_id is not None)
                 self._complete_delegated_todo(row, binding)
                 if needs_settlement:
-                    result = self._cli(
-                        binding,
-                        "turn",
-                        "run-once",
-                        *common,
-                        "--resume-turn-key",
-                        row["turn_key"],
-                        *execution,
-                        "--execute",
-                        timeout=binding["timeout_seconds"] + 60,
-                        host_record=self._host_process_record(path),
+                    self._settle_committed_turn(
+                        path, row, binding, execution, already_locked=True,
+                        fallback="validated delegation settlement remains incomplete",
                     )
-                    self._record_turn_result(path, row, result, publish=False, already_locked=True)
-                    if result.get("status") != "committed" or result.get("result_kind") != "validated_progress":
-                        raise ValueError(str(result.get("error") or result.get("reason")
-                                             or "validated delegation settlement remains incomplete"))
                     if not self._receiver_adopted(row, binding):
                         row["error"] = "delegation receiver did not adopt the request"
                         self._observe(path, row, "rejected", already_locked=True)
                         return
-                    self._bound(
-                        row,
-                        require_active=True,
-                        policy_locked=source_request_id is not None,
-                    )
-                    delegation_results.require_dependencies(
-                        self, binding, delegation_results.operation_brief(self, row)
-                    )
+                    self._bound(row, require_active=True, policy_locked=source_request_id is not None)
+                    delegation_results.require_dependencies(self, binding, delegation_results.operation_brief(self, row))
                 row["artifacts"] = self._accepted(binding)["artifacts"]
                 if not (_root(self.root) / "replies" / request_id / "conclusion.json").exists():
                     return_result(
-                        self.root,
-                        self.goal_id,
-                        binding["agent_id"],
-                        request_id,
-                        json.dumps(
-                            {
-                                "todo_id": binding["todo_id"],
-                                "status": "accepted",
-                                "artifacts": [
-                                    {k: v for k, v in item.items() if k != "text"}
-                                    for item in row["artifacts"]
-                                ],
-                            }
-                        ),
-                        registry=self.registry,
-                        caller_goal_ref=self._caller_goal_ref(),
+                        self.root, self.goal_id, binding["agent_id"], request_id,
+                        json.dumps({
+                            "todo_id": binding["todo_id"], "status": "accepted",
+                            "artifacts": [{k: v for k, v in item.items() if k != "text"} for item in row["artifacts"]],
+                        }),
+                        registry=self.registry, caller_goal_ref=self._caller_goal_ref(),
                     )
-                self._observe(path, row, "accepted", already_locked=True,
-                              canonical_done=binding["todo_id"] is not None,
-                              request_validated=binding["todo_id"] is None,
-                              request_subject=row["identity"].get("request_subject"),
-                              acceptance_ready=True, artifacts_current=True,
-                              requester=self._wake_requester(row))
+                self._observe(
+                    path, row, "accepted", already_locked=True,
+                    canonical_done=binding["todo_id"] is not None, request_validated=binding["todo_id"] is None,
+                    request_subject=row["identity"].get("request_subject"),
+                    acceptance_ready=True, artifacts_current=True, requester=self._wake_requester(row),
+                )
         except (ValueError, KeyError, subprocess.TimeoutExpired, EffectRuntimeRemoteError) as exc:
             # Retain uncertain execution for explicit same-operation recovery.
             # No fresh Turn is ever created because its client timed out.
-            row["error"] = str(exc)[:180] if isinstance(exc, (ValueError, EffectRuntimeRemoteError)) else type(exc).__name__
-            self._fenced_write(path, row)
+            self._record_execution_error(path, row, exc)
 
 
 def register_delegation_tools(server, delegations: Delegations) -> None:
@@ -1963,8 +1761,7 @@ def main():
     if args.delegation_action or args.operation_id:
         if not (args.delegation_action and args.operation_id and args.execution_config):
             parser.error("delegation actions require --execution-config and --operation-id")
-        service = Delegations(args.runtime_root, args.registry, args.goal_id,
-                              args.agent_id, args.execution_config)
+        service = Delegations(args.runtime_root, args.registry, args.goal_id, args.agent_id, args.execution_config)
         if args.delegation_action == "validate":
             row = _read(service.path(args.operation_id))
             binding = service._bound(row)
@@ -1975,23 +1772,17 @@ def main():
             service._clear_delegation_bootstrap(row, binding)
             service._validate(binding)
         else:
-            service._stop_signal = install_worker_stop_signal(
-                service._stop_path(service.path(args.operation_id)))
+            service._stop_signal = install_worker_stop_signal(service._stop_path(service.path(args.operation_id)))
             try:
                 service.execute(args.operation_id, prepared_source_request_id=args.prepared_source_request_id)
-            except LockAcquireTimeoutError:
-                pass  # Another worker still owns the operation after the bounded wait.
-            except DelegationStopRequested:
-                pass  # Stopped before owning the operation; the holder acknowledges.
+            except (LockAcquireTimeoutError, DelegationStopRequested):
+                pass  # Another worker owns the operation, or stop arrived before ownership.
         return
     if args.workspace is None:
         parser.error("--workspace is required when serving MCP")
     create_server(
-        args.runtime_root.resolve(),
-        args.registry.resolve(),
-        args.goal_id,
-        args.agent_id,
-        args.workspace.resolve(), args.execution_config,
+        args.runtime_root.resolve(), args.registry.resolve(), args.goal_id,
+        args.agent_id, args.workspace.resolve(), args.execution_config,
     ).run(transport="stdio")
 
 

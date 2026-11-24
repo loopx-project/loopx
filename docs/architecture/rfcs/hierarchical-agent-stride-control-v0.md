@@ -893,7 +893,7 @@ times separately. Check whether later work implemented the proposed mechanism;
 a decision record, saved snapshot or new identifier alone does not establish
 adoption, restoration or improved results. These are refinements of the existing
 Agent questions, not new decision fields, score thresholds or settlement gates;
-the inherited capability default enables the strategy; explicit off and saved legacy configurations retain their meaning. Identify the remaining authoritative goal gap, its limiting
+the strategy applies to live reviews. Identify the remaining authoritative goal gap, its limiting
 component and plausible headroom before choosing the next mechanism. Compare
 continuation with plausible alternatives that change the limiting assumption or
 mechanism, including complete cost. A stalled route calls for a discriminating
@@ -1055,22 +1055,20 @@ benchmark-specific additions are not installed as Core defaults or checkpoint
 requirements. This provider treatment must be revision-pinned in comparisons;
 it does not establish initial-quality parity or long-horizon research gain.
 
-The activation vocabulary and existing Goal/device editor stay unchanged; no
-second selectable strategy or policy database is added. Off retains ordinary
-projection/review semantics. Both historical v1 decision shapes retain read
-compatibility, but cannot discharge a fresh enabled review. Frozen workers retain
+Evidence-conditioned stride governs every live review. The Goal/device editor
+configures cadence and planning preferences. Both historical v1 decision shapes
+remain readable. Fresh reviews use v2 proposals. Frozen workers retain
 their exact source. Pin implementation revisions for comparisons; do not
 reinterpret old decisions. The policy seam can evolve when evidence warrants it, without maintaining speculative variants.
-For an enabled periodic review or an existing observed-stall review
+For a periodic review or an existing observed-stall review
 (`typed_progress_repeat`, `no_progress_streak`, `repeated_action_loop`,
 `external_progress_review_drift`), every settlement path requires a current,
 source-bound stride decision. Typed progress, successor and terminal results
 remain valid evidence/outcomes, while a bare Todo successor transition cannot
 stand in for the review. An evidenced path decision can retain unfinished useful
 work without a fabricated new progress identifier or Todo. Explicit acceptance
-and capability outcome restrictions still apply; explicit off, saved legacy
-cadence-only configurations and other sources
-retain their prior exit policies. No new detector, threshold or action is added.
+and capability outcome restrictions still apply. Other sources use their
+existing exit policies.
 
 The frozen [EdgeBench diagnostic window](https://huggingface.co/datasets/songwells/loopxbench/blob/c5dd30bfaa2f5af42ccd7d0ca9ed59b865a81d42/public/edgebench-20261018-v1/diagnostic_windows.csv)
 reports 902 completed native turns and no submissions over one post-hoc selected
@@ -1098,13 +1096,13 @@ Keep dependencies, acceptance, risk, authority and per-Turn settlement boundarie
 The next review must distinguish declared scope from actual execution, outcome
 quality and full cost; preserving a plan is not adoption or benefit.
 
-Evidence-conditioned stride is the capability default for inherited configuration.
-Explicit off, saved legacy cadence-only configurations and historical records
-retain their semantics. Clear overrides to inherit, or select off to roll back;
-no installed configuration, frozen worker or historical receipt is rewritten.
-The codec's missing historical strategy remains off. Review questions and syntax
-examples remain together; no extra decision fields, strategy versions or
-machine-enforced semantic classifier are added. Matched continuation must still
+Evidence-conditioned stride applies to reviews with inherited or explicitly
+configured cadence. After upgrading, pending writebacks use the current policy.
+A pending writeback for a qualifying review needs a current stride decision.
+Historical records and frozen workers keep their original interpretation.
+Device v2 files retain their stored strategy field for earlier runtimes to read
+after rollback. Review questions and syntax examples remain together.
+Matched continuation must still
 qualify target benefit and full cost before promotion or synergy claims.
 
 Exploratory iteration may run only strategy-enabled test arms and reuse historical

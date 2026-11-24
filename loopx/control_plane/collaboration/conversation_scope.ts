@@ -111,21 +111,30 @@ export function normalizeStewardGoalScope(value: unknown): string[] {
 export function normalizeStewardContext(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("steward context unavailable");
   const row = value as Record<string, unknown>;
-  const workspace = normalizeProjectContext({...row, kind: "project_workspace", grant: "workspace_read"});
+  const topicRef = row.topic_ref;
+  if (topicRef !== undefined && (typeof topicRef !== "string" || !/^[a-f0-9]{24}$/.test(topicRef))) {
+    throw new Error("invalid steward topic identity");
+  }
+  const {topic_ref: _ignoredTopic, ...baseRow} = row;
+  const workspace = normalizeProjectContext({...baseRow, kind: "project_workspace", grant: "workspace_read"});
   if (row.kind !== "bound_steward" || row.audience !== "bound_owner" || row.grant !== "portfolio_read"
       ) throw new Error("invalid bounded steward context");
-  return {...workspace, kind: "bound_steward", grant: "portfolio_read", goal_ids: normalizeStewardGoalScope(row.goal_ids)};
+  return {...workspace, ...(topicRef !== undefined ? {topic_ref: topicRef} : {}),
+    kind: "bound_steward", grant: "portfolio_read", goal_ids: normalizeStewardGoalScope(row.goal_ids)};
 }
 
 export function stewardConversationIdentity(input: Record<string, unknown>): Record<string, unknown> {
   const context = normalizeStewardContext(input.context);
+  const channel_id = typeof context.topic_ref === "string"
+    ? `manager.external.native.${context.binding_id}.${context.source_ref}.topic.${context.topic_ref}`
+    : `manager.external.native.${context.binding_id}.${context.source_ref}`;
   if (input.metadata_review === true && input.answer_review === true) throw new Error("steward review modes are exclusive");
   if (input.metadata_review === true || input.answer_review === true) {
     // Reuse the narrower native result-review policy without turning a
     // portfolio grant into project execution authority. Default to the existing
     // workspace-only frozen reads. The host may retain its already-authorized
     // trusted-owner read subset below; no writes or network are permitted.
-    const review = projectConversationIdentity({context: {...context,
+    const review = projectConversationIdentity({context: {...context, topic_ref: undefined,
       kind: "project_workspace", grant: "workspace_read"}, read_only_review: true});
     const config = review.host_config as Record<string, unknown>;
     config.features = {...config.features as object, shell_tool: false,
@@ -143,9 +152,9 @@ export function stewardConversationIdentity(input: Record<string, unknown>): Rec
       config.permissions = {[profile]: {...narrow,
         filesystem: {...narrow.filesystem as object, ":root": "read"}, network: {enabled: false}}};
     }
-    return {...review, context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
+    return {...review, context, channel_id};
   }
-  return {context, channel_id: `manager.external.native.${context.binding_id}.${context.source_ref}`};
+  return {context, channel_id};
 }
 
 type ConversationScope = Record<string, unknown> & (

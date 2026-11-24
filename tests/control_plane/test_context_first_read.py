@@ -97,26 +97,22 @@ def read_selection(command):
     return page, selected_context_values(page["content"])
 
 
-@pytest.mark.parametrize(("flag", "option"), [
-    ("--turn-envelope", "turn_envelope"), ("--complete-turn", "complete_turn"),
-])
-def test_new_selection_omits_view_alias_and_saved_selection_retains_it(tmp_path, flag, option):
-    from loopx.cli_commands.quota_context_reader import bind_capture_selection_transport
+@pytest.mark.parametrize("flag", ["--turn-envelope", "--complete-turn"])
+def test_saved_selection_projects_current_command_without_changing_capture(tmp_path, flag):
+    from loopx.cli_commands.quota_context_reader import _capture_selection_transport_template
 
     original = {"schema_version": "loopx_turn_envelope_v1", "interaction_contract": {"cli_channel": {
         "selection_command": {"command_args_template": "quota should-run --todo-id <todo-id>"}}}}
-    current = deepcopy(original)
-    request = Namespace(decision_output_root=str(tmp_path), **{option: True})
-    bind_capture_selection_transport(current, request)
-    current_command = current["interaction_contract"]["cli_channel"]["selection_command"]
-    assert flag not in shlex.split(current_command["command_args_template"])
-
-    # Stored selectors keep their recorded command for same-capture recovery.
-    saved = deepcopy(original)
-    saved_command = saved["interaction_contract"]["cli_channel"]["selection_command"]
+    saved_command = original["interaction_contract"]["cli_channel"]["selection_command"]
     saved_command["command_args_template"] += " " + flag
-    bind_capture_selection_transport(saved, Namespace(decision_output_root=str(tmp_path)))
-    assert shlex.split(saved_command["command_args_template"]).count(flag) == 1
+    before = deepcopy(original)
+    displayed = _capture_selection_transport_template(
+        original, Namespace(decision_output_root=str(tmp_path)), capture_root=tmp_path,
+    )
+    assert shlex.split(displayed) == [
+        "quota", "should-run", "--todo-id", "<todo-id>", "--decision-output-root", str(tmp_path.resolve()),
+    ]
+    assert original == before
 
 
 def pinned_initial_view(payload, directory):
@@ -1479,6 +1475,13 @@ def test_native_ready_opening_bounds_suggested_outcomes(
             outcome["requirements"][0].pop("future_required_fact")
         if large:
             outcome["requirements"][0]["description"] *= 160
+    peer = outcomes[1]
+    peer["declaration_owner_agent_id"] = "previous-owner"
+    peer["requirements"][0]["agent_review"] = {
+        "id": "tail", "recorded_for_agent_id": "previous-reviewer", "conclusion": "unmet",
+        "basis_current": False, "independently_verified": False,
+        "note": "The dependency was still missing.", "evidence_refs": ["original-check"],
+    }
     short_opening = large and ready and known_source and max_page_output_bytes is None
     directory = tmp_path / "capture"
     directory.mkdir(mode=0o700)
@@ -1512,7 +1515,14 @@ def test_native_ready_opening_bounds_suggested_outcomes(
     for index, original in enumerate(outcomes[:2]):
         outcome = f"{outcomes_path}/{index}"
         _, detail = read_selection(view["recovery"]["command"] + " --select " + outcome)
-        assert detail[outcome]["requirements"] == original["requirements"]
+        expected_requirements = json.loads(json.dumps(original["requirements"]))
+        if index == 1:
+            assert detail[outcome]["owner_agent_id"] == "peer"
+            assert detail[outcome]["declaration_owner_agent_id"] == "previous-owner"
+            if known_source:
+                review = expected_requirements[0]["agent_review"]
+                del review["note"], review["evidence_refs"]
+        assert detail[outcome]["requirements"] == expected_requirements
         if short_opening:
             assert outcome not in opening
             assert opening[outcome + "/id"] == original["id"]
@@ -1552,8 +1562,8 @@ def test_native_ready_opening_bounds_suggested_outcomes(
         source_command = opening["/context_details/command_template"]
         for index, original in enumerate(outcomes[:2]):
             address = f"{outcomes_path}/{index}"
-            _, evidence = read_selection(source_command.replace("<pointer>", address + "/sources"))
-            assert evidence[address + "/sources"] == original["sources"]
+            _, evidence = read_selection(source_command.replace("<pointer>", address))
+            assert evidence[address] == original
     elif "/context_details/instruction" in opening:
         assert "This view retains complete requirements" in opening["/context_details/instruction"]
 

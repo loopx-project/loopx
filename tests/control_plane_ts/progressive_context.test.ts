@@ -85,6 +85,31 @@ test("only supporting materials move; cumulative obligations and merged source g
   assert.deepEqual(progressiveContextPlan({payload, surface: "turn_envelope"}), {deferred: [], instructions: []});
 });
 
+test("ownership transfers keep declaration and review attribution in the required view", () => {
+  const review = outcome.requirements[0].agent_review;
+  const transferred = (declarer: unknown, reviewer: unknown) => ({
+    ...outcome, declaration_owner_agent_id: declarer, requirements: [{...outcome.requirements[0],
+      agent_review: {...review, recorded_for_agent_id: reviewer}}],
+  });
+  const plan = (row: unknown) => {
+    const outcome_requirements = {schema_version: "loopx_goal_outcomes_v0", outcomes: [row]};
+    const content = {...source.content, goal_acceptance_contract: {outcome_requirements}};
+    const work_context = {sources: [{...source, content}]};
+    return progressiveContextPlan({surface: "quota_packet", payload: {
+      ok: true, interaction_contract: {agent_channel: {work_context}}}});
+  };
+  const legacy = plan(outcome);
+  assert.equal(legacy.deferred.length, 3);
+  for (const reviewer of ["prior-owner", outcome.owner_agent_id, "another:reviewer"]) {
+    assert.deepEqual(plan(transferred("prior-owner", reviewer)), legacy);
+  }
+  for (const malformed of ["", "owner/path", "owner\n", "a".repeat(129), null, {}]) {
+    assert.deepEqual(plan(transferred(malformed, "prior-reviewer")).deferred, []);
+    assert.deepEqual(plan(transferred("prior-owner", malformed)).deferred, []);
+  }
+  assert.deepEqual(plan({...transferred("prior-owner", "prior-reviewer"), future_stop: true}).deferred, []);
+});
+
 test("unknown and failed source semantics remain whole rather than becoming guessed requirements", () => {
   for (const changed of [{...source, content: {...source.content, ok: false}},
     {...source, content: {...source.content, status: "failed"}}, {...source, source: "unregistered"}]) {
@@ -247,7 +272,7 @@ test("bounded ready opening discloses omitted suggested outcome parents before d
             schema_version: "loopx_goal_outcomes_v0", current_lifetime: true, revision: 3,
             outcomes: [
               makeOutcome("first", "Retain complete requirement A. ".repeat(260)),
-              makeOutcome("second", "Retain complete requirement B. ".repeat(260)),
+              {...makeOutcome("second", "Retain complete requirement B. ".repeat(260)), declaration_owner_agent_id: "original-agent"},
               makeOutcome("third", "Keep unrelated criterion separate."),
             ],
           }},

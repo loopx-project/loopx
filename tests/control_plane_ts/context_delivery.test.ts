@@ -5,7 +5,7 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {compactTodoContextSource, prepareContextDelivery, restoreContextDelivery} from "../../loopx/control_plane/quota/context_delivery.ts";
 import {prepareProgressiveContextDelivery} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
-import {updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
+import {NATIVE_CONTEXT_BASIS, updateNativeContextLifecycle} from "../../loopx/control_plane/quota/native_context_lifecycle.ts";
 
 test("only the provider-qualified native replay can retain a complete resume baseline", () => {
   const state = {session_id: "native", cwd: "/workspace", context_epoch: "original",
@@ -26,6 +26,23 @@ test("only the provider-qualified native replay can retain a complete resume bas
     assert.equal(result.candidate, undefined);
   }
   assert.equal(state.context_epoch, "original");
+});
+
+test("native lifecycle returns only changed fields when the journal caller requests edits", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "initial",
+    recovery: {target: {context_epoch: "initial"}, path: "capture.json"}, pending: {read_sections: {"/budget": "digest"}}};
+  const request = {operation: "native_context_lifecycle", state, new_epoch: "next",
+    event: {hook_event_name: "PreCompact", session_id: "native", cwd: "/workspace"}};
+  const {pending, ...retained} = state;
+  assert.deepEqual(evaluateTurnEnvelope(request), {...retained, context_epoch: "next"});
+  const edits = evaluateTurnEnvelope({...request, source_edits: true});
+  assert.deepEqual(edits, {changes: [
+    {path: ["pending"], remove: true},
+    {path: ["context_epoch"], value: "next"},
+  ]});
+  assert.deepEqual(state.pending, pending);
+  assert.deepEqual(evaluateTurnEnvelope({...request, source_edits: true,
+    event: {...request.event, hook_event_name: "Stop"}}), {changes: []});
 });
 
 test("warm progressive edits copy only numbers present in the captured input", () => {
@@ -1043,4 +1060,38 @@ test("file delta recovery preserves inherited numeric leaves across sibling edit
   const restored = restoreContextDelivery({delivery: delta, baseline, current: complete});
   assert.equal(restored.mode, "delta");
   assert.deepEqual(restored.context, current);
+});
+
+test("selected-scope replay survives candidate invalidation and rotates into the new epoch", () => {
+  const scope = {session_id: "native", context_epoch: "epoch-1"};
+  const state = {
+    session_id: "native",
+    cwd: "/workspace",
+    context_epoch: "epoch-1",
+    read_scope: scope,
+    candidate: {basis: NATIVE_CONTEXT_BASIS, capture_bytes_verified: true, native_resume: {reader_start: 100}},
+    consumed_pointers: {"/a": "sha256:aaa", "/b": "sha256:bbb"},
+    confirmed_read_sections: ["/a", "/b"],
+    selected_resume: {scope, epoch: "epoch-1", selections: {}},
+  };
+  const event = {hook_event_name: "SessionStart", source: "resume", session_id: "native", cwd: "/workspace"};
+  const rotated = updateNativeContextLifecycle({
+    state, event, new_epoch: "epoch-2", resume_verified: false,
+    resume_sections: {"/a": "sha256:aaa", "/b": "sha256:stale"},
+  });
+  assert.equal(rotated.context_epoch, "epoch-2");
+  assert.equal(rotated.candidate, undefined);
+  assert.deepEqual(rotated.read_scope, {session_id: "native", context_epoch: "epoch-2"});
+  assert.deepEqual(rotated.consumed_pointers, {"/a": "sha256:aaa"});
+  assert.deepEqual(rotated.confirmed_read_sections, ["/a"]);
+  assert.deepEqual((rotated.selected_resume as JsonObject).epoch, "epoch-2");
+  assert.deepEqual((rotated.selected_resume as JsonObject).scope, rotated.read_scope);
+
+  const cleared = updateNativeContextLifecycle({
+    state: rotated, event, new_epoch: "epoch-3", resume_verified: false, resume_sections: {},
+  });
+  assert.equal(cleared.context_epoch, "epoch-2");
+  assert.equal(cleared.consumed_pointers, undefined);
+  assert.equal(cleared.confirmed_read_sections, undefined);
+  assert.equal(cleared.selected_resume, undefined);
 });

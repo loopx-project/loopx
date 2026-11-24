@@ -854,7 +854,7 @@ def context_vision_audit_view(payload: dict[str, Any]) -> dict[str, Any]:
             or owner.get("required") is not True or "projection_ref" in owner or "projection_view" in owner
             or (isinstance(judge := owner.get("vision_gap_judge"), dict) and "projection_ref" in judge)):
         raise ValueError("CLI Vision audit view requires a complete inline owner in the same capture")
-    from ..work_items.interaction_contract import cli_vision_audit_view
+    from ..goals.goal_vision_read_model import cli_vision_audit_view
 
     return {**payload, "interaction_contract": {**interaction, "cli_channel": {
         **cli, "vision_continuation_audit": cli_vision_audit_view(owner),

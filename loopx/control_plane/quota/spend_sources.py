@@ -11,7 +11,6 @@ from ..scheduler.execution_context import (
     scheduler_runtime_profile_for_execution_context,
 )
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
-from .effect_program import SettlementStepKind, settlement_step_command
 
 DEFAULT_SLOT_SPEND_SOURCE = "heartbeat"
 VISIBLE_GOAL_SLOT_SPEND_SOURCE = "visible-goal"
@@ -113,6 +112,8 @@ def build_quota_spend_action(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
 ) -> str:
+    from .effect_program import SettlementStepKind, settlement_step_command
+
     source = quota_spend_source_for_execution_context(scheduler_execution_context)
     typed_command = settlement_step_command(
         settlement_plan,

@@ -1419,9 +1419,8 @@ def spend_quota_slot(
         turn_instance_id=turn_instance_id, effect_ref=normalized_effect_ref or None,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
     )
-    if not preview.get("ok"):
-        return preview
     return record_quota_slot_spend_from_preview(
         preview, status_payload, goal_id=safe_goal_id, execute=execute,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
+        settlement_identity=settlement_readback.identity.value if settlement_readback else None,
     )

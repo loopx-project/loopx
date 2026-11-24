@@ -10,7 +10,7 @@ export type ResearchRecordDisplay = {
 
 /** Local reading selection, fenced to the same Goal and physical source. It
  * carries no records, status judgment, source connection or execution grant. */
-export type ResearchRecordsLocation = {open: boolean; query: string; status: string; expanded: string[]; limit: number};
+export type ResearchRecordsLocation = {open: boolean; query: string; status: string; expanded: string[]; focused?: string; limit: number};
 export const defaultResearchRecordsLocation: ResearchRecordsLocation = {open: false, query: "", status: "", expanded: [], limit: 50};
 
 export function readResearchRecordsLocation(search: URLSearchParams, scope: string): ResearchRecordsLocation {
@@ -22,7 +22,8 @@ export function readResearchRecordsLocation(search: URLSearchParams, scope: stri
         || typeof value.status !== "string" || !Array.isArray(value.expanded)
         || !value.expanded.every((id: unknown) => typeof id === "string" && id)
         || !Number.isSafeInteger(value.limit) || value.limit < 50) return {...defaultResearchRecordsLocation};
-    return {open: value.open, query: value.query, status: value.status, expanded: [...new Set<string>(value.expanded)], limit: value.limit};
+    return {open: value.open, query: value.query, status: value.status, expanded: [...new Set<string>(value.expanded)],
+      ...(typeof value.focused === "string" && value.focused ? {focused: value.focused} : {}), limit: value.limit};
   } catch {return {...defaultResearchRecordsLocation};}
 }
 

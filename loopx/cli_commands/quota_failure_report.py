@@ -87,6 +87,8 @@ def quota_failure_payload(
     registry_path: Path,
     runtime_root_arg: str | None,
     error: Exception,
+    resolved_runtime_root: Path | None = None,
+    goal_ref: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     command = args.quota_command
     lock_timeout_fields = lock_timeout_error_fields(error)
@@ -180,16 +182,33 @@ def quota_failure_payload(
                 "unbound spend, obtain a fresh preview before retrying."
             ),
         )
+        if error.settlement_identity is not None and resolved_runtime_root is not None:
+            from .refresh_recovery import original_turn_guard_command
+
+            identity = error.settlement_identity
+            guard_command = original_turn_guard_command(
+                identity, registry_path=registry_path, runtime_root=resolved_runtime_root,
+                goal_ref=goal_ref, available_capabilities=args.available_capabilities or (),
+            )
+            payload["settlement_recovery"] = {
+                "required": True,
+                "settlement_identity": identity.as_dict(),
+                "next_cli_actions": [guard_command],
+                "instruction": (
+                    "Read the original Turn. Execute only its settlement_owed command if present. "
+                    "If none is returned, stop this spend retry."
+                ),
+            }
     if isinstance(error, HeartbeatReceiptIdentityConflictError):
         payload.update({
             "status": "heartbeat_receipt_identity_conflict",
             "effective_action": EffectiveAction.QUOTA_SKIP.value,
             "recommended_action": (
-                "Rerun quota should-run with the same --turn-instance-id and without "
-                "--todo-id or --replan-obligation-id to read the bound Turn's recovery "
-                "contract. Settle verified work or record its verified blocked closeout; "
-                "do not replace the committed binding, repair receipt storage, or invent "
-                "a new Turn id. Independent work belongs to the next real host Turn."
+                "If the conflict reports a replaced task lease generation, wait for the next real host Turn "
+                "to project execution-loss closeout without quota spend. A replacement lease cannot resume "
+                "the original Turn. For other binding conflicts, rerun quota should-run with the same "
+                "--turn-instance-id and without --todo-id or --replan-obligation-id to read the bound Turn's "
+                "recovery contract. Keep the committed binding and receipt storage intact."
             ),
         })
     if isinstance(error, CloseoutQueryUnavailableError):

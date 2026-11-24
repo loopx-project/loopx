@@ -110,7 +110,10 @@ class ResearchAnalysisRequestMixin:
             else:
                 catalog = store.discover(runtime_root=runtime, owner_goal_id=owner_goal_id, output_language=language)
                 pack_id = values.get("pack_id") or catalog["default_pack_id"]
-                pack = store.inspect_pack(runtime_root=runtime, owner_goal_id=owner_goal_id, pack_id=pack_id, output_language=language) if pack_id else None
+                pack = store.inspect_pack(
+                    runtime_root=runtime, owner_goal_id=owner_goal_id, pack_id=pack_id,
+                    output_language=language, include_native_outcome_samples=True,
+                ) if pack_id else None
                 if pack_id:
                     self._research_analysis_verify_source_goal(runtime, goal_id, pack_id, pack)
                 result = {"ok": True, "catalog": catalog, "pack": pack}

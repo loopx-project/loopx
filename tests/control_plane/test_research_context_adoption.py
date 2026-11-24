@@ -265,8 +265,7 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
 def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatch, work=None):
     """Real current-owner replan consumes inherited counterevidence, then work."""
     monkeypatch.chdir(workspace)
-    run('configure-goal', '--goal-id', 'branch', '--execution-replan-after-turns', '1',
-        '--execution-stride-strategy', 'evidence_conditioned_v1', '--execute')
+    run('configure-goal', '--goal-id', 'branch', '--execution-replan-after-turns', '1', '--execute')
     actor = ['--goal-id', 'branch', '--agent-id', 'branch-actor']
     def settle(turn, vision, *, review=False, lease_proof=None):
         path = tmp_path / (turn + '.json')

@@ -230,6 +230,6 @@ def test_original_http_task_reuses_requested_checker_and_session(environment, ca
         assert len(next_calls) == 1 and next_calls[0]["params"]["sandboxPolicy"] == {
             "type": "readOnly", "networkAccess": False}
         assert not any(row.get("method") == "thread/start" for row in later)
-        check_run = subprocess.run([sys.executable, "checks.py"], cwd=project, capture_output=True, text=True, timeout=10)
+        check_run = subprocess.run([sys.executable, "-I", "checks.py"], cwd=project, capture_output=True, text=True, timeout=10)
         assert check_run.returncode == 0 and "Ran 6 tests" in check_run.stderr
         assert hashlib.sha256((project / "checks.py").read_bytes()).hexdigest() == checker_hash

@@ -138,6 +138,12 @@ def language_server(monkeypatch):
                     response = {}
             elif method == "StartCascade":
                 response = {"cascadeId": "synthetic-cascade"}
+            elif method == "GetAllCascadeTrajectories":
+                status = "CASCADE_RUN_STATUS_RUNNING" if state["active"] else "CASCADE_RUN_STATUS_IDLE"
+                summaries = {} if state.get("missing_resume") else {"synthetic-cascade": {
+                    "status": status, "stepCount": state["sent_count"] * 2,
+                }}
+                response = {"trajectorySummaries": summaries}
             elif method == "GetCascadeTrajectory":
                 if state.get("frames") is not None:
                     if state["active"]:

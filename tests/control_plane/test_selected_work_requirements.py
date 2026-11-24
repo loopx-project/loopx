@@ -146,18 +146,17 @@ def test_inline_user_context_preserves_full_scoped_gates_without_granting_delive
     assert packet["requires_user_action"] is True
     assert packet["scoped_user_gate_fallback"]["selected_executable"]["todo_id"] == "todo_inspect"
     assert channel["work_context"]["complete"] is True
-    envelope = guard("--turn-envelope")
-    assert envelope["interaction_contract"]["agent_channel"]["work_context"]["user_todos"] == channel["work_context"]["user_todos"]
     assert state.read_text() == state_text
     # Canonical tasks still exist: the full Goal source must fail closed,
     # rather than silently substituting a Todo summary for missing intent.
     state.unlink()
     failed = guard(expected_exit=1)
-    assert failed["ok"] is False and failed["status_health_ok"] is False
-    failed_channel = failed["interaction_contract"]["agent_channel"]
-    assert failed_channel["delivery_allowed"] is False
-    assert failed_channel["work_context"]["complete"] is False
-    assert any(read["source"] == "goal_state" for read in failed_channel["required_reads"])
+    assert failed["ok"] is False
+    assert failed["decision"] == "skip" and failed["should_run"] is False
+    assert failed["diagnostic_code"] == "invalid_request"
+    assert failed["reason"] == "Complete Goal source is required before host dispatch"
+    assert "interaction_contract" not in failed
+    assert "reference_file" not in failed
     state.write_text(state_text)
     assert guard()["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
 
@@ -210,7 +209,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
         assert packet["should_run"] is True, packet.get("reason")
         return packet
 
-    envelope = guard("--turn-envelope")
+    envelope = guard()
     before = state.read_bytes()
     # Run the actual default product prompt's guard: no capture/envelope opt-in.
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
@@ -304,7 +303,7 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     assert fresh["selected_todo"]["todo_id"] == "todo_cursor_work"
     fresh_reads = fresh["interaction_contract"]["agent_channel"]["work_context"]["sources"]
     assert fresh_reads[-1]["content"]["todo"]["text"] == replacement
-    fresh_envelope = guard("--turn-envelope")
+    fresh_envelope = guard()
     fresh_plan = build_loopx_turn_plan(fresh_envelope, host="codex-cli", execution_mode="isolated-headless",
         turn_instance_id="requirements-next-turn")
     fresh_prompt = _prompt(build_loopx_turn_host_request(fresh_plan))
@@ -470,7 +469,7 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert json.dumps(context).count(note) == 1
 
     code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a",  "--turn-envelope",
+        "--agent-id", "agent-a",
         registry_path=registry, runtime_root=runtime)
     assert code == 0 and turn["ok"], turn
     turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]

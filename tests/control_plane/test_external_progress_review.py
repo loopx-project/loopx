@@ -198,13 +198,16 @@ def test_retry_claim_remains_in_external_obligation_and_cannot_be_replayed() -> 
         runs, agent_todos=None, external_progress_review=_context("assist", receipts),
     )
     assert obligation is not None and obligation["triggers"][0]["kind"] == EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND
+    _bind_review_context(obligation, runs)
+    vision = _vision(obligation, "stop")
     replay = semantic_delta_from_writeback(
-        obligation=obligation, progress_observation=earlier_retry["progress_observation"],
+        obligation=obligation, progress_observation=earlier_retry["progress_observation"], agent_vision=vision,
     )
     assert replay["accepted"] is False
     assert replay["satisfying_outcomes"] == []
     pivot = semantic_delta_from_writeback(
         obligation=obligation,
+        agent_vision=vision,
         progress_observation={
             **earlier_retry["progress_observation"], "hypothesis_id": "hypothesis-new",
             "evidence_ids": ["evidence-new"],
@@ -547,16 +550,25 @@ def test_context_loader_is_silent_for_off_and_reads_receipts_when_on(tmp_path) -
 # --- discharge policy through the shared outcome owner --------------------
 
 from loopx.control_plane.work_items.progress_observation import (  # noqa: E402
+    build_replan_context,
     replan_writeback_requirements,
     semantic_delta_from_writeback,
 )
 
 
-def _vision(outcome: str = "continue", *, evidence: list[str] | None = None) -> dict[str, object]:
+def _bind_review_context(obligation: dict, runs=()) -> None:
+    obligation["replan_context"] = build_replan_context(
+        obligation, goal_id="review-fixture", agent_id=AGENT, newest_first_runs=runs,
+    )
+
+
+def _vision(obligation: dict, outcome: str = "continue", *, evidence: list[str] | None = None,
+            state: str = "active") -> dict[str, object]:
     return {
-        "state": "active",
+        "state": state,
         "vision_patch": {"acceptance_summary": "Retry acceptance still needs a behaviour-changing slice"},
         "path_delta": {"outcome": outcome, "evidence_refs": ["evidence:review"] if evidence is None else evidence},
+        "stride_decision": replan_writeback_requirements(obligation)["stride_control"]["minimal_example"],
     }
 
 
@@ -570,17 +582,20 @@ def test_external_review_discharge_refuses_renamed_identifiers_over_the_same_evi
         external_progress_review=_context("assist", [receipt(2, turn="t2"), receipt(1, turn="t1")]),
     )
     assert obligation is not None
+    _bind_review_context(obligation, runs)
+    stop_vision = _vision(obligation, "stop")
     requirements = replan_writeback_requirements(obligation)
     assert "fresh_vision_path_outcome" in requirements["required_any_of"]
     assert "new_hypothesis" in requirements["required_any_of"]
-    assert "--progress-hypothesis-id" in requirements["cli_semantic_args"]
+    assert "--agent-vision-json" in requirements["cli_semantic_args"]
     contract = requirements["writeback_contract"]
     assert contract["identity_outcomes_require_new_evidence"] is True
-    assert "--agent-vision-json" in contract["alternative_cli_semantic_args"]
+    assert "agent_vision.stride_decision" in contract["required_fields"]
 
     def qualify(observation=None, vision=None):
         return semantic_delta_from_writeback(
-            obligation=obligation, progress_observation=observation, agent_vision=vision,
+            obligation=obligation, progress_observation=observation,
+            agent_vision=stop_vision if vision is None else vision,
         )
 
     baseline = obligation["progress_baseline"]
@@ -596,7 +611,7 @@ def test_external_review_discharge_refuses_renamed_identifiers_over_the_same_evi
         "blocker_id": "blocker-review", "evidence_ids": baseline["evidence_ids"],
     })
     assert blocker["accepted"] is True and "new_concrete_blocker" in blocker["satisfying_outcomes"]
-    kept = qualify(None, _vision("continue"))
+    kept = qualify(None, _vision(obligation))
     assert kept["accepted"] is True and kept["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
     # Replaying the older claim of the window (a new hypothesis against the
     # single baseline, with evidence absent from that baseline) is refused:
@@ -611,17 +626,22 @@ def test_external_review_discharge_refuses_renamed_identifiers_over_the_same_evi
     returned = qualify({**older, "evidence_ids": [*older["evidence_ids"], "evidence-fresh"]})
     assert returned["accepted"] is True and returned["satisfying_outcomes"] == ["new_hypothesis"]
     # A replayed claim beside an evidence-linked vision path is accepted for the vision only.
-    both_replayed = qualify(dict(older), _vision("continue"))
+    both_replayed = qualify(dict(older), _vision(obligation))
     assert both_replayed["accepted"] is True and both_replayed["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
-    assert qualify(None, _vision("replan"))["accepted"] is True
-    assert qualify(None, _vision("wait"))["accepted"] is False
-    assert qualify(None, _vision("continue", evidence=[]))["accepted"] is False
+    assert qualify(None, _vision(obligation, "replan"))["accepted"] is True
+    assert qualify(None, _vision(obligation, "wait"))["accepted"] is False
+    assert qualify(None, _vision(obligation, evidence=[]))["accepted"] is False
     # A renamed identifier together with a vision path is accepted for the vision, not the rename.
-    both = qualify(renamed, _vision("continue"))
+    both = qualify(renamed, _vision(obligation))
     assert both["accepted"] is True and both["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
     # The typed fuse's own obligation keeps its broader policy: the rule is scoped to the source.
-    fuse = {"triggers": [{"kind": "typed_progress_repeat", "progress_baseline": baseline}], "progress_baseline": baseline}
-    assert semantic_delta_from_writeback(obligation=fuse, progress_observation=renamed)["accepted"] is True
+    fuse = {"obligation_id": "replan-cccccccccccccccc",
+            "triggers": [{"kind": "typed_progress_repeat", "progress_baseline": baseline}],
+            "progress_baseline": baseline}
+    _bind_review_context(fuse, runs)
+    assert semantic_delta_from_writeback(
+        obligation=fuse, progress_observation=renamed, agent_vision=_vision(fuse, "stop"),
+    )["accepted"] is True
 
 
 def test_external_review_replay_policy_covers_blocker_and_terminal_claims() -> None:
@@ -639,21 +659,21 @@ def test_external_review_replay_policy_covers_blocker_and_terminal_claims() -> N
     for earlier in earlier_claims:
         earlier = {"schema_version": "typed_progress_observation_v0", **earlier}
         obligation = {
+            "obligation_id": "replan-dddddddddddddddd",
             "triggers": [{"kind": EXTERNAL_PROGRESS_REVIEW_TRIGGER_KIND}],
             "progress_baseline": baseline,
             "progress_window": [baseline, normalize_progress_observation(earlier)],
         }
-        terminal_vision = (
-            {"state": "no_followup", "path_delta": {"outcome": "stop"}}
-            if earlier["result_class"] == "no_followup" else None
-        )
+        _bind_review_context(obligation)
+        terminal_vision = _vision(obligation, "stop",
+            state="no_followup" if earlier["result_class"] == "no_followup" else "active")
         replayed = semantic_delta_from_writeback(
             obligation=obligation, progress_observation=earlier, agent_vision=terminal_vision,
         )
         assert replayed["accepted"] is False, earlier["result_class"]
         assert replayed["reason_code"] == "progress_observation_replayed"
         assert semantic_delta_from_writeback(
-            obligation=obligation, progress_observation=earlier, agent_vision=_vision("continue"),
+            obligation=obligation, progress_observation=earlier, agent_vision=_vision(obligation),
         )["satisfying_outcomes"] == ["fresh_vision_path_outcome"]
         successor = {**earlier, "evidence_ids": ["evidence-new"]}
         if earlier["result_class"] == "blocked":
@@ -678,14 +698,18 @@ def test_external_review_discharge_covers_every_claim_in_a_long_visible_window()
     )
     assert obligation is not None and obligation["required"] is True
     assert len(obligation["progress_window"]) == len(runs)
+    _bind_review_context(obligation, runs)
+    stop_vision = _vision(obligation, "stop")
     oldest = normalize_progress_observation(runs[-1]["progress_observation"])
     refused = semantic_delta_from_writeback(
-        obligation=obligation, progress_observation=oldest
+        obligation=obligation, progress_observation=oldest, agent_vision=stop_vision, history_runs=runs,
     )
     assert refused["accepted"] is False
     assert refused["reason_code"] == "progress_observation_replayed"
     pivot = semantic_delta_from_writeback(
         obligation=obligation,
+        agent_vision=stop_vision,
+        history_runs=runs,
         progress_observation={
             **oldest,
             "evidence_ids": ["evidence-not-in-window"],
@@ -694,7 +718,7 @@ def test_external_review_discharge_covers_every_claim_in_a_long_visible_window()
     assert pivot["accepted"] is True
     assert "new_hypothesis" in pivot["satisfying_outcomes"]
     kept = semantic_delta_from_writeback(
-        obligation=obligation, progress_observation=None, agent_vision=_vision()
+        obligation=obligation, progress_observation=None, agent_vision=_vision(obligation), history_runs=runs,
     )
     assert kept["accepted"] is True
     assert kept["satisfying_outcomes"] == ["fresh_vision_path_outcome"]

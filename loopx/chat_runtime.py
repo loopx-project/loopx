@@ -1073,7 +1073,11 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                 # and waiting boundaries. Do not invent Goal timing for them.
                 observed_goal = str(session.get("goal_id") or "") if scope["kind"] == "owner_goal" else ""
                 with observe_goal_execution(self.store.root.parent, observed_goal, host=str(session.get("agent_id") or "unknown")):
-                    if attachments:
+                    from .chat.attachments import local_goal_reply_route
+                    if isinstance(adapter, CodexAppServerAdapter) and local_goal_reply_route(
+                            session, current_turn, scope_kind=scope["kind"]):
+                        response = adapter.start_turn(message, event_sink, attachments=attachments, reply_documents=True)
+                    elif attachments:
                         response = start_attachment_turn(adapter, session, current_turn, message, event_sink, attachments)
                     else:
                         from .capabilities.native_chat.external_conversations import ChatExternalConversations

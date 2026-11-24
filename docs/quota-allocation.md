@@ -167,11 +167,17 @@ loopx configure-goal --goal-id example --clear-execution-replan-after-turns --ex
 The Dashboard exposes **Goal review and stride** in the Capability Center for
 both the device and selected Goal. The existing machine namespace
 `todo_replan_cadence_machine_defaults_v2` stores `count_unit` (`effective_turns`
-or `completed_todos`), `count` and optional strategy selection. Existing v0/v1
-configurations remain readable without migrating them on inspection. The
-strategy defaults off; `evidence_conditioned_v1` adds evidence-conditioned scope
-and route advice, with unchanged admission and semantic exits. See the
-[versioned strategy configuration and rollback](reference/protocols/goal-vision-replan-contract-v0.md#configure-and-roll-back-the-stride-strategy). It is built into the control plane and needs
+or `completed_todos`) and `count`. Existing v0/v1 configurations remain readable
+without migrating them on inspection. The stride strategy is not configurable:
+`evidence_conditioned_v1` is always on and adds evidence-conditioned scope and
+route advice, with unchanged admission and semantic exits. There is no
+`--execution-stride-strategy` flag, Dashboard selector or device field. A
+`stride_strategy` value saved by an earlier release (`off` or
+`evidence_conditioned_v1`) in a v2 device file or Goal profile still loads.
+Device v2 saves retain the serialized field for runtime rollback. The editor
+accepts cadence and planning settings. After upgrade, pending writebacks use
+the current policy. See the
+[review cadence contract](reference/protocols/goal-vision-replan-contract-v0.md#configure-review-cadence). It is built into the control plane and needs
 no provider installation. The CLI, settings readback, quota decision and
 writeback validation use the same effective configuration.
 
@@ -278,7 +284,9 @@ Controller 停止或恢复均沿用该记录。对已启用的 Goal 再次恢复
 
 If the canonical File or SQLite lease has replaced the original prepared
 generation and neither writeback nor debit has started, recovery reports
-`execution_loss_closeout` for the original Turn. Read the current Todo lease
+`execution_loss_closeout` for the original Turn. A retry of `quota should-run`
+with the original Turn ID can discover this directly, including when the Todo
+is inferred from its receipt. Read the current Todo lease
 and use the projected `refresh-state --execution-loss-closeout --dry-run` with
 the original Goal, Agent, Todo and Turn plus the current control-writer proof.
 The preview checks the same fences as commit. Execute the same command without
@@ -289,7 +297,8 @@ foreign control-writer proof holds settlement. A replacement lease cannot
 authorize business delivery for the old Turn.
 
 原准入租约已被 File 或 SQLite 权威确认换代，且原 Turn 的写回与扣额都尚未开始时，
-恢复决策会指向该 Turn 的 `execution_loss_closeout`。先读当前 Todo 租约，用原
+用原 Turn ID 重试 `quota should-run` 即可发现该 Turn 的 `execution_loss_closeout`。
+省略 Todo ID 时，系统从原回执读取绑定的 Todo。先读当前 Todo 租约，用原
 Goal、Agent、Todo 与 Turn 身份及当前控制写入凭据运行投影的
 `refresh-state --execution-loss-closeout --dry-run`。预览通过后再去掉
 `--dry-run` 提交，读回 `typed_blocked_writeback_no_spend`。原准入回执保留，
@@ -421,8 +430,23 @@ reports observed progress without offering a spend command.
 时读取回执并返回仍待执行的步骤。
 The raw Python refresh API returns `writeback_receipt_required` until its CLI
 caller appends the refresh receipt and rereads the chain; it must not offer a
-spend command before that point. Older guards without a persisted spend source
+spend command before that point. If the CLI stops in this interval, re-entering
+the same Todo-bound Turn returns receipt recovery even while the Todo is open
+and runnable. Replay the original delivery fields and sink options to finish
+the writeback receipt. The composed command can then settle that Turn.
+Older guards without a persisted spend source
 retain the existing heartbeat default.
+
+When a bound `quota spend-slot` returns `index_digest_conflict`, run the
+guard in `settlement_recovery.next_cli_actions`. It reads the original Turn.
+Execute its `settlement_owed.command` only when present. If another writer
+already settled the debit, the retry ends there. An unbound spend requires a
+fresh preview.
+
+已绑定轮次的 `quota spend-slot` 遇到索引冲突时，执行
+`settlement_recovery.next_cli_actions` 中的命令以核对原轮次。仅当返回
+`settlement_owed.command` 时才执行该命令。如果其他写入者已完成扣额，本次重试
+到此结束。未绑定轮次的扣额须重新预演。
 
 A rejected `refresh-state`, or an Agent's state-only maintenance update, also
 returns `settlement_recovery` when a persisted Turn still owes closeout. Its
@@ -814,23 +838,35 @@ loopx --format json quota should-run \
   --available-capability benchmark_runner
 ```
 
-A live `quota should-run` or executing `turn run-once` automatically remembers,
-through the admitted turn-start capability hook, these five runtime observations
-for the registered Agent on this host:
+A live `quota should-run`, executing `turn run-once`, committed `refresh-state` /
+`quota spend-slot` / `quota monitor-poll` settlement, or verified live external
+capability execution (such as Goal-bound `pr-review` or `issue-fix pr-lifecycle --fetch-metadata`)
+automatically remembers these five runtime observations for the registered Agent
+on this host:
 `network`, `benchmark_runner`, `external_evidence_poll`, `worker_bridge`, and
-`cli_bridge`. Later decisions, including `quota spend-slot` and `monitor-poll`
-rechecks, read that Agent's observations without repeating flags. Goal/project
-`available_capabilities` declarations are inherited dynamically; Agent observations
-never write back into Goal configuration or propagate to peer Agents.
+`cli_bridge`. In addition, when the host is not in a network-disabled sandbox
+(`CODEX_SANDBOX_NETWORK_DISABLED=1` / `LOOPX_OFFLINE=1`) and local GitHub CLI
+polling readiness (`gh` + configured auth/token) is detected, LoopX probes
+`external_evidence_poll` automatically by default (`probed`) so fresh Goals and
+Agents observe upstream PR/evidence dependencies out of the box without manual
+`agent-capabilities --execute` or `--available-capability` ceremony. Later
+decisions, including `heartbeat-prompt` pre-quota projection, `quota spend-slot`,
+and `monitor-poll` rechecks, read that Agent's effective availability without
+repeating flags. Goal/project `available_capabilities` declarations are
+inherited dynamically; Agent observations never write back into Goal configuration
+or propagate to peer Agents.
 The hook declares only its Agent-private write scope, returns no private payload,
 and fails in isolation; quota selection itself performs no provider or memory write.
 
-The scope is the resolved runtime root, registry path, Goal id and registered
-Agent id. Separate hosts/runtimes or registries do not inherit these observations.
-A reused Agent id in the same scope refers to the same runtime declaration;
-use distinct Agent identities for environments with different tools. Observations
-are caller declarations, not independently verified probe receipts. They persist
-until corrected or forgotten; omission of a flag does not revoke them.
+The scope is the resolved runtime root, canonical project `source_registry` path
+(unifying synced `registry.global.json` mirrors with the project's `.loopx/registry.json`),
+Goal id and registered Agent id. Separate hosts/runtimes or unrelated registries do
+not inherit these observations. A reused Agent id in the same scope refers to the
+same runtime declaration; use distinct Agent identities for environments with
+different tools. Explicit negative observations (`--unavailable-capability`)
+override both Goal inheritance and automatic host probes (`probed`), and are
+preserved across passive task-facing executions until explicitly cleared or replaced.
+Explicit and verified observations persist until corrected or forgotten. A forget masks the old mirror value on subsequent reads. Local readiness probes apply to the current invocation. A network-disabled host suppresses PR polling even with an earlier positive observation.
 
 ```bash
 # Read current Agent observations and inherited/effective declarations.
@@ -1188,6 +1224,14 @@ Once `resume_ready=true`, the wait disappears and ordinary open-todo or
 deferred-successor selection runs again. Missing vision checkpoints, closed
 stage succession, unsupported conditions, and continuous-monitor-as-gate
 repairs remain fail-closed and are not hidden by this wait path.
+
+An ordinary blocked advancement Todo without a qualified resume condition
+holds its own execution. It does not satisfy an ongoing Vision's acceptance
+gap when the recorded policy is `repeat_until_closed` or unspecified. With no
+selectable work and no covering exact wait or declared blocker, the existing
+scoped Vision-gap replan lets the Agent review the actual blocker and find
+independent work. An explicit `as_needed` Vision can still wait on its blocked
+frontier. Background monitors keep their clocks and no-spend policy.
 
 For a single exact scheduled successor, the interaction contract allows a
 quiet no-op while the canonical `resume_at` condition has positive runtime-clock

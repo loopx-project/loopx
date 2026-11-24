@@ -22,9 +22,26 @@ test("capability evidence is not a default exit or a generic progress claim", ()
 import { visionAuthoringContract } from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 
-const obligation = {triggers: [{kind: "required_agent_vision_missing"}]};
+const defaultObligationId = "replan-1111111111111111";
+const defaultContextId = "replan-context-" + "1".repeat(24);
+const obligation = {obligation_id: defaultObligationId, triggers: [{kind: "required_agent_vision_missing"}]};
+const strideDecision = (obligationId = defaultObligationId, contextId = defaultContextId) => ({
+  schema_version: "stride_decision_v2", strategy_version: "evidence_conditioned_v1",
+  reference_context_id: contextId, reference_obligation_id: obligationId,
+  basis: "unexplained_gap", action: "switch", axes: {
+    work_slice: {plan: "Compare the bounded alternative.", reason: "Current evidence leaves the gap open."},
+    route_distance: {plan: "Test a distinct mechanism.", reason: "Local tuning did not close the gap."},
+    validation_scope: {plan: "Compare on the same inputs.", reason: "Controlled comparison separates mechanisms."}},
+  next_probe: {
+    scope: "Run one bounded comparison.", prediction: "Alternative explains the gap.",
+    adoption_criterion: "Keep verified gain.", cost_bound: "One bounded run.",
+    minimum_evidence: "Executed controlled comparison."}});
 const vision = {vision_patch: {acceptance_summary: "Observed permission boundary"},
-  path_delta: {outcome: "continue", evidence_refs: ["evidence-permission"]}};
+  path_delta: {outcome: "continue", evidence_refs: ["evidence-permission"]},
+  stride_decision: strideDecision()};
+const strideStopVision = {vision_patch: {acceptance_summary: "Recorded stride review boundary"},
+  path_delta: {outcome: "stop", evidence_refs: ["evidence-permission"]},
+  stride_decision: strideDecision()};
 
 test("open-work review guidance does not require configured checks or outcome declarations", () => {
   for (const kind of ["typed_progress_repeat", "periodic_review_due", "goal_outcome_uncovered"]) {
@@ -69,13 +86,11 @@ test("autonomous checkpoints reuse owner review while ordinary checkpoints keep 
         "never forces a pivot", "do not invent work or consume budget merely to stay active"]) {
         assert.ok(guidance.includes(clause), clause);
       }
-      if (stride_strategy === "evidence_conditioned_v1") {
-        const review = (projection.stride_control as JsonObject).decision_value_review as JsonObject;
-        const advice = Object.values(review).join(" ");
-        for (const clause of ["feasible alternative", "complete experiment", "headroom",
-          "artifact version, input conditions and original budget", "budget, feedback and permission limits"]) {
-          assert.ok(advice.includes(clause), clause);
-        }
+      const review = (projection.stride_control as JsonObject).decision_value_review as JsonObject;
+      const advice = Object.values(review).join(" ");
+      for (const clause of ["feasible alternative", "complete experiment", "headroom",
+        "artifact version, input conditions and original budget", "budget, feedback and permission limits"]) {
+        assert.ok(advice.includes(clause), clause);
       }
     }
   }
@@ -113,7 +128,7 @@ test("a revalidated successor receipt settles only its exact original Turn guard
 
 test("receipt-bound reentry keeps original canonical proof separate from the next frontier", () => {
   const id = "replan-1111111111111111";
-  const original = {required: true, obligation_id: id, triggers: [{kind: "periodic_review_due"}]};
+  const original = {required: true, obligation_id: id, triggers: [{kind: "long_todo_chain"}]};
   const current = {...original, obligation_id: "replan-2222222222222222", triggers: [{kind: "vision_acceptance_gap"}]};
   const delta = {schema_version: "replan_semantic_delta_v0", accepted: true,
     obligation_id: id, successor_todo_id: "todo_independent_successor",
@@ -399,7 +414,9 @@ test("missing evidence or acceptance cannot manufacture a fresh path outcome", (
 
 for (const reviewKind of ["long_todo_chain", "periodic_review_due"]) {
   test(`${reviewKind} accepts its evidence-linked vision route and retains progress exits`, () => {
-    const chain = {triggers: [{kind: reviewKind}]};
+    const chain = {obligation_id: defaultObligationId, triggers: [{kind: reviewKind}],
+      replan_context: {context_id: defaultContextId}};
+    const requiresStride = reviewKind === "periodic_review_due";
     const projection = projectReplanSemantics({operation: "requirements", obligation: chain});
     assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
@@ -411,8 +428,15 @@ for (const reviewKind of ["long_todo_chain", "periodic_review_due"]) {
       observation_delta: {delta_kinds: [], evidence_novel: false}}).accepted, true);
     assert.match(String((projection.writeback_contract as JsonObject).rule), /First reuse observed evidence valid for current source\/acceptance/);
     for (const outcome of ["new_surface", "new_hypothesis", "new_probe_family", "new_runnable_successor"]) {
-      assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
-        observation_delta: {delta_kinds: [outcome]}}).accepted, true);
+      if (requiresStride) {
+        assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+          observation_delta: {delta_kinds: [outcome]}}).reason_code, "stride_decision_required");
+        assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+          agent_vision: strideStopVision, observation_delta: {delta_kinds: [outcome]}}).accepted, true);
+      } else {
+        assert.equal(projectReplanSemantics({operation: "qualify", obligation: chain,
+          observation_delta: {delta_kinds: [outcome]}}).accepted, true);
+      }
     }
     for (const incomplete of [{vision_patch: vision.vision_patch},
       {...vision, path_delta: {outcome: "replan", evidence_refs: []}},
@@ -423,14 +447,14 @@ for (const reviewKind of ["long_todo_chain", "periodic_review_due"]) {
     // A stricter source, mixed vision duty or unrelated trigger keeps its policy.
     for (const restricted of [
       {...chain, satisfying_semantic_outcomes: ["new_runnable_successor"]},
-      {triggers: [...chain.triggers, {kind: "goal_acceptance_unbound"}]},
-      {triggers: [{kind: "typed_progress_repeat", text: reviewKind}]},
+      {...chain, triggers: [...chain.triggers, {kind: "goal_acceptance_unbound"}]},
+      {...chain, triggers: [{kind: "monitor_no_change_streak", text: reviewKind}]},
     ]) {
       assert.equal(projectReplanSemantics({operation: "qualify", obligation: restricted,
         agent_vision: vision}).accepted, false);
     }
     assert.equal(projectReplanSemantics({operation: "qualify",
-      obligation: {triggers: [...chain.triggers, ...obligation.triggers]},
+      obligation: {...chain, triggers: [...chain.triggers, ...obligation.triggers]},
       observation_delta: {delta_kinds: ["new_surface"]}}).accepted, false);
   });
 
@@ -439,10 +463,11 @@ for (const reviewKind of ["long_todo_chain", "periodic_review_due"]) {
 test("explicit outcome restriction remains authoritative; trigger prose is not", () => {
   assert.deepEqual(requiredSemanticOutcomes({satisfying_semantic_outcomes: ["new_runnable_successor", "new_runnable_successor"]}), ["new_runnable_successor"]);
   assert.throws(() => requiredSemanticOutcomes({satisfying_semantic_outcomes: ["unrecognized"]}), /unknown typed outcome/);
-  const prose = {triggers: [{kind: "typed_progress_repeat", text: "required_agent_vision_missing"}]};
+  const prose = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "typed_progress_repeat", text: "required_agent_vision_missing"}]};
   assert.equal(requiredSemanticOutcomes(prose).includes("new_surface"), true);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: prose,
-    observation_delta: {delta_kinds: ["new_surface"]}}).accepted, true);
+    agent_vision: strideStopVision, observation_delta: {delta_kinds: ["new_surface"]}}).accepted, true);
 });
 
 test("stale Goal Acceptance cannot be discharged by unrelated progress or a vision patch", () => {
@@ -482,20 +507,21 @@ test("terminal input projection supplies coverage and vision without widening re
 });
 
 test("external progress review: renamed identifiers discharge only behind new evidence; the plan may stand on evidence", () => {
-  const review = {triggers: [{kind: "external_progress_review_drift", model_authority: "none"}]};
+  const review = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "external_progress_review_drift", model_authority: "none"}]};
   const projection = projectReplanSemantics({operation: "requirements", obligation: review});
   const required = projection.required_any_of as string[];
   assert.equal(required.includes("fresh_vision_path_outcome"), true);
   for (const outcome of ["new_surface", "new_hypothesis", "new_probe_family", "new_concrete_blocker", "coverage_backed_no_followup"]) {
     assert.equal(required.includes(outcome), true, outcome);
   }
-  assert.match(String(projection.cli_semantic_args), /--progress-hypothesis-id/);
+  assert.match(String(projection.cli_semantic_args), /--agent-vision-json/);
   const contract = projection.writeback_contract as Record<string, unknown>;
   assert.equal(contract.identity_outcomes_require_new_evidence, true);
   assert.match(String(contract.alternative_cli_semantic_args), /--agent-vision-json/);
   assert.deepEqual(contract.vision_authoring, visionAuthoringContract(true));
 
-  const qualify = (observation_delta?: Record<string, unknown>, agent_vision?: Record<string, unknown>) =>
+  const qualify = (observation_delta?: Record<string, unknown>, agent_vision: Record<string, unknown> = strideStopVision) =>
     projectReplanSemantics({operation: "qualify", obligation: review, observation_delta, agent_vision});
   for (const identity of ["new_surface", "new_hypothesis", "new_probe_family"]) {
     const refused = qualify({delta_kinds: [identity], evidence_novel: false});
@@ -542,7 +568,9 @@ test("external progress review: renamed identifiers discharge only behind new ev
 
 test("known blockers cannot discharge any replan source; independent vision evidence can", () => {
   for (const kind of ["vision_acceptance_gap", "typed_progress_repeat", "external_progress_review_drift"]) {
-    const request = {operation: "qualify", obligation: {triggers: [{kind}]},
+    const request = {operation: "qualify", obligation: {obligation_id: defaultObligationId,
+        replan_context: {context_id: defaultContextId}, triggers: [{kind}]},
+      agent_vision: strideStopVision,
       observation_delta: {delta_kinds: ["new_concrete_blocker"], blocker_repeated: true,
         evidence_novel: true, observation_repeated: false}};
     const rejected = projectReplanSemantics(request);
@@ -551,35 +579,42 @@ test("known blockers cannot discharge any replan source; independent vision evid
     assert.deepEqual(rejected.outcomes, []);
     assert.equal(projectReplanSemantics({...request,
       observation_delta: {...request.observation_delta, blocker_repeated: false}}).accepted, true);
-    if (kind !== "typed_progress_repeat") {
-      const kept = projectReplanSemantics({...request, agent_vision: vision});
-      assert.equal(kept.accepted, true);
-      assert.deepEqual(kept.satisfying_outcomes, ["fresh_vision_path_outcome"]);
-    }
+    const kept = projectReplanSemantics({...request, agent_vision: vision});
+    assert.equal(kept.accepted, true);
+    assert.deepEqual(kept.satisfying_outcomes, ["fresh_vision_path_outcome"]);
   }
 });
 
 test("the identity rule is scoped to the external review source", () => {
-  const fuse = {triggers: [{kind: "typed_progress_repeat"}]};
+  const fuse = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "typed_progress_repeat"}]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: fuse,
+    agent_vision: strideStopVision,
     observation_delta: {delta_kinds: ["new_hypothesis"], evidence_novel: false}}).accepted, true);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: fuse,
+    agent_vision: strideStopVision,
     observation_delta: {delta_kinds: ["new_hypothesis"], observation_repeated: true}}).accepted, true);
   assert.equal((projectReplanSemantics({operation: "requirements", obligation: fuse}).required_any_of as string[])
-    .includes("fresh_vision_path_outcome"), false);
+    .includes("fresh_vision_path_outcome"), true);
   // A vision duty on the same obligation keeps the stricter vision policy.
-  const withVision = {triggers: [{kind: "external_progress_review_drift"}, {kind: "required_agent_vision_missing"}]};
+  const withVision = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "external_progress_review_drift"}, {kind: "required_agent_vision_missing"}]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: withVision,
+    agent_vision: strideStopVision,
     observation_delta: {delta_kinds: ["new_hypothesis"], evidence_novel: true}}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: withVision, agent_vision: vision}).accepted, true);
   // An explicit outcome restriction stays authoritative over the source default.
-  const restricted = {triggers: [{kind: "external_progress_review_drift"}], satisfying_semantic_outcomes: ["new_concrete_blocker"]};
+  const restricted = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "external_progress_review_drift"}], satisfying_semantic_outcomes: ["new_concrete_blocker"]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: restricted,
+    agent_vision: strideStopVision,
     observation_delta: {delta_kinds: ["new_hypothesis"], evidence_novel: true}}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: restricted, agent_vision: vision}).accepted, false);
   // Trigger prose cannot opt into the external review policy.
-  const prose = {triggers: [{kind: "typed_progress_repeat", text: "external_progress_review_drift"}]};
+  const prose = {obligation_id: defaultObligationId, replan_context: {context_id: defaultContextId},
+    triggers: [{kind: "typed_progress_repeat", text: "external_progress_review_drift"}]};
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: prose,
+    agent_vision: strideStopVision,
     observation_delta: {delta_kinds: ["new_hypothesis"], evidence_novel: false}}).accepted, true);
 });
 
@@ -613,19 +648,17 @@ test("planning advice cannot discharge a replan or widen source-specific exits",
 });
 
 
-test("stride format replaces duplicate strategy advice and never discharges a semantic review", () => {
+test("stride format is unconditional across plain and historical off contexts and never discharges a semantic review", () => {
   const plain = {triggers: [{kind: "typed_progress_repeat"}]};
   const base = projectReplanSemantics({operation: "requirements", obligation: plain});
   const off = projectReplanSemantics({operation: "requirements", obligation: {
     ...plain, replan_context: {stride_strategy: "off"}}});
-  assert.deepEqual(off, base);
   const enabled = {...plain, replan_context: {stride_strategy: "evidence_conditioned_v1"}};
   const withStrategy = projectReplanSemantics({operation: "requirements", obligation: enabled});
-  assert.deepEqual(withStrategy.planning_guidance, base.planning_guidance);
-  assert.ok(withStrategy.stride_control);
-  assert.equal(base.stride_control, undefined);
-  assert.deepEqual(withStrategy.required_any_of,
-    ["fresh_vision_path_outcome", ...(base.required_any_of as string[])]);
+  assert.deepEqual(off, base);
+  assert.deepEqual(withStrategy, base);
+  assert.ok(base.stride_control);
+  assert.equal((base.required_any_of as string[]).includes("fresh_vision_path_outcome"), true);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: enabled,
     planning_guidance: withStrategy.planning_guidance}).accepted, false);
   for (const version of ["future_v2", null, 1]) {
@@ -1098,4 +1131,30 @@ test("pending lifecycle survives a new frontier without granting settlement or s
   assert.throws(() => projectReplanSemantics({...request, guard_scoped: false}), /identity conflicts/);
   assert.throws(() => projectReplanSemantics({...request,
     transition_candidates: [{...candidate, lifecycle_settled: true}]}), /identity conflicts/);
+});
+
+test("an admitted lifecycle trigger with a null completion key matches a Todo row without one", () => {
+  const agent = "synthetic-agent", id = "replan-1111111111111111";
+  // A Todo completed without a completion turn key: the row has no such field,
+  // while the admitted trigger carries the key as null.
+  const row = {todo_id: "todo_unkeyed", status: "done", done: true,
+    task_class: "advancement_task", claimed_by: agent, last_actor_agent_id: agent,
+    completed_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-01T00:00:00Z",
+    completion_continuation: "active_goal"};
+  const original = {required: true, obligation_id: id, resolution_mode: "todo_lifecycle_settlement",
+    triggers: [{kind: "completed_advancement_without_successor", todo_id: row.todo_id,
+      completion_turn_key: null, agent_id: agent}]};
+  const candidate = {obligation: original, source_obligation: original, lifecycle_settled: false,
+    guard_recorded_at: "2026-08-01T00:00:01Z", items: [row]};
+  const request = {operation: "receipt_bound_obligation", guard_scoped: true, replay_phase: "open",
+    selected_obligation_id: id, agent_id: agent,
+    current_obligation: {obligation_id: "replan-2222222222222222"}, transition_candidates: [candidate]};
+  assert.deepEqual(projectReplanSemantics(request).obligation, {...original, selection_binding: "heartbeat_receipt"});
+  // A key that appears on either side after admission is still a different completion.
+  assert.throws(() => projectReplanSemantics({...request,
+    transition_candidates: [{...candidate, items: [{...row, completion_turn_key: "later-completion"}]}]}),
+  /identity conflicts/);
+  const keyed = {...original, triggers: [{...original.triggers[0], completion_turn_key: "original-completion"}]};
+  assert.throws(() => projectReplanSemantics({...request,
+    transition_candidates: [{...candidate, obligation: keyed, source_obligation: keyed}]}), /identity conflicts/);
 });

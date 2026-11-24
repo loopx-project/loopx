@@ -15,10 +15,9 @@ from loopx.rollout_event_log import append_rollout_event, build_rollout_event, r
 
 
 @pytest.mark.parametrize("existing", [False, True])
-@pytest.mark.parametrize("turn_envelope", [False, True])
 @pytest.mark.parametrize("failure", ["query", "write"])
 def test_cli_preserves_query_failure_and_existing_receipt(
-    tmp_path, monkeypatch, existing, turn_envelope, failure,
+    tmp_path, monkeypatch, existing, failure,
 ):
     goal, agent, turn = "fixture-goal", "fixture-agent", "fixture-turn"
     registry = tmp_path / "registry.json"
@@ -33,7 +32,7 @@ def test_cli_preserves_query_failure_and_existing_receipt(
     args = build_parser().parse_args([
         "--format", "json", "quota", "should-run", "--goal-id", goal,
         "--agent-id", agent, "--turn-instance-id", turn,
-    ] + (["--turn-envelope"] if turn_envelope else []))
+    ])
     context = QuotaCommandContext(
         runtime_root=tmp_path, status_limit=1, status_goal_id=goal,
         status_payload={}, cache_metadata=None, scheduler_context=None,

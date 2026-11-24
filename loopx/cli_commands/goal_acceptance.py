@@ -13,6 +13,7 @@ from typing import Any
 from ..control_plane.goals.acceptance import (
     GoalAcceptanceRejected,
     configure_goal_acceptance,
+    handoff_goal_outcomes,
     refine_goal_outcome,
     update_goal_objective,
     inspect_goal_acceptance,
@@ -47,6 +48,12 @@ All steps require --goal-id GOAL. Proposal preparation alone requires neither
 owner input nor adoption; only an applied objective revision needs adoption.
 Authority, budgets, stops and existing gated actions remain binding.
 
+Outcome declaration (refine):
+  --document schema: {"outcome_id":"<opaque-id>", "owner_agent_id":"AGENT", "objective":"...", "requirements":[{"id":"<opaque-id>", "description":"..."}], "source":{"ref":"<opaque-id>", "summary":"..."}}
+  Optional refine fields: "todo_ids":["todo_..."], "review":[...], "review_patch":[...], "storage_format":"records".
+  Opaque IDs (outcome_id, requirements[*].id, source.ref): <=128 UTF-16 code units matching ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$ (no '/' paths or spaces).
+  Limits (UTF-16 code units): objective <=1024, requirements <=32 items (description <=2000 each), source.summary <=512.
+
 Long-horizon requirements (refine):
   Keep the same outcome_id. Add "storage_format":"records" to the document to
   preview/commit lossless record storage with the next authorized refinement.
@@ -57,6 +64,12 @@ Long-horizon requirements (refine):
   After a known rejection, inspect and prepare a new operation id; after an
   ambiguous result, recover the original operation before changing intent.
   See docs/reference/goal-acceptance-observations.md#long-horizon-record-storage
+
+Retired Agent outcome handoff (local Goal owner):
+  handoff --document selection.json --expected-provider-revision REV --operation-id ID
+  selection.json: {"from_agent_id":"retired","to_agent_id":"receiver","outcomes":[{"id":"export","revision":2}]}
+  Preview first, then repeat with --execute to apply. Retry the unchanged request
+  after a lost response. Inspect to read current ownership and historical reviews.
 
 Owner check-scope reconciliation (configure without --agent-id):
   --document is the full replacement: {"scope":{"kind":"selected_work","todo_ids":["todo_current"]},
@@ -70,7 +83,7 @@ Owner check-scope reconciliation (configure without --agent-id):
   docs/reference/goal-acceptance-observations.md#owner-check-scope-reconciliation''',
     )
     add_format(parser)
-    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "prepare-objective", "inspect-proposal", "apply-proposal", "revise-objective", "adopt-objective"))
+    parser.add_argument("action", type=lambda value: "clear-checks" if value == "disable" else value, choices=("inspect", "prepare", "configure", "verify", "clear-checks", "refine", "handoff", "prepare-objective", "inspect-proposal", "apply-proposal", "revise-objective", "adopt-objective"))
     parser.add_argument("--goal-id", required=True)
     parser.add_argument(
         "--proposal-id", help="Existing objective proposal ID for inspect-proposal/apply-proposal; reuses the original reviewed request and recovery identity.",
@@ -150,12 +163,16 @@ def render_goal_acceptance(payload: dict[str, Any]) -> str:
         if outcome.get("owner_registration_missing"):
             owner = f"{owner}, unregistered for this Goal at readback"
         lines.append(f"- outcome {outcome['id']}: {outcome['objective']} ({owner})")
+        if original := outcome.get("declaration_owner_agent_id"):
+            lines.append(f"  original declaration: {original}")
         for requirement in outcome["requirements"]:
             lines.append(f"  - {requirement['id']}: {requirement['description']} [{requirement['status']}]")
             review = requirement.get("agent_review")
             if review:
                 current = "current basis" if review["basis_current"] else "basis changed; review again"
                 lines.append(f"    Agent review: {review['conclusion']} ({current}; not independent verification). {review['note']}")
+                if reviewed_for := review.get("recorded_for_agent_id"):
+                    lines.append(f"    review recorded for: {reviewed_for}")
                 lines.extend(f"    evidence: {ref}" for ref in review["evidence_refs"])
         lines.append("  work: " + (", ".join(f"{work['todo_id']} ({work['status']})" for work in outcome["work"]) or "not linked"))
     for gap in (contract.get("outcome_requirements") or {}).get("acceptance_gaps", []):
@@ -202,6 +219,14 @@ def handle_goal_acceptance_command(
                 raise ValueError("prepare-objective requires --document and --operation-id; it reads the current basis")
             document = json.loads(args.document.read_text(encoding="utf-8"))
             payload = prepare_objective_revision(**common, document=document, operation_id=args.operation_id, execute=args.execute)
+        elif args.action == "handoff":
+            if args.document is None or not args.operation_id or not args.expected_provider_revision:
+                raise ValueError("handoff requires --document, --operation-id and --expected-provider-revision from inspect")
+            document = json.loads(args.document.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise ValueError("outcome handoff requires a selection document")
+            payload = public_goal_acceptance(handoff_goal_outcomes(**common, document=document, operation_id=args.operation_id,
+                expected_provider_revision=args.expected_provider_revision, execute=args.execute))
         elif args.action == "refine":
             if args.document is None or not args.operation_id or not args.expected_provider_revision:
                 raise ValueError("refine requires --document, --operation-id and --expected-provider-revision from inspect")

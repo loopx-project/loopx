@@ -248,6 +248,27 @@ try {
       await second.getByText("Unrelated met requirement", {exact: true}).waitFor();
       assert.equal(await outcomes.locator(".goal-outcome-criteria > li:visible").count(), 4,
         "Each selected outcome exposes every requirement without identity collisions");
+
+      // A second operator can finish a handoff while the selection form is open.
+      collision.handoff_receivers = ["receiver"];
+      collision.outcomes[1].owner_registration_missing = true;
+      const handoff = outcomes.locator(".goal-outcome-handoff");
+      await handoff.locator("summary").click();
+      await handoff.getByRole("button", {name: "Refresh ownership"}).click();
+      const source = handoff.getByLabel("Previous owner");
+      await source.selectOption(collision.outcomes[1].owner_agent_id);
+      await handoff.getByLabel("Receiving Agent").selectOption("receiver");
+      await handoff.getByRole("checkbox").check();
+      // Even if that same outcome now belongs to the other retired source, it
+      // was never selected for transfer from its new owner.
+      collision.outcomes[1].owner_agent_id = "former-author";
+      await handoff.getByRole("button", {name: "Refresh ownership"}).click();
+      const remaining = handoff.getByRole("checkbox", {name: /First colliding outcome/});
+      await remaining.waitFor();
+      assert.equal(await source.inputValue(), "former-author");
+      assert.equal(await remaining.isChecked(), false);
+      assert.equal(await handoff.getByRole("checkbox", {name: /Second colliding outcome/}).isChecked(), false);
+      assert.equal(await handoff.getByRole("button", {name: "Preview handoff"}).isDisabled(), true);
       response = structuredClone(snapshot);
       payload.run_history.goals[0].acceptance_observation = acceptance;
       await page.reload({waitUntil: "networkidle"});

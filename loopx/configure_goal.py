@@ -10,7 +10,11 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .agent_registry import normalize_registered_agents, registered_agent_ids_for_goal
+from .agent_registry import (
+    agent_registration_tokens,
+    normalize_registered_agents,
+    registered_agent_ids_for_goal,
+)
 from .boundary_authority import (
     build_checkpointed_boundary_authority_entry,
     checkpointed_boundary_authority_summary,
@@ -222,19 +226,11 @@ def _clean_domains(values: list[str] | None) -> list[str] | None:
 def _clean_registered_agents(values: list[str] | None) -> list[str] | None:
     if values is None:
         return None
-    agents: list[str] = []
-    for value in values:
-        for part in str(value).split(","):
-            raw_agent = part.strip()
-            if not raw_agent:
-                continue
-            agent = normalize_todo_claimed_by(raw_agent)
-            if not agent:
-                raise ValueError(
-                    "registered agents must be public-safe tokens such as codex-main-control"
-                )
-            if agent not in agents:
-                agents.append(agent)
+    agents, rejected = agent_registration_tokens(values)
+    if rejected:
+        raise ValueError(
+            "registered agents must be public-safe tokens such as codex-main-control"
+        )
     return agents
 
 
@@ -442,8 +438,6 @@ def configure_goal(
     execution_turn_granularity: str | None = None,
     execution_replan_after_todos: int | None = None,
     execution_replan_after_turns: int | None = None,
-    execution_stride_strategy: str | None = None,
-    clear_execution_stride_strategy: bool = False,
     execution_planning_horizon_goal: bool | None = None,
     clear_execution_planning_horizon_goal: bool = False,
     execution_yardstick_enabled: bool | None = None,
@@ -841,7 +835,6 @@ def configure_goal(
         turn_granularity=execution_turn_granularity,
         replan_after_completed_todos=execution_replan_after_todos,
         replan_after_effective_turns=execution_replan_after_turns,
-        stride_strategy=execution_stride_strategy, clear_stride_strategy=clear_execution_stride_strategy,
         planning_horizon_goal=execution_planning_horizon_goal,
         clear_planning_horizon_goal=clear_execution_planning_horizon_goal,
         yardstick_enabled=execution_yardstick_enabled,

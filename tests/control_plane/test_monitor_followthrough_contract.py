@@ -665,8 +665,12 @@ def test_same_turn_material_monitor_poll_is_no_spend_closeout_before_successor(
             "".join(json.dumps(row) + "\n" for row in mutated), encoding="utf-8"
         )
         incomplete = run_json_cli(*guard_args, registry_path=registry, runtime_root=runtime)
-        assert incomplete["agent_lane_next_action"]["receipt_bound_monitor_phase"] == "poll_due"
-        assert incomplete["execution_obligation"]["must_attempt_work"] is True
+        assert incomplete["effective_action"] == "unsettled_host_turn_recovery"
+        assert incomplete["unsettled_host_turn_recovery"]["binding_id"] == admitted["todo_id"]
+        assert incomplete["unsettled_host_turn_recovery"]["turn_instance_id"] == turn_id
+        assert incomplete["settlement_progress"]["state"] == "writeback_receipt_required"
+        assert incomplete.get("selected_todo") is None
+        assert incomplete["normal_delivery_allowed"] is False
     index.write_text(committed_index, encoding="utf-8")
 
     replay = run_json_cli(

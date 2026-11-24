@@ -1436,9 +1436,17 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             if not isinstance(response, dict):
                 raise ValueError("completing chat turn requires a response")
             completed_at = str(turn.get("completed_at") or utc_now())
-            if response.get("message"):
+            attachments = response.get("attachments")
+            if attachments:
+                from .chat.attachments import local_goal_reply_route
+                from .control_plane.collaboration import conversation_scope
+                session = self.load_session(session_id) or {}
+                if not local_goal_reply_route(session, turn, scope_kind=conversation_scope(session)["kind"]):
+                    attachments = None
+            if response.get("message") or attachments:
                 self.append_message(
-                    session_id, role="agent", text=str(response["message"]), turn_id=turn_id,
+                    session_id, role="agent", text=str(response.get("message") or ""), turn_id=turn_id,
+                    attachments=attachments,
                     message_id=f"managed.{turn_id}.completed", goal_draft=response.get("goal_draft"),
                 )
             self.append_completed_response_events(session_id, turn_id, response=response, idempotent=True)

@@ -201,7 +201,7 @@ def _goal_capability_options(
         if capability_id == "periodic_report":
             return {"clear_periodic_report_configuration": True}
         if capability_id == "todo_replan_cadence":
-            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_stride_strategy": True, "clear_execution_planning_horizon_goal": True, "clear_execution_yardstick_enabled": True}
+            return {"clear_execution_replan_after_todos": True, "clear_execution_replan_after_turns": True, "clear_execution_planning_horizon_goal": True, "clear_execution_yardstick_enabled": True}
         if capability_id == "pull_request_review":
             return {"clear_pull_request_review_configuration": True}
         if capability_id == "change_quality_qualification":
@@ -214,7 +214,7 @@ def _goal_capability_options(
     config = dict(configuration)
     allowed: dict[str, set[str]] = {
         "goal_capability_organization": {"mode", "discovery_budget_minutes", "max_trials"},
-        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "stride_strategy", "planning_horizon_goal", "yardstick_enabled"},
+        "todo_replan_cadence": {"completed_todos", "count_unit", "count", "planning_horizon_goal", "yardstick_enabled"},
         "multi_subagent": {
             "enabled",
             "max_children",
@@ -237,6 +237,9 @@ def _goal_capability_options(
     }
     if capability_id not in allowed:
         raise ValueError(f"Goal capability is read-only in Dashboard: {capability_id}")
+    if capability_id == "todo_replan_cadence" and "stride_strategy" in config:
+        from ..capabilities.todo_replan_cadence.machine_defaults import reject_removed_stride_strategy
+        reject_removed_stride_strategy(config)
     unknown = sorted(set(config) - allowed[capability_id])
     if unknown:
         raise ValueError(
@@ -249,7 +252,6 @@ def _goal_capability_options(
         return {"capability_improvement_configuration": config}
     if capability_id == "todo_replan_cadence":
         from ..capabilities.todo_replan_cadence.machine_defaults import normalize_replan_cadence_configuration
-        from ..control_plane.work_items.stride_policy_codec import normalize_stride_strategy
         horizon = {"clear_execution_planning_horizon_goal": True}
         if "planning_horizon_goal" in config:
             if not isinstance(config["planning_horizon_goal"], bool):
@@ -260,22 +262,19 @@ def _goal_capability_options(
             if not isinstance(config["yardstick_enabled"], bool):
                 raise ValueError("yardstick_enabled must be a boolean")
             yardstick = {"execution_yardstick_enabled": config["yardstick_enabled"]}
-        if config and set(config) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}:
-            # The capability editor submits the complete sparse value. Unlike
-            # the CLI's single-field strategy patch, omission restores live
-            # interval inheritance even when this Goal was previously pinned.
+        if config and set(config) <= {"planning_horizon_goal", "yardstick_enabled"}:
+            # The capability editor submits the complete sparse value; omitting
+            # the interval restores live inheritance even when this Goal was
+            # previously pinned.
             return {
                 **horizon, **yardstick,
-                **({"execution_stride_strategy": normalize_stride_strategy(config["stride_strategy"])}
-                   if "stride_strategy" in config else {}),
                 "clear_execution_replan_after_turns": True,
                 "clear_execution_replan_after_todos": True,
             }
         cadence = normalize_replan_cadence_configuration(config)
         option = ("execution_replan_after_turns" if cadence["count_unit"] == "effective_turns"
                   else "execution_replan_after_todos")
-        return {option: cadence["count"], **horizon, **yardstick, **({"execution_stride_strategy": cadence["stride_strategy"]}
-            if "stride_strategy" in cadence else {})}
+        return {option: cadence["count"], **horizon, **yardstick}
     if capability_id == "periodic_report":
         from ..capabilities.periodic_report.goal_configuration import normalize_configuration
         # Validate the payload before the Session guard reads native sources.

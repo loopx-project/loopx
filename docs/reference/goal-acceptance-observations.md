@@ -1085,3 +1085,28 @@ execution response, not an alternative acceptance ledger.
 本次不授予替换、撤销、跨 Agent 采用或完成验收的权限。已确认拒绝后改变意图需新
 operation；结果不明时先恢复原操作。旧运行时不能读写新格式，回滚须使用兼容版本，
 不能用旧备份覆盖新要求。
+
+### Transfer selected outcomes after an Agent retires
+
+In the local Goal's supporting outcomes, expand **Transfer retired Agent outcomes**,
+select the retired identity, its successor and the individual outcomes, then
+preview and apply. Refresh ownership to see the receiver and original declaration.
+Each Agent continues to refine only the outcomes it owns.
+
+The equivalent local owner command is `loopx goal-acceptance handoff --goal-id GOAL
+--document selection.json --expected-provider-revision REV --operation-id ID`.
+Take the provider revision and each outcome revision from the same fresh
+`goal-acceptance inspect`. The selection document is:
+
+```json
+{"from_agent_id":"retired","to_agent_id":"receiver","outcomes":[{"id":"export","revision":2}]}
+```
+
+The default previews the complete selection. Add `--execute` to commit it
+atomically. After an uncertain response, retry with the same document, revision
+and operation ID to recover its receipt. For a rejected or changed selection,
+inspect again and prepare a new operation. A current source Agent, an unregistered
+receiver or a stale outcome prevents the whole handoff. Historical reviews retain
+their original lane. Checks, Todos, leases and quota history remain under their
+existing owners. The first handoff introduces attribution metadata in the outcome
+state; older runtimes that cannot read it need a compatible upgrade.

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,9 @@ def test_dsh_plugin_publish_workflow_allows_tag_or_main_dispatch_with_relative_a
     checkout = next(step for step in steps if str(step.get("uses", "")).startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "refs/tags/${{ inputs.release_tag }}"
     assert checkout["with"]["fetch-depth"] == 0
+    setup = next(step for step in steps if str(step.get("uses", "")).startswith("actions/setup-node@"))
+    assert setup["with"]["registry-url"] == "https://registry.npmjs.org"
+    assert setup["with"]["package-manager-cache"] is False
 
     identity_run = next(
         step["run"]
@@ -63,3 +70,29 @@ def test_dsh_plugin_publish_workflow_allows_tag_or_main_dispatch_with_relative_a
     assert "on the existing published plugin tag or on `main`" in normalized_readme
     assert "refs/tags/<release_tag>" in normalized_readme
     assert "Allow npm publish" in normalized_readme
+
+
+@pytest.mark.skipif(os.name != "posix" or shutil.which("bash") is None, reason="The hosted step uses Bash on a POSIX runner")
+def test_dsh_publish_reports_the_authentication_stage_without_disclosing_trace(tmp_path, monkeypatch) -> None:
+    steps = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))["jobs"]["publish"]["steps"]
+    publish = next(step["run"] for step in steps if step.get("name") == "Publish the same bytes with npm trusted publishing")
+    fake_npm = tmp_path / "npm"
+    fake_npm.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'npm verbose oidc Failed token exchange request with body message: synthetic-private-trace'\nexit 17\n",
+        encoding="utf-8",
+    )
+    fake_npm.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    monkeypatch.setenv("DSH_ARTIFACT", "./output/immutable.tgz")
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_URL", raising=False)
+    monkeypatch.delenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", raising=False)
+    missing = subprocess.run(["bash", "-e", "-c", publish], check=False, capture_output=True, text=True)
+    assert missing.returncode == 1
+    assert "GitHub OIDC unavailable" in missing.stdout
+
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://example.invalid/oidc")
+    monkeypatch.setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "synthetic-token")
+    rejected = subprocess.run(["bash", "-e", "-c", publish], check=False, capture_output=True, text=True)
+    assert rejected.returncode == 17
+    assert "npm rejected its token exchange" in rejected.stdout
+    assert "synthetic-private-trace" not in rejected.stdout + rejected.stderr

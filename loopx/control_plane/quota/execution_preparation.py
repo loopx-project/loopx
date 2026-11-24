@@ -210,7 +210,7 @@ def commit_execution_loss_closeout(
                     "payload": load_project_registry(registry_path), "lifetime_sources": lifetime_sources}, "locks": witnesses,
                 "intent": {"delivery_outcome": delivery_outcome, "delivery_boundary": delivery_boundary,
                     "progress_observation": progress}, "control_writer_proof": dict(requested_proof) if requested_proof else None,
-                "requested_effects": dict(requested_effects), "observed_at": now_local_iso()}
+                "requested_effects": dict(requested_effects), "observed_at": now_local_iso(timespec="microseconds")}
             try:
                 result = effect_runtime_result(
                     "quota.execution_loss_closeout.commit",
@@ -407,6 +407,7 @@ def _hard_lease_execution_bound(
     # Recovery can read the retired proof from the same locked
     # snapshot, including a renewal within the admitted generation.
     proof = current_proof if not todo_open and requested_proof is None else requested_proof
+    admitted_version = prepared_lease.get("prepared_lease_version") if prepared_lease else None
     if (
         allow_same_generation_lease_renewal
         and lease_epoch is not None
@@ -417,7 +418,8 @@ def _hard_lease_execution_bound(
         and not isinstance(current_proof.get("expected_version"), bool)
         and isinstance(requested_proof.get("expected_version"), int)
         and not isinstance(requested_proof.get("expected_version"), bool)
-        and current_proof["expected_version"] >= requested_proof["expected_version"]
+        and type(admitted_version) is int
+        and current_proof["expected_version"] >= requested_proof["expected_version"] >= admitted_version
     ):
         proof = current_proof
     if prepared_lease is not None and proof is not None and proof == current_proof:

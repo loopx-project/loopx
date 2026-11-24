@@ -19,7 +19,7 @@ from tests.control_plane.codex_checkpoint_fixture import reference_metadata_orac
 @pytest.mark.parametrize("inherited", [False, True])
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("marked_goal", [True, False])
-def test_quota_navigation_is_opt_in_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited):
+def test_quota_navigation_respects_transport_and_original_capture_remains_complete(tmp_path, monkeypatch, marked_goal, provider, inherited):
     monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     goal, agent = "scope-cli", "author"
     runtime, registry, state = tmp_path / "runtime", tmp_path / "registry.json", tmp_path / "state.md"

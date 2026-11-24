@@ -7,6 +7,10 @@ import math
 import subprocess
 from pathlib import Path
 
+from loopx.control_plane.goals.task_planning import (
+    validate_task_plan_readback as validate_plan_readback,
+)
+
 
 def render_planning_prompt(packet: dict, env: dict[str, str]) -> str:
     """Deliver the Core packet and explicitly selected observation tool context.
@@ -70,45 +74,8 @@ def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:
     return packet
 
 
-def validate_plan_readback(result: dict, before: dict, after: dict) -> dict:
-    if (
-        result.get("input_digest") != before["input_digest"]
-        or after["input_digest"] != before["input_digest"]
-    ):
-        raise ValueError("planning input changed before readback")
-    status = result.get("status")
-    ids = result.get("todo_ids")
-    if (
-        status not in {"ready", "blocked"}
-        or not isinstance(ids, list)
-        or not ids
-        or any(not isinstance(item, str) for item in ids)
-        or len(set(ids)) != len(ids)
-    ):
-        raise ValueError(
-            "planning result requires unique actual Todo ids and a typed status"
-        )
-    todos = {item["todo_id"]: item for item in after["existing_todos"]}
-    if any(todo_id not in todos for todo_id in ids):
-        raise ValueError("planning referenced a missing or unrelated Todo")
-    if status == "ready" and not set(ids).issubset(after["runnable_todo_ids"]):
-        raise ValueError("planning referenced non-runnable or unclaimed work")
-    if status == "blocked" and not set(ids).issubset(after["blocking_todo_ids"]):
-        raise ValueError("blocked planning result requires unresolved blocking Todos")
-    requirements = after.get("goal_acceptance", {}).get("planning_requirements", {})
-    if status == "ready" and (
-        requirements.get("agent_id") != after["agent_id"]
-        or requirements.get("declaration_current") is not True
-        or not set(ids).issubset(requirements.get("linked_todo_ids", []))
-    ):
-        raise ValueError("ready planning requires canonical overall requirements linked to its Todos")
-    return {
-        "input_digest": before["input_digest"],
-        "status": status,
-        "todo_ids": ids,
-        "goal_id": after["goal_id"],
-        "agent_id": after["agent_id"],
-        "state_readback_verified": True,
-        **({"goal_requirements_readback": requirements} if status == "ready" else {}),
-        "execution_owner": "caller",
-    }
+__all__ = [
+    "render_planning_prompt",
+    "task_plan_packet",
+    "validate_plan_readback",
+]

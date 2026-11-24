@@ -38,7 +38,14 @@ export function useResearchRecordsLocation(scope: string) {
     window.history.replaceState(window.history.state, "", url);
     setLocation(previous => ({scope, value: next, navigation: previous.navigation}));
   };
-  return {value, update, consumeFocusRestore};
+  const toggleExpanded = (id: string, open?: boolean) => {
+    const {expanded} = current.current;
+    const wasOpen = expanded.includes(id);
+    const shouldOpen = open ?? !wasOpen;
+    if (shouldOpen === wasOpen) return;
+    update({expanded: shouldOpen ? [...expanded, id] : expanded.filter(value => value !== id)});
+  };
+  return {value, update, toggleExpanded, consumeFocusRestore};
 }
 
 /** Local read controls over the existing validated history snapshot. */
@@ -51,7 +58,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
   reading: ReturnType<typeof useResearchRecordsLocation>;
 }) {
-  const {query, status, limit, expanded} = reading.value;
+  const {query, status, limit, expanded, focused} = reading.value;
   const {consumeFocusRestore} = reading;
   const root = useRef<HTMLDivElement>(null);
   const [downloadFailed, setDownloadFailed] = useState(false);
@@ -63,22 +70,19 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   const allGroups = useMemo(() => researchRecordGroups(events, complete ? nodes : []), [events, nodes, complete]);
   useEffect(() => {
     if (!complete || busy || !consumeFocusRestore()) return;
-    const row = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])]
-      .find(element => expanded.includes(element.dataset.researchRecord!));
+    const rows = [...(root.current?.querySelectorAll<HTMLElement>("[data-research-record]") ?? [])];
+    const row = rows.find(element => element.dataset.researchRecord === focused)
+      ?? rows.find(element => expanded.includes(element.dataset.researchRecord!));
     const target = row?.querySelector<HTMLElement>("summary");
     target?.focus({preventScroll: true}); target?.scrollIntoView({block: "nearest"});
-  }, [complete, busy, consumeFocusRestore, groups, expanded]);
+  }, [complete, busy, consumeFocusRestore, groups, expanded, focused]);
   const missing = complete && expanded.some(id => !allGroups.some(group => group.id === id));
   const statuses = [...new Set(events.map(event => event.status).filter(Boolean))].sort();
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录 · ${groupCount}` : `${matches.length} matches in ${events.length} loaded records · ${groupCount}`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
   const updateFilters = (filters: Partial<Pick<ResearchRecordsLocation, "query" | "status">>) => {
-    reading.update({...filters, limit: 50, expanded: []});
-  };
-  const toggle = (id: string, open: boolean) => {
-    if (expanded.includes(id) === open) return;
-    reading.update({expanded: open ? [...expanded, id] : expanded.filter(value => value !== id)});
+    reading.update({...filters, limit: 50, expanded: [], focused: undefined});
   };
   const originalContent = (event: ExploreHistoryEvent) => {
     const shown = displayed.get(event.event_id) ?? event;
@@ -150,13 +154,17 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
     <ol className="research-history-records">{groups.slice(0, limit).map(group => {
       const event = group.events[0]!;
       const shown = displayed.get(event.event_id) ?? event;
-      return <li key={group.id} data-research-record={group.id}>
+      return <li key={group.id} data-research-record={group.id} onFocus={() => reading.update({focused: group.id})}>
         {group.node && group.events.length > 1
           ? <GroupedResearchRecord title={(displayed.get(group.node.latest.event_id) ?? group.node.latest).title}
             events={group.events} displayed={displayed} renderRecord={originalContent} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}
-            open={expanded.includes(group.id)} onOpen={open => toggle(group.id, open)}/>
-          : <details className="research-record-entry" open={expanded.includes(group.id)} onToggle={event => toggle(group.id, event.currentTarget.open)}>
-            <summary><strong>{shown.title}</strong><span>{timeLabel(event.recorded_at)} · {stateLabel(event.status)}</span></summary>
+            open={expanded.includes(group.id)} onOpen={open => reading.toggleExpanded(group.id, open)}/>
+          : <details className="research-record-entry" open={expanded.includes(group.id)}
+            onToggle={event => reading.toggleExpanded(group.id, event.currentTarget.open)}>
+            <summary onClick={event => {
+              event.preventDefault();
+              reading.toggleExpanded(group.id);
+            }}><strong>{shown.title}</strong><span>{timeLabel(event.recorded_at)} · {stateLabel(event.status)}</span></summary>
             {originalContent(event)}
           </details>}
     </li>;})}</ol>
@@ -168,7 +176,7 @@ function GroupedResearchRecord({title, events, displayed, renderRecord, zh, stat
   title: string; events: readonly ExploreHistoryEvent[]; displayed: ReadonlyMap<string, ExploreHistoryEvent>;
   renderRecord: (event: ExploreHistoryEvent) => ReactNode; zh: boolean;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
-  open: boolean; onOpen: (open: boolean) => void;
+  open: boolean; onOpen: (open?: boolean) => void;
 }) {
   const findings = events.filter(event => event.event_kind === "finding");
   const lifecycle = events.filter(event => event.event_kind === "node").at(-1)?.status;
@@ -180,10 +188,13 @@ function GroupedResearchRecord({title, events, displayed, renderRecord, zh, stat
       if (event.key !== "Escape" || !event.currentTarget.open || !(event.target instanceof Element)
           || event.target.closest("details") !== event.currentTarget) return;
       event.preventDefault(); event.stopPropagation();
-      event.currentTarget.open = false;
+      onOpen(false);
       event.currentTarget.querySelector("summary")?.focus();
     }}>
-    <summary><strong>{title}</strong><span>{summary.join(" · ")}</span></summary>
+    <summary onClick={event => {
+      event.preventDefault();
+      onOpen();
+    }}><strong>{title}</strong><span>{summary.join(" · ")}</span></summary>
     {open ? <ol className="research-record-group-history">{events.map(event => {
       const eventTitle = (displayed.get(event.event_id) ?? event).title;
       const kind = event.event_kind === "finding" ? (zh ? "结论记录" : "Finding") : (zh ? "研究项记录" : "Research item");

@@ -19,13 +19,13 @@ from ..control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_request_subject,
     heartbeat_receipt_view,
 )
+from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import (
     RolloutAppendPreconditionChanged,
     iter_rollout_events,
     rollout_event_log_path,
 )
-from .quota_presentation import is_undeclared_json_quota_caller
 
 if TYPE_CHECKING:
     from .quota_action_selection import RequestedQuotaActionSelection
@@ -58,9 +58,7 @@ def dispatch_quota_turn_start_hooks(
     runtime_root_arg: str | None,
     lark_turn_start_hook_dispatcher: Callable[..., dict[str, object]] | None = None,
 ) -> tuple[dict[str, object] | None, bool]:
-    _, scheduler_context, _ = quota_module._export(
-        "validate_quota_command_context_request"
-    )(args)
+    quota_module._export("validate_quota_command_context_request")(args)
     if args.quota_command != "should-run":
         return None, False
     preview = bool(getattr(args, "dry_run", False))
@@ -103,10 +101,7 @@ def dispatch_quota_turn_start_hooks(
             )
         # A preview still needs the current local Inbox and preferences. These
         # hooks observe existing context without recording reads or delivery.
-        model_read = (
-            not getattr(args, "scheduler_observation", False)
-            and not is_undeclared_json_quota_caller(args, scheduler_context)
-        )
+        model_read = not getattr(args, "scheduler_observation", False)
         context_dispatch = dispatch_turn_start_hooks(
             (
                 turn_start_hook(
@@ -443,10 +438,8 @@ def execute_quota_should_run(
         agent_id=args.agent_id,
         todo_id=args.todo_id,
     )
-    complete_context = (
-        not getattr(args, "scheduler_observation", False)
-        and not is_undeclared_json_quota_caller(args, scheduler_context)
-    )
+    complete_context = not getattr(args, "scheduler_observation", False)
+    outcome_navigation = complete_context and context_delivery_for_arguments(args)["progressive_enabled"]
     payload = export("build_live_quota_should_run_decision")(
         status_payload,
         goal_id=args.goal_id,
@@ -477,7 +470,7 @@ def execute_quota_should_run(
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         turn_context_projector=context_projector,
-        context_navigation=complete_context,
+        context_navigation=outcome_navigation,
         goal_ref=goal_ref,
     )
     execution.payload = payload

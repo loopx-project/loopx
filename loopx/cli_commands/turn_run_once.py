@@ -140,7 +140,7 @@ def execute_turn_run_once(
                     }
             return dict(cached_completion_lease)
 
-        def rebind_resumed_task_lease(*, bind_receipt: bool = True) -> None:
+        def rebind_resumed_settlement_lease() -> None:
             nonlocal task_lease_proof, task_lease_epoch, rebound_lease_active
             if (
                 rebound_lease_active
@@ -166,8 +166,7 @@ def execute_turn_run_once(
             )
             task_lease_proof = rebound_proof
             rebound_lease_active = True
-            if bind_receipt:
-                bind_heartbeat_settlement_receipt()
+            bind_heartbeat_settlement_receipt()
         transaction = (
             payload.get("transaction")
             if isinstance(payload.get("transaction"), Mapping)
@@ -380,7 +379,7 @@ def execute_turn_run_once(
         ) -> dict[str, object]:
             require_effect_ref(effect_ref, SettlementStepKind.DURABLE_WRITEBACK)
             if args.execute and completion_todo_id is None:
-                rebind_resumed_task_lease(bind_receipt=True)
+                rebind_resumed_settlement_lease()
             refresh = refresh_candidate(result, completion_todo_id=completion_todo_id,
                 completion_turn_key=completion_turn_key)
             if refresh.get("ok") and (
@@ -532,7 +531,7 @@ def execute_turn_run_once(
             prior = completion_readback()
             if prior is None:
                 if args.execute:
-                    rebind_resumed_task_lease(bind_receipt=True)
+                    rebind_resumed_settlement_lease()
                 # A rejected attachment must not leave the Todo completed.
                 # The primary writer still rechecks the same capability owner
                 # before commit; this preview authorizes no later effects.
@@ -870,7 +869,10 @@ def execute_turn_run_once(
             if settlement_identity.request_subject is not None:
                 require_current_request_operation(request_locator, settlement_identity,
                     registry_path=registry_path, runtime_root=runtime_root, workspace=project)
-            rebind_resumed_task_lease(bind_receipt=False)
+            # A Host retry is new work: retain the recorded preparation so the
+            # shared launch/requalification owner can reject a replaced lease.
+            # Only a validated settlement effect may resolve and bind a
+            # recovery lease for an existing frozen result.
             bind_heartbeat_settlement_receipt()
 
         managed_cadence = managed_cadence_start(
