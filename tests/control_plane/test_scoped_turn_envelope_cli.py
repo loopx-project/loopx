@@ -25,6 +25,8 @@ def _seed_mature_goal(
     *,
     provider: str,
     outcome_count: int = 33,
+    goal_id: str = "mature-scoped-goal",
+    objective_prefix: str = "Historical outcome",
 ) -> dict[str, object]:
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = tmp_path / "project"
@@ -34,7 +36,6 @@ def _seed_mature_goal(
     project.mkdir(parents=True)
     registry.parent.mkdir(parents=True)
 
-    goal_id = "mature-scoped-goal"
     agent_id = "worker"
     todos = [
         {
@@ -124,7 +125,7 @@ def _seed_mature_goal(
         patches.append({
             "outcome_id": f"outcome-hist-{i}",
             "owner_agent_id": f"peer-{i % 4}",
-            "objective": f"Historical outcome {i}.",
+            "objective": f"{objective_prefix} {i}.",
             "todo_ids": [f"todo_hist_{i}"],
             "storage_format": "records",
             "requirements": [
@@ -230,9 +231,15 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     assert reqs["full_outcome_count"] == 33
     assert reqs["inline_outcome_count"] == 1
     assert reqs["compacted_outcome_count"] == 32
+    assert isinstance(reqs["full_outcomes_sha256"], str) and reqs["full_outcomes_sha256"].startswith("sha256:")
+    assert reqs["outcome_revision"] == reqs["revision"]
+    assert "--include-detail goal_acceptance" in reqs["cold_read_instruction"]
+    assert str(env["registry"]) in reqs["cold_read_command"]
+    assert str(env["runtime"]) in reqs["cold_read_command"]
+    assert f"goal-acceptance inspect --goal-id {goal_id}" in reqs["cold_read_command"]
     assert len(reqs["outcomes"]) == 33
     assert reqs["outcomes"][0]["id"] == "outcome-current" and "requirements" in reqs["outcomes"][0]
-    assert all(row["summary_only"] is True and row["cold_read_command"].startswith("loopx goal-acceptance inspect")
+    assert all(row["summary_only"] is True and row["cold_read_command"] == reqs["cold_read_command"]
                for row in reqs["outcomes"][1:])
     assert len(required_ctx.get("context_details", {}).get("unread_context_index", {}).get("pointers", [])) < 20
 
@@ -410,3 +417,150 @@ def test_mature_goal_scoped_envelope_inspect_detail_replan_and_settle_parity(tmp
     from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
     with pytest.raises(Exception):
         assert_complete_turn_decision(tampered)
+
+
+def _claim_current_todo(env: dict[str, object]) -> None:
+    cli = env["cli"]
+    goal_id = env["goal_id"]
+    agent_id = env["agent_id"]
+    _, claim = cli(
+        "todo", "claim", "--goal-id", goal_id, "--todo-id", "todo_current",
+        "--agent-id", agent_id, "--claimed-by", agent_id,
+    )
+    assert claim["ok"], claim
+    _, inspected_lease = cli("task-lease", "inspect", "--goal-id", goal_id, "--todo-id", "todo_current")
+    if not inspected_lease.get("lease"):
+        _, acquired = cli(
+            "task-lease", "acquire", "--goal-id", goal_id, "--todo-id", "todo_current",
+            "--agent-id", agent_id, "--lease-owner", agent_id, "--execute",
+        )
+        assert acquired.get("lease"), acquired
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_scoped_acceptance_cold_read_binds_original_workspace_across_sibling_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    ws_a = _seed_mature_goal(
+        tmp_path / "ws_a",
+        monkeypatch,
+        provider=provider,
+        outcome_count=9,
+        goal_id="shared-goal",
+        objective_prefix="Workspace A outcome",
+    )
+    ws_b = _seed_mature_goal(
+        tmp_path / "ws_b",
+        monkeypatch,
+        provider=provider,
+        outcome_count=7,
+        goal_id="shared-goal",
+        objective_prefix="Workspace B outcome",
+    )
+    _claim_current_todo(ws_a)
+
+    # Sanity check: Workspace B directly holds 7 outcomes under the same goal_id.
+    _, ws_b_direct = ws_b["cli"]("goal-acceptance", "inspect", "--goal-id", "shared-goal")
+    ws_b_outcomes = ws_b_direct["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(ws_b_outcomes) == 7
+    assert ws_b_outcomes[1]["objective"].startswith("Workspace B outcome")
+
+    native = tmp_path / "native_a"
+    native.mkdir(mode=0o700)
+    captures = tmp_path / "captures_a"
+    captures.mkdir(mode=0o700)
+    monkeypatch.setenv("CODEX_THREAD_ID", f"cross-ws-{provider}")
+    codex_context_hook(
+        str(native),
+        {"hook_event_name": "SessionStart", "session_id": f"cross-ws-{provider}", "cwd": str(ws_a["project"]), "source": "startup"},
+    )
+
+    _, view = ws_a["cli"](
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", "shared-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-ws-a", "--codex-context-dir", str(native),
+        "--decision-output-root", str(captures),
+    )
+    decision_path = next(captures.rglob("decision.json"))
+    decision = json.loads(decision_path.read_text())
+    _, req_ref = read_context_read_reference(view["recovery"]["reference_file"])
+    required_ctx = json.loads(Path(req_ref["path"]).read_bytes())
+
+    wc_ga = next(
+        s["content"]["goal_acceptance_contract"]
+        for s in decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    reqs = wc_ga["outcome_requirements"]
+    assert reqs["full_outcome_count"] == 9
+    assert reqs["compacted_outcome_count"] == 8
+    assert isinstance(reqs["full_outcomes_sha256"], str) and reqs["full_outcomes_sha256"].startswith("sha256:")
+    assert reqs["outcome_revision"] == reqs["revision"]
+    assert "--include-detail goal_acceptance" in reqs["cold_read_instruction"]
+
+    summary_cmd = reqs["cold_read_command"]
+    compact_rows = [row for row in reqs["outcomes"] if row.get("summary_only") is True]
+    assert len(compact_rows) == 8
+    row_cmd = compact_rows[0]["cold_read_command"]
+    assert row_cmd == summary_cmd
+
+    # Progressive first read carries the exact same bound summary command, metadata, and row commands.
+    req_ga = next(
+        s["content"]["goal_acceptance_contract"]
+        for s in required_ctx["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    req_reqs = req_ga["outcome_requirements"]
+    assert req_reqs["cold_read_command"] == summary_cmd
+    assert req_reqs["full_outcomes_sha256"] == reqs["full_outcomes_sha256"]
+    assert req_reqs["outcome_revision"] == reqs["outcome_revision"]
+    assert req_reqs["cold_read_instruction"] == reqs["cold_read_instruction"]
+    assert req_reqs["outcomes"][1]["cold_read_command"] == summary_cmd
+
+    # Run BOTH emitted cold_read_commands verbatim from Workspace B without adding flags.
+    for cmd in (summary_cmd, row_cmd):
+        proc = subprocess.run(
+            shlex.split(cmd),
+            cwd=ws_b["project"],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        inspected = json.loads(proc.stdout)
+        outcomes = inspected["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+        assert len(outcomes) == 9
+        assert all(row["objective"].startswith("Workspace A outcome") for row in outcomes[1:])
+
+    # Default relative `.loopx/registry.json` invocation in Workspace A also binds absolutely across cwd.
+    rel_proc = subprocess.run(
+        [
+            sys.executable, "-m", "loopx.cli",
+            "--runtime-root", str(ws_a["runtime"]),
+            "--format", "json",
+            "quota", "should-run", "--codex-app", "--context-delivery", "off",
+            "--goal-id", "shared-goal", "--agent-id", "worker", "--todo-id", "todo_current",
+            "--turn-instance-id", "turn-ws-a",
+        ],
+        cwd=ws_a["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert rel_proc.returncode == 0, rel_proc.stdout + rel_proc.stderr
+    rel_decision = json.loads(rel_proc.stdout)
+    rel_reqs = next(
+        s["content"]["goal_acceptance_contract"]
+        for s in rel_decision["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )["outcome_requirements"]
+    rel_cold_proc = subprocess.run(
+        shlex.split(rel_reqs["cold_read_command"]),
+        cwd=ws_b["project"],
+        capture_output=True,
+        text=True,
+    )
+    assert rel_cold_proc.returncode == 0, rel_cold_proc.stdout + rel_cold_proc.stderr
+    rel_outcomes = json.loads(rel_cold_proc.stdout)["goal_acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(rel_outcomes) == 9
+    assert all(row["objective"].startswith("Workspace A outcome") for row in rel_outcomes[1:])

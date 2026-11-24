@@ -28,6 +28,17 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
         if capture_directory is not None
         else None
     )
+
+    def _anchor_existing_path(value: object) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute() or not candidate.exists():
+            return None
+        return str(candidate.resolve())
+
+    cli_registry = _anchor_existing_path(payload.get("registry"))
+    cli_runtime_root = _anchor_existing_path(payload.get("runtime_root"))
     try:
         return compose_turn_decision(
             payload,
@@ -37,6 +48,8 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
             include_goal_acceptance_detail="goal_acceptance" in detail_sections,
             cli_argv=current_loopx_cli_argv(),
             capture_reference_file=capture_reference_file,
+            cli_registry=cli_registry,
+            cli_runtime_root=cli_runtime_root,
         )
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         from .quota_capture import capture_decision

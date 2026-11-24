@@ -44,14 +44,25 @@ function stringList(value: unknown): string[] {
     : [];
 }
 
-function goalAcceptanceColdReadCommand(goalId: string): string {
-  return `loopx goal-acceptance inspect --goal-id ${shellQuote(goalId)}`;
-}
-
-export type CompactSettlementOptions = {
+export type ColdReadSourceOptions = {
   cliArgv?: readonly string[];
   captureReferenceFile?: string;
+  registry?: unknown;
+  runtimeRoot?: unknown;
 };
+
+export type CompactSettlementOptions = ColdReadSourceOptions;
+export type ScopeGoalAcceptanceOptions = ColdReadSourceOptions;
+
+function goalAcceptanceColdReadCommand(options: {
+  cliArgv: readonly string[];
+  registry: unknown;
+  runtimeRoot: unknown;
+  goalId: string;
+}): string {
+  const prefix = cliPrefix(options.cliArgv, options.registry, options.runtimeRoot);
+  return `${prefix} goal-acceptance inspect --goal-id ${shellQuote(options.goalId)}`;
+}
 
 function cliPrefix(
   cliArgv: readonly string[],
@@ -196,7 +207,11 @@ function collectAcceptanceGaps(
   return {globalAmbiguity, gapOutcomeIds};
 }
 
-export function compactOutcomeIndexEntry(outcome: JsonObject, goalId: string): JsonObject {
+export function compactOutcomeIndexEntry(
+  outcome: JsonObject,
+  goalId: string,
+  options: ScopeGoalAcceptanceOptions = {},
+): JsonObject {
   const todoIds = Array.isArray(outcome.todo_ids) ? outcome.todo_ids : [];
   return {
     id: outcome.id,
@@ -205,7 +220,12 @@ export function compactOutcomeIndexEntry(outcome: JsonObject, goalId: string): J
     revision: outcome.revision ?? null,
     todo_count: todoIds.length,
     summary_only: true,
-    cold_read_command: goalAcceptanceColdReadCommand(goalId),
+    cold_read_command: goalAcceptanceColdReadCommand({
+      cliArgv: options.cliArgv ?? ["loopx"],
+      registry: options.registry,
+      runtimeRoot: options.runtimeRoot,
+      goalId,
+    }),
   };
 }
 
@@ -278,7 +298,10 @@ function replaceInlineOutcomeRequirements(
   };
 }
 
-export function scopeTurnGoalAcceptance(payload: JsonObject): JsonObject {
+export function scopeTurnGoalAcceptance(
+  payload: JsonObject,
+  options: ScopeGoalAcceptanceOptions = {},
+): JsonObject {
   if (!isRoutineNormalRun(payload)) return payload;
   const goalId = nonEmptyString(payload.goal_id);
   const agentId = nonEmptyString(object(payload.agent_identity).agent_id ?? payload.agent_id);
@@ -331,6 +354,17 @@ export function scopeTurnGoalAcceptance(payload: JsonObject): JsonObject {
     ...(nonEmptyString(selectedTodo.unblocks_todo_id) ? [nonEmptyString(selectedTodo.unblocks_todo_id)!] : []),
   ]);
 
+  const cliArgv = options.cliArgv ?? ["loopx"];
+  const registry = options.registry ?? payload.registry;
+  const runtimeRoot = options.runtimeRoot ?? payload.runtime_root;
+  const coldReadOptions: ScopeGoalAcceptanceOptions = {cliArgv, registry, runtimeRoot};
+  const coldReadCommand = goalAcceptanceColdReadCommand({
+    cliArgv,
+    registry,
+    runtimeRoot,
+    goalId,
+  });
+
   let compactedCount = 0;
   const scopedOutcomes: unknown[] = [];
   for (const rawOutcome of outcomes) {
@@ -361,7 +395,7 @@ export function scopeTurnGoalAcceptance(payload: JsonObject): JsonObject {
       scopedOutcomes.push(rawOutcome);
     } else {
       compactedCount += 1;
-      scopedOutcomes.push(compactOutcomeIndexEntry(outcome, goalId));
+      scopedOutcomes.push(compactOutcomeIndexEntry(outcome, goalId, coldReadOptions));
     }
   }
 
@@ -374,8 +408,11 @@ export function scopeTurnGoalAcceptance(payload: JsonObject): JsonObject {
     full_outcome_count: outcomes.length,
     inline_outcome_count: outcomes.length - compactedCount,
     compacted_outcome_count: compactedCount,
+    outcome_revision: requirements.revision ?? null,
     full_outcomes_sha256: fullDigest,
-    cold_read_command: goalAcceptanceColdReadCommand(goalId),
+    cold_read_command: coldReadCommand,
+    cold_read_instruction:
+      "cold_read_command queries current live Goal acceptance in the bound workspace registry and runtime root (check outcome_revision/full_outcomes_sha256); use the original capture or --include-detail goal_acceptance for immutable Turn-baseline readback.",
     outcomes: scopedOutcomes,
   };
   return replaceInlineOutcomeRequirements(payload, owner, scopedRequirements);
@@ -442,8 +479,8 @@ export function compactRoutineSettlementPlan(
   const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
   const exploreColdRead = exploreColdReadCommand({
     cliArgv,
-    registry: payload.registry,
-    runtimeRoot: payload.runtime_root,
+    registry: options.registry ?? payload.registry,
+    runtimeRoot: options.runtimeRoot ?? payload.runtime_root,
     goalId,
     agentId,
     todoId,

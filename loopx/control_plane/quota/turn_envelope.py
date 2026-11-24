@@ -343,6 +343,8 @@ def compose_turn_decision(
     include_goal_acceptance_detail: bool = False,
     cli_argv: tuple[str, ...] | list[str] | None = None,
     capture_reference_file: str | None = None,
+    cli_registry: str | None = None,
+    cli_runtime_root: str | None = None,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -354,7 +356,9 @@ def compose_turn_decision(
         **({"include_vision_detail": True} if include_vision_detail else {}),
         **({"include_goal_acceptance_detail": True} if include_goal_acceptance_detail else {}),
         **({"cli_argv": list(cli_argv)} if cli_argv is not None else {}),
-        **({"capture_reference_file": capture_reference_file} if capture_reference_file is not None else {}))
+        **({"capture_reference_file": capture_reference_file} if capture_reference_file is not None else {}),
+        **({"cli_registry": cli_registry} if cli_registry is not None else {}),
+        **({"cli_runtime_root": cli_runtime_root} if cli_runtime_root is not None else {}))
     return _apply_context_projection_changes(source, result)
 
 

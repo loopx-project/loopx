@@ -1042,6 +1042,18 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   if (captureReferenceFile !== undefined && !isNonEmptyFilePath(captureReferenceFile)) {
     throw new EffectRuntimeRequestError("Turn envelope capture_reference_file must be a non-empty file path");
   }
+  if (request.cli_registry !== undefined && !isNonEmptyFilePath(request.cli_registry)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_registry must be a non-empty file path");
+  }
+  if (request.cli_runtime_root !== undefined && !isNonEmptyFilePath(request.cli_runtime_root)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_runtime_root must be a non-empty file path");
+  }
+  const coldReadOptions = {
+    cliArgv,
+    captureReferenceFile,
+    registry: request.cli_registry ?? payload.registry,
+    runtimeRoot: request.cli_runtime_root ?? payload.runtime_root,
+  };
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
@@ -1097,14 +1109,11 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
     }
   }
   if (!includeVisionDetail) {
-    source = compactRoutineSettlementPlan(source, {
-      cliArgv,
-      captureReferenceFile,
-    });
+    source = compactRoutineSettlementPlan(source, coldReadOptions);
   }
   source = referenceGoalAcceptance(source, sourceIdentity);
   if (!includeGoalAcceptanceDetail) {
-    source = scopeTurnGoalAcceptance(source);
+    source = scopeTurnGoalAcceptance(source, coldReadOptions);
   }
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
