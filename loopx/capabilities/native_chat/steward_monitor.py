@@ -29,7 +29,7 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 from ..issue_fix.repository_snapshot import _REPO_PATTERN
 from .github_pr_evidence import observe_github_repository_prs
-from .steward_commands import native_command
+from .steward_commands import NativeStewardCommandError, native_command
 from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
@@ -526,7 +526,6 @@ class StewardMonitor:
         from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
         from ..explore.composition_frontier import project_live_explore_composition_frontier
         from ...quota import record_quota_monitor_poll
-        from .steward_commands import NativeStewardCommandError
 
         args = build_parser().parse_args(["--format", "json", *argv])
 
@@ -743,8 +742,10 @@ class StewardMonitor:
         rearm_note = f"rearm-followup:{poll_turn_instance_id}"
         if str(followup.get("note") or "") == rearm_note:
             return False
-        lease = self._acquire(actor, followup, rearm_key)["lease"]
+        conflicts = {"todo_lease_conflict", "version_mismatch"}
+        lease = None
         try:
+            lease = self._acquire(actor, followup, rearm_key)["lease"]
             native_command(self.controller, [
                 "todo", "update",
                 "--goal-id", actor["goal_id"],
@@ -757,8 +758,18 @@ class StewardMonitor:
                 "--task-lease-expected-version", str(lease["version"]),
                 "--execute",
             ])
+        except NativeStewardCommandError as exc:
+            if exc.payload.get("error_code") in conflicts:
+                return False
+            raise
         finally:
-            self._release(actor, followup, lease)
+            if lease is not None:
+                try:
+                    self._release(actor, followup, lease)
+                except NativeStewardCommandError as exc:
+                    # A renewed lease belongs to its current generation. Preserve the update's outcome.
+                    if exc.payload.get("error_code") not in conflicts:
+                        raise
         return True
 
     def observe(self, *, host: Any, request: dict[str, Any], turn: dict[str, Any],
@@ -801,6 +812,8 @@ class StewardMonitor:
                 *successor_args])
         finally:
             self._release(actor, todo, lease)
+        self.controller.store.append_event(turn["session_id"], turn["turn_id"],
+            kind="native_loopx.monitor_poll", payload={"observation": observation, "receipt": result})
         rearmed_followup = False
         if (
             actor.get("schema_version") != "loopx_managed_session_actor_v0"
@@ -813,8 +826,6 @@ class StewardMonitor:
         if successor_args or rearmed_followup:
             binding_id = actor["goal_id"].removeprefix("steward-agent-")
             getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
-        self.controller.store.append_event(turn["session_id"], turn["turn_id"],
-            kind="native_loopx.monitor_poll", payload={"observation": observation, "receipt": result})
         return {"schema_version": "loopx_chat_agent_response_v0", "message": "已检查授权 Goal 状态；覆盖缺口和原始请求继续保留。",
             "proposals": [], "gate": None, "native_loopx": {"ok": True, "status": "observed",
                 "model_invoked": False, "quota_spent": False, "monitor": observation, "receipt": result}}
