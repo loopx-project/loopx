@@ -107,10 +107,11 @@ def test_retention_module_uses_zero_any_and_exact_defaults() -> None:
     for filename in (
         "context_delivery_retention.py",
         "context_delivery_retention_scan.py",
+        "context_delivery_retention_checkpoint.py",
     ):
         source_path = ROOT / "loopx" / "cli_commands" / filename
         source = source_path.read_text(encoding="utf-8")
-        assert len(source.splitlines()) <= 1000, f"{filename} exceeds 1000 LOC"
+        assert len(source.splitlines()) < 1000, f"{filename} must remain < 1000 LOC"
         assert "type: ignore" not in source
         tree = ast.parse(source)
         any_names = [
@@ -121,8 +122,14 @@ def test_retention_module_uses_zero_any_and_exact_defaults() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.Attribute) and node.attr == "Any"
         ]
+        bare_nofollow = [
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr == "O_NOFOLLOW"
+        ]
         assert any_names == []
         assert any_attrs == []
+        assert bare_nofollow == []
     assert CONTEXT_DELIVERY_EPHEMERAL_PREFIXES == (
         "decision-",
         "recovery-",
@@ -1910,10 +1917,55 @@ def test_oversized_first_aged_dir_skipped_and_checkpoint_security_boundaries(
     assert res_corrupt.swept is True and res_corrupt.deleted == 0
     checkpoint_path.unlink()
 
+    # Unsupported v1 checkpoint fails closed even with safe 0600 permissions.
     checkpoint_path.write_text('{"version":1}', encoding="utf-8")
+    os.chmod(checkpoint_path, 0o600)
+    res_v1 = maybe_prune_context_delivery_root(
+        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.0
+    )
+    assert res_v1.swept is True and res_v1.deleted == 0
+    checkpoint_path.unlink()
+
+    # Valid v2 structure with overlapping BFS waves / referrers / targets fails closed even at 0600.
+    valid_v2 = {
+        "version": 2,
+        "target_cohort": [
+            {
+                "name": "decision-small-016",
+                "mtime_ns": int((root / "decision-small-016").lstat().st_mtime_ns),
+                "data_digests": [],
+                "reader_digests": [],
+            }
+        ],
+        "protected_names": [],
+        "active_digests": [],
+        "seen_frontiers": [],
+        "active_frontier": ["decision-small-016"],
+        "next_frontier": [],
+        "referrer_witnesses": {},
+        "completed_witnesses": {},
+        "round_witnesses": {},
+    }
+    for bad_override in (
+        {"seen_frontiers": ["decision-small-016"]},
+        {"next_frontier": ["decision-small-016"]},
+        {"referrer_witnesses": {"decision-small-016": [1, 0, 0, 1]}},
+        {"completed_witnesses": {"decision-small-017": [1, 0, 0, 1]}},
+    ):
+        bad_payload = {**valid_v2, **bad_override}
+        checkpoint_path.write_text(json.dumps(bad_payload), encoding="utf-8")
+        os.chmod(checkpoint_path, 0o600)
+        res_bad = maybe_prune_context_delivery_root(
+            root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.5
+        )
+        assert res_bad.swept is True and res_bad.deleted == 0
+        checkpoint_path.unlink()
+
+    # Otherwise valid v2 payload with loose group/world permissions must also fail closed.
+    checkpoint_path.write_text(json.dumps(valid_v2), encoding="utf-8")
     os.chmod(checkpoint_path, 0o644)
     res_perm = maybe_prune_context_delivery_root(
-        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 3.0
+        root, min_age_seconds=86400.0, keep_recent_per_prefix=0, min_sweep_interval_seconds=0.0, now=now + 4.0
     )
     assert res_perm.swept is True and res_perm.deleted == 0
 
@@ -1993,8 +2045,10 @@ def test_sqlite_540_backlog_resumable_checkpoint_and_tamper_protection(
     assert checkpoint_path.is_file()
     assert (checkpoint_path.lstat().st_mode & 0o077) == 0
     ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-    assert ckpt_payload["version"] == 1
-    assert "decision-backlog-020" in ckpt_payload["scanned_witnesses"]
+    assert ckpt_payload["version"] == 2
+    assert ckpt_payload["seen_frontiers"] == []
+    assert ckpt_payload["completed_witnesses"] == {}
+    assert "decision-backlog-020" in ckpt_payload["round_witnesses"]
 
     # Tamper previously scanned decision-backlog-020 between Sweep 1 and Sweep 2 to add an
     # unsettled admission pointing to cohort target decision-backlog-000.
@@ -2036,3 +2090,539 @@ def test_sqlite_540_backlog_resumable_checkpoint_and_tamper_protection(
         registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
     )
     assert rc_read == 0 and read_active["ok"] is True
+
+
+def _run_measured_begin_turn(
+    *,
+    project: Path,
+    registry: Path,
+    runtime: Path,
+    goal_id: str,
+    agent_id: str,
+    todo_id: str,
+    extra_env: dict[str, str],
+    begin_turn: bool = True,
+) -> tuple[dict[str, object], float]:
+    cmd = [
+        sys.executable, "-m", "loopx.entrypoint",
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "quota", "should-run", "--codex-app",
+        "--goal-id", goal_id,
+    ]
+    if begin_turn:
+        cmd.extend(["--agent-id", agent_id, "--todo-id", todo_id, "--begin-turn"])
+    probe = (
+        "import json, resource, subprocess, sys;"
+        "p = subprocess.run(sys.argv[1:], capture_output=True, text=True);"
+        "rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss;"
+        "mib = rss / (1024 * 1024) if sys.platform == 'darwin' else rss / 1024;"
+        "print(json.dumps({'rc': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr, 'rss_mib': mib}))"
+    )
+    wrapper = subprocess.run(
+        [sys.executable, "-c", probe, *cmd],
+        cwd=project, check=True, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(ROOT), **extra_env},
+    )
+    measured = json.loads(wrapper.stdout)
+    assert measured["rc"] == 0, measured["stderr"] or measured["stdout"]
+    decoder = json.JSONDecoder()
+    stripped = str(measured["stdout"]).lstrip()
+    payload, end_idx = decoder.raw_decode(stripped)
+    assert not stripped[end_idx:].strip(), f"unexpected extra stdout: {stripped[end_idx:]}"
+    assert isinstance(payload, dict) and payload.get("ok") is True
+    return payload, float(measured["rss_mib"])
+
+
+def test_sqlite_540_backlog_with_expired_referrer_reclaims_across_5_sweeps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Paired 540-capture SQLite 5-sweep repro: Round-2 checkpoint avoids sweep stall."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+
+    # Control case: retention disabled across 5 sweeps keeps all 540 dirs and writes no checkpoint.
+    ctrl_root = tmp_path / "control"
+    ctrl_root.mkdir()
+    ctrl_project, ctrl_runtime, ctrl_registry = _write_fixture(ctrl_root, provider="sqlite")
+    ctrl_managed = ctrl_runtime.expanduser().resolve() / "context-delivery"
+    ctrl_managed.mkdir(parents=True, mode=0o700)
+    old_mtime = time.time() - 200_000.0
+    ctrl_names: list[str] = []
+    for index in range(540):
+        name = f"decision-ctrl-{index:03d}"
+        _make_512kib_dir(ctrl_managed, name, mtime=old_mtime + index)
+        ctrl_names.append(name)
+    for _ in range(5):
+        _run_measured_begin_turn(
+            project=ctrl_project, registry=ctrl_registry, runtime=ctrl_runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            extra_env={
+                "LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0",
+                "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0",
+            },
+            begin_turn=False,
+        )
+    assert sum(1 for name in ctrl_names if (ctrl_managed / name).exists()) == 540
+    assert not (ctrl_managed / RETENTION_REFSCAN_CHECKPOINT_NAME).exists()
+
+    # Experimental case: 540 aged 512 KiB captures where aged capture 020 references 000.
+    exp_root = tmp_path / "experimental"
+    exp_root.mkdir()
+    project, runtime, registry = _write_fixture(exp_root, provider="sqlite")
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    active_guard, baseline_rss_mib = _run_measured_begin_turn(
+        project=project, registry=registry, runtime=runtime,
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        extra_env={"LOOPX_CONTEXT_DELIVERY_MAX_DELETE": "0"},
+        begin_turn=True,
+    )
+    active_ref = Path(str(active_guard["reference_file"]))
+
+    seeded_names: list[str] = []
+    for index in range(540):
+        name = f"decision-backlog-{index:03d}"
+        _make_512kib_dir(managed_root, name, mtime=old_mtime + index)
+        seeded_names.append(name)
+
+    ref20_dir = managed_root / "decision-backlog-020"
+    ref20_target = ref20_dir / "decision.json"
+    ref20_digest = _write_owned_json(
+        ref20_target,
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(managed_root / "decision-backlog-000" / "decision.json"),
+            "blob": "r" * (512 * 1024),
+        },
+        mtime=old_mtime + 20,
+    )
+    _write_owned_json(
+        ref20_dir / "decision.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(ref20_target),
+            "sha256": ref20_digest,
+        },
+        mtime=old_mtime + 20,
+    )
+    os.utime(ref20_dir, (old_mtime + 20, old_mtime + 20))
+
+    def remaining_seeded() -> int:
+        return sum(1 for name in seeded_names if (managed_root / name).exists())
+
+    checkpoint_path = managed_root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    counts_after_sweep: list[int] = []
+    seen_round2_checkpoint = False
+    for sweep_idx in range(5):
+        _, sweep_rss_mib = _run_measured_begin_turn(
+            project=project, registry=registry, runtime=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+            extra_env={"LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS": "0"},
+            begin_turn=False,
+        )
+        assert sweep_rss_mib < baseline_rss_mib + 30.0
+        counts_after_sweep.append(remaining_seeded())
+        if checkpoint_path.is_file():
+            payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+            assert payload["version"] == 2
+            if payload["seen_frontiers"]:
+                seen_round2_checkpoint = True
+                assert payload["active_frontier"] == ["decision-backlog-020"]
+                assert "decision-backlog-020" in payload["referrer_witnesses"]
+                assert payload["completed_witnesses"]
+                assert payload["round_witnesses"]
+
+    assert seen_round2_checkpoint
+    assert counts_after_sweep[0] == 540
+    assert counts_after_sweep[-1] <= 480
+    rc_read, read_active = _run_cli(
+        registry, runtime, "quota", "context-read", "--reference-file", str(active_ref)
+    )
+    assert rc_read == 0 and read_active["ok"] is True
+
+
+def test_multi_sweep_checkpoint_protects_transitive_active_chain_and_reclaims_unrelated(
+    tmp_path: Path,
+) -> None:
+    """Checkpoint resume across Round 1 -> Round 2 preserves active -> R1 -> t0 while pruning t1, t2."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir(mode=0o700)
+    root = runtime_root / "context-delivery"
+    root.mkdir(mode=0o700)
+    now = 20_000_000.0
+    old_mtime = now - 200_000.0
+
+    # Cohort candidates (oldest 3).
+    for idx, name in enumerate(("decision-000-t0", "decision-001-t1", "decision-002-t2")):
+        d = _make_dir(root, name, mtime=old_mtime + idx)
+        _write_owned_json(d / "decision.json", {"ok": True, "decision": "wait", "pad": "x" * 200}, mtime=old_mtime + idx)
+        os.utime(d, (old_mtime + idx, old_mtime + idx))
+
+    # Expired referrer R1 -> t0 (will enter next_frontier in Round 1).
+    r1 = root / "decision-003-r1"
+    r1.mkdir(mode=0o700)
+    r1_size = _write_owned_json(
+        r1 / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(root / "decision-000-t0" / "decision.json"),
+            "pad": "r" * 400,
+        },
+        mtime=old_mtime + 10,
+    )
+    _ = r1_size
+    os.utime(r1, (old_mtime + 10, old_mtime + 10))
+
+    # Clean filler dirs (~600 bytes each) to force chunked Round-1 and Round-2 pauses.
+    for idx in range(4, 9):
+        fd = _make_dir(root, f"decision-00{idx}-fill", mtime=old_mtime + 20 + idx)
+        _write_owned_json(fd / "decision.json", {"ok": True, "decision": "wait", "pad": "f" * 500}, mtime=old_mtime + 20 + idx)
+        os.utime(fd, (old_mtime + 20 + idx, old_mtime + 20 + idx))
+
+    # Kept unsettled active capture A referencing R1, sorting last so Round 2 hits it after pause.
+    a_dir = root / "decision-zzz-active"
+    a_dir.mkdir(mode=0o700)
+    _write_owned_json(
+        a_dir / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-alpha",
+            "runtime_root": str(runtime_root),
+            "heartbeat_receipt": {"turn_instance_id": "turn-chain-1", "event_id": "evt-chain-1"},
+            "decision_capture_path": str(root / "decision-003-r1" / "decision.json"),
+        },
+        mtime=now - 10.0,
+    )
+    os.utime(a_dir, (now - 10.0, now - 10.0))
+
+    ckpt_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    saw_round1_ckpt = False
+    saw_round2_ckpt = False
+    for step in range(20):
+        res = maybe_prune_context_delivery_root(
+            root,
+            runtime_root=runtime_root,
+            min_age_seconds=86400.0,
+            keep_recent_per_prefix=0,
+            max_delete_per_sweep=3,
+            min_sweep_interval_seconds=0.0,
+            max_inspect_per_sweep=3,
+            max_inspect_bytes_per_sweep=4096,
+            max_ref_scan_bytes_per_sweep=2600,
+            now=now + step,
+        )
+        assert res.swept is True
+        if ckpt_path.is_file():
+            payload = json.loads(ckpt_path.read_text(encoding="utf-8"))
+            if payload["seen_frontiers"]:
+                saw_round2_ckpt = True
+            else:
+                saw_round1_ckpt = True
+        if res.deleted > 0:
+            break
+
+    assert saw_round1_ckpt and saw_round2_ckpt
+    assert not ckpt_path.exists()
+    assert (root / "decision-000-t0").is_dir()
+    assert (root / "decision-003-r1").is_dir()
+    assert a_dir.is_dir()
+    assert not (root / "decision-001-t1").exists()
+    assert not (root / "decision-002-t2").exists()
+    assert json.loads((root / "decision-000-t0" / "decision.json").read_text(encoding="utf-8"))["ok"] is True
+
+
+def test_round2_resume_scans_modified_and_new_dirs_with_full_needles(
+    tmp_path: Path,
+) -> None:
+    """During Round-2 resume, modified Round-1 witness and newly added capture both protect Round-1 targets."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir(mode=0o700)
+    root = runtime_root / "context-delivery"
+    root.mkdir(mode=0o700)
+    now = 21_000_000.0
+    old_mtime = now - 200_000.0
+
+    for idx, name in enumerate(("decision-000-t0", "decision-001-t1", "decision-002-t2", "decision-003-t3")):
+        d = _make_dir(root, name, mtime=old_mtime + idx)
+        _write_owned_json(d / "decision.json", {"ok": True, "decision": "wait", "pad": "t" * 200}, mtime=old_mtime + idx)
+        os.utime(d, (old_mtime + idx, old_mtime + idx))
+
+    # Settled R1 references only t0 so Round 2 has active_frontier={r1}.
+    r1 = root / "decision-004-r1"
+    r1.mkdir(mode=0o700)
+    _write_owned_json(
+        r1 / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(root / "decision-000-t0" / "decision.json"),
+            "pad": "r" * 400,
+        },
+        mtime=old_mtime + 10,
+    )
+    os.utime(r1, (old_mtime + 10, old_mtime + 10))
+
+    fill_dirs: list[Path] = []
+    for idx in range(5, 11):
+        fd = _make_dir(root, f"decision-0{idx:02d}-fill", mtime=old_mtime + 20 + idx)
+        _write_owned_json(fd / "decision.json", {"ok": True, "decision": "wait", "pad": "f" * 500}, mtime=old_mtime + 20 + idx)
+        os.utime(fd, (old_mtime + 20 + idx, old_mtime + 20 + idx))
+        fill_dirs.append(fd)
+
+    ckpt_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
+    # Advance sweeps until we land on a Round-2 checkpoint (seen_frontiers != []).
+    saw_round2 = False
+    for step in range(8):
+        maybe_prune_context_delivery_root(
+            root, runtime_root=runtime_root, min_age_seconds=86400.0,
+            keep_recent_per_prefix=0, max_delete_per_sweep=4, min_sweep_interval_seconds=0.0,
+            max_inspect_per_sweep=4, max_inspect_bytes_per_sweep=4096,
+            max_ref_scan_bytes_per_sweep=2600, now=now + step,
+        )
+        if ckpt_path.is_file():
+            payload = json.loads(ckpt_path.read_text(encoding="utf-8"))
+            if payload["seen_frontiers"]:
+                saw_round2 = True
+                break
+    assert saw_round2
+
+    # Mutate an already Round-1/2 clean dir (005-fill) to protect t1, and add a new dir protecting t2.
+    mod_dir = root / "decision-005-fill"
+    _write_owned_json(
+        mod_dir / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-tamper",
+            "runtime_root": str(runtime_root),
+            "heartbeat_receipt": {"turn_instance_id": "turn-mod", "event_id": "evt-mod"},
+            "decision_capture_path": str(root / "decision-001-t1" / "decision.json"),
+        },
+        mtime=now + 20,
+    )
+    os.utime(mod_dir, (now + 20, now + 20))
+
+    new_dir = root / "decision-099-new"
+    new_dir.mkdir(mode=0o700)
+    _write_owned_json(
+        new_dir / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-new",
+            "runtime_root": str(runtime_root),
+            "heartbeat_receipt": {"turn_instance_id": "turn-new", "event_id": "evt-new"},
+            "decision_capture_path": str(root / "decision-002-t2" / "decision.json"),
+        },
+        mtime=now + 21,
+    )
+    os.utime(new_dir, (now + 21, now + 21))
+
+    # Complete with ample budget: resumes Round 2, catches both mod_dir -> t1 & new_dir -> t2 via full_needles, reclaims t0 & t3.
+    res_final = maybe_prune_context_delivery_root(
+        root, runtime_root=runtime_root, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=4, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=4, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1_000_000, now=now + 30,
+    )
+    assert res_final.swept is True and res_final.deleted == 2
+    assert (root / "decision-001-t1").is_dir()
+    assert (root / "decision-002-t2").is_dir()
+    assert not (root / "decision-000-t0").exists()
+    assert not (root / "decision-003-t3").exists()
+
+
+def test_referrer_tamper_vanish_fallback_and_round1_false_positive_caught_in_round2(
+    tmp_path: Path,
+) -> None:
+    """Mutating or removing a checkpointed referrer aborts resume safely; Round-1 byte false positive is caught in Round 2."""
+    from loopx.cli_commands.context_delivery_retention import (
+        RETENTION_REFSCAN_CHECKPOINT_NAME,
+    )
+
+    # Part 1: Referrer witness tamper invalidates checkpoint fail-closed and falls back cleanly.
+    rt1 = tmp_path / "rt1"
+    rt1.mkdir(mode=0o700)
+    r1_root = rt1 / "context-delivery"
+    r1_root.mkdir(mode=0o700)
+    now = 22_000_000.0
+    old_mtime = now - 200_000.0
+
+    for idx, name in enumerate(("decision-000-t0", "decision-001-t1")):
+        d = _make_dir(r1_root, name, mtime=old_mtime + idx)
+        _write_owned_json(d / "decision.json", {"ok": True, "decision": "wait"}, mtime=old_mtime + idx)
+        os.utime(d, (old_mtime + idx, old_mtime + idx))
+
+    ref = r1_root / "decision-002-r1"
+    ref.mkdir(mode=0o700)
+    _write_owned_json(
+        ref / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(r1_root / "decision-000-t0" / "decision.json"),
+            "pad": "r" * 400,
+        },
+        mtime=old_mtime + 10,
+    )
+    os.utime(ref, (old_mtime + 10, old_mtime + 10))
+    for idx in range(3, 6):
+        fd = _make_dir(r1_root, f"decision-00{idx}-fill", mtime=old_mtime + 20 + idx)
+        _write_owned_json(fd / "decision.json", {"ok": True, "decision": "wait", "pad": "f" * 500}, mtime=old_mtime + 20 + idx)
+        os.utime(fd, (old_mtime + 20 + idx, old_mtime + 20 + idx))
+
+    res1 = maybe_prune_context_delivery_root(
+        r1_root, runtime_root=rt1, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=2, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=2, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1400, now=now,
+    )
+    assert res1.swept is True and res1.deleted == 0
+    ckpt = json.loads((r1_root / RETENTION_REFSCAN_CHECKPOINT_NAME).read_text(encoding="utf-8"))
+    assert "decision-002-r1" in ckpt["referrer_witnesses"]
+
+    # Mutate referrer R1 to now hold an unsettled active admission protecting t0.
+    _write_owned_json(
+        ref / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-ref-mutated",
+            "runtime_root": str(rt1),
+            "heartbeat_receipt": {"turn_instance_id": "turn-ref", "event_id": "evt-ref"},
+            "decision_capture_path": str(r1_root / "decision-000-t0" / "decision.json"),
+        },
+        mtime=now + 5,
+    )
+    os.utime(ref, (now + 5, now + 5))
+    res2 = maybe_prune_context_delivery_root(
+        r1_root, runtime_root=rt1, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=2, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=2, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1_000_000, now=now + 6,
+    )
+    assert res2.swept is True and res2.deleted == 1
+    assert (r1_root / "decision-000-t0").is_dir()
+    assert not (r1_root / "decision-001-t1").exists()
+
+    # Deleted referrer also aborts checkpoint cleanly and falls back without crashing.
+    t2 = _make_dir(r1_root, "decision-010-t2", mtime=old_mtime + 30)
+    _write_owned_json(t2 / "decision.json", {"ok": True, "decision": "wait"}, mtime=old_mtime + 30)
+    os.utime(t2, (old_mtime + 30, old_mtime + 30))
+    ref2 = r1_root / "decision-011-r2"
+    ref2.mkdir(mode=0o700)
+    _write_owned_json(
+        ref2 / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(r1_root / "decision-000-t0" / "decision.json"),
+            "pad": "r" * 400,
+        },
+        mtime=old_mtime + 31,
+    )
+    os.utime(ref2, (old_mtime + 31, old_mtime + 31))
+    maybe_prune_context_delivery_root(
+        r1_root, runtime_root=rt1, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=2, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=2, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1400, now=now + 10,
+    )
+    shutil.rmtree(ref2)
+    res_vanish = maybe_prune_context_delivery_root(
+        r1_root, runtime_root=rt1, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=2, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=2, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1_000_000, now=now + 11,
+    )
+    assert res_vanish.swept is True and (r1_root / "decision-000-t0").is_dir()
+
+    # Part 2: Round-1 byte false positive referencing R1 must stay in unscanned_dirs and be caught in Round 2.
+    rt2 = tmp_path / "rt2"
+    rt2.mkdir(mode=0o700)
+    fp_root = rt2 / "context-delivery"
+    fp_root.mkdir(mode=0o700)
+    for idx, name in enumerate(("decision-000-t0", "decision-001-t1")):
+        d = _make_dir(fp_root, name, mtime=old_mtime + idx)
+        _write_owned_json(d / "decision.json", {"ok": True, "decision": "wait"}, mtime=old_mtime + idx)
+        os.utime(d, (old_mtime + idx, old_mtime + idx))
+
+    r1_fp = fp_root / "decision-002-r1"
+    r1_fp.mkdir(mode=0o700)
+    _write_owned_json(
+        r1_fp / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "decision_capture_path": str(fp_root / "decision-000-t0" / "decision.json"),
+        },
+        mtime=old_mtime + 10,
+    )
+    os.utime(r1_fp, (old_mtime + 10, old_mtime + 10))
+
+    # Benign prose mentions decision-000-t0 (triggers Round-1 raw byte match),
+    # while real structured path references only decision-002-r1 (Round-2 target).
+    fp_dir = fp_root / "decision-003-fp"
+    fp_dir.mkdir(mode=0o700)
+    _write_owned_json(
+        fp_dir / "decision.json",
+        {
+            "ok": True,
+            "decision": "wait",
+            "summary": "prose mention of decision-000-t0 without path reference",
+            "decision_capture_path": str(fp_root / "decision-002-r1" / "decision.json"),
+        },
+        mtime=old_mtime + 11,
+    )
+    os.utime(fp_dir, (old_mtime + 11, old_mtime + 11))
+
+    active_fp = fp_root / "decision-zzz-active"
+    active_fp.mkdir(mode=0o700)
+    _write_owned_json(
+        active_fp / "decision.json",
+        {
+            "ok": True,
+            "decision": "run",
+            "goal_id": "goal-fp",
+            "runtime_root": str(rt2),
+            "heartbeat_receipt": {"turn_instance_id": "turn-fp", "event_id": "evt-fp"},
+            "decision_capture_path": str(fp_root / "decision-003-fp" / "decision.json"),
+        },
+        mtime=now - 5.0,
+    )
+    os.utime(active_fp, (now - 5.0, now - 5.0))
+
+    res_fp = maybe_prune_context_delivery_root(
+        fp_root, runtime_root=rt2, min_age_seconds=86400.0,
+        keep_recent_per_prefix=0, max_delete_per_sweep=2, min_sweep_interval_seconds=0.0,
+        max_inspect_per_sweep=2, max_inspect_bytes_per_sweep=4096,
+        max_ref_scan_bytes_per_sweep=1_000_000, now=now,
+    )
+    assert res_fp.swept is True and res_fp.deleted == 1
+    assert (fp_root / "decision-000-t0").is_dir()
+    assert not (fp_root / "decision-001-t1").exists()

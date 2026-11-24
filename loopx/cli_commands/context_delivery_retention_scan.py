@@ -1,7 +1,8 @@
 """Low-level ownership verification, chunked reference scan, and checkpoint IO."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -9,7 +10,6 @@ import os
 from pathlib import Path
 import shlex
 import stat
-import threading
 from typing import Protocol
 
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
@@ -20,7 +20,6 @@ CONTEXT_DELIVERY_EPHEMERAL_PREFIXES: tuple[str, ...] = (
     "settlement-",
     "context-",
 )
-RETENTION_REFSCAN_CHECKPOINT_NAME = ".retention-refscan.json"
 
 _KNOWN_CAPTURE_DATA_FILENAMES: frozenset[str] = frozenset(
     {
@@ -126,22 +125,6 @@ class _CandidateDirectory:
     referenced_names: frozenset[str]
     referenced_digests: frozenset[str]
     byte_size: int
-
-
-@dataclass(frozen=True, slots=True)
-class _TargetCohortIdentity:
-    name: str
-    mtime_ns: int
-    data_digests: frozenset[str]
-    reader_digests: frozenset[str]
-
-
-@dataclass(frozen=True, slots=True)
-class _RefScanCheckpoint:
-    target_cohort: tuple[_TargetCohortIdentity, ...]
-    protected_names: frozenset[str]
-    active_digests: frozenset[str]
-    scanned_witnesses: dict[str, tuple[int, int, int, int]]
 
 
 def _matching_ephemeral_prefix(name: str) -> str | None:
@@ -795,6 +778,123 @@ def _scan_dir_entries_for_needles(
     return "miss", scanned_bytes
 
 
+def _collect_root_entries(
+    root: Path,
+    *,
+    uid: int | None,
+) -> tuple[dict[str, list[_ShallowDirectory]], list[Path], int] | None:
+    by_prefix: dict[str, list[_ShallowDirectory]] = {
+        prefix: [] for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES
+    }
+    non_ephemeral_dirs: list[Path] = []
+    ephemeral_count = 0
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                name = entry.name
+                try:
+                    if entry.is_symlink():
+                        continue
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if stat.S_ISLNK(entry_stat.st_mode) or not stat.S_ISDIR(
+                    entry_stat.st_mode
+                ):
+                    continue
+                if uid is not None and entry_stat.st_uid != uid:
+                    continue
+                prefix = _matching_ephemeral_prefix(name)
+                if prefix is None:
+                    non_ephemeral_dirs.append(Path(entry.path))
+                    continue
+                ephemeral_count += 1
+                by_prefix[prefix].append(
+                    _ShallowDirectory(
+                        mtime=entry_stat.st_mtime,
+                        mtime_ns=entry_stat.st_mtime_ns,
+                        name=name,
+                        path=Path(entry.path),
+                        prefix=prefix,
+                    )
+                )
+    except OSError:
+        return None
+    return by_prefix, non_ephemeral_dirs, ephemeral_count
+
+
+def _expand_protected_closure(
+    seed_names: set[str],
+    *,
+    owned_by_name: Mapping[str, _CandidateDirectory],
+) -> set[str]:
+    protected = set(seed_names)
+    queue: deque[str] = deque(seed_names)
+    while queue:
+        current = queue.popleft()
+        candidate = owned_by_name.get(current)
+        if candidate is None:
+            continue
+        for ref_name in candidate.referenced_names:
+            if ref_name not in protected:
+                protected.add(ref_name)
+                queue.append(ref_name)
+    return protected
+
+
+def _partition_shallow_candidates(
+    shallow_by_prefix: Mapping[str, list[_ShallowDirectory]],
+    *,
+    protected_names: frozenset[str] | set[str],
+    current_now: float,
+    min_age_seconds: float,
+    keep_recent_per_prefix: int,
+) -> tuple[list[_ShallowDirectory], list[_ShallowDirectory]]:
+    cutoff = current_now - min_age_seconds
+    aged_shallow: list[_ShallowDirectory] = []
+    kept_shallow: list[_ShallowDirectory] = []
+    for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
+        kept_shallow.extend(
+            item for item in shallow_by_prefix[prefix] if item.name in protected_names
+        )
+        group = [
+            item for item in shallow_by_prefix[prefix] if item.name not in protected_names
+        ]
+        if not group:
+            continue
+        group.sort(key=lambda item: (item.mtime, item.name))
+        excess = len(group) - keep_recent_per_prefix
+        if excess <= 0:
+            kept_shallow.extend(group)
+            continue
+        for candidate in group[:excess]:
+            if candidate.mtime <= cutoff:
+                aged_shallow.append(candidate)
+            else:
+                kept_shallow.append(candidate)
+        kept_shallow.extend(group[excess:])
+    aged_shallow.sort(key=lambda item: (item.mtime, item.name))
+    return aged_shallow, kept_shallow
+
+
+def _candidate_is_directly_protected(
+    owned: _CandidateDirectory,
+    *,
+    protected: set[str],
+    active_digests: set[str],
+    runtime_root: Path | None,
+    settlement_cache: dict[tuple[str, str, str, str], bool],
+) -> bool:
+    return (
+        owned.name in protected
+        or bool(owned.data_digests & active_digests)
+        or bool(owned.reader_digests & active_digests)
+        or _candidate_has_unsettled_admission(
+            owned, runtime_root=runtime_root, settlement_cache=settlement_cache
+        )
+    )
+
+
 def _valid_sha256_tuple(raw: object) -> frozenset[str] | None:
     if not isinstance(raw, list):
         return None
@@ -806,181 +906,13 @@ def _valid_sha256_tuple(raw: object) -> frozenset[str] | None:
     return frozenset(out)
 
 
-def _valid_witness_tuple(raw: object) -> tuple[int, int, int, int] | None:
-    if not isinstance(raw, list) or len(raw) != 4:
-        return None
-    if not all(type(item) is int and item >= 0 for item in raw):
-        return None
-    return (int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3]))
-
-
-def _load_refscan_checkpoint(
-    root: Path,
-    *,
-    uid: int | None,
-    read_json: _JsonObjectReader = _read_regular_json_object,
-) -> tuple[_RefScanCheckpoint | None, bool]:
-    """Load ``.retention-refscan.json`` cleanly; return ``(None, True)`` to fail closed."""
-    checkpoint_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
-    try:
-        info = os.lstat(checkpoint_path)
-    except FileNotFoundError:
-        return None, False
-    except OSError:
-        return None, True
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        return None, True
-    if uid is not None and info.st_uid != uid:
-        return None, True
-    if (info.st_mode & 0o077) != 0:
-        return None, True
-    loaded = read_json(checkpoint_path, uid=uid)
-    if loaded is None:
-        return None, True
-    parsed, _ = loaded
-    if parsed.get("version") != 1:
-        return None, True
-
-    raw_cohort = parsed.get("target_cohort")
-    if not isinstance(raw_cohort, list) or not raw_cohort:
-        return None, True
-    cohort: list[_TargetCohortIdentity] = []
-    for entry in raw_cohort:
-        if not isinstance(entry, Mapping):
-            return None, True
-        name = entry.get("name")
-        mtime_ns = entry.get("mtime_ns")
-        data_digests = _valid_sha256_tuple(entry.get("data_digests"))
-        reader_digests = _valid_sha256_tuple(entry.get("reader_digests"))
-        if (
-            not isinstance(name, str)
-            or _matching_ephemeral_prefix(name) is None
-            or type(mtime_ns) is not int
-            or mtime_ns < 0
-            or data_digests is None
-            or reader_digests is None
-        ):
-            return None, True
-        cohort.append(
-            _TargetCohortIdentity(
-                name=name, mtime_ns=mtime_ns,
-                data_digests=data_digests, reader_digests=reader_digests,
-            )
-        )
-
-    raw_protected = parsed.get("protected_names")
-    if not isinstance(raw_protected, list) or not all(
-        isinstance(item, str) and item for item in raw_protected
-    ):
-        return None, True
-    active_digests = _valid_sha256_tuple(parsed.get("active_digests"))
-    if active_digests is None:
-        return None, True
-    raw_witnesses = parsed.get("scanned_witnesses")
-    if not isinstance(raw_witnesses, Mapping):
-        return None, True
-    witnesses: dict[str, tuple[int, int, int, int]] = {}
-    for key, val in raw_witnesses.items():
-        if not isinstance(key, str) or not key:
-            return None, True
-        witness = _valid_witness_tuple(val)
-        if witness is None:
-            return None, True
-        witnesses[key] = witness
-    return (
-        _RefScanCheckpoint(
-            target_cohort=tuple(cohort),
-            protected_names=frozenset(raw_protected),
-            active_digests=active_digests,
-            scanned_witnesses=witnesses,
-        ),
-        False,
-    )
-
-
-def _save_refscan_checkpoint(
-    root: Path,
-    *,
-    uid: int | None,
-    checkpoint: _RefScanCheckpoint,
-) -> bool:
-    checkpoint_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
-    try:
-        info = os.lstat(checkpoint_path)
-    except FileNotFoundError:
-        info = None
-    except OSError:
-        return False
-    if info is not None and (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or (uid is not None and info.st_uid != uid)
-    ):
-        return False
-    payload = {
-        "version": 1,
-        "target_cohort": [
-            {
-                "name": item.name,
-                "mtime_ns": item.mtime_ns,
-                "data_digests": sorted(item.data_digests),
-                "reader_digests": sorted(item.reader_digests),
-            }
-            for item in checkpoint.target_cohort
-        ],
-        "protected_names": sorted(checkpoint.protected_names),
-        "active_digests": sorted(checkpoint.active_digests),
-        "scanned_witnesses": {
-            key: list(val) for key, val in sorted(checkpoint.scanned_witnesses.items())
-        },
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    tmp_path = root / f".retention-refscan.{os.getpid()}.{threading.get_ident()}.tmp"
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
-        try:
-            view = memoryview(encoded)
-            written = 0
-            while written < len(encoded):
-                written += os.write(fd, view[written:])
-        finally:
-            os.close(fd)
-        os.replace(tmp_path, checkpoint_path)
-        return True
-    except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        return False
-
-
-def _remove_refscan_checkpoint(root: Path, *, uid: int | None) -> None:
-    checkpoint_path = root / RETENTION_REFSCAN_CHECKPOINT_NAME
-    try:
-        info = os.lstat(checkpoint_path)
-    except OSError:
-        return
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        return
-    if uid is not None and info.st_uid != uid:
-        return
-    try:
-        os.unlink(checkpoint_path)
-    except OSError:
-        pass
-
-
-def _cohort_identities_for_candidates(
-    candidates: Iterable[_CandidateDirectory],
-) -> tuple[_TargetCohortIdentity, ...]:
-    return tuple(
-        _TargetCohortIdentity(
-            name=item.name,
-            mtime_ns=item.mtime_ns,
-            data_digests=item.data_digests,
-            reader_digests=item.reader_digests,
-        )
-        for item in candidates
-    )
+from .context_delivery_retention_checkpoint import (  # noqa: E402
+    RETENTION_REFSCAN_CHECKPOINT_NAME as RETENTION_REFSCAN_CHECKPOINT_NAME,
+    _RefScanCheckpoint as _RefScanCheckpoint,
+    _TargetCohortIdentity as _TargetCohortIdentity,
+    _cohort_identities_for_candidates as _cohort_identities_for_candidates,
+    _load_refscan_checkpoint as _load_refscan_checkpoint,
+    _remove_refscan_checkpoint as _remove_refscan_checkpoint,
+    _save_refscan_checkpoint as _save_refscan_checkpoint,
+    _valid_witness_tuple as _valid_witness_tuple,
+)

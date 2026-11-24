@@ -1,8 +1,6 @@
 """Bounded opportunistic retention pruning for ephemeral context-delivery directories."""
 from __future__ import annotations
 
-from collections import deque
-from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 import errno
@@ -18,27 +16,32 @@ from typing import Iterator
 
 from .context_delivery_retention_scan import (
     CONTEXT_DELIVERY_EPHEMERAL_PREFIXES as CONTEXT_DELIVERY_EPHEMERAL_PREFIXES,
-    RETENTION_REFSCAN_CHECKPOINT_NAME as RETENTION_REFSCAN_CHECKPOINT_NAME,
     _MAX_CAPTURE_JSON_BYTES as _MAX_CAPTURE_JSON_BYTES,
     _CandidateDirectory,
     _JsonObjectReader,
-    _RefScanCheckpoint,
     _ShallowDirectory,
-    _candidate_has_unsettled_admission,
-    _cohort_identities_for_candidates,
+    _candidate_is_directly_protected,
     _collect_active_continuity_references,
+    _collect_root_entries,
     _dir_witness,
+    _expand_protected_closure,
     _extract_capture_names_and_digests as _extract_capture_names_and_digests,
     _extract_dir_name_from_path_token as _extract_dir_name_from_path_token,
     _inspect_owned_capture_dir,
-    _load_refscan_checkpoint,
-    _matching_ephemeral_prefix,
     _measure_candidate_dir,
+    _partition_shallow_candidates,
     _read_regular_json_object as _read_regular_json_object,
-    _remove_refscan_checkpoint,
     _resolved_variants as _resolved_variants,
-    _save_refscan_checkpoint,
     _scan_dir_entries_for_needles,
+)
+from .context_delivery_retention_checkpoint import (
+    RETENTION_REFSCAN_CHECKPOINT_NAME as RETENTION_REFSCAN_CHECKPOINT_NAME,
+    _RefScanCheckpoint,
+    _ResumedCheckpointState,
+    _load_refscan_checkpoint,
+    _persist_paused_refscan,
+    _remove_refscan_checkpoint,
+    _verify_checkpoint_targets_and_referrers,
 )
 
 if sys.platform != "win32":
@@ -298,123 +301,6 @@ def _acquire_sweep_lock(
             _ACTIVE_SWEEP_ROOTS.discard(key)
 
 
-def _collect_root_entries(
-    root: Path,
-    *,
-    uid: int | None,
-) -> tuple[dict[str, list[_ShallowDirectory]], list[Path], int] | None:
-    by_prefix: dict[str, list[_ShallowDirectory]] = {
-        prefix: [] for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES
-    }
-    non_ephemeral_dirs: list[Path] = []
-    ephemeral_count = 0
-    try:
-        with os.scandir(root) as entries:
-            for entry in entries:
-                name = entry.name
-                try:
-                    if entry.is_symlink():
-                        continue
-                    entry_stat = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                if stat.S_ISLNK(entry_stat.st_mode) or not stat.S_ISDIR(
-                    entry_stat.st_mode
-                ):
-                    continue
-                if uid is not None and entry_stat.st_uid != uid:
-                    continue
-                prefix = _matching_ephemeral_prefix(name)
-                if prefix is None:
-                    non_ephemeral_dirs.append(Path(entry.path))
-                    continue
-                ephemeral_count += 1
-                by_prefix[prefix].append(
-                    _ShallowDirectory(
-                        mtime=entry_stat.st_mtime,
-                        mtime_ns=entry_stat.st_mtime_ns,
-                        name=name,
-                        path=Path(entry.path),
-                        prefix=prefix,
-                    )
-                )
-    except OSError:
-        return None
-    return by_prefix, non_ephemeral_dirs, ephemeral_count
-
-
-def _expand_protected_closure(
-    seed_names: set[str],
-    *,
-    owned_by_name: Mapping[str, _CandidateDirectory],
-) -> set[str]:
-    protected = set(seed_names)
-    queue: deque[str] = deque(seed_names)
-    while queue:
-        current = queue.popleft()
-        candidate = owned_by_name.get(current)
-        if candidate is None:
-            continue
-        for ref_name in candidate.referenced_names:
-            if ref_name not in protected:
-                protected.add(ref_name)
-                queue.append(ref_name)
-    return protected
-
-
-def _partition_shallow_candidates(
-    shallow_by_prefix: Mapping[str, list[_ShallowDirectory]],
-    *,
-    protected_names: frozenset[str] | set[str],
-    current_now: float,
-    min_age_seconds: float,
-    keep_recent_per_prefix: int,
-) -> tuple[list[_ShallowDirectory], list[_ShallowDirectory]]:
-    cutoff = current_now - min_age_seconds
-    aged_shallow: list[_ShallowDirectory] = []
-    kept_shallow: list[_ShallowDirectory] = []
-    for prefix in CONTEXT_DELIVERY_EPHEMERAL_PREFIXES:
-        kept_shallow.extend(
-            item for item in shallow_by_prefix[prefix] if item.name in protected_names
-        )
-        group = [
-            item for item in shallow_by_prefix[prefix] if item.name not in protected_names
-        ]
-        if not group:
-            continue
-        group.sort(key=lambda item: (item.mtime, item.name))
-        excess = len(group) - keep_recent_per_prefix
-        if excess <= 0:
-            kept_shallow.extend(group)
-            continue
-        for candidate in group[:excess]:
-            if candidate.mtime <= cutoff:
-                aged_shallow.append(candidate)
-            else:
-                kept_shallow.append(candidate)
-        kept_shallow.extend(group[excess:])
-    aged_shallow.sort(key=lambda item: (item.mtime, item.name))
-    return aged_shallow, kept_shallow
-
-
-def _candidate_is_directly_protected(
-    owned: _CandidateDirectory,
-    *,
-    protected: set[str],
-    active_digests: set[str],
-    runtime_root: Path | None,
-    settlement_cache: dict[tuple[str, str, str, str], bool],
-) -> bool:
-    return (
-        owned.name in protected
-        or bool(owned.data_digests & active_digests)
-        or bool(owned.reader_digests & active_digests)
-        or _candidate_has_unsettled_admission(
-            owned, runtime_root=runtime_root, settlement_cache=settlement_cache
-        )
-    )
-
-
 def _select_fresh_cohort(
     aged_shallow: list[_ShallowDirectory],
     *,
@@ -478,86 +364,119 @@ def _select_fresh_cohort(
     return preliminary_reclaimable, uninspected_aged, invalid_aged
 
 
+def _build_ref_needles(
+    frontier_names: set[str],
+    *,
+    active_digests: set[str] | None = None,
+) -> tuple[bytes, ...]:
+    needle_bytes = [name.encode("utf-8") for name in frontier_names]
+    if active_digests:
+        needle_bytes.extend(digest.encode("ascii") for digest in active_digests)
+    return tuple(sorted(set(needle_bytes)))
+
+
 def _resume_checkpoint_cohort(
     checkpoint: _RefScanCheckpoint,
     aged_shallow: list[_ShallowDirectory],
+    kept_shallow: list[_ShallowDirectory],
     *,
     protected: set[str],
     active_digests: set[str],
     runtime_root: Path | None,
+    root: Path,
     abs_root: Path,
     resolved_root: Path,
     uid: int | None,
     max_delete_per_sweep: int,
     max_inspect_per_sweep: int,
     max_inspect_bytes_per_sweep: int,
+    ref_scan_remaining: int,
+    max_ref_scan_bytes_per_sweep: int,
     inspected_by_name: dict[str, _CandidateDirectory],
     settlement_cache: dict[tuple[str, str, str, str], bool],
     read_json: _JsonObjectReader,
-) -> tuple[list[_CandidateDirectory], list[_ShallowDirectory], dict[str, tuple[int, int, int, int]], int]:
-    if checkpoint.active_digests != frozenset(active_digests):
-        return [], aged_shallow, {}, 0
+) -> _ResumedCheckpointState | None:
+    if (
+        checkpoint.active_digests != frozenset(active_digests)
+        or len(checkpoint.target_cohort) > max_delete_per_sweep
+        or len(checkpoint.target_cohort) > max_inspect_per_sweep
+    ):
+        return None
+    saved_protected = set(protected)
     aged_by_name = {item.name: item for item in aged_shallow}
-    preliminary_reclaimable: list[_CandidateDirectory] = []
-    invalid_aged = 0
-    inspected_dirs = 0
-    inspected_bytes = 0
+    all_shallow_by_name = {item.name: item for item in (*aged_shallow, *kept_shallow)}
+    verified = _verify_checkpoint_targets_and_referrers(
+        checkpoint, aged_by_name=aged_by_name, all_shallow_by_name=all_shallow_by_name,
+        protected=protected, active_digests=active_digests, runtime_root=runtime_root,
+        abs_root=abs_root, resolved_root=resolved_root, uid=uid,
+        max_inspect_bytes_per_sweep=max_inspect_bytes_per_sweep,
+        ref_scan_remaining=ref_scan_remaining,
+        max_ref_scan_bytes_per_sweep=max_ref_scan_bytes_per_sweep,
+        inspected_by_name=inspected_by_name,
+        settlement_cache=settlement_cache, read_json=read_json,
+    )
+    if verified is None:
+        protected.clear()
+        protected.update(saved_protected)
+        inspected_by_name.clear()
+        return None
+    preliminary_reclaimable, ref_scan_remaining = verified
 
-    for entry in checkpoint.target_cohort:
-        if (
-            len(preliminary_reclaimable) >= max_delete_per_sweep
-            or inspected_dirs >= max_inspect_per_sweep
-        ):
-            break
-        shallow = aged_by_name.get(entry.name)
-        if shallow is None or shallow.mtime_ns != entry.mtime_ns:
-            continue
-        measured = _measure_candidate_dir(shallow.path, uid=uid)
-        if measured is None:
-            invalid_aged += 1
-            continue
-        entries, dir_bytes, _ = measured
-        if (
-            dir_bytes > max_inspect_bytes_per_sweep
-            or inspected_bytes + dir_bytes > max_inspect_bytes_per_sweep
-        ):
-            continue
-        inspected_dirs += 1
-        inspected_bytes += dir_bytes
-        owned = _inspect_owned_capture_dir(
-            shallow.path, name=shallow.name, prefix=shallow.prefix,
-            mtime=shallow.mtime, mtime_ns=shallow.mtime_ns, uid=uid,
-            abs_root=abs_root, resolved_root=resolved_root,
-            measured=(entries, dir_bytes), read_json=read_json,
-        )
-        if owned is None:
-            invalid_aged += 1
-            continue
-        if (
-            owned.data_digests != entry.data_digests
-            or owned.reader_digests != entry.reader_digests
-        ):
-            continue
-        inspected_by_name[owned.name] = owned
-        if _candidate_is_directly_protected(
-            owned, protected=protected, active_digests=active_digests,
-            runtime_root=runtime_root, settlement_cache=settlement_cache,
-        ):
-            protected.add(owned.name)
-            continue
-        preliminary_reclaimable.append(owned)
-
-    if not preliminary_reclaimable:
-        return [], aged_shallow, {}, invalid_aged
-    uninspected_aged = [
-        item for item in aged_shallow if item.name not in inspected_by_name
+    protected.update(_expand_protected_closure(protected, owned_by_name=inspected_by_name))
+    remaining_targets = [
+        item for item in preliminary_reclaimable if item.name not in protected
     ]
-    witnesses = {
-        key: val
-        for key, val in checkpoint.scanned_witnesses.items()
-        if key not in inspected_by_name
+    unscanned_dirs = {
+        name: shallow
+        for name, shallow in all_shallow_by_name.items()
+        if name not in inspected_by_name
     }
-    return preliminary_reclaimable, uninspected_aged, witnesses, invalid_aged
+    if not remaining_targets:
+        _remove_refscan_checkpoint(root, uid=uid)
+        return _ResumedCheckpointState(
+            preliminary_reclaimable=[], unscanned_dirs=unscanned_dirs,
+            ref_scan_remaining=ref_scan_remaining, seen_frontiers=set(),
+            frontier=set(), next_frontier=set(), completed_witnesses={},
+            prior_round_witnesses={}, referrer_witnesses={},
+            invalid_aged=0, done_empty=True,
+        )
+
+    seen_frontiers = set(checkpoint.seen_frontiers)
+    if not seen_frontiers:
+        frontier = {item.name for item in remaining_targets}
+        next_frontier = set(checkpoint.next_frontier) - protected - seen_frontiers - frontier
+        completed_witnesses: dict[str, tuple[int, int, int, int]] = {}
+        prior_round_witnesses = {
+            k: v for k, v in checkpoint.round_witnesses.items() if k in unscanned_dirs
+        }
+    else:
+        completed_witnesses = {
+            k: v for k, v in checkpoint.completed_witnesses.items() if k in unscanned_dirs
+        }
+        frontier = set(checkpoint.active_frontier) - protected - seen_frontiers
+        next_frontier = set(checkpoint.next_frontier) - protected - seen_frontiers - frontier
+        prior_round_witnesses = {
+            k: v for k, v in checkpoint.round_witnesses.items() if k in unscanned_dirs
+        }
+        if not frontier:
+            seen_frontiers |= set(checkpoint.active_frontier)
+            frontier = next_frontier
+            next_frontier = set()
+            prior_round_witnesses = {}
+
+    return _ResumedCheckpointState(
+        preliminary_reclaimable=remaining_targets,
+        unscanned_dirs=unscanned_dirs,
+        ref_scan_remaining=ref_scan_remaining,
+        seen_frontiers=seen_frontiers,
+        frontier=frontier,
+        next_frontier=next_frontier,
+        completed_witnesses=completed_witnesses,
+        prior_round_witnesses=prior_round_witnesses,
+        referrer_witnesses=dict(checkpoint.referrer_witnesses),
+        invalid_aged=0,
+        done_empty=False,
+    )
 
 
 def _verify_targets_via_ref_scan(
@@ -565,7 +484,12 @@ def _verify_targets_via_ref_scan(
     *,
     inspected_by_name: dict[str, _CandidateDirectory],
     unscanned_dirs: dict[str, _ShallowDirectory],
-    prior_witnesses: Mapping[str, tuple[int, int, int, int]],
+    seen_frontiers: set[str],
+    frontier: set[str],
+    next_frontier: set[str],
+    completed_witnesses: dict[str, tuple[int, int, int, int]],
+    prior_round_witnesses: dict[str, tuple[int, int, int, int]],
+    referrer_witnesses: dict[str, tuple[int, int, int, int]],
     protected: set[str],
     active_digests: set[str],
     runtime_root: Path | None,
@@ -588,83 +512,108 @@ def _verify_targets_via_ref_scan(
         _remove_refscan_checkpoint(root, uid=uid)
         return [], invalid_found
 
-    frontier: set[str] = {item.name for item in remaining_targets}
-    first_round = True
-    next_witnesses: dict[str, tuple[int, int, int, int]] = {}
-    cohort_snapshot = _cohort_identities_for_candidates(remaining_targets)
-
-    while frontier and unscanned_dirs:
-        needle_bytes = [name.encode("utf-8") for name in frontier]
-        if first_round and active_digests:
-            needle_bytes.extend(digest.encode("ascii") for digest in active_digests)
-        needles = tuple(sorted(set(needle_bytes)))
-        if not needles:
-            break
-        overlap = max(
-            _REF_SCAN_OVERLAP_MIN_BYTES,
-            max(len(needle) for needle in needles) - 1,
+    tamper_recheck_pending = bool(seen_frontiers) and not frontier
+    while (frontier or tamper_recheck_pending) and unscanned_dirs:
+        round_frontier = set(frontier)
+        tamper_recheck_pending = False
+        round_needles: tuple[bytes, ...] | None = (
+            _build_ref_needles(
+                round_frontier,
+                active_digests=None if seen_frontiers else active_digests,
+            )
+            if round_frontier
+            else None
         )
-        next_frontier: set[str] = set()
+        full_needles = (
+            _build_ref_needles(
+                seen_frontiers | round_frontier, active_digests=active_digests
+            )
+            if seen_frontiers
+            else (round_needles or ())
+        )
+        if not full_needles:
+            break
+        full_overlap = max(
+            _REF_SCAN_OVERLAP_MIN_BYTES,
+            max(len(needle) for needle in full_needles) - 1,
+        )
+        round_overlap = (
+            max(_REF_SCAN_OVERLAP_MIN_BYTES, max(len(needle) for needle in round_needles) - 1)
+            if round_needles
+            else full_overlap
+        )
+        next_round_witnesses: dict[str, tuple[int, int, int, int]] = {}
         for dir_name in sorted(unscanned_dirs):
             shallow = unscanned_dirs[dir_name]
             measured = _measure_candidate_dir(shallow.path, uid=uid)
             if measured is None:
                 invalid_found += 1
                 unscanned_dirs.pop(dir_name, None)
+                completed_witnesses.pop(dir_name, None)
                 continue
             entries, total_bytes, max_file_mtime_ns = measured
             if total_bytes > max_ref_scan_bytes_per_sweep:
                 _remove_refscan_checkpoint(root, uid=uid)
                 return None
-            witness = _dir_witness(
-                shallow.mtime_ns, entries, total_bytes, max_file_mtime_ns
-            )
-            if (
-                first_round
-                and dir_name in prior_witnesses
-                and prior_witnesses[dir_name] == witness
-            ):
-                next_witnesses[dir_name] = witness
-                continue
-            if total_bytes > ref_scan_remaining:
-                _save_refscan_checkpoint(
-                    root,
-                    uid=uid,
-                    checkpoint=_RefScanCheckpoint(
-                        target_cohort=cohort_snapshot,
-                        protected_names=frozenset(protected),
-                        active_digests=frozenset(active_digests),
-                        scanned_witnesses=next_witnesses,
-                    ),
-                )
-                return None
+            witness = _dir_witness(shallow.mtime_ns, entries, total_bytes, max_file_mtime_ns)
+            if not seen_frontiers:
+                if round_needles is None or prior_round_witnesses.get(dir_name) == witness:
+                    next_round_witnesses[dir_name] = witness
+                    continue
+                used_full_needles = False
+                scan_needles, scan_overlap = round_needles, round_overlap
+                match_targets = round_frontier
+            elif completed_witnesses.get(dir_name) == witness:
+                if round_needles is None or prior_round_witnesses.get(dir_name) == witness:
+                    next_round_witnesses[dir_name] = witness
+                    continue
+                used_full_needles = False
+                scan_needles, scan_overlap = round_needles, round_overlap
+                match_targets = round_frontier
+            else:
+                used_full_needles = True
+                scan_needles, scan_overlap = full_needles, full_overlap
+                match_targets = seen_frontiers | round_frontier
 
-            status, used_bytes = _scan_dir_entries_for_needles(
-                entries, needles=needles, overlap=overlap, uid=uid,
-                budget_remaining=ref_scan_remaining,
-            )
-            ref_scan_remaining -= used_bytes
-            if status == "unreadable" or ref_scan_remaining < 0:
-                return None
-            if status == "budget_exceeded":
-                _save_refscan_checkpoint(
-                    root,
-                    uid=uid,
-                    checkpoint=_RefScanCheckpoint(
-                        target_cohort=cohort_snapshot,
-                        protected_names=frozenset(protected),
-                        active_digests=frozenset(active_digests),
-                        scanned_witnesses=next_witnesses,
-                    ),
+            budget_paused = total_bytes > ref_scan_remaining
+            if not budget_paused:
+                status, used_bytes = _scan_dir_entries_for_needles(
+                    entries, needles=scan_needles, overlap=scan_overlap, uid=uid,
+                    budget_remaining=ref_scan_remaining,
+                )
+                ref_scan_remaining -= used_bytes
+                if status == "unreadable" or ref_scan_remaining < 0:
+                    return None
+                budget_paused = status == "budget_exceeded"
+            if budget_paused:
+                protected.update(
+                    _expand_protected_closure(protected, owned_by_name=inspected_by_name)
+                )
+                remaining_targets = [
+                    item for item in remaining_targets if item.name not in protected
+                ]
+                if not remaining_targets:
+                    _remove_refscan_checkpoint(root, uid=uid)
+                    return [], invalid_found
+                _persist_paused_refscan(
+                    root=root, uid=uid, remaining_targets=remaining_targets,
+                    protected=protected, active_digests=active_digests,
+                    seen_frontiers=seen_frontiers, round_frontier=round_frontier,
+                    next_frontier=next_frontier, referrer_witnesses=referrer_witnesses,
+                    completed_witnesses=completed_witnesses,
+                    next_round_witnesses=next_round_witnesses,
+                    unscanned_dirs=unscanned_dirs,
                 )
                 return None
             if status == "not_capture":
                 invalid_found += 1
                 unscanned_dirs.pop(dir_name, None)
+                completed_witnesses.pop(dir_name, None)
                 continue
             if status == "miss":
-                if first_round:
-                    next_witnesses[dir_name] = witness
+                if used_full_needles:
+                    completed_witnesses[dir_name] = witness
+                next_round_witnesses[dir_name] = witness
                 continue
 
             owned = _inspect_owned_capture_dir(
@@ -673,20 +622,32 @@ def _verify_targets_via_ref_scan(
                 abs_root=abs_root, resolved_root=resolved_root,
                 measured=(entries, total_bytes), read_json=read_json,
             )
-            unscanned_dirs.pop(dir_name, None)
             if owned is None:
                 invalid_found += 1
+                unscanned_dirs.pop(dir_name, None)
+                completed_witnesses.pop(dir_name, None)
                 continue
-            inspected_by_name[owned.name] = owned
             if _candidate_is_directly_protected(
                 owned, protected=protected, active_digests=active_digests,
                 runtime_root=runtime_root, settlement_cache=settlement_cache,
             ):
+                unscanned_dirs.pop(dir_name, None)
+                completed_witnesses.pop(dir_name, None)
+                inspected_by_name[owned.name] = owned
                 protected.add(owned.name)
-            elif owned.referenced_names & frontier:
-                next_frontier.add(owned.name)
+                referrer_witnesses[owned.name] = witness
+            elif owned.referenced_names & match_targets:
+                unscanned_dirs.pop(dir_name, None)
+                completed_witnesses.pop(dir_name, None)
+                inspected_by_name[owned.name] = owned
+                referrer_witnesses[owned.name] = witness
+                if owned.name not in seen_frontiers and owned.name not in round_frontier:
+                    next_frontier.add(owned.name)
+            else:
+                if used_full_needles:
+                    completed_witnesses[dir_name] = witness
+                next_round_witnesses[dir_name] = witness
 
-        first_round = False
         protected.update(
             _expand_protected_closure(protected, owned_by_name=inspected_by_name)
         )
@@ -696,7 +657,13 @@ def _verify_targets_via_ref_scan(
         if not remaining_targets:
             _remove_refscan_checkpoint(root, uid=uid)
             return [], invalid_found
-        frontier = next_frontier - protected
+        seen_frontiers |= round_frontier
+        completed_witnesses = {
+            k: v for k, v in next_round_witnesses.items() if k in unscanned_dirs
+        }
+        prior_round_witnesses = {}
+        frontier = next_frontier - protected - seen_frontiers
+        next_frontier = set()
 
     _remove_refscan_checkpoint(root, uid=uid)
     return remaining_targets, invalid_found
@@ -760,29 +727,27 @@ def _select_prune_targets(
 
     inspected_by_name: dict[str, _CandidateDirectory] = {}
     settlement_cache: dict[tuple[str, str, str, str], bool] = {}
-    prior_witnesses: dict[str, tuple[int, int, int, int]] = {}
-    preliminary_reclaimable: list[_CandidateDirectory] = []
-    uninspected_aged: list[_ShallowDirectory] = aged_shallow
-    invalid_aged = 0
-
+    resumed: _ResumedCheckpointState | None = None
     if checkpoint is not None:
-        preliminary_reclaimable, uninspected_aged, prior_witnesses, invalid_aged = (
-            _resume_checkpoint_cohort(
-                checkpoint, aged_shallow, protected=protected,
-                active_digests=active_digests, runtime_root=runtime_root,
-                abs_root=abs_root, resolved_root=resolved_root, uid=uid,
-                max_delete_per_sweep=max_delete_per_sweep,
-                max_inspect_per_sweep=max_inspect_per_sweep,
-                max_inspect_bytes_per_sweep=max_inspect_bytes_per_sweep,
-                inspected_by_name=inspected_by_name,
-                settlement_cache=settlement_cache, read_json=active_reader,
-            )
+        resumed = _resume_checkpoint_cohort(
+            checkpoint, aged_shallow, kept_shallow, protected=protected,
+            active_digests=active_digests, runtime_root=runtime_root, root=root,
+            abs_root=abs_root, resolved_root=resolved_root, uid=uid,
+            max_delete_per_sweep=max_delete_per_sweep,
+            max_inspect_per_sweep=max_inspect_per_sweep,
+            max_inspect_bytes_per_sweep=max_inspect_bytes_per_sweep,
+            ref_scan_remaining=ref_scan_remaining,
+            max_ref_scan_bytes_per_sweep=max_ref_scan_bytes_per_sweep,
+            inspected_by_name=inspected_by_name,
+            settlement_cache=settlement_cache, read_json=active_reader,
         )
-        if not preliminary_reclaimable:
+        if resumed is None:
             _remove_refscan_checkpoint(root, uid=uid)
+        elif resumed.done_empty:
+            return [], resumed.invalid_aged
 
-    if not preliminary_reclaimable:
-        preliminary_reclaimable, uninspected_aged, fresh_invalid = _select_fresh_cohort(
+    if resumed is None:
+        preliminary_reclaimable, uninspected_aged, invalid_aged = _select_fresh_cohort(
             aged_shallow, protected=protected, active_digests=active_digests,
             runtime_root=runtime_root, abs_root=abs_root, resolved_root=resolved_root,
             uid=uid, max_delete_per_sweep=max_delete_per_sweep,
@@ -791,17 +756,36 @@ def _select_prune_targets(
             inspected_by_name=inspected_by_name,
             settlement_cache=settlement_cache, read_json=active_reader,
         )
-        invalid_aged += fresh_invalid
+        if not preliminary_reclaimable:
+            return [], invalid_aged
+        unscanned_dirs: dict[str, _ShallowDirectory] = {
+            item.name: item for item in (*kept_shallow, *uninspected_aged)
+        }
+        seen_frontiers: set[str] = set()
+        frontier = {item.name for item in preliminary_reclaimable}
+        next_frontier: set[str] = set()
+        completed_witnesses: dict[str, tuple[int, int, int, int]] = {}
+        prior_round_witnesses: dict[str, tuple[int, int, int, int]] = {}
+        referrer_witnesses: dict[str, tuple[int, int, int, int]] = {}
+    else:
+        preliminary_reclaimable = resumed.preliminary_reclaimable
+        unscanned_dirs = resumed.unscanned_dirs
+        ref_scan_remaining = resumed.ref_scan_remaining
+        seen_frontiers = resumed.seen_frontiers
+        frontier = resumed.frontier
+        next_frontier = resumed.next_frontier
+        completed_witnesses = resumed.completed_witnesses
+        prior_round_witnesses = resumed.prior_round_witnesses
+        referrer_witnesses = resumed.referrer_witnesses
+        invalid_aged = resumed.invalid_aged
 
-    if not preliminary_reclaimable:
-        return [], invalid_aged
-
-    unscanned_dirs: dict[str, _ShallowDirectory] = {
-        item.name: item for item in (*kept_shallow, *uninspected_aged)
-    }
     verified = _verify_targets_via_ref_scan(
         preliminary_reclaimable, inspected_by_name=inspected_by_name,
-        unscanned_dirs=unscanned_dirs, prior_witnesses=prior_witnesses,
+        unscanned_dirs=unscanned_dirs, seen_frontiers=seen_frontiers,
+        frontier=frontier, next_frontier=next_frontier,
+        completed_witnesses=completed_witnesses,
+        prior_round_witnesses=prior_round_witnesses,
+        referrer_witnesses=referrer_witnesses,
         protected=protected, active_digests=active_digests,
         runtime_root=runtime_root, root=root, abs_root=abs_root,
         resolved_root=resolved_root, uid=uid,
