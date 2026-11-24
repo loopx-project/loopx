@@ -1664,6 +1664,24 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
     runtime._steward_monitor_next_check.clear()
     assert pump_steward_monitors(runtime) == []
 
+    # The parent can commit a real poll while another operation owns its follow-up.
+    held = monitor._acquire(actor, adv_todo, "busy-followup")["lease"]
+    try:
+        due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
+        edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at", due)
+        watched, = pump_steward_monitors(runtime)
+        observed = finish(runtime, watched)
+        assert observed["status"] == "completed", observed.get("error")
+        evidence = [event for event in store.events_after(watched["session_id"], watched["turn_id"], None)
+                    if event["kind"] == "native_loopx.monitor_poll"]
+        assert len(evidence) == 1
+        assert evidence[0]["payload"]["receipt"] == observed["response"]["native_loopx"]["receipt"]
+        assert local_watch_row(runtime, actor, monitor_todo_id)["next_due_at"] != due
+        assert _current_followup().get("note") == adv_todo.get("note")
+        assert pump_steward_monitors(runtime) == []
+    finally:
+        monitor._release(actor, adv_todo, held)
+
     # On the next due monitor poll, the exhausted zero-write follow-up is re-armed and executes cleanly.
     edit_local_watch(
         runtime,
