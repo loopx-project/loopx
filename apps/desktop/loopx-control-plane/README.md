@@ -555,19 +555,25 @@ Self-service:
    on its own: it succeeds even when its target is missing and leaves a
    dangling link in place of the original.
 
+   Run the block below in one Terminal window; every line is chained, so the
+   sequence stops before anything is moved when the candidate is missing or
+   older than 22.22.3. `--version` prints the candidate for you to read, and
+   the third line re-checks the same version numerically.
+
    ```bash
    node=<supported node binary> &&
    "$node" --version &&
-   mv ~/.local/bin/node ~/.local/bin/node.before-loopx &&
+   "$node" -e "const [maj,min,pat]=process.versions.node.split('.').map(Number);process.exit(maj>22||(maj===22&&(min>22||(min===22&&pat>=3)))?0:1)" &&
+   mv ~/.local/bin/node ~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    ln -s "$node" ~/.local/bin/node
    ```
 
-   The first two lines stop the sequence when that binary is missing. Read the
-   version they print and continue only for 22.22.3 or newer; the old file is
-   kept as `node.before-loopx` either way. `node_found` of `true` with no
-   `node_version` means the App found a `node` it could not read a version
-   from: inspect that entry with `ls -l` and the same `--version` call before
-   replacing it the same way.
+   The backup name is timestamped, so a retry keeps every earlier backup
+   instead of overwriting one; restore by copying the newest
+   `node.before-loopx-*` back over `~/.local/bin/node`. `node_found` of `true`
+   with no `node_version` means the App found a `node` it could not read a
+   version from: inspect that entry with `ls -l` and the same `--version` call
+   before replacing it the same way.
 4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
    environment reading refreshes every 30 seconds, or reopen the App.
    `node --version` in a terminal only verifies the interactive shell, which
