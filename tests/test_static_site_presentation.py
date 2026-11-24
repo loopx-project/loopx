@@ -242,6 +242,56 @@ def test_package_scans_large_text_assets_before_certifying_them_public_safe(
     assert not destination.exists()
 
 
+@pytest.mark.parametrize(
+    ("asset", "payload"),
+    [
+        ("data.csv", "name,value\napi,{token}\n"),
+        ("assets/export.csv", "name,value\napi,{token}\n"),
+        ("build.log", "export GITHUB_TOKEN={token}\n"),
+        ("config.yaml", "token: {token}\n"),
+        (".env", "OPENAI_API_KEY={token}\n"),
+        ("Dockerfile", "ENV GITHUB_TOKEN={token}\n"),
+    ],
+)
+def test_package_scans_text_assets_outside_the_former_suffix_allow_list(
+    tmp_path: Path, asset: str, payload: str
+) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    (site / asset).write_text(payload.replace("{token}", token), encoding="utf-8")
+    destination = tmp_path / "publish"
+
+    with pytest.raises(StaticSiteContractError, match="public boundary scan failed"):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
+def test_package_scans_a_bom_marked_utf16_capture_before_publication(
+    tmp_path: Path,
+) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    (site / "capture.txt").write_text(
+        "GITHUB_TOKEN=" + token + "\n", encoding="utf-16"
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(StaticSiteContractError, match="public boundary scan failed"):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
+def test_package_still_copies_binary_assets_without_text_scanning(
+    tmp_path: Path,
+) -> None:
+    site = _site(tmp_path)
+    (site / "render.png").write_bytes(b"\x89PNG\r\n\x1a\n" + bytes(range(32)))
+    result = _package(site, tmp_path / "publish", tmp_path / "state")
+
+    assert result["write_performed"] is True
+    assert (tmp_path / "publish" / "render.png").is_file()
+
+
 def test_package_rejects_reserved_paths_symlinks_and_public_boundary_leaks(
     tmp_path: Path,
 ) -> None:

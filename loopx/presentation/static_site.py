@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import urlopen
 
+from ..capabilities.public_safe_outbound.scan_cli import BINARY_SUFFIXES
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .public_safety import (
     PUBLIC_BOUNDARY_PATTERNS,
@@ -33,9 +35,20 @@ RECEIPT_LOG_FILE = "receipts.jsonl"
 REVISION_DIR = "revisions"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_TEXT_SUFFIXES = {".css", ".html", ".js", ".json", ".md", ".svg", ".txt", ".xml"}
 _PUBLIC_BOUNDARY_PATTERNS = PUBLIC_BOUNDARY_PATTERNS
 _RESERVED_TOP_LEVEL = {MANIFEST_FILE, RECEIPT_FILE, REVISION_FILE, REVISION_DIR}
+
+# Windows PowerShell 5.1 writes a `>` or `Out-File` capture as UTF-16LE with a
+# BOM; reading those bytes as UTF-8 turns every character into NUL-interleaved
+# mojibake that no boundary pattern can match. UTF-32 is checked before UTF-16
+# because BOM_UTF32_LE starts with BOM_UTF16_LE.
+_BOM_CODECS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
 
 
 class StaticSiteContractError(ValueError):
@@ -74,12 +87,25 @@ def _paths_overlap(left: Path, right: Path) -> bool:
     )
 
 
-def _scan_public_text(path: Path, relative_path: str) -> None:
-    if path.suffix.lower() not in _TEXT_SUFFIXES:
+def _scan_public_text(path: Path, relative_path: str, content: bytes) -> None:
+    # A filename allow-list certified every text asset outside it (`.env`,
+    # `Dockerfile`, `.csv` data) without reading a byte. Excluding only the
+    # binary formats the outbound public-safe scanner already refuses to read as
+    # text leaves every other copied asset as reviewable text.
+    if path.suffix.lower() in BINARY_SUFFIXES:
         return
-    # A size exemption would certify the unscanned tail as public-safe; the caller
-    # already reads the whole file for its digest, so scan every text byte copied.
-    text = path.read_text(encoding="utf-8", errors="replace")
+    for bom, encoding in _BOM_CODECS:
+        if content.startswith(bom):
+            break
+    else:
+        encoding = "utf-8"
+    # A size exemption would certify an unscanned tail as public-safe, so scan
+    # every byte of the text the caller already read for this asset's digest.
+    text = content.decode(encoding, errors="replace")
+    if "\x00" in text:
+        # NUL-bearing bytes are not reviewable text; a BOM-less UTF-16 capture
+        # and a known-binary asset both land here instead of certifying clean.
+        return
     for label, pattern in _PUBLIC_BOUNDARY_PATTERNS:
         if pattern.search(text):
             raise StaticSiteContractError(
@@ -108,8 +134,8 @@ def _collect_site_files(site_dir: Path, *, entry_path: str) -> list[dict[str, ob
             raise StaticSiteContractError(
                 f"site bundle uses reserved path: {relative_path}"
             )
-        _scan_public_text(path, relative_path)
         content = path.read_bytes()
+        _scan_public_text(path, relative_path, content)
         files.append(
             {
                 "path": relative_path,
