@@ -45,6 +45,9 @@ ENV_MIN_SWEEP_INTERVAL_SECONDS = "LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS"
 _KNOWN_CAPTURE_DATA_FILENAMES: frozenset[str] = frozenset(
     {
         "decision.json",
+        "delivery.json",
+        "delivery-request.json",
+        "failure.json",
         "projection.json",
         "required-context.json",
         "result.json",
@@ -342,7 +345,15 @@ def _read_regular_json_object(
 
 
 def _is_reader_filename(name: str) -> bool:
-    return name.endswith(".reader.json") and len(name) > len(".reader.json")
+    if name.endswith(".reader.json"):
+        return len(name) > len(".reader.json")
+    stem, sep, suffix = name.partition(".reader.json.")
+    return (
+        bool(sep)
+        and bool(stem)
+        and len(suffix) == 16
+        and all(ch in "0123456789abcdef" for ch in suffix)
+    )
 
 
 def _reader_reference_is_valid(
@@ -380,9 +391,13 @@ def _prefix_ownership_matches(
 ) -> bool:
     if prefix == "decision-":
         decision = data_payloads.get("decision.json")
-        if decision is None:
-            return False
-        return any(key in decision for key in _DECISION_OWNERSHIP_KEYS) or has_verified_reader
+        if decision is not None:
+            return (
+                any(key in decision for key in _DECISION_OWNERSHIP_KEYS)
+                or has_verified_reader
+            )
+        failure = data_payloads.get("failure.json")
+        return failure is not None and bool(failure) and has_verified_reader
     if prefix == "recovery-":
         required = data_payloads.get("required-context.json")
         return required is not None and bool(required)
@@ -397,6 +412,13 @@ def _prefix_ownership_matches(
             payload = data_payloads.get(name)
             if payload is not None and bool(payload):
                 return True
+        delivery = data_payloads.get("delivery.json")
+        if delivery is not None and bool(delivery):
+            return (
+                has_verified_reader
+                or delivery.get("schema_version") == "context_delivery_v1"
+                or any(key in delivery for key in _DECISION_OWNERSHIP_KEYS)
+            )
         return False
     return False
 

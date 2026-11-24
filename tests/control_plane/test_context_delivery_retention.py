@@ -1047,3 +1047,240 @@ def test_active_session_references_and_transitive_dependencies_preserved(
     assert claim_capture.exists()
     assert unsettled_capture.exists()
     assert unsettled_dep.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_default_cli_unsettled_capture_protected_then_pruned_on_turn3_across_file_and_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID,
+        GOAL_ID,
+        TODO_ID,
+        _run_cli,
+        _write_fixture,
+    )
+
+    cast("Callable[[Path, pytest.MonkeyPatch], None]", isolate_sqlite_runtime)(
+        tmp_path, monkeypatch
+    )
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
+    managed_root = runtime.expanduser().resolve() / "context-delivery"
+    managed_root.mkdir(parents=True, mode=0o700)
+
+    # Pre-seed progressive context-* (with delivery.json + pinned .reader.json.<16hex>),
+    # decision-* with delivery-request.json, owned failure-only decision-*, unowned
+    # failure.json-only decision-*, and unrelated context-notes/.
+    old_mtime = time.time() - 10_000.0
+    progressive_ctx = managed_root / "context-progressive-delta"
+    progressive_ctx.mkdir(mode=0o700)
+    delta_target = progressive_ctx / "delivery.json"
+    delta_sha = _write_owned_json(
+        delta_target,
+        {"schema_version": "context_delivery_v1", "mode": "delta", "delta": {"open_count": 1}},
+        mtime=old_mtime,
+    )
+    _write_owned_json(
+        progressive_ctx / "delivery.0123456789abcdef.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(delta_target),
+            "sha256": delta_sha,
+        },
+        mtime=old_mtime,
+    )
+    os.utime(progressive_ctx, (old_mtime, old_mtime))
+
+    req_decision = managed_root / "decision-with-delivery-request"
+    req_decision.mkdir(mode=0o700)
+    req_dec_sha = _write_owned_json(
+        req_decision / "decision.json",
+        {"ok": True, "decision": "wait"},
+        mtime=old_mtime,
+    )
+    _write_owned_json(
+        req_decision / "delivery-request.json",
+        {"mode": "full", "requested": True},
+        mtime=old_mtime,
+    )
+    _write_owned_json(
+        req_decision / "decision.reader.json.abcdef0123456789",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(req_decision / "decision.json"),
+            "sha256": req_dec_sha,
+        },
+        mtime=old_mtime,
+    )
+    os.utime(req_decision, (old_mtime, old_mtime))
+
+    failure_owned = managed_root / "decision-failure-owned"
+    failure_owned.mkdir(mode=0o700)
+    failure_target = failure_owned / "failure.json"
+    failure_sha = _write_owned_json(
+        failure_target,
+        {"ok": False, "error_code": "QUOTA_OUTPUT_BOUND"},
+        mtime=old_mtime,
+    )
+    _write_owned_json(
+        failure_owned / "failure.reader.json",
+        {
+            "schema_version": "context_capture_read_reference_v1",
+            "path": str(failure_target),
+            "sha256": failure_sha,
+        },
+        mtime=old_mtime,
+    )
+    os.utime(failure_owned, (old_mtime, old_mtime))
+
+    failure_unowned = managed_root / "decision-failure-unowned"
+    failure_unowned.mkdir(mode=0o700)
+    _write_owned_json(
+        failure_unowned / "failure.json",
+        {"ok": False, "custom": "no-reader"},
+        mtime=old_mtime,
+    )
+    os.utime(failure_unowned, (old_mtime, old_mtime))
+
+    mixed_notes = managed_root / "context-notes" / "readme.txt"
+    mixed_notes.parent.mkdir(mode=0o700)
+    mixed_notes.write_text("default-cli mixed note\n", encoding="utf-8")
+
+    # Turn 1 uses default CLI flags (raw_guard=False, omitting --context-delivery off),
+    # writing delivery.json + delivery.<16hex>.reader.json + decision.json inside <runtime_root>/context-delivery.
+    code1, guard1 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-default-1",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert code1 == 0 and guard1["ok"] is True, guard1
+    turn1_ref = Path(str(guard1["reference_file"]))
+    turn1_dir = turn1_ref.parent
+    assert turn1_dir.parent == managed_root
+    assert (turn1_dir / "delivery.json").is_file()
+    assert (turn1_dir / "decision.json").is_file()
+
+    rc_read1, read1 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-read",
+        "--reference-file",
+        str(turn1_ref),
+    )
+    assert rc_read1 == 0 and read1["ok"] is True, read1
+
+    # Enable aggressive sweep for Turn 2 and Turn 3.
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MIN_AGE_SECONDS", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_KEEP_RECENT", "0")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_MAX_DELETE", "128")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY_SWEEP_INTERVAL_SECONDS", "0")
+
+    # Turn 2 triggers opportunistic CLI pruning:
+    # - unsettled Turn 1 capture stays protected & readable;
+    # - settled/no-receipt LoopX dirs (progressive context-* delta, delivery-request, owned failure) are pruned;
+    # - unowned failure.json-only dir and context-notes/ survive untouched.
+    code2, guard2 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-default-2",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert code2 == 0 and guard2["ok"] is True, guard2
+    turn2_dir = Path(str(guard2["reference_file"])).parent
+    assert turn1_dir.is_dir()
+    assert turn2_dir.is_dir()
+    assert not progressive_ctx.exists()
+    assert not req_decision.exists()
+    assert not failure_owned.exists()
+    assert failure_unowned.is_dir()
+    assert mixed_notes.read_text(encoding="utf-8") == "default-cli mixed note\n"
+
+    rc_still1, read_still1 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "context-read",
+        "--reference-file",
+        str(turn1_ref),
+    )
+    assert rc_still1 == 0 and read_still1["ok"] is True, read_still1
+
+    # Settle Turn 1 via real CLI refresh-state --settle-turn.
+    code_settle, settled = _run_cli(
+        registry,
+        runtime,
+        "refresh-state",
+        "--goal-id",
+        GOAL_ID,
+        "--classification",
+        "validated_progress",
+        "--delivery-batch-scale",
+        "implementation",
+        "--delivery-outcome",
+        "outcome_progress",
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-default-1",
+        "--no-global-sync",
+        "--suppress-external-sinks",
+        "--settle-turn",
+        "--settlement-receipt",
+        cwd=project,
+    )
+    assert code_settle == 0 and settled["settlement_progress"]["state"] == "settled", settled
+
+    # Turn 3 runs with default CLI flags: opportunistic pruning now reclaims settled Turn 1
+    # (even though turn1_dir contains delivery.json + *.reader.json* + decision.json + projection.json)
+    # while still protecting unsettled Turn 2 and Turn 3.
+    code3, guard3 = _run_cli(
+        registry,
+        runtime,
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--todo-id",
+        TODO_ID,
+        "--turn-instance-id",
+        "turn-default-3",
+        cwd=project,
+        raw_guard=False,
+    )
+    assert code3 == 0 and guard3["ok"] is True, guard3
+    turn3_dir = Path(str(guard3["reference_file"])).parent
+    assert not turn1_dir.exists()
+    assert turn2_dir.is_dir()
+    assert turn3_dir.is_dir()
+    assert failure_unowned.is_dir()
+    assert mixed_notes.read_text(encoding="utf-8") == "default-cli mixed note\n"
