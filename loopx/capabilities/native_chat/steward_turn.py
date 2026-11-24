@@ -48,6 +48,7 @@ _WORKER_EXITED_ERROR = (
 )
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
+    "the portfolio scope changed after observation",
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })
@@ -1337,8 +1338,12 @@ class StewardTurnHost:
 
         model_input = authority.get("_model_input")
         detail_ref = model_input.get("detail_ref") if isinstance(model_input, Mapping) else None
-        packet = authority.get("replan_action_packet") or (
-            detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        detail_packet = detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        auth_packet = authority.get("replan_action_packet")
+        packet = (
+            detail_packet
+            if isinstance(detail_packet, Mapping) and ("review" in detail_packet or "writeback" in detail_packet)
+            else auth_packet
         )
 
         def _read_stage(cmd_str: Any) -> dict[str, Any] | None:
@@ -1729,7 +1734,7 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                    if (report_work or steward_advancement or governance_work) and isinstance(adapter, AntigravityAdapter):
                         from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC
                         response = adapter.start_turn(
                             prompt,

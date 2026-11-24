@@ -124,6 +124,7 @@ function admitMonitorRestartRecovery(
     original.error_code === "runtime_unavailable"
     || original.error_code === "runtime_error" && (
       original.error === "steward monitor external signal source temporarily unavailable"
+      || original.error === "the portfolio scope changed after observation"
       || original.error === "disk I/O error"
       || original.error === WORKER_EXITED_ERROR
     )
