@@ -562,16 +562,41 @@ Self-service:
 
    ```bash
    node=<supported node binary> &&
+   node_qualifies() {
+     case "$1" in
+       *$'\n'* | *$'\r'*) return 1 ;;
+     esac
+     printf '%s\n' "$1" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || return 1
+     printf '%s\n' "$1" | awk '
+       {
+         sub(/^v/, "")
+         n = split($0, a, /[.+-]/)
+         if (n < 3) exit 1
+         maj = a[1] + 0; min = a[2] + 0; pat = a[3] + 0
+         if (maj < 22) exit 1
+         if (maj == 22 && min < 22) exit 1
+         if (maj == 22 && min == 22 && pat < 3) exit 1
+         if (maj == 22 && min == 22 && pat == 3) {
+           plus = index($0, "+")
+           dash = index($0, "-")
+           if (dash > 0 && (plus == 0 || dash < plus)) exit 1
+         }
+         exit 0
+       }'
+   }
    "$node" --version &&
-   printf '%s\n' "$("$node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;maj=a[1]+0;min=a[2]+0;pat=a[3]+0;if(maj<22)exit 1;if(maj==22&&min<22)exit 1;if(maj==22&&min==22&&pat<3)exit 1;if(maj==22&&min==22&&pat==3&&index($0,"-")>0)exit 1;exit 0}' &&
+   node_ver="$("$node" --version)" &&
+   node_qualifies "$node_ver" &&
    node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
    "$node" --version &&
+   node_ver="$("$node" --version)" &&
+   node_qualifies "$node_ver" &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    mkdir "$backup" &&
    mv ~/.local/bin/node "$backup/node" &&
    if ln -s "$node" ~/.local/bin/node &&
-      "$HOME/.local/bin/node" --version &&
-      printf '%s\n' "$("$HOME/.local/bin/node" --version)" | awk '{sub(/^v/,"");n=split($0,a,/[.+-]/);if(n<3)exit 1;maj=a[1]+0;min=a[2]+0;pat=a[3]+0;if(maj<22)exit 1;if(maj==22&&min<22)exit 1;if(maj==22&&min==22&&pat<3)exit 1;if(maj==22&&min==22&&pat==3&&index($0,"-")>0)exit 1;exit 0}'; then
+      installed_ver="$("$HOME/.local/bin/node" --version)" &&
+      node_qualifies "$installed_ver"; then
      echo "Node launcher updated to $node (previous entry kept in $backup)"
    else
      mv "$backup/node" ~/.local/bin/node &&
@@ -581,21 +606,17 @@ Self-service:
    fi
    ```
 
-   The final two checks run through the installed link while the original
-   entry is safely inside the backup directory: `--version` proves the entry
-   executes, and the numeric guard re-checks the same 22.22.3 floor through
-   it — a wrapper that runs but resolves an older Node fails the second line
-   and is treated exactly like an execution failure. Some candidates only
-   pass the earlier checks: an alias that points back at the launcher being
-   replaced turns the new link into a loop, and a wrapper that locates Node
-   relative to its own directory stops working from `~/.local/bin`. Either
-   makes the final check fail, and the `else` branch then restores the
-   original entry — `mv` keeps its entry type, so a symlink route or regular
-   file comes back exactly as it was — and exits nonzero. On success the
-   original entry stays in the backup directory as the recovery artifact.
-   The pre-move checks qualify the candidate from the Terminal; the installed
-   link is qualified after the swap, with the restore above as the undo path
-   for that last step.
+   `node_qualifies` is the single version judgment shared by the candidate
+   and the installed link, and it follows `probe_node()`: the whole captured
+   output must be exactly one `v?[maj.min.pat]` line — extra output lines
+   fail the newline check before anything is matched — with an optional
+   prerelease after `-` and an optional build after `+`; malformed fields or
+   missing segments fail the shape check. The base triple must reach
+   22.22.3, and a base sitting exactly on the minimum is rejected when a
+   prerelease is present, while `22.22.3+build-5`, whose hyphen belongs to
+   the build metadata, still qualifies. The installed link is qualified
+   through the same function after the swap, with the `else` branch above as
+   the undo path. The two `--version` lines remain as the readback prints.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
