@@ -186,6 +186,9 @@ not overlap. Either bound may be omitted. ISO offsets are compared as instants;
 dates and timestamps without an offset use UTC. The default unfiltered read is
 unchanged. The selected window applies to run rows and retained semantic-history
 references, while quota accounting still uses the complete Goal history.
+Active retry status also uses complete relevant retained evidence: a later
+progress record outside the window can supersede an older blocker. The older
+Run stays readable in the window, but is not reported as an active retry.
 `run_count` counts matching runs before `--limit`; `time_filter` reports the
 normalized bounds and the number of excluded rows with missing or invalid times.
 Malformed/reversed bounds and combinations with history repair/audit actions or

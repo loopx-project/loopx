@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -189,3 +189,78 @@ def test_window_does_not_hide_goal_wide_quota_integrity(history_source):
     )
     assert result.returncode == 0, result.stderr
     assert filtered["goals"][0]["quota"] == quota
+
+
+@pytest.mark.parametrize("agent_args", [[], ["--agent-id", "worker"]])
+def test_window_does_not_reactivate_superseded_retries(history_source, agent_args):
+    _, index = history_source
+    now = datetime.now(timezone.utc)
+    due = (now + timedelta(minutes=5)).isoformat()
+    rows = []
+    for name, minutes, todo in [
+        ("old-block", 8, "todo_current001"),
+        ("still-waiting", 6, "todo_current002"),
+        ("outside-window", 12, "todo_current003"),
+    ]:
+        stamp = (now - timedelta(minutes=minutes)).isoformat()
+        rows.append(
+            {
+                "goal_id": "sample",
+                "agent_id": "worker",
+                "todo_id": todo,
+                "generated_at": stamp,
+                "classification": name,
+                "turn_instance_id": name,
+                "delivery_outcome": "outcome_gap",
+                "progress_observation": {"result_class": "blocked"},
+                "blocked_retry": {
+                    "schema_version": "quota_blocked_retry_v0",
+                    "source": "turn_settlement",
+                    "todo_id": todo,
+                    "resume_when": "resume_at:" + due,
+                    "observed_at": stamp,
+                    "due_at": due,
+                },
+            }
+        )
+    rows.append(
+        {
+            "goal_id": "sample",
+            "agent_id": "worker",
+            "todo_id": "todo_current001",
+            "generated_at": (now - timedelta(minutes=1)).isoformat(),
+            "classification": "later-progress",
+            "delivery_outcome": "outcome_progress",
+            "progress_observation": {"result_class": "advanced"},
+        }
+    )
+    index.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    _, full = run_history(history_source, "--goal-id", "sample", *agent_args)
+
+    def retries(payload):
+        return [
+            r["classification"]
+            for r in payload["goals"][0]["semantic_history"][
+                "active_blocked_retry_runs"
+            ]
+        ]
+
+    assert retries(full) == ["still-waiting", "outside-window"]
+    window = [
+        "--goal-id",
+        "sample",
+        *agent_args,
+        "--since",
+        (now - timedelta(minutes=10)).isoformat(),
+        "--until",
+        (now - timedelta(minutes=5)).isoformat(),
+    ]
+    result, filtered = run_history(history_source, *window)
+    assert result.returncode == 0, result.stderr
+    assert [r["classification"] for r in filtered["runs"]] == [
+        "still-waiting",
+        "old-block",
+    ]
+    assert retries(filtered) == ["still-waiting"]
+    _, limited = run_history(history_source, *window, "--limit", "1")
+    assert retries(limited) == ["still-waiting"]

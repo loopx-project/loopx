@@ -556,6 +556,7 @@ def collect_history(
         goal_runs = runs
         if scoped_agent_id:
             runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
+        retry_evidence = runs
         if time_filtered:
             dated_runs = [(run, parse_timestamp(run.get("generated_at"))) for run in runs]
             undated_run_count += sum(stamp is None for _, stamp in dated_runs)
@@ -584,6 +585,16 @@ def collect_history(
             agent_lane_id=None if scoped_agent_id else agent_lane_id,
         )
         semantic_history = goal_semantic_history_from_runs(runs)
+        if time_filtered:
+            # Active retry is a current fact, not an as-of-window state. Later
+            # progress outside the display range must still supersede an old
+            # blocker. Qualify the complete relevant lane before filtering its
+            # references; keep the old row itself available for investigation.
+            visible_runs = {id(run) for run in runs}
+            current_retries = goal_semantic_history_from_runs(retry_evidence)["active_blocked_retry_runs"]
+            semantic_history["active_blocked_retry_runs"] = [
+                run for run in current_retries if id(run) in visible_runs
+            ]
         goal_record: dict[str, object] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),
