@@ -22,6 +22,7 @@ from loopx.capabilities.issue_fix.pr_gate_reconcile import (
 from loopx.capabilities.issue_fix.pr_review_ack import record_issue_fix_pr_review_ack
 from loopx.cli_commands.status import (
     attach_agent_lane_next_actions,
+    handle_review_packet_command,
     handle_status_command,
 )
 from loopx.control_plane import effect_runtime
@@ -304,7 +305,9 @@ def _status_cli_args(*, agent_id: str | None) -> argparse.Namespace:
     )
 
 
-def _run_status_cli(registry: Path, runtime: Path, *, agent_id: str | None) -> tuple[dict[str, Any], str]:
+def _run_status_cli_with_exit(
+    registry: Path, runtime: Path, *, agent_id: str | None
+) -> tuple[int, dict[str, Any], str]:
     captured: list[tuple[dict[str, Any], str]] = []
 
     def capture(value: dict[str, Any], _fmt: str, renderer: Any) -> None:
@@ -317,9 +320,16 @@ def _run_status_cli(registry: Path, runtime: Path, *, agent_id: str | None) -> t
         output_format=lambda _args: "json",
         print_payload=capture,
     )
-    assert exit_code == 0
     assert len(captured) == 1
-    return captured[0]
+    return exit_code, captured[0][0], captured[0][1]
+
+
+def _run_status_cli(registry: Path, runtime: Path, *, agent_id: str | None) -> tuple[dict[str, Any], str]:
+    exit_code, payload, rendered_md = _run_status_cli_with_exit(
+        registry, runtime, agent_id=agent_id
+    )
+    assert exit_code == 0
+    return payload, rendered_md
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -746,6 +756,135 @@ def test_status_agent_lane_recovers_when_pr_merge_lands_between_collect_status_a
     assert item["agent_todos"]["deferred_work_counts"]["ready"] == 1
     assert item["project_asset"]["agent_scope_frontier"]["action"] == "successor_replan_required"
     assert item["project_asset"]["agent_scope_frontier"]["deferred_resume_candidates"][0]["resume_ready"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_status_agent_lane_fails_closed_after_exhausted_canonical_source_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    import loopx.cli_commands.status as status_cli_module
+
+    registry, runtime, log_path = _write_pr_wait_status_fixture(
+        tmp_path, provider=provider, seed_rollout_log=True
+    )
+    original_attach = status_cli_module.attach_agent_lane_next_actions
+    propagate_flags: list[bool] = []
+
+    def append_twice_before_attach(payload: dict[str, object], **kwargs: Any) -> dict[str, object]:
+        attempt_idx = len(propagate_flags)
+        propagate_flags.append(bool(kwargs.get("propagate_stale_canonical_source", True)))
+        if attempt_idx == 0:
+            append_rollout_event(
+                log_path,
+                build_rollout_event(
+                    goal_id=GOAL_ID,
+                    event_kind="evidence_log_read",
+                    agent_id=AGENT_ID,
+                    status="completed",
+                    summary="First concurrent log event before quota batch.",
+                    recorded_at="2026-11-24T10:04:00Z",
+                ),
+            )
+        elif attempt_idx == 1:
+            append_rollout_event(
+                log_path,
+                build_rollout_event(
+                    goal_id=GOAL_ID,
+                    event_kind="pr_merge",
+                    agent_id=AGENT_ID,
+                    pr_ref=f"{REPO_SLUG}#41",
+                    status="merged",
+                    summary="Second concurrent log event (PR 41 merged) during retry.",
+                    recorded_at="2026-11-24T10:05:00Z",
+                ),
+            )
+        return original_attach(payload, **kwargs)
+
+    monkeypatch.setattr(status_cli_module, "attach_agent_lane_next_actions", append_twice_before_attach)
+    exit_code, payload, rendered_md = _run_status_cli_with_exit(
+        registry, runtime, agent_id=AGENT_ID
+    )
+
+    assert propagate_flags == [True, True]
+    assert exit_code == 1
+    assert payload["ok"] is False
+    assert payload["code"] == "quota_canonical_source_changed"
+    assert payload["error_code"] == "quota_canonical_source_changed"
+    assert payload["retry_attempts"] == 2
+    assert payload["registry"] == str(registry)
+    assert payload["runtime_root"] == str(runtime)
+    assert "quota canonical source changed" in str(payload.get("error") or "")
+    assert payload["attention_queue"]["available"] is False
+    assert payload["attention_queue"]["items"][0]["status"] == "status_collection_failed"
+    assert "agent_todos" not in payload["attention_queue"]["items"][0]
+    assert "- ok: `False`" in rendered_md
+    assert "status_collection_failed" in rendered_md
+
+    # Subsequent clean read with no concurrent append succeeds and exposes ready frontier.
+    clean_payload, _ = _run_status_cli(registry, runtime, agent_id=AGENT_ID)
+    assert clean_payload["ok"] is True
+    clean_item = clean_payload["attention_queue"]["items"][0]
+    assert clean_item["agent_todos"]["items"][0]["resume_ready"] is True
+    assert clean_item["project_asset"]["agent_scope_frontier"]["action"] == "successor_replan_required"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_review_packet_fails_closed_after_exhausted_canonical_source_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    import loopx.cli_commands.status as status_cli_module
+
+    registry, runtime, log_path = _write_pr_wait_status_fixture(
+        tmp_path, provider=provider, seed_rollout_log=True
+    )
+    original_attach = status_cli_module.attach_agent_lane_next_actions
+    calls = 0
+
+    def append_twice_before_attach(payload: dict[str, object], **kwargs: Any) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            append_rollout_event(
+                log_path,
+                build_rollout_event(
+                    goal_id=GOAL_ID,
+                    event_kind="evidence_log_read",
+                    agent_id=AGENT_ID,
+                    status="completed",
+                    summary=f"Concurrent log event #{calls} during review packet.",
+                    recorded_at=f"2026-11-24T10:0{calls}:00Z",
+                ),
+            )
+        return original_attach(payload, **kwargs)
+
+    monkeypatch.setattr(status_cli_module, "attach_agent_lane_next_actions", append_twice_before_attach)
+    captured: list[dict[str, Any]] = []
+    args = argparse.Namespace(
+        limit=5,
+        handoff_only=False,
+        goal_id=GOAL_ID,
+        available_capabilities=["shell"],
+        agent_id=AGENT_ID,
+        action_kind=None,
+        review_url=None,
+        review_packet_format="json",
+    )
+    exit_code = handle_review_packet_command(
+        args,
+        registry_path=registry,
+        runtime_root_arg=str(runtime),
+        output_format=lambda _args, _attr=None: "json",
+        print_payload=lambda value, _fmt, _renderer: captured.append(value),
+    )
+
+    assert calls == 2
+    assert exit_code == 1
+    assert len(captured) == 1
+    assert captured[0]["ok"] is False
+    assert captured[0]["code"] == "quota_canonical_source_changed"
+    assert captured[0]["error_code"] == "quota_canonical_source_changed"
+    assert captured[0]["retry_attempts"] == 2
+    assert captured[0]["goal_id"] == GOAL_ID
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

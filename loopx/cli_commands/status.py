@@ -195,6 +195,43 @@ def handle_check_command(
     return 0 if payload.get("ok") else 1
 
 
+_STATUS_CANONICAL_SOURCE_MAX_ATTEMPTS = 2
+
+
+def _attach_agent_lane_for_attempt(
+    payload: dict[str, object],
+    *,
+    agent_id: str,
+    attempt: int,
+    max_attempts: int = _STATUS_CANONICAL_SOURCE_MAX_ATTEMPTS,
+) -> bool:
+    """Attach agent-lane actions, retrying stale canonical snapshots up to the ceiling."""
+    try:
+        attach_agent_lane_next_actions(
+            payload,
+            agent_id=agent_id,
+            propagate_stale_canonical_source=True,
+        )
+    except StaleCanonicalQuotaSourceError:
+        if attempt + 1 < max_attempts:
+            return False
+        raise
+    return True
+
+
+def _annotate_status_collection_error(
+    payload: dict[str, object], exc: BaseException
+) -> None:
+    """Attach typed error fields for known status-collection failures."""
+    if isinstance(exc, LocalCoordinationAuthorityUnavailable):
+        payload["error_code"] = exc.code
+        payload["authority_read"] = exc.payload
+    elif isinstance(exc, StaleCanonicalQuotaSourceError):
+        payload["code"] = "quota_canonical_source_changed"
+        payload["error_code"] = "quota_canonical_source_changed"
+        payload["retry_attempts"] = _STATUS_CANONICAL_SOURCE_MAX_ATTEMPTS
+
+
 def handle_status_command(
     args: argparse.Namespace,
     *,
@@ -216,7 +253,7 @@ def handle_status_command(
         payload = None
         cache_metadata = None
         with effect_runtime_request_scope():
-            for attempt in range(2):
+            for attempt in range(_STATUS_CANONICAL_SOURCE_MAX_ATTEMPTS):
                 payload = None
                 cache_metadata = None
                 if attempt == 0 and args.use_projection_cache:
@@ -256,13 +293,11 @@ def handle_status_command(
                     elif cache_metadata:
                         payload["projection_cache"] = cache_metadata
                 if args.agent_id:
-                    try:
-                        attach_agent_lane_next_actions(
-                            payload,
-                            agent_id=args.agent_id,
-                            propagate_stale_canonical_source=attempt == 0,
-                        )
-                    except StaleCanonicalQuotaSourceError:
+                    if not _attach_agent_lane_for_attempt(
+                        payload,
+                        agent_id=args.agent_id,
+                        attempt=attempt,
+                    ):
                         continue
                     _trim_run_history_for_status_display(
                         payload,
@@ -311,9 +346,7 @@ def handle_status_command(
                 ],
             },
         }
-        if isinstance(exc, LocalCoordinationAuthorityUnavailable):
-            payload["error_code"] = exc.code
-            payload["authority_read"] = exc.payload
+        _annotate_status_collection_error(payload, exc)
     print_payload(
         display_report_value(payload),
         output_format(args),
@@ -684,7 +717,7 @@ def attach_agent_lane_next_actions(
     payload: dict[str, object],
     *,
     agent_id: str,
-    propagate_stale_canonical_source: bool = False,
+    propagate_stale_canonical_source: bool = True,
 ) -> dict[str, object]:
     safe_agent_id = str(agent_id or "").strip()
     if not safe_agent_id:
@@ -937,26 +970,25 @@ def handle_review_packet_command(
 ) -> int:
     selected_format = output_format(args, "review_packet_format")
     try:
-        for attempt in range(2):
-            status_payload = collect_status(
-                registry_path=registry_path,
-                runtime_root_override=runtime_root_arg,
-                limit=max(0, args.limit),
-                include_task_graph=not args.handoff_only,
-                goal_id=args.goal_id,
-                available_capabilities=args.available_capabilities,
-                agent_lane_id=args.agent_id,
-            )
-            if args.agent_id:
-                try:
-                    attach_agent_lane_next_actions(
+        with effect_runtime_request_scope():
+            for attempt in range(_STATUS_CANONICAL_SOURCE_MAX_ATTEMPTS):
+                status_payload = collect_status(
+                    registry_path=registry_path,
+                    runtime_root_override=runtime_root_arg,
+                    limit=max(0, args.limit),
+                    include_task_graph=not args.handoff_only,
+                    goal_id=args.goal_id,
+                    available_capabilities=args.available_capabilities,
+                    agent_lane_id=args.agent_id,
+                )
+                if args.agent_id:
+                    if not _attach_agent_lane_for_attempt(
                         status_payload,
                         agent_id=args.agent_id,
-                        propagate_stale_canonical_source=attempt == 0,
-                    )
-                except StaleCanonicalQuotaSourceError:
-                    continue
-            break
+                        attempt=attempt,
+                    ):
+                        continue
+                break
         if args.handoff_only:
             payload = build_project_agent_handoff(
                 status_payload, goal_id=args.goal_id, action_kind=args.action_kind,
@@ -972,6 +1004,7 @@ def handle_review_packet_command(
             "goal_id": args.goal_id,
             "error": str(exc),
         }
+        _annotate_status_collection_error(payload, exc)
     if args.handoff_only:
         payload = review_packet_handoff_only_payload(payload)
     if args.handoff_only and selected_format != "json" and payload.get("ok"):
