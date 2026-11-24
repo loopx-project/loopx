@@ -8792,6 +8792,8 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
         "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
         "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
     _atomic_write_json(pending, {"status": "pending"})
+    cached_after = old.stat().st_ctime_ns + 3_000_000_000
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery.time_ns", lambda: cached_after)
     assert transport.pending_delivery_paths() == [pending]
     reads.clear()
     assert transport.pending_delivery_paths() == [pending] and reads == [pending]
@@ -8814,6 +8816,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
 def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
     import os
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_delivery_discovery as discovery
 
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
@@ -8823,8 +8826,13 @@ def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_pa
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
     path = tmp_path / "original.json"
     _atomic_write_json(path, {"status": "delivered"})
-    assert transport.pending_delivery_paths() == []
     before = path.stat()
+    if not replace:
+        # A filesystem may give multiple writes an identical change time.
+        observed = (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns, before.st_size)
+        monkeypatch.setattr(discovery, "file_change_fingerprint", lambda _path: observed)
+        monkeypatch.setattr(discovery, "time_ns", lambda: before.st_ctime_ns + 1)
+    assert transport.pending_delivery_paths() == []
     body = path.read_bytes().replace(b'delivered', b'uncertain')
     if replace:
         other = tmp_path / "replacement.tmp"
