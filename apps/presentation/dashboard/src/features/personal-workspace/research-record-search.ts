@@ -78,9 +78,9 @@ export function validResearchDateRange({from, to}: ResearchDateRange): boolean {
 /** Validate the source wall-clock fields before Date.parse can normalize them.
  * A malformed or timezone-less timestamp remains readable without a date filter. */
 function recordedResearchTime(value: string): number {
-  const parts = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
+  const parts = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/.exec(value);
   if (!parts || !validResearchDate(parts[1]) || Number(parts[2]) > 23
-      || Number(parts[3]) > 59 || Number(parts[4]) > 59
+      || Number(parts[3]) > 59 || (parts[4] !== undefined && Number(parts[4]) > 59)
       || (parts[5] && (Number(parts[6]) > 23 || Number(parts[7]) > 59))) return NaN;
   return Date.parse(value);
 }

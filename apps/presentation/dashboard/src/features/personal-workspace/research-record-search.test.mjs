@@ -131,3 +131,12 @@ test("recorded instants require a real source calendar and clock before UTC conv
   assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {from: "2024-03-01", to: "2024-03-01"}), [leap]);
   assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {to: "2024-02-29"}), []);
 });
+
+test("explicitly zoned minute precision shares UTC-day selection with second precision", () => {
+  const dates = ["2026-03-02T10:15Z", "2026-03-03T01:05+02:00", "2026-03-03T01:00:00+02:00"];
+  const valid = dates.map((recorded_at, index) => record({event_id: `valid-${index}`, recorded_at}));
+  const invalid = ["2026-02-30T10:15Z", "1900-02-29T10:15Z", "2026-03-02T24:00Z", "2026-03-02T10:60Z", "2026-03-02T10:15+24:00", "2026-03-02T10:15+02:60", "2026-03-02T10:15"].map(recorded_at => record({recorded_at}));
+  const rows = [...valid, ...invalid];
+  assert.deepEqual(searchResearchRecords(rows, "", "", undefined, {from: "2026-03-02", to: "2026-03-02"}), valid);
+  assert.deepEqual(searchResearchRecords(rows, ""), rows);
+});
