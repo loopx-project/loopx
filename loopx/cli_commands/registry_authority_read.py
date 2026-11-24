@@ -5,7 +5,8 @@ from pathlib import Path
 import unicodedata
 from typing import cast
 
-from ..authority import find_goal_index, normalize_project_materials, normalize_topic_authority
+from ..authority import find_goal_index, normalize_project_materials
+from ..control_plane.agents.material_frontier import authority_topic_index
 from ..control_plane.projects.registry_codec import load_project_registry
 
 
@@ -25,12 +26,24 @@ def list_authority_sources(
     authority = goal.get("authority_registry") or {}
     if not isinstance(authority, dict):
         raise ValueError("authority_registry must be an object")
+    if "project_materials" not in authority and (
+        "project_material_count" in authority or goal.get("source_registry")
+    ):
+        return {
+            "ok": False, "goal_id": goal_id, "read_only": True,
+            "error_code": "authority_source_details_unavailable",
+            "error": "This registry snapshot contains a material summary, not source details.",
+            "recovery": "Select the authoritative project registry explicitly with --registry and repeat the query; no source registry was opened automatically.",
+            "summary_source_count": authority.get("project_material_count"),
+            "source_count": None, "matched_count": None, "returned_count": 0,
+            "sources": [], "next_offset": None,
+        }
     materials = normalize_project_materials(authority.get("project_materials"))
-    topics = normalize_topic_authority(authority.get("topic_authority"))
+    _, material_topics = authority_topic_index(authority)
     terms = _search_text(query).split()
     rows: list[dict[str, object]] = []
     for source_id, material in sorted(materials.items()):
-        source_topics = sorted(key for key, value in topics.items() if value == source_id)
+        source_topics = sorted(material_topics.get(source_id, []))
         if topic is not None and topic not in source_topics:
             continue
         # The registered metadata contract, not arbitrary document/registry fields.
@@ -62,7 +75,12 @@ def list_authority_sources(
 def render_authority_sources_markdown(payload: dict[str, object]) -> str:
     lines = ["# Registered Goal Materials", ""]
     if not payload.get("ok"):
-        return "\n".join([*lines, str(payload.get("error")), ""])
+        lines.append(str(payload.get("error")))
+        if "summary_source_count" in payload:
+            lines.append(f"Summary source count: {payload['summary_source_count']} (details unavailable).")
+        if payload.get("recovery"):
+            lines.append(str(payload["recovery"]))
+        return "\n".join([*lines, ""])
     lines.extend([
         f"Goal: `{payload['goal_id']}`",
         f"Showing {payload['returned_count']} of {payload['matched_count']} matches "

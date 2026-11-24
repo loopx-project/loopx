@@ -78,6 +78,11 @@ metadata, including `needs_access` and historical material. Register/update the
 source through its existing workflow when those facts change. The command
 reads the explicitly selected registry snapshot; select the project's source
 registry rather than a global summary when looking for its complete inventory.
+Summary-only snapshots return `authority_source_details_unavailable` with the
+recorded summary count and an explicit project-registry recovery instruction,
+even when that count is zero; unavailable details are not an empty inventory.
+Topic lookup uses the material frontier's existing string, object and list
+reference interpretation for displayed topics, exact filters and text search.
 Registration retains only a source-reference kind and digest, not its original
 URL/path. Use the original DOC_REGISTRY or authorized connector to locate and
 check the document, then reuse its listed source ID with

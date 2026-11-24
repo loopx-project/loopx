@@ -111,3 +111,81 @@ def test_missing_goal_and_unreadable_registry_fail_without_creating_state(tmp_pa
     result = run(registry, "authority-sources", "--goal-id", "missing")
     assert result.returncode != 0
     assert registry.read_text() == "not json"
+
+
+@pytest.mark.parametrize("format", ["json", "markdown"])
+def test_synced_summary_is_unavailable_not_empty_and_does_not_follow_source(registry: Path, format: str):
+    runtime = registry.parent / "runtime"
+    synced = run(registry, "--runtime-root", str(runtime), "register-authority-source",
+                 "--goal-id", "materials", "--source-id", "a-guide", "--source-kind", "doc",
+                 "--role", "Installation guide", "--freshness", "current")
+    assert synced.returncode == 0, synced.stdout + synced.stderr
+    shared = runtime / "registry.global.json"
+    before = shared.read_bytes()
+    # The recovery route must be explicit: even a missing project registry must
+    # not cause this read to open/fetch the recorded source_registry.
+    registry.rename(registry.with_suffix(".saved"))
+    result = run(shared, "authority-sources", "--goal-id", "materials", format=format)
+    assert result.returncode != 0
+    if format == "json":
+        payload = json.loads(result.stdout)
+        assert payload["error_code"] == "authority_source_details_unavailable"
+        assert payload["source_count"] is None
+        assert payload["summary_source_count"] == 3
+        assert "project registry" in payload["recovery"]
+    else:
+        assert "project registry" in result.stdout
+        assert "summary" in result.stdout
+        assert "0 registered sources" not in result.stdout
+    assert shared.read_bytes() == before
+    assert not registry.exists()
+
+
+@pytest.mark.parametrize("format", ["json", "markdown"])
+def test_empty_project_still_reports_zero(registry: Path, format: str):
+    result = run(registry, "authority-sources", "--goal-id", "empty", format=format)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if format == "json":
+        assert json.loads(result.stdout)["source_count"] == 0
+    else:
+        assert "0 registered sources" in result.stdout
+    from loopx.global_registry import sync_project_registry_to_global
+
+    runtime = registry.parent / "empty-runtime"
+    sync_project_registry_to_global(registry_path=registry, goal_id="empty",
+                                    runtime_root_override=str(runtime))
+    summary = run(runtime / "registry.global.json", "authority-sources", "--goal-id", "empty", format=format)
+    assert summary.returncode != 0
+    if format == "json":
+        payload = json.loads(summary.stdout)
+        assert payload["summary_source_count"] == 0
+        assert payload["source_count"] is None
+    else:
+        assert "details unavailable" in summary.stdout
+        assert "0 registered sources" not in summary.stdout
+
+
+@pytest.mark.parametrize("format", ["json", "markdown"])
+def test_topic_string_object_and_list_have_identical_display_filter_search(registry: Path, format: str):
+    payload = json.loads(registry.read_text())
+    payload["goals"][0]["authority_registry"]["topic_authority"] = {
+        "single": "a-guide", "object": {"material_id": "b-paper"},
+        "bundle": [{"source_id": "b-paper"}, {"id": "c-review"}, "b-paper"],
+    }
+    registry.write_text(json.dumps(payload), encoding="utf-8")
+    before = registry.read_bytes()
+    for topic, expected in [("single", ["a-guide"]), ("object", ["b-paper"]),
+                            ("bundle", ["b-paper", "c-review"])]:
+        for selector in ("--topic", "--query"):
+            result = run(registry, "authority-sources", "--goal-id", "materials", selector, topic, format=format)
+            assert result.returncode == 0, result.stdout + result.stderr
+            if format == "json":
+                rows = json.loads(result.stdout)["sources"]
+                assert [row["id"] for row in rows] == expected
+                assert all(row["topics"].count(topic) == 1 for row in rows)
+            else:
+                assert [line[3:] for line in result.stdout.splitlines() if line.startswith("## ")] == expected
+                assert topic in result.stdout
+    page = read(registry, "--topic", "bundle", "--query", "review", "--limit", "1")
+    assert [row["id"] for row in page["sources"]] == ["c-review"]
+    assert registry.read_bytes() == before

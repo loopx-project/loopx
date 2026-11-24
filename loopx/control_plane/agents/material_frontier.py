@@ -128,7 +128,8 @@ def _topic_material_ids(value: Any) -> list[str]:
     return material_ids
 
 
-def _topic_index(authority_registry: Mapping[str, Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def authority_topic_index(authority_registry: Mapping[str, Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Interpret registered string/object/list references for every material reader."""
     raw_topics = authority_registry.get("topic_authority")
     if not isinstance(raw_topics, Mapping):
         return {}, {}
@@ -486,7 +487,7 @@ def build_agent_material_frontier(
     if safe_generated_at and parse_timestamp(safe_generated_at) is None:
         raise ValueError("generated_at must be an ISO timestamp")
     materials = _project_materials(authority_registry)
-    topic_materials, material_topics = _topic_index(authority_registry)
+    topic_materials, material_topics = authority_topic_index(authority_registry)
     requirements = _collect_requirements(
         agent_id=safe_agent_id,
         topic_materials=topic_materials,
