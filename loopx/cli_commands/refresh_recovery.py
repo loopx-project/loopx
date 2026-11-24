@@ -71,8 +71,9 @@ def attach_refresh_settlement_recovery(
             identity, registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
             available_capabilities=args.available_capabilities or (),
         )
+        checkpoint_command = recovery["settlement_progress"].get("checkpoint_context_command")
         recovery.update(required=True, settlement_identity=identity.as_dict(),
-            next_cli_actions=[owed["command"] if isinstance(owed, dict) else command],
+            next_cli_actions=[owed["command"] if isinstance(owed, dict) else checkpoint_command or command],
             instruction="This response does not settle the original Turn. Follow its recovery with the same identity; "
                         "state-only updates and installation maintenance cannot replace accountable writeback.")
         payload["settlement_recovery"] = recovery

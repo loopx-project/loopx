@@ -310,6 +310,7 @@ def qualify_replan_writeback(
     agent_id: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None = None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None = None,
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
@@ -479,6 +480,7 @@ def qualify_replan_writeback(
         progress_observation=progress_observation,
         agent_vision=agent_vision,
         history_runs=newest_first_runs,
+        recovering_writeback_path=recovering_writeback_path,
     )
     if (
         "coverage_backed_no_followup"
@@ -506,6 +508,7 @@ def enforce_open_replan_writeback(
     agent_id: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None = None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None = None,
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
@@ -540,6 +543,7 @@ def enforce_open_replan_writeback(
         agent_id=agent_id,
         goal_id=goal_id,
         progress_observation=progress_observation,
+        recovering_writeback_path=recovering_writeback_path,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
         effective_turn_cadence=effective_turn_cadence,
@@ -610,6 +614,7 @@ def qualify_refresh_replan_writeback(
     state_text: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None,
     external_progress_review: Mapping[str, Any] | None = None,
     effective_turn_cadence: dict[str, Any] | None = None,
@@ -680,6 +685,7 @@ def qualify_refresh_replan_writeback(
         agent_id=agent_id,
         goal_id=goal_id,
         progress_observation=progress_observation,
+        recovering_writeback_path=recovering_writeback_path,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
         effective_turn_cadence=effective_turn_cadence,

@@ -878,6 +878,7 @@ def refresh_state_run(
         refresh_recovery = None
         prior_writeback_run = None
         checkpoint_supplement = False
+        recovering_writeback_path = None
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
             if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
                 require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
@@ -943,6 +944,13 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            if (
+                checkpoint_supplement
+                and refresh_recovery["reason"] == "complete_missing_replan_qualification_on_original_turn"
+            ):
+                recovering_writeback_path = (prior_writeback_run or {}).get("json_path")
+                if not isinstance(recovering_writeback_path, str) or not recovering_writeback_path:
+                    raise ValueError("the original blocked writeback has no indexed artifact path")
             checkpoint_replay = None
             if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
                 checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
@@ -1188,6 +1196,7 @@ def refresh_state_run(
             state_text=state_text,
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
+            recovering_writeback_path=recovering_writeback_path,
             registry_goal=effective_replan_goal,
             effective_turn_cadence=effective_turn_cadence_context(
                 effective_replan_goal, runtime_root,

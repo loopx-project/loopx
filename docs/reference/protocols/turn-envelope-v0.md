@@ -397,6 +397,19 @@ controls first and follow any required reader under `quota_spend`. If the
 failure capture cannot be saved, the result returns its original failure controls
 with `result_delivery_error`.
 
+An older blocked writeback may already contain the observation while its
+original replan qualification is still missing. An exact checkpoint supplement
+treats that one indexed observation as its current input when checking novelty.
+Independent historical claims remain in the check, and the supplement leaves
+the original writeback and quota ledger intact. Original-Turn reentry exposes
+the bound `checkpoint-context` command as the remaining action; quota spend
+refuses until the qualification is resolved.
+
+中文：旧版阻塞写回可能已保存原观察，但尚未完成原重规划验收。补写原检查点时，
+新颖性检查把这条已索引观察作为当前输入，同时保留对其他历史记录的去重检查。
+补写保留原写回与额度账本。重进原轮时，宿主直接给出绑定该轮的
+`checkpoint-context` 命令，验收缺失时额度入口拒绝扣费。
+
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
 write semantic closeout with an evidence-linked vision decision on the original

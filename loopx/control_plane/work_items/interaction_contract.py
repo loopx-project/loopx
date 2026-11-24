@@ -866,6 +866,9 @@ def _admitted_interaction_next_cli_actions(
     registry_path: str | None = None,
     recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> list[str]:
+    progress = _as_mapping(payload.get("settlement_progress"))
+    if isinstance(command := progress.get("checkpoint_context_command"), str):
+        return [command]
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
     agent_identity = _as_mapping(payload.get("agent_identity"))
@@ -1397,6 +1400,14 @@ def _build_interaction_cli_channel(
     registry_path: str | None = None,
     recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    progress = _as_mapping(payload.get("settlement_progress"))
+    if isinstance(command := progress.get("checkpoint_context_command"), str):
+        return {
+            "next_cli_actions": [command],
+            "spend_allowed_now": False,
+            "spend_after_validation": False,
+            "spend_policy": "Recover the original blocked checkpoint before settlement.",
+        }
     if selection_recovery_required:
         return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
             payload, available_capabilities=available_capabilities,

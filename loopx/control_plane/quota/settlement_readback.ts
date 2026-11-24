@@ -1533,6 +1533,9 @@ function readQuotaSettlementFromRequest(
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
   const semanticReplanGuard = projectSemanticReplanGuard(receiptDetails);
+  const missingBlockedReplanQualification = writeback.failure === null && spendRun === null && spendEvent === null &&
+    semanticReplanGuard.selected_obligation_id === identity.replan_obligation_id &&
+    isUnqualifiedBlockedReplanWriteback(writebackRun, identity);
   // The exact Turn-bound blocked writeback is itself a durable no-spend
   // closeout. It cannot certify Todo completion or become delivery progress.
   // A spend already committed for this identity remains an ordinary spend
@@ -1600,8 +1603,12 @@ function readQuotaSettlementFromRequest(
   // still owed, the Turn is settlement_pending regardless of optional boundary
   // or checkpoint flags; completed spends without those proofs remain open.
   const spendPendingAfterWriteback = writeback.failure === null && spend.failure !== null;
-  const progress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
+  const receiptProgress = settlementProgress(identityResult, writeback, spend, writebackRun, spendRun,
     receiptDetails.quota_spend_source ?? spendRun?.source, noSpendKind);
+  const progress = missingBlockedReplanQualification
+    ? {...receiptProgress, state: "writeback_required", next_step: "durable_writeback",
+      checkpoint_recovery_required: true}
+    : receiptProgress;
   // The Run can commit before the CLI records its refresh event. Its original
   // Todo still owes receipt repair even when the Todo itself remains open.
   const pendingTodoReceipt = identity.binding_kind === "todo" && progress.state === "writeback_receipt_required";
@@ -1629,9 +1636,7 @@ function readQuotaSettlementFromRequest(
       run.goal_id === identity.goal_id && run.agent_id === identity.agent_id &&
       (jsonObject(run.agent_vision) !== null || jsonObject(run.vision_checkpoint)?.required === true)
     ),
-    writeback.failure === null && spendRun === null && spendEvent === null &&
-      semanticReplanGuard.selected_obligation_id === identity.replan_obligation_id &&
-      isUnqualifiedBlockedReplanWriteback(writebackRun, identity),
+    missingBlockedReplanQualification,
   );
   // A non-material poll need not appear as findWriteback's advancement run.
   // Its exact committed observation still fences an incompatible unavailable
@@ -1861,6 +1866,9 @@ function originalSpendRejection(
   ledger: SpendTerms, receipt: SpendTerms,
 ): SettlementResult<JsonObject> | null {
   const progress = requireJsonObject(readback.progress, "quota settlement progress");
+  if (progress.checkpoint_recovery_required === true) {
+    return rejectedSpend("the original blocked writeback requires replan qualification; run checkpoint-context for this same Turn");
+  }
   const guard = jsonObject(readback.heartbeat_receipt);
   const authorizedSource = guard ? details(guard).quota_spend_source : null;
   // Older ledgers can have a rollout receipt but no readable artifact. Keep
