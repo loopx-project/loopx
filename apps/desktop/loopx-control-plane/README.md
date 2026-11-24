@@ -548,12 +548,26 @@ Self-service:
    The App runs the `node` from the first search path entry that holds one,
    for example a `~/.local/bin/node` ahead of every Homebrew location, and
    Diagnostics report the version but not the path. Check that order, then
-   update the winning entry: upgrade it in place, or point it at the supported
-   installation with
-   `ln -sf /opt/homebrew/opt/node@24/bin/node ~/.local/bin/node`
-   (`/usr/local/opt/node@24/bin/node` with Intel Homebrew). `node_found` of
-   `true` with no `node_version` means the App found a `node` it could not read
-   a version from; replace it with a supported release the same way.
+   update the winning entry. Point it at a supported Node you have confirmed,
+   such as `/opt/homebrew/opt/node@24/bin/node` after `brew install node@24`
+   (`/usr/local/opt/node@24/bin/node` with Intel Homebrew) or the path your own
+   supported Node is installed at, and keep the old file. Do not use `ln -sf`
+   on its own: it succeeds even when its target is missing and leaves a
+   dangling link in place of the original.
+
+   ```bash
+   node=<supported node binary> &&
+   "$node" --version &&
+   mv ~/.local/bin/node ~/.local/bin/node.before-loopx &&
+   ln -s "$node" ~/.local/bin/node
+   ```
+
+   The first two lines stop the sequence when that binary is missing. Read the
+   version they print and continue only for 22.22.3 or newer; the old file is
+   kept as `node.before-loopx` either way. `node_found` of `true` with no
+   `node_version` means the App found a `node` it could not read a version
+   from: inspect that entry with `ls -l` and the same `--version` call before
+   replacing it the same way.
 4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
    environment reading refreshes every 30 seconds, or reopen the App.
    `node --version` in a terminal only verifies the interactive shell, which
