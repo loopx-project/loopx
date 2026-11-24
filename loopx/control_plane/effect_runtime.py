@@ -304,6 +304,11 @@ def _read_source_digest(path: Path, key: str) -> str | None:
     return fingerprint
 
 
+def _source_snapshot_is_settled(snapshot: _RuntimeSourceSnapshot) -> bool:
+    settled_before = time.time_ns() - _SOURCE_DIGEST_SETTLE_NS
+    return all(max(mtime, ctime) <= settled_before for _name, mtime, ctime, _size in snapshot)
+
+
 def _write_source_digest(
     path: Path,
     key: str,
@@ -312,8 +317,7 @@ def _write_source_digest(
 ) -> None:
     """Best-effort publication into an existing private runtime namespace."""
 
-    settled_before = time.time_ns() - _SOURCE_DIGEST_SETTLE_NS
-    if any(max(mtime, ctime) > settled_before for _name, mtime, ctime, _size in snapshot):
+    if not _source_snapshot_is_settled(snapshot):
         return
     if not _private_directory(path.parent):
         return
@@ -346,15 +350,16 @@ def _require_unchanged_snapshot(root: Path, snapshot: _RuntimeSourceSnapshot) ->
         raise _RuntimeSourceChanged(current_snapshot)
 
 
-@lru_cache(maxsize=8)
-def _runtime_fingerprint_for_snapshot(
+def _hash_runtime_source_snapshot(
     root: str,
     snapshot: _RuntimeSourceSnapshot,
+    *,
+    use_digest_memo: bool,
 ) -> str:
     # A fresh CLI process would otherwise open every source; on hosts that scan
     # each open this dominates short commands. The record is only a memo.
     source_root = Path(root)
-    location = _source_digest_location(root, snapshot)
+    location = _source_digest_location(root, snapshot) if use_digest_memo else None
     if location is not None:
         recorded = _read_source_digest(*location)
         if recorded is not None:
@@ -391,6 +396,11 @@ def _runtime_fingerprint_for_snapshot(
     return fingerprint
 
 
+@lru_cache(maxsize=8)
+def _runtime_fingerprint_for_snapshot(root: str, snapshot: _RuntimeSourceSnapshot) -> str:
+    return _hash_runtime_source_snapshot(root, snapshot, use_digest_memo=True)
+
+
 def _runtime_fingerprint() -> str:
     root = _control_plane_root()
     resolved_root = os.fspath(root.resolve())
@@ -400,6 +410,9 @@ def _runtime_fingerprint() -> str:
         try:
             if snapshot is None:
                 snapshot = _runtime_source_snapshot(root)
+            if not _source_snapshot_is_settled(snapshot):
+                # Multiple equal-size writes can share a filesystem clock tick.
+                return _hash_runtime_source_snapshot(resolved_root, snapshot, use_digest_memo=False)
             return _runtime_fingerprint_for_snapshot(
                 resolved_root,
                 snapshot,
