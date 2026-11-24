@@ -174,3 +174,35 @@ def test_a_shared_hard_link_is_not_rewritten_outside_the_fixture(
                 # assertions above proved teardown did not do it.
                 os.chmod(source, stat.S_IWRITE)
                 remove_owned_tree(retained)
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_missing_interpreter_preserves_launch_and_cleanup_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cleanup_fails: bool,
+) -> None:
+    examples = tmp_path / "examples"
+    examples.mkdir()
+    (examples / "optional.mjs").write_text("console.log('fixture');\n")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(runner.tempfile, "tempdir", str(tmp_path))
+    removed = runner._remove_fixture_root
+    roots = []
+
+    def cleanup(root: Path) -> None:
+        roots.append(root)
+        if cleanup_fails:
+            raise OSError("fixture is busy")
+        removed(root)
+
+    monkeypatch.setattr(runner, "_remove_fixture_root", cleanup)
+    result = runner.run_canary_smoke_check(
+        {"command": "node examples/optional.mjs"}, repo_root=tmp_path, timeout_seconds=5,
+    )
+    assert result["status"] == "failed" and result["ok"] is False
+    assert result["returncode"] is None and result["stdout_tail"] == result["stderr_tail"] == ""
+    assert result["normalized"]["display_argv"] == ["node", "examples/optional.mjs"]
+    assert "could not start smoke check" in result["reason"]
+    assert len(roots) == 1 and roots[0].exists() is cleanup_fails
+    assert ("fixture is busy" in result["reason"]) is cleanup_fails
+    markdown = runner.render_canary_smoke_suite_run_markdown({"selected_checks": [result]})
+    assert result["reason"] in markdown
