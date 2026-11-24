@@ -132,8 +132,12 @@ function arraySpliceOperations(
   next: readonly unknown[],
   path: AuthorityStatePath,
 ): AuthorityStateOperation[] {
-  const previousBytes = previous.map(item => canonicalAuthorityBytes(item));
-  const nextBytes = next.map(item => canonicalAuthorityBytes(item));
+  // Array holes persist as null, while an explicit undefined remains invalid.
+  // Compare every index, including holes, using those same persisted bytes.
+  const previousBytes = Array.from(previous, (item, index) =>
+    canonicalAuthorityBytes(Object.hasOwn(previous, index) ? item : null));
+  const nextBytes = Array.from(next, (item, index) =>
+    canonicalAuthorityBytes(Object.hasOwn(next, index) ? item : null));
   const shared = Math.min(previousBytes.length, nextBytes.length);
   let prefix = 0;
   while (prefix < shared && previousBytes[prefix]!.equals(nextBytes[prefix]!)) prefix += 1;
@@ -143,7 +147,8 @@ function arraySpliceOperations(
     suffix += 1;
   }
   const removed = previousBytes.length - prefix - suffix;
-  const inserted = next.slice(prefix, nextBytes.length - suffix);
+  const inserted = Array.from({length: nextBytes.length - prefix - suffix}, (_, index) =>
+    Object.hasOwn(next, prefix + index) ? next[prefix + index] : null);
   if (removed === 0 && inserted.length === 0) return [];
   return [{op: "splice", path, index: prefix, remove: removed, insert: inserted}];
 }
