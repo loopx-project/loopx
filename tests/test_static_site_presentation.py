@@ -223,6 +223,25 @@ def test_package_rejects_unlabeled_ai_provider_tokens(tmp_path: Path, prefix: st
     assert not destination.exists()
 
 
+def test_package_scans_large_text_assets_before_certifying_them_public_safe(
+    tmp_path: Path,
+) -> None:
+    site = _site(tmp_path)
+    token = "ghp_" + "a" * 36
+    large_report = site / "large-report.txt"
+    large_report.write_text(
+        "A" * 2_000_001 + "\ntoken=" + token + "\n", encoding="utf-8"
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(
+        StaticSiteContractError,
+        match="public boundary scan failed for large-report.txt: provider token",
+    ):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
 def test_package_rejects_reserved_paths_symlinks_and_public_boundary_leaks(
     tmp_path: Path,
 ) -> None:
