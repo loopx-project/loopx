@@ -1063,11 +1063,21 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const replanRequired = context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
     && replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required"
     && replan.settlement_only !== true;
+  const stagedReview = typeof replan?.review === "string" && replan.review.length > 0;
+  const inlineReplan = replanRequired && !stagedReview && context.schema_version === "loopx_turn_envelope_v1";
+  const inlineVision = inlineReplan
+    && object(replan?.writeback_contract)?.preferred_input === "evidence_linked_vision_path";
   let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
-  if (replanRequired && typeof replan.review === "string" && replan.review) {
+  if (replanRequired && stagedReview) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (replanRequired && context.schema_version === "loopx_turn_envelope_v1") {
+  } else if (inlineReplan) {
+    if (inlineVision) {
+      // An inline replan has no later writer read to supply these inputs.
+      include("replan_action_packet", "writeback_contract");
+      for (const field of ["attachment", "required_fields", "minimal_example"])
+        include("replan_action_packet", "stride_control", field);
+    }
     // The complete contract already carries the review facts: use its own
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
@@ -1301,7 +1311,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
         include("interaction_contract", "cli_channel", field);
         // A task-facing operation and its declared continuation belong in the
         // same opening. Keep the existing exact settlement deduplication.
-        if (field === "next_cli_actions" && object(channel?.next_task_action) && pointers.length > before)
+        if (field === "next_cli_actions" && (inlineVision || object(channel?.next_task_action)) && pointers.length > before)
           opening.push(pointers.pop()!);
       }
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
