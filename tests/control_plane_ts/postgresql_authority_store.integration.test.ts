@@ -122,6 +122,47 @@ async function cleanScope(tenantId: string, goalId: string): Promise<void> {
 }
 
 if (database && installed) {
+  test("PostgreSQL rejects sparse transaction lists without changing the retained head", async t => {
+    await installed;
+    const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};
+    t.after(() => cleanScope(options.tenant_id, options.goal_id));
+    const store = new PostgreSqlAuthorityStore(database, options);
+    const seed = await store.commitAuthority({expected_provider_revision: null,
+      operation_id: "seed", events: [], receipts: [], next_projection: {state: "seed"}});
+    assert.equal(seed.status, "applied");
+    if (seed.status !== "applied") throw new Error("seed failed");
+    const before = await store.loadAuthority();
+    for (const field of ["events", "receipts"]) {
+      const request = {expected_provider_revision: seed.provider_revision,
+        operation_id: "corrected", events: [{}], receipts: [{}], next_projection: {state: "corrected"}};
+      if (field === "events") request.events = new Array<JsonObject>(1);
+      else request.receipts = new Array<JsonObject>(1);
+      const result = await store.commitAuthority(request);
+      assert.equal(result.status, "failed");
+      if (result.status === "failed") assert.equal(result.reason_code, "invalid_commit_request");
+      assert.deepEqual(await store.loadAuthority(), before);
+      assert.deepEqual(await store.readReceipt("corrected"), {status: "missing"});
+    }
+    const corrected = {expected_provider_revision: seed.provider_revision, operation_id: "corrected",
+      events: [{}], receipts: [{}], next_projection: {state: "corrected"}};
+    const applied = await store.commitAuthority(corrected);
+    assert.equal(applied.status, "applied");
+    if (applied.status !== "applied") throw new Error("corrected commit failed");
+    assert.equal(applied.cursor, "2");
+    const reader = new PostgreSqlAuthorityStore(database, options);
+    const loaded = await reader.loadAuthority();
+    assert.equal(loaded.status, "loaded");
+    if (loaded.status === "loaded") assert.deepEqual(loaded.head, {state: "corrected"});
+    const receipt = await reader.readReceipt("corrected");
+    assert.equal(receipt.status, "found");
+    if (receipt.status === "found") assert.deepEqual(receipt.receipts, [{}]);
+    const history = await reader.scanCommitted(null, 10);
+    assert.equal(history.status, "page");
+    if (history.status === "page") {
+      assert.deepEqual(history.transactions.map(row => row.operation_id), ["seed", "corrected"]);
+    }
+  });
+
   test("PostgreSQL canonical quota transaction binds one provider read and complete caller differences", async t => {
     await installed;
     const options = {tenant_id: `tenant-${randomUUID()}`, goal_id: `goal-${randomUUID()}`};

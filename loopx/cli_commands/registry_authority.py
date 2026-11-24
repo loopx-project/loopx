@@ -20,12 +20,21 @@ PrintPayload = Callable[
 ]
 
 REGISTRY_AUTHORITY_COMMANDS = {
+    "authority-sources",
     "register-authority-source",
     "import-doc-registry-authority",
 }
 
 
 def register_registry_authority_commands(subparsers: argparse._SubParsersAction) -> None:
+    sources = subparsers.add_parser(
+        "authority-sources", help="Find registered Goal material metadata without opening sources.",
+    )
+    sources.add_argument("--goal-id", required=True)
+    sources.add_argument("--query", default="", help="Match all whitespace-separated terms across metadata and topics.")
+    sources.add_argument("--topic", help="Exact registered topic key.")
+    sources.add_argument("--offset", type=int, default=0, help="Skip this many matches in stable source-id order.")
+    sources.add_argument("--limit", type=int, default=20, help="Maximum matches to return (1–100).")
     authority_parser = subparsers.add_parser(
         "register-authority-source",
         help="Register a redacted local authority/material source for a goal.",
@@ -125,6 +134,19 @@ def handle_registry_authority_command(
     registry_path: Path,
     print_payload: PrintPayload,
 ) -> int | None:
+    if args.command == "authority-sources":
+        from .registry_authority_read import list_authority_sources, render_authority_sources_markdown
+
+        try:
+            payload = list_authority_sources(
+                registry_path, args.goal_id, query=args.query, topic=args.topic,
+                offset=args.offset, limit=args.limit,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            payload = {"ok": False, "goal_id": args.goal_id, "read_only": True, "error": str(exc)}
+        print_payload(payload, args.format, render_authority_sources_markdown)
+        return 0 if payload["ok"] else 1
+
     if args.command == "register-authority-source":
         try:
             payload = register_authority_source(

@@ -4,7 +4,7 @@
     "schema_version": "loopx_turn_envelope_v1",
     "interaction_schema_version": "loopx_interaction_contract_v0"
   },
-  "public_channel": "historical",
+  "public_channel": "current",
   "historical": {
     "surface": "quota_packet",
     "schema_version": null,

@@ -29,7 +29,7 @@ from ...control_plane.goals.activation import goal_is_stopped
 from ...file_lock import exclusive_file_lock
 from ..issue_fix.repository_snapshot import _REPO_PATTERN
 from .github_pr_evidence import observe_github_repository_prs
-from .steward_commands import native_command
+from .steward_commands import NativeStewardCommandError, native_command
 from .steward_managed_mode import StewardManagedMode
 
 TARGET = "steward-portfolio-watch"
@@ -159,8 +159,12 @@ def monitor_turn_id(todo: dict[str, Any]) -> str:
 def advancement_turn_id(todo: dict[str, Any]) -> str:
     """Stable Turn instance identity per Todo revision for Steward follow-ups."""
     stamp = todo.get("updated_at") or todo.get("created_at") or "0"
+    note = str(todo.get("note") or "")
+    basis: list[Any] = [todo["todo_id"], stamp]
+    if note.startswith("rearm-followup:"):
+        basis.append(note)
     return "advancement." + hashlib.sha256(json.dumps(
-        [todo["todo_id"], stamp], sort_keys=True).encode()).hexdigest()[:40]
+        basis, sort_keys=True).encode()).hexdigest()[:40]
 
 
 def _zero_write_advancement_response(
@@ -281,6 +285,49 @@ def resolve_advancement_turn_id(
         ) is None:
             return retry_admission_token
     return None
+
+
+def is_exhausted_zero_write_followup_todo(
+    store: Any,
+    actor: Mapping[str, Any],
+    todo: dict[str, Any],
+    *,
+    now: float | None = None,
+) -> bool:
+    """Return True when an open monitor follow-up exhausted its per-revision retries with zero writes."""
+    from .steward_turn import native_steward_client_id
+
+    if (
+        todo.get("status") != "open"
+        or todo.get("task_class") != "advancement_task"
+        or not str(todo.get("target_key") or "").startswith(FOLLOWUP_TARGET_PREFIX)
+    ):
+        return False
+    if resolve_advancement_turn_id(store, actor, todo, now=now) is not None:
+        return False
+    base = advancement_turn_id(todo)
+    suffixes = (
+        "",
+        ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        ADVANCEMENT_ADMISSION_RETRY_SUFFIX + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX + ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
+    )
+    found_any = False
+    for suffix in suffixes:
+        turn = store.turn_for_client(
+            actor["session_id"],
+            native_steward_client_id(actor, base + suffix),
+        )
+        if turn is None:
+            continue
+        found_any = True
+        if not (
+            _is_precommit_retryable_advancement_turn(turn, now=now)
+            or _is_zero_effect_selection_deferred_advancement_turn(turn, now=now)
+        ):
+            return False
+    return found_any
 
 
 def _github_repo_slug(task_repository: Any) -> str | None:
@@ -479,7 +526,6 @@ class StewardMonitor:
         from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
         from ..explore.composition_frontier import project_live_explore_composition_frontier
         from ...quota import record_quota_monitor_poll
-        from .steward_commands import NativeStewardCommandError
 
         args = build_parser().parse_args(["--format", "json", *argv])
 
@@ -677,6 +723,55 @@ class StewardMonitor:
             ]
         return observation, successor_args
 
+    def _rearm_exhausted_followup_if_needed(
+        self, actor: dict[str, Any], monitor_todo: dict[str, Any], poll_turn_instance_id: str,
+    ) -> bool:
+        followup_key = f"{FOLLOWUP_TARGET_PREFIX}{monitor_todo['todo_id']}"
+        followup = next(
+            (
+                row for row in self.todos(actor)
+                if row.get("target_key") == followup_key and row.get("status") == "open"
+            ),
+            None,
+        )
+        if followup is None or not is_exhausted_zero_write_followup_todo(
+            self.controller.store, actor, followup,
+        ):
+            return False
+        rearm_key = f"rearm-followup.{poll_turn_instance_id}"
+        rearm_note = f"rearm-followup:{poll_turn_instance_id}"
+        if str(followup.get("note") or "") == rearm_note:
+            return False
+        conflicts = {"todo_lease_conflict", "version_mismatch"}
+        lease = None
+        try:
+            lease = self._acquire(actor, followup, rearm_key)["lease"]
+            native_command(self.controller, [
+                "todo", "update",
+                "--goal-id", actor["goal_id"],
+                "--role", "agent",
+                "--agent-id", actor["agent_id"],
+                "--todo-id", followup["todo_id"],
+                "--update-operation-id", rearm_key,
+                "--note", rearm_note,
+                "--task-lease-idempotency-key", rearm_key,
+                "--task-lease-expected-version", str(lease["version"]),
+                "--execute",
+            ])
+        except NativeStewardCommandError as exc:
+            if exc.payload.get("error_code") in conflicts:
+                return False
+            raise
+        finally:
+            if lease is not None:
+                try:
+                    self._release(actor, followup, lease)
+                except NativeStewardCommandError as exc:
+                    # A renewed lease belongs to its current generation. Preserve the update's outcome.
+                    if exc.payload.get("error_code") not in conflicts:
+                        raise
+        return True
+
     def observe(self, *, host: Any, request: dict[str, Any], turn: dict[str, Any],
                 context: dict[str, Any], todo: dict[str, Any]) -> dict[str, Any]:
         actor = request["actor"]
@@ -717,11 +812,20 @@ class StewardMonitor:
                 *successor_args])
         finally:
             self._release(actor, todo, lease)
-        if successor_args:
-            binding_id = actor["goal_id"].removeprefix("steward-agent-")
-            getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
         self.controller.store.append_event(turn["session_id"], turn["turn_id"],
             kind="native_loopx.monitor_poll", payload={"observation": observation, "receipt": result})
+        rearmed_followup = False
+        if (
+            actor.get("schema_version") != "loopx_managed_session_actor_v0"
+            and todo.get("target_key") != TARGET
+            and not successor_args
+        ):
+            rearmed_followup = self._rearm_exhausted_followup_if_needed(
+                actor, todo, request["turn_instance_id"],
+            )
+        if successor_args or rearmed_followup:
+            binding_id = actor["goal_id"].removeprefix("steward-agent-")
+            getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
         return {"schema_version": "loopx_chat_agent_response_v0", "message": "已检查授权 Goal 状态；覆盖缺口和原始请求继续保留。",
             "proposals": [], "gate": None, "native_loopx": {"ok": True, "status": "observed",
                 "model_invoked": False, "quota_spent": False, "monitor": observation, "receipt": result}}

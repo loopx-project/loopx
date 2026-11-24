@@ -19,7 +19,7 @@ from loopx.capabilities.native_chat.steward_turn import (
     StewardTurnHost,
     native_steward_client_id,
 )
-from loopx.chat_lark_api import manager_source_scope_resolver
+from loopx.chat.lark_api import manager_source_scope_resolver
 from loopx.control_plane.collaboration import conversation_scope
 from test_native_steward_managed_mode import original, storage
 from test_native_steward_monitor import edit_local_watch, local_watch_row

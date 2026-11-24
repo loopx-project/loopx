@@ -21,7 +21,7 @@ from typing import Any
 from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
-from ...file_lock import exclusive_file_lock
+from ...file_lock import LOCK_ACQUIRE_TIMEOUT_ERROR_CODE, exclusive_file_lock
 from .report_failure_proof import (
     build_report_quota_request,
     build_report_timeout_request,
@@ -48,9 +48,12 @@ _WORKER_EXITED_ERROR = (
 )
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
+    "the portfolio scope changed after observation",
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })
+_FILE_LOCK_TIMEOUT_ERROR_RE = re.compile(
+    r"^file lock acquisition timed out \((?:recorded holder pid [1-9]\d*|lock busy, current holder unknown)\)$")
 _USER_ACTION_DEDUPE_KEY = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{0,119}$")
 _REPORT_VALIDATOR_PREFIX = (
     "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
@@ -440,12 +443,14 @@ class StewardTurnHost:
         prior = original.get("loopx_request") or {}
         error = original.get("error_code")
         if (original.get("status") != "failed"
-                or error not in {"server_restarted", "runtime_error", "runtime_unavailable"}
+                or error not in {"server_restarted", "runtime_error", "runtime_unavailable", LOCK_ACQUIRE_TIMEOUT_ERROR_CODE}
                 or prior.get("work_kind") != "monitor"):
             return None
         if prior.get("monitor_restart_recovery") is not None and error != "server_restarted":
-            post_context_error = error == "runtime_unavailable" or (
-                error == "runtime_error" and original.get("error") in _POST_CONTEXT_WATCH_ERRORS
+            msg = original.get("error")
+            post_context_error = error in {"runtime_unavailable", LOCK_ACQUIRE_TIMEOUT_ERROR_CODE} or (
+                error == "runtime_error"
+                and (msg in _POST_CONTEXT_WATCH_ERRORS or (isinstance(msg, str) and _FILE_LOCK_TIMEOUT_ERROR_RE.fullmatch(msg) is not None))
             )
             completed_ts = _iso_timestamp_seconds(original.get("completed_at"))
             current_ts = time.time() if now is None else now
@@ -1337,8 +1342,12 @@ class StewardTurnHost:
 
         model_input = authority.get("_model_input")
         detail_ref = model_input.get("detail_ref") if isinstance(model_input, Mapping) else None
-        packet = authority.get("replan_action_packet") or (
-            detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        detail_packet = detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        auth_packet = authority.get("replan_action_packet")
+        packet = (
+            detail_packet
+            if isinstance(detail_packet, Mapping) and ("review" in detail_packet or "writeback" in detail_packet)
+            else auth_packet
         )
 
         def _read_stage(cmd_str: Any) -> dict[str, Any] | None:
@@ -1729,7 +1738,7 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                    if (report_work or steward_advancement or governance_work) and isinstance(adapter, AntigravityAdapter):
                         from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC
                         response = adapter.start_turn(
                             prompt,

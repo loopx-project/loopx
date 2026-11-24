@@ -50,7 +50,7 @@ from ..capabilities.native_chat.steward_managed_mode import (
 from ..capabilities.steward_executor import allocation as alloc
 from .acp import ACPStdioAdapter
 from ..chat_agent import CodexChatAgentError, agent_endpoint_error
-from ..chat_codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
+from .codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
 from ..chat_manager import (
     MANAGER_AGENT_GOAL_ID,
     MANAGER_CONTEXT_VERSION,

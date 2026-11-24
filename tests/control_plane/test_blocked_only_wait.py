@@ -14,7 +14,7 @@ from loopx.control_plane.testing.quota_fixtures import quota_status_payload, quo
 from loopx.quota import build_quota_should_run
 from loopx.rollout_event_log import build_rollout_event
 from tests.control_plane.test_dated_vision_wait_cli import (
-    AGENT, GOAL, TODO, cli, fixture, isolated_effect as isolated_effect,
+    AGENT, FUTURE, GOAL, TODO, cli, fixture, isolated_effect as isolated_effect,
 )
 
 
@@ -100,6 +100,76 @@ def test_blocker_does_not_hide_owed_replan():
     guard = _quota(_status(settled=False))
     assert guard["effective_action"] == "autonomous_replan_required"
     assert guard["interaction_contract"]["agent_channel"]["must_attempt"] is True
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"], ids=["f", "s"])
+def test_cli_blocked_advancement_recovers_ongoing_vision(tmp_path, isolated_effect, provider):
+    registry, runtime, state = fixture(tmp_path)
+    state.write_text(
+        state.read_text(encoding="utf-8")
+        .replace("status=deferred", "status=blocked")
+        .replace(f" resume_when={FUTURE}", "")
+        + "- [ ] Watch the unrelated published status.\n"
+        f"  <!-- loopx:todo todo_id=todo_background_watch status=open claimed_by={AGENT} "
+        "task_class=continuous_monitor target_key=published-status cadence=1h "
+        "next_due_at=2099-01-01T00:00:00Z watch_only=true -->\n",
+        encoding="utf-8",
+    )
+    runs = runtime / f"goals/{GOAL}/runs"
+    saved_vision = runs / "vision.json"
+    run = json.loads(saved_vision.read_text(encoding="utf-8"))
+    patch = run["agent_vision"]["vision_patch"]
+    patch.pop("advancement_policy")
+    patch.pop("replan_trigger_summary")
+    saved_vision.write_text(json.dumps(run), encoding="utf-8")
+    (runs / "index.jsonl").write_text(
+        json.dumps({**run, "json_path": str(saved_vision)}) + "\n", encoding="utf-8",
+    )
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+
+    turn = "blocked-frontier-recovery"
+    guard_args = (
+        "quota", "should-run", "--codex-app", "--goal-id", GOAL,
+        "--agent-id", AGENT, "--turn-instance-id", turn,
+    )
+    rc, before = cli(registry, runtime, *guard_args)
+    assert rc == 0, before
+    assert before["effective_action"] == "autonomous_replan_required"
+    assert before["normal_delivery_allowed"] is False
+    assert before["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    obligation = before["autonomous_replan_obligation"]
+    assert obligation["triggers"][0]["kind"] == "vision_acceptance_gap"
+
+    rc, replay = cli(registry, runtime, *guard_args)
+    assert rc == 0, replay
+    assert replay["autonomous_replan_obligation"]["obligation_id"] == obligation["obligation_id"]
+
+    rc, added = cli(
+        registry, runtime, "todo", "add", "--goal-id", GOAL, "--role", "agent",
+        "--claimed-by", AGENT, "--task-class", "advancement_task",
+        "--action-kind", "validate", "--target-key", "fixture:read-local-proof",
+        "--replan-obligation-id", obligation["obligation_id"], "--turn-instance-id", turn,
+        "--operation-id", "blocked-frontier-independent-work",
+        "--text", "Validate the already available local evidence.",
+    )
+    assert rc == 0 and added["ok"], (
+        added.get("error_code"), added.get("reason"), added.get("error"), added.get("recovery"),
+    )
+    assert added["todo"]["status"] == "open"
+
+    rc, next_turn = cli(registry, runtime, *guard_args[:-1], "independent-work")
+    assert rc == 0, next_turn
+    assert next_turn["selected_todo"]["todo_id"] == added["todo_id"]
+    assert next_turn["interaction_contract"]["agent_channel"]["must_attempt"] is True
+
+    rc, listed = cli(registry, runtime, "todo", "list", "--goal-id", GOAL)
+    assert rc == 0, listed
+    todos = {todo["todo_id"]: todo for todo in listed["todos"]}
+    assert todos[TODO]["status"] == "blocked"
+    assert todos["todo_background_watch"]["next_due_at"] == FUTURE.removeprefix("resume_at:")
+    assert list(todos).count(added["todo_id"]) == 1
+    history = [json.loads(line) for line in (runs / "index.jsonl").read_text().splitlines()]
+    assert not any(run.get("classification") == "quota_slot_spent" for run in history)
 
 
 @pytest.mark.parametrize("task_class", ["blocker", "advancement_task"])

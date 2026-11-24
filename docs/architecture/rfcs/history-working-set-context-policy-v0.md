@@ -5,7 +5,7 @@
 - **Delivery maturity:** Proposal
 - **Authors / owners:** Shared context presentation, Turn, continuation, and extension maintainers; maintainers claim individual implementation slices.
 - **Created:** 2026-11-09
-- **Last normative revision:** 2026-11-09
+- **Last normative revision:** 2026-11-21
 - **Implementation baseline:** Audited [`241c991794c37627d1bf9e2fa9d83472857c4129`](https://github.com/loopx-project/loopx/commit/241c991794c37627d1bf9e2fa9d83472857c4129); the relevant current-system code was also compared with `701795db237a35b23266588abad6f21857704ccd` and is unchanged.
 - **Related contracts:** [Design discussion #8450](https://github.com/loopx-project/loopx/issues/8450), [#4391 / T02 / M1-B](https://github.com/loopx-project/loopx/issues/4391), [Controller/Executor contract][lx-controller], [T02 research program][lx-frontier], and [extension contract][lx-extensions].
 - **Language mirror:** [中文版 — semantic mirror](history-working-set-context-policy-v0.zh-CN.md)
@@ -150,6 +150,24 @@ To eliminate mid-trajectory cache-busting dynamic working-set rewrites while kee
 
 Between any two `EpochReset` boundaries, the prefix preceding the monotonic append tail stays byte-identical (`100%` prefix KV-cache hit preservation). Upward policy layers (`{KeepRaw, FoldToReceipt, EpochReset} × {grow, switch, verify}` in [Joint Target, Yardstick and Stride Decisions](target-yardstick-stride-decisions-v0.md#policy-evolution)) may propose these transitions, while the deterministic projection owner enforces receipt verification, eligibility checks, and epoch invariance.
 
+#### Atomic fold-and-prefetch: Stage-then-Swap `next_command` hydration
+
+Plain reclamation or prose-only scope transitions (compare [Spine][SP1]'s `Next(μ, d)` in [SpineCodex][SP2]) leave the model empty-handed on wakeup—costing one extra model round-trip to emit the next read or probe command, or triggering premature-compression re-read thrashing when lossy prose drops exact predicates, file lines, or failure modes. Extending receipt-gated reclamation with an optional `next_command` (or typed `context-read --select` read list) executes an atomic **Stage-then-Swap** transition (still `Proposal` maturity and `default-off`):
+
+$$
+Q \mathbin{\Vert} B_{\text{old}} \;\xrightarrow{\;\text{reclaim}(\mu,\; \text{next\_cmd})\;}\; Q \mathbin{\Vert} \mu \mathbin{\Vert} \text{Obs}(\text{next\_cmd})
+$$
+
+Replacing dense exploratory tool calls ($B_{\text{old}}$) with a compact verified receipt ($\mu$) plus fresh deterministic command output ($\text{Obs}(\text{next\_cmd})$) in one transition preserves continuity when the model already knows which script or query surfaces the next high-SNR working view. All five invariants below apply normatively:
+
+1. **Stage-then-Swap atomicity (execute before evict):** Execute `next_command` first under explicit `timeout_ms` and `max_output_bytes` limits. Commit reclamation only if execution succeeds within bounds **and** clears net token savings $\text{Tokens}(B_{\text{old}}) - \text{Tokens}(\mu + \text{Obs}(\text{next\_cmd})) \ge \Delta_{\min}$ (accounting for cold-prefill break-even when rebasing). On command failure, timeout, output overflow, or negative net savings, abort atomically back to `KeepRaw` with $B_{\text{old}}$ intact and append only a bounded error observation.
+2. **Prefix KV-cache locality (two host-aligned carriers):** Forbid scattered mid-prefix deletions, which invalidate downstream KV cache from the earliest deleted span. Support two carrier patterns:
+   - *Contiguous Tail `FoldAndPrefetch` (controllable sampling-stack runtimes such as `DSH` / `Pi` / managed agent loop):* pop the contiguous exploratory suffix `[since_anchor..now]` while keeping parent prefix $Q$ byte-identical (`100%` prefix KV-cache hit preservation), incrementally prefilling only $\mu + \text{Obs}(\text{next\_cmd})$.
+   - *`EpochReset` Prefetch (opaque external CLI hosts such as `codex-cli` / Claude Code):* execute a bounded `prefetch_command` or `context-read --select` list inside `turn_driver` at Turn closeout / `EpochReset` so `epoch + 1` starts with the hydrated observation already inside its initial prompt.
+3. **Caller authority, side-effect bounds, and replay idempotency (§2.4, §5.3, A7):** `next_command` is strictly an agent-invoked action or Turn-closeout request—never emitted by passive `HistoryViewPolicy` plugins—subject to the same sandbox, lease, and permission checks as normal tool calls, and restricted by default to idempotent read/probe operations (forbidding state mutations, `git push`, or quota debits). Capture `Obs(next_command)` immutably in `decision_capture` / Turn journal so recovery or replay (`A7`) restores the saved output **without re-executing `next_command`**, keeping `tool` observation trust level (never elevated to `system` authority).
+4. **Reasoning and tool-pairing integrity:** Preserve valid OpenAI `reasoning` items and Anthropic `thinking` + `tool_use`/`tool_result` pairing by collapsing the entire closed suffix `[since_anchor..reclaim_call]` into one well-formed call/result pair rather than deleting orphaned tool outputs or splicing `Obs(next_command)` onto old call IDs, while retaining raw $B_{\text{old}}$ under `source_ref` + `sha256` for exact expansion (`A2`).
+5. **Receipt-backed anti-whitewashing header:** The runtime deterministically prepends objective facts from $B_{\text{old}}$ (last verification exit code, unresolved error/gate counts, and exact `source_ref` pointer) into $\mu$ so failed checks or inverted local proxies cannot be erased behind a cherry-picked `next_command`.
+
 ### 5.2 Historical eligibility
 
 V0 candidates come from existing typed attempt/result/evidence facts and bounded sources, not completion inferred from strings such as “done” or “old logs.” A candidate must meet all of the following:
@@ -184,6 +202,7 @@ interface HistorySummaryProvider {
 ```
 
 - Policy input may read current relevance information, but cannot mutate current facts. Output is a declarative original/reference/summary plan for specified candidates, not arbitrary JSON Patch or whole-payload replacement. It cannot define message roles, executable commands, permission conclusions, or host paths; the owner creates final framing and provenance.
+- **Agent-initiated prefetch versus passive policy plugins:** `HistoryViewPolicy.propose()` remains strictly declarative and cannot emit executable commands. By contrast, agent-initiated `FoldAndPrefetch` or Turn-closeout `EpochReset` `prefetch_command` requests (§5.1) execute through existing tool/Turn runtime sandboxes and journal capture before projection validation.
 - **Plugins have no authoritative `approve` or `validateProposal` callback.** The shared TypeScript owner decides scope, revision, coverage, protection, budget, reference availability, and actual projection.
 - Synchronous `propose()` performs bounded planning without external IO. Policy work requiring a model, process, or network prepares source-bound proposals through provider/runtime beforehand. This logical interface does not authorize arbitrary third-party code loading inside the shared projection process.
 - V0 selects one historical policy per effective scope, without arbitrary plugin chains or phase reordering.
@@ -294,8 +313,9 @@ V0 has no destructive migration. A later proposal to delete originals, rewrite h
 | A10 | True storage/restart scope | Expand after restart/recovery within the declared scope; provider completion followed by a pre-publication crash and concurrent same-binding completion do not duplicate publication; different attempts do not overwrite each other; duplicate-call costs remain visible | Temporary captures do not establish long-term storage |
 | A11 | Numbers, order, and unknown content survive | Independent regressions at existing exact/typed boundaries preserve necessary facts, numbers, and list ordering through view transformation | A TypeScript round trip does not prove semantic equivalence |
 | A12 | Usable product journey | Enable through existing configuration, observe real task impact, inspect sources/fallback, and disable; verify the packaged path | A CLI prototype does not deliver every App/Lark host |
+| A13 | Stage-then-Swap fold-and-prefetch atomicity and replay | Failed, timed-out, oversized, or negative-net-gain `next_command` aborts atomically back to `KeepRaw` with $B_{\text{old}}$ intact; committed tail folds keep prefix $Q$ byte-identical, preserve reasoning/tool pairing, retain runtime objective failure-header facts in $\mu$, keep `tool` observation trust, and restore saved output on replay without re-executing `next_command` | Running `next_command` alone does not authorize write side effects or elevate observation trust |
 
-Structural checks establish range/reference consistency only; semantic fidelity requires A3 and task acceptance. Extend relevant existing suites with independent semantic counterexamples. Do not add implementation-mirroring tests for every DTO field or raw benchmark trajectories to CI. Static review does not pass runtime or model-qualification rows.
+Structural checks establish range/reference consistency only; semantic fidelity requires A3 and task acceptance. Rows `A1–A13` define the full runtime/model acceptance scope. Extend relevant existing suites with independent semantic counterexamples. Do not add implementation-mirroring tests for every DTO field or raw benchmark trajectories to CI. Static review does not pass runtime or model-qualification rows.
 
 ### 9.2 Controls and complete-cost accounting
 
@@ -340,7 +360,7 @@ Initial budgets use current output/provider limits rather than copied upstream t
 
 | Milestone | Reviewable delivery | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0: RFC review | Owners, candidates, first caller, source retention, and controls are explicit | Fixed source and related-work audit | Record design acceptance and choices required at this stage; D1–D7 retain their own latest decision points, and unverified items remain unverified | Retain discussion; no runtime change |
+| M0: RFC review | Owners, candidates, first caller, source retention, and controls are explicit | Fixed source and related-work audit | Record design acceptance and choices required at this stage; D1–D8 retain their own latest decision points, and unverified items remain unverified | Retain discussion; no runtime change |
 | M1: One real consumer | Existing complete source, shared Progressive, and same-capture reader connect to final model input | Check C1 slices then merged; available reader; bounded host | A1/A2/A7/A8/A11 and a complete input baseline; machine interfaces unchanged | Original renderer/projection |
 | M2: One category of one-level history | Eligible units → retention → bounded generation → core validation → actual input reduction → expansion | M1; selected source lifecycle, scope, budget, and validity; explicit opt-in | A2–A8/A10; B0/B1/T1 task and complete-cost results | Disable optional policy; preserve originals |
 | M3: External policy provider and product adoption | Versioned narrow port, existing extension lifecycle, configuration/readback | M2 proves a real replaceable caller; placement and compatibility review | A9/A12, older-version/disabled parity, packaged failure/recovery | Disable/rollback; original path continues |
@@ -374,6 +394,7 @@ Recheck [#8266](https://github.com/loopx-project/loopx/pull/8266) and related ow
 | D5 | Persistent choice/configuration: version the registered context_delivery namespace; semantic policy defaults off | Configuration / frontend owners | v0/v1 compatibility, scope, packaged readback; before M2 enablement and M3 productization |
 | D6 | Public plugin port: establish the built-in helper versus formal provider boundary after the first caller matures | Extension / typed-contract owners | Two interchangeable implementations or equivalent conformance need; before M3 |
 | D7 | Non-inferiority and benefit thresholds: prioritize quality and complete costs; freeze before observing results | T02 / benchmark / context owners | Legal tasks, controls, sample design, and complete budget; before any model experiment |
+| D8 | Prefetch command admission scope: start with `quota context-read --select` pointers and sandboxed read-only workspace probes before permitting general read-only shell commands | Turn / sandbox / context owners | Sandbox enforcement, `decision_capture` replay parity, and Stage-then-Swap net-gain gates; before any `FoldAndPrefetch` runtime slice |
 
 Merge does not automatically approve these recommended implementation choices, assign resources, promise release dates, or start experiments. Keep discussion linked to [#8450](https://github.com/loopx-project/loopx/issues/8450) and [#4391](https://github.com/loopx-project/loopx/issues/4391). Record explicit decisions and affected normative sections as described in Appendix B.
 
@@ -383,7 +404,7 @@ Merge does not automatically approve these recommended implementation choices, a
 - **Completed static work:** Read fixed-version key sources, RFC conventions, and related issues/PRs; map upstream design to existing owners.
 - **Baseline comparison:** Relative to earlier research at `cffb53fe`, audited `241c991` adds only three files of native-chat metadata recovery changes, without altering the listed core seams. The relevant current-system code is also unchanged at documentation base `701795db237a35b23266588abad6f21857704ccd`. A later documentation rebase does not automatically expand that audit claim.
 - **Corrected status interpretation:** `merged=true` on [#7430](https://github.com/loopx-project/loopx/pull/7430) does not override its [#8265](https://github.com/loopx-project/loopx/pull/8265) revert. At this audit, [#8266](https://github.com/loopx-project/loopx/pull/8266)/#8378 are not treated as shipped main behavior.
-- **Not executed:** This RFC's implementation, source/install tests, model experiments, paid summary calls, UI verification, deployment, or default changes. Static sources do not replace A1–A12 implementation evidence.
+- **Not executed:** This RFC's implementation, source/install tests, model experiments, paid summary calls, UI verification, deployment, or default changes. Static sources do not replace A1–A13 implementation evidence.
 - **Ownership:** [#8450](https://github.com/loopx-project/loopx/issues/8450) is the discussion and implementation-tracking entry for this design, which remains a bounded [#4391](https://github.com/loopx-project/loopx/issues/4391) T02 subproposal.
 
 There is no implementation or experiment execution record for this RFC yet. When actual delivery evidence first exists, create dated entries and their Chinese mirrors under `ledger/history-working-set-context-policy-v0/`, following the [ledger contract](ledger/README.md). This appendix then maintains pointers only.
@@ -392,7 +413,9 @@ There is no implementation or experiment execution record for this RFC yet. When
 
 The original design discussion is [#8450](https://github.com/loopx-project/loopx/issues/8450), under [#4391](https://github.com/loopx-project/loopx/issues/4391) T02 / M1-B. Merge of this RFC PR records design acceptance; it does not independently approve the concrete §12 choices, model runs, default promotion, or runtime changes.
 
-D1–D7 remain open until their owners explicitly approve them. Subsequent records identify the date, public approval evidence, alternatives, and changed normative sections, synchronized in both languages. Do not infer approval from implementation progress, silence, or a recommended answer. No other RFC is superseded or closed, and no existing schema field is approved for removal.
+D1–D8 remain open until their owners explicitly approve them. Subsequent records identify the date, public approval evidence, alternatives, and changed normative sections, synchronized in both languages. Do not infer approval from implementation progress, silence, or a recommended answer. No other RFC is superseded or closed, and no existing schema field is approved for removal.
+
+- **2026-11-21 normative proposal refinement:** Added the bounded Stage-then-Swap `FoldAndPrefetch` / `EpochReset` `next_command` hydration contract (`§5.1`, `§5.3`), acceptance criterion `A13` (`§9.1`), and open decision `D8` (`§12`) while keeping `Proposal` delivery maturity and `default-off` execution unchanged.
 
 ## Appendix C: Evidence registry and fixed sources (non-normative)
 
@@ -401,7 +424,7 @@ D1–D7 remain open until their owners explicitly approve them. Subsequent recor
 | E1 | Reusable billion-context mechanisms | `4be21b08...`; BC1–BC5 | Static review only; not LoopX integration, runtime effect, or cost benefit |
 | E2 | Existing LoopX owners and seams | `241c991...`; LX1–LX12; relevant code compared unchanged at `701795db...` | Static review only; not adoption of the shared view by every host |
 | E3 | Related work and design ownership | [#8450](https://github.com/loopx-project/loopx/issues/8450), [#4391](https://github.com/loopx-project/loopx/issues/4391), and PRs in §2.3 | Read on 2026-11-09; recheck before implementation |
-| E4 | Input, readback, task quality, and complete cost for this RFC | A1–A12 and B0/B1/T1 | Unverified; neither static design nor document merge establishes a pass |
+| E4 | Input, readback, task quality, and complete cost for this RFC | A1–A13 and B0/B1/T1 | Unverified; neither static design nor document merge establishes a pass |
 
 ### billion-context
 
@@ -410,6 +433,11 @@ D1–D7 remain open until their owners explicitly approve them. Subsequent recor
 - [BC3 — Shared recommendation/application eligibility][BC3]
 - [BC4 — Hierarchical summaries and coverage][BC4]
 - [BC5 — Cache accounting and compression economics][BC5]
+
+### Spine
+
+- [SP1 — Spine: Compiling Subtask Trees into Structured Context for Long-Horizon Coding Agents][SP1]
+- [SP2 — SpineCodex reference repository][SP2]
 
 ### LoopX
 
@@ -434,6 +462,8 @@ D1–D7 remain open until their owners explicitly approve them. Subsequent recor
 [BC3]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/unit-projection.ts
 [BC4]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/types.ts#L68-L109
 [BC5]: https://github.com/ranxianglei/billion-context/blob/4be21b08ed3da8b69d1800a10a9c0b9c5a707f71/kernel/src/cache-report.ts
+[SP1]: https://arxiv.org/abs/2610.37224
+[SP2]: https://github.com/GhabiX/SpineCodex
 [LX1]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/quota/progressive_context.ts
 [LX2]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/quota/turn_envelope.ts
 [LX3]: https://github.com/loopx-project/loopx/blob/241c991794c37627d1bf9e2fa9d83472857c4129/loopx/control_plane/turn_driver/decision_capture.py

@@ -115,45 +115,6 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
     small_request = requests[-1]
     small_channel = small["interaction_contract"]["agent_channel"]
     assert_complete_goal(small_channel, initial)
-    from loopx.cli import build_parser
-    from loopx.cli_commands.quota_capture import read_context_capture
-    from loopx.control_plane.turn_driver import codex_context
-
-    monkeypatch.setenv("CODEX_THREAD_ID", "complete-goal-native")
-    native = tmp_path / "native"
-    native.mkdir(mode=0o700)
-    captures = tmp_path / "captures"
-    captures.mkdir()
-    codex_context.codex_context_hook(str(native), {"hook_event_name": "SessionStart",
-        "source": "startup", "session_id": "complete-goal-native", "cwd": str(tmp_path)})
-    output = io.StringIO()
-    with contextlib.redirect_stdout(output):
-        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-            "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--codex-app",
-            "--todo-id", todo_id, "--turn-instance-id", "native-goal-material",
-            "--context-delivery", "on", "--codex-context-dir", str(native),
-            "--decision-output-root", str(captures)])
-    page, raw = json.loads(output.getvalue()), bytearray()
-    assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
-    digest = reference_metadata_oracle(page)["sha256"]
-    if page.get("schema_version") != "context_capture_page_v1":
-        from test_context_delivery_cli import _native_reader_args
-
-        args = _native_reader_args(page["command"])
-        args.page_bytes = 3072
-        page = read_context_capture(args)
-        assert page["ok"], page
-    while True:
-        assert page["offset"] == len(raw) and page["sha256"] == digest
-        raw.extend(page["content"].encode())
-        if page["eof"]:
-            assert len(raw) == page["total_bytes"]
-            break
-        page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
-    assert sha256(raw).hexdigest() == digest
-    native_channel = json.loads(raw)["interaction_contract"]["agent_channel"]
-    assert_complete_goal(native_channel, initial)
-    assert state.read_bytes() == initial
     large = initial + b"\n## Evidence\n" + b"Prior evidence remains available. " * 100_000
     large += "\n## Stop Conditions\n未经授权不得发布。\n".encode()
     assert len(large) > 2 * 1024 * 1024  # Preserve the original source regression.
@@ -241,3 +202,46 @@ def test_goal_availability_transport_preserves_full_read_and_recovery(tmp_path, 
         code, recovered = run_full_guard()
         assert code == 0 and recovered["normal_delivery_allowed"] is True
         assert_complete_goal(recovered["interaction_contract"]["agent_channel"], large)
+
+    # Open the native Turn after the unbound guards finish. Its durable
+    # receipt would otherwise route the next guard to original-Turn recovery.
+    state.write_bytes(initial)
+    from loopx.cli import build_parser
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver import codex_context
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "complete-goal-native")
+    native = tmp_path / "native"
+    native.mkdir(mode=0o700)
+    captures = tmp_path / "captures"
+    captures.mkdir()
+    codex_context.codex_context_hook(str(native), {"hook_event_name": "SessionStart",
+        "source": "startup", "session_id": "complete-goal-native", "cwd": str(tmp_path)})
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+            "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--codex-app",
+            "--todo-id", todo_id, "--turn-instance-id", "native-goal-material",
+            "--context-delivery", "on", "--codex-context-dir", str(native),
+            "--decision-output-root", str(captures)])
+    page, raw = json.loads(output.getvalue()), bytearray()
+    assert code == 0 and page["ok"], (page.get("reason"), page.get("error"), page.get("error_code"))
+    digest = reference_metadata_oracle(page)["sha256"]
+    if page.get("schema_version") != "context_capture_page_v1":
+        from test_context_delivery_cli import _native_reader_args
+
+        args = _native_reader_args(page["command"])
+        args.page_bytes = 3072
+        page = read_context_capture(args)
+        assert page["ok"], page
+    while True:
+        assert page["offset"] == len(raw) and page["sha256"] == digest
+        raw.extend(page["content"].encode())
+        if page["eof"]:
+            assert len(raw) == page["total_bytes"]
+            break
+        page = read_context_capture(build_parser().parse_args(shlex.split(page["next_command"])[1:]))
+    assert sha256(raw).hexdigest() == digest
+    native_channel = json.loads(raw)["interaction_contract"]["agent_channel"]
+    assert_complete_goal(native_channel, initial)
+    assert state.read_bytes() == initial

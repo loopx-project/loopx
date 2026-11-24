@@ -138,6 +138,7 @@ def handle_heartbeat_prompt_command(
                 reward_memory_automatic_ingest_for_agent,
             )
             from ..control_plane.agents.capability_memory import (
+                heartbeat_evidence_poll_possible,
                 resolve_agent_capabilities,
             )
             from ..history import load_registry
@@ -154,20 +155,24 @@ def handle_heartbeat_prompt_command(
                         args.runtime_root,
                         registry_path=agent_registry_path,
                     )
-                    effective_available_capabilities = list(
-                        resolve_agent_capabilities(
-                            {
-                                "registry": str(agent_registry_path.resolve()),
-                                "runtime_root": str(resolved_runtime.resolve()),
-                            },
-                            goal_id=args.goal_id,
-                            agent_identity={"agent_id": effective_agent_id},
-                            item=registry_goal,
-                            project_asset={},
-                            available=args.available_capabilities,
-                        ).get("effective")
-                        or []
-                    )
+                    effective_available_capabilities = []
+                    if heartbeat_evidence_poll_possible(
+                        resolved_runtime, goal=registry_goal, available=args.available_capabilities,
+                    ):
+                        effective_available_capabilities = list(
+                            resolve_agent_capabilities(
+                                {
+                                    "registry": str(agent_registry_path.resolve()),
+                                    "runtime_root": str(resolved_runtime.resolve()),
+                                },
+                                goal_id=args.goal_id,
+                                agent_identity={"agent_id": effective_agent_id},
+                                item=registry_goal,
+                                project_asset={},
+                                available=args.available_capabilities,
+                            ).get("effective")
+                            or []
+                        )
                 except Exception:  # noqa: BLE001 - prompt rendering stays fail-open
                     effective_available_capabilities = None
         explicit_scheduler_fields = (

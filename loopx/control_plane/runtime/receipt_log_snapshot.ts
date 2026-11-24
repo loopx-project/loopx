@@ -44,10 +44,13 @@ export interface ReceiptLogSnapshot {
   readonly unterminatedRecordLine: number | null;
 }
 
-interface Prefix extends ReceiptLogSnapshot {
+interface ParsedPrefix extends ReceiptLogSnapshot {
   readonly bytes: number;
-  readonly digest: string;
   readonly lines: number;
+}
+
+interface Prefix extends ParsedPrefix {
+  readonly digest: string;
 }
 
 // Bound retained source volume and the number of histories. This is not a
@@ -56,6 +59,7 @@ const MAX_RETAINED_BYTES = 128 * 1024 * 1024;
 const MAX_RETAINED_LOGS = 4;
 const prefixes = new Map<string, Prefix>();
 let retainedBytes = 0;
+const decoding = new Map<string, { bytes: Buffer; result: Promise<ReceiptLogSnapshot> }>();
 
 function digest(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -127,6 +131,65 @@ function decodeLine(line: string, schemaVersion?: string): JsonObject {
   return freezeRecord(record);
 }
 
+async function parseThrough(
+  bytes: Buffer, completeBytes: number, reusable: ParsedPrefix | null,
+  schemaVersion: string | undefined, recoveryKeys: readonly string[],
+): Promise<ParsedPrefix> {
+  const records = reusable ? [...reusable.records] : [];
+  const recordLines = reusable ? [...reusable.recordLines] : [];
+  const malformedLines = reusable ? [...reusable.malformedLines] : [];
+  let firstErrorLine = reusable?.firstErrorLine ?? null;
+  let lines = reusable?.lines ?? 0;
+  let offset = reusable?.bytes ?? 0;
+  let batchStart = offset;
+  // The append owner drops uncommitted torn bytes before it writes its own
+  // row, so this prefix can only end on a finished row. Any rewrite (including
+  // that drop) still fails the digest check and lands here as a cold read.
+  while (offset < completeBytes) {
+    const end = bytes.indexOf(10, offset);
+    const raw = bytes.subarray(offset, end);
+    const line = strictUtf8(raw);
+    lines += 1;
+    let record: JsonObject | null = null;
+    if (line === null) {
+      firstErrorLine ??= lines;
+      const recovered = jsonLineMembers(raw, recoveryKeys);
+      if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+        recovered.ambiguous || recovered.lostKeyName) {
+        malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
+      }
+    } else if (line.trim()) {
+      try {
+        record = decodeLine(line, schemaVersion);
+      } catch {
+        firstErrorLine ??= lines;
+        const recovered = jsonLineMembers(raw, recoveryKeys);
+        if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
+          recovered.ambiguous || recovered.lostKeyName) {
+          malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
+        }
+      }
+    }
+    if (record !== null) {
+      records.push(record);
+      recordLines.push(lines);
+    }
+    offset = end + 1;
+    // Cold/rebuilt histories must let the shared server service other sockets.
+    if (offset - batchStart >= 1024 * 1024) {
+      await setImmediate();
+      batchStart = offset;
+    }
+  }
+  return Object.freeze({
+    records: Object.freeze(records),
+    recordLines: Object.freeze(recordLines),
+    malformedLines: Object.freeze(malformedLines),
+    firstErrorLine, lines, unterminatedRecordLine: null,
+    bytes: completeBytes,
+  });
+}
+
 /**
  * Read fresh bytes on EVERY invocation. Only reuse a parsed newline-terminated
  * prefix after hashing those exact bytes. Rewrites, rotation, truncation and
@@ -150,69 +213,53 @@ export async function readReceiptLogSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
+  // Each caller owns a fresh read. Only coalesce large, byte-identical reads
+  // with the same decode contract while the original parse is still running.
+  if (bytes.length < 1024 * 1024 || bytes.length > MAX_RETAINED_BYTES) {
+    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
+  }
+  const active = decoding.get(key);
+  if (active && bytes.equals(active.bytes)) return active.result;
+  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
+  if (active || decoding.size >= MAX_RETAINED_LOGS) return result;
+  decoding.set(key, { bytes, result });
+  try {
+    return await result;
+  } finally {
+    decoding.delete(key);
+  }
+}
+
+async function parseSnapshot(
+  bytes: Buffer, key: string, schemaVersion: string | undefined, recoveryKeys: readonly string[],
+): Promise<ReceiptLogSnapshot> {
   const completeBytes = bytes.lastIndexOf(10) + 1;
   const prior = prefixes.get(key);
-  const reusable = prior !== undefined && prior.bytes <= completeBytes &&
-    digest(bytes.subarray(0, prior.bytes)) === prior.digest ? prior : null;
-  let prefix: Prefix;
-  if (reusable !== null && reusable.bytes === completeBytes) {
-    prefix = reusable;
-  } else {
-    const records = reusable ? [...reusable.records] : [];
-    const recordLines = reusable ? [...reusable.recordLines] : [];
-    const malformedLines = reusable ? [...reusable.malformedLines] : [];
-    let firstErrorLine = reusable?.firstErrorLine ?? null;
-    let lines = reusable?.lines ?? 0;
-    let offset = reusable?.bytes ?? 0;
-    let batchStart = offset;
-    // The append owner drops uncommitted torn bytes before it writes its own
-    // row, so this prefix can only end on a finished row. Any rewrite (including
-    // that drop) still fails the digest check and lands here as a cold read.
-    while (offset < completeBytes) {
-      const end = bytes.indexOf(10, offset);
-      const raw = bytes.subarray(offset, end);
-      const line = strictUtf8(raw);
-      lines += 1;
-      let record: JsonObject | null = null;
-      if (line === null) {
-        firstErrorLine ??= lines;
-        const recovered = jsonLineMembers(raw, recoveryKeys);
-        if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
-          recovered.ambiguous || recovered.lostKeyName) {
-          malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
-        }
-      } else if (line.trim()) {
-        try {
-          record = decodeLine(line, schemaVersion);
-        } catch {
-          firstErrorLine ??= lines;
-          const recovered = jsonLineMembers(raw, recoveryKeys);
-          if (recovered.members.length > 0 || recovered.unreadable.length > 0 ||
-            recovered.ambiguous || recovered.lostKeyName) {
-            malformedLines.push(freezeMalformed({ line: lines, ...recovered }));
-          }
-        }
-      }
-      if (record !== null) {
-        records.push(record);
-        recordLines.push(lines);
-      }
-      offset = end + 1;
-      // Cold/rebuilt histories must let the shared server service other sockets.
-      if (offset - batchStart >= 1024 * 1024) {
-        await setImmediate();
-        batchStart = offset;
-      }
-    }
-    prefix = Object.freeze({
-      records: Object.freeze(records),
-      recordLines: Object.freeze(recordLines),
-      malformedLines: Object.freeze(malformedLines),
-      firstErrorLine, lines, unterminatedRecordLine: null,
-      bytes: completeBytes, digest: digest(bytes.subarray(0, completeBytes)),
-    });
+  // The rollout log and run index are usually read together. When whole
+  // histories compete for the retained-byte budget, leave room for a peer.
+  // Preserve a larger already-resident prefix when the same log grows.
+  const otherBytes = retainedBytes - (prior?.bytes ?? 0);
+  const limit = otherBytes + completeBytes <= MAX_RETAINED_BYTES
+    ? completeBytes : Math.max(MAX_RETAINED_BYTES / 2, prior?.bytes ?? 0);
+  const retainedEnd = limit >= completeBytes ? completeBytes : bytes.lastIndexOf(10, limit - 1) + 1;
+  let reusable: Prefix | null = null;
+  let retainedDigest: string | undefined;
+  if (prior !== undefined && prior.bytes <= retainedEnd) {
+    const hash = createHash("sha256").update(bytes.subarray(0, prior.bytes));
+    const hasSuffix = prior.bytes < retainedEnd;
+    const prefixDigest = (hasSuffix ? hash.copy() : hash).digest("hex");
+    if (prefixDigest === prior.digest) reusable = prior;
+    retainedDigest = hasSuffix
+      ? hash.update(bytes.subarray(prior.bytes, retainedEnd)).digest("hex")
+      : prefixDigest;
   }
-  remember(key, prefix);
+  const retained = reusable !== null && reusable.bytes === retainedEnd ? reusable : Object.freeze({
+    ...await parseThrough(bytes, retainedEnd, reusable, schemaVersion, recoveryKeys),
+    digest: retainedDigest ?? digest(bytes.subarray(0, retainedEnd)),
+  });
+  remember(key, retained);
+  const prefix = retainedEnd === completeBytes ? retained
+    : await parseThrough(bytes, completeBytes, retained, schemaVersion, recoveryKeys);
   const tail = strictUtf8(bytes.subarray(completeBytes));
   if (tail === null) {
     return Object.freeze({

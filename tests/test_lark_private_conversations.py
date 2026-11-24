@@ -162,7 +162,7 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
                                     "source_unavailable", "source_changed"])
 def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
     from test_native_steward_private import finish, steward
-    from loopx import chat_ingress
+    from loopx.chat import ingress
     from loopx.capabilities.native_chat import conversation_bindings
     from loopx.file_lock import exclusive_file_lock
 
@@ -219,7 +219,7 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
                     assert runtime.close_session(sid)
             return exclusive_file_lock(path, **kwargs)
 
-        monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
+        monkeypatch.setattr(ingress, "exclusive_file_lock", publish_at_scope_fence)
         monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
         pending_ref = identity_ref(binding["provider_ref"], pending_id)
         pending_path = transport.root / f"{pending_ref}.json"
@@ -6011,7 +6011,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
 ):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     store, runtime, provider, transport = connect(ordinary)
     monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
@@ -8360,7 +8360,7 @@ def test_rendered_cli_text_is_preserved_and_source_type_must_agree(ordinary):  #
 
 
 def test_private_app_alias_guard_rejects_unknown_or_unverified_identity():
-    from loopx.chat_lark_api import _app_identity_for_private_guard
+    from loopx.chat.lark_api import _app_identity_for_private_guard
     provider = Provider()
     assert _app_identity_for_private_guard("notes-app", provider, "lark-cli") == "cli_notes_app"
     for data in [{}, {"appId": "cli_notes_app"}, {"appId": "malformed", "identities": {"bot": {

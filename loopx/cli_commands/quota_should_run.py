@@ -19,6 +19,7 @@ from ..control_plane.quota.heartbeat_receipt import (
     heartbeat_receipt_request_subject,
     heartbeat_receipt_view,
 )
+from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import (
     RolloutAppendPreconditionChanged,
@@ -438,6 +439,7 @@ def execute_quota_should_run(
         todo_id=args.todo_id,
     )
     complete_context = not getattr(args, "scheduler_observation", False)
+    outcome_navigation = complete_context and context_delivery_for_arguments(args)["progressive_enabled"]
     payload = export("build_live_quota_should_run_decision")(
         status_payload,
         goal_id=args.goal_id,
@@ -468,7 +470,7 @@ def execute_quota_should_run(
         interaction_projection_hooks=interaction_projection_hooks,
         turn_start_hook_dispatch=turn_start_hook_dispatch,
         turn_context_projector=context_projector,
-        context_navigation=complete_context,
+        context_navigation=outcome_navigation,
         goal_ref=goal_ref,
     )
     execution.payload = payload

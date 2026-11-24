@@ -315,6 +315,7 @@ def semantic_delta_from_writeback(
     progress_observation: Mapping[str, Any] | None,
     agent_vision: Mapping[str, Any] | None = None,
     history_runs: Iterable[Mapping[str, Any]] | None = None,
+    recovering_writeback_path: str | None = None,
 ) -> dict[str, Any]:
     """Qualify concrete typed writeback evidence against one obligation.
 
@@ -356,18 +357,30 @@ def semantic_delta_from_writeback(
             raise ValueError("replan context obligation identity mismatch")
     coverage = context["coverage_ledger"] if context is not None else None
     claimed = list(window) if isinstance(window, list) else []
-    if isinstance(coverage, list):
+    # During an exact supplement, the current observation is already in the
+    # displayed ledger. The full index below can distinguish its source row
+    # from every other occurrence of the same observation.
+    if isinstance(coverage, list) and recovering_writeback_path is None:
         claimed.extend(coverage)
     if runs is not None and context is not None:
         from .replan_context_codec import replan_evidence_rows
 
         # The readable context has a display budget; admission does not forget
         # an older claim merely because it was omitted from that display.
+        novelty_runs = runs
+        if recovering_writeback_path is not None:
+            # The settlement owner bound this supplement to an existing
+            # unqualified observation. It is the input being qualified.
+            novelty_runs = [run for run in runs if run.get("json_path") != recovering_writeback_path]
+            if len(novelty_runs) != len(runs) - 1:
+                raise ValueError("the original blocked writeback is not unique in replan history")
         claimed.extend(
             row["progress_observation"]
-            for row in replan_evidence_rows(runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
+            for row in replan_evidence_rows(novelty_runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
             if row["progress_observation"] is not None
         )
+    elif recovering_writeback_path is not None:
+        raise ValueError("blocked writeback recovery requires the original replan context and full history")
     elif context is not None and context.get("coverage_truncated"):
         raise ValueError("replan writeback requires the complete evidence history when coverage is truncated")
     progress_source = None
