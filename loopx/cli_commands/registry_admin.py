@@ -5,7 +5,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from ..agent_registry import normalize_registered_agents
+from ..agent_registry import agent_registration_tokens, normalize_registered_agents
 from ..capabilities.multi_subagent import (
     apply_codex_subagent_capacity,
     plan_codex_subagent_capacity,
@@ -121,6 +121,49 @@ def _fresh_agent_collision_payload(
     }
 
 
+def _rejected_agent_preview(value: str, limit: int = 80) -> str:
+    """Keep one rejected token readable on one CLI line."""
+    return value[:limit].replace("\r", "\\r").replace("\n", "\\n")
+
+
+def _invalid_agent_identity_payload(
+    *,
+    execute: bool,
+    goal_id: str,
+    global_path: Path,
+    source_registry_path: Path,
+    existing_agents: list[str],
+    requested_agents: list[str],
+    rejected_agents: list[str],
+) -> dict[str, object]:
+    previews = ", ".join(repr(_rejected_agent_preview(value)) for value in rejected_agents)
+    return {
+        "ok": False,
+        "dry_run": not execute,
+        "execute": execute,
+        "goal_id": goal_id,
+        "global_registry": str(global_path),
+        "source_registry": str(source_registry_path),
+        "existing_agents": existing_agents,
+        "requested_agents": requested_agents,
+        "rejected_agents": rejected_agents,
+        "registered_agents": existing_agents,
+        "changed": False,
+        "written": False,
+        "error_kind": "agent_identity_invalid",
+        "error": (
+            "registered agents must be public-safe tokens such as "
+            f"codex-main-control; rejected: {previews}"
+        ),
+        "recommended_action": (
+            "rerun with one lowercase public-safe agent id per token (letters, "
+            "digits, dot, underscore, colon, at-sign or hyphen) and inspect "
+            "rejected_agents; continue only after the execute result reports "
+            "ok=true, changed=true, and written=true"
+        ),
+    }
+
+
 def _agent_registration_readback(
     *,
     source_registry_path: Path,
@@ -168,7 +211,17 @@ def register_agent_via_source_registry(
     source_registry_path = Path(str(source_registry)).expanduser()
     source_goal = _registry_goal(source_registry_path, goal_id)
     existing_agents = _goal_registered_agents(source_goal)
-    requested_agents = normalize_registered_agents(agent_ids)
+    requested_agents, rejected_agents = agent_registration_tokens(agent_ids)
+    if rejected_agents:
+        return _invalid_agent_identity_payload(
+            execute=execute,
+            goal_id=goal_id,
+            global_path=global_path,
+            source_registry_path=source_registry_path,
+            existing_agents=existing_agents,
+            requested_agents=requested_agents,
+            rejected_agents=rejected_agents,
+        )
     collisions = [agent_id for agent_id in requested_agents if agent_id in existing_agents]
     if require_new and collisions:
         return _fresh_agent_collision_payload(

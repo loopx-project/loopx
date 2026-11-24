@@ -594,6 +594,12 @@ loopx register-agent \
   --execute
 ```
 
+`--agent-id` is repeatable, and each value may also be a comma-separated list.
+Registration is all-or-nothing: an id outside the public token shape (a lowercase
+first letter, then letters, digits, `.`, `_`, `:`, `@` or `-`) fails the preview
+or execute with `error_kind=agent_identity_invalid` and the raw
+`rejected_agents` before either the source or the global registry changes.
+
 Then claim through the dedicated command. `--claimed-by` records the durable
 owner, while `--agent-id` attributes the peer performing this mutation. For a
 self-claim they are both required and must name the same registered agent:
