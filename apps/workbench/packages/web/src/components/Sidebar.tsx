@@ -9,15 +9,16 @@ import { clockLabel } from '../timeline';
 import { useInTitlebar, useLongPress, useStoredFlag, useStoredSet } from '../hooks';
 import { attentionCount, threadMark, waitingLabel, type ThreadMark } from '../notices';
 import { folderName } from '../paths';
-import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type HostSource } from '../sidebar';
+import { buildActivity, buildMerged, buildSidebar, externalThreadRow, handoverGroups, markTerms, navOverflow, projectDir, SEARCH_MIN, taggedAgents, withExternalSessions, type ForkSubchatItem, type HostSource } from '../sidebar';
 import { timeAgo } from '../sessions';
 import { deliveredPreview } from '../timeline';
 import { HostSwitcher } from './Hosts';
 import { Menu } from './Menu';
 import type { HostIconName } from '@calli/extension-api';
 import { HostIcon } from '../extensions/ui';
-import { AgentMark, IconBell, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
+import { AgentMark, IconAgents, IconBell, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFork, IconHandover, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
 import { t } from '../i18n';
+import './fork-subchat.css';
 
 export { folderName } from '../paths';
 
@@ -53,6 +54,10 @@ interface Props {
   threads: Thread[];
   /** Each lead thread's team members, by the lead's id: rows under the lead instead of threads of their own. */
   members?: Map<string, Thread[]>;
+  /** Grouped forked sub-conversations by their root thread id: merged into the parallel drawer under the lead. */
+  forks?: Map<string, ForkSubchatItem[]>;
+  /** Opens the one-step grouped sub-conversation fork dialog for a thread. */
+  onForkSubchat?: (thread: Thread) => void;
   sections: Section[];
   /** For the mark each row shows in place of its agent's name; null while not known, so no name stands in. */
   agents: AgentMarkInfo[] | null;
@@ -151,6 +156,8 @@ export function Sidebar({
   showEmptySections = true,
   threads,
   members,
+  forks,
+  onForkSubchat,
   sections,
   agents,
   selectedId,
@@ -409,32 +416,71 @@ export function Sidebar({
     );
   };
 
-  // Like Orca's agents under a task: the lead's row, then one line per member saying what it is doing.
-  const entry = (thread: Thread, on?: Elsewhere) => {
-    if (thread.external) return externalRow(thread);
-    const team = members?.get(thread.id);
-    if (!team?.length || on?.open) return row(thread, thread.title, thread.preview, undefined, on);
-    const sorted = [...team].sort(teamOrder);
-    const auto = sorted.some((m) => busy(m) > 0 || m.id === selectedId);
-    const open = Boolean(search.trim()) || (teamOpen.get(thread.id) ?? auto);
+  const teamOf = (thread: Thread) => members?.get(thread.id);
+  const forksOf = (list: Thread[], team: Thread[] = []): ForkSubchatItem[] => {
+    if (!forks?.size) return [];
+    const teamIds = new Set(team.map((m) => m.id));
+    const seen = new Set<string>();
+    const out: ForkSubchatItem[] = [];
+    for (const seg of list) {
+      for (const item of forks.get(seg.id) ?? []) {
+        if (seen.has(item.thread.id) || teamIds.has(item.thread.id)) continue;
+        seen.add(item.thread.id);
+        out.push(item);
+      }
+    }
+    return out;
+  };
+  const parallelOpenFor = (keyId: string, items: Thread[]) =>
+    Boolean(search.trim()) || (teamOpen.get(keyId) ?? items.some((m) => busy(m) > 0 || m.id === selectedId));
+  /** Horizontal axis under a card: forked sub-conversations + team members in one drawer (orthogonal to vertical handover chain). */
+  const parallelToggle = (keyThread: Thread, forkItems: ForkSubchatItem[], team: Thread[], inline = false, onOpen?: () => void) => {
+    const allThreads = [...forkItems.map((f) => f.thread), ...team];
+    const sorted = [...allThreads].sort(teamOrder);
+    const open = parallelOpenFor(keyThread.id, sorted);
     const working = sorted.filter((m) => m.status === 'running').length;
     const waiting = sorted.filter((m) => m.waiting).length;
-    const stack = stackLine(sorted);
-    const current = thread.id === selectedId || sorted.some((m) => m.id === selectedId);
-    return <div key={thread.id} className={`handover-group team-group${open ? ' open' : ''}${current ? ' selected' : ''}`}>
-      {row(thread, thread.title, thread.preview, undefined, on)}
-      <button className="handover-toggle" aria-expanded={open} onClick={() => setTeamOpen((old) => new Map(old).set(thread.id, !open))}
-        aria-label={[t('sidebar.agents', sorted.length), waiting ? t('sidebar.waitingCount', waiting) : working ? t('team.running', working) : null, open ? t('sidebar.collapseTeam', thread.title) : t('sidebar.expandTeam', thread.title)].filter(Boolean).join(' · ')}>
-        {stack ? <>
-          {runDot(sorted)}
-          {stack}
-        </> : <>
-          <span>{t('sidebar.agents', sorted.length)}</span>
-          {(waiting || working) > 0 && <span className="team-note">{waiting ? t('sidebar.waitingCount', waiting) : t('team.running', working)}</span>}
-        </>}
-        <IconChevron size={13} open={open} />
-      </button>
-      {open && <div className="handover-members">{sorted.map((m) => {
+    const stack = forkItems.length === 0 ? stackLine(sorted) : null;
+    const label = forkItems.length > 0 ? t('sidebar.parallel', sorted.length) : t('sidebar.agents', sorted.length);
+    return <button className={`handover-toggle${inline ? ' inline' : ''}`} aria-expanded={open} onClick={() => { if (!open) onOpen?.(); setTeamOpen((old) => new Map(old).set(keyThread.id, !open)); }}
+      aria-label={[label, waiting ? t('sidebar.waitingCount', waiting) : working ? t('team.running', working) : null, open ? t('sidebar.collapseTeam', keyThread.title) : t('sidebar.expandTeam', keyThread.title)].filter(Boolean).join(' · ')}>
+      {inline && <span className="handover-toggle-kind">{forkItems.length > 0 ? <IconFork size={13} /> : <IconAgents size={13} />}</span>}
+      {stack ? <>
+        {runDot(sorted)}
+        {stack}
+      </> : <>
+        {runDot(sorted)}
+        {!inline && forkItems.length > 0 && <span className="fork-toggle-ico"><IconFork size={12} /></span>}
+        <span>{label}</span>
+        {(waiting || working) > 0 && <span className="team-note">{waiting ? t('sidebar.waitingCount', waiting) : t('team.running', working)}</span>}
+      </>}
+      {!inline && <IconChevron size={13} open={open} />}
+    </button>;
+  };
+  const parallelList = (keyThread: Thread, forkItems: ForkSubchatItem[], team: Thread[]) => {
+    const allThreads = [...forkItems.map((f) => f.thread), ...team];
+    if (!parallelOpenFor(keyThread.id, allThreads)) return null;
+    const sortedTeam = [...team].sort(teamOrder);
+    return <div className="handover-members">
+      {forkItems.map(({ thread: f, handedOver }) => {
+        const mark = threadMark(f, f.id === selectedId);
+        return <button
+          key={f.id}
+          className={`handover-member${f.id === selectedId ? ' active' : ''}`}
+          aria-current={f.id === selectedId ? 'true' : undefined}
+          title={f.forkTag ? `${f.forkTag} · ${f.title}` : f.title}
+          onClick={() => onSelect(f.id)}
+          onContextMenu={(e) => { e.preventDefault(); onThreadMenu(f, e.clientX, e.clientY); }}
+          {...longPress(f)}
+        >
+          <span className={`dot ${mark ?? 'idle'}`} role="img" aria-label={mark === 'waiting' ? waitingLabel(f) : mark ? MARK_LABELS[mark] : t('status.idle')} />
+          {f.forkTag ? <span className="fork-tag-pill">{f.forkTag}</span> : null}
+          {(!f.forkTag || f.title !== f.forkTag) ? <span className="handover-member-name">{f.title}</span> : <span className="handover-member-name" />}
+          {handedOver ? <span className="fork-handed-mark" title={t('sidebar.forkHandedOver')} aria-label={t('sidebar.forkHandedOver')}><IconHandover size={12} /></span> : null}
+          <time className="handover-member-time" dateTime={f.updatedAt}>{timeAgo(f.updatedAt, now)}</time>
+        </button>;
+      })}
+      {sortedTeam.map((m) => {
         const agent = agentById.get(m.agent);
         const mark = threadMark(m, m.id === selectedId);
         return <button
@@ -451,7 +497,27 @@ export function Sidebar({
           <span className="handover-member-name team-member-text">{deliveredPreview(m.coordination?.doing ?? '') || m.title}</span>
           <time className="handover-member-time" dateTime={m.updatedAt}>{timeAgo(m.updatedAt, now)}</time>
         </button>;
-      })}</div>}
+      })}
+      {onForkSubchat && forkItems.length > 0 && (
+        <button type="button" className="fork-add-row" onClick={() => onForkSubchat(keyThread)}>
+          <IconPlus size={12} />
+          <span>{t('sidebar.addForkSubchat')}</span>
+        </button>
+      )}
+    </div>;
+  };
+  // Like Orca's agents under a task: the lead's row, then one line per parallel conversation or member.
+  const entry = (thread: Thread, on?: Elsewhere) => {
+    if (thread.external) return externalRow(thread);
+    const team = teamOf(thread) ?? [];
+    const forkItems = on?.open ? [] : forksOf([thread], team);
+    const allParallel = [...forkItems.map((f) => f.thread), ...team];
+    if (!allParallel.length || on?.open) return row(thread, thread.title, thread.preview, undefined, on);
+    const current = thread.id === selectedId || allParallel.some((m) => m.id === selectedId);
+    return <div key={thread.id} className={`handover-group team-group${parallelOpenFor(thread.id, allParallel) ? ' open' : ''}${current ? ' selected' : ''}`}>
+      {row(thread, thread.title, thread.preview, undefined, on)}
+      {parallelToggle(thread, forkItems, team)}
+      {parallelList(thread, forkItems, team)}
     </div>;
   };
 
@@ -462,22 +528,43 @@ export function Sidebar({
     const marks = [...new Set(members.filter((thread) => thread.id !== latest.id).map((thread) => threadMark(thread, thread.id === selectedId)).filter(Boolean))] as ThreadMark[];
     const chainStack = stackLine(members, false);
     const chainDot = (['waiting', 'error', 'unread', 'running'] as const).find((m) => marks.includes(m));
-    const current = members.some((thread) => thread.id === selectedId);
-    // Like Orca's agents under a task: one card, the latest conversation on top, the chain folded below it.
-    return <div key={key} className={`handover-group${expanded ? ' open' : ''}${current ? ' selected' : ''}`}>
+    // The team and grouped forks move along with a handover, so any segment on the chain carries them.
+    const lead = members.find((thread) => teamOf(thread)?.length) ?? latest;
+    const team = teamOf(lead) ?? [];
+    const forkItems = forksOf(members, team);
+    const allParallel = [...forkItems.map((f) => f.thread), ...team];
+    const hasParallel = allParallel.length > 0;
+    const current = members.some((thread) => thread.id === selectedId) || allParallel.some((m) => m.id === selectedId);
+    // Two orthogonal axes: vertical handover chain + horizontal parallel drawer (forks & team members).
+    return <div key={key} className={`handover-group${expanded || (hasParallel && parallelOpenFor(latest.id, allParallel)) ? ' open' : ''}${current ? ' selected' : ''}`}>
       {row(latest, latest.title.replace(/(?:（接手）)+$/, ''), latest.preview, members)}
-      <button className="handover-toggle" aria-expanded={expanded} onClick={() => setExpandedHandovers((old) => {
-        const next = new Set(old);
-        if (next.has(storageKey)) next.delete(storageKey); else next.add(storageKey);
-        return next;
-      })}
-        aria-label={[t('sidebar.sessions', members.length), expanded ? t('sidebar.collapseHandover', latest.title) : t('sidebar.expandHandover', latest.title)].join(' · ')}>
-        {chainStack ? <>
-          {chainDot && <span className={`dot ${chainDot}`} role="img" aria-label={t('sidebar.otherHandover', MARK_LABELS[chainDot])} title={t('sidebar.otherHandover', MARK_LABELS[chainDot])} />}
-          {chainStack}
-        </> : <span>{t('sidebar.sessions', members.length)}</span>}
-        <IconChevron size={13} open={expanded} />
-      </button>
+      {(() => {
+        const toggleChain = () => {
+          if (!expanded && hasParallel) setTeamOpen((old) => new Map(old).set(latest.id, false));
+          setExpandedHandovers((old) => {
+            const next = new Set(old);
+            if (next.has(storageKey)) next.delete(storageKey); else next.add(storageKey);
+            return next;
+          });
+        };
+        const chainButton = <button className={`handover-toggle${hasParallel ? ' inline' : ''}`} aria-expanded={expanded} onClick={toggleChain}
+          aria-label={[t('sidebar.sessions', members.length), expanded ? t('sidebar.collapseHandover', latest.title) : t('sidebar.expandHandover', latest.title)].join(' · ')}>
+          {hasParallel && <span className="handover-toggle-kind"><IconHandover size={13} /></span>}
+          {chainStack ? <>
+            {chainDot && <span className={`dot ${chainDot}`} role="img" aria-label={t('sidebar.otherHandover', MARK_LABELS[chainDot])} title={t('sidebar.otherHandover', MARK_LABELS[chainDot])} />}
+            {chainStack}
+          </> : <span>{t('sidebar.sessions', members.length)}</span>}
+          {!hasParallel && <IconChevron size={13} open={expanded} />}
+        </button>;
+        if (!hasParallel) return chainButton;
+        // Chain and parallel drawer share one row: each side opens its own list, one at a time.
+        const closeChain = () => setExpandedHandovers((old) => { const next = new Set(old); next.delete(storageKey); return next; });
+        return <div className="handover-toggles">
+          {chainButton}
+          {parallelToggle(latest, forkItems, team, true, closeChain)}
+          <span className="handover-toggles-chevron" aria-hidden="true"><IconChevron size={13} open={expanded || parallelOpenFor(latest.id, allParallel)} /></span>
+        </div>;
+      })()}
       {expanded && <div className="handover-members handover-chain">{members.map((thread) => {
         const agent = agentById.get(thread.agent);
         const mark = threadMark(thread, thread.id === selectedId);
@@ -496,6 +583,7 @@ export function Sidebar({
           <time className="handover-member-time" dateTime={thread.updatedAt}>{timeAgo(thread.updatedAt, now)}</time>
         </button>;
       })}</div>}
+      {hasParallel ? parallelList(latest, forkItems, team) : null}
     </div>;
   });
 

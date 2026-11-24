@@ -4,6 +4,7 @@ if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'
 // Prompt text drives behaviour: "slow" waits until abort, "fail" ends with an error.
 import { personalFixture } from './personal.mjs';
 import { coordinationFixture } from './coordination.mjs';
+import { contextReaderFixture } from './context-reader.mjs';
 import { existsSync, appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -292,6 +293,14 @@ rl.on('line', (line) => {
         pendingTeamReview = () => unwatchFile(file, finish);
         watchFile(file, { interval: 20 }, finish);
         finish();
+        return;
+      }
+      const contextRead = contextReaderFixture(cmd.message);
+      if (contextRead !== null) {
+        reply({ disposition: 'started' });
+        out({ type: 'agent_start' });
+        out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: contextRead } });
+        out({ type: 'agent_settled', aborted: false });
         return;
       }
       const personal = personalFixture(cmd.message);

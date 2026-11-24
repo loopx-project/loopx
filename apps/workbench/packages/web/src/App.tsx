@@ -57,9 +57,9 @@ import { newerBuildAvailable } from './version';
 import { AppearancePanel } from './components/AppearancePanel';
 import { ActionSheet, type SheetTarget } from './components/ActionSheet';
 import { ArchivePanel } from './components/ArchivePanel';
-import { Composer, prefillComposerDraft, type DraftNote } from './components/Composer';
+import { Composer, prefillComposerDraft, replaceAutomaticComposerReference, type DraftNote } from './components/Composer';
 import { HandToAssistant, type MessageSnapshot } from './components/MessageActions';
-import type { ContextReference } from './context-references';
+import { pendingThreadReference, type ContextReference } from './context-references';
 import { CollaborationMenu } from './components/CollaborationMenu';
 import { DirectoryPicker } from './components/DirectoryPicker';
 import { Dialog } from './components/Dialog';
@@ -127,7 +127,7 @@ import { machineSummaries, threadMachine, parseThreadLink } from './extensions/p
 import { createThreadFeed } from './extensions/thread-feed';
 import { cachedAgentMarks, cachedThreads, rememberAgentMarks, rememberThreads } from './thread-cache';
 import { cachedAgents, cachedDraft, cachedModels, rememberAgents, rememberDraft, rememberModels } from './host-cache';
-import { clampSidebarWidth, defaultSidebarWidth, projectDir, savedSidebarWidth, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, type HostSource } from './sidebar';
+import { clampSidebarWidth, defaultSidebarWidth, forkGroupsByRoot, ownRows, projectDir, savedSidebarWidth, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, type HostSource } from './sidebar';
 import { enabledViews, extensionHash, looksLikeExtensionRoute, resolveExtensionRoute } from './extensions/routes';
 import { AgentPicker, type DiscoveredAccount, type DiscoveredAgent, effortsForModel, imagesBlocked, imagesNote, modelName, resolveModel, speedsForModel, ModelPicker, PermissionPicker, UsageMeter, WorkspacePicker } from './components/Pickers';
 import { Sidebar, SIDEBAR_SHORTCUT } from './components/Sidebar';
@@ -142,8 +142,8 @@ import { NoteMarks, type NoteMark } from './components/NoteMarks';
 import { ConnectDialog, DemoBar } from './components/ConnectDialog';
 import { DemoApi, DemoError } from './demo/DemoApi';
 import { EMPTY_MODEL_PREFERENCE, type DraftModelPreference } from '../../daemon/src/model-preferences';
-import { QUICK_SWITCH_HIDDEN_KEY, clampQuickSwitchBottom, savedQuickSwitchBottom, saveQuickSwitchBottom } from './quick-switch';
-import { IconDownload, IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowLeft, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
+import { ThreadQuickSwitch } from './components/ThreadQuickSwitch';
+import { IconDownload, IconCheck, IconBell, AgentMark, IconActivity, IconAgents, IconArchive, IconArrowDown, IconBack, IconClose, IconEdit, IconFolder, IconGauge, IconGlobe, IconList, IconMenu, IconSettings, IconMore, IconOverview, IconPalette, IconPlus, IconPuzzle, IconServer, IconShield, IconSidebar, IconSignIn, IconSignOut, IconSparkle, IconTerminal, IconTrace, IconLanguage, IconWaveform, IconSideChat } from './components/icons';
 import { StatReadings } from './components/SessionStats';
 import { ThreadTracePanel } from './components/TracePanel';
 import { chooseLocale, locale, LOCALES, localeChoice, t } from './i18n';
@@ -263,132 +263,6 @@ const OVERVIEW_OPEN_KEY = 'calli.overview.open';
 const MEMBER_DEFAULTS_KEY = 'calli.coord.defaults';
 /** A plan the user chose to leave be, by thread: the proposal's key, so a reload does not ask again. */
 const PLAN_SKIP_KEY = 'calli:plan-skipped';
-
-const QUICK_SWITCH_SIDE = 10;
-function ThreadQuickSwitch({ threads, selectedId, agents, onSelect }: {
-  threads: Thread[];
-  selectedId: string;
-  agents: AgentInfo[];
-  onSelect: (id: string) => void;
-}) {
-  const selectedIndex = threads.findIndex((thread) => thread.id === selectedId);
-  const items = useMemo(() => selectedIndex < 0 ? [] : threads.slice(Math.max(0, selectedIndex - QUICK_SWITCH_SIDE), Math.min(threads.length, selectedIndex + QUICK_SWITCH_SIDE + 1)), [threads, selectedIndex]);
-  const root = useRef<HTMLDivElement>(null);
-  const current = useRef<HTMLButtonElement | null>(null);
-  const start = useRef<{ pointerId: number; x: number; y: number; bottom: number; moved: boolean } | null>(null);
-  const [open, setOpen] = useState(false);
-  const [hidden, setHidden] = useStoredFlag(QUICK_SWITCH_HIDDEN_KEY);
-  const [bottom, setBottom] = useState(savedQuickSwitchBottom);
-  const agentById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
-  // The panel is short: it opens on the current session, with its neighbours above and below.
-  useLayoutEffect(() => { if (open) current.current?.scrollIntoView({ block: 'center' }); }, [open]);
-  useEffect(() => {
-    if (!open) return;
-    // Dismissing is all a tap outside does: what lies under it is not pressed as well.
-    const onPointerDown = (e: PointerEvent) => {
-      if (!root.current || root.current.contains(e.target as Node)) return;
-      setOpen(false);
-      const swallow = (click: MouseEvent) => { click.stopPropagation(); click.preventDefault(); };
-      document.addEventListener('click', swallow, { capture: true, once: true });
-      window.setTimeout(() => document.removeEventListener('click', swallow, { capture: true }), 500);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('pointerdown', onPointerDown, true);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown, true);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-  if (hidden || selectedIndex < 0 || items.length <= 1) return null;
-  const release = (el: HTMLElement, pointerId: number) => {
-    if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
-    start.current = null;
-  };
-  return (
-    <div className="quick-switch" ref={root}>
-      {/* A small visible handle near the right edge, inset from iOS's own edge gestures. Tap it or
-          pull it left to open the panel; drag it up or down to move it out of the way of text. It
-          covers only its own few pixels, so selecting text elsewhere is never intercepted. */}
-      <button
-        type="button"
-        className={`quick-switch-handle${open ? ' open' : ''}`}
-        style={{ bottom: `calc(${bottom}px + var(--safe-bottom))` }}
-        aria-label={t('quickSwitch.sessions')}
-        aria-expanded={open}
-        onPointerDown={(e) => {
-          if (e.pointerType === 'mouse' && e.button !== 0) return;
-          e.currentTarget.setPointerCapture(e.pointerId);
-          start.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, bottom, moved: false };
-        }}
-        onPointerMove={(e) => {
-          const from = start.current;
-          if (from?.pointerId !== e.pointerId) return;
-          const dx = from.x - e.clientX;
-          const dy = e.clientY - from.y;
-          if (!from.moved && dx > 24 && dx > Math.abs(dy)) { release(e.currentTarget, e.pointerId); setOpen(true); return; }
-          if (!from.moved && Math.abs(dy) > 8) from.moved = true;
-          if (from.moved) setBottom(clampQuickSwitchBottom(from.bottom - dy));
-        }}
-        onPointerUp={(e) => {
-          const from = start.current;
-          if (from?.pointerId !== e.pointerId) return;
-          release(e.currentTarget, e.pointerId);
-          if (from.moved) saveQuickSwitchBottom(bottom);
-          else setOpen((was) => !was);
-        }}
-        onPointerCancel={(e) => {
-          if (start.current?.pointerId === e.pointerId) release(e.currentTarget, e.pointerId);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            e.preventDefault();
-            const next = clampQuickSwitchBottom(bottom + (e.key === 'ArrowUp' ? 24 : -24));
-            setBottom(next);
-            saveQuickSwitchBottom(next);
-          }
-        }}
-        onClick={(e) => { if (e.detail === 0) setOpen((was) => !was); }}
-      ><IconArrowLeft size={12} /></button>
-      {open && (
-        <div className="quick-switch-panel" role="listbox" aria-label={t('quickSwitch.sessions')}>
-          {items.map((thread) => {
-            const agent = agentById.get(thread.agent);
-            const isCurrent = thread.id === selectedId;
-            const place = thread.scratch ? t('projects.none') : folderName(projectDir(thread).cwd);
-            return (
-              <button
-                type="button"
-                key={thread.id}
-                ref={isCurrent ? current : undefined}
-                className={`quick-switch-card${isCurrent ? ' current' : ''}`}
-                role="option"
-                aria-selected={isCurrent}
-                onClick={() => {
-                  setOpen(false);
-                  if (!isCurrent) onSelect(thread.id);
-                }}
-              >
-                <span className="quick-switch-title">{thread.title}</span>
-                <span className="quick-switch-meta">
-                  {agent?.icon && <AgentMark path={agent.icon} size={13} />}
-                  <span>{agent?.label ?? thread.agent}</span>
-                  <span>{place}</span>
-                  {thread.status === 'running' && <span className="dot running" aria-label={t('status.running')} />}
-                  {thread.waiting && <span className="dot waiting" aria-label={t('notices.unknown.label')} />}
-                  {thread.unread && !isCurrent && <span className="dot unread" aria-label={t('sidebar.unread')} />}
-                </span>
-              </button>
-            );
-          })}
-          <button type="button" className="quick-switch-hide" onClick={() => { setOpen(false); setHidden(true); }}>{t('quickSwitch.hide')}</button>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function savedMemberDefaults(key: string): Record<string, MemberDefault> {
   try {
@@ -999,10 +873,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [restore, setRestore] = useState<{ text: string; nonce: number; mentions?: AgentMention[] } | null>(null);
   // Text quoted out of a message by selecting it.
   const composerDraftKey = hostId ? `host:${hostId}:${selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new')}` : selectedId ?? (draftTeam ? `new:team:${draftTeam}` : 'new');
+  const [draftGeneration, setDraftGeneration] = useState(0);
+  const draftGenerationRef = useRef(0);
+  const composerScope = JSON.stringify([composerDraftKey, draftGeneration]);
+  const composerScopeRef = useRef(composerScope); composerScopeRef.current = composerScope;
   const [noteSignal, setNoteSignal] = useState<{ draftKey: string; note: DraftNote & { nonce: number } } | null>(null);
   const pendingNoteId = useRef<string | null>(null);
   pendingNoteId.current = noteSignal?.note.id ?? null;
-  const [messageReference, setMessageReference] = useState<{ draftKey: string; value: ContextReference; nonce: number } | null>(null);
+  const [messageReference, setMessageReference] = useState<{ scope: string; value: ContextReference; nonce: number } | null>(null);
   const [assistantMessage, setAssistantMessage] = useState<MessageSnapshot | null>(null);
   const messageAssistantApi = useMemo(() => hostId === null ? api : new Api(token), [api, hostId, token]);
   const messageSnapshot = async (text: string, turnId: string, threadId?: string): Promise<MessageSnapshot> => {
@@ -1043,7 +921,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The passage a side chat was opened for, if one is open.
   const [sideAsk, setSideAsk] = useState<{ text: string; nonce: number; source?: Thread } | null>(null);
   // A message waiting for the user to confirm sending into a session the terminal also used.
-  const [pendingSend, setPendingSend] = useState<{ text: string; images: PreparedImage[]; videos?: PreparedVideo[]; mentions?: AgentMention[]; resolve: () => void; reject: (e: unknown) => void } | null>(null);
+  const [pendingSend, setPendingSend] = useState<{ text: string; images: PreparedImage[]; videos?: PreparedVideo[]; mentions?: AgentMention[]; references: string[]; resolve: () => void; reject: (e: unknown) => void } | null>(null);
   const [pageHidden, setPageHidden] = useState(() => document.hidden);
   const baseTitle = useRef(document.title);
 
@@ -1301,7 +1179,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [timeline, planSkip]);
   const waitingOn = waiting[0] ?? null;
 
-  const topLevelThreads = useMemo(() => threads.filter((t) => !t.coordination || t.coordination.rootId === t.id || !threads.some((r) => r.id === t.coordination!.rootId)), [threads]);
+  const topLevelThreads = useMemo(() => ownRows(threads), [threads]);
   // Her conversation is reached through her, from the sidebar's own row and the desk, not listed twice.
   const listedThreads = useMemo(() => routerThreadId ? topLevelThreads.filter((t) => t.id !== routerThreadId) : topLevelThreads, [topLevelThreads, routerThreadId]);
 
@@ -1324,6 +1202,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     }
     return byLead;
   }, [threads]);
+  const forkMembers = useMemo(() => forkGroupsByRoot(threads), [threads]);
 
   // A takeover under way, from the button on a turn that failed because the plan ran out.
   const [takingOver, setTakingOver] = useState(false);
@@ -2204,7 +2083,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return id;
   };
 
-  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void) => {
+  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void, references: string[] = []) => {
     setError(null);
     let id = selectedId;
     const created = (threadId: string) => onCreated?.(hostId ? `host:${hostId}:${threadId}` : threadId);
@@ -2216,7 +2095,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       }
       if (!id && draftTeam) {
         if (videos.length) throw new Error(t('teams.attachments'));
-        const task = await api.dispatchTeam(draftTeam, text, draftCwd, images.map(({ data, mimeType }) => ({ data, mimeType })));
+        const task = await api.dispatchTeam(draftTeam, text, draftCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), references);
         created(task.threadId);
         setSelectedId(task.threadId); setDraftTeam(null); setDraftSectionId(null);
         setView('thread'); void refreshThreads(); return;
@@ -2231,7 +2110,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         id,
         text,
         images.map(({ data, mimeType }) => ({ data, mimeType })),
-        { queue: true, mentions, collaboration, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(id!, video.file)).id)) },
+        { queue: true, mentions, collaboration, references, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(id!, video.file)).id)) },
       );
       void refreshThreads();
     } catch (e) {
@@ -2245,14 +2124,14 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     }
   };
 
-  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void) => {
+  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void, references: string[] = []) => {
     // The terminal wrote to this session after the hub last did. Both sides writing the same session
     // interleaves turns, so ask before joining in again.
     // The composer keeps the draft and its pictures until this settles, so backing out loses nothing.
     if (selectedId && selected?.terminalActivity) {
-      return new Promise<void>((resolve, reject) => setPendingSend({ text, images, videos, mentions, resolve, reject }));
+      return new Promise<void>((resolve, reject) => setPendingSend({ text, images, videos, mentions, references, resolve, reject }));
     }
-    await performSend(text, images, true, mentions, videos, onCreated);
+    await performSend(text, images, true, mentions, videos, onCreated, references);
   };
 
   // Stopping means stopping: messages that were waiting are not sent. Their text goes back in the box.
@@ -2503,9 +2382,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       onOpen: () => openExtensionView(extensionHash(v)),
     }));
 
-  const newThread = (opts: { cwd?: string; sectionId?: string | null; scratch?: boolean } = {}) => navigate(() => {
+  const newThread = (opts: { cwd?: string; sectionId?: string | null; scratch?: boolean; beside?: Thread } = {}) => navigate(() => {
     void modelPreferences.refresh();
     if (showcase) { showcase.onInstall(); return; }
+    const targetKey = hostId ? `host:${hostId}:${opts.beside || !draftTeam ? 'new' : `new:team:${draftTeam}`}` : opts.beside || !draftTeam ? 'new' : `new:team:${draftTeam}`;
+    // Directory selection and visible read attachments are separate; restoring the former never recreates the latter.
+    replaceAutomaticComposerReference(targetKey, opts.beside ? pendingThreadReference(opts.beside) : null);
+    const generation = ++draftGenerationRef.current;
+    composerScopeRef.current = JSON.stringify([targetKey, generation]);
+    setDraftGeneration(generation);
+    setMessageReference(null); setNoteSignal(null); setRestore(null);
     setSelectedId(null);
     setView('thread');
     setDrawer(false);
@@ -3145,6 +3031,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           showEmptySections={!showcase}
           threads={listedThreads}
           members={teamMembers}
+          forks={forkMembers}
+          onForkSubchat={threadActions.forkSubchat}
           sections={sections}
           agents={sidebarAgents}
           selectedId={selectedId}
@@ -3528,13 +3416,15 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 setNoteSignal({ draftKey: composerDraftKey, note: { id, quote, comment: '', nonce: Date.now(), ...(threadId && threadId !== selectedId ? { source: { threadId, turnId } } : {}) } });
               }}
               onMessageContext={!demo && !voice.state.active && !writing ? async (text, turnId, threadId) => {
-                const draftKey = composerDraftKey;
+                const scope = composerScope;
                 const source = await messageSnapshot(text, turnId, threadId);
+                if (composerScopeRef.current !== scope) return;
                 const value = await api.createReference({ kind: 'message', ...source });
-                setMessageReference({ draftKey, value, nonce: Date.now() });
+                if (composerScopeRef.current === scope) setMessageReference({ scope, value, nonce: Date.now() });
               } : undefined}
               onHandToAssistant={!demo ? async (text, turnId, threadId) => setAssistantMessage(await messageSnapshot(text, turnId, threadId)) : undefined}
               historyThreadId={selected.id}
+              historyTitle={selected.title}
               items={threadItems}
               revealTurnId={jump?.threadId === selected.id ? jump.turnId : undefined}
               roots={threadRoots}
@@ -3638,6 +3528,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           note={noteSignal?.draftKey === composerDraftKey ? noteSignal.note : null} onNotesChange={onNotesChange}
         /> : <Composer
           draftKey={composerDraftKey}
+          draftGeneration={draftGeneration}
           voiceControls={voice.state.active ? <VoiceControls session={voice.state} onMute={voice.toggleMute} onStop={() => void voice.stop()} /> : undefined}
           running={voice.state.active ? false : running}
           disabled={modeBusy || (!selected && (!draftCwd || modelPreferences.status !== 'ready'))}
@@ -3646,8 +3537,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
             try { await voice.appendText(text, images.map(img => ({ data: img.data, mimeType: img.mimeType })), await Promise.all(videos.map(async video => (await api.uploadVideo(selectedId!, video.file)).id))); }
             catch (error) { handleError(error); throw error; }
           } : send}
-          referenceSource={!demo && !voice.state.active ? { api, cwd: activeCwd, threadId: selected?.id } : undefined}
-          reference={messageReference?.draftKey === composerDraftKey ? messageReference : null}
+          referenceSource={!demo && !voice.state.active ? { api, cwd: activeCwd, threadId: selected?.id, sourceId: selected?.handover?.sourceId } : undefined}
+          reference={messageReference?.scope === composerScope ? messageReference : null}
           onReferenceConsumed={id => setMessageReference(current => current?.value.id === id ? null : current)}
           mentionOptions={collaborationOptions}
           mentionIcon={collaborationIcon}
@@ -3664,7 +3555,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onStop={stop}
           header={header}
           writingMode={draftTeam ? undefined : { active: !!writing, disabled: writingBusy, onChange: active => void changeWriting(active ? 'draft' : null) }}
-          takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note) => threadActions.takeOver(selected!, agent, note) } : undefined}
+          takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note, references) => threadActions.takeOver(selected!, agent, note, references) } : undefined}
           banner={<>{selected && !api.demo && drivenByApp(selected.loopxInfo, selected.origin) && <p className="loopx-driven" role="status">{t('loopx.driven')}</p>}{writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
             onOpen={file => void openFileLink(file).catch(handleError)}
             habits={habitsPath ? { path: habitsPath, ready: habitsReady } : null}
@@ -3860,7 +3751,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onConfirm={() => {
             const p = pendingSend;
             setPendingSend(null);
-            performSend(p.text, p.images, false, p.mentions, p.videos).then(p.resolve, p.reject);
+            performSend(p.text, p.images, false, p.mentions, p.videos, undefined, p.references).then(p.resolve, p.reject);
           }}
         />
       )}
@@ -3914,6 +3805,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           effort={sideAsk.source ? sideAsk.source.effort : effort}
           quoteText={sideAsk.text}
           sourceTitle={(sideAsk.source ?? selected)?.title ?? null}
+          sourceThreadId={(sideAsk.source ?? selected)?.id ?? null}
           forkSourceId={sideAsk.source ? (capsOf(sideAsk.source.agent)?.fork && !forkBlocked(sideAsk.source) ? sideAsk.source.id : null) : selected && activeCaps?.fork && !forkBlocked(selected) ? selected.id : null}
           attachBlocked={sideAgentInfo?.capabilities.images === false ? t('app.noImages', agentLabel(sideAgent)) : null}
           onClose={() => setSideAsk(null)}

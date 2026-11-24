@@ -220,7 +220,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
           <p>{m.latest?.result?.split(/<(?:loochat|limi)-(?:coordination|team)>/)[0].slice(-160) || m.latest?.text.slice(0, 160) || t('team.waitingTask')}</p>
           {m.thread?.unread && <span className="coord-unread">{t('team.newOutput')}</span>}
         </button>)}
-      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
+      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} historyTitle={thread.title} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
     </div>
     {memberId && !atBottom && <button className="agent-panel-latest" onClick={() => { stick.current = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>{t('team.latest')}</button>}
     {/* A member is written to directly, in a box like the lead's; going through the lead instead is
@@ -232,10 +232,10 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
         header={null} left={remote ? null : memberModel?.(thread, 'permission') ?? null} right={remote ? null : memberModel?.(thread, 'model') ?? null} commands={[]} actions={[]} hiddenCommands={[]} onAction={() => {}}
         attachBlocked={agents.find(a => a.id === thread.agent)?.capabilities?.images ? null : t('app.noImages', agents.find(a => a.id === thread.agent)?.label ?? thread.agent)}
         note={noteSignal?.draftKey === memberDraftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handleMemberNotes : undefined} restore={restore?.thread === thread.id ? restore : null} onError={onError}
-        onSend={async (text, images, mentions, videos = []) => {
+        onSend={async (text, images, mentions, videos = [], _onCreated, references = []) => {
           try {
             await threadApi.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
-              queue: true, mentions, videos: await Promise.all(videos.map(async video => (await threadApi.uploadVideo(thread.id, video.file)).id)),
+              queue: true, mentions, references, videos: await Promise.all(videos.map(async video => (await threadApi.uploadVideo(thread.id, video.file)).id)),
             });
             stick.current = true; onRefresh();
           } catch (error) { onError(error); throw error; }

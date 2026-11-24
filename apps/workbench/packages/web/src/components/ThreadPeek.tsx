@@ -27,6 +27,7 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
   const [events, setEvents] = useState<StoredEvent[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
+  const [restore, setRestore] = useState<{ text: string; nonce: number } | null>(null);
   const [olderError, setOlderError] = useState('');
   const [cursor, setCursor] = useState<number | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -152,18 +153,18 @@ export function ThreadPeek({ api, initial, draftKey, returnFocus, onClose, onOpe
       stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
       readingPosition.capture();
     }}>
-      {!loaded || !thread ? (!error && <ConversationSkeleton compact />) : <ThreadView historyApi={api} historyThreadId={thread.id}
+      {!loaded || !thread ? (!error && <ConversationSkeleton compact />) : <ThreadView historyApi={api} historyThreadId={thread.id} historyTitle={thread.title}
         items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={loadImage} loadFile={loadFile}
         hasOlder={cursor !== null} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} />}
     </div>
-    {thread && <Composer attachBlocked={null} restore={null} note={noteSignal?.draftKey === draftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handlePeekNotes : undefined} draftKey={draftKey} running={timeline.running || thread?.status === 'running'}
+    {thread && <Composer attachBlocked={null} restore={restore} note={noteSignal?.draftKey === draftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handlePeekNotes : undefined} draftKey={draftKey} running={timeline.running || thread?.status === 'running'}
       placeholder={timeline.running ? t('sideChat.queuePlaceholder') : t('app.placeholder.continue')}
-      onSend={async (text, images, _mentions, videos = []) => {
+      onSend={async (text, images, _mentions, videos = [], _onCreated, references = []) => {
         await api.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })),
-          { queue: true, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(thread.id, video.file)).id)) });
+          { queue: true, references, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(thread.id, video.file)).id)) });
         await refresh();
       }}
-      onStop={() => void api.cancel(thread.id).catch(reportError)} onError={setError}
+      onStop={() => void api.cancel(thread.id).then(result => { if (result.dropped.length) setRestore({ text: result.dropped.join('\n\n'), nonce: Date.now() }); void refresh(); }).catch(reportError)} onError={setError}
       header={null} left={null} right={null} commands={[]} actions={[]} hiddenCommands={[]} onAction={() => undefined}
       queued={thread.queued} onRemoveQueued={id => void api.removeQueued(thread.id, id).then(refresh).catch(reportError)}
       onEditQueued={async id => { const taken = await api.removeQueued(thread.id, id); return { ...taken, videos: await restoreVideos(api, thread.id, taken.videos) }; }}

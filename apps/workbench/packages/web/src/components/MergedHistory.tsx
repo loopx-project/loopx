@@ -167,7 +167,7 @@ function EarlierSegment({ segment, api, agentLabel, fork, onFork, onQuote, onMes
   const loadImage = useMemo(() => (id: string) => api.attachment(thread.id, id), [api, thread.id]);
   const loadFile = useMemo(() => (path: string) => api.threadFile(thread.id, path), [api, thread.id]);
   return <div data-history-thread={thread.id} className="history-segment">
-    <ThreadView onQuote={onQuote} onMessageContext={onMessageContext} onHandToAssistant={onHandToAssistant} historyApi={api} historyThreadId={thread.id} items={timeline.items} roots={roots} loadImage={loadImage} loadFile={loadFile}
+    <ThreadView onQuote={onQuote} onMessageContext={onMessageContext} onHandToAssistant={onHandToAssistant} historyApi={api} historyThreadId={thread.id} historyTitle={thread.title} items={timeline.items} roots={roots} loadImage={loadImage} loadFile={loadFile}
       onOpenFile={onOpenFile} onPreview={onPreview} onFork={fork.enabled ? onFork : undefined} forkAnyTurn={fork.any} {...older}
       beforeItems={<>{prefix}{!page.hasOlder && handedOver(thread) && <HandoverBoundary api={api} thread={thread} agentLabel={agentLabel} turnId={page.events.find(event => event.type === 'turn.started')?.turnId ?? undefined} />}
         {!timeline.items.length && <div className="row chain-beginning">{t('handover.chain.empty')}</div>}</>} />

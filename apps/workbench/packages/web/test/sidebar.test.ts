@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExternalSession, Section, Thread } from '../src/api.js';
-import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, handoverGroups, isLoopxRow, markTerms, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
+import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, forkGroupsByRoot, handoverGroups, isLoopxRow, markTerms, ownRows, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
 import { threadMark } from '../src/notices.js';
 
 let clock = 0;
@@ -355,4 +355,34 @@ test('the LoopX filter keeps threads and not-yet-imported sessions that belong t
   const goalSession = externalThreadRow({ agent: 'codex', sessionId: 's1', cwd: '/w', title: 'x', updatedAt: null, loopx: { ...info, missing: true } });
   const plainSession = externalThreadRow({ agent: 'codex', sessionId: 's2', cwd: '/w', title: 'y', updatedAt: null });
   assert.deepEqual([goalThread, plainThread, goalSession, plainSession].filter(isLoopxRow).map((r) => r.id), ['t1', 'ext:codex:s1']);
+});
+
+test('grouped forks fold under their root (including across root handovers) and collapse internal handovers into one row', () => {
+  const root1 = thread('root-1', { createdAt: '2026-11-23T01:00:00Z', updatedAt: '2026-11-23T01:00:00Z' });
+  const root2 = thread('root-2', {
+    createdAt: '2026-11-23T02:00:00Z',
+    updatedAt: '2026-11-23T02:00:00Z',
+    handover: { sourceId: root1.id, title: root1.title, agent: root1.agent, mode: 'continue' },
+  });
+  const forkA = thread('fork-a', { forkGroup: root1.id, forkTag: '分析 one page', updatedAt: '2026-11-23T03:00:00Z' });
+  const forkB1 = thread('fork-b1', { forkGroup: root1.id, forkTag: '写代码', createdAt: '2026-11-23T03:10:00Z', updatedAt: '2026-11-23T03:10:00Z' });
+  const forkB2 = thread('fork-b2', {
+    forkGroup: root1.id,
+    forkTag: '写代码',
+    createdAt: '2026-11-23T04:00:00Z',
+    updatedAt: '2026-11-23T04:00:00Z',
+    handover: { sourceId: forkB1.id, title: forkB1.title, agent: forkB1.agent, mode: 'continue' },
+  });
+  const orphanFork = thread('orphan', { forkGroup: 'archived-root', forkTag: '独立保留' });
+
+  const all = [root1, root2, forkA, forkB1, forkB2, orphanFork];
+  assert.deepEqual(new Set(ids(ownRows(all))), new Set([root1.id, root2.id, orphanFork.id]));
+
+  const map = forkGroupsByRoot(all);
+  const items = map.get(root1.id) ?? [];
+  assert.equal(items.length, 2);
+  const itemB = items.find((i) => i.thread.id === forkB2.id);
+  const itemA = items.find((i) => i.thread.id === forkA.id);
+  assert.ok(itemA && !itemA.handedOver);
+  assert.ok(itemB && itemB.handedOver);
 });

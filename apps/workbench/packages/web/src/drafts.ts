@@ -43,11 +43,12 @@ type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem'>;
 function readNotes(value: { notes?: unknown; quote?: unknown }): StoredDraft['notes'] {
   if (Array.isArray(value.notes)) {
     return value.notes
-      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; source?: { threadId?: unknown; turnId?: unknown; elsewhere?: unknown } } => !!n && typeof n.quote === 'string')
+      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; reference?: unknown; source?: { threadId?: unknown; turnId?: unknown; elsewhere?: unknown } } => !!n && typeof n.quote === 'string')
       .map((n) => ({
         quote: n.quote, comment: typeof n.comment === 'string' ? n.comment : '',
         ...(typeof n.file === 'string' && n.file ? { file: n.file } : {}),
         ...(typeof n.source?.threadId === 'string' && typeof n.source.turnId === 'string' ? { source: { threadId: n.source.threadId, turnId: n.source.turnId, ...(n.source.elsewhere === true ? { elsewhere: true } : {}) } } : {}),
+        ...(readReferences([n.reference])[0] ? { reference: readReferences([n.reference])[0] } : {}),
       }));
   }
   // Drafts saved before notes held a single quote.
@@ -80,7 +81,7 @@ export function writeDraft(storage: Storage, key: string, draft: { text: string;
       text: draft.text,
       ...(draft.references?.length ? { references: draft.references } : {}),
       ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
-      notes: draft.notes.map(({ quote, comment, file, source }) => ({ quote, comment, ...(file ? { file } : {}), ...(source ? { source } : {}) })),
+      notes: draft.notes.map(({ quote, comment, file, source, reference }) => ({ quote, comment, ...(file ? { file } : {}), ...(source ? { source } : {}), ...(reference ? { reference } : {}) })),
       at: now,
       ...(draft.sending !== undefined ? { sending: draft.sending } : {}),
     };

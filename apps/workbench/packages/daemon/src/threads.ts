@@ -1,6 +1,6 @@
 import { applyModelPreference, readModelPreferences, type DraftModelPreference, type DraftModelPreferences, type ModelPreferencePatch } from './model-preferences.js';
 import { PreviewNotes } from './preview-notes.js';
-import { ContextReferences } from './context-references.js';
+import { ContextReferences, referenceBody, referenceDisplay } from './context-references.js';
 import { GitManager, gitWorktreeRoot } from './git.js';
 import { PersonalBriefSchedule } from './personal-brief-schedule.js';
 import { changedFiles, mentionedFiles, checkMissingFiles, MAX_OUTPUT_ITEMS, type ThreadOutputs } from './outputs.js';
@@ -13,7 +13,7 @@ import { QuotaResume, type ResumeView } from './quota-resume.js';
 import type { VoiceTransport } from './voice-sessions.js';
 import { VoiceConversation } from './voice-conversation.js';
 import { turnOutcome } from './lifecycle.js';
-import { UserInputs } from './user-input.js';
+import { UserInputs, type InputSubmission } from './user-input.js';
 import type { LoginState, SystemPrompt, WorkMode } from './adapters/types.js';
 import { diagnosticFailure, modelLoginFailure } from './adapters/diagnostics.js';
 import { turnAnswer, type CoordinationManager, type CoordinationSetup } from './coordination.js';
@@ -46,7 +46,7 @@ import { findFiles, listDir, readText, type Listing, type TextFile } from './bro
 import { referencedFile } from './artifacts.js';
 import { imagePathNote, isVideoType, MAX_IMAGES, sniffImageType, sniffSvg, type AttachmentStore, type StoredAttachment, type StoredVideo } from './attachments.js';
 import { HttpError } from './errors.js';
-import { handoverBrief, handoverPrompt, synthesizeBrief, turnMessage } from './handover.js';
+import { chainSegments, handoverBrief, handoverPrompt, synthesizeBrief, turnMessage, type ChainSegment } from './handover.js';
 import { McpManager } from './mcp.js';
 import { SkillsManager } from './skills.js';
 import { isWithinWorkdirs, Workdirs } from './workdirs.js';
@@ -173,6 +173,8 @@ interface QueuedTurn {
   error?: string;
   workMode?: WorkMode;
   mentions?: unknown[];
+  /** Validated pending attachment ids; a read grant is created only when this turn is delivered. */
+  references?: string[];
   /** Typed by the person into this thread, rather than sent in by the hub. */
   fromUser?: boolean;
   id: string;
@@ -180,6 +182,9 @@ interface QueuedTurn {
   images: unknown[];
   videos: string[];
 }
+
+interface HandoverBoundary { sourceId: string; references: string[]; handover?: HandoverLink }
+interface HumanHandoverNote { text: string; references: string[] }
 
 /** A thread's native goal as the API serves it to the goal card. */
 export interface GoalView {
@@ -359,7 +364,10 @@ export class ThreadManager {
 
   /** Turns in flight. `cancelRequested` covers cancels that arrive before the agent session exists. */
   private readonly running = new Map<string, { turnId: string; cancelRequested: boolean; since: string }>();
-  readonly inputs = new UserInputs((thread, turn, type, data) => this.emitThreadEvent(thread, turn, type, data));
+  readonly inputs = new UserInputs(
+    (thread, turn, type, data) => this.emitThreadEvent(thread, turn, type, data),
+    submission => this.acceptInput(submission),
+  );
   private readonly dispatchingQueues = new Set<string>();
   private readonly startingTurns = new Map<string, Promise<unknown>>();
   private readonly changingModes = new Set<string>();
@@ -394,6 +402,12 @@ export class ThreadManager {
   private readonly syncing = new Set<string>();
   /** Messages waiting for the running turn of their thread to finish. Kept in memory only. */
   private readonly queues = new Map<string, QueuedTurn[]>();
+  /** Private replay evidence, never inferred from a channel, fromUser flag, or protocol text. */
+  private readonly queuedReferenceInputs = new WeakMap<object, string[]>();
+  /** Frozen handovers and authenticated notes cannot be minted from the turn input or its wire. */
+  private readonly handoverBoundaries = new WeakMap<object, HandoverBoundary>();
+  private readonly humanHandoverNotes = new WeakSet<HumanHandoverNote>();
+  private readonly handoverNoteInputs = new WeakMap<object, HumanHandoverNote>();
   /** Latest provider queue position per thread. Kept in memory; it is only meaningful while a turn runs. */
   private readonly modelQueues = new Map<string, ModelQueueState>();
 
@@ -749,13 +763,21 @@ export class ThreadManager {
    * conversation; the hub copies the event log and the images. With `turnId` the copy ends where
    * that turn ended, on both sides; without it, or when that turn is the last, it is the whole thread.
    */
-  async forkThread(id: string, opts: { turnId?: string; worktree?: boolean } = {}): Promise<ThreadView> {
+  async forkThread(
+    id: string,
+    opts: { turnId?: string; worktree?: boolean; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
+  ): Promise<ThreadView> {
     const thread = this.getThread(id);
     const adapter = this.adapters.get(thread.agent);
-    if (!adapter?.capabilities.fork || !adapter.forkSession) throw new HttpError(400, `${thread.agent} cannot fork a conversation`);
-    if (!thread.agentSessionId) throw new HttpError(400, 'there is nothing to fork yet; send a message first');
+    const lightweight = opts.lightweight === true;
+    if (!adapter) throw new HttpError(400, `no such agent: ${thread.agent}`);
+    if (lightweight && opts.turnId) throw new HttpError(400, 'a lightweight fork starts a fresh session and does not accept turnId');
+    if (!lightweight) {
+      if (!adapter.capabilities.fork || !adapter.forkSession) throw new HttpError(400, `${thread.agent} cannot fork a conversation`);
+      if (!thread.agentSessionId) throw new HttpError(400, 'there is nothing to fork yet; send a message first');
+    }
     const running = this.running.has(id);
-    if (running && !opts.turnId) throw new HttpError(409, 'wait for the running turn to finish before forking');
+    if (!lightweight && running && !opts.turnId) throw new HttpError(409, 'wait for the running turn to finish before forking');
 
     // Where the hub's copy stops, and which of its turns that is. Null: the whole thread.
     let cut: { upToSeq: number; hubIndex: number; hubKeys: string[] } | null = null;
@@ -783,9 +805,9 @@ export class ThreadManager {
       if (added) await removeWorktree(added.main, added.tree).catch(() => undefined);
     };
 
-    let forkedSessionId: string;
+    let forkedSessionId: string | null = null;
     try {
-      const forkRef = cut ? await this.agentForkRef(thread, adapter, cut.hubIndex, cut.hubKeys) : undefined;
+      const forkRef = !lightweight && cut ? await this.agentForkRef(thread, adapter, cut.hubIndex, cut.hubKeys) : undefined;
       if (opts.worktree) {
         const plan = await this.worktreePlan(thread);
         if (!plan.checkout) throw new HttpError(400, WORKTREE_REFUSALS[plan.reason]);
@@ -798,40 +820,144 @@ export class ThreadManager {
         if (!isWithinWorkdirs(cwd, this.workdirs)) throw new HttpError(400, WORKTREE_REFUSALS.outside_workdirs);
         worktree = { root: tree.root, branch: tree.branch, of: thread.worktree?.of ?? thread.cwd };
       }
-      forkedSessionId = await adapter.forkSession(thread.agentSessionId, thread.cwd, forkRef, added ? cwd : undefined);
+      if (!lightweight) {
+        forkedSessionId = await adapter.forkSession!(thread.agentSessionId!, thread.cwd, forkRef, added ? cwd : undefined);
+      }
     } catch (err) {
       await undoWorktree();
       if (err instanceof HttpError) throw err;
       throw new HttpError(502, `could not fork the ${thread.agent} session: ${err instanceof Error ? err.message : err}`);
     }
 
-    this.attachments.copyThread(thread.id, copyId);
+    if (!lightweight) this.attachments.copyThread(thread.id, copyId);
+    const sourceSeq = cut?.upToSeq ?? this.store.history.latest(thread.id);
+    const chainLink = thread.handover && !thread.handover.detached
+      ? { sourceId: thread.id, title: thread.title, agent: thread.agent, mode: 'branch' as const, method: 'resume' as const, sourceSeq }
+      : undefined;
+    const grouped = opts.grouped === true;
+    const rawTag = typeof opts.forkTag === 'string' ? opts.forkTag.trim() : '';
+    if (rawTag.length > 40) throw new HttpError(400, 'forkTag must be at most 40 characters');
+    const forkTag = grouped && rawTag ? rawTag : null;
+    const forkGroup = grouped ? this.forkGroupRoot(thread) : null;
+    const firstMessage = typeof opts.firstMessage === 'string' ? opts.firstMessage.trim() : '';
+    const copyTitle = grouped
+      ? (firstMessage ? firstMessage.slice(0, 40) : forkTag || `${thread.title}（分叉）`)
+      : `${thread.title}（分叉）`;
     try {
       this.store.transaction(() => {
         this.store.createThread({
           id: copyId,
           agent: thread.agent,
           cwd,
-          title: `${thread.title}（分叉）`,
+          title: copyTitle,
           permissionMode: thread.permissionMode,
           workMode: thread.workMode,
           speed: thread.speed,
           model: thread.model,
           effort: thread.effort,
           forkedFrom: thread.id,
+          forkGroup,
+          forkTag,
+          ...(chainLink ? { handover: chainLink } : {}),
           worktree,
         });
-        this.store.updateThread(copyId, { agentSessionId: forkedSessionId, sectionId: thread.sectionId }, { touch: true });
-        this.store.copyEvents(thread.id, copyId, cut?.upToSeq);
+        this.store.updateThread(copyId, { ...(forkedSessionId ? { agentSessionId: forkedSessionId } : {}), sectionId: thread.sectionId }, { touch: true });
+        if (!lightweight) this.store.copyEvents(thread.id, copyId, cut?.upToSeq);
       });
     } catch (err) {
-      this.attachments.removeThread(copyId);
+      if (!lightweight) this.attachments.removeThread(copyId);
       await undoWorktree();
       throw err;
     }
     // The last event of the copy: what comes before it was copied, what comes after is its own.
-    this.emitThreadEvent(copyId, null, 'thread.updated', { forkedFrom: thread.id, ...(added ? { worktree: { branch: added.tree.branch } } : {}) });
+    this.emitThreadEvent(copyId, null, 'thread.updated', { forkedFrom: thread.id, ...(forkGroup ? { forkGroup } : {}), ...(forkTag ? { forkTag } : {}), ...(added ? { worktree: { branch: added.tree.branch } } : {}) });
+    if (grouped && firstMessage) {
+      void this.startTurn(copyId, { text: firstMessage, fromUser: true }).catch(() => undefined);
+    }
     return this.threadView(copyId);
+  }
+
+  /**
+   * Canonical root thread ID of a grouped fork family. If a thread is already a grouped fork,
+   * reuse its root so forks never nest; otherwise use the earliest segment of its handover chain
+   * so automatic handovers on the main thread keep the same family.
+   */
+  private forkGroupRoot(thread: ThreadRecord): string {
+    if (thread.forkGroup) return thread.forkGroup;
+    const chain = this.handoverChain(thread);
+    return chain[0]?.id ?? thread.id;
+  }
+
+  /**
+   * Every thread ID in the same grouped fork family (and any collaboration on it), including
+   * handover segments of both the main thread and each forked sub-conversation.
+   */
+  forkFamilyIds(threadId: string): Set<string> {
+    const out = new Set<string>();
+    const self = this.store.getThread(threadId);
+    if (!self) return out;
+    const selfChain = this.handoverChain(self).map((s) => s.id);
+    const roots = new Set<string>(self.forkGroup ? [self.forkGroup] : selfChain);
+    const all = [...this.store.listThreads(), ...this.store.listThreads({ archived: true })];
+    // Expand roots to include the root thread's full handover chain (if self is a grouped fork).
+    if (self.forkGroup) {
+      const rootThread = this.store.getThread(self.forkGroup);
+      if (rootThread) {
+        for (const s of this.handoverChain(rootThread)) roots.add(s.id);
+      }
+      for (const t of all) {
+        if (t.handover?.sourceId && roots.has(t.handover.sourceId)) roots.add(t.id);
+      }
+    }
+    // Collect the root chain and every thread whose forkGroup points into it.
+    const hasForks = Boolean(self.forkGroup) || all.some((t) => Boolean(t.forkGroup && roots.has(t.forkGroup)));
+    if (hasForks) {
+      for (const r of roots) out.add(r);
+      for (const t of all) {
+        if (t.forkGroup && roots.has(t.forkGroup)) {
+          out.add(t.id);
+          for (const s of this.handoverChain(t)) out.add(s.id);
+        }
+      }
+    }
+    // Also allow lead and collaboration members to read each other on demand.
+    for (const cid of this.coordination?.familyIds(threadId) ?? []) out.add(cid);
+    out.delete(threadId);
+    return out;
+  }
+
+  /** Compact, on-demand directory of sibling conversations in the same grouped fork family. */
+  private forkDirectoryBlock(thread: ThreadRecord): string | null {
+    const selfChain = this.handoverChain(thread).map((s) => s.id);
+    const roots = new Set<string>(thread.forkGroup ? [thread.forkGroup] : selfChain);
+    const all = this.store.listThreads();
+    if (thread.forkGroup) {
+      const rootThread = this.store.getThread(thread.forkGroup);
+      if (rootThread) {
+        for (const s of this.handoverChain(rootThread)) roots.add(s.id);
+      }
+      for (const t of all) {
+        if (t.handover?.sourceId && roots.has(t.handover.sourceId)) roots.add(t.id);
+      }
+    }
+    const grouped = all.filter((t) => Boolean(t.forkGroup && roots.has(t.forkGroup)));
+    if (!grouped.length) return null;
+    const ids = new Set<string>([...roots, ...grouped.map((t) => t.id)]);
+    ids.delete(thread.id);
+    const active = all.filter((t) => ids.has(t.id));
+    if (!active.length) return null;
+    // Collapse handover chains so only the latest segment of each sibling conversation is listed.
+    const superseded = new Set<string>();
+    for (const t of active) {
+      if (t.handover && !t.handover.detached) superseded.add(t.handover.sourceId);
+    }
+    const peers = active.filter((t) => !superseded.has(t.id)).slice(0, 12);
+    if (!peers.length) return null;
+    const lines = peers.map((t) => {
+      const label = !t.forkGroup ? `主会话「${t.title}」` : t.forkTag ? `[${t.forkTag}] ${t.title}` : t.title;
+      return `- ${label}（id: ${t.id}，状态: ${t.status === 'running' ? '运行中' : '空闲'}）`;
+    });
+    return `<loochat-forks>\n同工作区关联会话（按需只读；平时不要主动读取，仅在用户提及或需要对照时用 \`loochat history <id> --user-inputs\` 查阅）：\n${lines.join('\n')}\n</loochat-forks>`;
   }
 
   /** What forking this thread can offer. Asked when the user reaches for the fork button, not before. */
@@ -1823,6 +1949,8 @@ export class ThreadManager {
       done?: boolean;
       /** The person places the thread on the board; it stands until a later turn reports again. */
       stage?: ProgressStage;
+      /** Short purpose tag for a forked sub-conversation. */
+      forkTag?: string | null;
     },
   ): Promise<ThreadView> {
     const thread = this.getThread(id);
@@ -1846,6 +1974,12 @@ export class ThreadManager {
       if (updates.done !== undefined) throw new HttpError(400, 'set done or stage, not both');
       if (!PROGRESS_STAGES.includes(updates.stage)) throw new HttpError(400, 'stage must be backlog, doing, blocked or review');
       this.store.setThreadProgress(id, { doneAt: null, report: { stage: updates.stage, note: '', at: new Date().toISOString(), by: 'user' } });
+    }
+    if (updates.forkTag !== undefined) {
+      if (updates.forkTag !== null && typeof updates.forkTag !== 'string') throw new HttpError(400, 'forkTag must be a string or null');
+      const trimmed = typeof updates.forkTag === 'string' ? updates.forkTag.trim() : '';
+      if (trimmed.length > 40) throw new HttpError(400, 'forkTag must be at most 40 characters');
+      patch.forkTag = trimmed || null;
     }
     if (updates.speed !== undefined) {
       patch.speed = updates.speed === null ? (thread.speed ? 'default' : null) : await this.validateSpeed(thread.agent, updates.model === undefined ? thread.model : updates.model, updates.speed);
@@ -2105,6 +2239,62 @@ export class ThreadManager {
     return this.store.history;
   }
 
+  /** A person's answer is recorded with their own words, at the event's real time. */
+  private acceptInput(submission: InputSubmission) {
+    const { inputId, threadId, turnId, request, answer, fromUser } = submission;
+    this.getThread(threadId);
+    const accepted = this.store.transaction(() => {
+      let hasFreeText = false;
+      const userInputs: string[] = [];
+      if ('answers' in answer) {
+        for (const question of request.questions) {
+          const human: string[] = [];
+          for (const value of answer.answers[question.id] ?? []) {
+            const option = question.options.find(opt => opt.value === value);
+            if (option) human.push(option.label);
+            else { hasFreeText = true; human.push(value); }
+          }
+          if (human.length) userInputs.push(`${question.question}\n${human.filter(Boolean).join('\n')}`);
+        }
+      }
+      const person = fromUser && 'answers' in answer && (request.kind !== 'plan' || hasFreeText);
+      const stored = this.store.appendEvent(threadId, turnId, 'input.resolved', {
+        inputId, answer, userOrigin: person ? 'person' : 'hub',
+        ...(person ? { userInput: userInputs.join('\n\n') } : {}),
+      });
+      return { stored };
+    });
+    return { answer: submission.answer, publish: () => {
+      // Delivery observers cannot turn an already committed answer into a failed submission.
+      for (const listener of this.listeners) {
+        try { listener(accepted.stored); } catch { console.error('[input] answer observer failed'); }
+      }
+    } };
+  }
+
+  /** Attachment locations are returned only after the history reader has checked this turn's scope. */
+  contextAttachments(threadId: string, data: Record<string, unknown>) {
+    return ['images', 'videos'].flatMap(kind => (Array.isArray(data[kind]) ? data[kind] as Array<Record<string, unknown>> : []).map(attachment => {
+      const file = typeof attachment.id === 'string' ? this.attachments.find(threadId, attachment.id) : null;
+      return { id: attachment.id, kind: kind === 'images' ? 'image' : 'file', name: attachment.name ?? null,
+        mimeType: file?.mimeType ?? attachment.mimeType ?? null, size: file?.size ?? attachment.size ?? null,
+        path: file?.path ?? null, available: Boolean(file), ...(!file ? { error: 'attachment no longer exists' } : {}) };
+    }));
+  }
+
+  /**
+   * The handover chain of a thread, oldest first, ending at the thread itself. The archive is
+   * included: a chain often reaches back through quiet segments, and the successor can read those too.
+   */
+  handoverChain(thread: { id: string }, boundary?: HandoverBoundary): ChainSegment[] {
+    const all = [...this.store.listThreads(), ...this.store.listThreads({ archived: true })];
+    const byId = new Map(all.map((t) => [t.id, t]));
+    const stored = byId.get(thread.id);
+    const self = stored && boundary ? { ...stored, ...(boundary.handover ? { handover: boundary.handover } : {}) } : stored;
+    return self ? chainSegments(self, (id) => byId.get(id), id => this.store.history.latest(id),
+      (id, at) => Number(this.store.db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM events WHERE thread_id=? AND ts<=?').get(id, at)?.seq ?? 0)) : [];
+  }
+
   /**
    * Everything after a sequence number, however much that is: what a stream replays before it
    * goes live. Stopping at a page size here would leave a hole between the replay and the live
@@ -2243,6 +2433,9 @@ export class ThreadManager {
     scratch?: boolean;
     /** The scheduled task that starts this thread, if any: shown as its badge. */
     schedule?: { id: string; name: string } | null;
+    /** Inherited grouped fork family & tag (e.g. when a forked sub-conversation hands over). */
+    forkGroup?: string | null;
+    forkTag?: string | null;
   }, inheritedWorktree?: ThreadWorktree | null, handover?: ThreadRecord['handover']): Promise<ThreadView> {
     const adapter = this.adapters.get(input.agent);
     if (!adapter) throw new HttpError(400, `unknown agent: ${input.agent}`);
@@ -2299,6 +2492,8 @@ export class ThreadManager {
         model,
         effort,
         handover,
+        forkGroup: input.forkGroup ?? null,
+        forkTag: input.forkTag ?? null,
         schedule: input.schedule ?? null,
         ...(input.sectionId ? { sectionId: input.sectionId } : {}),
         ...(added ? { worktree: { root: added.tree.root, branch: added.tree.branch, of: cwd } } : inheritedWorktree ? { worktree: inheritedWorktree } : {}),
@@ -2339,7 +2534,7 @@ export class ThreadManager {
   }
 
   /** A fresh conversation in the source's exact directory, sharing its existing worktree. No agent is started. */
-  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method'], takeTeam = true): Promise<ThreadView> {
+  async createHandoverThread(threadId: string, agent: string, model?: string, mode?: unknown, method?: HandoverLink['method'], takeTeam = true, deferAcceptance = false): Promise<ThreadView> {
     const source = this.getThread(threadId);
     if (mode !== undefined && mode !== 'continue' && mode !== 'branch') throw new HttpError(400, 'invalid handover mode');
     if (takeTeam && this.coordination?.metadata(threadId) && source.status === 'running') {
@@ -2362,6 +2557,14 @@ export class ThreadManager {
       && await offers(async () => (await this.adapterModels(target)).some(o => o.id === source.model)) ? source.model : undefined);
     const effort = sameKind && source.effort
       && await offers(async () => (await this.effortsFor(agent, chosen ?? null) as readonly string[]).includes(source.effort!)) ? source.effort : undefined;
+    const sourceSeq = this.store.history.latest(source.id);
+    const boundary: HandoverBoundary = {
+      sourceId: source.id,
+      references: this.references.ids(source.id),
+      handover: { sourceId: source.id, title: source.title, agent: source.agent, mode: selected,
+        sourceSeq, segments: this.handoverChain(source), ...(method ? { method } : {}) },
+    };
+    this.store.toolHistory.pinSegments(boundary.handover!.segments!);
     const successor = await this.createThread({
       agent,
       cwd: source.cwd,
@@ -2369,12 +2572,35 @@ export class ThreadManager {
       model: chosen,
       effort,
       sectionId: source.sectionId,
-    }, source.worktree, { sourceId: source.id, title: source.title, agent: source.agent, mode: selected,
-      sourceSeq: this.store.history.latest(source.id), ...(method ? { method } : {}) });
+      forkGroup: source.forkGroup ?? null,
+      forkTag: source.forkTag ?? null,
+    }, source.worktree);
+    this.handoverBoundaries.set(successor, boundary);
+    if (deferAcceptance) return successor;
+    const restoreSeat = this.coordination?.handoverCheckpoint(source.id);
+    try {
+      this.store.transaction(() => {
+        this.acceptHandoverBoundary(successor.id, boundary);
+        if (takeTeam && this.coordination?.metadata(source.id)) this.coordination.replaceHandoverMember(source.id, successor.id, null);
+        this.emitThreadEvent(successor.id, null, 'thread.updated', {});
+      });
+    } catch (error) { restoreSeat?.(); throw error; }
     this.personal.inherit(source.id, successor.id);
-    // Manual handover carries the collaboration; automatic handover waits for the successor claim.
-    if (takeTeam && this.coordination?.metadata(source.id)) this.coordination.replaceHandoverMember(source.id, successor.id, null);
-    return successor;
+    return this.threadView(successor.id);
+  }
+
+  /** Install the route and its frozen grants together, only after the receiving turn is accepted. */
+  private acceptHandoverBoundary(target: string, boundary: HandoverBoundary): void {
+    if (!this.store.getThread(boundary.sourceId)) throw new HttpError(409, 'handover source no longer exists');
+    if (boundary.handover) this.store.setHandover(target, boundary.handover);
+    this.references.inherit(boundary.sourceId, target, boundary.references);
+  }
+
+  private startHandoverTurn(target: string, boundary: HandoverBoundary, input: Parameters<ThreadManager['startTurn']>[1], delivery: NonNullable<Parameters<ThreadManager['startTurn']>[2]>, note?: HumanHandoverNote) {
+    if (note && !this.humanHandoverNotes.has(note)) throw new HttpError(403, 'only an authenticated human send can attach a handover note');
+    this.handoverBoundaries.set(input, boundary);
+    if (note) this.handoverNoteInputs.set(input, note);
+    return this.startTurn(target, input, delivery);
   }
 
   /** The project roots, each with whether it was added from the page and so can be removed there. */
@@ -2470,7 +2696,8 @@ export class ThreadManager {
     const imageIds = Array.isArray(input.images) ? input.images : [];
     const videoIds = Array.isArray(input.videos) ? input.videos : [];
     if (!text && imageIds.length === 0 && videoIds.length === 0) throw new HttpError(400, 'text is empty');
-    const fingerprint = MessageEdits.fingerprint({ turnId, text, images: imageIds, videos: videoIds, revision });
+    const preparedReferences = this.references.prepare(threadId, text, true);
+    const fingerprint = MessageEdits.fingerprint({ turnId, text: preparedReferences.displayText, images: imageIds, videos: videoIds, revision });
 
     // A retry of an edit that already went through answers with the turn it sent: the turn it
     // replaced is gone from the current history by now, so this is checked before looking for it.
@@ -2607,7 +2834,7 @@ export class ThreadManager {
 
   private async startTurnReady(
     threadId: string,
-    input: { voiceSummary?: string; workMode?: unknown; text?: unknown; displayText?: string; channel?: TurnChannel; coalesce?: TurnBatch; images?: unknown; videos?: unknown; queue?: unknown; mentions?: unknown; collaboration?: CoordinationSetup; handoverFrom?: string; autoContinuation?: boolean; handover?: unknown; scheduled?: unknown; review?: boolean; proactive?: unknown; fromUser?: boolean },
+    input: { voiceSummary?: string; workMode?: unknown; text?: unknown; displayText?: string; channel?: TurnChannel; coalesce?: TurnBatch; images?: unknown; videos?: unknown; queue?: unknown; mentions?: unknown; references?: unknown; collaboration?: CoordinationSetup; handoverFrom?: string; handoverReferences?: string[]; autoContinuation?: boolean; handover?: unknown; scheduled?: unknown; review?: boolean; proactive?: unknown; fromUser?: boolean },
     delivery?: { turnId: string; source: Record<string, unknown>; displayText: string; claim: () => void },
     fromQueue = false,
     reservedTurnId?: string,
@@ -2618,7 +2845,14 @@ export class ThreadManager {
     if (this.changingModes.has(threadId)) throw new HttpError(409, '模式正在切换，请稍后发送');
     if (input.workMode !== undefined) thread.workMode = this.validateWorkMode(thread.agent, input.workMode);
     const originalText = typeof input.text === 'string' ? input.text.trim() : '';
-    const reference = this.references.prepare(threadId, originalText, input.fromUser === true, input.handoverFrom);
+    const queuedAttachments = this.queuedReferenceInputs.get(input);
+    const boundary = this.handoverBoundaries.get(input);
+    const humanNote = this.handoverNoteInputs.get(input);
+    const humanAttachments = queuedAttachments !== undefined || input.fromUser === true && !delivery && !input.scheduled && !input.review && !input.proactive && !input.autoContinuation && !input.handoverFrom && !input.handover && !input.channel;
+    const restored = this.references.prepare(threadId, originalText, humanAttachments, input.handoverFrom, queuedAttachments ?? input.references, boundary?.references);
+    const reference = humanNote
+      ? this.references.prepare(threadId, restored.displayText, true, undefined, [...new Set([...restored.references.map(value => value.id), ...humanNote.references])])
+      : restored;
     if (thread.workMode === 'plan' && /^\/goal(?:\s|$)/.test(originalText) && !['/goal', '/goal pause', '/goal clear'].includes(originalText)) throw new HttpError(409, '请切到执行模式后启动目标');
     const mentions = Array.isArray(input.mentions) && input.mentions.length ? input.mentions : undefined;
     if ((mentions || input.collaboration) && !this.coordination) throw new HttpError(400, '协作不可用');
@@ -2627,7 +2861,7 @@ export class ThreadManager {
     const storedVideos = this.attachments.videos(threadId, input.videos);
     const videoIds = storedVideos.map(v => v.id);
     if (storedVideos.length && /^\/\S+/.test(rawText)) throw new HttpError(400, '视频和文件请随普通消息发送，不能附在斜杠命令后');
-    if (!rawText && rawImages.length === 0 && !storedVideos.length) throw new HttpError(400, 'text is empty');
+    if (!rawText && !reference.references.length && rawImages.length === 0 && !storedVideos.length) throw new HttpError(400, 'text is empty');
     personalControl?.authorize?.();
     if (thread.archivedAt && !this.backgroundThreads.has(threadId)) throw new HttpError(409, 'this thread is archived; restore it first');
     if (this.running.has(threadId) || this.autoHandover.held(threadId) && !input.handover && !input.autoContinuation || !fromQueue && this.queues.get(threadId)?.some(q => !q.error)) {
@@ -2658,15 +2892,18 @@ export class ThreadManager {
       if (input.queue !== true) throw new HttpError(409, 'a turn is already running in this thread');
       const queue = this.queues.get(threadId) ?? [];
       const tail = queue.at(-1);
-      const merged = input.coalesce && tail?.coalesce && !tail.error ? mergeBatches(tail.coalesce, input.coalesce) : null;
+      const batch = input.coalesce ? { ...input.coalesce, body: referenceBody(input.coalesce.body) } : undefined;
+      const ids = [...new Set([...(tail?.references ?? []), ...reference.references.map(value => value.id)])];
+      const merged = batch && tail?.coalesce && !tail.error && ids.length <= 12 ? mergeBatches(tail.coalesce, batch) : null;
       if (tail && merged) {
-        this.setQueue(threadId, [...queue.slice(0, -1), { ...tail, text: merged.body + merged.context, coalesce: merged, fromUser: merged.parts.some(part => part.kind === 'person'), ...batchShape(merged.parts) }]);
+        const shape = batchShape(merged.parts);
+        const displayText = referenceDisplay(shape.displayText, this.references.prepare(threadId, '', true, undefined, ids).references);
+        this.setQueue(threadId, [...queue.slice(0, -1), { ...tail, ...shape, displayText, text: merged.body + merged.context, references: ids, coalesce: merged, fromUser: merged.parts.some(part => part.kind === 'person') }]);
         return { queued: true, id: tail.id };
       }
       if (queue.length >= MAX_QUEUED) throw new HttpError(409, `at most ${MAX_QUEUED} messages can wait in a thread`);
       this.attachments.check(rawImages); // a bad image is refused now, not when its turn comes
-      const queued: QueuedTurn = { ...(personalControl ? { assistantSay: personalControl.assistantSay } : {}), voiceSummary: input.voiceSummary, workMode: thread.workMode ?? 'execute', id: randomUUID(), text: originalText, displayText: input.displayText, channel: input.channel, ...(input.coalesce ? { coalesce: input.coalesce } : {}), images: rawImages, videos: videoIds, ...(mentions ? { mentions } : {}), ...(input.collaboration ? { collaboration: input.collaboration } : {}), ...(input.fromUser ? { fromUser: true } : {}) };
-      this.references.grant(threadId, reference.references);
+      const queued: QueuedTurn = { ...(personalControl ? { assistantSay: personalControl.assistantSay } : {}), voiceSummary: input.voiceSummary, workMode: thread.workMode ?? 'execute', id: randomUUID(), text: reference.displayText, displayText: referenceDisplay(input.displayText ?? reference.displayText, reference.references), channel: input.channel, ...(batch ? { coalesce: batch } : {}), images: rawImages, videos: videoIds, ...(mentions ? { mentions } : {}), references: reference.references.map(value => value.id), ...(input.collaboration ? { collaboration: input.collaboration } : {}), ...(input.fromUser ? { fromUser: true } : {}) };
       this.queues.set(threadId, [...queue, queued]);
       this.emitThreadEvent(threadId, null, 'thread.updated', {});
       return { queued: true, id: queued.id };
@@ -2681,7 +2918,7 @@ export class ThreadManager {
     const slashCommand = /^\/\S+/.test(rawText);
     // Internal callers may attach protocol context. Only the person's words (or a channel
     // summary) belong in the conversation, its queue, and later replay/continuation views.
-    const displayText = delivery?.displayText ?? input.displayText ?? originalText.split('\n\n[指定协作对象]')[0];
+    const displayText = referenceDisplay(delivery?.displayText ?? input.displayText ?? reference.displayText.split('\n\n[指定协作对象]')[0], reference.references);
     // A collaboration member spoken to by the person directly answers the person, not the lead.
     const fromUser = Boolean(input.fromUser && !delivery && this.coordination?.isMember(threadId));
     // A resent prompt (a retry, a handover) carries its blocks already: they are not attached twice.
@@ -2690,7 +2927,7 @@ export class ThreadManager {
     // A background question goes as asked: no hints, tools or progress request around it.
     const bare = this.backgroundThreads.has(threadId);
     const interruptedContext = !bare && !slashCommand && Boolean(rawText) && !input.voiceSummary && !input.handover
-      && !input.autoContinuation && !input.scheduled && !input.review && !input.proactive && !delivery
+      && !input.autoContinuation && !input.scheduled && !input.review && !input.proactive && !input.channel && !delivery
       && input.displayText === undefined
       ? this.interruptedFollowupContext(threadId)
       : null;
@@ -2699,11 +2936,13 @@ export class ThreadManager {
     // Writing mode's way of working for its stage; an edit the person made is mentioned once.
     const writing = !slashCommand && rawText ? thread.writing : null;
     const written = writing ? writingInstructions(discoverable, writing) : discoverable;
+    const forkBlock = !bare && !slashCommand && Boolean(rawText) ? this.forkDirectoryBlock(thread) : null;
+    const withForks = forkBlock && gate('forks', forkBlock) ? `${written}\n\n${forkBlock}` : written;
     const followupContextText = interruptedContext
       ? [interruptedContext, displayText].filter(Boolean).join('\n\n').slice(-FOLLOWUP_CONTEXT_LIMIT)
       : null;
     const askProgress = !bare && !slashCommand && Boolean(rawText) && this.progressWanted();
-    const text = askProgress ? progressInstructions(written, gate) : written;
+    const text = askProgress ? progressInstructions(withForks, gate) : withForks;
 
     if (rawImages.length > 0) {
       await this.checkImages(thread.agent, thread.model, rawImages);
@@ -2722,8 +2961,10 @@ export class ThreadManager {
 
     const turnId = delivery?.turnId ?? reservedTurnId ?? randomUUID();
     if (askProgress) this.reportTurns.add(turnId);
+    const restoreSeat = boundary ? this.coordination?.handoverCheckpoint(boundary.sourceId) : undefined;
     try {
       this.store.transaction(() => {
+        if (boundary) this.acceptHandoverBoundary(threadId, boundary);
         delivery?.claim();
         this.references.grant(threadId, reference.references);
         personalControl?.authorize?.();
@@ -2753,6 +2994,8 @@ export class ThreadManager {
           workMode: thread.workMode ?? 'execute',
           ...(delivery ? { coordination: delivery.source } : {}),
           ...(fromUser ? { fromUser: true } : {}),
+          userOrigin: humanNote || input.fromUser === true && !delivery && !input.scheduled && !input.review && !input.proactive && !input.autoContinuation && !input.handoverFrom && !input.handover ? 'person' : 'hub',
+          ...(humanNote ? { userInput: referenceDisplay(humanNote.text, this.references.prepare(threadId, '', true, undefined, humanNote.references).references) } : {}),
           ...(personalHuman ? { personalOrigin: 'person' } : {}),
           ...(personalControl ? { assistantSay: personalControl.assistantSay } : {}),
           ...(promptText !== displayText ? { displayText } : {}),
@@ -2765,7 +3008,8 @@ export class ThreadManager {
           ...(input.proactive === true ? { proactive: true } : {}),
         });
       });
-    } catch (err) { this.running.delete(threadId); this.reportTurns.delete(turnId); throw err; }
+    } catch (err) { restoreSeat?.(); this.running.delete(threadId); this.reportTurns.delete(turnId); throw err; }
+    if (boundary) this.personal.inherit(boundary.sourceId, threadId);
     void this.runTurn(thread, turnId, { text: promptText, images });
     return { turnId };
   }
@@ -2965,11 +3209,16 @@ export class ThreadManager {
    * out). Same path as an automatic handover, without asking the source for a summary first: the
    * successor takes over the conversation, its queue and, in a collaboration, its place.
    */
-  async takeOver(id: string, agent: unknown, model: unknown, note: unknown): Promise<ThreadView> {
+  async takeOver(id: string, agent: unknown, model: unknown, note: unknown, references?: unknown, authenticatedHuman = false): Promise<ThreadView> {
     const thread = this.getThread(id);
     if (typeof agent !== 'string' || !this.adapters.has(agent) || agent === thread.agent && !model) throw new HttpError(400, 'invalid handover target');
     if (model !== undefined && typeof model !== 'string') throw new HttpError(400, 'invalid model');
     if (note !== undefined && (typeof note !== 'string' || note.length > 20_000)) throw new HttpError(400, 'invalid note');
+    const preparedNote = this.references.prepare(id, typeof note === 'string' ? note : '', authenticatedHuman, undefined, references);
+    note = referenceBody(preparedNote.displayText);
+    const humanNote = authenticatedHuman && (note || preparedNote.references.length)
+      ? { text: String(note), references: preparedNote.references.map(reference => reference.id) } : undefined;
+    if (humanNote) this.humanHandoverNotes.add(humanNote);
     if (this.running.has(id) || this.threadView(id).waiting) throw new HttpError(409, 'the thread is busy');
     this.autoHandover.cancel(id);
     this.quotaResume.drop(id);
@@ -2979,11 +3228,11 @@ export class ThreadManager {
     const target = { agent, ...(model ? { model } : {}) };
     if (this.autoHandover.settings().method === 'resume' && await this.canResumeHandover(id, agent, failed)) {
       const sessionId = await this.importHandoverSession(id, agent);
-      if (sessionId) return this.executeResumeHandover(id, target, sessionId, failed, note?.trim());
+      if (sessionId) return this.executeResumeHandover(id, target, sessionId, failed, String(note), humanNote);
     }
     const result = await this.handoverSummary(id, null, { compress: true });
     if (!('summary' in result)) throw new HttpError(409, 'handover summary unavailable');
-    return this.executeAutoHandover(id, target, result.summary, failed, note?.trim());
+    return this.executeAutoHandover(id, target, result.summary, failed, String(note), humanNote);
   }
 
   /**
@@ -3020,10 +3269,12 @@ export class ThreadManager {
    * conversation: no brief, the failed turn resent as it was asked. The successor joins the source as
    * an automatic continuation, so the page shows one conversation.
    */
-  async executeResumeHandover(id: string, target: HandoverTarget, sessionId: string, failedTurn: string | null, note?: string): Promise<ThreadView> {
+  async executeResumeHandover(id: string, target: HandoverTarget, sessionId: string, failedTurn: string | null, note?: string, humanNote?: HumanHandoverNote): Promise<ThreadView> {
+    if (humanNote && !this.humanHandoverNotes.has(humanNote)) throw new HttpError(403, 'only an authenticated human send can attach a handover note');
     const source = this.getThread(id);
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume', false);
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'resume', false, true);
+    const boundary = this.handoverBoundaries.get(successor)!;
     this.store.updateThread(successor.id, { agentSessionId: sessionId });
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
@@ -3031,7 +3282,7 @@ export class ThreadManager {
     if (adapter.capabilities.workModes?.includes(source.workMode ?? 'execute')) await this.updateThread(successor.id, { workMode: source.workMode ?? 'execute' });
     this.attachments.copyThread(id, successor.id);
     const failed = failedTurn ? this.store.listTurnEvents(id, failedTurn).find(e => e.type === 'turn.started') : undefined;
-    if (failed || note) {
+    if (failed || note || humanNote?.references.length) {
       const images = ((failed?.data.images ?? []) as Array<{ id: string }>).map(img => {
         const file = this.attachments.find(id, img.id);
         if (!file) throw new HttpError(409, 'handover attachment unavailable');
@@ -3040,10 +3291,14 @@ export class ThreadManager {
       const added = note ? `${failed ? '\n\n' : ''}${note}` : '';
       const text = String(failed?.data.displayText ?? failed?.data.text ?? '') + added;
       const turnId = randomUUID();
-      await this.startTurn(successor.id, { text: failed?.data.hiddenPrompt ? String(failed.data.text) + added : text, ...(failed?.data.hiddenPrompt ? { displayText: text } : {}), channel: failed?.data.channel as TurnChannel | undefined, images, videos: ((failed?.data.videos ?? []) as Array<{ id: string }>).map(v => v.id), handoverFrom: id }, {
+      await this.startHandoverTurn(successor.id, boundary, { text: failed?.data.hiddenPrompt ? String(failed.data.text) + added : text, ...(failed?.data.hiddenPrompt ? { displayText: text } : {}), channel: failed?.data.channel as TurnChannel | undefined, images, videos: ((failed?.data.videos ?? []) as Array<{ id: string }>).map(v => v.id), handoverFrom: id }, {
         turnId, source: { handover: id, ...(failedTurn ? { retry: failedTurn } : {}) }, displayText: text,
         claim: () => this.coordination?.replaceHandoverMember(id, successor.id, turnId),
-      });
+      }, humanNote);
+    } else {
+      this.store.transaction(() => this.acceptHandoverBoundary(successor.id, boundary));
+      this.personal.inherit(id, successor.id);
+      this.emitThreadEvent(successor.id, null, 'thread.updated', {});
     }
     const queue = this.queues.get(id) ?? [];
     this.setQueue(id, []);
@@ -3052,11 +3307,13 @@ export class ThreadManager {
     return this.threadView(successor.id);
   }
 
-  async executeAutoHandover(id: string, target: HandoverTarget, summary: string, failedTurn: string | null, note?: string): Promise<ThreadView> {
+  async executeAutoHandover(id: string, target: HandoverTarget, summary: string, failedTurn: string | null, note?: string, humanNote?: HumanHandoverNote): Promise<ThreadView> {
+    if (humanNote && !this.humanHandoverNotes.has(humanNote)) throw new HttpError(403, 'only an authenticated human send can attach a handover note');
     const source = this.getThread(id);
     // The work moves; waiting for this agent's quota to come back is moot.
     this.quotaResume.drop(id);
-    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary', false);
+    const successor = await this.createHandoverThread(id, target.agent, target.model, 'continue', 'summary', false, true);
+    const boundary = this.handoverBoundaries.get(successor)!;
     this.autoHandover.inherit(id, successor.id);
     const adapter = this.adapters.get(target.agent)!;
     // Preserve the user's execution and permission choices when the successor supports them.
@@ -3077,10 +3334,10 @@ export class ThreadManager {
       ? summary + '\n\n## 继续未完成的这一轮\n\n' + String(failed.data.text) + (note ? '\n\n## 用户补充\n\n' + note : '')
       : text;
     // Reserve the mailbox identity in the same synchronous claim as the first successor turn.
-    await this.startTurn(successor.id, { text: promptText, ...(failed?.data.hiddenPrompt ? { displayText: text } : {}), channel: failed?.data.channel as TurnChannel | undefined, images, videos, handoverFrom: id }, {
+    await this.startHandoverTurn(successor.id, boundary, { text: promptText, ...(failed?.data.hiddenPrompt ? { displayText: text } : {}), channel: failed?.data.channel as TurnChannel | undefined, images, videos, handoverFrom: id }, {
       turnId, source: { handover: id }, displayText: text,
       claim: () => this.coordination?.replaceHandoverMember(id, successor.id, turnId),
-    });
+    }, humanNote);
     const queue = this.queues.get(id) ?? [];
     this.attachments.copyThread(id, successor.id);
     this.setQueue(id, []);
@@ -3132,7 +3389,9 @@ export class ThreadManager {
     this.dispatchingQueues.add(threadId);
     if (rest.length) this.queues.set(threadId, rest);
     else this.queues.delete(threadId);
-    this.startTurn(threadId, { workMode: next.workMode, text: next.text, displayText: next.displayText, channel: next.channel, voiceSummary: next.voiceSummary, images: next.images, videos: next.videos, mentions: next.mentions, collaboration: next.collaboration, fromUser: next.fromUser }, undefined, true, undefined, undefined, next.assistantSay ? { assistantSay: next.assistantSay } : undefined).catch((err) => {
+    const input = { workMode: next.workMode, text: next.text, displayText: next.displayText, channel: next.channel, voiceSummary: next.voiceSummary, images: next.images, videos: next.videos, mentions: next.mentions, collaboration: next.collaboration, fromUser: next.fromUser };
+    if (next.references !== undefined) this.queuedReferenceInputs.set(input, next.references);
+    this.startTurn(threadId, input, undefined, true, undefined, undefined, next.assistantSay ? { assistantSay: next.assistantSay } : undefined).catch((err) => {
       // The thread was archived or deleted in the meantime, or the message is no longer acceptable.
       console.error(`could not send a queued message: ${err instanceof Error ? err.message : err}`);
       if (this.store.getThread(threadId)) this.setQueue(threadId, [

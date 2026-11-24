@@ -2,6 +2,7 @@
  * Turns the daemon's event log into the items the thread view renders.
  * Pure: no React, no I/O, so it can be unit-tested directly.
  */
+import type { ContextReference } from './context-references';
 import { diffStats } from './diff';
 import { IMAGE_FILE, relativePath } from './paths';
 import type { TurnChannel, TurnPart, VideoRef } from './api';
@@ -373,6 +374,8 @@ export interface Note {
   /** The earlier conversation of a handover chain the passage was picked out of. The agent cannot
    * see that one, so the note says where to read it; the person sees the note as any other. */
   source?: NoteSource;
+  /** The visible note owns this permission; it is not kept as an unrelated hidden attachment. */
+  reference?: ContextReference;
 }
 
 /** Where a passage came from: the earlier part of a handover chain, or (`elsewhere`) another thread. */

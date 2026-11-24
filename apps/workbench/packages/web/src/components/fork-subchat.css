@@ -1,0 +1,130 @@
+/* Styles for grouped fork sub-conversations (kept separate from styles.css to respect UI budgets). */
+.fork-subchat-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.fork-subchat-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 12px;
+}
+
+.fork-subchat-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fork-subchat-field > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fork-subchat-mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--hover);
+}
+
+.fork-subchat-mode button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.fork-subchat-mode button.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.fork-subchat-mode-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.fork-subchat-field input,
+.fork-subchat-field textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.fork-subchat-field textarea {
+  resize: vertical;
+}
+
+.fork-subchat-field input:focus,
+.fork-subchat-field textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
+  outline-offset: 1px;
+}
+
+.handover-member .fork-tag-pill {
+  flex: none;
+  max-width: 108px;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.handover-toggle .fork-toggle-ico {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.handover-member .fork-handed-mark {
+  flex: none;
+  display: inline-flex;
+  color: var(--faint);
+}
+
+.handover-members .fork-add-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 12px 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.handover-members .fork-add-row:hover {
+  background: var(--hover);
+  color: var(--text);
+}

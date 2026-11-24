@@ -1,4 +1,5 @@
 import { referencePreview, splitReferences, withReferences } from '../context-references';
+import { parseReferenceDraft } from '../reference-drafts';
 import { ReferenceChips } from './ContextReferences';
 import { captureReadingAnchor, restoreReadingAnchor, type ReadingAnchor } from '../scroll-anchor';
 import { MessageActionButton, MessageMore, PointMessageMenu, SelectMessage, useMessageGestures, type MessageAction } from './MessageActions';
@@ -13,7 +14,8 @@ import { MARKDOWN_REHYPE_PLUGINS, preserveNonHtmlTags } from '../markdown-html';
 import { placeImages, stripPaths } from '../image-places';
 import { highlightLanguage, languageName } from '../code-language';
 import { enlargeMermaidDiagram, renderMermaidDiagram } from '../mermaid';
-import { copyRich, copyText, quoteMarkdown, rememberCopiedQuote } from '../clipboard';
+import { conversationPointer, copiedQuoteText, copyRich, copyText, quoteMarkdown, rememberCopiedQuote } from '../clipboard';
+import { useReferenceMachine } from '../reference-input';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { diffLines, numberLines } from '../diff';
@@ -76,6 +78,7 @@ interface Props {
   olderError?: string;
   historyApi?: Api;
   historyThreadId?: string;
+  historyTitle?: string;
   items: Item[];
   /** Every spelling of the thread's directory (as stored, and resolved), so paths can be shown relative to it. */
   roots: string[];
@@ -151,13 +154,21 @@ const NEAR_TOP_PX = 600;
 /** Nearest scrollable container for a thread: panel scrollers first, falling back to the main page scroller. */
 const THREAD_SCROLLER = '.chat-flow, .agent-panel-body, .thread-peek-body, .side-chat-body, .scroller';
 
-export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, beforeItems, olderLabel, olderError, revealTurnId, historyApi, historyThreadId, items: originalItems, roots, loadImage, loadFile, onOpenFile, onPreview, hasOlder, loadingOlder, onLoadOlder, onFork, onQuote, onMessageContext, onHandToAssistant, forkAnyTurn, onEdit, revision = 0, takeover, resume, autoRetry, memberThreadId, onOpenMemberThread, threads, onOpenThread }: Props) {
+export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, beforeItems, olderLabel, olderError, revealTurnId, historyApi, historyThreadId, historyTitle, items: originalItems, roots, loadImage, loadFile, onOpenFile, onPreview, hasOlder, loadingOlder, onLoadOlder, onFork, onQuote, onMessageContext, onHandToAssistant, forkAnyTurn, onEdit, revision = 0, takeover, resume, autoRetry, memberThreadId, onOpenMemberThread, threads, onOpenThread }: Props) {
+  const machineId = useReferenceMachine(historyApi?.demo ? null : historyApi);
+  const sourceTitle = historyTitle ?? threads?.find(thread => thread.id === historyThreadId)?.title ?? historyThreadId ?? '';
   const [selection, setSelection] = useState<{ text: string; turnId: string } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ text: string; turnId: string; element: HTMLElement; x: number; y: number; nonce: number } | null>(null);
   useEffect(() => { setSelection(null); setContextMenu(null); }, [historyThreadId]);
   const actionsFor = (text: string, turnId: string, element?: HTMLElement): MessageAction[] => [
     { key: 'copy', label: t('view.copyAnswer'), icon: IconCopy, run: async () => { if (!await copyText(text)) throw new Error(t('view.copyFailed')); } },
-    { key: 'copyQuote', label: t('view.copyQuote'), icon: IconClipboard, run: async () => { if (!await copyRich(quoteMarkdown(text), quoteHtml(text))) throw new Error(t('view.copyFailed')); rememberCopiedQuote({ text, turnId, host: historyApi?.host ?? null, ...(historyThreadId ? { threadId: historyThreadId } : {}) }); } },
+    { key: 'copyQuote', label: t('view.copyQuote'), icon: IconClipboard, run: async () => {
+      if (historyThreadId && !machineId) throw new Error(t('references.copyUnavailable'));
+      const quote = { text, turnId, host: historyApi?.host ?? null, ...(historyThreadId ? { threadId: historyThreadId } : {}), ...(machineId ? { machineId } : {}) };
+      const pointer = historyThreadId && machineId ? conversationPointer({ id: historyThreadId, title: sourceTitle }, turnId, machineId) : undefined;
+      if (!await copyRich(copiedQuoteText(quote, sourceTitle), quoteHtml(text, pointer))) throw new Error(t('view.copyFailed'));
+      rememberCopiedQuote(quote);
+    } },
     ...(onQuote ? [{ key: 'quote', label: t('references.quote'), icon: IconQuote, run: () => onQuote(text, turnId, historyThreadId) }] : []),
     ...(onHandToAssistant ? [{ key: 'assistant', label: t('messageActions.assistant'), icon: IconSparkle, run: () => onHandToAssistant(text, turnId, historyThreadId) }] : []),
     ...(onMessageContext ? [{ key: 'context', label: t('messageActions.context'), icon: IconPaperclip, run: () => onMessageContext(text, turnId, historyThreadId) }] : []),
@@ -341,9 +352,8 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
             : <div key={`${item.key}:${index}`} className="row channel-note" data-turn={item.turnId}><IconTray size={13} /><span>{row.text}</span></div>);
           if (item.coordination) return <DeliveredNote key={item.key} turnId={item.turnId} note={item.coordination} text={item.text} memberThreadId={memberThreadId} onOpenMemberThread={onOpenMemberThread} />;
           // Notes (and the older single quote) ride in the message text; drawn apart here.
-          const noted = splitNotes(item.text);
-          const referenced = splitReferences(noted.body);
-          const { quote, body } = noted.notes.length ? { quote: null, body: referenced.body } : splitUserQuote(referenced.body);
+          const draft = parseReferenceDraft(item.text);
+          const { quote, body } = draft.notes.length ? { quote: null, body: draft.text } : splitUserQuote(draft.text);
           return (
             <div key={item.key} className={`row user${item.voice ? ' voice' : ''}${item.streaming ? ' draft' : ''}`} data-turn={item.turnId} data-message-key={item.key}>
               {item.images.length > 0 && (
@@ -353,8 +363,8 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
                   ))}
                 </div>
               )}
-              <ReferenceChips references={referenced.references} />
-              {noted.notes.length > 0 && <SentNotes notes={noted.notes} />}
+              <ReferenceChips references={draft.references} />
+              {draft.notes.length > 0 && <SentNotes notes={draft.notes} />}
               {item.videos?.map(video => <SentVideo key={video.id} video={video} load={loadImage} />)}
               {quote !== null && (
                 <div className="bubble-quote" title={quote}>
@@ -376,7 +386,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
                 </div>
               )}
               <div className="user-message-actions">
-              {onEdit && (body || item.images.length > 0 || referenced.references.length > 0) && !item.voice && !item.fromTerminal && !item.scheduled && !item.coordination && (
+              {onEdit && (body || item.images.length > 0 || draft.references.length > 0 || draft.notes.length > 0) && !item.voice && !item.fromTerminal && !item.scheduled && !item.coordination && (
                 <EditMessage
                   text={item.text}
                   imageIds={item.images.map((img) => img.id)}
@@ -1074,13 +1084,18 @@ const QUOTE_REMARK_PLUGINS = [remarkGfm, preserveNonHtmlTags];
  * A message as a block quote for another app's editor. Plain Markdown, none of this page's own
  * blocks (copy buttons, highlighting, previews), drawn synchronously so the copy keeps the click.
  */
-function quoteHtml(text: string): string {
+function quoteHtml(text: string, pointer?: string): string {
   const box = document.createElement('div');
   const root = createRoot(box);
   flushSync(() => root.render(<Markdown remarkPlugins={QUOTE_REMARK_PLUGINS} rehypePlugins={MARKDOWN_REHYPE_PLUGINS}>{text.trim()}</Markdown>));
   const html = box.innerHTML;
   root.unmount();
-  return `<blockquote style="margin:0;padding-left:12px;border-left:3px solid #d0d7de">${html}</blockquote>`;
+  const heading = document.createElement('p');
+  pointer?.split('\n').forEach((line, index) => {
+    if (index) heading.append(document.createElement('br'));
+    heading.append(document.createTextNode(line));
+  });
+  return `${pointer ? heading.outerHTML : ''}<blockquote style="margin:0;padding-left:12px;border-left:3px solid #d0d7de">${html}</blockquote>`;
 }
 /**
  * Markdown drops addresses it does not know, `file://` among them, leaving a link that reloads
