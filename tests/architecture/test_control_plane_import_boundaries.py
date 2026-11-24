@@ -342,6 +342,7 @@ def test_read_adapters_do_not_load_writeback_facades_for_leaf_helpers() -> None:
     for module, unrelated in (
         ("loopx.control_plane.coordination.local_authority", "loopx.history"),
         ("loopx.cli_commands.status", "loopx.state_refresh"),
+        ("loopx.cli_commands.quota_registration", "loopx.control_plane.quota.effect_program"),
     ):
         completed = subprocess.run(
             [sys.executable, "-c", (
