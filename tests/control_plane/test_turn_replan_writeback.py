@@ -169,10 +169,13 @@ def test_replan_retains_context_and_requires_shared_authoring(tmp_path, monkeypa
     follow = _runner(tmp_path, {"result_kind": "validated_progress",
         "classification": "fixture_executed_plan", "summary": "The retained task consumed the plan.",
         "next_action": "Assess remaining accepted work."}, follow=True)
-    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--turn-instance-id", turn + "-next",
-        "--todo-id", SELECTED_REPLAN_TODO_ID)
+    # This is a readback of the prior replan. The next DSH invocation below
+    # owns the next admission, so the observer does not open a Codex Turn.
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run",
+        "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
     assert rc == 0 and guard.get("autonomous_replan_obligation") is None, guard
+    assert guard["should_run"] is True, guard
+    assert guard["selected_todo"]["todo_id"] == SELECTED_REPLAN_TODO_ID
     rc, result = _run_turn(project, runtime, registry, follow, turn=turn + "-next", follow=True)
     assert rc == 0 and result["status"] == "committed", result
     assert result["validation"]["status"] == "passed"

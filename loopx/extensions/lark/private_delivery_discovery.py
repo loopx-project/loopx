@@ -10,6 +10,7 @@ import zlib
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from time import time_ns
 from typing import TYPE_CHECKING, Any, cast
 
 from ...chat.attachments import CHAT_IMAGE_MAX_COUNT
@@ -41,6 +42,7 @@ _DEFAULT_FILE_CHANGE_FINGERPRINT = file_change_fingerprint
 _DEFAULT_FD_FILE_CHANGE_FP = _file_discovery.file_change_fingerprint
 DEFAULT_OPTIONAL_FILE_FINGERPRINT = optional_file_fingerprint
 _UNSET = object()
+_COMPLETED_FINGERPRINT_SETTLE_NS = 2_000_000_000
 _SESSION_BACKOFF_VOLATILE_FIELDS = frozenset({"updated_at", "last_activity_at"})
 SESSION_BACKOFF_TOKEN_CACHE_LIMIT = 1024
 ANSWER_IMAGE_RETRY_MAX_SECONDS = 3600
@@ -422,6 +424,10 @@ class PrivateDeliveryDiscovery:
 
     def _observe(self, path: Path, *, before: object = _UNSET) -> tuple[dict[str, Any], bool]:
         fp = file_change_fingerprint(path) if before is _UNSET else cast(tuple[int, ...] | None, before)
+        # Rapid in-place writes can share a filesystem change timestamp.
+        # Read recently changed records until their metadata can identify reuse.
+        if fp is not None and time_ns() - fp[3] < _COMPLETED_FINGERPRINT_SETTLE_NS:
+            fp = None
         saved = self._completed.get(path)
         if fp is not None and saved is not None and saved[0] == fp:
             return saved[1], saved[2]

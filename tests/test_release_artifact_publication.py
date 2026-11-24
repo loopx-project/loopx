@@ -95,7 +95,7 @@ def bundle(tmp_path):
     (tmp_path / "runtime").mkdir()
     for name in ["loopx-1.2.3-py3-none-any.whl", "loopx-1.2.3.tar.gz"]:
         (tmp_path / "packages" / name).write_bytes(name.encode())
-    stable_runtime(tmp_path, identity, current=False)
+    stable_runtime(tmp_path, identity, current=True)
     (tmp_path / "RELEASE-SOURCES.json").write_text(json.dumps({
         "product_tag": identity.tag, "product_commit": "a" * 40,
     }))
@@ -129,9 +129,9 @@ def transport(files, *, mismatch=False, wrong_case=False, attestation_failure=Fa
     return calls, gh, download
 
 
-def test_engineering_qualified_c1_cannot_reach_unqualified_stable_release(bundle):
+def test_engineering_qualified_c1_cannot_reach_unqualified_stable_release(bundle, monkeypatch):
     root, identity = bundle
-    stable_runtime(root, identity, current=True)
+    monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "historical")
     calls, gh, download = transport([])
     with patch.object(owner, "gh", gh), patch.object(owner.subprocess, "run", download):
         with pytest.raises(owner.ReleaseArtifactError, match="pending public channel qualification"):
@@ -188,10 +188,10 @@ def test_collision_or_changed_bytes_prevents_every_upload(bundle, wrong_case, mi
 
 
 @pytest.mark.parametrize("failure", ["policy-held", "missing", "changed", "draft", None])
-def test_named_release_preserves_old_latest_until_qualified_bundle_readback(bundle, failure):
+def test_named_release_preserves_old_latest_until_qualified_bundle_readback(bundle, failure, monkeypatch):
     root, identity = bundle
     if failure == "policy-held":
-        stable_runtime(root, identity, current=True)
+        monkeypatch.setitem(update_artifact._ARTIFACT_DEFAULT_CONTRACTS, "public_channel", "historical")
     files = owner.publication_files(root, identity)
     asset_files = files[:-1] if failure == "missing" else files
     old = {"id": 41, "tag_name": "v1.2.2"}
