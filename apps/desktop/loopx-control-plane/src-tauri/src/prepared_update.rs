@@ -76,7 +76,7 @@ pub(crate) fn save(
         return Err(INVALID.into());
     }
     #[cfg(target_os = "macos")]
-    crate::macos_update::qualify_candidate(channel, version, bytes)?;
+    crate::macos_update::qualify_candidate(bytes)?;
     fs::create_dir_all(root).map_err(|_| INVALID)?;
     let old = metadata(root).ok().flatten();
     let value = json!({"schema_version":"desktop_prepared_update_v1", "channel":channel,
@@ -159,7 +159,7 @@ fn read(
         .map_err(|_| INVALID)?;
     key.verify(&bytes, &signature, true).map_err(|_| INVALID)?;
     #[cfg(target_os = "macos")]
-    crate::macos_update::qualify_candidate(channel, version, &bytes)?;
+    crate::macos_update::qualify_candidate(&bytes)?;
     Ok(Some(PreparedUpdate {
         version: version.into(),
         signature: value["signature"].as_str().ok_or(INVALID)?.into(),
@@ -187,6 +187,33 @@ pub(crate) fn clear(root: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    fn qualified_archive(marker: &str) -> Vec<u8> {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../../loopx/cli_commands/public_default_contract.json"
+        ))
+        .unwrap();
+        let identity = json!({
+            "schema_version": "desktop_runtime_bundle_v1",
+            "source_revision": "1111111111111111111111111111111111111111",
+            "default_contract": contract,
+            "test_payload": marker
+        });
+        let body = identity.to_string();
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o600);
+        archive
+            .append_data(
+                &mut header,
+                "LoopX.app/Contents/Resources/runtime/identity.json",
+                body.as_bytes(),
+            )
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
     #[test]
     fn update_order_matches_explicit_channel_selection() {
         assert!(is_newer("1.0.0", "1.1.0", "stable"));
@@ -205,7 +232,14 @@ mod tests {
     fn missing_cache_is_ordinary_and_obsolete_cache_is_retired() {
         let root = tempfile::tempdir().unwrap();
         assert!(load(root.path(), "1.0.0", "stable", "").unwrap().is_none());
-        save(root.path(), "stable", "1.1.0", "unused", b"old").unwrap();
+        save(
+            root.path(),
+            "stable",
+            "1.1.0",
+            "unused",
+            &qualified_archive("old"),
+        )
+        .unwrap();
         assert!(load(root.path(), "1.2.0", "stable", "").unwrap().is_none());
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
     }
@@ -213,10 +247,11 @@ mod tests {
     #[test]
     fn cached_data_without_a_valid_shipped_signature_is_never_activated() {
         let root = tempfile::tempdir().unwrap();
-        save(root.path(), "stable", "1.1.0", "invalid", b"untrusted").unwrap();
+        let archive = qualified_archive("untrusted");
+        save(root.path(), "stable", "1.1.0", "invalid", &archive).unwrap();
         assert!(load(root.path(), "1.0.0", "stable", "invalid").is_err());
         fs::write(
-            root.path().join(format!("{}.tar.gz", digest(b"untrusted"))),
+            root.path().join(format!("{}.tar.gz", digest(&archive))),
             b"changed",
         )
         .unwrap();
@@ -241,13 +276,15 @@ mod tests {
     #[test]
     fn replacing_a_prepared_download_preserves_only_the_new_complete_archive() {
         let root = tempfile::tempdir().unwrap();
-        save(root.path(), "stable", "1.1.0", "signature", b"first").unwrap();
-        save(root.path(), "stable", "1.2.0", "signature", b"second").unwrap();
+        let first = qualified_archive("first");
+        let second = qualified_archive("second");
+        save(root.path(), "stable", "1.1.0", "signature", &first).unwrap();
+        save(root.path(), "stable", "1.2.0", "signature", &second).unwrap();
         let value = metadata(root.path()).unwrap().unwrap();
         assert_eq!(value["version"], "1.2.0");
         assert_eq!(
             fs::read(root.path().join(archive_name(&value).unwrap())).unwrap(),
-            b"second"
+            second
         );
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
         clear(root.path()).unwrap();
@@ -275,7 +312,10 @@ mod tests {
         // the retained publisher signature on the next process's read.
         let mut changed = bytes;
         changed[0] ^= 1;
-        save(root.path(), "stable", "1.1.0", signature.trim(), &changed).unwrap();
+        let mut value = metadata(root.path()).unwrap().unwrap();
+        value["sha256"] = json!(digest(&changed));
+        fs::write(root.path().join(archive_name(&value).unwrap()), changed).unwrap();
+        fs::write(root.path().join("prepared.json"), value.to_string()).unwrap();
         assert!(load(root.path(), "1.0.0", "stable", key).is_err());
     }
 }

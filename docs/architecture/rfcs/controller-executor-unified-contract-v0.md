@@ -1405,11 +1405,10 @@ contract to match. The immutable `v2.4.0` tag retains its quota-packet writer.
 C1 source cutover and public distribution qualify separately. The publisher and
 Desktop updater must support the observed contract before a C1 artifact can be
 published. Engineering-qualified main builds are available for verification
-through immutable prereleases. The automatic Runtime and Desktop main channels
-retain their published defaults until a reviewed change to the shared
-publication policy records qualification for C1. For each supported profile,
-record actual installation and adoption evidence, and evaluate outcomes and
-full cost under §9. See the
+through immutable prereleases. After the v2.4.1 cutover, the Runtime and Desktop
+main and stable update channels require the same Complete Turn contract. Use
+local previous-release installs and App backups for rollback. Record actual
+installation and adoption evidence, and evaluate outcomes and full cost under §9. See the
 [release boundary](../../product/release-readiness.md).
 
 Native launch rechecks use the original `SettlementIdentity` as their sole
