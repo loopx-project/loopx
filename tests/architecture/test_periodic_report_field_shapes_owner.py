@@ -44,9 +44,11 @@ OWNER_PATH = "loopx/capabilities/periodic_report/field_shapes.py"
 CONSUMERS: dict[str, tuple[str, ...]] = {
     "loopx/capabilities/periodic_report/adapters.py": (
         "DOCUMENT_SCHEMA",
+        "INLINE_MARKDOWN_LINK_RAW_MULTIPLIER",
         "ITEM_VISIBILITIES",
         "REPORT_LANGUAGE_PATTERN",
         "SUPPORTING_CONTENT_KINDS",
+        "periodic_report_visible_text",
     ),
     "loopx/capabilities/periodic_report/audience.py": (
         "DOCUMENT_SCHEMA",
@@ -57,7 +59,10 @@ CONSUMERS: dict[str, tuple[str, ...]] = {
         "SUPPORTING_CONTENT_KINDS",
     ),
     "loopx/capabilities/periodic_report/cadence_journal.py": ("REPORT_IDENTITY_PATTERN",),
-"loopx/capabilities/periodic_report/pending_intent.py": ("REPORT_IDENTITY_PATTERN",),
+    "loopx/capabilities/periodic_report/pending_intent.py": (
+        "REPORT_IDENTITY_PATTERN",
+        "periodic_report_visible_text",
+    ),
     "loopx/capabilities/periodic_report/request_action.py": ("REPORT_IDENTITY_PATTERN",),
 }
 # Bounded-context reuse of one name: a distinct rule, declared rather than merged.
