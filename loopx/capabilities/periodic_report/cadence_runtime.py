@@ -7,7 +7,10 @@ import shlex
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...control_plane.capability_hooks import (
-    TURN_START_HOOK_RESULT_SCHEMA_VERSION, TurnStartHookRegistration, dispatch_turn_start_hooks,
+    TURN_START_HOOK_RESULT_SCHEMA_VERSION,
+    TurnStartHookRegistration,
+    dispatch_turn_start_hooks,
+    load_scoped_registry,
 )
 from ...history import load_registry
 from ...registry import find_registry_goal
@@ -26,7 +29,10 @@ def periodic_report_cadence_hooks(
 ) -> tuple[TurnStartHookRegistration, ...]:
     if not agent_id:
         return ()
-    goal = find_registry_goal(load_registry(registry_path), goal_id)
+    goal = find_registry_goal(
+        load_scoped_registry(registry_path, loader=load_registry),
+        goal_id,
+    )
     subscription = resolve_active_goal_periodic_report_subscription(
         goal, read_periodic_report_machine_defaults(runtime_root))
     if subscription is None or subscription.get("schedule") is None:

@@ -321,6 +321,9 @@ def _atomic_write_bytes(path: Path, payload: bytes, *, mode: int | None) -> None
         if mode is not None:
             os.chmod(temporary_path, mode)
         os.replace(temporary_path, path)
+        from ..hook_runtime.request_scope import invalidate_hook_registry_snapshot
+
+        invalidate_hook_registry_snapshot(path)
     finally:
         temporary_path.unlink(missing_ok=True)
 

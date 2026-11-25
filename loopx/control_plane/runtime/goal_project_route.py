@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..hook_runtime.request_scope import load_scoped_registry
 from ...history import load_registry
 from ...paths import registry_project_root
 from ...registry import registry_goals
@@ -30,7 +31,7 @@ def resolve_goal_project_route(
     source_registry = Path(str(route["source_registry"])).expanduser().resolve()
 
     def load_goal(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        payload = load_registry(path)
+        payload = load_scoped_registry(path, loader=load_registry)
         matched = next(
             (
                 item

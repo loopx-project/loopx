@@ -222,7 +222,7 @@ def extend_turn_start_dispatch(
     normalized = normalize_required_capabilities(available)
     if not agent_id or not normalized:
         return dispatch
-    from ..capability_hooks import dispatch_turn_start_hooks
+    from ..capability_hooks import dispatch_turn_start_hooks, merge_turn_start_dispatch
 
     extra = dispatch_turn_start_hooks(
         (
@@ -235,12 +235,7 @@ def extend_turn_start_dispatch(
             ),
         )
     )
-    result = dict(dispatch)
-    for key in ("results", "required_reads", "failures"):
-        result[key] = list(dispatch.get(key) or []) + list(extra.get(key) or [])
-    for key in ("registered_count", "invoked_count"):
-        result[key] = int(dispatch.get(key) or 0) + int(extra.get(key) or 0)
-    return result
+    return merge_turn_start_dispatch(dispatch, extra, include_contexts=False)
 
 
 def heartbeat_evidence_poll_possible(
