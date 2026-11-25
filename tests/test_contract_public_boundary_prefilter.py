@@ -45,6 +45,8 @@ def test_scan_enumeration_follows_the_resolved_target_and_binary_media(
     # Directory eligibility follows the resolved target and its local-state
     # name, never the alias name or the retired suffix allow-list; binary media
     # is skipped. The pruned-root fast path preserves Git's per-alias observations.
+    # Three aliases (alias.md, alias.ts, alias.png) resolve to one target, so a
+    # pruned walk reports the same path once per alias observation.
     aliases = [target, target, target]
     expected = (
         [distinct, regular, regular_ts, *aliases]

@@ -246,7 +246,10 @@ CREDENTIAL_BEARER_KEYWORD_PATTERN = re.compile("Bear" + "er" + r"\s+", re.I)
 CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN = re.compile(
     "|".join(
         [
-            r"\$\{?[A-Za-z_]",
+            # Any interpolation template is a runtime expression, including
+            # `${(await issue()).token}` where the expression starts with a call.
+            r"\$\{",
+            r"\$[A-Za-z_]",
             r"\$\(",
             r"%[A-Za-z_][A-Za-z0-9_]*%",
             r"os\.environ",
@@ -376,13 +379,25 @@ def _credential_hits_are_all_references(line: str) -> bool:
     return all(_credential_match_is_reference(line, match) for match in matches)
 
 
-# A selected directory owns every file in it, so only binary media is dropped
-# before reading. A seven-suffix allow-list used to make that decision silently:
-# every other text file -- on this repository the whole TypeScript control
-# plane plus .mjs, .tsx, .html, .txt, .svg and extensionless files -- was
-# certified without ever being opened. An unlisted suffix is read as UTF-8 and
-# a file that cannot be decoded is reported unreadable rather than passed, so
-# an incomplete list cannot turn into a silent skip.
+# A selected directory owns every file in it, so only paths whose suffix names
+# a binary media or container format are dropped before reading. A seven-suffix
+# allow-list used to make that decision silently: every other text file -- on
+# this repository the whole TypeScript control plane plus .mjs, .tsx, .html,
+# .txt, .svg and extensionless files -- was certified without ever being
+# opened. Selection is suffix-based, so a text payload under a media suffix
+# (for example `notes.png`) is skipped; this repository has no such file, and a
+# directory walk cannot learn otherwise without opening every binary.
+#
+# `public_safe_outbound.scan_cli.BINARY_SUFFIXES` is the closest existing list,
+# but the two answer different questions: that outbound candidate set also
+# prunes build output (.map, .tsbuildinfo) and opaque packages (.bin, .war),
+# while this publication boundary reads every file not listed here as UTF-8 and
+# reports a decode failure as unreadable. Keeping source maps and .tsbuildinfo
+# readable here means embedded source text is still examined, and .bin/.war
+# stay fail-closed instead of disappearing. The shared media/container suffixes
+# are common vocabulary, not a second authority: this list only decides whether
+# a selected file is opened, and every content verdict still comes from the
+# text rules above.
 BINARY_MEDIA_SUFFIXES = {
     # images
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".avif",
