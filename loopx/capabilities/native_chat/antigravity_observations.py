@@ -24,12 +24,18 @@ from .antigravity_cascade import (
     _verify_anchored_user_step,
 )
 from .manager_input import manager_input_matches
-from .antigravity_discovery import (
-    ANTIGRAVITY_DEFAULT_MODEL,
-    DiscoverFn,
+from .antigravity_contracts import (
+    AntigravityCompletedResultDict,
+    AntigravityInterruptedAnswerDict,
     IndexedStep,
     JsonDict,
     JsonMap,
+    as_completed_result,
+    as_interrupted_answer,
+)
+from .antigravity_discovery import (
+    ANTIGRAVITY_DEFAULT_MODEL,
+    DiscoverFn,
     RpcPostFn,
     _extract_user_model_quota,
     _is_dict,
@@ -53,7 +59,7 @@ def observe_interrupted_answer(
     discover_fn: DiscoverFn = discover_antigravity_language_server,
     rpc_post_fn: RpcPostFn = _rpc_post,
     manager_input_matches_fn: ManagerInputMatcher = manager_input_matches,
-) -> JsonDict | None:
+) -> AntigravityInterruptedAnswerDict | None:
     """Read a stable original segment for a read-only answer review only."""
     try:
         start = input_anchor.get("start_step_index")
@@ -183,7 +189,7 @@ def observe_interrupted_answer(
                 return None
         if not results or len(json.dumps(results, ensure_ascii=False).encode()) > 256 * 1024:
             return None
-        return {
+        return as_interrupted_answer({
             "thread_id": cascade_id,
             "request_ref": request_ref,
             "execution_id": execution,
@@ -196,7 +202,7 @@ def observe_interrupted_answer(
             "no_final_answer": True,
             "effects_observed": True,
             "visible_results": results,
-        }
+        })
     except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
         return None
 
@@ -478,7 +484,7 @@ def observe_completed_result(
     rpc_post_fn: RpcPostFn = _rpc_post,
     parse_response_fn: Callable[..., JsonDict] = parse_agent_response,
     manager_input_matches_fn: ManagerInputMatcher = manager_input_matches,
-) -> JsonDict | None:
+) -> AntigravityCompletedResultDict | None:
     """Read an existing result; never start, send to or cancel a cascade."""
     try:
         anchored = input_anchor.get("start_step_index") if input_anchor is not None else None
@@ -572,7 +578,7 @@ def observe_completed_result(
         )
         if not response.get("message"):
             return None
-        return {
+        return as_completed_result({
             "thread_id": cascade_id,
             "request_ref": request_ref,
             "execution_id": execution,
@@ -588,6 +594,6 @@ def observe_completed_result(
             "response": response,
             **({"retained_result": _native_completion_facts(cascade_id, current)} if include_retained_result else {}),
             **({"raw_response": answer} if include_raw_response else {}),
-        }
+        })
     except (KeyError, TypeError, ValueError, AttributeError, CodexChatAgentError):
         return None

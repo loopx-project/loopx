@@ -42,15 +42,22 @@ from .antigravity_cascade import (
     _turn_progress_snapshot as _turn_progress_snapshot,
     _validate_review_envelope,
 )
+from .antigravity_contracts import (
+    AntigravityCompletedResultDict,
+    AntigravityEndpointDict,
+    AntigravityInterruptedAnswerDict,
+    AntigravityModelOptionDict,
+    AntigravityRpcResponseDict,
+    IndexedStep,
+    JsonDict,
+    JsonMap,
+)
 from .antigravity_discovery import (
     ANTIGRAVITY_DEFAULT_MODEL,
     ANTIGRAVITY_DEFAULT_REASONING_EFFORT,
     ANTIGRAVITY_MODEL_OPTIONS,
     ANTIGRAVITY_MODEL_PLACEHOLDERS,
     EventSink,
-    IndexedStep,
-    JsonDict,
-    JsonMap,
     _as_int,
     _cascade_summary_entry,
     _is_dict,
@@ -98,7 +105,7 @@ def _run_command(cmd: list[str], *, timeout: float) -> str:
 def discover_antigravity_language_server(
     env: Mapping[str, str] | None = None, *,
     deadline: float | None = None, include_model_config: bool = False,
-) -> JsonDict | None:
+) -> AntigravityEndpointDict | None:
     """Discover a running local endpoint without reusing an availability verdict."""
     return _discovery.discover_antigravity_language_server(
         env=env, deadline=deadline, include_model_config=include_model_config,
@@ -128,7 +135,9 @@ def _discovered_model_configs(discovered: JsonMap) -> list[JsonDict]:
     return _discovery._discovered_model_configs(discovered, rpc_post_fn=_rpc_post)
 
 
-def offered_antigravity_model_options(*, discovered: JsonMap | None = None) -> list[JsonDict]:
+def offered_antigravity_model_options(
+    *, discovered: JsonMap | None = None,
+) -> list[AntigravityModelOptionDict]:
     """Read registered choices from the local account without opening a cascade."""
     return _discovery.offered_antigravity_model_options(
         discovered=discovered, discover_fn=discover_antigravity_language_server, rpc_post_fn=_rpc_post,
@@ -164,7 +173,7 @@ class AntigravityAdapter:
     def interrupted_answer_observation(
         *, cascade_id: str, request_ref: str, message: str,
         started_at: str, completed_at: str, input_anchor: JsonMap,
-    ) -> JsonDict | None:
+    ) -> AntigravityInterruptedAnswerDict | None:
         """Read a stable original segment for a read-only answer review only."""
         return _obs.observe_interrupted_answer(
             cascade_id=cascade_id, request_ref=request_ref, message=message,
@@ -229,7 +238,7 @@ class AntigravityAdapter:
         completed_at: str, work_dir: Path, input_anchor: JsonMap | None = None,
         include_raw_response: bool = False, retained_result: JsonMap | None = None,
         include_retained_result: bool = False,
-    ) -> JsonDict | None:
+    ) -> AntigravityCompletedResultDict | None:
         """Read an existing result; never start, send to or cancel a cascade."""
         return _obs.observe_completed_result(
             cascade_id=cascade_id, request_ref=request_ref, message=message,
@@ -293,7 +302,7 @@ class AntigravityAdapter:
     def model_settings(self) -> dict[str, str | None]:
         return {"agent_reasoning_effort": self.reasoning_effort, "agent_service_tier": None}
 
-    def _post(self, method: str, payload: JsonMap, *, timeout: float) -> JsonDict:
+    def _post(self, method: str, payload: JsonMap, *, timeout: float) -> AntigravityRpcResponseDict:
         return _rpc_post(self.ls_url, self.csrf_token, method, payload, timeout=timeout)
 
     def _retire_active_turn(self) -> None:
@@ -615,7 +624,7 @@ class AntigravityAdapter:
         def observe(
             method: str, args: JsonMap, final_read_deadline: float | None,
             *, include_cascade_id: bool = True,
-        ) -> JsonDict | None:
+        ) -> JsonMap | None:
             nonlocal transport_error_since
             remaining = observation_limit
             if final_read_deadline is not None:
@@ -669,7 +678,7 @@ class AntigravityAdapter:
                 self._interrupted.wait(wait_sec)
                 self._check_interrupted()
 
-            traj: JsonDict | None = None
+            traj: JsonMap | None = None
             if (
                 start_step_index >= ANTIGRAVITY_LARGE_CASCADE_POLL_THRESHOLD
                 and final_read_deadline is None

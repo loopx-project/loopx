@@ -20,10 +20,17 @@ import urllib.request
 from urllib.parse import urlsplit
 
 from ...chat_agent import CodexChatAgentError
+from .antigravity_contracts import (
+    AntigravityEndpointDict,
+    AntigravityModelOptionDict,
+    AntigravityRpcResponseDict,
+    JsonDict,
+    JsonMap,
+    JsonSeq,
+    as_endpoint_dict,
+    as_rpc_response,
+)
 
-JsonDict: TypeAlias = dict[str, object]
-JsonMap: TypeAlias = Mapping[str, object]
-IndexedStep: TypeAlias = tuple[int, JsonDict]
 EventSink: TypeAlias = Callable[[str, JsonDict], None]
 
 
@@ -36,7 +43,7 @@ class RpcPostFn(Protocol):
         payload: JsonMap,
         *,
         timeout: float = 15.0,
-    ) -> JsonDict: ...
+    ) -> AntigravityRpcResponseDict: ...
 
 
 class DiscoverFn(Protocol):
@@ -46,7 +53,7 @@ class DiscoverFn(Protocol):
         *,
         deadline: float | None = None,
         include_model_config: bool = False,
-    ) -> JsonDict | None: ...
+    ) -> AntigravityEndpointDict | None: ...
 
 
 class CommandRunner(Protocol):
@@ -65,7 +72,7 @@ ANTIGRAVITY_MODEL_PLACEHOLDERS: dict[str, str] = {
     "gemini-4-carbon-low": "MODEL_PLACEHOLDER_M438",
 }
 
-ANTIGRAVITY_MODEL_OPTIONS: tuple[JsonDict, ...] = tuple(
+ANTIGRAVITY_MODEL_OPTIONS: tuple[AntigravityModelOptionDict, ...] = tuple(
     {
         "id": f"gemini-4-{family}-{effort}",
         "display_name": f"Gemini 4 {family.title()} ({effort.title()})",
@@ -158,7 +165,7 @@ def _rpc_post(
     payload: JsonMap,
     *,
     timeout: float = 15.0,
-) -> JsonDict:
+) -> AntigravityRpcResponseDict:
     url = f"{_local_url(base_url)}/exa.language_server_pb.LanguageServerService/{method}"
     req = urllib.request.Request(
         url,
@@ -174,7 +181,7 @@ def _rpc_post(
         with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data: object = json.loads(raw) if raw.strip() else {}
-            return data if _is_dict(data) else {}
+            return as_rpc_response(data if _is_dict(data) else {})
     except urllib.error.HTTPError as exc:
         raise CodexChatAgentError(
             f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",
@@ -244,15 +251,15 @@ def _probe_model_config(
     timeout: float,
     include_model_config: bool,
     rpc_post_fn: RpcPostFn = _rpc_post,
-) -> JsonDict:
+) -> AntigravityEndpointDict:
     model_data = rpc_post_fn(url, token, "GetCascadeModelConfigData", {}, timeout=timeout)
-    return {
+    return as_endpoint_dict({
         "url": url,
         "csrf_token": token,
         "pid": pid,
         "source": source,
         **({"model_config_data": model_data} if include_model_config else {}),
-    }
+    })
 
 
 def _cascade_summary_entry(resp: object, cascade_id: str) -> JsonDict | None:
@@ -318,7 +325,7 @@ def discover_antigravity_language_server(
     run_command_fn: CommandRunner = _default_run_command,
     getuid_fn: Callable[[], int | None] = _default_uid,
     monotonic_fn: Callable[[], float] = time.monotonic,
-) -> JsonDict | None:
+) -> AntigravityEndpointDict | None:
     """Discover a running local endpoint without reusing an availability verdict.
 
     Readiness can bound the whole observation, including process listing. An
@@ -461,14 +468,23 @@ def probe_antigravity_endpoint(
     )
 
 
-def _matching_antigravity_model_config(rows: list[object], model_id: str) -> list[JsonDict]:
+def _matching_antigravity_model_config(
+    rows: JsonSeq,
+    model_id: str,
+    *,
+    require_dict_alias: bool = False,
+) -> list[JsonDict]:
     """Match clientModelConfigs entries by modelId or placeholder when LS omits modelId."""
     expected_placeholder = ANTIGRAVITY_MODEL_PLACEHOLDERS.get(model_id)
     return [
         row
         for row in rows
         if _is_dict(row)
-        and (not row.get("modelOrAlias") or _is_dict(row.get("modelOrAlias")))
+        and (
+            not require_dict_alias
+            or not row.get("modelOrAlias")
+            or _is_dict(row.get("modelOrAlias"))
+        )
         and (
             row.get("modelId") == model_id
             or (
@@ -485,7 +501,7 @@ def resolve_antigravity_model_placeholder(
     model_id: object,
     reasoning_effort: object = None,
     *,
-    dynamic_configs: list[JsonDict] | None = None,
+    dynamic_configs: JsonSeq | None = None,
 ) -> tuple[str, str]:
     """Return `(canonical_model_id, model_placeholder)` for Antigravity."""
     raw_model = str(model_id or "").strip().lower()
@@ -513,7 +529,9 @@ def resolve_antigravity_model_placeholder(
         )
     placeholder = ANTIGRAVITY_MODEL_PLACEHOLDERS[canonical]
     if dynamic_configs is not None:
-        matches = _matching_antigravity_model_config(list(dynamic_configs), canonical)
+        matches = _matching_antigravity_model_config(
+            list(dynamic_configs), canonical, require_dict_alias=True,
+        )
         if not matches:
             raise CodexChatAgentError(
                 "The local Antigravity account did not offer this model.",
@@ -531,7 +549,7 @@ def _discovered_model_configs(
 ) -> list[JsonDict]:
     """Reuse verified metadata, or read it for an endpoint-only record."""
     data = discovered.get("model_config_data")
-    if not _is_dict(data):
+    if not isinstance(data, Mapping):
         data = rpc_post_fn(
             str(discovered["url"]),
             str(discovered["csrf_token"]),
@@ -548,7 +566,7 @@ def offered_antigravity_model_options(
     discovered: JsonMap | None = None,
     discover_fn: DiscoverFn = discover_antigravity_language_server,
     rpc_post_fn: RpcPostFn = _rpc_post,
-) -> list[JsonDict]:
+) -> list[AntigravityModelOptionDict]:
     """Read registered choices from the local account without opening a cascade."""
     if discovered is None:
         discovered = discover_fn(include_model_config=True)
@@ -559,10 +577,10 @@ def offered_antigravity_model_options(
             error_code="antigravity_unavailable",
         )
     configs = _discovered_model_configs(discovered, rpc_post_fn=rpc_post_fn)
-    options: list[JsonDict] = []
+    options: list[AntigravityModelOptionDict] = []
     for item in ANTIGRAVITY_MODEL_OPTIONS:
         try:
-            resolve_antigravity_model_placeholder(item["id"], dynamic_configs=configs)
+            resolve_antigravity_model_placeholder(item.get("id"), dynamic_configs=configs)
             options.append(item)
         except CodexChatAgentError:
             continue
@@ -579,7 +597,7 @@ def _extract_user_model_quota(
     user: object,
     model_id: str,
     *,
-    fallback_rows: list[object] | None = None,
+    fallback_rows: JsonSeq | None = None,
 ) -> tuple[str, float, str] | None:
     """Validate and extract `(account_ref, remaining_fraction, reset_time)` for one canonical model."""
     if not isinstance(user, Mapping):

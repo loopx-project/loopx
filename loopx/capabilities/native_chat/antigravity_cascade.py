@@ -19,12 +19,16 @@ from ...chat import (
 )
 from ...chat_agent import CodexChatAgentError
 from .antigravity_activity import AntigravityActivity
-from .antigravity_discovery import (
-    DiscoverFn,
-    EventSink,
+from .antigravity_contracts import (
+    AntigravityRpcResponseDict,
     IndexedStep,
     JsonDict,
     JsonMap,
+    JsonSeq,
+)
+from .antigravity_discovery import (
+    DiscoverFn,
+    EventSink,
     RpcPostFn,
     _is_dict,
     _is_strict_int,
@@ -69,7 +73,7 @@ _NON_TOOL_STEP_TYPES = frozenset({
 
 
 class CascadeReader(Protocol):
-    def __call__(self, method: str, **payload: object) -> JsonDict: ...
+    def __call__(self, method: str, **payload: object) -> AntigravityRpcResponseDict: ...
 
 
 class ManagerInputMatcher(Protocol):
@@ -176,7 +180,7 @@ def _turn_steps_allow_completion(
 
 
 def _index_step_batch(
-    steps: list[object],
+    steps: JsonSeq,
     requested_start: int,
     total: int,
 ) -> tuple[int, list[IndexedStep], int]:
@@ -217,7 +221,7 @@ def _index_step_batch(
 
 
 def _observed_turn_steps(
-    steps: list[object],
+    steps: JsonSeq,
     start: int,
     total: int,
 ) -> tuple[list[IndexedStep], int]:
@@ -467,13 +471,13 @@ def _open_idle_cascade(
     timeout: float,
     discover_fn: DiscoverFn = discover_antigravity_language_server,
     rpc_post_fn: RpcPostFn = _rpc_post,
-) -> tuple[str, str, CascadeReader, JsonDict, int] | None:
+) -> tuple[str, str, CascadeReader, AntigravityRpcResponseDict, int] | None:
     found = discover_fn()
     if found is None:
         return None
     url, token = str(found["url"]), str(found["csrf_token"])
 
-    def read(method: str, **payload: object) -> JsonDict:
+    def read(method: str, **payload: object) -> AntigravityRpcResponseDict:
         return rpc_post_fn(
             url,
             token,
