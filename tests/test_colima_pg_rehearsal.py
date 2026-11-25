@@ -451,3 +451,64 @@ def test_volcengine_deployment_artifacts() -> None:
     for action in actions:
         assert not action.startswith("rds_postgresql:Create"), f"Mutating action {action} in policy"
         assert not action.startswith("rds_postgresql:Delete"), f"Destructive action {action} in policy"
+
+
+def test_rehearsal_symlink_directory_invocation(tmp_path: Path) -> None:
+    """Invoking .sh or .ts via a symlinked directory must still run and never false-pass 0."""
+    linked_root = tmp_path / "symlink-worktree"
+    linked_root.symlink_to(REPO_ROOT, target_is_directory=True)
+    linked_sh = linked_root / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.sh"
+    linked_ts = linked_root / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.ts"
+
+    sh_sim = subprocess.run(
+        [str(linked_sh), "--simulate"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=linked_root,
+    )
+    sh_data = json.loads(sh_sim.stdout)
+    assert sh_data["ok"] is True
+    assert len(sh_data["steps"]) == 8
+
+    sh_bad_url = subprocess.run(
+        [str(linked_sh), "--database-url", "postgresql://invalid"],
+        capture_output=True,
+        text=True,
+        cwd=linked_root,
+    )
+    assert sh_bad_url.returncode != 0
+
+    ts_sim = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-sqlite",
+            "--experimental-strip-types",
+            str(linked_ts),
+            "--simulate",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=linked_root,
+    )
+    ts_data = json.loads(ts_sim.stdout)
+    assert ts_data["ok"] is True
+    assert len(ts_data["steps"]) == 8
+
+    ts_bad_url = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-sqlite",
+            "--experimental-strip-types",
+            str(linked_ts),
+            "--database-url",
+            "postgresql://invalid",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=linked_root,
+    )
+    assert ts_bad_url.returncode != 0

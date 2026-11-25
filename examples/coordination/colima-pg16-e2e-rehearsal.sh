@@ -18,8 +18,17 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_SOURCE}" ]; do
+  LINK_DIR="$(cd -P "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
+  LINK_TARGET="$(readlink "${SCRIPT_SOURCE}")"
+  case "${LINK_TARGET}" in
+    /*) SCRIPT_SOURCE="${LINK_TARGET}" ;;
+    *) SCRIPT_SOURCE="${LINK_DIR}/${LINK_TARGET}" ;;
+  esac
+done
+SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_SOURCE}")" && pwd)"
+REPO_ROOT="$(cd -P "${SCRIPT_DIR}/../.." && pwd)"
 
 MODE="simulate"
 EXPLICIT_MODE=""

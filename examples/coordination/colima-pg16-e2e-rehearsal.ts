@@ -14,9 +14,11 @@
 
 import {execFile} from "node:child_process";
 import {createHash, randomBytes} from "node:crypto";
+import {realpathSync} from "node:fs";
 import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
-import {join} from "node:path";
+import {join, resolve} from "node:path";
+import {fileURLToPath} from "node:url";
 import {parseArgs, promisify} from "node:util";
 import {Pool, type PoolClient, type PoolConfig} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
@@ -1003,8 +1005,30 @@ export class ColimaPgCoordinationRehearsal {
   }
 }
 
+function isDirectEntry(): boolean {
+  const entry = process.argv[1];
+  if (!entry) {
+    return false;
+  }
+  try {
+    return (
+      realpathSync(resolve(entry)) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch (error: unknown) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? (error as {code?: unknown}).code
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 // CLI entrypoint
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectEntry()) {
   const {values} = parseArgs({
     options: {
       "database-url": {type: "string"},
