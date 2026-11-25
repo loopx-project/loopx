@@ -138,6 +138,18 @@ class DeletionResult(dict[str, object]):
         return super().__getitem__(key)
 
 
+def deletion_readback(payload: PayloadView) -> DeletionReadback | None:
+    """Return the typed readback block from a deletion result when present."""
+    raw = payload.get("readback")
+    if not isinstance(raw, Mapping):
+        return None
+    return {
+        "source_missing": bool(raw.get("source_missing")),
+        "global_missing": bool(raw.get("global_missing")),
+        "verified": bool(raw.get("verified")),
+    }
+
+
 def _as_payload(value: Mapping[str, object]) -> Payload:
     return {str(key): item for key, item in value.items()}
 

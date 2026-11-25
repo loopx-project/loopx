@@ -56,6 +56,7 @@ from .deletion_basis import (
     _route_matches_locked_paths,
     _source_basis,
     _state_fingerprint,
+    deletion_readback as deletion_readback,
 )
 from .deletion_recovery import (
     RecoveryRecord as RecoveryRecord,

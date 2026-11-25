@@ -8,6 +8,9 @@ import tokenize
 
 import pytest
 
+from loopx.chat import goal_lifecycle_actions
+from loopx.chat_action_store import ChatActionStore
+from loopx.chat_actions import ChatActionService
 from loopx.control_plane.goals import deletion_basis, deletion_recovery, deletion_service
 from loopx.control_plane.goals.activation import build_goal_activation
 from loopx.control_plane.goals.activation_service import (
@@ -38,6 +41,7 @@ from loopx.control_plane.goals.deletion_service import (
     _recovery_hooks,
     _recovery_receipt_path,
     delete_stopped_goal,
+    deletion_readback,
 )
 from loopx.global_registry import sync_project_registry_to_global
 from loopx.history import load_registry
@@ -342,3 +346,70 @@ def test_delete_stopped_goal_missing_stale_lock_failure_and_replay_contract(
     )
     assert blocked["ok"] is False
     assert blocked["error_kind"] == "goal_source_lock_unavailable"
+
+
+def test_deletion_readback_helper_and_chat_caller_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert deletion_service.deletion_readback is deletion_readback
+    assert deletion_readback({}) is None
+    assert deletion_readback({"readback": "not-a-mapping"}) is None
+    assert deletion_readback(
+        {
+            "readback": {
+                "source_missing": True,
+                "global_missing": True,
+                "verified": True,
+            }
+        }
+    ) == {
+        "source_missing": True,
+        "global_missing": True,
+        "verified": True,
+    }
+
+    _source_registry, global_registry = _stopped_connected_registries(tmp_path)
+    service = ChatActionService(
+        store=ChatActionStore(tmp_path / "actions"),
+        registry_path=global_registry,
+    )
+    proposal = service.preview(
+        {
+            "action_kind": "goal.lifecycle",
+            "summary": "Delete stopped contract Goal",
+            "normalized_parameters": {
+                "goal_id": "goal-one",
+                "operation": "delete",
+                "reason": "Contract test",
+            },
+            "context": {"kind": "goal_directory"},
+            "idempotency_key": "contract-delete-readback-missing",
+        }
+    )
+
+    def delete_without_readback(
+        *,
+        registry_path: Path,
+        goal_id: str,
+        execute: bool = False,
+        expected_state_fingerprint: str | None = None,
+        expected_source_basis: PayloadView | None = None,
+    ) -> dict[str, object]:
+        if execute:
+            return {"ok": True}
+        return delete_stopped_goal(
+            registry_path=registry_path,
+            goal_id=goal_id,
+            execute=False,
+            expected_state_fingerprint=expected_state_fingerprint,
+            expected_source_basis=expected_source_basis,
+        )
+
+    monkeypatch.setattr(
+        goal_lifecycle_actions,
+        "delete_stopped_goal",
+        delete_without_readback,
+    )
+    with pytest.raises(ValueError, match="Goal deletion did not verify"):
+        service.apply(str(proposal["proposal_id"]))
