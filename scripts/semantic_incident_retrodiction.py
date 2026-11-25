@@ -18,6 +18,7 @@ the measurement disagrees, the mismatch is the finding and is printed last.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 import copy
 import importlib.util
 import json
@@ -26,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -66,28 +67,168 @@ def appendix_e_lessons(rfc_path: Path) -> int:
     return sum(1 for line in tail.splitlines() if line.startswith("- "))
 
 
-def load_ledger() -> dict[str, Any]:
-    ledger = json.loads(LEDGER_PATH.read_text(encoding="utf-8"))
-    require(set(ledger) == LEDGER_KEYS, f"ledger keys must be exactly {sorted(LEDGER_KEYS)}")
-    require(ledger["schema_version"] == LEDGER_SCHEMA_VERSION, "ledger schema_version drift")
-    require(ledger["meaning"].strip() and ledger["source"].strip(), "ledger needs a meaning and a source")
+BaselineDict = TypedDict(
+    "BaselineDict",
+    {
+        "meaning": str,
+        "would_have_caught": int,
+        "total": int,
+        "negative_control_false_positives": int,
+    },
+)
+IncidentDict = TypedDict(
+    "IncidentDict",
+    {
+        "id": str,
+        "class": str,
+        "defect": str,
+        "expected_rule": str,
+        "probe": str,
+        "expectation": str,
+    },
+)
+ControlDict = TypedDict(
+    "ControlDict",
+    {
+        "id": str,
+        "class": str,
+        "meaning": str,
+        "probe": str,
+    },
+)
+LedgerDict = TypedDict(
+    "LedgerDict",
+    {
+        "schema_version": str,
+        "meaning": str,
+        "source": str,
+        "measured_at": str,
+        "incidents": list[IncidentDict],
+        "negative_controls": list[ControlDict],
+        "caught_baseline": BaselineDict,
+    },
+)
+
+
+def _require_mapping(value: object, message: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise LedgerError(message)
+    return {str(key): item for key, item in value.items()}
+
+
+def _require_str_records(
+    value: object,
+    *,
+    label: str,
+    keys: set[str],
+    non_empty_keys: set[str],
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise LedgerError(f"{label} must be a list")
+    records: list[dict[str, str]] = []
+    for entry in value:
+        mapping = _require_mapping(entry, f"{label} entry must be an object")
+        require(set(mapping) == keys, f"{mapping.get('id')}: {label} keys must be exactly {sorted(keys)}")
+        record: dict[str, str] = {}
+        for key in keys:
+            item = mapping[key]
+            if not isinstance(item, str):
+                raise LedgerError(f"{mapping.get('id')}: {key} must be a string")
+            if key in non_empty_keys:
+                require(bool(item.strip()), f"{mapping.get('id')}: {key} must be non-empty")
+            record[key] = item
+        records.append(record)
+    ids = [record["id"] for record in records]
+    require(len(ids) == len(set(ids)), f"{label} ids repeat")
+    return records
+
+
+def load_ledger() -> LedgerDict:
+    raw = _require_mapping(
+        json.loads(LEDGER_PATH.read_text(encoding="utf-8")),
+        "ledger must be a JSON object",
+    )
+    require(set(raw) == LEDGER_KEYS, f"ledger keys must be exactly {sorted(LEDGER_KEYS)}")
+    require(raw["schema_version"] == LEDGER_SCHEMA_VERSION, "ledger schema_version drift")
+    meaning = raw["meaning"]
+    source = raw["source"]
+    measured_at = raw["measured_at"]
+    require(
+        isinstance(meaning, str) and bool(meaning.strip())
+        and isinstance(source, str) and bool(source.strip())
+        and isinstance(measured_at, str),
+        "ledger needs a meaning, measured_at, and source",
+    )
     require(LEDGER_PATH.parent.joinpath("vocabulary_v0.json").is_file(), "ledger must sit beside the vocabulary registry")
-    ids = [incident["id"] for incident in ledger["incidents"]]
-    require(len(ids) == len(set(ids)), "incident ids repeat")
-    for incident in ledger["incidents"]:
-        require(set(incident) == INCIDENT_KEYS, f"{incident.get('id')}: incident keys must be exactly {sorted(INCIDENT_KEYS)}")
-        require(incident["expectation"] in VERDICTS, f"{incident['id']}: expectation must be one of {sorted(VERDICTS)}")
-        for key in ("class", "defect", "expected_rule", "probe"):
-            require(incident[key].strip(), f"{incident['id']}: {key} must be non-empty")
-    control_ids = [control["id"] for control in ledger["negative_controls"]]
-    require(len(control_ids) == len(set(control_ids)), "negative control ids repeat")
-    for control in ledger["negative_controls"]:
-        require(set(control) == CONTROL_KEYS, f"{control.get('id')}: control keys must be exactly {sorted(CONTROL_KEYS)}")
-    baseline = ledger["caught_baseline"]
-    require(set(baseline) == {"meaning", "would_have_caught", "total", "negative_control_false_positives"},
-            "caught_baseline keys must be meaning, would_have_caught, total, and negative_control_false_positives")
-    require(baseline["total"] == len(ledger["incidents"]), "caught_baseline.total must equal the incident count")
-    return ledger
+
+    incident_rows = _require_str_records(
+        raw["incidents"],
+        label="incident",
+        keys=INCIDENT_KEYS,
+        non_empty_keys={"class", "defect", "expected_rule", "probe"},
+    )
+    incidents: list[IncidentDict] = []
+    for row in incident_rows:
+        require(row["expectation"] in VERDICTS, f"{row['id']}: expectation must be one of {sorted(VERDICTS)}")
+        incidents.append(
+            {
+                "id": row["id"],
+                "class": row["class"],
+                "defect": row["defect"],
+                "expected_rule": row["expected_rule"],
+                "probe": row["probe"],
+                "expectation": row["expectation"],
+            }
+        )
+
+    control_rows = _require_str_records(
+        raw["negative_controls"],
+        label="negative control",
+        keys=CONTROL_KEYS,
+        non_empty_keys=set(),
+    )
+    controls: list[ControlDict] = [
+        {
+            "id": row["id"],
+            "class": row["class"],
+            "meaning": row["meaning"],
+            "probe": row["probe"],
+        }
+        for row in control_rows
+    ]
+
+    raw_baseline = _require_mapping(raw["caught_baseline"], "caught_baseline must be an object")
+    require(
+        set(raw_baseline) == {"meaning", "would_have_caught", "total", "negative_control_false_positives"},
+        "caught_baseline keys must be meaning, would_have_caught, total, and negative_control_false_positives",
+    )
+    base_meaning = raw_baseline["meaning"]
+    caught = raw_baseline["would_have_caught"]
+    total = raw_baseline["total"]
+    false_pos = raw_baseline["negative_control_false_positives"]
+    if not (
+        isinstance(base_meaning, str)
+        and isinstance(caught, int)
+        and isinstance(total, int)
+        and isinstance(false_pos, int)
+    ):
+        raise LedgerError("caught_baseline field types mismatch")
+    baseline: BaselineDict = {
+        "meaning": base_meaning,
+        "would_have_caught": caught,
+        "total": total,
+        "negative_control_false_positives": false_pos,
+    }
+    require(baseline["total"] == len(incidents), "caught_baseline.total must equal the incident count")
+    return {
+        "schema_version": str(raw["schema_version"]),
+        "meaning": str(meaning),
+        "source": str(source),
+        "measured_at": str(measured_at),
+        "incidents": incidents,
+        "negative_controls": controls,
+        "caught_baseline": baseline,
+    }
 
 
 class Guard:
@@ -105,7 +246,8 @@ class Guard:
 
     def __init__(self) -> None:
         spec = importlib.util.spec_from_file_location("_semantic_drift_smoke_probe", SMOKE_PATH)
-        require(spec is not None and spec.loader is not None, "the guard module could not be loaded")
+        if spec is None or spec.loader is None:
+            raise LedgerError("the guard module could not be loaded")
         self.module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = self.module
         spec.loader.exec_module(self.module)
@@ -114,7 +256,7 @@ class Guard:
         self.sources = self.ns["load_sources"](self.ns["REPO_ROOT"])
         self.inventory = self.ns["build_inventory"](self.ns["REPO_ROOT"], sources=self.sources)
 
-    def rejects(self, call: Any) -> tuple[bool, str]:
+    def rejects(self, call: Callable[[], object]) -> tuple[bool, str]:
         try:
             call()
         except Exception as error:  # noqa: BLE001 - any rejection is the signal
@@ -122,7 +264,7 @@ class Guard:
             return True, f"{type(error).__name__}: {first}"
         return False, "accepted"
 
-    def with_registry_file(self, mutated: dict[str, Any], call: Any) -> tuple[bool, str]:
+    def with_registry_file(self, mutated: Mapping[str, object], call: Callable[[], object]) -> tuple[bool, str]:
         """Run a loader-level check against mutated registry content.
 
         The patch is proven live before the verdict is used: the committed
@@ -143,8 +285,8 @@ class Guard:
             self.ns["REGISTRY_PATH"] = original
             temporary.unlink(missing_ok=True)
 
-    def semantic_forks(self, registry: dict[str, Any] | None = None) -> int:
-        return self.ns["check_scope_declarations"](registry or self.registry, self.inventory)
+    def semantic_forks(self, registry: Mapping[str, object] | None = None) -> int:
+        return int(self.ns["check_scope_declarations"](registry or self.registry, self.inventory))
 
 
 # --- incident probes -----------------------------------------------------------------
@@ -158,14 +300,15 @@ def probe_cross_runtime_value_drift(guard: Guard) -> tuple[bool, str]:
         if owner and "::" in owner and owner.split("::")[0].endswith(".ts"):
             target = (name, owner)
             break
-    require(target is not None, "no registered cross-runtime pair to mutate; the probe cannot measure anything")
+    if target is None:
+        raise LedgerError("no registered cross-runtime pair to mutate; the probe cannot measure anything")
     name, owner = target
     module, _symbol = owner.split("::")
     victim = guard.ns["owner_values"](owner)[-1]
     original = guard.ns["source"]
-    applied = []
+    applied: list[str] = []
 
-    def drifted(path: str):
+    def drifted(path: str) -> object:
         file = original(path)
         if path != module:
             return file
@@ -180,7 +323,7 @@ def probe_cross_runtime_value_drift(guard: Guard) -> tuple[bool, str]:
         rejected, detail = guard.rejects(lambda: guard.ns["check_owned_vocabularies"](guard.registry, guard.inventory))
     finally:
         guard.ns["source"] = original
-    require(applied and set(applied) == {module}, f"the drifted module was never read (read={sorted(set(applied))})")
+    require(bool(applied) and set(applied) == {module}, f"the drifted module was never read (read={sorted(set(applied))})")
     return rejected, f"{name} {owner}: {victim} -> {victim}_drift rejected={rejected} ({detail})"
 
 
@@ -254,12 +397,22 @@ def probe_definitions_ratcheted(guard: Guard) -> tuple[bool, str]:
 
 def probe_commit_time_selection(guard: Guard) -> tuple[bool, str]:
     """E07: the guard must be selected before merge, not discovered by the fleet."""
+    from loopx.canary.planner import CURRENT_REPO_PROFILES
     from loopx.canary.premerge import build_premerge_validation_gate
     from loopx.canary.runner import MAINTAINABILITY_RATCHET_SCRIPT
 
-    planner = (REPO_ROOT / "loopx" / "canary" / "planner.py").read_text(encoding="utf-8")
     command = "examples/semantic-vocabulary-drift-smoke.py"
-    planned = command in planner
+    matching_profiles: list[Mapping[str, object]] = []
+    for profile in CURRENT_REPO_PROFILES:
+        raw_checks = profile.get("checks")
+        if not isinstance(raw_checks, list):
+            continue
+        if any(
+            isinstance(check, Mapping) and command in str(check.get("command") or "")
+            for check in raw_checks
+        ):
+            matching_profiles.append(profile)
+    planned = bool(matching_profiles)
     gate = build_premerge_validation_gate(
         changed_files=["loopx/_probe_semantic_guard.py"],
         execute=False,
@@ -272,7 +425,12 @@ def probe_commit_time_selection(guard: Guard) -> tuple[bool, str]:
     ]
     selected_by_premerge = any(command in item for item in selected_commands)
     not_advisory_baseline = command != MAINTAINABILITY_RATCHET_SCRIPT
-    guarded_roots = [hint for hint in ("loopx/", "scripts/", "examples/") if f'"{hint}"' in planner]
+    hint_values: set[str] = set()
+    for profile in matching_profiles:
+        raw_hints = profile.get("trigger_hints")
+        if isinstance(raw_hints, (list, tuple)):
+            hint_values.update(str(hint) for hint in raw_hints)
+    guarded_roots = [hint for hint in ("loopx/", "scripts/", "examples/") if hint in hint_values]
     return planned and selected_by_premerge and not_advisory_baseline, (
         f"named_in_planner={planned} selected_by_premerge={selected_by_premerge} "
         f"not_advisory_baseline={not_advisory_baseline} planner_trigger_hints={guarded_roots}"
@@ -364,7 +522,7 @@ def probe_scan_reach_disclosed(guard: Guard) -> tuple[bool, str]:
     require(dropped > 0, f"{dropped_prefix} holds no sources; the probe cannot narrow anything")
     original = guard.ns["load_sources"]
 
-    def narrowed(repo_root: str, root: str | None = None):
+    def narrowed(repo_root: str, root: str | None = None) -> list[object]:
         scope = root if root is not None else DEFAULT_ROOT
         return [source for source in kept if source.path.startswith(scope)]
 
@@ -438,7 +596,10 @@ def probe_roles_table(guard: Guard) -> tuple[bool, str]:
 
 def control_single_value_ignored(guard: Guard) -> tuple[bool, str]:
     """A one-value set must not be reported as a collision candidate."""
-    fake = {section: [] for section in ("python_enums", "python_closed_sets", "python_literal_aliases", "typescript_const_arrays")}
+    fake: dict[str, list[dict[str, object]]] = {
+        section: []
+        for section in ("python_enums", "python_closed_sets", "python_literal_aliases", "typescript_const_arrays")
+    }
     fake["python_closed_sets"] = [
         {"name": "ONLY_ONE", "module": "loopx/_probe_a.py", "values": ["solo"]},
         {"name": "ALSO_ONE", "module": "loopx/_probe_b.py", "values": ["solo"]},
@@ -521,9 +682,10 @@ def main() -> int:
         f"Appendix E records {lessons} lessons but the ledger probes {len(ledger['incidents'])}; "
         "every lesson needs a probe and every probe needs a lesson"
     ))
-    for ledger_key, probes in (("incidents", INCIDENT_PROBES), ("negative_controls", CONTROL_PROBES)):
-        for entry in ledger[ledger_key]:
-            require(entry["probe"] in probes, f"{entry['id']}: unknown probe {entry['probe']!r}")
+    for incident in ledger["incidents"]:
+        require(incident["probe"] in INCIDENT_PROBES, f"{incident['id']}: unknown probe {incident['probe']!r}")
+    for control in ledger["negative_controls"]:
+        require(control["probe"] in CONTROL_PROBES, f"{control['id']}: unknown probe {control['probe']!r}")
 
     caught, mismatches, details = 0, [], []
     for incident in ledger["incidents"]:
