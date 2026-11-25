@@ -350,12 +350,19 @@ test('the merged list puts every machine in one activity order, names where each
   assert.deepEqual(finished.groups.flatMap((g) => g.items), []);
 });
 
-test('snooze: a quiet thread joins no attention surface until its time passes, then it is back', () => {
+test('snooze: a quiet thread joins no attention surface until its time passes, except unread failures', () => {
   const until = new Date(Date.now() + 3600_000).toISOString();
   assert.equal(threadAttention(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until }), null), null);
   assert.equal(threadAttention(thread('a', { unread: true, snoozedUntil: until }), null), null);
   assert.equal(boardStage(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until })), 'review', 'the board does not count a snoozed wait as blocked');
   assert.equal(threadMark(thread('a', { unread: true, snoozedUntil: until }), false), null, 'no dot while quiet');
+  // Unread failure breaks through snooze across attention, sidebar mark, activity and board.
+  const failedSnoozed = thread('f', { status: 'error', unread: true, snoozedUntil: until });
+  assert.deepEqual(threadAttention(failedSnoozed, null), { kind: 'error' });
+  assert.equal(threadAttention(failedSnoozed, 'f'), null, 'an open failed thread is being read right now');
+  assert.equal(threadMark(failedSnoozed, false), 'error');
+  assert.equal(boardStage(failedSnoozed), 'blocked');
+  assert.equal(threadAttention(thread('seen-err', { status: 'error', unread: false, snoozedUntil: until }), null), null, 'a seen failure stays quiet while snoozed');
   assert.deepEqual(threadAttention(thread('a', { unread: true, snoozedUntil: new Date(Date.now() - 1000).toISOString() }), null), { kind: 'unread' });
   assert.deepEqual(threadAttention(thread('a', { unread: true }), null), { kind: 'unread' });
   assert.equal(snoozeTimeLabel(new Date('2026-01-02T09:05:00').toISOString(), new Date('2026-01-02T08:00:00')), '09:05');

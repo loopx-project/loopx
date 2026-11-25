@@ -197,8 +197,11 @@ const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDat
  * in the same state everywhere. The thread on screen is being read right now: it is never unread.
  */
 export function threadAttention(t: Pick<Thread, 'id' | 'waiting' | 'waitingReason' | 'unread' | 'status' | 'snoozedUntil'>, selectedId: string | null, now = Date.now()): Attention | null {
-  // Snoozed, the thread asked not to be heard from until its time comes: no dot, no count, no board block.
-  if (t.snoozedUntil && Date.parse(t.snoozedUntil) > now) return null;
+  // Snoozed, the thread asked not to be heard from until its time comes — except an unread failure,
+  // which breaks through here just as PushService.maybePush lets errors bypass snooze suppression.
+  if (t.snoozedUntil && Date.parse(t.snoozedUntil) > now) {
+    return t.unread && t.status === 'error' && t.id !== selectedId ? { kind: 'error' } : null;
+  }
   // Older daemons do not say what is awaited; approvals were all there was.
   if (t.waiting) return { kind: t.waitingReason ?? 'approval' };
   if (t.unread && t.id !== selectedId) return { kind: t.status === 'error' ? 'error' : 'unread' };
