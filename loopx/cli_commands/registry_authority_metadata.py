@@ -5,11 +5,11 @@ import copy
 from pathlib import Path
 from typing import cast
 
-from .authority import (
+from ..authority import (
     Payload, _apply_authority_entry, _dict_view, find_goal_index,
     normalize_project_materials, now_local, public_safe_optional, validate_authority_source_id,
 )
-from .control_plane.projects.registry_codec import (
+from ..control_plane.projects.registry_codec import (
     load_project_registry, mutate_project_registry, require_runtime_compatible_project_registry,
 )
 

@@ -11,7 +11,7 @@ from ..authority import (
     render_doc_registry_authority_import_markdown,
     render_authority_source_markdown,
 )
-from ..authority_metadata import update_authority_source
+from .registry_authority_metadata import update_authority_source
 from ..global_registry import sync_project_registry_to_global
 
 
@@ -189,12 +189,19 @@ def handle_registry_authority_command(
                 if args.dry_run:
                     payload["global_sync"] = {"enabled": True, "dry_run": True, "wrote": False}
                 else:
-                    payload["global_sync"] = sync_project_registry_to_global(
+                    sync_result = sync_project_registry_to_global(
                         registry_path=registry_path,
                         runtime_root_override=args.runtime_root,
                         goal_id=args.goal_id,
                         dry_run=False,
                     )
+                    payload["global_sync"] = sync_result
+                    if args.command == "update-authority-source" and sync_result.get("ok") is False:
+                        payload["ok"] = False
+                        payload["error"] = (
+                            "Project metadata was written, but shared registry synchronization failed: "
+                            + str(sync_result.get("error") or "shared registry rejected the update")
+                        )
             else:
                 payload["global_sync"] = {"enabled": False}
         except Exception as exc:

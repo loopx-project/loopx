@@ -114,8 +114,17 @@ access a source. No source is opened. Registration keeps its existing full-entry
 replacement semantics; use it for deliberate replacement, supplying the complete
 contract. Project writes use the existing registry transaction; shared-summary
 sync follows separately. If sync fails after the project update, the failure
-reports `written: true`; inspect the project readback and retry the same update
-once shared registry access is restored.
+reports `ok: false` and `written: true`. Inspect the project readback; after
+restoring shared registry access, sync the current project snapshot with the same
+Goal and runtime root instead of replaying the metadata patch:
+
+```bash
+loopx --registry .loopx/registry.json --runtime-root /path/to/runtime \
+  sync-global --goal-id example-goal
+```
+
+Use the original resolved runtime root. Sync-only recovery preserves newer
+metadata observations recorded since the failure.
 
 ## Stop Conditions
 

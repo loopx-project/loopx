@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from loopx.authority_metadata import update_authority_source
+from loopx.cli_commands.registry_authority_metadata import update_authority_source
 
 
 def cli(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -93,7 +93,7 @@ def test_list_materials_and_import_metadata_preserved(material: Path):
 
 
 def test_transaction_failure_keeps_original_bytes(material: Path, monkeypatch: pytest.MonkeyPatch):
-    from loopx import authority_metadata as authority
+    from loopx.cli_commands import registry_authority_metadata as authority
     before = material.read_bytes()
     apply = authority._apply_authority_entry
 
@@ -147,7 +147,7 @@ def test_sync_failure_reports_local_write_and_retry_recovers(material: Path):
     assert json.loads(result.stdout)['written'] is True
     assert json.loads(material.read_text())['goals'][0]['authority_registry']['project_materials']['guide']['freshness'] == 'stale'
     runtime.unlink()
-    result = cli(material, *args)
+    result = cli(material, '--runtime-root', str(runtime), 'sync-global', '--goal-id', 'demo')
     assert result.returncode == 0, result.stdout
     assert (runtime / 'registry.global.json').exists()
 
@@ -164,3 +164,51 @@ def test_concurrent_disjoint_metadata_updates_preserve_each_other(material: Path
     assert entry['owner_status'] == 'reviewed'
     assert entry['revision'] == 'edition-2'
     assert entry['source_ref_sha256']
+
+
+@pytest.mark.skipif(os.name != 'posix' or getattr(os, 'geteuid', lambda: 0)() == 0,
+                    reason='requires POSIX directory permissions enforced for a non-root user')
+@pytest.mark.parametrize('output_format', ['json', 'markdown'])
+def test_structured_sync_rejection_and_sync_only_recovery(material: Path, output_format: str):
+    runtime = material.parent / 'readonly-runtime'
+    route = ('--runtime-root', str(runtime))
+    initial = cli(material, *route, 'sync-global', '--goal-id', 'demo')
+    assert initial.returncode == 0, initial.stdout
+    shared = runtime / 'registry.global.json'
+    before = shared.read_bytes()
+    original = json.loads(material.read_text())['goals'][0]['authority_registry']['project_materials']['guide']
+    runtime.chmod(0o500)
+    try:
+        result = cli(material, *route, '--format', output_format, 'update-authority-source',
+                     '--goal-id', 'demo', '--source-id', 'guide', '--freshness', 'stale')
+        assert result.returncode == 1, result.stdout
+        if output_format == 'json':
+            payload = json.loads(result.stdout)
+            assert payload['ok'] is False and payload['written'] is True
+            assert payload['global_sync']['ok'] is False
+            assert payload['global_sync']['write_denied'] is True
+            assert payload['global_sync']['error'] in payload['error']
+        else:
+            assert '- written: `True`' in result.stdout
+            assert 'Permission denied' in result.stdout
+        assert shared.read_bytes() == before
+        committed = json.loads(material.read_text())['goals'][0]['authority_registry']['project_materials']['guide']
+        assert committed == {**original, 'freshness': 'stale'}
+        # Another observation arrives before recovery. Recovery must not replay stale metadata.
+        later = cli(material, *route, 'update-authority-source', '--goal-id', 'demo',
+                    '--source-id', 'guide', '--freshness', 'owner_review_pending', '--no-global-sync')
+        assert later.returncode == 0, later.stdout
+        newest = material.read_bytes()
+    finally:
+        runtime.chmod(0o700)
+    recovered = cli(material, *route, 'sync-global', '--goal-id', 'demo')
+    assert recovered.returncode == 0, recovered.stdout
+    assert material.read_bytes() == newest
+    entry = json.loads(newest)['goals'][0]['authority_registry']['project_materials']['guide']
+    assert entry == {**original, 'freshness': 'owner_review_pending'}
+    before_summary = json.loads(before)['goals'][0]['authority_registry']
+    summary = json.loads(shared.read_text())['goals'][0]['authority_registry']
+    assert before_summary['project_material_owner_review_required_count'] == 0
+    assert summary['project_material_owner_review_required_count'] == 1
+    assert summary['project_material_stale_count'] == 0
+    assert summary['project_material_count'] == 1
