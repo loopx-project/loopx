@@ -1,0 +1,29 @@
+{
+  "baseline": "50aa5b4fd1c88b7225fc30e58423120e3ad5d426",
+  "candidate": "94dabbaacdcfd6346078d16f5f1952f5496695f4",
+  "fixture": "Goal Workspace M2, packaged Chat and public synthetic status",
+  "baseline_observation": "Escape returned focus to the Overview tab.",
+  "candidate_observation": "Escape returned focus to Goal information. At 390 px the close button restored the masthead Goal control.",
+  "screenshots": {
+    "after-expanded-390.png": {
+      "sha256": "85f2772eb715932c45b4cacdf54fd0ac25b52383ecf1954d4a24e757a29abc92",
+      "width": 390,
+      "height": 844
+    },
+    "after-masthead-390.png": {
+      "sha256": "0aa995c1a540508dbc4dd5c1290a4d6b2d2a67f8632fa12bbdc6fea94aa067c9",
+      "width": 390,
+      "height": 844
+    },
+    "after-overview.png": {
+      "sha256": "8f8e15b7a3071cf79c63085e8fa9019bbb760e5de77b3ec66cbea87724e8ac23",
+      "width": 1512,
+      "height": 982
+    },
+    "before-overview.png": {
+      "sha256": "f27b5b1276fc87464ecc564c01e9bd5947e2f1742953515d8b93a6d6212980d7",
+      "width": 1512,
+      "height": 982
+    }
+  }
+}
