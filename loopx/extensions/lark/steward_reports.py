@@ -35,11 +35,11 @@ from ...capabilities.periodic_report.private_generation import attempt_directory
 class _LarkOwnerAttentionProtocol(Protocol):
     def _route(
         self,
-        binding: Mapping[str, object],
-        saved: object = None,
+        binding: dict[str, object],
+        saved: dict[str, object] | None = None,
         *,
-        session_id: str,
-        source_ref: str,
+        session_id: str | None = None,
+        source_ref: str | None = None,
     ) -> dict[str, object]: ...
 
 
@@ -63,17 +63,17 @@ class _LarkTransportProtocol(Protocol):
     @property
     def owner_attention(self) -> _LarkOwnerAttentionProtocol: ...
 
-    def _inbox(self, record: Mapping[str, object]) -> object: ...
+    def _inbox(self, record: dict[str, object]) -> Path: ...
 
     def _deliver(
         self,
         path: Path,
         record: dict[str, object],
         phase: str,
-        body: str,
+        text: str,
         *,
-        inbox: Callable[[], object],
-        authorization_check: Callable[[], bool],
+        inbox: Callable[[], Path],
+        authorization_check: Callable[[], bool] | None = None,
         reply_placement: str | None = None,
         finalize_source: bool = True,
     ) -> bool: ...
@@ -91,10 +91,11 @@ class LarkStewardReports:
         actor: Mapping[str, object],
         saved: object = None,
     ) -> dict[str, object]:
+        saved_dict = as_dict(saved) if saved is not None else None
         route = as_dict(
             self.transport.owner_attention._route(
-                binding,
-                saved,
+                as_dict(binding),
+                saved_dict,
                 session_id=str(actor["session_id"]),
                 source_ref=str(actor["source_ref"]),
             )
@@ -252,7 +253,7 @@ class LarkStewardReports:
                         record = item
                     phase = f"steward_monitor_report.{turn_id}"
 
-                    def make_inbox(rec: dict[str, object] = record) -> object:
+                    def make_inbox(rec: dict[str, object] = record) -> Path:
                         return self.transport._inbox(rec)
 
                     delivered = self.transport._deliver(
@@ -350,7 +351,7 @@ class LarkStewardReports:
                     placement = str(placement_raw) if placement_raw is not None else None
                     phase = "periodic_report." + window_id
 
-                    def make_inbox(rec: dict[str, object] = record) -> object:
+                    def make_inbox(rec: dict[str, object] = record) -> Path:
                         return self.transport._inbox(rec)
 
                     delivered = self.transport._deliver(
