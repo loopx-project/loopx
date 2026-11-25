@@ -601,7 +601,7 @@ Self-service:
    mkdir -p ~/.local/bin &&
    lock=~/.local/bin/.node-loopx-repair &&
    if mkdir "$lock" 2>/dev/null; then
-     echo "$$" > "$lock/pid" &&
+     sh -c 'echo $PPID' > "$lock/pid" &&
      trap 'rm -rf "$lock"' EXIT
    else
      holder_pid="$(cat "$lock/pid" 2>/dev/null)" || holder_pid=
@@ -609,7 +609,7 @@ Self-service:
      if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null &&
         rm -rf "$lock" &&
         mkdir "$lock" 2>/dev/null; then
-       echo "$$" > "$lock/pid" &&
+       sh -c 'echo $PPID' > "$lock/pid" &&
        trap 'rm -rf "$lock"' EXIT
      else
        echo "Another repair is in progress; nothing was changed." &&
@@ -685,19 +685,22 @@ Self-service:
 
   The whole repair runs inside one lock inside its own subshell. The block
   takes `~/.local/bin/.node-loopx-repair` with an exclusive `mkdir` before
-  either branch, records the terminal's process id inside it, and releases
-  the lock when the subshell exits — so the repair never closes your
-  terminal, not even when a check fails, any EXIT hook you had registered
-  stays yours, and a second window stops with "Another repair is in
-  progress; nothing was changed." instead of interleaving its move, install,
-  final check or rollback between this window's steps. Rerun the block after
-  the other window finishes. A repair whose terminal is killed outright can
-  leave the lock behind; an attempt retakes it only after checking that the
-  recorded process id no longer exists — a window that is merely suspended
-  is still alive and keeps holding the lock. If the message persists while
-  no repair is running, remove that directory by hand. The inode checks
-  inside the two branches then guard the one overlap this cannot close: the
-  lock removed by hand while a suspended window still holds the entry.
+  either branch, records the repair subshell's own process id inside it —
+  looked up through a child's parent pid, so the recorded holder is exactly
+  the process doing the work — and releases the lock when that subshell
+  exits. The repair therefore never closes your terminal, not even when a
+  check fails, any EXIT hook you had registered stays yours, and a second
+  window stops with "Another repair is in progress; nothing was changed."
+  instead of interleaving its move, install, final check or rollback between
+  this window's steps. Rerun the block after the other window finishes. A
+  repair interrupted without its cleanup — its subshell killed outright —
+  can leave the lock behind; an attempt retakes it only after checking that
+  the recorded repair process no longer exists, and a repair that is merely
+  suspended is still alive and keeps holding the lock. If the message
+  persists while no repair is running, remove that directory by hand. The
+  inode checks inside the two branches then guard the one overlap this
+  cannot close: the lock removed by hand while a suspended window still
+  holds the entry.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
