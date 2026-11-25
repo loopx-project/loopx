@@ -55,13 +55,19 @@ _BOM_CODECS = (
 # source map can carry local source paths, so they stay reviewable here.
 _TEXT_SUFFIXES_IN_BINARY_DENYLIST = frozenset({".map", ".tsbuildinfo"})
 
-# Image containers a browser decodes that the outbound tree deny-list does not name
-# yet. That list answers "does a repository hold text a person wrote", not "can a
+# Containers a browser decodes that the outbound tree deny-list does not name yet.
+# That list answers "does a repository hold text a person wrote", not "can a
 # browser load these bytes", so the publisher keeps its own media boundary instead
 # of inheriting one: a suffix listed here is copied verbatim, and every asset not
-# listed must still be reviewable text. `AVIF` is the verified case; a further
-# browser container belongs in this set rather than in the repo scan's deny-list.
-_STATIC_MEDIA_SUFFIXES = frozenset({".avif"})
+# listed must still be reviewable text. `.avif` and `.apng` are verified against
+# real encoder output; the rest are opaque audio/video/image containers of the same
+# class. Subtitle and playlist formats (`.vtt`, `.m3u8`, `.mpd`) are text and
+# deliberately stay outside, as does a further browser container until it is added
+# here rather than to the repo scan's deny-list.
+_STATIC_MEDIA_SUFFIXES = frozenset({
+    ".apng", ".avif", ".avifs", ".heic", ".heif", ".jxl",  # images
+    ".m4v", ".ogv", ".opus",  # audio and video
+})
 _BINARY_ASSET_SUFFIXES = (
     BINARY_SUFFIXES - _TEXT_SUFFIXES_IN_BINARY_DENYLIST
 ) | _STATIC_MEDIA_SUFFIXES
