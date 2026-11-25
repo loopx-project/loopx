@@ -14,7 +14,7 @@ from .botmux_binding_store import (
     Payload,
     PayloadView,
     _as_mapping,
-    _as_mutable_dict,
+    _coerce_binding_section,
     _dispatch_state,
     _now_iso,
     _operation_packet,
@@ -251,9 +251,10 @@ def _trigger_botmux_runtime(
         revision=revision,
         instruction=selected_instruction,
     )
-    receipts = _as_mutable_dict(binding.get("receipts"))
+    receipts = _coerce_binding_section(binding.get("receipts"), field="receipts")
     prior = _as_mapping(receipts.get(dispatch_key))
     prior_state = _dispatch_state(prior.get("state") if prior is not None else None)
+    session = _coerce_binding_section(binding.get("session"), field="session")
     if prior_state in _ALREADY_DISPATCHED_STATES:
         return _operation_packet(
             ok=True,
@@ -269,7 +270,6 @@ def _trigger_botmux_runtime(
                 "session_reused": True,
             },
         )
-    session = _as_mutable_dict(binding.get("session"))
     existing_session_id = str(session.get("session_id") or "").strip()
     if not execute:
         return _operation_packet(

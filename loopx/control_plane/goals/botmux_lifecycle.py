@@ -20,7 +20,7 @@ from .botmux_binding_store import (
     NowIsoFn,
     Payload,
     PayloadView,
-    _as_mapping,
+    _coerce_binding_section,
     _now_iso,
     _operation_packet,
     _save_binding,
@@ -111,8 +111,6 @@ def _setup_botmux_runtime(
         and prior.get("token_env") == token_env
         and prior.get("expected_working_dir") == str(expected_working_dir)
     )
-    prior_session = _as_mapping(prior.get("session"))
-    prior_receipts = _as_mapping(prior.get("receipts"))
     binding: Payload = {
         "goal_id": goal_id,
         "provider": BOTMUX_PROVIDER,
@@ -122,8 +120,16 @@ def _setup_botmux_runtime(
         "chat_id": chat_id,
         "token_env": token_env,
         "expected_working_dir": str(expected_working_dir),
-        "session": dict(prior_session) if same_route and prior_session else {},
-        "receipts": dict(prior_receipts) if same_route and prior_receipts else {},
+        "session": (
+            _coerce_binding_section(prior.get("session"), field="session")
+            if same_route
+            else {}
+        ),
+        "receipts": (
+            _coerce_binding_section(prior.get("receipts"), field="receipts")
+            if same_route
+            else {}
+        ),
     }
     try:
         probe = _probe_botmux(binding=binding, requester=requester)

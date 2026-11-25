@@ -137,11 +137,31 @@ def _as_mapping(value: object) -> PayloadView | None:
     return None
 
 
-def _as_mutable_dict(value: object) -> Payload:
-    mapping = _as_mapping(value)
-    if mapping is None:
+def _coerce_binding_section(value: object, *, field: str) -> Payload:
+    """Coerce missing, mapping, or KV-pair sequence sections; reject corrupt shapes."""
+    if value is None:
         return {}
-    return {str(key): item for key, item in mapping.items()}
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[object, object], value)
+        normalized: Payload = {}
+        for key, item in mapping.items():
+            if not isinstance(key, str):
+                raise ValueError(f"botmux runtime {field} must use string keys")
+            normalized[key] = item
+        return normalized
+    if isinstance(value, (list, tuple)):
+        entries = cast(list[object] | tuple[object, ...], value)
+        recovered: Payload = {}
+        for entry in entries:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                raise ValueError(f"botmux runtime {field} must be a mapping")
+            pair = cast(list[object] | tuple[object, ...], entry)
+            key = pair[0]
+            if not isinstance(key, str):
+                raise ValueError(f"botmux runtime {field} must use string keys")
+            recovered[key] = pair[1]
+        return recovered
+    raise ValueError(f"botmux runtime {field} must be a mapping")
 
 
 def _as_string_dict(value: object) -> Payload | None:
@@ -264,7 +284,9 @@ def _persist_dispatch_receipt(
     current_binding = botmux_binding_for_goal(payload, goal_id)
     if current_binding is None:
         raise ValueError("botmux runtime binding disappeared during dispatch")
-    receipts = _as_mutable_dict(current_binding.get("receipts"))
+    receipts = _coerce_binding_section(
+        current_binding.get("receipts"), field="receipts"
+    )
     receipt = _transition_dispatch_receipt(
         _as_mapping(receipts.get(dispatch_key)),
         state=state,
@@ -291,8 +313,8 @@ def _persist_dispatch_receipt(
 def _active_dispatch_receipt(
     binding: PayloadView,
 ) -> tuple[str, Payload] | None:
-    receipts = _as_mapping(binding.get("receipts")) or {}
-    session = _as_mapping(binding.get("session")) or {}
+    receipts = _coerce_binding_section(binding.get("receipts"), field="receipts")
+    session = _coerce_binding_section(binding.get("session"), field="session")
     active_key = str(session.get("active_dispatch_key") or "").strip()
     active = _as_mapping(receipts.get(active_key)) if active_key else None
     if active_key and active is not None:

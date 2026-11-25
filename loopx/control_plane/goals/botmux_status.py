@@ -17,7 +17,7 @@ from .botmux_binding_store import (
     PayloadView,
     _active_dispatch_receipt,
     _as_mapping,
-    _as_mutable_dict,
+    _coerce_binding_section,
     _dispatch_state,
     _now_iso,
     _operation_packet,
@@ -123,7 +123,7 @@ def _record_status_transport_failure(
     now_iso: NowIsoFn,
 ) -> Payload:
     if execute:
-        receipts = _as_mapping(binding.get("receipts")) or {}
+        receipts = _coerce_binding_section(binding.get("receipts"), field="receipts")
         receipt = _as_mapping(receipts.get(dispatch_key))
         current_state = _dispatch_state(
             receipt.get("state") if receipt is not None else None
@@ -275,15 +275,11 @@ def _status_botmux_runtime(
             blocker="botmux_binding_missing",
             public_summary="configure a botmux runtime binding for this goal",
         )
-    session = _as_mutable_dict(binding.get("session"))
+    session = _coerce_binding_section(binding.get("session"), field="session")
     session_id = str(session.get("session_id") or "").strip()
     dispatch_key = str(session.get("active_dispatch_key") or "").strip()
-    local_receipts = _as_mapping(binding.get("receipts"))
-    local_receipt = (
-        _as_mapping(local_receipts.get(dispatch_key))
-        if (local_receipts is not None and dispatch_key)
-        else None
-    )
+    local_receipts = _coerce_binding_section(binding.get("receipts"), field="receipts")
+    local_receipt = _as_mapping(local_receipts.get(dispatch_key)) if dispatch_key else None
     local_state = _dispatch_state(
         local_receipt.get("state") if local_receipt is not None else None
     )
@@ -348,7 +344,9 @@ def _status_botmux_runtime(
         identity_unverified = True
     latest_payload = read_botmux_runtime_binding(binding_path)
     latest_binding = botmux_binding_for_goal(latest_payload, goal_id) or binding
-    latest_receipts = _as_mapping(latest_binding.get("receipts")) or {}
+    latest_receipts = _coerce_binding_section(
+        latest_binding.get("receipts"), field="receipts"
+    )
     latest_receipt = _as_mapping(latest_receipts.get(dispatch_key))
     latest_local_state = _dispatch_state(
         latest_receipt.get("state") if latest_receipt is not None else None
