@@ -433,6 +433,21 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
         results.append(result)
 
     failure_count = sum(result.get("ok") is False for result in results)
+    external_read_count = sum(
+        result.get("external_read_performed") is True for result in results
+    )
+    if any(row.get("ok") is True and row.get("external_read_performed") is True for row in results):
+        from ...control_plane.agents.capability_memory import (
+            record_verified_agent_capability_observation,
+        )
+
+        record_verified_agent_capability_observation(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            available=("network", "external_evidence_poll"),
+        )
     return {
         "ok": True,
         "schema_version": PR_REVIEW_ACKED_RECONCILIATION_SCHEMA_VERSION,
@@ -449,9 +464,7 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
         "already_reconciled_count": sum(
             result.get("already_reconciled") is True for result in results
         ),
-        "external_read_count": sum(
-            result.get("external_read_performed") is True for result in results
-        ),
+        "external_read_count": external_read_count,
         "failure_count": failure_count,
         "private_material_read": False,
         "external_write_performed": False,

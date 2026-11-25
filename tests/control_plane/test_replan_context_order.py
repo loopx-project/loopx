@@ -48,13 +48,13 @@ def test_compact_status_newest_first_returns_latest_decision_and_later_work(shap
     rows = list(reversed(_rows()))
     history = {"runs": rows} if shape == "runs" else {"goals": [{"id": "evidence-goal", "latest_runs": rows}]}
     context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
-        source_status={"run_history": history}, stride_strategy="evidence_conditioned_v1")
+        source_status={"run_history": history})
     assert _assert_followthrough(context)["source_history_complete"] is False
 
 
 def test_named_newest_first_builder_preserves_order_without_a_status_source():
     context = build_replan_context({"obligation_id": "replan-fixture"}, goal_id="evidence-goal",
-        agent_id="agent-a", newest_first_runs=reversed(_rows()), stride_strategy="evidence_conditioned_v1")
+        agent_id="agent-a", newest_first_runs=reversed(_rows()))
     _assert_followthrough(context)
 
 
@@ -74,16 +74,15 @@ def test_declared_results_survive_busy_work_through_the_source_codec(typed):
         return item
 
     rows = [decision, result("todo-comparison", 0), *[result("todo-busy", i + 1) for i in range(12)]]
-    for strategy in ("off", "evidence_conditioned_v1"):
-        context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
-            history_newest_first=False, stride_strategy=strategy)
-        follow = context["decision_followthrough"]
-        observed = follow["observations"] if typed else follow["ordinary_work"]["evidence"]
-        assert len(observed) == 6
-        assert {row["todo_id"] for row in observed} == {"todo-busy", "todo-comparison"}
-        planned = next(work for work in follow["planned_work"] if work["todo_id"] == "todo-comparison")
-        assert len(planned["observation_refs"] if typed else planned["ordinary_evidence_refs"]) == 1
-        assert follow["execution_and_goal_gain"] == "unknown"
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
+        history_newest_first=False)
+    follow = context["decision_followthrough"]
+    observed = follow["observations"] if typed else follow["ordinary_work"]["evidence"]
+    assert len(observed) == 6
+    assert {row["todo_id"] for row in observed} == {"todo-busy", "todo-comparison"}
+    planned = next(work for work in follow["planned_work"] if work["todo_id"] == "todo-comparison")
+    assert len(planned["observation_refs"] if typed else planned["ordinary_evidence_refs"]) == 1
+    assert follow["execution_and_goal_gain"] == "unknown"
 
 
 def test_real_append_index_ignores_compact_display_order_and_clock_skew(tmp_path):
@@ -95,7 +94,7 @@ def test_real_append_index_ignores_compact_display_order_and_clock_skew(tmp_path
     before = index.read_bytes()
     context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=(),
         source_status={"registry": str(registry), "runtime_root": str(tmp_path),
-            "run_history": {"runs": [_rows()[0]]}}, stride_strategy="evidence_conditioned_v1")
+            "run_history": {"runs": [_rows()[0]]}})
     assert _assert_followthrough(context)["source_history_complete"] is True
     assert index.read_bytes() == before
 
@@ -357,20 +356,19 @@ def test_projected_work_uses_the_planned_todos_own_settlement(tmp_path, monkeypa
 
 @pytest.mark.parametrize("rows", [_rows(), list(reversed(_rows()))])
 def test_unknown_order_does_not_fabricate_a_previous_decision_or_later_work(rows):
-    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
-        stride_strategy="evidence_conditioned_v1")
+    context = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows)
     assert "decision_followthrough" not in context
     assert context["evidence_count"] == 3
 
 
-def test_carrier_metadata_preserves_feature_off_parity_and_rejects_non_boolean_order():
+def test_carrier_metadata_preserves_unconditional_stride_and_rejects_non_boolean_order():
     rows = list(reversed(_rows()))
     ordinary = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows)
     declared = project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,
-        history_newest_first=True, stride_strategy="off")
+        history_newest_first=True)
     assert "decision_followthrough" not in ordinary
     _assert_followthrough(declared)
-    assert "stride_strategy" not in declared
+    assert declared["stride_strategy"] == "evidence_conditioned_v1"
     for invalid in [0, 1, "newest_first"]:
         with pytest.raises(ValueError, match="boolean or unknown"):
             project_replan_context(goal_id="evidence-goal", agent_id="agent-a", runs=rows,

@@ -1,6 +1,6 @@
 /** Benchmark-toolkit's observer sidecar; never a solver or native-score authority. */
 import {createHash} from 'node:crypto';
-import {projectTrajectoryNativeOutcomes} from './trajectory_native_outcomes.ts';
+import {projectTrajectoryNativeCapture, projectTrajectoryNativeOutcomes} from './trajectory_native_outcomes.ts';
 import {BARE_SHA256_PATTERN} from '../content_digest.ts';
 import {EffectRuntimeRequestError} from '../effect_runtime_errors.ts';
 import {parseExploreHistoryPage, projectExploreHistory} from '../presentation/explore_history.ts';
@@ -299,7 +299,8 @@ export function prepareTrajectoryAssessment(params: Record<string, unknown>) {
   const native = input.native_outcomes_source_id ? nativeContext(input) : undefined;
   const attention = projectTrajectoryHumanAttention(input);
   const attentionInstruction = attention ? '\nHuman attention observations are source-bound records, not model estimates. Never infer human origin from user-role messages, count every replan as a human correction, or turn unmeasured time into zero. Necessity labels are observer declarations: verify their cited causes. In research synthesis, explain actionable attention hotspots only where episode evidence supports them, preserve required authorization and useful review, and connect any proposed optimization to subsequent accepted quality. Do not claim savings from fewer requests alone.\n' : '';
-  const measured = params.native_outcomes === undefined ? undefined : projectTrajectoryNativeOutcomes(params.native_outcomes, input);
+  const capture = params.native_outcomes === undefined ? undefined : projectTrajectoryNativeCapture(params.native_outcomes, input);
+  const measured = capture?.projection;
   if (native && measured && JSON.stringify(native) !== JSON.stringify(measured)) throw new EffectRuntimeRequestError('native readback differs from the bound analysis context');
   // Only analysis identity; provider configuration/execution is owned by its adapter.
   // Omission preserves the identity of already registered, language-unspecified artifacts.
@@ -337,6 +338,7 @@ Keep JSON field names, IDs, metric/verdict tokens and citation ranges unchanged.
     ...(display ? {display_request: {schema_version: display.schema_version, snapshot_key: display.snapshot_key,
       source_id: display.source_id, source_namespace: display.source_namespace, eligible: display.fields.length}} : {}),
     ...(measured ? {native_outcomes: measured} : {}),
+    ...(capture && params.include_native_outcome_samples === true ? {native_outcome_samples: capture.samples} : {}),
     ...(attention ? {human_attention: attention} : {}),
     prompt: `${RUBRIC}${languageInstruction}${displayInstructions}${synthesis ? synthesisInstruction : ''}${native ? NATIVE_CONTEXT_INSTRUCTION : ''}${attentionInstruction}\n\nEvidence pack:\n${JSON.stringify({...input, sources: promptSources})}${native ? `\n\nNative outcome context:\n${JSON.stringify(native)}` : ''}${display ? `\n\ndisplay_fields:\n${JSON.stringify(display.requests.map(field => ({field_id: field.field_id, text: field.protected.masked,
       ...(field.context_citations ? {context_citations: field.context_citations} : {}),

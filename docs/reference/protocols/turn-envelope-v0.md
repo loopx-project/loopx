@@ -33,11 +33,11 @@ loopx --format json quota should-run --goal-id <goal-id> --agent-id <agent-id> \
   --turn-instance-id <turn-id> --decision-output-dir ./complete-001
 ```
 
-`--turn-envelope` and `--complete-turn` remain mutually exclusive inputs
-for saved commands. Both use v1 in the current CLI. With no independent
-Delta request, `--context-delivery off` returns the complete inline v1
-document. Read existing captures with their original digest-bound
-`quota context-read` or `context-project` recovery.
+Remove `--turn-envelope` and `--complete-turn` from current guard commands.
+Use `--context-delivery off --delta-delivery off` for inline v1. Read saved
+captures with their original digest-bound `quota context-read` or
+`context-project` recovery. To run an earlier live contract, use a compatible
+runtime revision after verifying that it can read the current authority state.
 
 `quota context-project` checks a saved complete decision before presenting it
 as current context, including with Delta alone or with context delivery off.
@@ -149,6 +149,29 @@ CLI from becoming another reader of the legacy guidance field.
 事实仍在当前包内，不需再次执行 guard。不同副本和既有详细视图保留；原始决定与
 capture 不变。动作维度等价不意味着不同渲染可以共用原始 source hash。
 
+#### Agent-efficiency vs. storage-engineering boundary
+
+Consistent with the overall roadmap's Track A/Track B prioritization, runtime work on
+`loopx_turn_envelope_v1` and `progressive_context` prioritizes direct **Agent-facing
+efficiency and effectiveness wins (Track A)** ahead of SQLite/capture storage refactors
+(Track B):
+
+- Shipped intra-envelope sharing (`#9328`): `outcome_requirements_ref` across differing
+  outer `goal_objective` carriers alongside exact source-identity readbacks. Separately,
+  per the ordinary quota CLI rule above, the existing ordinary CLI display projection can
+  emit `blocked_priority_fallback_ref` when `heartbeat_recommendation.blocked_priority_fallback`
+  matches the root diagnostic, while raw complete Turn decisions (`compose_complete` /
+  `loopx_turn_envelope_v1`), saved captures, and `--include-detail agent-todos` retain
+  both inline fallback diagnostics.
+- Shipped bounded normal-run CLI inline openings (`#9253`): inlines verified
+  `work_opening` and `before_work` facts within output budgets while retaining
+  digest-bound cold-path `first_read_command` / `recovery` fallbacks; remaining work
+  targets over-budget openings and other admission entrypoints beyond that CLI route.
+- Remaining Track A work: preserving intra-epoch prefix KV-cache stability (`KeepRaw` /
+  `FoldToReceipt` / `EpochReset`) over mid-trajectory prefix mutations.
+
+中文：遵循总路线图 Track A/Track B 分层原则，`loopx_turn_envelope_v1` 与 `progressive_context` 优先推进直接改善 **Agent 效率与效果（Track A）** 的优化，而非先重构 SQLite 或 capture 存储（Track B）：其中 `#9328` 已落地 `goal_objective` 不同时仍共享同内容 `outcome_requirements_ref` 及精确源身份读回（既有普通 quota CLI 展示投影按上文规则在等值时输出 `blocked_priority_fallback_ref`，而 `compose_complete` / `loopx_turn_envelope_v1` 原始完整决策、保存 capture 与 `--include-detail agent-todos` 仍保留两份内联 fallback 诊断），且 `#9253` 已落地有界普通 CLI 轮次内联 `work_opening` / `before_work` 并保留摘要绑定回退读取；剩余推进聚焦超预算情形与其余准入入口的启动压缩，以及 epoch 内前缀 KV-Cache 单调稳定（`KeepRaw` / `FoldToReceipt` / `EpochReset`）。
+
 ### Captured replan reads / 捕获后的重规划读取
 
 For a successful replan with `--decision-output-dir` or `--decision-output-root`,
@@ -170,12 +193,23 @@ the source-bound reader even when native context delta transport is disabled.
 Uncaptured consumers keep the inline path. This changes presentation timing,
 not the Goal requirements or which work is authorized.
 
+When native first read presents an inline Vision replan, it includes the
+existing Vision writeback contract, the required stride fields and bound
+example, and the current CLI actions. The same capture carries the complete
+stride guidance for focused reads when the decision needs it. Review the
+current evidence before authoring, use the original Turn's writeback, then
+verify its settlement.
+
 中文：必读 review 统一交付本次捕获的 Goal 与规划范围，CLI 入口和分段 Host
 呈现不再重复这两份正文。入口保留准入、已选工作、必读项、权限与停止规则，
 CLI 也保留供显式选项使用的当前 action portfolio。执行器签名包和完整 capture
 不变；每个 Turn 决策前须读取自己的 review。依赖或优先级变化会改变绑定源摘要的
 读取命令，关闭原生差分时也生效。未捕获的调用保留原内联路径。这调整交付时序，
 不改变目标要求或授权工作范围。
+
+原生首读呈现内联 Vision 重规划时，提供既有 Vision 写回契约、步幅必填项和绑定
+示例，以及本轮 CLI 动作。需要更完整的步幅依据时，可从同一捕获定向读取。先核对
+当前证据，再使用原 Turn 的写回命令，并读回结算。
 
 Captured reads retain the caller's explicit `--cli-bin` route, including later
 acceptance and Explore reads; an ambient executable cannot silently replace it.
@@ -264,6 +298,16 @@ planning choices, while original priorities, constraints, budgets and stops
 remain binding. Old captures retain their original text. This is an intentional
 change to advisory prompting, not a lossless claim about model behavior.
 
+When an admitted Todo lifecycle is already closed and its Turn still owes a
+Vision checkpoint, the recovered action packet carries the exact lifecycle
+context and `stride_control`. Use that basis to author an evidence-linked path
+and stride decision, then finish the original writeback and quota settlement.
+Independent new work remains eligible for its own Turn.
+
+已准入 Todo 的生命周期收尾后，若原 Turn 仍欠 Vision 检查点，恢复包会提供该
+生命周期对应的上下文和 `stride_control`。模型据此写入关联证据的路径与步幅决策，
+随后完成原写回与额度结算。独立的新工作由自己的 Turn 处理。
+
 The benchmark checkpoint preflight uses the same CLI decision capture with
 TurnEnvelope off. It retains the complete captured source for checkpoint
 selection and verification, and sends the projected CLI view to the model.
@@ -329,7 +373,11 @@ unsatisfied checkpoints, dry runs and no-spend closeout cannot debit quota.
 For a fresh append, the parent can reuse the child's authoritative readback
 when the original identity, prior receipts and new spend event all match.
 An ambiguous response is reconciled through the original receipts; exact retry
-cannot debit twice. Ordinary refresh without the option retains its behavior.
+cannot debit twice. For a hard-lease Todo, a first combined writeback can use
+the original admission's lease proof after a renewal in that same generation.
+The submitted version must be between the admitted and current versions,
+inclusive, and the lease must still match the original admission. Ordinary
+refresh without the option still requires the current proof.
 When `--delivery-workspace-path` names the producing worktree, the combined
 operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a
@@ -349,6 +397,19 @@ controls first and follow any required reader under `quota_spend`. If the
 failure capture cannot be saved, the result returns its original failure controls
 with `result_delivery_error`.
 
+An older blocked writeback may already contain the observation while its
+original replan qualification is still missing. An exact checkpoint supplement
+treats that one indexed observation as its current input when checking novelty.
+Independent historical claims remain in the check, and the supplement leaves
+the original writeback and quota ledger intact. Original-Turn reentry exposes
+the bound `checkpoint-context` command as the remaining action; quota spend
+refuses until the qualification is resolved.
+
+中文：旧版阻塞写回可能已保存原观察，但尚未完成原重规划验收。补写原检查点时，
+新颖性检查把这条已索引观察作为当前输入，同时保留对其他历史记录的去重检查。
+补写保留原写回与额度账本。重进原轮时，宿主直接给出绑定该轮的
+`checkpoint-context` 命令，验收缺失时额度入口拒绝扣费。
+
 An in-flight recommendation does not require keeping a completed Todo open.
 Validate its original declaration, use ordinary completion when satisfied, and
 write semantic closeout with an evidence-linked vision decision on the original
@@ -366,7 +427,9 @@ writeback 读取，避免重复交付；当前准入、选择与停止事实仍�
 `refresh-state --settle-turn` 在写回与交付后置条件通过后，执行原 Goal/Agent/
 Todo 或 obligation/Turn 的 canonical 待结算命令并验证回执；不重新 guard、换绑或
 完成 Todo。验证失败、检查点未满足、dry-run 与无扣额收尾不能扣额；响应不确定时
-按原回执恢复，精确重试不会重复扣额。不传此选项保持原 refresh 行为。
+按原回执恢复，精确重试不会重复扣额。硬租约 Todo 在同一世代续期后，组合写回
+首次执行时可继续使用原准入的租约证明。提交的版本必须介于准入版本和当前版本之间
+（含两端），租约仍须与原准入匹配。不传此选项时，普通 refresh 仍须使用当前证明。
 首次追加扣额成功且原身份、前序回执和新扣额事件全部匹配时，父进程可以复用子进程的权威回读。
 指定 `--delivery-workspace-path` 后，组合操作也在该交付工作区执行待结算命令，
 继续使用原调用方的 CLI 实现。原工作区和结算校验保持；目录缺失或不兼容时保留
@@ -538,14 +601,13 @@ caller-owned checkpoint. Explicit `--context-delivery off` retains the complete
 inline contract when no independent Delta delivery is requested.
 
 New bootstrap, guard, selection and settlement-recovery commands use the
-complete v1 source. Saved callers can still pass `--turn-envelope` or
-`--complete-turn` to the current CLI under their existing input restrictions.
-Saved captures and their original read commands retain the recorded version
-and digest. Follow the original capture for selection, replan or required
-detail. A persistent bootstrap binds each Turn on wake.
+complete v1 source. The saved bootstrap reader recognizes the retired
+options to upgrade existing generated prompts. Saved captures and their
+original read commands retain the recorded version and digest. Rebind a
+selection command from the saved capture to keep the same Turn.
 
-当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。原先
-保存的两个别名仍可按原输入限制使用，原捕获和读回命令保留其版本与摘要。
+当前生成的 bootstrap、guard、选择和结算恢复命令统一使用完整 v1 来源。升级
+生成的旧提示时，历史 reader 可识别旧选项。原捕获和读回命令保留其版本与摘要。
 捕获与交付方式独立，显式关闭上下文交付后仍使用完整契约。
 
 Capability planning context stays inline under the existing context owner's
@@ -593,14 +655,11 @@ diagnostic remain unchanged. This is an output qualification, not a full-cost SL
 
 中文：捕获和模型输入投影独立。`--decision-output-root` 仅保存完整决策，
 `--decision-handoff-socket` 仅保留检查点交接；二者均不隐式开启 TurnEnvelope。
-历史 Short 使用曾交付 v0 的产品版本，并保留原请求与捕获。当前 C1 中
-`--turn-envelope` 是完整契约的兼容别名，已有实验按其记录版本解释。
+历史 Short 使用曾交付 v0 的产品与 runner 版本，并保留原请求与捕获。
 
-The benchmark heartbeat worker verifies a historical `turn_envelope` request
-against the pinned CLI's v0 response before launching a model. Its read-only
-preview and eligibility are recorded in the wake receipt. See the
-[runtime guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md)
-for supported configurations.
+For historical Short, use the original runner and product revisions and
+inspect the recorded v0 response and wake receipt. The current worker refuses
+historical treatment requests before model launch. See the [runtime guide](https://github.com/loopx-project/loopx/blob/main/benchmark/runtime/RUNTIME.md) for supported configurations.
 Model cost, decision quality and long-run adoption require a separately pinned
 experiment. A capture carries its original read and recovery scope.
 
@@ -699,8 +758,9 @@ selected view is bounded, the full canonical detail stays in
 omit only an actually duplicate body; if there are no other fields to retain,
 `work_context.selected_todo_authority` carries the source and revision. All exact
 commands remain in `required_reads`.
-The mixed Goal document remains an exact progressive full read; quota checks
-source availability rather than automatically copying unrelated tasks/history.
+Ordinary quota and heartbeat execution load the exact full mixed Goal document
+before host dispatch. The progressive source reader can also return the source
+reference for a separate read. A missing complete source refuses dispatch.
 No heading heuristic replaces Goal intent. `work_context.complete` does not
 settle pending read obligations. Full delivered sources and related User
 obligations survive budget overflow. Missing,

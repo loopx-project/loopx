@@ -153,9 +153,9 @@ def test_bad_vision_is_rejected_before_todo_completion_and_can_be_corrected(tmp_
     assert len(spends(runtime)) == 1
 
 
-@pytest.mark.parametrize("machine_enabled", [False, True])
-def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
-    tmp_path, monkeypatch, machine_enabled,
+@pytest.mark.parametrize("malformed_stride", [False, True])
+def test_terminal_stride_preflight_validates_before_todo_effects(
+    tmp_path, monkeypatch, malformed_stride,
 ):
     control, project, runtime = control_at(tmp_path)
     monkeypatch.chdir(project)
@@ -165,8 +165,7 @@ def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
     owner = build_builtin_machine_configuration_registry()
     configuration = {"schema_version": "loopx_machine_configuration_v0", "namespaces": {
         "todo_replan_cadence": {"schema_version": "todo_replan_cadence_machine_defaults_v2",
-            "count_unit": "completed_todos", "count": 1,
-            "stride_strategy": "evidence_conditioned_v1" if machine_enabled else "off"}}}
+            "count_unit": "completed_todos", "count": 1}}}
     preview = configure_machine_configuration(
         runtime_root=runtime, registry=owner, configuration=configuration)
     configure_machine_configuration(
@@ -188,6 +187,8 @@ def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
             "adoption_criterion": "Adopt only a verified source outcome.",
             "cost_bound": "One source and contrary case.",
             "minimum_evidence": "Source result and contrary-case result."}}
+    if malformed_stride:
+        authored["stride_decision"]["action"] = "invalid_action"
     state = project / "ACTIVE_GOAL_STATE.md"
     before = state.read_bytes()
     calls = []
@@ -198,13 +199,13 @@ def test_terminal_stride_preflight_uses_effective_strategy_before_todo_effects(
         return original(args, **kwargs)
 
     monkeypatch.setattr(control, "run_cli", recorded)
-    if machine_enabled:
+    if not malformed_stride:
         result = json.loads(control.complete_task("todo_reducer", fixture.AGENT,
             "Synthetic acceptance", successor_todo_ids=["todo_cli"], agent_vision=authored))
         assert result["ok"] is True, result
         assert len(spends(runtime)) == 1
     else:
-        with pytest.raises(ValueError, match="stride_decision requires an evidence-linked path decision"):
+        with pytest.raises(ValueError, match="stride_decision"):
             control.complete_task("todo_reducer", fixture.AGENT, "Synthetic acceptance",
                 successor_todo_ids=["todo_cli"], agent_vision=authored)
         assert calls == []

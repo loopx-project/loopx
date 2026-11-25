@@ -108,7 +108,7 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
     from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
     from loopx.extensions.lark.conversation_identity import identity_ref
     from loopx.presentation.request_control_api import bound_steward_inventory_scope
-    from loopx.chat_lark_api import manager_source_scope_resolver
+    from loopx.chat.lark_api import manager_source_scope_resolver
 
     store, runtime, provider, transport, binding, capture, workspace = steward
     goal = "registered-work"
@@ -220,9 +220,9 @@ def test_native_inventory_http_keeps_long_history_and_fresh_provider_checks(stew
 
 def test_manager_source_scope_keeps_source_and_executor_routes_distinct(monkeypatch, tmp_path):
     from types import SimpleNamespace
-    from loopx import chat_lark_api
+    from loopx.chat import lark_api
     from loopx.extensions.lark import manager_routing
-    from loopx.chat_lark_api import manager_source_scope_resolver
+    from loopx.chat.lark_api import manager_source_scope_resolver
 
     source, frozen_registry, executor = tmp_path / "source", tmp_path / "registry", tmp_path / "executor"
     server = SimpleNamespace(registry_path=source, runtime_root_override="current-source-override",
@@ -235,7 +235,7 @@ def test_manager_source_scope_keeps_source_and_executor_routes_distinct(monkeypa
         assert value == {"source": "current"} and session == {"channel_id": "legacy-manager"}
         observed.append(kwargs)
         return ["permitted-goal"]
-    monkeypatch.setattr(chat_lark_api, "build_lark_goal_topic_runtime_snapshot", snapshot)
+    monkeypatch.setattr(lark_api, "build_lark_goal_topic_runtime_snapshot", snapshot)
     monkeypatch.setattr(manager_routing, "authorized_manager_goal_ids", authorize)
     read = manager_source_scope_resolver(server, registry_path=frozen_registry, executor_runtime_root=executor)
     assert read({"channel_id": "legacy-manager"}) == ["permitted-goal"]

@@ -19,7 +19,7 @@ from typing import Any
 
 from ...chat.attachments import normalize_chat_image_attachments
 
-from ...chat_ingress import (
+from ...chat.ingress import (
     STEWARD_BINDING_ADOPTION_PENDING as STEWARD_BINDING_ADOPTION_PENDING,
     ensure_external_admission_scope,
     resolve_external_admission_source,
@@ -730,27 +730,16 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
                 if session.get("agent_id") == "antigravity":
-                    from .antigravity_adapter import _rpc_post, discover_antigravity_language_server
+                    from .antigravity_adapter import discover_antigravity_language_server, probe_cascade_idle
 
                     discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
                     if discovered is None:
                         return False
                     cascade_id = str(session.get("upstream_thread_id") or "").strip()
-                    if cascade_id:
-                        from ...chat_agent import CodexChatAgentError
-
-                        try:
-                            trajectory = _rpc_post(
-                                str(discovered["url"]),
-                                str(discovered["csrf_token"]),
-                                "GetCascadeTrajectory",
-                                {"cascadeId": cascade_id},
-                                timeout=2.5,
-                            )
-                        except CodexChatAgentError:
-                            return False
-                        if not isinstance(trajectory, dict) or trajectory.get("status") != "CASCADE_RUN_STATUS_IDLE":
-                            return False
+                    if cascade_id and not probe_cascade_idle(
+                        str(discovered["url"]), str(discovered["csrf_token"]), cascade_id, timeout=2.5,
+                    ):
+                        return False
                 else:
                     from .codex_auth import native_api_transport
                     native_api_transport(self.controller.coordination_runtime_root,
@@ -1464,6 +1453,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 allocation = session.get("manager_executor_allocation") or {}
                 if (saved.get("binding_id") == binding["binding_id"]
                         and saved.get("source_ref") == source["source_ref"]
+                        and (saved.get("topic_ref") or None) == (source.get("topic_ref") or None)
                         and session.get("status") in RESUMABLE_SESSION_STATES
                         and (session.get("agent_id") == binding["executor_endpoint_id"]
                             or binding["context_kind"] == "steward" and allocation.get("selection_policy") == "flexible")):
@@ -1493,7 +1483,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         # These references enter the lock path before authority is resolved.
         # Check path-safe shape here; the typed owner checks current grants
         # and provider identity after both fences are acquired.
-        for ref in (binding_id, source.get("source_ref")):
+        for ref in (binding_id, source.get("source_ref"), *([source["topic_ref"]] if "topic_ref" in source else ())):
             if not isinstance(ref, str) or not _REQUEST_JOURNAL_STEM.fullmatch(ref):
                 raise ValueError("invalid external conversation source reference")
         path = self.root / f"{request_ref}.json"

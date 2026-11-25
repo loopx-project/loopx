@@ -18,7 +18,7 @@ from ..coordination.shadow_management import (
     require_shadow_primary_write_allowed,
     shadow_maintenance_lock_target,
 )
-from ..effect_runtime import effect_runtime_result
+from ..effect_runtime import CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS, effect_runtime_result
 from ..goals.activation import goal_is_stopped
 from ..todos.contract import normalize_todo_claimed_by, normalize_todo_id
 from ..work_items.action_selection_contract import (
@@ -165,7 +165,10 @@ def commit_execution_loss_closeout(
 
     registry_path = registry_path.expanduser().resolve()
     registry = load_project_registry(registry_path)
-    root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    # Cross-runtime lock witnesses carry the physical target paths.
+    root = resolve_runtime_root(
+        registry, runtime_root_override, registry_path=registry_path,
+    ).resolve()
     identity = SettlementIdentity(goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
         turn_instance_id=turn_instance_id).as_dict()
     progress = (normalize_progress_observation(progress_observation, work_item_id=todo_id)
@@ -207,9 +210,13 @@ def commit_execution_loss_closeout(
                     "payload": load_project_registry(registry_path), "lifetime_sources": lifetime_sources}, "locks": witnesses,
                 "intent": {"delivery_outcome": delivery_outcome, "delivery_boundary": delivery_boundary,
                     "progress_observation": progress}, "control_writer_proof": dict(requested_proof) if requested_proof else None,
-                "requested_effects": dict(requested_effects), "observed_at": now_local_iso()}
+                "requested_effects": dict(requested_effects), "observed_at": now_local_iso(timespec="microseconds")}
             try:
-                result = effect_runtime_result("quota.execution_loss_closeout.commit", request)
+                result = effect_runtime_result(
+                    "quota.execution_loss_closeout.commit",
+                    request,
+                    timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
+                )
             except EffectRuntimeRejected as exc:
                 error = RefreshTaskLeaseUnavailable(str(exc))
                 error.code = exc.diagnostic_code
@@ -400,6 +407,7 @@ def _hard_lease_execution_bound(
     # Recovery can read the retired proof from the same locked
     # snapshot, including a renewal within the admitted generation.
     proof = current_proof if not todo_open and requested_proof is None else requested_proof
+    admitted_version = prepared_lease.get("prepared_lease_version") if prepared_lease else None
     if (
         allow_same_generation_lease_renewal
         and lease_epoch is not None
@@ -410,7 +418,8 @@ def _hard_lease_execution_bound(
         and not isinstance(current_proof.get("expected_version"), bool)
         and isinstance(requested_proof.get("expected_version"), int)
         and not isinstance(requested_proof.get("expected_version"), bool)
-        and current_proof["expected_version"] >= requested_proof["expected_version"]
+        and type(admitted_version) is int
+        and current_proof["expected_version"] >= requested_proof["expected_version"] >= admitted_version
     ):
         proof = current_proof
     if prepared_lease is not None and proof is not None and proof == current_proof:

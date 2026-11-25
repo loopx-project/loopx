@@ -687,7 +687,7 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
 | 已检查边界 | 现有实现 | 经现有 owner 解决的缺口 |
 | --- | --- | --- |
 | App 自由文本 | `personal-workspace-page.tsx`、`workspace-action-form.tsx` | 退役浏览器对 Goal 创建、Todo 改动、分配和调度的意图分类。所有自由文本完整到达 Chat；显式控件打开 typed form 与需审阅的 preview |
-| Chat 请求与观察 | `chat_ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
+| Chat 请求与观察 | `chat/ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
 | 协作 | `control_plane/collaboration/inbox.py`、typed collaboration rules 与 return-delivery owner | 虽有历史存储名称，现有语义已对 Agent 中立。保留 decision/read/return 区别，不另建 manager 专用 inbox |
 | Operator inbox | `control_plane/work_items/operator_inbox.py` | 已有 source contract 与共享 urgency projection；检查并迁移真实 pending/read/ack 生命周期，不新增泛化 wrapper |
 | Lark transport | `extensions/lark/event_inbox.py`、`routed_inbox.py`、`inbox_reply.py` 与 reaction adapter | Provider 归一化、幂等 capture、read/processed 记录、reply recovery 与 Lark id/policy 共存。只提取已有证据的可复用语义；认证、寻址、provider id、reaction 和消息限制留在 adapter |
@@ -1110,6 +1110,12 @@ Turn HTTP 预算包含既有附件额度的 base64 编码：最多四张图片�
 Attached 宿主、其他 executor 以及关联/Lark 会话在准入前拒绝这种新输入；这不
 授予文件同步或任意路径访问。图片保留现有路径。来源送达不证明理解、自动材料采用、
 完整 GQ06 验收或模型成本降低。
+
+本地托管 Codex 的 Goal 网页对话也可以返回用户要求的 Markdown 或纯文本文件。
+在原对话中点击“下载原文”即可保存。即使工作区文件后来改变，重新打开消息仍可取回当时
+的字节。Agent 在答复中提供文件名、MIME 类型、字节数和内联 Base64 数据，沿用已有的
+数量、大小及 UTF-8 校验。文件含受保护的本机路径时，答复会说明附件交付失败。
+LoopX 只使用答复携带的数据。
 
 ### 飞书私聊默认复用原生 Turn 图片附件
 

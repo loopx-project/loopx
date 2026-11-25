@@ -16,22 +16,10 @@ const PUBLIC_DEFAULT_CONTRACT: &str =
 
 /// Read the publisher's observed contract inside the signature-verified bytes
 /// before an update can be cached, close the workspace, or replace its App.
-pub(crate) fn qualify_candidate(
-    channel: &str,
-    version: &str,
-    verified_bytes: &[u8],
-) -> Result<(), String> {
-    // Historical stable bundles predate the attestation and remain usable.
-    // A preview stays subject to the check even if cache metadata changes channel.
-    if channel != "main"
-        && !semver::Version::parse(version)
-            .is_ok_and(|value| value.pre.as_str().starts_with("main."))
-    {
-        return Ok(());
-    }
+pub(crate) fn qualify_candidate(verified_bytes: &[u8]) -> Result<(), String> {
     let invalid = "runtime_bundle_invalid";
     let unavailable = "update_platform_unavailable";
-    let supported: Value = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).map_err(|_| invalid)?;
+    let current: Value = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).map_err(|_| invalid)?;
     let identity_path = Path::new("LoopX.app/Contents/Resources/runtime/identity.json");
     let mut archive = tar::Archive::new(GzDecoder::new(Cursor::new(verified_bytes)));
     let mut qualified = false;
@@ -46,7 +34,11 @@ pub(crate) fn qualify_candidate(
         let mut raw = Vec::new();
         entry.read_to_end(&mut raw).map_err(|_| invalid)?;
         let identity = crate::bundled_runtime::parse_identity(&raw)?;
-        if identity["default_contract"] != supported {
+        let observed = identity
+            .get("default_contract")
+            .filter(|contract| contract.is_object())
+            .ok_or(unavailable)?;
+        if observed != &current {
             return Err(unavailable.into());
         }
         qualified = true;
@@ -177,13 +169,13 @@ mod tests {
     }
 
     #[test]
-    fn only_qualified_preview_can_replace_the_prepared_candidate() {
+    fn only_qualified_runtime_can_replace_a_prepared_candidate() {
         let root = tempfile::tempdir().unwrap();
         let candidate = root.path().join("candidate");
         let resources = candidate.join("Contents/Resources/runtime");
         fs::create_dir_all(&resources).unwrap();
         let cache = root.path().join("prepared");
-        let version = "0.0.0-main.2.1";
+        let channels = [("main", "0.0.0-main.2.1"), ("stable", "2.4.1")];
         let identity_path = resources.join("identity.json");
         let mut identity = serde_json::json!({
             "schema_version": "desktop_runtime_bundle_v1",
@@ -193,8 +185,13 @@ mod tests {
             None,
             Some(serde_json::json!({"surface": "unknown"})),
             Some(serde_json::json!({
+                "surface": "quota_packet",
+                "schema_version": null,
+                "interaction_schema_version": "loopx_interaction_contract_v0"
+            })),
+            Some(serde_json::json!({
                 "surface": "complete_turn",
-                "schema_version": "loopx_turn_envelope_v1",
+                "schema_version": "loopx_turn_envelope_v0",
                 "interaction_schema_version": "loopx_interaction_contract_v0"
             })),
         ];
@@ -204,24 +201,27 @@ mod tests {
             }
             fs::write(&identity_path, identity.to_string()).unwrap();
             let bytes = archive(&candidate);
-            assert_eq!(
-                crate::prepared_update::save(&cache, "main", version, "unused", &bytes),
-                Err("update_platform_unavailable".into())
-            );
+            for (channel, version) in channels {
+                assert_eq!(
+                    crate::prepared_update::save(&cache, channel, version, "unused", &bytes),
+                    Err("update_platform_unavailable".into())
+                );
+            }
             assert!(!cache.exists());
-            assert_eq!(
-                qualify_candidate("stable", version, &bytes),
-                Err("update_platform_unavailable".into())
-            );
-            assert!(qualify_candidate("stable", "2.3.0", &bytes).is_ok());
         }
 
-        identity["default_contract"] = serde_json::from_str(PUBLIC_DEFAULT_CONTRACT).unwrap();
-        fs::write(identity_path, identity.to_string()).unwrap();
+        identity["default_contract"] = serde_json::json!({
+            "surface": "complete_turn",
+            "schema_version": "loopx_turn_envelope_v1",
+            "interaction_schema_version": "loopx_interaction_contract_v0"
+        });
+        fs::write(&identity_path, identity.to_string()).unwrap();
         let bytes = archive(&candidate);
-        crate::prepared_update::save(&cache, "main", version, "unused", &bytes).unwrap();
+        for (channel, version) in channels {
+            crate::prepared_update::save(&cache, channel, version, "unused", &bytes).unwrap();
+        }
         let pointer = fs::read(cache.join("prepared.json")).unwrap();
-        assert!(crate::prepared_update::save(&cache, "main", version, "unused", b"bad").is_err());
+        assert!(crate::prepared_update::save(&cache, "stable", "2.4.1", "unused", b"bad").is_err());
         assert_eq!(fs::read(cache.join("prepared.json")).unwrap(), pointer);
     }
 

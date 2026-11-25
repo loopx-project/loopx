@@ -6,7 +6,6 @@ from typing import Any
 
 from ..configuration_transaction import configuration_payload_revision
 from ..control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL, MAX_EFFECTIVE_TURN_REPLAN_THRESHOLD
-from ..control_plane.work_items.stride_policy_codec import stride_strategy_options
 
 from .progress_review.policy import (
     PROGRESS_REVIEW_MAX_DRIFT_THRESHOLD,
@@ -125,6 +124,14 @@ def capability_configuration_editor(
                 _field("max_trials", "Maximum proposed trials", "number", minimum=0, maximum=2, required=True),
             ],
         },
+        "goal_closeout": {
+            "supported_scopes": ["machine"], "writable_scopes": ["machine"],
+            "fields": [
+                _field("timeout_seconds", "Closeout timeout (seconds)", "number",
+                       minimum=1, maximum=600, required=True,
+                       description="Bounds one terminal hook invocation. The command itself is local-private: configure it with the machine-config CLI, never through the Dashboard."),
+            ],
+        },
         "goal_storage": {
             "supported_scopes": ["machine"], "writable_scopes": ["machine"],
             "fields": [_field("new_goal_provider", "New Goal storage provider", "select",
@@ -148,9 +155,6 @@ def capability_configuration_editor(
                        description="Effective Turns: 1–6; completed Todos: 1–5. Effective Turns require accepted work settlement. Retries and observation-only polls do not count."),
                 _field("planning_horizon_goal", "Show Goal in planning horizon", "boolean",
                        description="Default on. Include the original Goal and acceptance before choosing work. Advanced opt-out for rollback or comparisons; does not change replan, stride or execution authority."),
-                _field("stride_strategy", "Stride strategy", "select",
-                       options=list(stride_strategy_options()),
-                       description="Off retains ordinary review. Evidence-conditioned v1 independently reviews work-slice size, route changes and validation scope; fresh Vision path reviews require a structured proposal, without automatic execution."),
                 _field("yardstick_enabled", "Review measurement criteria", "boolean",
                        description="Default off. Use available Explore evidence to review measurement scope and feedback before choosing work. Requires Explore evidence; does not enable it or authorize execution."),
             ],
@@ -715,15 +719,15 @@ def _attach_effective_configuration(entry: dict[str, Any]) -> None:
         entry["capability_id"] == "todo_replan_cadence"
         and goal_override is not None
         and bool(goal_override)
-        and set(goal_override) <= {"stride_strategy", "planning_horizon_goal", "yardstick_enabled"}
+        and set(goal_override) <= {"planning_horizon_goal", "yardstick_enabled"}
     ):
         from .todo_replan_cadence.machine_defaults import (
             cadence_configuration_value,
             default_replan_cadence_configuration,
         )
 
-        # The Goal chooses the strategy while the existing review cadence stays
-        # live. Keep `current` sparse so readback does not claim a pinned count.
+        # The Goal chooses horizon/Yardstick while the existing review cadence
+        # stays live. Keep `current` sparse so readback does not claim a pinned count.
         inherited_cadence = (
             cadence_configuration_value(machine_default)
             if machine_default is not None

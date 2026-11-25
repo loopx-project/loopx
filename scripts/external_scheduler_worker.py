@@ -566,6 +566,25 @@ def _log(line: str) -> None:
     print(f"{stamp} {line}", flush=True)
 
 
+def _disable_core_dumps() -> None:
+    """Keep crashed child runtimes from spilling multi-GB core files into /tmp."""
+    if os.name != "posix":
+        return
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_CORE)
+    if soft != 0:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
+
+
+def _wake_stderr_tail(result: CappedProcessResult, *, limit: int = 400) -> str:
+    raw = getattr(result, "stderr", b"")
+    if not isinstance(raw, (bytes, bytearray)) or not raw:
+        return ""
+    collapsed = " ".join(bytes(raw).decode("utf-8", errors="replace").split())
+    return collapsed[-limit:] if collapsed else ""
+
+
 def _shell_argv(command: str) -> list[str]:
     if os.name == "nt":  # pragma: no cover - exercised on Windows hosts.
         return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
@@ -867,6 +886,7 @@ def _run_worker_locked(
                 wake_rc = None
                 wake_failure_kind = None
                 wake_failed = False
+                wake_stderr_tail = ""
                 if args.wake_cmd:
                     environment = None
                     if host_guard:
@@ -1005,6 +1025,8 @@ def _run_worker_locked(
                             # commit, resolves the independent witness.
                             _save_host_pending(state_path, False)
                     wake_status = "wake_failed" if wake_failed else "wake_ok"
+                    if wake_failed:
+                        wake_stderr_tail = _wake_stderr_tail(wake_result)
                 _log(
                     f"status=should_run {wake_status} "
                     f"action={decision.action} class={decision.cadence_class} "
@@ -1012,6 +1034,7 @@ def _run_worker_locked(
                     f"todo={selected_id or '-'} "
                     f"reason={shlex.quote(decision.reason)}"
                     + (f" wake_rc={wake_rc}" if wake_rc is not None else "")
+                    + (f" stderr_tail={shlex.quote(wake_stderr_tail)}" if wake_stderr_tail else "")
                 )
                 if wake_failed:
                     save({
@@ -1196,6 +1219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.registry = str(global_registry_path())
         except ValueError as exc:
             parser.error(str(exc))
+    _disable_core_dumps()
     return run_worker(args)
 
 

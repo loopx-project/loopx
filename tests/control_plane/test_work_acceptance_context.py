@@ -109,8 +109,12 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         goal_id=goal, todo_id="todo_missing")
     assert missing == {**full, "tasks": []}, "missing work must not fall back to another binding"
 
-    packet = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
-        )
+    selected_guard = (
+        "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a",
+        "--todo-id", selected, "--runtime-profile", "generic_cli", "--turn-instance-id", "export-context-turn",
+        "--context-delivery", "off", "--delta-delivery", "off",
+    )
+    packet = cli(*selected_guard)
     channel = packet["interaction_contract"]["agent_channel"]
     assert channel["delivery_allowed"] is True and channel["work_context"]["complete"] is True
     # The public canonical reader retains its full format metadata. Host context
@@ -124,21 +128,20 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     }
     observed = next(row["content"] for row in channel["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    assert observed == exact
-    assert any(row.get("source") == "goal_state" for row in channel["required_reads"])
-    # The normal guard's complete captured basis is the envelope input; no
-    # second guard may substitute a different observation for the host.
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
-    envelope = build_turn_envelope(packet)
+    # Verify complete Goal requirements and the selected binding in either
+    # presentation. A repeated navigation block must match its owning read.
+    assert {name: value for name, value in observed.items() if name != "outcome_context"} == exact
+    if "outcome_context" in observed:
+        scoped = inspect_goal_acceptance(
+            registry_path=registry, runtime_root=str(runtime), goal_id=goal,
+            todo_id=selected, include_work_details=False, context_agent_id="agent-a",
+        )
+        assert observed["outcome_context"] == scoped["outcome_context"]
+    goal_source = next(row for row in channel["work_context"]["sources"] if row["source"] == "goal_state")
+    assert "Deliver a compatible export." in goal_source["content"]["text"]
+    assert all(row.get("source") != "goal_state" for row in channel["required_reads"])
     assert channel["work_context"]["selected_todo_text_verified"] is True
-    assert envelope["work_context"] == {
-        key: value
-        for key, value in channel["work_context"].items()
-        if key != "selected_todo_text_verified"
-    }
-    assert envelope["action"]["selected_todo"]["text_source_verified"] is True
-    request = build_loopx_turn_host_request(build_loopx_turn_plan(envelope,
+    request = build_loopx_turn_host_request(build_loopx_turn_plan(packet,
         host="codex-cli", execution_mode="isolated-headless", turn_instance_id="export-context-turn"))
     before = {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()}
     command = _recording_host(tmp_path)
@@ -146,15 +149,16 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         input=json.dumps(request), capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     prompt = (tmp_path / "received.txt").read_text()
-    authority = json.loads(prompt.split("Turn authority JSON:\n", 1)[1].split("\n\nWhen finished", 1)[0])
-    assert authority["work_context"] == envelope["work_context"]
-    assert authority["selected_todo"]["text_source_verified"] is True
+    authority = json.loads(prompt.split("Turn request:\n", 1)[1].split("\n\nWhen finished", 1)[0])
+    work_context = authority["task_context"]["interaction_contract"]["agent_channel"]["work_context"]
+    assert work_context == channel["work_context"]
     changed = deepcopy(request)
-    acceptance = next(row["content"] for row in changed["turn_envelope"]["work_context"]["sources"]
+    changed_context = changed["work_contract"]["interaction_contract"]["agent_channel"]["work_context"]
+    acceptance = next(row["content"] for row in changed_context["sources"]
         if row.get("source") == "goal_acceptance")
     acceptance["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][-1]["requirements"][-1]["description"] = "Omit recovery."
     rejected = subprocess.run(command, input=json.dumps(changed), capture_output=True, text=True, timeout=30)
-    assert rejected.returncode != 0 and "action signature" in rejected.stderr
+    assert rejected.returncode != 0 and "complete Turn contract rejected" in rejected.stderr
     assert (tmp_path / "received.txt").read_text() == prompt
     assert {p: p.read_bytes() for p in runtime.rglob("*") if p.is_file()} == before
 
@@ -163,7 +167,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     from loopx.cli import main
     from loopx.control_plane.work_items import context_readback
 
-    def unavailable(**_kwargs):
+    attempted_acceptance_reads = []
+
+    def unavailable(**kwargs):
+        attempted_acceptance_reads.append(kwargs["todo_id"])
         raise OSError("acceptance source unavailable")
 
     planner_sources = []
@@ -180,8 +187,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             code = main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
-                "quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", "--context-delivery", "off"])
-        failed = json.loads(output.getvalue())["interaction_contract"]["agent_channel"]
+                *selected_guard])
+        failure = json.loads(output.getvalue())
+        failed = failure["interaction_contract"]["agent_channel"]
+        assert attempted_acceptance_reads == [selected], failure.get("effective_action")
         assert code == 0 and failed["delivery_allowed"] is False
         assert failed["work_context"]["complete"] is False
         assert any(row.get("source") == "goal_acceptance" for row in failed["required_reads"])
@@ -190,8 +199,10 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
         assert set(source) == {"selected_todo", "task_orchestration_contract", "effective_action", "interaction_contract"}
         assert set(source["interaction_contract"]["cli_channel"]) <= {"selection_required"}
         assert set(source["task_orchestration_contract"]) <= {"schema_version", "mode", "primary_todo_id"}
-    recovered = cli("quota", "should-run", "--goal-id", goal, "--agent-id", "agent-a", )
-    assert recovered["interaction_contract"]["agent_channel"]["work_context"]["complete"] is True
+    recovered = cli(*selected_guard)
+    recovered_context = recovered["interaction_contract"]["agent_channel"]["work_context"]
+    assert recovered_context["complete"] is True
+    assert recovered_context["selected_todo_text_verified"] is True
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -248,7 +259,7 @@ def test_captured_acceptance_does_not_replace_current_work_admission(acceptance_
     capture = tmp_path / "decision"
     guard = ("quota", "should-run", "--goal-id", goal, "--agent-id", agent, "--codex-app")
     first = cli(*guard, "--todo-id", selected, "--turn-instance-id", "original-delivery",
-        "--turn-envelope", "--decision-output-dir", str(capture))
+        "--decision-output-dir", str(capture))
     first = read_cli_policy_payload(json.dumps(first), returncode=0)
     saved = (capture / "decision.json").read_bytes()
     full = json.loads(saved)

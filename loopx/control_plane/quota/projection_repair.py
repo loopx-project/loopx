@@ -1,8 +1,10 @@
 from __future__ import annotations
 from .effective_action import EffectiveAction
 
+from pathlib import Path
 from typing import Any
 
+from ...repository_identity import resolve_project_identity
 from ...state_projection import actions_are_projection_aligned, is_user_wait_text
 from ..effect_runtime import (
     EffectRuntimeRemoteError, EffectRuntimeStartupError, effect_runtime_result,
@@ -10,12 +12,14 @@ from ..effect_runtime import (
 from ..todos.contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     normalize_required_write_scopes,
+    normalize_todo_task_repository,
 )
 from ..todos.todo_semantics import (
     todo_item_is_actionable_open,
     todo_item_task_class,
 )
 from ..work_items.primary_action import protocol_action_text
+from .selected_todo_projection import lookup_raw_todo
 
 
 def open_todo_count(summary: dict[str, Any] | None) -> int:
@@ -179,6 +183,32 @@ def _write_scope_coverage(
     return [covered[index:index + width] for index in range(0, len(covered), width)]
 
 
+def _goal_boundary_covers_repo_root(
+    allowed_scopes: list[str],
+    *,
+    goal_repo: str | Path | None = None,
+) -> bool:
+    if not allowed_scopes:
+        return False
+    repo_roots: set[str] = set()
+    if goal_repo is not None:
+        raw_repo = str(goal_repo).strip()
+        if raw_repo:
+            repo_roots.add(Path(raw_repo).as_posix().rstrip("/"))
+            try:
+                repo_roots.add(Path(raw_repo).expanduser().resolve(strict=False).as_posix().rstrip("/"))
+            except OSError:
+                pass
+    for raw in allowed_scopes:
+        clean = str(raw).strip()
+        if clean in {"**", "./**", "/**", ".", "./"}:
+            return True
+        norm = clean.rstrip("/")
+        if norm in repo_roots or (clean.endswith("/**") and clean[:-3].rstrip("/") in repo_roots):
+            return True
+    return False
+
+
 def build_boundary_projection_repair_hint(
     goal_boundary: dict[str, Any] | None,
     agent_todo_summary: dict[str, Any] | None,
@@ -186,6 +216,8 @@ def build_boundary_projection_repair_hint(
     candidate_should_run: bool,
     capability_gate: dict[str, Any] | None = None,
     selected_todo: dict[str, Any] | None = None,
+    raw_agent_todo_summary: dict[str, Any] | None = None,
+    goal_repo: str | Path | None = None,
 ) -> dict[str, Any] | None:
     if not candidate_should_run or not isinstance(agent_todo_summary, dict):
         return None
@@ -215,6 +247,14 @@ def build_boundary_projection_repair_hint(
         break
     if not selected:
         return None
+    raw_match = lookup_raw_todo(raw_agent_todo_summary, selected.get("todo_id"))
+    if raw_match:
+        selected = {
+            **raw_match,
+            **selected,
+            **({"task_repository": raw_match["task_repository"]}
+               if not selected.get("task_repository") and raw_match.get("task_repository") else {}),
+        }
 
     required_scopes = normalize_required_write_scopes(
         selected.get("required_write_scopes")
@@ -222,11 +262,29 @@ def build_boundary_projection_repair_hint(
     if not required_scopes:
         return None
     boundary = goal_boundary if isinstance(goal_boundary, dict) else {}
-    allowed_scopes = normalize_required_write_scopes(boundary.get("write_scope"))
+    raw_allowed = [
+        str(value).strip()
+        for value in (boundary.get("write_scope") or [])
+        if isinstance(value, str) and str(value).strip()
+    ]
+    if _goal_boundary_covers_repo_root(raw_allowed, goal_repo=goal_repo):
+        return None
+    allowed_scopes = normalize_required_write_scopes(raw_allowed)
     active_coverage = _write_scope_coverage(required_scopes, [allowed_scopes])[0]
     missing_scopes = [scope for scope, covered in zip(required_scopes, active_coverage) if not covered]
     if not missing_scopes:
         return None
+    # Goal-relative grants apply unless the two repositories are known to differ.
+    task_repository = normalize_todo_task_repository(selected.get("task_repository"))
+    if task_repository:
+        goal_repository = normalize_todo_task_repository(boundary.get("task_repository"))
+        if not goal_repository and goal_repo:
+            try:
+                goal_repository = resolve_project_identity(goal_repo)
+            except ValueError:
+                pass
+        if goal_repository and goal_repository.casefold() != task_repository.casefold():
+            return None
     boundary_authority = (
         boundary.get("checkpointed_boundary_authority")
         if isinstance(boundary.get("checkpointed_boundary_authority"), dict)

@@ -234,11 +234,22 @@ def _accepted_ack_run(
 def test_compact_ack_projects_validated_path_disposition(
     path_disposition: str,
 ) -> None:
+    from loopx.control_plane.work_items.progress_observation import build_replan_context
+    from loopx.control_plane.work_items.replan_semantics_codec import project_replan_semantics
+
+    obligation = {
+        "obligation_id": "replan-3338000000000000",
+        "satisfying_semantic_outcomes": ["new_surface"],
+    }
+    obligation["replan_context"] = build_replan_context(
+        obligation, goal_id=GOAL_ID, agent_id=AGENT_ID, newest_first_runs=[],
+    )
+    vision = _validated_agent_vision(path_disposition)
+    vision["stride_decision"] = project_replan_semantics({
+        "operation": "requirements", "obligation": obligation,
+    })["stride_control"]["minimal_example"]
     semantic_delta = semantic_delta_from_writeback(
-        obligation={
-            "obligation_id": "replan-3338",
-            "satisfying_semantic_outcomes": ["new_surface"],
-        },
+        obligation=obligation,
         progress_observation={
             "schema_version": "typed_progress_observation_v0",
             "work_item_id": "todo-replan-3338",
@@ -246,7 +257,7 @@ def test_compact_ack_projects_validated_path_disposition(
             "result_class": "advanced",
             "evidence_ids": ["evidence:new-surface"],
         },
-        agent_vision=_validated_agent_vision(path_disposition),
+        agent_vision=vision,
     )
 
     assert semantic_delta["accepted"] is True

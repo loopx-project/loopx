@@ -43,7 +43,10 @@ class StewardManagedMode:
                 session = self.store.load_session(actor["session_id"])
             else:
                 candidates = self.bindings.local_sessions(binding_id)
-                candidates = [row for row in candidates if row.get("status") != "closed"]
+                candidates = [
+                    row for row in candidates
+                    if row.get("status") != "closed" and not (row.get("steward_context") or {}).get("topic_ref")
+                ]
                 channels = {row.get("channel_id") for row in candidates}
                 if len(channels) != 1 or not candidates:
                     raise ValueError("select the original private steward conversation first")
@@ -363,8 +366,7 @@ class ManagedSessionTurn:
     def _original_task_entry(self, session_id: str) -> dict[str, Any]:
         """Observe the existing creation/validation owners without any effects.
 
-        Native
-        submit still rechecks current admission and every validation source.
+        Native submit still rechecks current admission and every validation source.
         """
         from ...control_plane.effect_runtime import effect_runtime_result
         from ...control_plane.goals.acceptance import inspect_goal_acceptance
@@ -395,16 +397,36 @@ class ManagedSessionTurn:
             unavailable["todo_id"] = todo_id
             request["todo_id"] = todo_id
             self.admit(request)
-            plan = self._validation_source(request, todo_id)["plan"]
-            # Return only the display observation; commands, pins and private
-            # declarations stay with their existing owner.
+            source = self._validation_source(request, todo_id)
+            plan = source["plan"]
+            completion_turn = self._completed_task_turn(actor, source) if plan["canonical_done"] else None
+            # Commands, pins and private declarations stay with the validation owner.
             self.admit(request)
             return {**{key: plan[key] for key in ("todo_id", "state", "source", "observation", "canonical_done")},
-                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable}}
+                **{key: unavailable[key] for key in ("creation_request", "creation_turn") if key in unavailable},
+                **({"completion_turn": completion_turn} if completion_turn is not None else {})}
         except (OSError, ValueError, RuntimeError) as exc:
             reason = ("the original task source is temporarily unavailable" if isinstance(exc, OSError)
                 else str(exc))
             return {**unavailable, "reason": reason}
+
+    def _completed_task_turn(self, actor: dict[str, Any], source: dict[str, Any]) -> dict[str, Any] | None:
+        completion_key = source.get("completion_turn_key")
+        operation = re.fullmatch(r"managed-session\.([A-Za-z0-9._:-]{1,100})",
+            completion_key if isinstance(completion_key, str) else "")
+        if operation is None:
+            return None
+        turn = self.store.turn_for_client(actor["session_id"], "managed." + operation[1])
+        if not isinstance(turn, dict):
+            return None
+        saved = turn.get("loopx_request")
+        if (turn.get("status") != "completed" or turn.get("origin") != "native_loopx"
+                or turn.get("loopx_execution") is not True or not isinstance(saved, dict)
+                or saved.get("operation") != "native_turn" or saved.get("work_kind") != "native_turn"
+                or saved.get("actor") != actor or saved.get("todo_id") != source["todo_id"]
+                or saved.get("turn_instance_id") != completion_key):
+            return None
+        return turn
 
     def submit(self, session_id: str, *, agent_id: str, operation_id: str,
                todo_id: str | None = None, monitor_deadline: str | None = None,

@@ -111,7 +111,9 @@
 .research-history-all-records summary { min-height: 48px; align-content: center; cursor: pointer; padding-block: 8px; color: var(--pw-text); font-weight: 500; }
 .research-history-all-records > .research-history-records { max-height: 400px; overflow: auto; }
 .research-record-search { color: var(--pw-text); font-size: var(--text-body); }
-.research-record-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 12px; }
+.research-record-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-block: 12px; }
+.research-record-filters label { display: grid; gap: 4px; font-size: 12px; min-width: 0; }
+.research-record-filters label input { flex: none; width: 100%; box-sizing: border-box; }
 .research-record-filters input { flex: 1 1 220px; min-width: 0; }
 .research-record-filters input, .research-record-filters select, .research-record-search button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--pw-line); border-radius: 6px; color: var(--pw-text); background: var(--pw-bg); font: inherit; }
 .research-record-count, .research-comparison-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-block: 12px; color: var(--pw-muted); font-size: var(--text-body); }

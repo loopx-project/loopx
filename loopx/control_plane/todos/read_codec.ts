@@ -182,13 +182,19 @@ export function pythonFieldInteger(row: JsonObject, key: string, fallback = 9999
 function fieldRepr(row: JsonObject | unknown[], key: string | number): string {
   return pythonValues.get(row)?.get(String(key))?.[1] as string ?? repr((row as JsonObject)[key]);
 }
-export function copyTodoPythonValues(source: JsonObject, target: JsonObject): void {
+export function copyTodoPythonValues(source: JsonObject, target: JsonObject, replaced?: JsonObject): void {
   const fields = pythonValues.get(source);
-  if (fields) pythonValues.set(target, new Map([...fields].filter(([key]) => target[key] === source[key])));
+  if (fields) pythonValues.set(target, new Map([...fields].filter(([key]) => target[key] === source[key] && !(replaced && Object.hasOwn(replaced, key)))));
 }
 export function handoffReadSource(value: JsonObject): JsonObject {
   if (value.record === undefined) return value; // retained already-encoded transport callers
   return {...handoffSource(decodeTodoReadSource(value)), goal_id: value.goal_id ?? "", source: value.source ?? ""};
+}
+
+function legacyHandoffId(item: JsonObject): string {
+  const fields = ["goal_id", "role", "index", truthy(item.text) ? "text" : "title"];
+  const tuple = "(" + fields.map(key => fieldRepr(item, key)).join(", ") + ")";
+  return "handoff_" + createHash("sha1").update(tuple).digest("hex").slice(0, 12);
 }
 
 export function handoffSource(item: JsonObject): JsonObject {
@@ -204,15 +210,15 @@ export function handoffSource(item: JsonObject): JsonObject {
   }
   const fields = ["continuation_hint", "suggested_next_action", "note", "reason", "summary", "intent", "blocked_on", "evidence", "title", "text", "task_class", "goal_id", "source", "latest_event_kind"];
   const action = compactPythonWhitespace(scalarText(item.action_kind)).toLowerCase();
-  const legacy = "(" + ["goal_id", "role", "index", truthy(item.text) ? "text" : "title"].map(key => fieldRepr(item, key)).join(", ") + ")";
+  const todoId = id(item.todo_id);
   return {...nested, nested_metadata: nestedMetadata,
     texts: Object.fromEntries(fields.filter(key => truthy(item[key])).map(key => [key, pythonFieldText(item, key)])),
-    metadata: {todo_id: id(item.todo_id), claimed_by: readAgent(item.claimed_by), excluded_agents: readExcludedAgents(item.excluded_agents),
+    metadata: {todo_id: todoId, claimed_by: readAgent(item.claimed_by), excluded_agents: readExcludedAgents(item.excluded_agents),
       successor_todo_ids: ids(item.successor_todo_ids), unblocks_todo_id: id(item.unblocks_todo_id), superseded_by: id(item.superseded_by),
       action_kind: /^[a-z][a-z0-9_-]{0,63}$/.test(action) ? action : null, resume_when: readResume(item.resume_when),
       required_decision_scopes: readScopes(item.required_decision_scopes), decision_scope: readScope(item.decision_scope)},
     evidence_refs: refs(item.evidence_refs), has_evidence: truthy(item.evidence), has_note: truthy(item.note),
-    goal_id: "", source: "", legacy_id: id(item.todo_id) ? null : "handoff_" + createHash("sha1").update(legacy).digest("hex").slice(0, 12)};
+    goal_id: "", source: "", legacy_id: todoId ? null : legacyHandoffId(item)};
 }
 
 /** Provider records are already decoded. This changes presentation, never authority. */

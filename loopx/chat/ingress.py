@@ -10,12 +10,12 @@ import json
 from pathlib import Path
 import uuid
 from typing import TYPE_CHECKING, Any
-from .chat import require_matching_message_replay, require_matching_replay
-from .file_lock import exclusive_file_lock
-from .capabilities.native_chat.file_discovery import FileChatDiscovery
+from ..chat import require_matching_message_replay, require_matching_replay
+from ..file_lock import exclusive_file_lock
+from ..capabilities.native_chat.file_discovery import FileChatDiscovery
 
 if TYPE_CHECKING:
-    from .capabilities.native_chat.conversation_bindings import ChatConversationBindings
+    from ..capabilities.native_chat.conversation_bindings import ChatConversationBindings
 
 
 SESSION_QUEUE_MAX_PENDING = 20
@@ -75,7 +75,7 @@ def ensure_external_admission_scope(
             raise ValueError("the original steward Session changed during admission")
         # Preserve the original Session across provider IO, service interruption
         # or Close. The existing prepared-request path owns subsequent admission.
-        from .chat_store import _atomic_write_json
+        from ..chat_store import _atomic_write_json
         request.update(session_id=session_id, response_code=STEWARD_BINDING_ADOPTION_PENDING)
         _atomic_write_json(path, request)
 
@@ -99,14 +99,18 @@ def chat_runtime_activation_lock(runtime_root: Path, *, timeout_seconds: float |
     )
 
 
-def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
+def chat_runtime_activation_state(
+    runtime_root: Path, *, active_session_ids: list[str] | None = None,
+) -> dict[str, int]:
     """Strict read of all accepted work; never initialize or recover a store.
 
     The caller holds ``chat_runtime_activation_lock`` through the service switch.
     Session summaries alone omit queued input and are insufficient for this check.
     Unknown or unreadable records must not authorize stopping their consumer.
+    When requested, collect Sessions with active pointers during this same scan.
+    Their pointers only select recovery candidates. Turn records decide admission.
     """
-    from .chat_store import CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+    from ..chat_store import CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
     sessions = runtime_root.expanduser().resolve() / "chat" / "sessions"
     counts = {"sessions": 0, "nonterminal_turns": 0}
@@ -139,6 +143,10 @@ def chat_runtime_activation_state(runtime_root: Path) -> dict[str, int]:
                 counts["nonterminal_turns"] += 1
         if not active_found:
             raise ValueError("active Chat Turn state is missing")
+        if active_id and active_session_ids is not None:
+            if session.get("session_id") != directory.name:
+                raise ValueError("active Chat Session identity does not match its directory")
+            active_session_ids.append(directory.name)
     return counts
 
 
@@ -152,7 +160,7 @@ class ChatIngressStore:
     def _turn_discovery_rows(
         self, session_id: str, turns_dir: Path, read: Callable[[Path], dict[str, Any]],
     ) -> Iterator[tuple[Path, dict[str, Any], dict[str, Any] | None]]:
-        from .chat_store import CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+        from ..chat_store import CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
         def terminal(path: Path, payload: dict[str, Any]) -> dict[str, Any] | None:
             status = payload.get("status")
@@ -185,7 +193,7 @@ class ChatIngressStore:
     def _matched_discovered_turn(
         self, session_id: str, client_id: str, path: Path, fresh: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        from .chat_store import CHAT_TURN_SCHEMA_VERSION, _read_json
+        from ..chat_store import CHAT_TURN_SCHEMA_VERSION, _read_json
 
         payload = fresh if fresh is not None else _read_json(path)
         if (payload.get("schema_version") != CHAT_TURN_SCHEMA_VERSION
@@ -195,7 +203,7 @@ class ChatIngressStore:
         return payload
 
     def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, Any] | None:
-        from .chat_store import _read_json
+        from ..chat_store import _read_json
 
         turns_dir = self._session_dir(session_id) / "turns"
         if not turns_dir.is_dir():
@@ -212,7 +220,7 @@ class ChatIngressStore:
         return chat_runtime_activation_lock(self.root.parent)
 
     def queued_turns(self, session_id: str, *, strict: bool = False, include_reserved: bool = False, capacity_at: str | None = None) -> list[dict[str, Any]]:
-        from .chat_store import _read_json, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
+        from ..chat_store import _read_json, CHAT_TURN_SCHEMA_VERSION, TERMINAL_TURN_STATES
 
         session = self.load_session(session_id)
         if session is None:
@@ -252,7 +260,7 @@ class ChatIngressStore:
         if not rows and not strict and not include_reserved and capacity_at is None:
             return []
 
-        from .control_plane.chat_turn_acceptance import queued_chat_turn_ids
+        from ..control_plane.chat_turn_acceptance import queued_chat_turn_ids
         selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(
             [row for row in rows if row["turn_id"] in selected],
@@ -279,9 +287,9 @@ class ChatIngressStore:
 
     def mutate_queued_input(self, session_id: str, turn_id: str, request: dict[str, Any]) -> dict[str, Any]:
         """Execute the TS owner's recoverable input plan under the consumer fences."""
-        from .chat_store import _atomic_write_json, _read_jsonl, utc_now
-        from .control_plane.chat_turn_acceptance import plan_queued_chat_mutation
-        from .file_lock import write_bytes_atomic
+        from ..chat_store import _atomic_write_json, _read_jsonl, utc_now
+        from ..control_plane.chat_turn_acceptance import plan_queued_chat_mutation
+        from ..file_lock import write_bytes_atomic
 
         with self.queue_steering_lock(session_id, turn_id):
             session, turn = self.load_session(session_id), self.load_turn(session_id, turn_id)
@@ -344,7 +352,7 @@ class ChatIngressStore:
 
     def _strict_ingress_receipt(self, session_id: str, ingress_id: str) -> dict[str, Any] | None:
         """Absent is ``None``; any other unreadable receipt fails closed."""
-        from .chat_store import CHAT_INGRESS_SCHEMA_VERSION, _opaque_id
+        from ..chat_store import CHAT_INGRESS_SCHEMA_VERSION, _opaque_id
         # The receipt is stored under the normalized id, so a replay that repeats
         # the original (padded) text must be matched against that same id.
         ingress_id = _opaque_id(ingress_id, field="client_ingress_id")
@@ -371,7 +379,7 @@ class ChatIngressStore:
 
     def write_queue_steering(self, session_id: str, turn: dict[str, Any], plan: dict[str, Any]):
         """Persist the typed plan while the caller holds both queue fences."""
-        from .chat_store import _atomic_write_json, utc_now
+        from ..chat_store import _atomic_write_json, utc_now
         if plan["action"] not in {"dispatch", "complete", "release"}:
             return turn
         turn = {**turn, "_queue_steering": plan["reservation"]}
@@ -379,8 +387,13 @@ class ChatIngressStore:
             # Keep the existing SSE response envelope for older readers. The
             # adoption marker distinguishes this receipt from a model answer;
             # no assistant transcript row or invented answer is published.
-            response = {"schema_version": "loopx_chat_agent_response_v0", "message": "",
-                        "proposals": [], "protected_action": None, "gate": None}
+            response: dict[str, Any] = {
+                "schema_version": "loopx_chat_agent_response_v0",
+                "message": "",
+                "proposals": [],
+                "protected_action": None,
+                "gate": None,
+            }
             turn.update(status="completed", completed_at=turn.get("completed_at") or utc_now(), response=response)
         _atomic_write_json(self._turn_path(session_id, turn["turn_id"]), turn, preserve_mode=True)
         if plan["action"] == "complete":
@@ -401,7 +414,7 @@ class ChatIngressStore:
         those writes failed, retain the exact recovery result and idempotently
         finish only its missing writes under the caller's execution fence.
         """
-        from .chat_store import CHAT_SESSION_MODE_MANAGED, utc_now
+        from ..chat_store import CHAT_SESSION_MODE_MANAGED, utc_now
 
         if (session is None or turn is None
                 or session.get("session_mode") != CHAT_SESSION_MODE_MANAGED
@@ -449,10 +462,10 @@ class ChatIngressStore:
         source revalidation and Stop remain independent bounds.
         """
 
-        from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
+        from ..chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_TURN_SCHEMA_VERSION
 
         client_id = _opaque_id(client_turn_id, field="client_turn_id")
-        from .chat.attachments import normalize_chat_attachments, validate_chat_turn_envelope
+        from .attachments import normalize_chat_attachments, validate_chat_turn_envelope
         normalized_attachments = normalize_chat_attachments(attachments) or None
         if normalized_attachments:
             validate_chat_turn_envelope({"message": message, "attachments": normalized_attachments})
@@ -561,7 +574,7 @@ class ChatIngressStore:
         publication marker, so healthy claims need no full transcript scan.
         Recovery uses the saved request, never a retry's replacement text.
         """
-        from .chat_store import _read_jsonl
+        from ..chat_store import _read_jsonl
 
         if "_acceptance" in turn:
             raise ValueError("managed Turn acceptance must finish before queue dispatch")
@@ -606,7 +619,7 @@ class ChatIngressStore:
     ) -> tuple[dict[str, Any], bool]:
         """Reserve one idempotent external ingress before provider delivery."""
 
-        from .chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
+        from ..chat_store import _opaque_id, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
 
         if self.load_session(session_id) is None:
             raise KeyError("chat session was not found")
@@ -620,7 +633,10 @@ class ChatIngressStore:
             # recreating it would resend the message and erase that evidence.
             existing = self._strict_ingress_receipt(session_id, client_ingress_id)
             if existing is not None:
-                request = {"mode": _opaque_id(mode, field="mode"), "message": str(message)}
+                request: dict[str, Any] = {
+                    "mode": _opaque_id(mode, field="mode"),
+                    "message": str(message),
+                }
                 if expected_turn_id is not None or "expected_turn_id" in existing:
                     request["expected_turn_id"] = expected_turn_id
                 require_matching_replay(
@@ -657,7 +673,7 @@ class ChatIngressStore:
         client_ingress_id: str,
         **changes: Any,
     ) -> dict[str, Any]:
-        from .chat_store import _read_json, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
+        from ..chat_store import _read_json, _atomic_write_json, utc_now, CHAT_INGRESS_SCHEMA_VERSION
 
         path = self._ingress_path(session_id, client_ingress_id)
         with exclusive_file_lock(
@@ -679,7 +695,7 @@ class ChatIngressStore:
 
     def loopx_ingress(self, session_id: str) -> list[dict[str, Any]]:
         """Read the existing ingress ledger; no second queue or delivery truth."""
-        from .chat_store import _read_json
+        from ..chat_store import _read_json
 
         rows = [_read_json(path) for path in (self._session_dir(session_id) / "ingress").glob("*.json")]
         return sorted((row for row in rows if row.get("mode") in {"loopx_queue", "loopx_inbox"}),

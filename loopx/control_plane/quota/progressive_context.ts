@@ -7,7 +7,7 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
-import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
+import {GOAL_OUTCOMES_SCHEMA, isGoalOutcomeIdentifier, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
@@ -26,8 +26,11 @@ type ReusableReadField = {
 };
 export type ReusableExactBody = {path: Path; sourceIdentity: string};
 const MIN_REUSABLE_BODY_BYTES = 1024;
+const MAX_INLINE_WORK_FACTS_BYTES = 2048;
+const MAX_INLINE_WORK_OPENING_BYTES = 7000;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
+const COMPLETE_REQUIREMENTS_CLAUSE = "This view retains complete requirements and current review/check states. ";
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -54,6 +57,39 @@ function readySettlementIdentity(context: JsonObject, interaction: JsonObject,
     && jsonObject(context.selected_todo)?.todo_id === identity.todo_id
     && isDeepStrictEqual(identity, jsonObject(jsonObject(context.heartbeat_receipt)?.settlement_identity))
     ? identity : undefined;
+}
+
+/** A normal work decision can be opened inline only when its complete current
+ * work sources and exact settlement route are available from the same capture. */
+export function inlineNormalWorkOpening(context: JsonObject, envelopeConstraints: JsonObject): JsonObject | undefined {
+  if (context.schema_version !== "loopx_turn_envelope_v1" || context.ok !== true || context.should_run !== true ||
+      context.blocked_action_scope != null || context.autonomous_replan_obligation != null || context.replan_action_packet != null)
+    return undefined;
+  const interaction = jsonObject(context.interaction_contract);
+  if (!interaction || interaction.mode !== "bounded_delivery") return undefined;
+  const agent = jsonObject(interaction.agent_channel), cli = jsonObject(interaction.cli_channel);
+  const user = jsonObject(interaction.user_channel), work = jsonObject(agent?.work_context);
+  const scheduler = jsonObject(context.scheduler_hint);
+  if (agent?.must_attempt !== true || !Array.isArray(agent.required_reads) || agent.required_reads.length ||
+      agent.next_task_action != null || work?.complete !== true || work.selected_todo_text_verified !== true ||
+      work.selected_todo_ref !== "selected_todo" || work.unavailable_context != null || user?.action_required !== false ||
+      scheduler?.action !== "run_now" || jsonObject(scheduler.app_automation)?.host_action !== "none") return undefined;
+  const plan = jsonObject(cli?.settlement_plan), identity = readySettlementIdentity(context, interaction, plan);
+  if (!identity || plan?.schema_version !== "quota_settlement_plan_v2") return undefined;
+  const writebacks = orderedSettlementSteps(plan)?.map(jsonObject).filter(step => step?.kind === "durable_writeback");
+  const writeback = writebacks?.[0];
+  if (writebacks?.length !== 1 || writeback?.owner !== "agent" ||
+      typeof writeback.semantic_closeout_command_template !== "string") return undefined;
+  const workOpening = {effective_action: context.effective_action, reason: context.reason,
+    selected_todo: context.selected_todo, settlement_identity: identity,
+    settlement_command: writeback.semantic_closeout_command_template};
+  if (Buffer.byteLength(JSON.stringify(workOpening)) > MAX_INLINE_WORK_FACTS_BYTES) return undefined;
+  const opening = {work_opening: workOpening, before_work: {
+    ...envelopeConstraints,
+    work_context: work, required_reads: agent.required_reads, user_channel: user,
+    execution_preparation: cli?.execution_preparation, delivery_workspace_causality: cli?.delivery_workspace_causality,
+  }};
+  return Buffer.byteLength(JSON.stringify(opening)) <= MAX_INLINE_WORK_OPENING_BYTES ? opening : undefined;
 }
 
 /** Reorder the opening for an exact dated Todo reentry. The saved capture
@@ -426,9 +462,12 @@ function compactObservedSelection(ordinary: ReadSelection[], selected: ReadSelec
  * bodies again. A coalesced parent can span both parts; keep only the coverage
  * shared by the verified reduced selection and the ordinary remainder. */
 function withLinkedObservedRemainder(observed: JsonObject | undefined,
-    initial: ReturnType<typeof nativeContextReadPlan> | undefined): JsonObject | undefined {
-  if (!observed || !initial?.linked_opening_detail || !initial.remaining
-      || Object.hasOwn(observed.reused as JsonObject, initial.linked_opening_detail)) return observed;
+    initial: ReturnType<typeof nativeContextReadPlan> | undefined,
+    details?: readonly string[]): JsonObject | undefined {
+  const requiredDetails = details?.length ? details
+    : (initial?.linked_opening_detail ? [initial.linked_opening_detail] : []);
+  if (!observed || !initial?.linked_opening_detail || !initial.remaining || !requiredDetails.length
+      || requiredDetails.every(detail => Object.hasOwn(observed.reused as JsonObject, detail))) return observed;
   const ordinary = initial.plan.selections as ReadSelection[];
   const selected = observedSelection(ordinary, observed);
   if (selected === undefined) return observed;
@@ -507,7 +546,8 @@ export function progressiveContextPlan(request: JsonObject,
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
     declaration.outcomes.forEach((value, i) => {
       const row = jsonObject(value);
-      if (!row || !known(row, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+      if (!row || !known(row, ["id", "owner_agent_id", "declaration_owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+          || (row.declaration_owner_agent_id !== undefined && !isGoalOutcomeIdentifier(row.declaration_owner_agent_id))
           || typeof row.id !== "string" || typeof row.objective !== "string" || !Array.isArray(row.requirements)
           || !Array.isArray(row.sources) || row.sources.some(value => {
             const source = jsonObject(value);
@@ -520,7 +560,8 @@ export function progressiveContextPlan(request: JsonObject,
             || typeof requirement.id !== "string" || typeof requirement.description !== "string") return;
         if (requirement.agent_review === undefined) continue;
         const review = jsonObject(requirement.agent_review);
-        if (!review || !known(review, ["id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+            || (review.recorded_for_agent_id !== undefined && !isGoalOutcomeIdentifier(review.recorded_for_agent_id))
             || typeof review.note !== "string" || !Array.isArray(review.evidence_refs)
             || review.evidence_refs.some(ref => typeof ref !== "string")
             || !["met", "unmet", "uncertain"].includes(String(review.conclusion))
@@ -647,7 +688,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         }) : [],
       },
       instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
-        + "This view retains complete requirements and current review/check states. "
+        + COMPLETE_REQUIREMENTS_CLAUSE
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "Use the outcome's supporting_material_pointer when shown, or remove /id from its selected JSON pointer. "
@@ -730,7 +771,7 @@ function nativeContextContinuity(codec: JsonObject): JsonObject {
 /** Plan and encode one native capture without sending its intermediate view
  * back through Python. Capture publication and native locking remain Host IO. */
 export function prepareProgressiveContextDelivery(request: JsonObject, legacyFields: readonly string[],
-    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody): JsonObject {
+    decisionFields: readonly string[], plan?: JsonObject, exactBody?: ReusableExactBody, inlineOpening?: JsonObject): JsonObject {
   if (request.include_initial_read_plan !== undefined)
     requireBoolean(request.include_initial_read_plan, "include_initial_read_plan");
   const sourceValues: ProjectionSourceValues = new WeakMap();
@@ -742,20 +783,24 @@ export function prepareProgressiveContextDelivery(request: JsonObject, legacyFie
   // Full native delivery can use that copy; delta still carries its own edits.
   if (request.source_edits === true && delivery.mode === "full") delete delivery.context;
   const observe = request.observe_first_read === true && !!jsonObject(required.context.selected_todo)?.todo_id;
+  const firstReadBytes = jsonObject(request.native_projection)?.initial_read_output_bytes;
+  const openingBudget = typeof firstReadBytes === "number" && Number.isSafeInteger(firstReadBytes) && firstReadBytes > 0
+    ? firstReadBytes : undefined;
   const groups = observe || request.include_initial_read_plan === true
-    ? initialContextReadGroups(required.context, decisionFields) : undefined;
+    ? initialContextReadGroups(required.context, decisionFields, openingBudget) : undefined;
   const openingSplit = request.include_initial_read_plan === true && groups
     ? prepareInitialOpening(required.context, groups, exactBody?.path) : undefined;
   const pointers = groups ? [...groups.opening, ...groups.remaining] : [];
   const initial = request.include_initial_read_plan === true && groups
     ? nativeContextReadPlan(required.context, pointers, groups, openingSplit) : undefined;
   const observed = observe && pointers.length
-    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial) : undefined;
+    ? withLinkedObservedRemainder(observedFirstRead(codec, pointers, exactBody), initial, openingSplit?.details) : undefined;
   const {operation: _operation, source_edits: _edits, source_number_tokens: _numbers, ...source} = request;
   return contextProjectionChanges(source, {context: required.context, delivery, projected: required.projected,
     ...(observed ? {observed_first_read: observed} : {}),
     read_sections: inlineReadSections(request, required.context, exactBody),
-    ...(initial ? {initial_read_plan: initial} : {})}, sourceValues, undefined, true);
+    ...(initial ? {initial_read_plan: {...initial, ...(inlineOpening ? {inline_opening: inlineOpening} : {})}} : {})},
+    sourceValues, undefined, true);
 }
 
 /** Stateless presentation uses the same plan without inventing a native session,
@@ -773,61 +818,90 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
     scope?: Path): InitialOpeningSplit | undefined {
   const cli = jsonObject(jsonObject(context.interaction_contract)?.cli_channel);
   const candidate = "/selected_todo";
+  const controls = new Map<string, string[]>();
+  const details: string[] = [];
+  let linkedDetail: string | undefined;
   if (cli?.selection_required === true && groups.opening.includes(candidate)) {
     // This Todo is a recommendation. The current operation is selection;
     // keep its route and permission controls ahead of the candidate's details.
-    const controls = ["selection_required", "selection_policy_ref", "selection_command",
+    const selectionControls = ["selection_required", "selection_policy_ref", "selection_command",
       "next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"]
       .map(field => pointer(["interaction_contract", "cli_channel", field]));
-    for (const control of [...controls, "/action_portfolio/selection_policy",
+    for (const control of [...selectionControls, "/action_portfolio/selection_policy",
       "/action_portfolio/suggested_actions"]) {
       const index = groups.remaining.indexOf(control);
       if (index >= 0) groups.opening.push(...groups.remaining.splice(index, 1));
     }
-    return {controls: new Map([[candidate, []]]), details: [candidate], linkedDetail: candidate};
+    controls.set(candidate, []);
+    details.push(candidate);
+    linkedDetail = candidate;
   }
-  if (!scope) return undefined;
-  const parent = scope.slice(0, -1), detail = scope.at(-1)!;
-  const body = jsonObject(at(context, parent)), boundary = pointer(parent);
-  const controls = new Map<string, string[]>();
-  const details: string[] = [];
-  let linkedDetail: string | undefined;
-  if (groups.opening.includes(boundary) && body && Array.isArray(body[detail]) && body[detail].length) {
-    const boundaryControls = Object.keys(body).filter(key => key !== detail).map(key => pointer([...parent, key]));
-    linkedDetail = pointer(scope);
-    details.push(linkedDetail);
-    controls.set(boundary, boundaryControls);
-    const checkpointPath = [...parent, "checkpointed_boundary_authority"];
-    const checkpoint = jsonObject(at(context, checkpointPath));
-    if (checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
-        && Array.isArray(checkpoint.active_write_scope) && Number.isSafeInteger(checkpoint.active_count)
-        && Number.isSafeInteger(checkpoint.inactive_count) && Array.isArray(checkpoint.entries)
-        && checkpoint.entries.length) {
-      // Keep the current approval summary in the opening. Read the exact
-      // entries and write scope from the same capture before work.
-      const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
-      boundaryControls.splice(checkpointIndex, 1, ...Object.keys(checkpoint).filter(key => key !== "entries")
-        .map(key => pointer([...checkpointPath, key])));
-      details.push(pointer([...checkpointPath, "entries"]));
+  const parent = scope ? scope.slice(0, -1) : groups.opening
+    .map(field => field.slice(1).split("/").map(part => part.replace(/~1/g, "/").replace(/~0/g, "~")))
+    .find(path => path.length === 1 && jsonObject(jsonObject(at(context, path))?.checkpointed_boundary_authority) != null);
+  if (parent) {
+    const detail = scope?.at(-1);
+    const body = jsonObject(at(context, parent)), boundary = pointer(parent);
+    if (groups.opening.includes(boundary) && body) {
+      const deferWriteScope = Boolean(scope && detail && Array.isArray(body[detail]) && body[detail].length);
+      const checkpointPath = [...parent, "checkpointed_boundary_authority"];
+      const checkpoint = jsonObject(at(context, checkpointPath));
+      const activeWriteScopes = checkpoint?.active_write_scope;
+      const checkpointEntries = checkpoint?.entries;
+      const hasCheckpoint = checkpoint?.schema_version === "checkpointed_boundary_authority_v0"
+        && (activeWriteScopes === undefined || Array.isArray(activeWriteScopes))
+        && Number.isSafeInteger(checkpoint.active_count)
+        && Number.isSafeInteger(checkpoint.inactive_count);
+      const hasActiveScopes = hasCheckpoint && Array.isArray(activeWriteScopes) && activeWriteScopes.length > 0;
+      const hasCheckpointEntries = hasCheckpoint && Array.isArray(checkpointEntries) && checkpointEntries.length > 0;
+      if (deferWriteScope || hasActiveScopes || hasCheckpointEntries) {
+        const boundaryControls = Object.keys(body)
+          .filter(key => !(deferWriteScope && key === detail))
+          .map(key => pointer([...parent, key]));
+        if (deferWriteScope) details.push(pointer(scope!));
+        if (hasActiveScopes || hasCheckpointEntries) {
+          // Keep only approval summary counts on page 0; read active_write_scope and
+          // entries on demand from the same capture.
+          const checkpointIndex = boundaryControls.indexOf(pointer(checkpointPath));
+          if (checkpointIndex >= 0) {
+            boundaryControls.splice(
+              checkpointIndex,
+              1,
+              ...Object.keys(checkpoint)
+                .filter(key => key !== "entries" && key !== "active_write_scope")
+                .map(key => pointer([...checkpointPath, key])),
+            );
+          }
+          if (hasActiveScopes) details.push(pointer([...checkpointPath, "active_write_scope"]));
+          if (hasCheckpointEntries) details.push(pointer([...checkpointPath, "entries"]));
+        }
+        controls.set(boundary, boundaryControls);
+        if (!linkedDetail) linkedDetail = deferWriteScope ? pointer(scope!) : details[0];
+        // Current readiness belongs with the decision. Reorder only the new pinned
+        // reader, so an explicit historical initial-read cursor still replays.
+        const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
+        if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
+      }
     }
   }
-  const selected = jsonObject(context.selected_todo), requested = "required_write_scopes";
-  const scopes = selected?.[requested];
-  if (groups.opening.includes(candidate) && selected?.schema_version === "quota_selected_todo_v0"
-      && Array.isArray(scopes) && scopes.length && scopes.every(value => typeof value === "string" && value)) {
-    controls.set(candidate, Object.keys(selected).filter(key => key !== requested)
-      .map(key => pointer(["selected_todo", key])));
-    // Current requested scopes need this read even when the Goal's exact
-    // write scope can carry forward from an earlier observation.
-    linkedDetail = pointer(["selected_todo", requested]);
-    details.push(linkedDetail);
-  }
   if (!linkedDetail) return undefined;
-  // Current readiness belongs with the decision. Reorder only the new pinned
-  // reader, so an explicit historical initial-read cursor still replays.
-  const preparation = groups.remaining.indexOf("/interaction_contract/cli_channel/execution_preparation");
-  if (preparation >= 0) groups.opening.push(...groups.remaining.splice(preparation, 1));
   return {controls, details, linkedDetail};
+}
+
+function deferredOutcomesInstruction(context: JsonObject, deferredOutcomes: readonly string[]): string | undefined {
+  if (!deferredOutcomes.length) return undefined;
+  const details = jsonObject(context.context_details);
+  const instruction = typeof details?.instruction === "string" ? details.instruction : undefined;
+  if (!instruction) return undefined;
+  const notice =
+    "This opening omits full requirement bodies for large suggested outcomes, delivering only their id, objective and revision. "
+    + "Before dependent work, read each applicable complete outcome. Select its parent from recovery.command for requirements and current checks, "
+    + "or select the same parent once with context_details.command_template for the requirements, current checks and their original supporting material together. "
+    + `Outcome parents (--select <pointer>): ${deferredOutcomes.join(", ")}. `
+    + "Supporting material below still comes from the original capture in context_details. ";
+  return instruction.includes(COMPLETE_REQUIREMENTS_CLAUSE)
+    ? instruction.replace(COMPLETE_REQUIREMENTS_CLAUSE, notice)
+    : notice + instruction;
 }
 
 /** Invocation-local navigation, not captured input or a read/retention receipt.
@@ -835,7 +909,7 @@ function prepareInitialOpening(context: JsonObject, groups: ReturnType<typeof in
 function nativeContextReadPlan(context: JsonObject, pointers: string[],
     groups: ReturnType<typeof initialContextReadGroups>, openingSplit?: ReturnType<typeof prepareInitialOpening>): {
       initial: boolean; plan: JsonObject; opening?: JsonObject; remaining?: JsonObject; linked_opening_detail?: string;
-      ordinary_opening_rows?: number;
+      ordinary_opening_rows?: number; deferred_suggested_outcomes?: string[]; opening_context_instruction?: string;
     } {
   if (!pointers.length) return {initial: false,
     plan: capturedContextSelection({context, select: [""], list_fields: true})};
@@ -850,10 +924,15 @@ function nativeContextReadPlan(context: JsonObject, pointers: string[],
   const ordinaryRows = openingSplit ? (plan.selections as ReadSelection[]).reduce((end, row, index) =>
     groups.opening.some(field => field === row.pointer || field.startsWith(row.pointer + "/"))
       ? index + 1 : end, 0) : undefined;
+  const deferredOutcomes = groups.deferredSuggestedOutcomes ?? [];
+  const openingInstruction = deferredOutcomes.length && pointers.includes("/context_details/instruction")
+    ? deferredOutcomesInstruction(context, deferredOutcomes) : undefined;
   // Keep the ordinary fallback in the same order as the observed selection.
   return {initial: true, plan, ...(opening.length && remaining.length
     ? {opening: select(opening), remaining: select(remaining)} : {}),
-    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {})};
+    ...(openingSplit ? {linked_opening_detail: openingSplit.linkedDetail, ordinary_opening_rows: ordinaryRows} : {}),
+    ...(deferredOutcomes.length ? {deferred_suggested_outcomes: deferredOutcomes} : {}),
+    ...(openingInstruction ? {opening_context_instruction: openingInstruction} : {})};
 }
 
 export function initialContextReadPointers(context: JsonObject, decisionFields: readonly string[]): string[] {
@@ -951,8 +1030,8 @@ function managerReturnAttention(value: unknown, requiredReads: unknown[]): JsonO
   return attention;
 }
 
-function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[]): {
-  opening: string[]; remaining: string[];
+function initialContextReadGroups(context: JsonObject, decisionFields: readonly string[], openingBudget?: number): {
+  opening: string[]; remaining: string[]; deferredSuggestedOutcomes?: string[];
 } {
   const object = (value: unknown): JsonObject | undefined =>
     value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : undefined;
@@ -984,11 +1063,21 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const replanRequired = context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
     && replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required"
     && replan.settlement_only !== true;
+  const stagedReview = typeof replan?.review === "string" && replan.review.length > 0;
+  const inlineReplan = replanRequired && !stagedReview && context.schema_version === "loopx_turn_envelope_v1";
+  const inlineVision = inlineReplan
+    && object(replan?.writeback_contract)?.preferred_input === "evidence_linked_vision_path";
   let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
-  if (replanRequired && typeof replan.review === "string" && replan.review) {
+  if (replanRequired && stagedReview) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (replanRequired && context.schema_version === "loopx_turn_envelope_v1") {
+  } else if (inlineReplan) {
+    if (inlineVision) {
+      // An inline replan has no later writer read to supply these inputs.
+      include("replan_action_packet", "writeback_contract");
+      for (const field of ["attachment", "required_fields", "minimal_example"])
+        include("replan_action_packet", "stride_control", field);
+    }
     // The complete contract already carries the review facts: use its own
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
@@ -1015,6 +1104,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
     include("interaction_contract", "agent_channel", field);
   const cli = object(interaction.cli_channel), planPath = SETTLEMENT_PLAN_PATH;
   const plan = object(cli?.settlement_plan);
+  const readyIdentity = readySettlementIdentity(context, interaction, plan);
   const deferredReentry = hasBoundDatedTodoReentry(context, interaction, plan);
   const turnBindingRequired = cli?.turn_binding_required === true;
   const admissionFields = ["next_cli_actions", "spend_allowed_now", "spend_after_validation", "spend_policy"];
@@ -1109,6 +1199,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // before selecting other sources' metadata: complete-parent coalescing keeps
   // the first selected child's position. Preserve stable order within each group.
   const hasText = (source: unknown): boolean => typeof object(object(source)?.content)?.text === "string";
+  const deferredSuggestedOutcomes: string[] = [];
   sourceRows.sort((left, right) => Number(hasText(right.source)) - Number(hasText(left.source)));
   sourceRows.forEach(({source: _source, index}) => {
     const source = [...work, "sources", index];
@@ -1157,11 +1248,31 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && suggested.every(id => typeof id === "string"
         && outcomes.filter(value => object(value)?.id === id).length === 1);
     const expanded = new Set(expand ? suggested as string[] : []);
+    const outcomesPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const canDeferSuggested = openingBudget !== undefined && readyIdentity !== undefined && expanded.size > 0
+      && inlineSupportingDetails && details?.outcome_support_from_id === true
+      && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
+      && typeof details.command_template === "string" && details.command_template.length > 0;
+    const referenced = canDeferSuggested && Array.isArray(outcomes) ? outcomes.filter((value, index) => {
+      const row = object(value);
+      return typeof row?.id === "string" && expanded.has(row.id)
+        && row.supporting_material_pointer === pointer([...outcomesPath, index]);
+    }) : [];
+    // The whole suggested set must have exact supporting addresses before
+    // exceeding the native opening window moves its bodies to selected reads.
+    const deferSuggested = canDeferSuggested && referenced.length === expanded.size
+      && Buffer.byteLength(JSON.stringify(referenced), "utf8") > openingBudget;
     if (Array.isArray(outcomes)) outcomes.forEach((_outcome, outcomeIndex) => {
-      const outcome = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes", outcomeIndex];
+      const outcome = [...outcomesPath, outcomeIndex];
       const row = object(_outcome), outcomeId = row?.id;
-      if (typeof outcomeId === "string" && expanded.has(outcomeId)) { include(...outcome); return; }
+      const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
+      if (suggested && !deferSuggested) { include(...outcome); return; }
       include(...outcome, "id");
+      if (suggested) {
+        include(...outcome, "objective");
+        include(...outcome, "revision");
+        deferredSuggestedOutcomes.push(pointer(outcome));
+      }
       // The id selection already carries the same absolute outcome address.
       // Keep aliases whose source, value or read guidance cannot be verified.
       if (!(inlineSupportingDetails && details?.outcome_support_from_id === true
@@ -1188,7 +1299,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // A ready Turn already shows its ordered writeback and spend with their
   // conditions. Hide only the exact duplicate fallback in this first read;
   // recovery, legacy readers and the original capture keep both forms.
-  const repeatsSettlement = readySettlementIdentity(context, interaction, plan) !== undefined
+  const repeatsSettlement = readyIdentity !== undefined
     && settlementSteps?.length === 2 && writeback?.kind === "durable_writeback" && spend?.kind === "quota_spend"
     && templates?.every(command => typeof command === "string" && command.length > 0)
     && isDeepStrictEqual(cli?.next_cli_actions, templates);
@@ -1200,7 +1311,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
         include("interaction_contract", "cli_channel", field);
         // A task-facing operation and its declared continuation belong in the
         // same opening. Keep the existing exact settlement deduplication.
-        if (field === "next_cli_actions" && object(channel?.next_task_action) && pointers.length > before)
+        if (field === "next_cli_actions" && (inlineVision || object(channel?.next_task_action)) && pointers.length > before)
           opening.push(pointers.pop()!);
       }
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery
@@ -1251,5 +1362,6 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   } else if (details && known(details, ["command_template", "path", "sha256"])) {
     include("context_details");
   } else include("context_details", "unread_context_index");
-  return {opening, remaining: pointers};
+  return {opening, remaining: pointers,
+    ...(deferredSuggestedOutcomes.length ? {deferredSuggestedOutcomes} : {})};
 }

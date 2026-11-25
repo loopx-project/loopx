@@ -65,6 +65,10 @@ def test_edit_cancel_and_admission_retries_keep_exact_input_history_and_active_t
     sid, active, queued, original = held_queue(ordinary)
     path = f"/api/chat/sessions/{sid}/queue/{queued}/input"
     before = capture.read_bytes()
+    code, queue = request(f"/api/chat/sessions/{sid}/queue")
+    assert code == 200
+    pending, = queue["turns"]
+    assert pending["turn_id"] == queued and pending["input_mutation_allowed"] is True
     assert request(path)[0] == 404
     assert store.load_turn(sid, queued)["message"] == original["message"]  # GET never mutates.
     body = queue_input_body()
@@ -335,7 +339,7 @@ def test_unknown_native_delivery_stays_reserved_across_reload_retry_and_queue_cl
         assert request(path, body)[0] == 409
         assert request(path, {**body, "client_ingress_id": "new"})[1]["error_code"] == "queue_steering_in_progress"
     assert len(calls) == 1
-    monkeypatch.setattr("loopx.chat_ingress.SESSION_QUEUE_MAX_PENDING", 1)
+    monkeypatch.setattr("loopx.chat.ingress.SESSION_QUEUE_MAX_PENDING", 1)
     assert request(f"/api/chat/sessions/{sid}/turns", {
         "message": "No capacity escape", "client_turn_id": "over-capacity", "delivery": "queue"})[0] == 429
     # A fresh store instance sees the same durable pending input and reservation.

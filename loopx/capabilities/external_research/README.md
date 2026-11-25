@@ -69,10 +69,20 @@ JSON 与默认 Markdown 输出分别报告文件读取、JSON 解析和根对象
 便于调用者修正输入。
 
 ```bash
-loopx external-evidence discover \
-  --connector-registry \
+# Default zero-flag auto-detection: probes local methods (public-github,
+# public-source-reader, gh-cli, ego-browser) + default connector inventory.
+loopx external-evidence discover --format json
+
+# Default zero-flag planning with pinned GitHub source refs (auto-probes public-github):
+loopx external-evidence plan \
+  --objective "Compare current behavior" \
+  --user-activity "Choose an implementation" \
+  --decision "Whether to adopt it" \
+  --evidence-kind current_behavior \
+  --source https://github.com/OWNER/REPO/blob/FULL_COMMIT_SHA/README.md \
   --format json
 
+# Explicit custom provider inventory override remains supported:
 loopx external-evidence plan \
   --objective "Compare current behavior" \
   --user-activity "Choose an implementation" \
@@ -294,15 +304,17 @@ ledger. It requires the active research question to match the plan objective.
 Retries for the same admission are idempotent. Wrong questions, unrelated existing
 sources and exhausted source budgets remain blockers; partial projection stays
 retained until every admitted source is actually read back with matching lineage.
-Omit `--execute` for read-only projection; omit `--public-github` to avoid the
-provider readiness probe. There is no persistent provider enablement to uninstall.
+Omit `--execute` for read-only projection; pass `--no-auto-detect` (or an
+explicit `--provider-inventory-json` without `--public-github`) to disable automatic
+provider readiness probing. There is no persistent provider enablement to uninstall.
 Original sources remain available on partial, empty and failed results.
 
 `execute --execute` 只授权读取来源；`readback --execute` 只把已明确采纳的紧凑证据
 写入现有研究账本，且要求研究问题与 plan objective 相同。同一 admission 可幂等重试；
 问题不匹配、已有不相关来源或预算耗尽仍为 blocker。部分下游投影保持 retained，
-直至全部已采纳来源以匹配 lineage 实际回读。省略 `--execute` 可只读回读；省略
-`--public-github` 不探测该 provider。没有持久开关需要卸载。部分、空或失败证据
+直至全部已采纳来源以匹配 lineage 实际回读。省略 `--execute` 可只读回读；传入
+`--no-auto-detect`（或不带 `--public-github` 的显式 `--provider-inventory-json`）
+可关闭默认 provider 就绪探测。没有持久开关需要卸载。部分、空或失败证据
 保留原始来源退路；字面匹配不证明语义结论或证据完整性。
 
 Real qualification (anonymous network reads, disposable synthetic ledger):

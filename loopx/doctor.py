@@ -626,6 +626,44 @@ def optional_installation_script_check(
     }
 
 
+def _promotion_goal_segment(goal_id: object) -> str | None:
+    segment = str(goal_id or "").strip()
+    if not segment or segment in {".", ".."} or "/" in segment or "\\" in segment:
+        return None
+    return segment
+
+
+def _promotion_artifact_exists(
+    raw_path: object,
+    *,
+    extension: str,
+    runtime_root: Path,
+    goal_id: str | None,
+) -> bool:
+    """Stored path, or the same-named regular file copied into this goal's runs."""
+
+    text = str(raw_path or "")
+    path = Path(text)
+    # Path("") is ".", so a missing path still probes the working directory.
+    # That matches the previous ``Path(stored).exists()`` check.
+    if str(path):
+        try:
+            if path.exists():
+                return True
+        except (OSError, RuntimeError):
+            # A historical path can name an account that does not exist here.
+            # It is evidence of missing promotion output, not a doctor failure.
+            pass
+    segment = _promotion_goal_segment(goal_id)
+    stored = text.strip()
+    if segment is None or not stored:
+        return False
+    from .control_plane.quota.ledger_readback import relocated_run_artifact_path
+
+    runs_dir = runtime_root / "goals" / segment / "runs"
+    return relocated_run_artifact_path(runs_dir, segment, stored, extension) is not None
+
+
 def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = None) -> dict[str, Any]:
     goals_dir = runtime_root / "goals"
     runtime_index = runtime_root / PROMOTION_READINESS_RUNTIME_INDEX
@@ -664,11 +702,12 @@ def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = N
             classification = str(item.get("classification") or "")
             if classification not in PROMOTION_READINESS_CLASSIFICATIONS:
                 continue
-            json_path = Path(str(item.get("json_path") or ""))
-            markdown_path = Path(str(item.get("markdown_path") or ""))
             target_matches = (
                 runtime_matches if source == "runtime_release_ledger" else legacy_matches
             )
+            # Legacy indexes live under goals/<id>/runs. A release-ledger row
+            # remaps only when its own goal id and path use that same shape.
+            remap_goal_id = current_goal_id or _promotion_goal_segment(item.get("goal_id"))
             target_matches.append(
                 {
                     "available": True,
@@ -683,8 +722,18 @@ def latest_promotion_readiness_event(runtime_root: Path, goal_id: str | None = N
                     "delivery_batch_scale": item.get("delivery_batch_scale"),
                     "delivery_outcome": item.get("delivery_outcome"),
                     "recommended_action": item.get("recommended_action"),
-                    "json_exists": json_path.exists() if str(json_path) else False,
-                    "markdown_exists": markdown_path.exists() if str(markdown_path) else False,
+                    "json_exists": _promotion_artifact_exists(
+                        item.get("json_path"),
+                        extension=".json",
+                        runtime_root=runtime_root,
+                        goal_id=remap_goal_id,
+                    ),
+                    "markdown_exists": _promotion_artifact_exists(
+                        item.get("markdown_path"),
+                        extension=".md",
+                        runtime_root=runtime_root,
+                        goal_id=remap_goal_id,
+                    ),
                 }
             )
         if runtime_matches:
@@ -1248,7 +1297,11 @@ def collect_doctor(
             "exists": bool(project_skill.get("exists")),
             "delivery_hints": bool(project_skill.get("required_phrases")),
             "route_conflict": bool(project_skill.get("route_conflict")),
-            "candidate_paths": list(project_skill.get("candidate_paths") or []),
+            "candidate_paths": (
+                list(candidate_paths)
+                if isinstance((candidate_paths := project_skill.get("candidate_paths")), (list, tuple))
+                else []
+            ),
         },
         "skill_delivery": skill_delivery,
         "skills": skills,

@@ -447,6 +447,9 @@ def test_public_cli_diagnostic_reentry_preserves_guard_identity_without_spending
     corrected["path_delta"]["observed_reality"] = (
         "The route and evidence are valid; add the missing final-outcome claim."
     )
+    corrected["stride_decision"] = results[0]["replan_action_packet"][
+        "stride_control"
+    ]["minimal_example"]
     written = refresh_state_run(
         registry_path=registry,
         runtime_root_override=str(runtime),

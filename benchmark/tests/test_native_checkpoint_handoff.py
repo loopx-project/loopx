@@ -422,7 +422,7 @@ def test_actual_worker_captures_pending_replan_before_native_model(tmp_path, exp
     run("task-lease", "acquire", "--goal-id", cli.GOAL_ID, "--todo-id", cli.TODO_ID,
         "--owner", cli.AGENT_ID, "--idempotency-key", "source-work")
     configured = run("configure-goal", "--goal-id", cli.GOAL_ID,
-        "--execution-replan-after-turns", "6", "--execution-stride-strategy", "evidence_conditioned_v1",
+        "--execution-replan-after-turns", "6",
         "--explore-mode", explore_mode, "--execute")
     assert configured["after"]["execution_profile"]["replan_after_effective_turns"] == 6
 

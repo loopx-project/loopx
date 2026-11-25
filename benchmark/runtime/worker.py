@@ -15,12 +15,14 @@ from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 
+from collections.abc import Mapping
+
 from benchmark.runtime.codex import (
     Execution,
-    explicit_turn_display,
+    claim_ttl_seconds_from_env,
+    reject_retired_turn_display,
     prepare_codex_home,
     process_environment,
-    turn_envelope_receipt,
 )
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
@@ -82,8 +84,21 @@ def loopx_command(env: dict[str, str]) -> list[str]:
     ]
 
 
+def _claim_ttl_guidance(env: Mapping[str, str]) -> str:
+    ttl = claim_ttl_seconds_from_env(env)
+    if ttl is None:
+        return ""
+    return (
+        f"\nLong-wake lease TTL opt-in (`LOOPX_BENCHMARK_CLAIM_TTL_SECONDS={ttl}`): "
+        f"when claiming a Todo with `loopx todo claim`, pass `--ttl-seconds {ttl}` "
+        f"(or renew via `loopx task-lease renew --ttl-seconds {ttl}` before expiry) "
+        "so long execution wakes retain their lease.\n"
+    )
+
+
 def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
-                   decision_handoff_socket: str | None = None) -> str:
+                   decision_handoff_socket: str | None = None,
+                   resume_codex_session_id: str | None = None) -> str:
     command = loopx_command(env) + [
         "heartbeat-prompt",
         "--thin",
@@ -102,19 +117,17 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
     ]
     if not native_goal:
         command += ["--turn-instance-id", turn_id]
-    display = explicit_turn_display(env)
+        if resume_codex_session_id:
+            command += ["--resume-codex-session-id", resume_codex_session_id]
+    reject_retired_turn_display(env)
     context_dir = env.get("LOOPX_CODEX_CONTEXT_DIR") if env.get("LOOPX_CONTEXT_DELIVERY") == "on" else None
-    if display.complete_turn or display.turn_envelope or decision_handoff_socket is not None or context_dir:
+    if decision_handoff_socket is not None or context_dir:
         if native_goal:
             raise ValueError("TurnEnvelope capture requires a host-owned heartbeat Turn")
         # Wake identity comes from this worker, never from model-authored text.
         root = Path(env["LOOPX_WAKE_LOG_DIR"]) / turn_id / "decisions"
         root.mkdir(mode=0o700, exist_ok=False)
         command += ["--decision-output-root", str(root)]
-        if display.turn_envelope:
-            command += ["--turn-envelope"]
-        if display.complete_turn:
-            command += ["--complete-turn"]
         if decision_handoff_socket is not None:
             command += ["--decision-handoff-socket", decision_handoff_socket]
         if context_dir:
@@ -140,7 +153,12 @@ def heartbeat_body(env: dict[str, str], turn_id: str, *, native_goal: bool,
 
     from .interruption_recovery import recovery_handoff
     _, handoff = recovery_handoff(env)
-    return body + runtime_execution_guidance(env) + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
+    return (
+        body
+        + runtime_execution_guidance(env)
+        + _claim_ttl_guidance(env)
+        + ("\nRecovery handoff (content only):\n" + handoff if handoff else "")
+    )
 
 
 @contextmanager
@@ -477,13 +495,32 @@ def run_native_goal(
                 receipt["native_goal"] = compact_native_goal_receipt(observed[-1])
 
 
+def _normalize_runtime_root(runtime_root: str, project: str) -> str:
+    """Resolve LOOPX_RUNTIME_ROOT in filesystem order relative to LOOPX_PROJECT."""
+    root = Path(runtime_root)
+    if root.is_absolute():
+        return os.path.realpath(root)
+    return os.path.realpath(os.path.join(os.path.realpath(project), root))
+
+
+def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) -> list[str]:
+    if stage != "plan" or execution.sandbox != "workspace-write":
+        return []
+    runtime_root = env.get("LOOPX_RUNTIME_ROOT")
+    if not runtime_root:
+        return []
+    normalized = _normalize_runtime_root(runtime_root, env["LOOPX_PROJECT"])
+    return ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([normalized])}"]
+
+
 def native_command(env, execution, stage, wake, session_wake, *, native_hook_args=()):
     if session_wake is None:
         # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
         return [
             env["CODEX_BIN"], "exec", "--json", "--skip-git-repo-check",
             "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
-            *(["-c", "features.goals=false", "--output-schema", str(wake / "planning-schema.json"),
+            *(["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage),
+               "--output-schema", str(wake / "planning-schema.json"),
                "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
             *native_hook_args,
             "-",
@@ -507,7 +544,7 @@ def native_command(env, execution, stage, wake, session_wake, *, native_hook_arg
             # native shell whose frozen settings still record the requested on.
             command[-1:-1] = ["-c", 'shell_environment_policy.set.LOOPX_CONTEXT_DELIVERY="off"']
     if stage == "plan":
-        command[-1:-1] = ["-c", "features.goals=false"]
+        command[-1:-1] = ["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage)]
     return command
 
 
@@ -532,64 +569,13 @@ def _phase_timeout(timeout: float | None, deadline: float | None) -> tuple[float
     return timeout, False
 
 
-def _qualify_short_envelope(env: dict[str, str], receipt: dict) -> bool:
-    """Verify the pinned Short carrier, returning False if the phase expires."""
-    from loopx.control_plane.quota.turn_envelope import (
-        COMPLETE_TURN_DECISION_VERSION,
-        TURN_ENVELOPE_SCHEMA_VERSION,
-    )
-
-    contract = {
-        "expected_schema_version": TURN_ENVELOPE_SCHEMA_VERSION,
-        "observed_schema_version": None,
-        "eligible": False,
-    }
-    receipt.update(quota_input_contract=contract, host_invoked=False)
-    # This preview runs the same product projection without a Turn, capture,
-    # or admission. Keep optional delivery out of the carrier observation.
-    command = loopx_command(env) + [
-        "quota", "should-run", "--dry-run", "--runtime-profile", "generic_cli",
-        "--goal-id", env["LOOPX_GOAL_ID"], "--agent-id", env["LOOPX_AGENT_ID"],
-        "--available-capability", "shell", "--available-capability", "filesystem_write",
-        "--turn-envelope", "--context-delivery", "off",
-    ]
-    deadline = env.get("LOOPX_PHASE_DEADLINE_EPOCH")
-    timeout, phase_limited = _phase_timeout(120, float(deadline) if deadline else None)
-    try:
-        result = subprocess.run(command, cwd=env["LOOPX_PROJECT"], env=env,
-                                capture_output=True, text=True, timeout=timeout, check=True)
-        payload = read_json(result.stdout)
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        if phase_limited and isinstance(exc, subprocess.TimeoutExpired):
-            receipt.update(ok=True, budget_exhausted=True)
-            return False
-        raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.") from exc
-    if payload.get("ok") is not True:
-        raise ValueError("Short envelope requires a successful v0 quota preview from the pinned product.")
-    observed = payload.get("schema_version")
-    if observed in (TURN_ENVELOPE_SCHEMA_VERSION, COMPLETE_TURN_DECISION_VERSION):
-        contract["observed_schema_version"] = observed
-    if observed != TURN_ENVELOPE_SCHEMA_VERSION:
-        raise ValueError("Short envelope requires a verified v0 response from the pinned product. "
-                         "Use the recorded historical source pins for that arm.")
-    if checkpoint_path := env.get("LOOPX_CHECKPOINT_REQUEST"):
-        from .checkpoint import read_checkpoint_request
-
-        request, _ = read_checkpoint_request(checkpoint_path)
-        if request.get("trigger") == "fresh_replan":
-            raise ValueError("Short envelope requires the direct v0 guard. "
-                             "A fresh_replan checkpoint preloads a different view.")
-    contract["eligible"] = True
-    return True
-
-
 def run_once(env: dict[str, str]) -> dict:
     if env.get("LOOPX_CONTEXT_DELIVERY", "off") not in {"off", "on"}:
         raise ValueError("LOOPX_CONTEXT_DELIVERY supports only off or on")
     stop_hook = env.get("LOOPX_OFFICIAL_STOP_HOOK", "0")
     if stop_hook not in {"0", "1"}:
         raise ValueError("LOOPX_OFFICIAL_STOP_HOOK must be 0 or 1")
-    display = explicit_turn_display(env)
+    reject_retired_turn_display(env)
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
         context=env.get("LOOPX_ITERATION_CONTEXT"),
@@ -598,11 +584,9 @@ def run_once(env: dict[str, str]) -> dict:
                          if env.get("LOOPX_CODEX_TURN_TIMEOUT_SEC") else None),
         validation_command=json.loads(env.get("LOOPX_VALIDATION_COMMAND_JSON", "[]")),
         task_entry=env.get("LOOPX_TASK_ENTRY"),
-        turn_envelope=display.turn_envelope,
         context_delivery=env.get("LOOPX_CONTEXT_DELIVERY"),
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
-        complete_turn=display.complete_turn,
         official_stop_hook=stop_hook == "1",
     )
     request_admission = False
@@ -625,6 +609,10 @@ def run_once(env: dict[str, str]) -> dict:
     stdout_path, stderr_path = host_output_paths(wake)
     home = Path(env["LOOPX_CODEX_HOME"])
     env = process_environment(home, base=env)
+    if env.get("LOOPX_RUNTIME_ROOT"):
+        env["LOOPX_RUNTIME_ROOT"] = _normalize_runtime_root(
+            env["LOOPX_RUNTIME_ROOT"], env["LOOPX_PROJECT"]
+        )
     # Preserve this trial's resolved off/on choice in both preflight and solver
     # subprocesses; an explicit off must not inherit a machine-wide default.
     env["LOOPX_CONTEXT_DELIVERY"] = execution.context_delivery
@@ -649,7 +637,6 @@ def run_once(env: dict[str, str]) -> dict:
         "task_entry": execution.task_entry,
         **({"execution_observation": observation_producer}
            if observation_producer is not None else {}),
-        **turn_envelope_receipt(explicit=False, complete=execution.complete_turn),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"official_stop_hook": True} if execution.official_stop_hook else {}),
         **({"native_child_limit": execution.native_child_limit}
@@ -696,8 +683,7 @@ def run_once(env: dict[str, str]) -> dict:
                 execution, timeout_seconds=(remaining - reserve if execution.timeout_seconds is None
                                              else min(execution.timeout_seconds, remaining - reserve))
             )
-        if execution.turn_envelope and not _qualify_short_envelope(env, receipt):
-            return receipt
+        claim_ttl_seconds = claim_ttl_seconds_from_env(env)
         prepare_codex_home(
             home,
             execution=execution,
@@ -712,6 +698,7 @@ def run_once(env: dict[str, str]) -> dict:
             model_catalog=(
                 Path(env["LOOPX_MODEL_CATALOG"]) if env.get("LOOPX_MODEL_CATALOG") else None
             ),
+            claim_ttl_seconds=claim_ttl_seconds,
         )
         native_hook_args = ()
         if execution.official_stop_hook:
@@ -762,14 +749,11 @@ def run_once(env: dict[str, str]) -> dict:
             body = render_planning_prompt(planning_before, env)
             (wake / "planning-input.json").write_text(body, encoding="utf-8")
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
-        elif execution.mode in {"heartbeat", "loopx-goal"}:
-            body = heartbeat_body(env, turn_id, native_goal=execution.native_goal,
-                                  decision_handoff_socket=checkpoint_wake.socket_path)
-            if execution.turn_envelope:
-                receipt.update(turn_envelope_receipt(explicit=True))
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
         session_wake = None
+        fresh_context_prefix = ""
+        resumed_session_id = None
         if execution.mode in {"heartbeat", "turn"} and not (execution.mode == "turn" and stage == "execute"):
             from benchmark.runtime.sessions import BenchmarkSessionWake
 
@@ -780,13 +764,20 @@ def run_once(env: dict[str, str]) -> dict:
             session_wake = BenchmarkSessionWake(env, session_execution, receipt)
             if expected_session and session_wake.session_id != expected_session:
                 raise ValueError("Host retry requires its original Codex session")
+            if not expected_session and session_wake.binding is not None:
+                resumed_session_id = session_wake.session_id
             receipt["host_invoked"] = False
             if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_WARM_START"):
                 from benchmark.runtime.checkpoint_session_refresh import prepare_session_refresh
 
-                body = prepare_session_refresh(env, session_wake, wake) + body
+                fresh_context_prefix = prepare_session_refresh(env, session_wake, wake)
                 if expected_session and session_wake.session_id != expected_session:
                     raise ValueError("Host retry cannot replace its original Codex session")
+                if fresh_context_prefix or session_wake.session_id != resumed_session_id:
+                    resumed_session_id = None
+        if stage != "plan" and execution.mode in {"heartbeat", "loopx-goal"}:
+            body = fresh_context_prefix + heartbeat_body(env, turn_id, native_goal=execution.native_goal,
+                decision_handoff_socket=checkpoint_wake.socket_path, resume_codex_session_id=resumed_session_id)
         if stage == "execute" and execution.mode == "heartbeat" and env.get("LOOPX_CHECKPOINT_REQUEST"):
             from benchmark.runtime.checkpoint import capture_before_replan
 
@@ -914,7 +905,12 @@ def run_once(env: dict[str, str]) -> dict:
                 )
             if (execution.mode == "heartbeat" and stage == "execute"
                     and not receipt["ok"] and not receipt.get("budget_exhausted")):
-                receipt["host_failure"] = heartbeat_host_failure(wake, receipt)
+                try:
+                    receipt["host_failure"] = heartbeat_host_failure(wake, receipt)
+                except Exception as exc:
+                    receipt["host_failure_record_error"] = (
+                        f"{type(exc).__name__}: {str(exc)[:300]}"
+                    )
             (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt
 

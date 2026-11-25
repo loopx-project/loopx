@@ -668,6 +668,7 @@ def render_thin_heartbeat_task_body(
     thin_prompt_command: str,
     reward_memory_rule: str = REWARD_MEMORY_OUTCOME_COMPACT_RULE,
     antigravity_app: bool = False,
+    resumed_codex_session: bool = False,
 ) -> str:
     policy_tail = _render_compact_policy_tail(
         material_queue_rule=material_queue_rule,
@@ -687,6 +688,21 @@ def render_thin_heartbeat_task_body(
     policy_sections = "".join(
         f"\n\n{section}" for section in (reward_memory_rule, policy_tail) if section
     )
+    if resumed_codex_session:
+        return f"""Resume `{goal_id}` through this Turn's captured decision.{scope_sentence}
+
+```sh
+{render_turn_bootstrap()}
+{pr_review_pre_quota_instruction}{quota_guard_command}
+```
+
+Read this capture's `interaction_contract`, `agent_channel.work_context` and required_reads before work. Pass a known Todo as `--todo-id` on the first guard, or follow selection_command. Honor current claim/lease and workspace requirements. Follow projected next_cli_actions for preparation or recovery and current approval, replan, scheduler and Stop obligations. Recover stale facts from the original digest-bound capture. Pass only observed runtime capabilities.
+
+{HOST_LOOP_SAFETY_RULE}
+Size and validate work by evidence, risk and the active Goal. Preserve cumulative acceptance, use loopx-project for material Goal or acceptance changes, and checkpoint evidenced progress with the original Turn.
+{HEARTBEAT_NOTIFICATION_RULE_SHORT}
+{HEARTBEAT_VISION_WRITEBACK_RULE_SHORT}
+`agent_read_required`: drain, read and triage before work, then settle or ACK. Todo completion still owes settlement. Read back uncertain effects before retrying. Preserve progress and yield at a projected wait, with fresh admission on resume. No spend for waiting alone.{policy_sections}"""
     return f"""Advance `{goal_id}` from {active_state}.
 
 {RUNTIME_EXECUTION_ROUTING_RULE}

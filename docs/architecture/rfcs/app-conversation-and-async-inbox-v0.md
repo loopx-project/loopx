@@ -1044,7 +1044,7 @@ packaged UI with synthetic fixtures and qualify the chosen real query separately
 | Boundary inspected | Existing implementation | Gap to address through that owner |
 | --- | --- | --- |
 | App free text | `personal-workspace-page.tsx`, `workspace-action-form.tsx` | Retire browser intent classification for Goal creation, Todo changes, assignment and scheduling. All free text reaches Chat intact; explicit controls open typed forms and reviewed previews |
-| Chat request and observation | `chat_ingress.py`, `chat_store.py`, dashboard `data/chat.ts` | Existing client ingress/Turn identity and event cursors are assets. Prove response-loss, same-key/different-payload and reload recovery before claiming durable end-to-end entry |
+| Chat request and observation | `chat/ingress.py`, `chat_store.py`, dashboard `data/chat.ts` | Existing client ingress/Turn identity and event cursors are assets. Prove response-loss, same-key/different-payload and reload recovery before claiming durable end-to-end entry |
 | Collaboration | `control_plane/collaboration/inbox.py`, typed collaboration rules and return-delivery owner | Already Agent-neutral despite legacy storage names. Preserve decision/read/return distinctions; do not build another manager-only inbox |
 | Operator inbox | `control_plane/work_items/operator_inbox.py` | A source contract and shared urgency projection already exist; inspect and migrate the real pending/read/ack lifecycle rather than adding another generic wrapper |
 | Lark transport | `extensions/lark/event_inbox.py`, `routed_inbox.py`, `inbox_reply.py` and reaction adapter | Provider normalization, idempotent capture, read/processed records and reply recovery coexist with Lark ids/policy. Extract only demonstrated reusable semantics; keep authentication, addressing, provider ids, reactions and message limits in the adapter |
@@ -1762,6 +1762,14 @@ Attached hosts, other executors and linked/Lark conversations reject this new
 input before admission; this is not a file-sync or arbitrary-path grant. Images
 retain their existing routes. Source delivery does not prove comprehension,
 automatic material adoption, full GQ06 qualification or lower model cost.
+
+A local managed Codex Goal can also return a requested Markdown or plain-text
+file in its web reply. Open the original conversation and choose **Download
+source**. Reopening the message retrieves the captured bytes even after the
+workspace file changes. The Agent supplies the filename, MIME type, byte count
+and inline base64 data in the reply envelope. The same count, size and UTF-8
+checks apply. A file containing a protected local path is withheld and the
+answer reports the delivery failure. LoopX never opens a path from the reply.
 
 ### Default Lark private images reuse native Turn attachments
 

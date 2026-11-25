@@ -18,7 +18,7 @@ from ...agent_registry import registered_agent_ids_from_registry
 from ...command_invocation import loopx_cli_argv
 from ..agents.workspace_guard import _git_worktree_root
 from .authority_source_capture import authority_registry_source
-from ..runtime.time import now_local_iso as now_local
+from ..runtime.time import now_local_iso
 from ..effect_runtime import (
     CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,
     EffectRuntimeResponseAmbiguous,
@@ -259,7 +259,7 @@ def claim_canonical_todo_if_promoted(
                 if task_lease_idempotency_key is not None
                 else None
             ),
-            "observed_at": now_local(),
+            "observed_at": now_local_iso(timespec="milliseconds"),
             "dry_run": dry_run,
         },
         timeout=CANONICAL_AUTHORITY_WRITE_TIMEOUT_SECONDS,

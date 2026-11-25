@@ -1257,7 +1257,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert applied["lease_changed"] is True
     assert applied["lease"]["owner"] == "agent-a"
     assert applied["lease"]["idempotency_key"] == "turn:atomic-cli-claim"
-    assert applied["lease"]["write_scopes"] == ["loopx/control_plane/**"]
+    assert applied["lease"]["write_scopes"] == []
     replay = json.loads(
         subprocess.run(
             command,
@@ -1271,6 +1271,7 @@ def test_canonical_hard_lease_claim_cli_atomically_acquires_ownership(
     assert replay["original_receipt"] == applied["original_receipt"]
     after = list_goal_todos(registry_path=registry_path, goal_id="goal-a")
     assert after["todos"][0]["claimed_by"] == "agent-a"
+    assert after["todos"][0]["required_write_scopes"] == ["loopx/control_plane/**"]
     assert not state_file.exists()
 
     edit = [sys.executable, "-m", "loopx.cli", "--format", "json", "--registry",

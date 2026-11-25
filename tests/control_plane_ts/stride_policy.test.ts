@@ -38,8 +38,8 @@ test("an absent recorded decision roundtrips without satisfying an enabled strid
       assert.equal(missing.accepted, false, kind);
       assert.equal(missing.reason_code, "stride_decision_required", kind);
       assert.equal(projectReplanSemantics({operation: "qualify", obligation: {
-        ...obligation, replan_context: {stride_strategy: "off"}},
-        observation_delta, agent_vision: vision}).accepted, true, kind);
+        ...obligation, replan_context: {stride_strategy: "off", context_id: contextId}},
+        observation_delta, agent_vision: vision}).reason_code, "stride_decision_required", kind);
     }
   }
   for (const value of [false, 0, "", [], {}]) {
@@ -119,8 +119,8 @@ test("concrete independent plans retain action choice and fit the shared vision 
     assert.deepEqual(decision.axes, proposal.axes);
     assert.equal(decision.action, "switch");
   }
-  assert.equal(strideControlContract({stride_strategy: "off"}), null);
-  const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"})!;
+  assert.equal(strideControlContract({stride_strategy: "off"}).strategy_version, "evidence_conditioned_v1");
+  const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"});
   assert.deepEqual(contract.actions, ["grow", "switch", "verify"]);
   assert.equal(Object.hasOwn(contract, "adjustments"), false);
   const prepared = buildVisionCheckpoint(request);
@@ -131,8 +131,8 @@ test("concrete independent plans retain action choice and fit the shared vision 
 });
 
 test("goal-value questions are enabled review input, not persisted decisions or extra admission gates", () => {
-  assert.equal(strideControlContract({stride_strategy: "off"}), null);
-  const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"}, proposal.reference_obligation_id)!;
+  assert.equal(strideControlContract({stride_strategy: "off"}).strategy_version, "evidence_conditioned_v1");
+  const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1"}, proposal.reference_obligation_id);
   assert.deepEqual(Object.keys(contract.decision_value_review as object),
     ["work_slice", "route_distance", "validation_scope"]);
   const validation = (contract.decision_value_review as Record<string, string>).validation_scope;
@@ -173,7 +173,7 @@ test("goal-value questions are enabled review input, not persisted decisions or 
 });
 
 test("invalid, ambiguous, oversized and misplaced control proposals fail authoring", () => {
-  for (const patch of [{basis: "plateau_from_elapsed_time"}, {strategy_version: "future_v2"},
+  for (const patch of [{basis: "plateau_from_elapsed_time"}, {strategy_version: "future_v2"}, {strategy_version: undefined},
     {axes: {work_slice: "shrink", route_distance: "grow", validation_scope: "grow"}},
     {action: "shrink"}, {action: "hold"}, {action: "continue"}, {action: undefined}, {axis_reasons: {}},
     {axes: {...proposal.axes, work_slice: {plan: "", reason: "Incomplete scope."}}},
@@ -205,7 +205,7 @@ test("an accepted schema and vector do not authorize work or certify gain; stale
   assert.equal(missing.accepted, false);
   assert.equal(missing.reason_code, "stride_decision_required");
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: {...obligation,
-    replan_context: {stride_strategy: "off"}}, agent_vision: legacyVision}).accepted, true);
+    replan_context: {stride_strategy: "off", context_id: contextId}}, agent_vision: legacyVision}).reason_code, "stride_decision_required");
   assert.equal(stale.accepted, false);
   assert.equal(stale.reason_code, "stride_reference_obligation_mismatch");
   assert.equal(projectReplanSemantics({operation: "qualify", obligation, stride_decision: proposal}).accepted, false);
@@ -226,7 +226,7 @@ for (const kind of decisionReviewTriggers) test(`${kind} records stride even whe
     assert.equal(projectReplanSemantics({operation: "qualify", obligation,
       observation_delta, agent_vision: authored}).accepted, true, outcome);
     assert.equal(projectReplanSemantics({operation: "qualify", obligation: {...obligation,
-      replan_context: {stride_strategy: "off"}}, observation_delta}).accepted, true, outcome);
+      replan_context: {stride_strategy: "off", context_id: contextId}}, observation_delta}).reason_code, "stride_decision_required", outcome);
   }
   const stale = projectReplanSemantics({operation: "qualify", obligation,
     observation_delta: {delta_kinds: ["new_concrete_blocker"]},
@@ -258,10 +258,7 @@ for (const kind of decisionReviewTriggers) test(`${kind} records stride even whe
 for (const kind of decisionReviewTriggers) test(`${kind} can record a terminal decision without manufacturing a continuing path`, () => {
   const terminalPacket = {...packet,
     state: "no_followup", path_delta: {...packet.path_delta, outcome: "stop"}};
-  assert.throws(() => buildVisionCheckpoint({...request, agent_vision_packet: terminalPacket}), /stride_decision requires/);
-  assert.throws(() => buildVisionCheckpoint({...request, allow_terminal_stride_path: "true",
-    agent_vision_packet: terminalPacket}), /allow_terminal_stride_path/);
-  const terminal = buildVisionCheckpoint({...request, allow_terminal_stride_path: true,
+  const terminal = buildVisionCheckpoint({...request,
     agent_vision_packet: terminalPacket}).agent_vision;
   const obligation = {obligation_id: proposal.reference_obligation_id,
     triggers: [{kind}],
@@ -288,7 +285,7 @@ for (const kind of decisionReviewTriggers) test(`${kind} cannot be silently sett
     selected_obligation_id: proposal.reference_obligation_id,
     transition_candidates: [candidate]};
   assert.equal(projectReplanSemantics({...transition, stride_strategy: "evidence_conditioned_v1"}).semantic_delta, null);
-  assert.deepEqual(projectReplanSemantics({...transition, stride_strategy: "off"}).semantic_delta, semantic_delta);
+  assert.equal(projectReplanSemantics({...transition, stride_strategy: "off"}).semantic_delta, null);
   const bound = projectReplanSemantics({operation: "receipt_bound_obligation", guard_scoped: true,
     selected_obligation_id: proposal.reference_obligation_id, current_obligation: obligation,
     transition_candidates: [candidate], replay_phase: "open", stride_strategy: "evidence_conditioned_v1"});
@@ -394,7 +391,7 @@ test("recorded fixed-vector decisions remain readable but cannot be newly author
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: {obligation_id: proposal.reference_obligation_id,
     triggers: [{kind: "vision_acceptance_gap"}], replan_context: {stride_strategy: "evidence_conditioned_v1"}}, agent_vision: oldVision}).accepted, false);
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: {obligation_id: proposal.reference_obligation_id,
-    triggers: [{kind: "vision_acceptance_gap"}], replan_context: {stride_strategy: "off"}}, agent_vision: oldVision}).accepted, true);
+    triggers: [{kind: "vision_acceptance_gap"}], replan_context: {stride_strategy: "off"}}, agent_vision: oldVision}).reason_code, "stride_decision_required");
   assert.throws(() => normalizeRecordedStrideDecision({...recorded, axes: {work_slice: "grow"}}), /historical/);
 });
 
@@ -436,7 +433,7 @@ test("independent v1 records preserve their values but cannot satisfy a current 
   assert.equal(projectReplanSemantics({operation: "qualify", obligation,
     agent_vision: {...packet, stride_decision: historical}}).reason_code, "stride_decision_required");
   assert.equal(projectReplanSemantics({operation: "qualify", obligation: {...obligation,
-    replan_context: {stride_strategy: "off"}}, agent_vision: {...packet, stride_decision: historical}}).accepted, true);
+    replan_context: {stride_strategy: "off"}}, agent_vision: {...packet, stride_decision: historical}}).reason_code, "stride_decision_required");
   assert.throws(() => normalizeStrideDecision({...historical, action: "verify"}), /unsupported/);
   const withReviews = {...proposal,
     previous_review: {reference_decision_ref: "replan-decision-" + "b".repeat(24), adoption: "executed",
@@ -456,11 +453,10 @@ test("shared replan guidance retains stride-off isolation and bounded enabled au
       replan_context: {stride_strategy: strategy, context_id: contextId}}});
   const off = requirements("off");
   const enabled = requirements("evidence_conditioned_v1");
-  assert.equal(Object.hasOwn(off, "stride_control"), false);
-  assert.deepEqual(off.planning_guidance, enabled.planning_guidance);
+  assert.deepEqual(off, enabled);
   assert.ok((off.planning_guidance as string[]).length > 0);
-  assert.equal(((off.writeback_contract as Record<string, unknown>).required_fields as string[])
-    .includes("agent_vision.stride_decision"), false);
+  assert.ok(((off.writeback_contract as Record<string, unknown>).required_fields as string[])
+    .includes("agent_vision.stride_decision"));
   assert.ok(((enabled.writeback_contract as Record<string, unknown>).required_fields as string[])
     .includes("agent_vision.stride_decision"));
   const contract = strideControlContract({stride_strategy: "evidence_conditioned_v1", context_id: contextId}, proposal.reference_obligation_id)!;

@@ -50,10 +50,14 @@ def _packet(request: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def vision_patch_action(request: Mapping[str, Any]) -> ScriptedExecToolAction:
-    # Authored independently from the implementation under test. The path is
-    # still open: evidence confirms reader-by-default, not completion of a Goal.
     packet = _packet(request)
     control = packet.get("stride_control") or packet["replan_action_packet"]["stride_control"]
+    return _vision_patch_with_stride(control)
+
+
+def _vision_patch_with_stride(control: Mapping[str, Any]) -> ScriptedExecToolAction:
+    # Authored independently from the implementation under test. The path is
+    # still open: evidence confirms reader-by-default, not completion of a Goal.
     assert control["schema_version"] == "stride_decision_v2"
     assert control["strategy_version"] == "evidence_conditioned_v1"
     decision = {
@@ -167,12 +171,11 @@ def _qualify(tmp_path: Path, actions: list[Any]) -> dict[str, Any]:
 
 
 def test_projected_module_readers_complete_native_shell_closeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
     transport = _vision_transport([
-        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction(fixture.quota_guard_command + " --context-delivery on --delta-delivery off"),
         ScriptedExecToolAction("cat fixture/permission-config.json"),
         vision_patch_action, projected_refresh, projected_spend,
     ])
@@ -205,6 +208,64 @@ def test_projected_module_readers_complete_native_shell_closeout(
     assert decisions[0]["reference_context_id"] == control["reference_context_id"]
     assert decisions[0]["reference_obligation_id"] == control["reference_obligation_id"]
     assert decisions[0]["schema_version"] == "stride_decision_v2"
+
+
+def test_default_native_first_read_reaches_inline_vision_writeback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
+    fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+    selected: dict[str, Any] = {}
+    pages = bytearray()
+    missing: list[str] = []
+
+    def choose(request: Mapping[str, Any]) -> ScriptedExecToolAction | ScriptedAssistantAction:
+        latest = request["messages"][-1]
+        if latest["role"] != "tool":
+            # Choose the inline input. The ordinary first-read selection still
+            # has to expose the writer; the staged route is exercised above.
+            return ScriptedExecToolAction(fixture.quota_guard_command + " --include-detail vision")
+        if not latest["content"]:
+            refresh = selected["/interaction_contract/cli_channel/next_cli_actions"][0]
+            return ScriptedExecToolAction(refresh.replace(
+                "<path-to-evidence-linked-goal-vision-replan-contract-v0.json>", "decision.json",
+            ))
+        reply = json.loads(latest["content"])
+        schema = reply.get("schema_version")
+        if schema == "context_capture_navigation_v1":
+            return ScriptedExecToolAction(reply["first_read_command"])
+        if schema == "context_capture_selection_page_v1":
+            assert reply["offset"] == len(pages)
+            pages.extend(reply["content"].encode())
+            if not reply["eof"]:
+                return ScriptedExecToolAction(reply["next_command"])
+            selected.update((row["pointer"], row["value"]) for row in json.loads(pages)["selections"])
+            assert "/replan_action_packet/review" not in selected
+            missing.extend(path for path in (
+                "/replan_action_packet/writeback_contract",
+                "/replan_action_packet/stride_control/minimal_example",
+                "/interaction_contract/cli_channel/next_cli_actions",
+            ) if path not in selected)
+            if missing:
+                return ScriptedAssistantAction("The default read omitted the bound Vision authoring fields.")
+            return ScriptedExecToolAction("cat fixture/permission-config.json")
+        if schema == "permission_config_contract_v0":
+            contract = selected["/replan_action_packet/writeback_contract"]
+            assert contract["vision_authoring"]["total_text_limit"] == 1800
+            assert "agent_vision.stride_decision" in contract["required_fields"]
+            example = selected["/replan_action_packet/stride_control/minimal_example"]
+            return _vision_patch_with_stride(example)
+        assert reply["ok"]
+        return ScriptedExecToolAction(selected["/interaction_contract/cli_channel/next_cli_actions"][1])
+
+    result = DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport([choose] * 40),
+    ).qualify(qualification_id="native-default-first-read-vision",
+              fixture_root=tmp_path / "actor", required_vision=True)
+    assert not missing, f"Default first read omitted {missing}"
+    assert result["qualification_passed"] is True, result
+    assert result["vision_closeout"]["original_obligation_closed"]
+    assert result["vision_closeout"]["spend_count"] == 1
 
 
 @pytest.mark.parametrize("context_mode", ["on", "off"])
@@ -264,9 +325,8 @@ def test_native_stride_rejection_cannot_write_or_spend(
 
 @pytest.mark.parametrize("change", ["source_hash", "decision_file", "other_module"])
 def test_native_shell_reader_bridge_does_not_expand_authority(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str,
+    tmp_path: Path, change: str,
 ) -> None:
-    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on")
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
 
     def capture(request: Mapping[str, Any]) -> ScriptedExecToolAction:
@@ -292,7 +352,8 @@ def test_native_shell_reader_bridge_does_not_expand_authority(
 
     result = DoubaoReplanSemanticActionBehaviorActor(
         api_key="test-only-placeholder", transport=ScriptedDoubaoExecTransport([
-            ScriptedExecToolAction(fixture.quota_guard_command), capture, invalid_reader, rejected,
+            ScriptedExecToolAction(fixture.quota_guard_command + " --context-delivery on --delta-delivery off"),
+            capture, invalid_reader, rejected,
         ]),
     ).qualify(qualification_id="native-reader-boundary",
               fixture_root=tmp_path / "actor", required_vision=True)
@@ -430,11 +491,14 @@ def test_native_host_does_not_qualify_unproven_closeout(tmp_path: Path, invalid:
 @pytest.mark.parametrize("passed", [True, False])
 def test_budget_boundary_still_requires_the_final_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, context_mode: str, passed: bool) -> None:
     monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", context_mode)
-    # Native capture/review/writeback consume the original forty-call budget.
+    # Staged capture/review/writeback consume the original forty-call budget.
     extra_reads = (32 if context_mode == "on" else 35) + (0 if passed else 1)
     fixture = _build_fixture(tmp_path / "oracle", required_vision=True)
+    guard = fixture.quota_guard_command
+    if context_mode == "on":
+        guard += " --context-delivery on --delta-delivery off"
     result = _qualify(tmp_path, [
-        ScriptedExecToolAction(fixture.quota_guard_command),
+        ScriptedExecToolAction(guard),
         ScriptedExecToolAction("cat fixture/permission-config.json"),
         *[ScriptedExecToolAction("printf inspected") for _ in range(extra_reads)],
         vision_patch_action, projected_refresh, projected_spend,

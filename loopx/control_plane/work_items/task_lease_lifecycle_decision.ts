@@ -4,6 +4,7 @@ import {leaseOwnerRejection as ownerRejection, type LeaseEligibilityTodo} from "
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { type JsonObject } from "../effect_program.ts";
 import { requireJsonObject, requireStringLiteral } from "../runtime_decode.ts";
+import {leaseEventTimestamp} from "./task_lease_record.ts";
 import {leaseEpoch, utcIsoformat, type LeaseRecord} from "./task_lease_acquire.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection} from "./task_lease_repository.ts";
@@ -309,7 +310,7 @@ export function decideTaskLeaseLifecycle(
  * or timestamps. Release retains the fence generation as historical evidence. */
 export function releasedTaskLeaseRecord(lease: LeaseRecord, at: Date): LeaseRecord {
   return {...lease, lease_epoch: leaseEpoch(lease), status: "released",
-    released_at: utcIsoformat(at), updated_at: utcIsoformat(at)};
+    released_at: leaseEventTimestamp(at), updated_at: leaseEventTimestamp(at)};
 }
 
 export function materializeTaskLeaseLifecycle(lease: LeaseRecord,
@@ -323,7 +324,7 @@ export function materializeTaskLeaseLifecycle(lease: LeaseRecord,
   return {...lease,
     ...(command.operation === "transfer" ? {owner: next.owner,
       idempotency_key: next.idempotency_key, lease_epoch: next.lease_epoch} : {}),
-    version: next.version, updated_at: utcIsoformat(at),
+    version: next.version, updated_at: leaseEventTimestamp(at),
     expires_at: utcIsoformat(new Date(at.valueOf() + command.ttl_seconds! * 1000))};
 }
 

@@ -24,6 +24,8 @@ import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.t
  * still checks ownership, deadline, permissions and user work. */
 const WORKER_EXITED_ERROR =
   "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
+const FILE_LOCK_TIMEOUT_ERROR_PATTERN =
+  /^file lock acquisition timed out \((?:recorded holder pid [1-9]\d*|lock busy, current holder unknown)\)$/;
 const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
 const REPORT_VALIDATOR_PREFIX =
   "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
@@ -68,7 +70,13 @@ function hasSingleManagerContextEvidence(basis: JsonObject, prior: JsonObject, e
   return requireJsonObject(basis.contexts[0], "watch context").schema_version === "manager_turn_context_v1";
 }
 
-function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, session: JsonObject): void {
+function admitMonitorRestartRecovery(
+  params: JsonObject,
+  request: JsonObject,
+  session: JsonObject,
+  legacySessionId?: string,
+  queuedTurnCount?: unknown,
+): void {
   if (request.monitor_restart_recovery === undefined) {
     if (params.monitor_restart_basis != null) throw new EffectRuntimeRequestError("watch recovery lacks its original request");
     return;
@@ -110,16 +118,19 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
     && requireJsonObject(basis.phases[0], "original watch phase").phase === "manager_context"
     && Array.isArray(events) && events.filter(kind => kind === "agent.phase").length === 1;
   // Post-context monitor failures (external signal outage, daemon worker exit,
-  // storage I/O error, or runtime unavailability) before any poll receipt or
-  // upstream model turn may recover once immediately and retry only after a
-  // bounded cooldown when strict single-context and zero-effect journal proofs
-  // hold; pre-context unknown worker launches remain closed.
+  // storage I/O or file lock timeout, or runtime unavailability) before any poll
+  // receipt or upstream model turn may recover once immediately and retry only
+  // after a bounded cooldown when strict single-context and zero-effect journal
+  // proofs hold; pre-context unknown worker launches remain closed.
   const postContextWatchRecoverable = hasSingleManagerContextEvidence(basis, prior, events) && (
     original.error_code === "runtime_unavailable"
+    || original.error_code === "lock_acquire_timeout"
     || original.error_code === "runtime_error" && (
       original.error === "steward monitor external signal source temporarily unavailable"
+      || original.error === "the portfolio scope changed after observation"
       || original.error === "disk I/O error"
       || original.error === WORKER_EXITED_ERROR
+      || (typeof original.error === "string" && FILE_LOCK_TIMEOUT_ERROR_PATTERN.test(original.error))
     )
   );
   const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;
@@ -128,9 +139,12 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
   const chainedPostContextWatchRecoverable = postContextWatchRecoverable
     && Number.isFinite(completedAtMs) && Number.isFinite(observedAtMs)
     && observedAtMs - completedAtMs >= MONITOR_RECOVERY_RETRY_COOLDOWN_MS;
+  const effectiveQueuedCount = queuedTurnCount !== undefined ? queuedTurnCount : params.queued_turn_count;
+  const originalSessionMatches = original.session_id === session.session_id
+    || (legacySessionId !== undefined && original.session_id === legacySessionId);
   if (Object.keys(recovery).join() !== "original_turn_id"
       || recovery.original_turn_id !== original.turn_id || typeof original.turn_id !== "string"
-      || !/^[a-f0-9]{32}$/.test(original.turn_id) || original.session_id !== session.session_id
+      || !/^[a-f0-9]{32}$/.test(original.turn_id) || !originalSessionMatches
       || original.status !== "failed"
       || !(original.error_code === "server_restarted" || scopeRefused || identityRefused || postContextWatchRecoverable)
       || original.origin !== "native_loopx" || original.loopx_execution !== true
@@ -145,7 +159,7 @@ function admitMonitorRestartRecovery(params: JsonObject, request: JsonObject, se
       || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
       || priorKeys.length !== keys.length
       || keys.some(key => key !== "monitor_lease_version" && JSON.stringify(request[key]) !== JSON.stringify(prior[key]))
-      || Number(params.queued_turn_count) !== 0) {
+      || Number(effectiveQueuedCount) !== 0) {
     throw new EffectRuntimeRequestError("watch restart requires independent proof before any native observation");
   }
 }
@@ -612,6 +626,8 @@ function reportSettlementOnly(params: JsonObject, request: JsonObject, todo: Jso
 }
 
 export const STEWARD_MANAGED_ACTOR_SCHEMA = "loopx_steward_managed_actor_v0";
+export const STEWARD_BACKGROUND_SESSION_PREFIX = "steward.background.";
+export const STEWARD_BACKGROUND_CHANNEL_PREFIX = "manager.external.steward.background.";
 const AGENT_ID = "steward";
 
 function text(value: unknown, name: string, expression?: RegExp): string {
@@ -620,6 +636,35 @@ function text(value: unknown, name: string, expression?: RegExp): string {
     throw new EffectRuntimeRequestError(`invalid ${name}`);
   }
   return result;
+}
+
+export function stewardBackgroundSessionId(bindingId: string): string {
+  const id = text(bindingId, "binding identity", /^[a-f0-9]{24}$/);
+  return `${STEWARD_BACKGROUND_SESSION_PREFIX}${id}`;
+}
+
+function validateStewardBackgroundCarrier(carrierRaw: unknown, bindingId: string, parentContext: JsonObject): JsonObject {
+  const carrier = requireJsonObject(carrierRaw, "steward background carrier Session");
+  const bgContext = requireJsonObject(carrier.steward_background_context, "steward background carrier authority");
+  if (carrier.session_id !== stewardBackgroundSessionId(bindingId)
+      || carrier.channel_id !== `${STEWARD_BACKGROUND_CHANNEL_PREFIX}${bindingId}`
+      || carrier.goal_id !== "loopx-manager"
+      || carrier.session_mode !== "managed_runtime"
+      || carrier.status === "closed"
+      || carrier.project_context != null
+      || carrier.steward_context != null
+      || carrier.managed_agent_id != null
+      || bgContext.kind !== "bound_steward"
+      || bgContext.audience !== "bound_owner"
+      || bgContext.grant !== "portfolio_read"
+      || (parentContext.kind !== undefined && bgContext.kind !== parentContext.kind)
+      || (parentContext.audience !== undefined && bgContext.audience !== parentContext.audience)
+      || (parentContext.grant !== undefined && bgContext.grant !== parentContext.grant)
+      || ["binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref"].some(
+        key => bgContext[key] !== parentContext[key])) {
+    throw new EffectRuntimeRequestError("the steward background watch carrier Session is invalid");
+  }
+  return carrier;
 }
 
 export function normalizeStewardManagedActor(value: unknown): JsonObject {
@@ -656,12 +701,17 @@ export function stewardManagedBasis(params: JsonObject, executing = false) {
   const observation = requireJsonObject(params.observation, "current provider observation");
   const id = text(binding.binding_id, "binding identity", /^[a-f0-9]{24}$/);
   const source = text(context.source_ref, "steward source", /^[a-f0-9]{24}$/);
+  const hasCarrier = params.carrier_session != null;
+  if (hasCarrier && jsonObject(params.request)?.work_kind !== "monitor") {
+    throw new EffectRuntimeRequestError("steward background carrier is reserved for observation-only monitor work");
+  }
+  const carrier = hasCarrier ? validateStewardBackgroundCarrier(params.carrier_session, id, context) : null;
   if (binding.context_kind !== "steward" || binding.grant !== "portfolio_read" || binding.enabled !== true
       || binding.audience === "group" || observeStewardNativeExecutor(params).execution_available !== true
       || session.goal_id !== "loopx-manager"
       || session.session_mode === "attached_host" || session.status === "closed"
       || session.channel_id !== `manager.external.native.${id}.${source}`
-      || !executing && (session.active_turn_id || params.queued_turn_count !== 0)) {
+      || !executing && !hasCarrier && (session.active_turn_id || params.queued_turn_count !== 0)) {
     throw new EffectRuntimeRequestError("prepare the original idle private steward, retaining its current work");
   }
   for (const key of ["binding_id", "provider_ref", "operator_ref", "project_ref"]) {
@@ -685,7 +735,7 @@ export function stewardManagedBasis(params: JsonObject, executing = false) {
       || !Array.isArray(goal.registered_agents) || !goal.registered_agents.includes(AGENT_ID))) {
     throw new EffectRuntimeRequestError("the prepared steward identity or its original Goal lifetime is unavailable");
   }
-  return {binding, session, id, source, workspace, sessionId, goalId, creation, goal, actor};
+  return {binding, session, id, source, workspace, sessionId, goalId, creation, goal, actor, carrier};
 }
 
 /** Bind an internal host dispatch to the prepared actor and original Core Turn.
@@ -717,11 +767,29 @@ export function admitStewardManagedTurn(params: JsonObject): JsonObject {
   admitReportSelectionRecovery(params, request, current.sessionId);
   admitReportQuotaRecovery(params, request, current.session);
   admitReportTimeoutRecovery(params, request, current.session);
-  admitMonitorRestartRecovery(params, request, current.session);
-  if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
-      || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
-      || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {
-    throw new EffectRuntimeRequestError("the original native Chat Turn no longer owns execution");
+  if (current.carrier !== null) {
+    const rawCarrierQueued = params.carrier_queued_turn_count ?? 0;
+    if (!Number.isSafeInteger(rawCarrierQueued) || Number(rawCarrierQueued) < 0) {
+      throw new EffectRuntimeRequestError("invalid steward background carrier queue count");
+    }
+    const carrierQueuedCount = Number(rawCarrierQueued);
+    admitMonitorRestartRecovery(params, request, current.carrier, current.sessionId, carrierQueuedCount);
+    if (turn === null) {
+      if (current.carrier.active_turn_id || carrierQueuedCount !== 0) {
+        throw new EffectRuntimeRequestError("the steward background watch carrier is busy; retain its current observation");
+      }
+    } else if (turn.session_id !== current.carrier.session_id || turn.turn_id !== current.carrier.active_turn_id
+        || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+        || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request)) {
+      throw new EffectRuntimeRequestError("the original native Chat Turn no longer owns execution");
+    }
+  } else {
+    admitMonitorRestartRecovery(params, request, current.session);
+    if (turn && (turn.session_id !== current.sessionId || turn.turn_id !== current.session.active_turn_id
+        || !["starting", "running"].includes(String(turn.status)) || turn.origin !== "native_loopx"
+        || turn.loopx_execution !== true || JSON.stringify(turn.loopx_request) !== JSON.stringify(request))) {
+      throw new EffectRuntimeRequestError("the original native Chat Turn no longer owns execution");
+    }
   }
   const monitor = params.monitor_todo == null ? null : requireJsonObject(params.monitor_todo, "native monitor");
   const observationOnly = request.work_kind === "monitor";

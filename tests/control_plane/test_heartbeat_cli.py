@@ -16,6 +16,7 @@ PARSER_CASES = [
     (["heartbeat-prompt", "--goal-id"], 2),
     (["heartbeat-prompt", "--goal", "fixture"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--unknown"], 2),
+    (["heartbeat-prompt", "--goal-id=fixture", "--turn-envelope", "--complete-turn"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--full", "--thin"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--runtime-profile=unknown"], 2),
     (["heartbeat-prompt", "--goal-id=fixture", "--context-delivery=invalid"], 2),
@@ -69,7 +70,6 @@ def test_heartbeat_semantic_errors_keep_recovery_and_exit_status(tmp_path):
         ["--agent-id=unregistered"],
         ["--goal-id=missing"],
         ["--context-delivery=on", "--trae_app"],
-        ["--turn-envelope"],
         ["--decision-handoff-socket=missing"],
     )]
     full = run_cli_batch("loopx.cli", cases)
@@ -139,5 +139,9 @@ for module in ("loopx.cli", "loopx.cli_commands.support_control", "loopx.chat_se
 if {mode!r} == "help":
     assert "loopx.cli_commands.support_control_heartbeat" not in sys.modules
 """
-    result = run_isolated_script(script, environment={"LOOPX_USAGE_PING": "0"})
+    # The no-evidence fixture must not inherit an authenticated host's
+    # auto-detected poll path. Capability memory tests cover that real path.
+    result = run_isolated_script(script, environment={
+        "LOOPX_USAGE_PING": "0", "LOOPX_AUTO_CAPABILITY_PROBE": "0",
+    })
     assert result.returncode == 0, result.stderr

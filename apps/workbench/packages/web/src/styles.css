@@ -1747,12 +1747,16 @@ html.list-open body {
   max-width: 100%;
   margin: 0 0 0.9em;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border-collapse: collapse;
   font-size: 14px;
 }
 
 .markdown th,
 .markdown td {
+  min-width: 6em;
+  overflow-wrap: break-word;
+  word-break: normal;
   padding: 7px 12px 7px 0;
   border-bottom: 1px solid var(--border);
   text-align: left;
@@ -1760,7 +1764,12 @@ html.list-open body {
 }
 
 .markdown th {
+  white-space: nowrap;
   font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .markdown th, .markdown td { min-width: 8em; }
 }
 
 /* Marks a turn that came from the terminal, not from here. */
@@ -10712,10 +10721,6 @@ div.file-card:hover { background: var(--surface); }
 /* The overview is the quietest card on the page: barely a shade over the paper, a hairline, and
    the card shadow rather than the popover's lift. Its own text stays small and plain; colour is
    kept for what asks for the person, failed, running, and the adds and removals. */
-.pop-panel.overview-panel {
-  background: color-mix(in srgb, var(--surface) 40%, var(--bg));
-  box-shadow: var(--shadow-card);
-}
 .thread-overview { display: flex; flex-direction: column; }
 /* A standing panel with nothing to report is one faint line, not a card that failed to draw. */
 .overview-empty { padding: 6px 7px; color: var(--faint); font-size: 12.5px; }
@@ -15168,6 +15173,11 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 /* Overview A: natural height, fewer real rows when space runs out. Never scroll the preview. */
 .pop-panel.overview-panel {
   width: 340px;
+  background: color-mix(in srgb, var(--surface) 40%, var(--bg));
+  box-shadow: var(--shadow-card);
+  /* The paper is opaque; a backdrop filter would trap its fixed confirmation dialog. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   min-width: 0;
   max-width: calc(100vw - 24px);
   max-height: none;
@@ -15384,242 +15394,6 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   .preview-actions .ghost { padding: 0 5px; }
 }
 
-/* LoopX: the sidebar's Goals group, the goal work page and the steward page. */
-.sidebar-goals {
-  padding: 4px 0 2px;
-}
-
-.sidebar-goals-head {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  margin: 8px 10px 2px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--faint);
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.sidebar-goals-all {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 26px;
-  padding: 0 10px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.sidebar-goals-all:hover { background: var(--hover, rgba(31, 30, 28, 0.05)); color: var(--text); }
-.sidebar-goals-all-count { font-variant-numeric: tabular-nums; }
-
-.sidebar-goal-pin { flex: none; color: var(--muted); display: inline-flex; }
-
-/* A stopped Goal reads as absence: a hollow dot, not a coloured one. */
-.sidebar-goal-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
-
-.sidebar-goal {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 30px;
-  padding: 0 10px 0 calc(10px + var(--depth, 0) * 14px);
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.sidebar-goal:hover { background: var(--hover, rgba(31, 30, 28, 0.05)); }
-.sidebar-goal.active { background: var(--active, rgba(31, 30, 28, 0.09)); }
-
-.sidebar-goal-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.sidebar-goal-dot.is-active { background: var(--ok, #3a7d44); }
-.sidebar-goal-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
-
-.sidebar-goal-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The group's fold chevron sits right after its label, not pinned to the sidebar's far edge. */
-.sidebar-goals-head .sidebar-goal-title { flex: none; }
-
-.sidebar-goal-badge {
-  flex-shrink: 0;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent, #2f5bd3);
-  color: var(--surface, #fff);
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-}
-
-/* The All Goals page: the whole list, searched and grouped. Quiet greys; colour only where the
-   state says so (green runs, black waits on you, hollow is stopped). */
-.goals-page {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 20px 20px 48px;
-}
-
-.goals-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-.goals-head h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.02em; }
-
-.goals-search {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  flex: 1;
-  max-width: 360px;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  color: var(--muted);
-  background: var(--surface);
-}
-.goals-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; outline: none; }
-.goals-search input::placeholder { color: var(--faint); }
-
-.goals-filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
-.goals-filters button {
-  padding: 4px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  background: transparent;
-  color: var(--muted);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-.goals-filters button[aria-pressed='true'] { background: var(--active); color: var(--text); border-color: var(--border-strong); }
-.goals-filter-count { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
-
-.goals-group { margin: 14px 0 6px; }
-.goals-group h2 {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin: 0 0 4px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-}
-.goals-group h2 span { color: var(--faint); font-size: 12px; font-weight: 500; }
-
-.goals-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: calc(var(--depth, 0) * 22px);
-}
-.goals-row-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-  min-height: 40px;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: var(--radius, 10px);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-  /* At narrow widths every column must give way inside the row, never paint past its right edge. */
-  overflow: hidden;
-}
-.goals-row-main:hover { background: var(--hover); }
-
-.goals-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
-.goals-dot.is-active { background: var(--ok, #3a7d44); }
-.goals-dot.is-needs-you { background: var(--text); }
-.goals-dot.is-stopped { background: transparent; border: 1.5px solid var(--faint); }
-
-.goals-row-title {
-  /* The name comes first: it takes the room, and only past that does it shorten. */
-  flex: 2 1 55%;
-  min-width: 0;
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-}
-.goals-row.is-child .goals-row-title { font-size: 13px; color: var(--muted); }
-.goals-row-badge {
-  display: inline-block;
-  vertical-align: 2px;
-  margin-left: 6px;
-  flex: none;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--text);
-  color: var(--surface);
-  font-size: 10px;
-  line-height: 16px;
-  text-align: center;
-}
-.goals-row-sub {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  flex: 1 1 0;
-  min-width: 0;
-  color: var(--muted);
-  font-size: 12.5px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-/* Fixed columns that yield gracefully: each keeps its width while there is room and
-   truncates with an ellipsis, not a hard clip, when the row runs out of space. */
-.goals-row-sub .goals-row-agents { flex: 0 1 120px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.goals-row-sub .goals-row-task { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.goals-row-count, .goals-row-recent { flex: 0 1 64px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
-.goals-pin { color: var(--faint); }
-.goals-pin.on { color: var(--text); }
-.goals-empty { margin: 24px 0; color: var(--faint); font-size: 13px; }
-
-@media (max-width: 640px) {
-  .goals-page { padding: 14px 12px 40px; }
-  .goals-head { flex-wrap: wrap; }
-  .goals-search { max-width: none; width: 100%; order: 3; }
-  .goals-row-count { display: none; }
-  .goals-row-recent { width: auto; }
-}
-
 /* The standing line while the login came through a link: pinned above the sidebar's buttons, on
    the foot's own fade, so a long session list cannot scroll it away. Quiet; a tap from the fix. */
 .link-login-notice {
@@ -15688,12 +15462,6 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
 .access-links .ghost { min-height: 28px; padding: 0 10px; font-size: 12px; }
 .access-links .ghost.danger { color: var(--danger); }
 
-.goal-page {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 24px 20px 48px;
-}
-
 /* The steward page is the chat: it owns the viewport height the scroller gives it. */
 .steward-page.is-chat {
   display: flex;
@@ -15704,121 +15472,34 @@ body:has(.settings-page, .action-sheet) .pet { display: none; }
   padding: 0;
 }
 .steward-page .steward-composer { width: 100%; max-width: calc(var(--content-w) + 32px); margin-inline: auto; }
-
-.goal-masthead {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 18px;
+.goal-directory-picker .dialog-scrim { z-index: 90; }
+@media (min-width: 1240px) {
+  .main.overview-room .steward-page.is-chat { width: calc(100% - 364px); margin: 0 364px 0 0; }
 }
 
-.goal-masthead h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-}
-
-.goal-masthead-status {
-  color: var(--faint);
-  font-size: 12px;
-}
-
-.goal-vitals {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.goal-vital {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 12px 14px;
-  border-radius: var(--radius, 10px);
-  background: var(--well, rgba(31, 30, 28, 0.04));
-}
-
-.goal-vital-value { font-size: 20px; font-weight: 700; }
-.goal-vital-label { font-size: 12px; color: var(--faint); }
-
-.goal-since {
-  margin: 0 0 16px;
-  padding: 8px 12px;
-  border-radius: var(--radius, 10px);
-  background: var(--well, rgba(31, 30, 28, 0.04));
-  font-size: 13px;
-}
-
-.goal-needs h2,
-.goal-objective h2 {
-  margin: 16px 0 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.goal-need { margin: 6px 0; font-size: 14px; }
-.goal-next { margin: 10px 0 0; color: var(--faint); font-size: 13px; }
 .goal-empty { margin: 6px 0; color: var(--faint); font-size: 13px; }
 .goal-failure { margin: 8px 0; font-size: 13px; }
-.goal-objective p { margin: 4px 0; font-size: 14px; }
 
-/* The steward's buttons sit in the app topbar, at its right edge, like a thread's. */
-.steward-actions { display: flex; gap: 2px; }
-.steward-head-btn { position: relative; color: var(--muted); }
-.steward-head-btn:hover:not(:disabled) { color: var(--text); }
-/* The count of what waits on the person, as the topbar's other badges wear it. */
-.steward-head-badge {
-  position: absolute;
-  top: 2px;
-  right: 0;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: var(--radius-pill, 999px);
-  background: var(--text);
-  color: var(--surface);
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 15px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
+/* The steward shares the conversation overview; only its growing inventory scrolls. */
+.steward-overview { max-height: min(var(--pop-height, calc(100dvh - 96px)), calc(100dvh - 96px)); }
+.steward-overview > .overview-content { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.steward-overview .overview-empty { white-space: normal; overflow-wrap: break-word; }
+.steward-overview .needs-you .overview-head-icon, .steward-overview .needs-you .overview-summary { color: var(--warn); }
+.overview-goal { padding: 6px 7px 6px; min-width: 0; }
+.overview-goal + .overview-goal { border-top: 1px solid var(--border); }
+.overview-goal-heading { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.overview-goal-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.overview-goal-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.overview-goal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 0 -6px; min-width: 0; }
+.overview-goal-actions .overview-more,
+.overview-goal-actions .goal-lifecycle { min-height: 26px; padding: 3px 6px; gap: 3px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); font-size: 12px; line-height: 1.2; }
+.overview-goal-actions .overview-more { margin: 0; }
+.overview-goal-actions .goal-lifecycle:hover { background: var(--hover); color: var(--text); }
+.goal-lifecycle-error { flex-basis: 100%; padding-left: 6px; color: var(--warn); font-size: 12px; }
+@media (max-width: 640px) {
+  .overview-goal-actions .overview-more,
+  .overview-goal-actions .goal-lifecycle { min-height: 32px; }
 }
-
-/* The steward's menus: a heading with its count, quiet one-line rows, and the way to every Goal. */
-.steward-menu { display: flex; flex-direction: column; width: 300px; max-width: calc(100vw - 32px); }
-.steward-menu-head { display: flex; align-items: baseline; gap: 6px; width: 100%; padding: 6px 10px; border: 0; border-radius: var(--radius-sm, 8px); background: none; color: var(--muted); font-size: 12.5px; text-align: left; }
-button.steward-menu-head { cursor: pointer; }
-button.steward-menu-head:hover { background: var(--hover, rgba(31, 30, 28, 0.06)); color: var(--text); }
-.steward-menu-go { margin-left: auto; opacity: 0; }
-button.steward-menu-head:hover .steward-menu-go { opacity: 1; }
-.steward-menu-count { color: var(--faint); font-variant-numeric: tabular-nums; }
-.steward-menu-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
-.steward-menu-row {
-  display: flex; align-items: flex-start; gap: 10px; width: 100%;
-  padding: 7px 10px; border: 0; border-radius: var(--radius-sm, 8px);
-  background: none; color: var(--text); text-align: left; cursor: pointer;
-}
-.steward-menu-row:hover { background: var(--hover, rgba(31, 30, 28, 0.06)); }
-.steward-menu-dot { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: var(--faint); }
-.steward-menu-dot.warn { background: var(--text); }
-.steward-menu-dot.ok { background: var(--ok, #3f8f5a); }
-.steward-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.steward-menu-title { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.steward-menu-sub { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.steward-menu-empty { margin: 0; padding: 4px 10px 10px; color: var(--faint); font-size: 13px; }
-.steward-menu-foot {
-  margin-top: 4px; padding: 8px 10px; border: 0; border-top: 1px solid var(--border);
-  background: none; color: var(--muted); font-size: 12.5px; text-align: left; cursor: pointer;
-}
-.steward-menu-foot:hover { color: var(--text); }
-.steward-brief-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 2px 6px 8px; }
-.steward-brief-stat { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: var(--radius-sm, 8px); background: var(--well, rgba(31, 30, 28, 0.04)); color: var(--text); text-align: left; font: inherit; }
-button.steward-brief-stat { cursor: pointer; }
-button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
-.steward-brief-num { font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.steward-brief-label { color: var(--faint); font-size: 12px; }
 
 .steward-hint { margin: 0 0 8px; color: var(--faint); font-size: 13px; }
 
@@ -15906,94 +15587,12 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
 }
 .steward-steps li::before { content: '· '; }
 
-.goal-masthead-actions { margin-left: auto; }
-
-.goal-tabs {
-  display: flex;
-  gap: 4px;
-  width: 100%;
-  margin-top: 10px;
-  border-bottom: 1px solid var(--line, rgba(31, 30, 28, 0.12));
-}
-.goal-tabs button {
-  padding: 6px 12px 8px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--faint);
-  font-size: 13px;
-  cursor: pointer;
-}
-.goal-tabs button.active { color: inherit; border-bottom-color: var(--accent); font-weight: 600; }
-
-.goal-todos { margin: 4px 0 0; padding: 0; list-style: none; }
-.goal-todos li {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  padding: 6px 0;
-  font-size: 14px;
-}
-.goal-todo-state { flex: none; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--faint); transform: translateY(-1px); }
-.goal-todos li.open .goal-todo-state { border-color: var(--accent); }
-.goal-todos li.done .goal-todo-state { background: var(--faint); }
-.goal-todos li.done .goal-todo-text { color: var(--faint); text-decoration: line-through; }
-.goal-todos-more { margin: 4px 0 0; color: var(--faint); font-size: 12px; }
-
-.goal-threads { display: flex; flex-direction: column; }
-.goal-thread {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  margin: 6px 0;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: var(--radius, 10px);
-  background: var(--well, rgba(31, 30, 28, 0.04));
-  text-align: left;
-  cursor: pointer;
-}
-.goal-thread:hover { background: var(--hover, rgba(31, 30, 28, 0.08)); }
-.goal-thread.is-running .goal-thread-status { color: var(--accent); }
-.goal-thread-title { font-size: 14px; }
-.goal-thread-status { color: var(--faint); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.goal-thread-new {
-  align-self: flex-start;
-  margin: 6px 0;
-  padding: 8px 14px;
-  border: 1px solid var(--line, rgba(31, 30, 28, 0.12));
-  border-radius: 999px;
-  background: var(--bg);
-  font-size: 13px;
-  cursor: pointer;
-}
-
 .goal-lifecycle-confirm { max-width: 420px; }
 .goal-lifecycle-summary { margin: 0 0 8px; font-size: 14px; }
 .goal-lifecycle-evidence { margin: 0 0 8px; padding-left: 18px; color: var(--faint); font-size: 12px; }
 .goal-lifecycle-warning { margin: 0; color: var(--danger); font-size: 13px; }
 
-.sidebar-goals-stopped { margin-top: 2px; padding-top: 2px; }
-.sidebar-goals-stopped-head { color: var(--faint); }
-.sidebar-goals-stopped-head .sidebar-goal-title::after { content: ' ▸'; font-size: 10px; }
-.sidebar-goals-stopped-head[aria-expanded='true'] .sidebar-goal-title::after { content: ' ▾'; }
-
-@media (max-width: 640px) {
-  .goal-vitals { flex-wrap: wrap; }
-  .goal-vital { flex: 1 1 40%; }
-  .goal-tabs { overflow-x: auto; }
-}
-
-/* wb-sessions: the LoopX filter in the sidebar's top row, and the second line of every conversation row. */
-.loopx-btn { position: relative; }
-.loopx-btn.on { border-color: transparent; background: var(--text); color: var(--bg); box-shadow: none; }
-.loopx-btn.on:hover { background: var(--text); }
-.loopx-count {
-  position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box;
-  border-radius: var(--radius-pill); background: var(--bg); color: var(--text); border: 1px solid var(--text);
-  font-size: 10px; font-weight: 600; line-height: 14px; text-align: center; font-variant-numeric: tabular-nums;
-}
+/* The quiet second line of every conversation row. */
 .thread-sub { display: flex; align-items: center; gap: 0; min-width: 0; font-size: 11.5px; line-height: 1.35; color: var(--muted); white-space: nowrap; }
 .thread-sub > span { flex: none; }
 .thread-sub-crab { display: inline-flex; margin-right: 3px; color: var(--faint); }
@@ -16002,16 +15601,15 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
 .thread-sub-sep { margin: 0 4px; color: var(--faint); }
 .thread-sub-source { flex: none !important; }
 
-/* wb-sessions: the LoopX Goal group at the top of the session panel. */
+/* The current Goal at the top of the shared overview. */
 .loopx-group-head { cursor: default; }
-.loopx-group-body { display: flex; flex-direction: column; gap: 6px; padding: 2px 14px 10px 36px; }
-.loopx-group-name { font-size: 13px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
-.loopx-group-name.gone { text-decoration: line-through; color: var(--muted); font-weight: 400; }
-.loopx-group-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
-.loopx-group-line > span:first-child { flex: none; min-width: 5.5em; }
-.loopx-group-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.loopx-group-note { margin: 0; font-size: 12px; color: var(--muted); }
-.loopx-group-open { align-self: flex-start; }
+.loopx-group-head:hover { background: none; }
+.loopx-group-body { gap: 4px; padding: 2px 7px 7px; }
+.loopx-group-head .loopx-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; }
+.loopx-group-name.gone { text-decoration: line-through; color: var(--muted); }
+.loopx-group-head .overview-summary { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.loopx-group-line, .loopx-group-note { margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.loopx-group-open { margin-left: auto !important; }
 
 /* wb-sessions: the grey line above the composer while the desktop app still wakes this conversation. */
 .loopx-driven { margin: 0 4px 6px; font-size: 12px; line-height: 1.45; color: var(--muted); }
@@ -16036,3 +15634,24 @@ button.steward-brief-stat:hover { background: var(--hover, rgba(31, 30, 28, 0.08
 .picture-dock-stage.vector img { padding: 12px; background: var(--bg); }
 
 .dock-panel[hidden] { display: none; }
+
+/* Goal readers stay within the conversation overview, with their own scoped disclosures. */
+.goal-details { min-width: 0; margin-top: 8px; }
+.goal-detail-objective { margin: 4px 0 8px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.goal-detail-section { border-top: 1px solid var(--border); min-width: 0; }
+.goal-detail-toggle { display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.goal-detail-toggle:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.goal-detail-body { min-width: 0; padding: 0 0 10px; overflow-wrap: anywhere; }
+.goal-details .goal-tasks-controls { min-width: 0; }
+.goal-details .goal-tasks-filters { flex-wrap: nowrap; overflow-x: auto; }
+.goal-details .goal-tasks-filters > button { flex-shrink: 0; white-space: nowrap; }
+.goal-details .goal-tasks-controls input { min-width: 0; width: 100%; }
+.goal-details .goal-files, .goal-details .goal-acceptance { min-width: 0; }
+.goal-details .goal-acceptance-head { flex-wrap: wrap; }
+.goal-details .goal-task-details dd, .goal-details pre { min-width: 0; overflow-x: auto; }
+
+.thread-overview.with-goal-details { max-height: min(var(--pop-height, calc(100dvh - 108px)), calc(100dvh - 108px)); }
+.thread-overview.with-goal-details > .overview-content { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+
+.loopx-group:has(.goal-details) .loopx-group-name,
+.overview-goal:has(.goal-details) .overview-goal-title { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }

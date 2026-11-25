@@ -116,27 +116,31 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     }
   });
   test(`${provider} managed execution: terminal advice does not replace explicit proof or bypass task blockers`, async t => {
-    for (const scenario of ["explicit-proof", "foreign-holder", "excluded", "blocked", "overlapping-work"]) {
+    for (const scenario of ["explicit-proof", "foreign-holder", "excluded", "blocked", "independent-todo"]) {
       const {store, request} = await setup(t);
       let original = {...completion(request), claim_operation_id: undefined} as Parameters<typeof complete>[1];
       if (scenario === "explicit-proof") original = {...original, lease_idempotency_key: "unproven-key"};
       if (scenario === "foreign-holder") {
         assert.equal((await claim(store, {...request, actor_agent_id: "agent-b", claimed_by: "agent-b"})).status, "applied");
       }
-      if (["excluded", "blocked", "overlapping-work"].includes(scenario)) {
+      if (["excluded", "blocked", "independent-todo"].includes(scenario)) {
         const head = await loaded(store); const todo = (head.head.todos as JsonObject[])[0]!;
         const change = scenario === "excluded" ? {...todo, excluded_agents: ["agent-a"]}
           : scenario === "blocked" ? {...todo, status: "blocked"}
-          : {...todo, todo_id: "todo_other", text: "Independent work occupying the same scope"};
+          : {...todo, todo_id: "todo_other", text: "Independent work without hard write_scope conflict"};
         assert.equal((await store.commitAuthority(prepareCoordinationProjectionCommit({goal_id: request.goal_id,
           operation_id: "prepare-blocker", expected_provider_revision: head.provider_revision, projection: head.head,
           mutations: [{kind: "todo_upsert", todo: change}]}))).status, "applied");
-        if (scenario === "overlapping-work") assert.equal((await claim(store, {...request, todo_id: "todo_other",
+        if (scenario === "independent-todo") assert.equal((await claim(store, {...request, todo_id: "todo_other",
           actor_agent_id: "agent-b", claimed_by: "agent-b", operation_id: "occupy-scope"})).status, "applied");
       }
       const before = await loaded(store); const result = await complete(store, original);
       assert.equal(result.status, "failed", scenario);
-      assert.notEqual((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      if (scenario === "independent-todo") {
+        assert.equal((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      } else {
+        assert.notEqual((result.recovery as JsonObject | undefined)?.action, "claim_task", scenario);
+      }
       if (scenario === "explicit-proof") assert.equal(result.recovery, undefined);
       assert.deepEqual(await loaded(store), before, scenario);
     }
@@ -175,7 +179,7 @@ export function registerManagedClaimExecutionConformance(provider: string, facto
     const accepted = await claim(store, request);
     assert.equal(accepted.status, "applied", JSON.stringify(accepted));
     const original = accepted.lease as JsonObject;
-    assert.deepEqual(original.write_scopes, ["src/**"]);
+    assert.deepEqual(original.write_scopes, []);
     assert.equal(original.expires_at, "2026-09-13T10:45:00Z");
     assert.equal(accepted.claim_operation_id, "claim-a");
     assert.equal((await update(store, progress)).status, "applied");

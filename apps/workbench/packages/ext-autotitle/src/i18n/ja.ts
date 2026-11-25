@@ -3,8 +3,8 @@ import type { zh } from './zh';
 export const ja: typeof zh = {
   lead: '新しいスレッドの最初のターンが終わると、選んだエージェントが下のルールで短いタイトルを付けます。自分で付けたタイトルはそのままです。',
   agent: 'タイトルを付けるエージェント',
-  chooseAgent: 'エージェントを選択',
-  noAgent: 'まだ選ばれていません。選ぶと付け始めます',
+  autoAgent: '自動',
+  autoHint: 'スレッド自身のエージェントの最も安いモデルで付けます。Codex は Luna、Antigravity は Gemini 3.8 Flash Low、Claude は Haiku です。価格の分かるモデルがないエージェントでは付けません',
   noAsk: 'このエージェントには「確認してから」モードがなく、命名中にツールを自分で使うことがあります',
   model: 'モデル',
   defaultModel: 'デフォルトのモデル',

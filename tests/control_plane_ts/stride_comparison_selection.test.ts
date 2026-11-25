@@ -118,10 +118,10 @@ for (const kind of ["periodic_review_due", "typed_progress_repeat", "no_progress
     assert.equal(projectReplanSemantics({...request, obligation: {...obligation,
       satisfying_semantic_outcomes: ["new_runnable_successor"]}}).accepted, false,
       "An explicit source restriction still cannot be satisfied by a fresh path alone.");
-    const off = {...obligation, replan_context: {stride_strategy: "off"}};
-    assert.equal(projectReplanSemantics({operation: "qualify", obligation: off,
-      observation_delta: successor}).accepted, true);
-    assert.equal(projectReplanSemantics({operation: "transition_eligibility", obligation: off}).allowed, true);
+    const legacyOff = {...obligation, replan_context: {stride_strategy: "off"}};
+    assert.equal(projectReplanSemantics({operation: "qualify", obligation: legacyOff,
+      observation_delta: successor}).accepted, false);
+    assert.equal(projectReplanSemantics({operation: "transition_eligibility", obligation: legacyOff}).allowed, false);
   });
 }
 
@@ -139,11 +139,11 @@ test("explicit selection remains optional and cannot be turned into authority or
   const off = context(projectExploreTurnContext({...input, graph_enabled: false, harness_gate: {enabled: false}, plan: {}}));
   assert.equal(off.explore_basis, undefined);
   assert.equal(qualify(off, proposal).accepted, false);
-  const disabledStrategy = projectReplanContext({operation: "project", goal_id: goal, agent_id: agent, rows: [],
+  const legacyOffStrategy = projectReplanContext({operation: "project", goal_id: goal, agent_id: agent, rows: [],
     goal_facts: {}, obligation: {obligation_id: obligationId}, stride_strategy: "off",
     explore_context: projectExploreTurnContext(input)});
-  assert.equal(disabledStrategy.explore_basis, undefined);
-  assert.equal(qualify(disabledStrategy, proposal).accepted, false);
+  assert.equal(legacyOffStrategy.stride_strategy, "evidence_conditioned_v1");
+  assert.ok(legacyOffStrategy.explore_basis);
   const nonperiodic = {operation: "qualify", obligation: {obligation_id: obligationId,
     triggers: [{kind: "vision_acceptance_gap"}], replan_context: ctx},
     agent_vision: {stride_decision: proposal, todo_delta: ["retain:todo_other"]},

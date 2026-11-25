@@ -16,6 +16,7 @@ from ..todos.contract import (
     normalize_todo_task_repository,
 )
 from ..work_items.primary_action import protocol_action_text
+from .selected_todo_projection import lookup_raw_todo
 
 
 def _source_items(items: Any, summary: Any) -> list[dict[str, Any]]:
@@ -50,6 +51,16 @@ def build_adaptive_task_orchestration_contract(
 ) -> dict[str, Any] | None:
     items = []
     for item in _source_items(agent_todo_source_items, raw_agent_todo_summary):
+        raw_match = (
+            None
+            if "required_write_scopes" in item
+            else lookup_raw_todo(raw_agent_todo_summary, item.get("todo_id"))
+        )
+        raw_scopes = (
+            item.get("required_write_scopes")
+            if "required_write_scopes" in item
+            else (raw_match.get("required_write_scopes") if raw_match else None)
+        )
         items.append(
             {
                 **{
@@ -87,7 +98,7 @@ def build_adaptive_task_orchestration_contract(
                 ),
                 "repository_declared": bool(item.get("task_repository")),
                 "required_write_scopes": normalize_required_write_scopes(
-                    item.get("required_write_scopes")
+                    raw_scopes
                 ),
                 "required_capabilities": normalize_required_capabilities(
                     item.get("required_capabilities")

@@ -160,14 +160,18 @@ function projectVisionWaitFromFacts(input: {request: JsonObject; gaps: JsonObjec
   const {request, gaps, causalIds} = input;
   const agentId = optionalNonEmptyString(request.agent_id, "agent_id");
   const summary = request.agent_todo_summary === null ? {} : requireJsonObject(request.agent_todo_summary, "agent_todo_summary");
+  // A blocked task holds that task. Only an explicit as-needed vision can
+  // treat an unqualified task blocker as a reason to park its open acceptance.
+  const deferManualAdvancement = gaps.every(gap => gap.advancement_policy === "as_needed");
   const cachedWait = cachedWaitProof(summary, agentId, causalIds);
-  if (cachedWait) return cachedWait;
+  if (cachedWait && (deferManualAdvancement || cachedWait.automatic_resume === true)) return cachedWait;
   const basis = request.wait_basis == null ? null : requireJsonObject(request.wait_basis, "wait basis");
   const resumePlan = basis === null ? projectTodoResumePlanning(requireJsonObject(request.resume_planning_request, "resume_planning_request")) :
     requireJsonObject(basis.resume_planning, "prepared resume planning");
   const blockerContext = new Map(currentAgentBlockers(summary.current_agent_blocker_items, agentId)
     .map(blocker => [blocker.todo_id, blocker]));
   const blockers = currentAgentBlockers(resumePlan.blocked_wait_items ?? summary.current_agent_blocker_items, agentId)
+    .filter(blocker => deferManualAdvancement || blocker.task_class === "blocker")
     .map(blocker => ({...blockerContext.get(blocker.todo_id), ...blocker}));
   const candidates = Array.isArray(resumePlan.blocked_successor_items) ? resumePlan.blocked_successor_items as JsonObject[] : [];
   const lineageRows = Array.isArray(request.lineage_source_items) ? request.lineage_source_items :

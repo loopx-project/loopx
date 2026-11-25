@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import stat
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
@@ -44,6 +45,26 @@ class NativeRecoveryLeaseUnavailable(RuntimeError):
 
 class NativePreparationTurnUnavailable(ValueError):
     """The original Turn cannot authorize a new host claim."""
+
+
+class NativeClaimRejected(ValueError):
+    """This provider declined the exact managed operation before commit."""
+
+
+def native_preparation_workspace(path: Path) -> dict[str, str | int]:
+    info = path.stat()
+    if not path.is_absolute() or path.resolve(strict=True) != path or not stat.S_ISDIR(info.st_mode):
+        raise ValueError("Native execution preparation requires a physical workspace")
+    return {"path": str(path), "device": info.st_dev, "inode": info.st_ino}
+
+
+def _original_claim_workspace(binding: object) -> Path:
+    if not isinstance(binding, Mapping) or not isinstance(binding.get("path"), str):
+        raise ValueError("Invalid original native preparation workspace")
+    workspace = Path(binding["path"])
+    if native_preparation_workspace(workspace) != binding:
+        raise ValueError("The workspace that admitted this native claim has changed")
+    return workspace
 
 
 def compact_execution_preparation_request(
@@ -143,8 +164,13 @@ def _run_json(
     cwd: Path,
     timeout: float,
     runner: CommandRunner,
+    claim_identity: Mapping[str, str] | None = None,
+    exclude_workdir_imports: bool = False,
 ) -> dict[str, Any]:
     route = current_loopx_cli_argv()
+    if exclude_workdir_imports and route[1:] == ["-m", "loopx.entrypoint"]:
+        # Keep the caller's Python installation when launching from the admitted checkout.
+        route = [route[0], "-P", *route[1:]]
     command = command_argv(
         Path(route[0]),
         [
@@ -160,6 +186,34 @@ def _run_json(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError("LoopX Host preparation returned non-JSON output") from exc
+    if completed.returncode == 1 and claim_identity is not None and isinstance(payload, dict):
+        from ..coordination.local_authority import LOCAL_AUTHORITY_SOURCES
+
+        decision = payload.get("claim_decision")
+        if (payload.get("ok") is False and payload.get("decision_read_from_provider") is True
+                and payload.get("source_authority") in LOCAL_AUTHORITY_SOURCES
+                and payload.get("legacy_fallback_used") is False and "original_receipt" not in payload
+                and isinstance(decision, dict)
+                and decision.get("schema_version") == "loopx_coordination_todo_claim_decision_v0"
+                and decision.get("status") == "rejected"
+                and all(decision.get(key) == value for key, value in claim_identity.items())
+                and isinstance(decision.get("reason_code"), str) and isinstance(decision.get("reason"), str)):
+            holder = decision.get("claim_owner")
+            ownership = f" Holder: {holder}." if holder else ""
+            condition = {
+                "claim_owner_mismatch": "after the Todo is available to you",
+                "todo_lease_conflict": "after the Todo lease becomes available",
+                "write_scope_conflict": "after the conflicting lease is released or expires",
+                "workspace_lease_conflict": (
+                    "after the conflicting workspace lease is released or expires, "
+                    "or in an independent authorized worktree if the work can be isolated"
+                ),
+            }.get(decision["reason_code"], "after the blocking condition changes")
+            raise NativeClaimRejected(
+                f"Claim for {claim_identity['todo_id']} declined ({decision['reason_code']}): "
+                f"{decision['reason'].rstrip('.')}.{ownership} Continue other eligible work. "
+                f"Retry this Todo with a fresh eligible guard {condition}."
+            )
     if (
         completed.returncode != 0
         or not isinstance(payload, dict)
@@ -577,6 +631,16 @@ def codex_execution_preparation_readback_context(
         and (session_directory := Path(context_directory)).is_absolute()
         and operation_id == _native_claim_operation_id(request)
     ):
+        if "claim_workspace" in request:
+            try:
+                facts["readiness_workdir"] = str(_original_claim_workspace(request["claim_workspace"]))
+            except (OSError, ValueError, RuntimeError):
+                return (
+                    "Read the original claim receipt and current lease. The original preparation workspace "
+                    "is unavailable or has changed. Reconcile the original operation before obtaining "
+                    "a fresh eligible workspace guard. Receipt: "
+                    + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+                )
         # A lost readiness result must not replace the live session's claim
         # source if the fresh guard finds a retired lease or a different gate.
         # The existing capture writer creates this private staging directory.
@@ -594,8 +658,9 @@ def codex_execution_preparation_readback_context(
             "--capture-sha256", "<capture_sha256>", "--prepared-claim-operation-id", operation_id,
             *_native_context_argv(scenario, session_directory, progressive_enabled=progressive_enabled),
         ])
+        workdir = "readiness_workdir" if "readiness_workdir" in facts else "the original workspace"
         guidance = (
-            "Run readiness_command once from the original workspace after the original claim and active lease "
+            f"Run readiness_command once from {workdir} after the original claim and active lease "
             "match in Goal, Todo, owner, key and version. Require normal_delivery_allowed=true and "
             "execution_preparation.state=ready for this same Goal, Agent, Todo and Turn, with lease_proof "
             "matching the original key and version. Only then substitute the returned capture_sha256 for "
@@ -700,7 +765,9 @@ def execute_codex_execution_preparation(
     ):
         raise ValueError("invalid Codex execution-preparation request")
     workspace = Path(cwd)
-    if (
+    if "claim_workspace" in request:
+        workspace = _original_claim_workspace(request["claim_workspace"])
+    elif (
         not workspace.is_absolute()
         or not workspace.is_dir()
         or workspace.resolve() != workspace
@@ -727,6 +794,7 @@ def execute_codex_execution_preparation(
         ),
         "--decision-output-dir", str(capture_directory), "--prepared-capture-reference",
     ]
+    switched_workdir = workspace != cwd
     invoke = runner or _default_runner
     deadline = monotonic() + timeout
     # Use the same index fence as writeback and spend. An immutable pre-claim
@@ -757,6 +825,9 @@ def execute_codex_execution_preparation(
         claimed = _run_json(
             expected_claim, registry_path=registry_path, runtime_root=runtime_root,
             cwd=workspace, timeout=min(timeout / 2, remaining), runner=invoke,
+            exclude_workdir_imports=switched_workdir,
+            claim_identity={"goal_id": goal_id, "todo_id": todo_id, "actor_agent_id": agent_id,
+                            "claim_operation_id": claim_operation_id},
         )
     claim_reference = claimed.get("claim_operation_id")
     if claim_reference != claim_operation_id:
@@ -765,13 +836,15 @@ def execute_codex_execution_preparation(
     remaining = deadline - monotonic()
     if remaining <= 0:
         raise TimeoutError("Native execution preparation deadline elapsed before the ready check")
+    if "claim_workspace" in request:
+        _original_claim_workspace(request["claim_workspace"])
     after = _run_json(
         guard,
         registry_path=registry_path,
         runtime_root=runtime_root,
         cwd=workspace,
         timeout=remaining,
-        runner=invoke,
+        runner=invoke, exclude_workdir_imports=switched_workdir,
     )
     preparation = after.get("execution_preparation")
     selected = after.get("selected_todo")

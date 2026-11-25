@@ -118,7 +118,7 @@ def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypa
     project, runtime, path = setup(tmp_path, active=True, provider=provider, write_scope=scope)
     run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID,
         "--execution-replan-after-turns", "1",
-        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execute")
     finding = attachment()
     profiles = finding["work_yardstick_decision"]
     profiles["proxy"]["comparison_scope"] = "validation:screen-slice"
@@ -195,7 +195,7 @@ def test_bound_benchmark_replan_opening_shows_scoped_reversal(tmp_path, monkeypa
     prepared = run(project, runtime, path, "quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--turn-instance-id", turn, "--runtime-profile", "generic_cli",
         "--available-capability", "shell", "--available-capability", "filesystem_write",
-        "--decision-output-dir", str(opening), "--prepared-capture-reference", "--complete-turn",
+        "--decision-output-dir", str(opening), "--prepared-capture-reference",
         "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation")
     original = opening / "decision.json"
     original_bytes = original.read_bytes()
@@ -878,7 +878,7 @@ def test_measured_yardstick_changes_next_work_from_local_screening_to_a_whole_go
         "--document", str(acceptance), "--operation-id", "declare-encoding", "--expected-provider-revision",
         before["provider_revision"], "--execute")
     run(project, runtime, path, "configure-goal", "--goal-id", GOAL_ID, "--execution-replan-after-turns", "2",
-        "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+        "--execute")
     payload = ["repeated-entry"] * 24 + ["other-entry"] * 24
 
     def encode(value):

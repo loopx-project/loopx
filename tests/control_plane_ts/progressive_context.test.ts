@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {contextReadSectionDigests, initialContextReadPointers,
-  progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
+  prepareProgressiveContextDelivery, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
 const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owner_agent_id: "a", todo_ids: ["t"],
@@ -83,6 +83,31 @@ test("only supporting materials move; cumulative obligations and merged source g
     value: "Adopt the current objective. " + PROGRESSIVE_OUTCOME_READ_GUIDANCE}]);
   assert.deepEqual(payload, before);
   assert.deepEqual(progressiveContextPlan({payload, surface: "turn_envelope"}), {deferred: [], instructions: []});
+});
+
+test("ownership transfers keep declaration and review attribution in the required view", () => {
+  const review = outcome.requirements[0].agent_review;
+  const transferred = (declarer: unknown, reviewer: unknown) => ({
+    ...outcome, declaration_owner_agent_id: declarer, requirements: [{...outcome.requirements[0],
+      agent_review: {...review, recorded_for_agent_id: reviewer}}],
+  });
+  const plan = (row: unknown) => {
+    const outcome_requirements = {schema_version: "loopx_goal_outcomes_v0", outcomes: [row]};
+    const content = {...source.content, goal_acceptance_contract: {outcome_requirements}};
+    const work_context = {sources: [{...source, content}]};
+    return progressiveContextPlan({surface: "quota_packet", payload: {
+      ok: true, interaction_contract: {agent_channel: {work_context}}}});
+  };
+  const legacy = plan(outcome);
+  assert.equal(legacy.deferred.length, 3);
+  for (const reviewer of ["prior-owner", outcome.owner_agent_id, "another:reviewer"]) {
+    assert.deepEqual(plan(transferred("prior-owner", reviewer)), legacy);
+  }
+  for (const malformed of ["", "owner/path", "owner\n", "a".repeat(129), null, {}]) {
+    assert.deepEqual(plan(transferred(malformed, "prior-reviewer")).deferred, []);
+    assert.deepEqual(plan(transferred("prior-owner", malformed)).deferred, []);
+  }
+  assert.deepEqual(plan({...transferred("prior-owner", "prior-reviewer"), future_stop: true}).deferred, []);
 });
 
 test("unknown and failed source semantics remain whole rather than becoming guessed requirements", () => {
@@ -221,4 +246,95 @@ test("first read keeps decision rules and preserves nonstandard Vision obligatio
     required.vision_authoring = {...schema, new_stop: "Keep this changed policy visible."};
     assert.ok(initialContextReadPointers(context, []).includes(base));
   }
+});
+
+test("bounded ready opening discloses omitted suggested outcome parents before dependent work", () => {
+  const identity = {schema_version: "quota_settlement_identity_v0", effect_id: "effect-1",
+    goal_id: "goal-1", agent_id: "agent-1", todo_id: "todo-1", turn_instance_id: "turn-1"};
+  const makeOutcome = (id: string, description: string) => ({
+    id, objective: `Verify ${id}.`, revision: 1, owner_agent_id: "agent-1", todo_ids: ["todo-1"],
+    sources: [{ref: `${id}:evidence`, summary: "Supporting evidence. ".repeat(120)}],
+    requirements: [{id: `${id}-req`, description, status: "unverified", planning_satisfied: false}],
+  });
+  const baseContext = {
+    ok: true, goal_id: "goal-1", agent_id: "agent-1", agent_identity: {agent_id: "agent-1"},
+    should_run: true, effective_action: "normal_run", normal_delivery_allowed: true,
+    selected_todo: {todo_id: "todo-1"}, heartbeat_receipt: {settlement_identity: identity},
+    interaction_contract: {
+      schema_version: "loopx_interaction_contract_v0",
+      agent_channel: {delivery_allowed: true, work_context: {sources: [{
+        source: "goal_acceptance",
+        reason: FULL_OUTCOME_READ_GUIDANCE,
+        content: {
+          status: "loaded", ok: true, read_complete: true, decision_read_from_provider: true,
+          legacy_fallback_used: false, provider_revision: "rev-1",
+          goal_acceptance_contract: {outcome_requirements: {
+            schema_version: "loopx_goal_outcomes_v0", current_lifetime: true, revision: 3,
+            outcomes: [
+              makeOutcome("first", "Retain complete requirement A. ".repeat(260)),
+              {...makeOutcome("second", "Retain complete requirement B. ".repeat(260)), declaration_owner_agent_id: "original-agent"},
+              makeOutcome("third", "Keep unrelated criterion separate."),
+            ],
+          }},
+          outcome_context: {
+            schema_version: "outcome_context_navigation_v1", goal_id: "goal-1", agent_id: "agent-1",
+            todo_id: "todo-1", outcome_revision: 3, provider_revision: "rev-1",
+            coverage_complete: true, suggested_outcome_ids: ["first", "second"],
+          },
+        },
+      }]}},
+      cli_channel: {
+        execution_preparation: {state: "ready", todo_id: "todo-1"},
+        settlement_plan: {schema_version: "quota_settlement_plan_v2", identity, ordered_steps: []},
+      },
+    },
+  };
+  const prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes";
+  const readInitialPlan = (budget: number, captureId: string) => {
+    const request = {
+      scope: {goal_id: "goal-1", agent_id: "agent-1", session_id: "session-1", context_epoch: "epoch-1"},
+      capture_id: captureId, surface: "quota_packet",
+      context: baseContext, include_initial_read_plan: true,
+      native_projection: {
+        path: "projection.json", sha256: "a".repeat(64), initial_read_output_bytes: budget,
+        command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "a".repeat(64) + " --select '<pointer>'",
+      },
+    };
+    const {changes} = prepareProgressiveContextDelivery(request, [], ["ok", "goal_id", "effective_action"]) as {
+      changes: {path: (string | number)[]; from?: (string | number)[]; value?: unknown; remove?: true}[];
+    };
+    const applied: Record<string, unknown> = structuredClone(request);
+    const get = (root: unknown, path: (string | number)[]) =>
+      path.reduce<unknown>((node, key) => (node as Record<string | number, unknown>)[key], root);
+    for (const edit of changes) {
+      const parent = get(applied, edit.path.slice(0, -1)) as Record<string | number, unknown>;
+      const key = edit.path.at(-1)!;
+      if (edit.remove) delete parent[key];
+      else parent[key] = structuredClone(edit.from ? get(request, edit.from) : edit.value);
+    }
+    return applied.initial_read_plan as {
+      plan: {selections: {pointer: string}[]};
+      deferred_suggested_outcomes?: string[];
+      opening_context_instruction?: string;
+    };
+  };
+  const initialPlan = readInitialPlan(12000, "cap-1");
+  const pointers = initialPlan.plan.selections.map(row => row.pointer);
+  assert.ok(!pointers.includes(prefix + "/0") && !pointers.includes(prefix + "/1"));
+  assert.ok(pointers.includes(prefix + "/0/id") && pointers.includes(prefix + "/0/objective") && pointers.includes(prefix + "/0/revision"));
+  assert.ok(pointers.includes(prefix + "/1/id") && pointers.includes(prefix + "/1/objective") && pointers.includes(prefix + "/1/revision"));
+  assert.deepEqual(initialPlan.deferred_suggested_outcomes, [prefix + "/0", prefix + "/1"]);
+  assert.ok(typeof initialPlan.opening_context_instruction === "string");
+  assert.ok(!initialPlan.opening_context_instruction.includes("This view retains complete requirements"));
+  assert.ok(initialPlan.opening_context_instruction.includes("Before dependent work"));
+  assert.ok(initialPlan.opening_context_instruction.includes(prefix + "/0"));
+  assert.ok(initialPlan.opening_context_instruction.includes(prefix + "/1"));
+  assert.ok(initialPlan.opening_context_instruction.includes("recovery.command"));
+  assert.ok(initialPlan.opening_context_instruction.includes("remove /id"));
+
+  const largerPlan = readInitialPlan(64000, "cap-2");
+  const largerPointers = largerPlan.plan.selections.map(row => row.pointer);
+  assert.ok(largerPointers.includes(prefix + "/0") && largerPointers.includes(prefix + "/1"));
+  assert.equal(largerPlan.deferred_suggested_outcomes, undefined);
+  assert.equal(largerPlan.opening_context_instruction, undefined);
 });

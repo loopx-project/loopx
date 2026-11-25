@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from loopx.control_plane.quota.turn_envelope import build_turn_envelope
 from test_replan_successor_guard_reentry import AGENT, GOAL, _fixture, _guard
 
 
@@ -149,10 +150,16 @@ def test_hidden_completed_source_recovers_its_original_guard_after_new_work(
         obligation["obligation_id"], "--source", "heartbeat", "--execute", expected_code=1)
     assert denied.get("appended") is not True
 
+    packet = recovered["replan_action_packet"]
+    assert "agent_vision.stride_decision" in packet["writeback_contract"]["required_fields"]
+    stride = packet["stride_control"]["minimal_example"]
+    assert stride["reference_obligation_id"] == obligation["obligation_id"]
+    assert stride["reference_context_id"] == recovered["autonomous_replan_obligation"]["replan_context"]["context_id"]
     vision = tmp_path / "accepted-review.json"
     vision.write_text(json.dumps({"schema_version": "goal_vision_replan_contract_v0",
         "state": "vision_patch_proposed", "vision_patch": {
             "acceptance_summary": "Finite maintenance is verified; the independent new source remains open."},
+        "stride_decision": stride,
         "path_delta": {"schema_version": "goal_path_delta_v0", "outcome": "continue",
             "prior_assumption": "Finite maintenance needed a terminal disposition.",
             "observed_reality": "Its original outcome and no-follow-up were verified; new work remains independent.",
@@ -198,8 +205,6 @@ def test_native_cli_context_exposes_the_same_bound_lifecycle_reentry(
     entry = call("quota", "should-run", "--runtime-profile", "generic_cli", "--goal-id", GOAL,
         "--agent-id", AGENT, "--turn-instance-id", turn, "--context-delivery", delivery,
         "--decision-output-dir", str(tmp_path / "capture"))
-    from loopx.control_plane.quota.turn_envelope import build_turn_envelope
-
     if delivery == "auto":
         assert entry["schema_version"] == "context_capture_navigation_v1"
         selected = call("quota", "context-read", "--reference-file", entry["recovery"]["reference_file"],

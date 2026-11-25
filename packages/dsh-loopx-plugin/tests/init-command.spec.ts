@@ -600,6 +600,7 @@ describe('/loopx-init implementation', () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-loopx-managed-runtime-'))
     const runtimeDir = join(root, 'runtime')
     const launcherPath = join(runtimeDir, 'loopx_cli.py')
+    const pythonBin = join(root, 'bin', 'python3')
     await mkdir(runtimeDir, { recursive: true })
     await writeFile(launcherPath, '# fixture launcher\n', 'utf8')
     const calls: Array<{ readonly file: string; readonly args: readonly string[] }> = []
@@ -621,11 +622,13 @@ describe('/loopx-init implementation', () => {
     }
 
     try {
-      const command = await resolvePluginLoopXCommand({ runner, runtimeDir })
+      const command = await resolvePluginLoopXCommand({ runner, runtimeDir, pythonBin })
+      expect(command.file).toBe(pythonBin)
       expect(command.prefix).toEqual([launcherPath])
       const result = await initializeLoopX({
         runner,
         runtimeDir,
+        pythonBin,
         skillsDir: join(root, 'skills'),
       })
       expect(result.cliInstalled).toBe(false)
@@ -634,7 +637,7 @@ describe('/loopx-init implementation', () => {
       ))).toBe(false)
       expect(calls.filter(call => call.args.includes('workflow-skills')).every(call => (
         call.args[call.args.indexOf('--cli-bin') + 1]
-          === `python3 ${launcherPath}`
+          === command.skillCommand
       ))).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })

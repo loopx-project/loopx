@@ -24,7 +24,7 @@ from ...chat_agent import (
     CodexChatAgentError, CodexChatAgentSession, CodexChatTimeoutError,
     _retry_error_details, _routing_discovery_timeout, _event_thread_id, _event_turn_id, _terminal_turn_error,
 )
-from ...chat_codex_goal import CodexGoalDriver
+from ...chat.codex_goal import CodexGoalDriver
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 
 if TYPE_CHECKING:
@@ -283,7 +283,7 @@ class NativeHistoryRestoration:
 
     def manager_migration(self, *, refresh: bool) -> bool:
         from ...chat_manager import MANAGER_CONTEXT_VERSION, is_manager_channel
-        from ...chat_codex_goal import UPSTREAM_MODE
+        from ...chat.codex_goal import UPSTREAM_MODE
         return bool(is_manager_channel(self.session.get("channel_id")) and self.session.get("upstream_mode") != UPSTREAM_MODE
             and (self.session.get("manager_context_version") != MANAGER_CONTEXT_VERSION or refresh or self.session.get("answer_review") is True))
 
@@ -296,7 +296,7 @@ class NativeHistoryRestoration:
             and any(session.get(key) != value for key, value in manager_runtime_session_fields(manager_runtime).items()))
 
     def provider_migration(self, stored: list[dict[str, Any]]) -> bool:
-        from ...chat_codex_goal import UPSTREAM_MODE
+        from ...chat.codex_goal import UPSTREAM_MODE
         return bool(self.session.get("agent_id") == "codex" and self.session.get("upstream_mode") not in {"chat", UPSTREAM_MODE}
             or self.session.get("agent_id") == "claude-code" and (self.session.get("last_error_code") == "provider_unavailable"
                 or bool(stored and stored[-1].get("role") == "error")))
@@ -407,9 +407,11 @@ def compact_native_history(
     while True:
         # This is model work, not a control RPC. Reuse the native Turn's
         # idle/hard budgets and the caller's live lifecycle checks.
-        deadline = last_activity_at + session.idle_timeout_sec
-        if session.hard_timeout_sec is not None:
-            deadline = min(deadline, started_at + session.hard_timeout_sec)
+        deadlines = [
+            *([last_activity_at + session.idle_timeout_sec] if session.idle_timeout_sec is not None else []),
+            *([started_at + session.hard_timeout_sec] if session.hard_timeout_sec is not None else []),
+        ]
+        deadline = min(deadlines) if deadlines else None
         event = session._next_event(deadline=deadline, **({"check": check} if check is not None else {}))
         if session._check_server_gate(event):
             continue
@@ -1094,7 +1096,7 @@ class CodexAppServerAdapter:
         history: list[dict[str, Any]] | None = None,
         resume_thread_id: str | None = None,
         startup_timeout_sec: float = 30.0,
-        idle_timeout_sec: float = 180.0,
+        idle_timeout_sec: float | None = None,
         hard_timeout_sec: float | None = None,
         execution_mode: bool = False,
         runtime_profile: str = "restricted",
@@ -1228,10 +1230,19 @@ class CodexAppServerAdapter:
             "steering": True,
         }
 
-    def start_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
-                   reply_image_turn_id: str | None = None) -> dict[str, Any]:
-        return self.session.send(message, on_event=event_sink, **self._ordinary_turn_arguments(),
-            **({"reply_image_turn_id": reply_image_turn_id} if reply_image_turn_id is not None else {}))
+    def start_turn(
+        self, message: str, event_sink: Callable[[str, dict[str, Any]], None], *,
+        reply_image_turn_id: str | None = None, attachments: list[dict[str, Any]] | None = None,
+        reply_documents: bool = False,
+    ) -> dict[str, Any]:
+        arguments = self._ordinary_turn_arguments()
+        if reply_image_turn_id is not None:
+            arguments["reply_image_turn_id"] = reply_image_turn_id
+        if attachments:
+            arguments["attachments"] = attachments
+        if reply_documents:
+            arguments["reply_documents"] = True
+        return self.session.send(message, on_event=event_sink, **arguments)
 
     def _ordinary_turn_arguments(self):
         check = self._managed_read_turn_guard
@@ -1280,8 +1291,7 @@ class CodexAppServerAdapter:
         event_sink: Callable[[str, dict[str, Any]], None],
         attachments: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        return self.session.send(message, attachments=attachments, on_event=event_sink,
-            **self._ordinary_turn_arguments())
+        return self.start_turn(message, event_sink, attachments=attachments)
 
     def interrupt_turn(self, turn_id: str | None = None) -> None:
         driver = self.goal_driver
@@ -1336,7 +1346,7 @@ def start_bound_project_turn(external: ChatExternalConversations, adapter: Any, 
 
 
 def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_schema: dict | None,
-                         reply_image_turn_id: str | None) -> dict[str, Any]:
+                         reply_image_turn_id: str | None, reply_documents: bool = False) -> dict[str, Any]:
     if output_schema is not None:
         try:
             result = json.loads(raw)
@@ -1351,7 +1361,8 @@ def native_turn_response(session: CodexChatAgentSession, raw: str, *, output_sch
 
     image_targets: list[str] | None = [] if reply_image_turn_id is not None else None
     response = parse_agent_response(raw, protected_paths=[session.work_dir],
-        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets)
+        team_plan_context=getattr(session, "team_plan_context", None), image_targets=image_targets,
+        reply_documents=reply_documents)
     if image_targets and reply_image_turn_id is not None:
         plan = capture_reply_image_plan(session.work_dir.resolve(), reply_image_turn_id, image_targets)
         if plan:

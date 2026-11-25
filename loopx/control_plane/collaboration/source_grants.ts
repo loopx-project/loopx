@@ -70,7 +70,7 @@ export function configureOriginalConversationGrant(params: JsonObject): JsonObje
 }
 
 /** Retire only this exact native conversation's grants. Historical requests and
- * receipts remain readable;
+ * receipts remain readable.
  */
 export function revokeConversationSources(params: JsonObject): JsonObject {
   const id = requireNonEmptyString(params.binding_id, "conversation binding identity");
@@ -80,7 +80,7 @@ export function revokeConversationSources(params: JsonObject): JsonObject {
   const sources = requireJsonObject(policy.sources, "context sources");
   let changed = false;
   const retired = Object.fromEntries(Object.entries(sources).map(([key, value]) => {
-    const sourceBinding = /^manager\.external\.native\.([a-f0-9]{24})\.[a-f0-9]{24}$/.exec(key)?.[1];
+    const sourceBinding = /^manager\.external\.native\.([a-f0-9]{24})\.[a-f0-9]{24}(?:\.topic\.[a-f0-9]{24})?$/.exec(key)?.[1];
     if (sourceBinding !== id) return [key, value];
     const source = requireJsonObject(value, "conversation source");
     // Keep an explicit empty read scope: removing the row would restore the

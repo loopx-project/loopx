@@ -412,6 +412,41 @@ C1 default-channel adoption, installed behavior or model/outcome benefit.
 The visible-Goal hard-lease control carries the same guard's proof into manual
 writeback and retains rejection of unproven writeback without changing the log.
 
+Ordinary Turn planning and failed-Turn recovery now use one
+[`TypeScript conversation policy`](../../../loopx/control_plane/turn_driver/session_binding.ts)
+through the existing Turn RPC boundary. The Python start/resume/reject producer
+is retired; the existing session store and public binding/context schemas stay
+in place. Both callers retain fresh binding omission, schema/identity refusal
+precedence, Agent versus Todo conversation scope, request-bound fresh execution
+and the original recovery transaction. The retained Python adapter encodes
+historical `str(value or "")` identities for existing callers and recorded
+journals; remove that codec with their C1 historical-reader retirement, rather
+than keeping a second normal decision path. The persisted session-key helper
+remains an IO namespace contract. [Boundary checks](../../../tests/control_plane/test_turn_session_policy.py)
+and existing [File/SQLite CLI and retry checks](../../../tests/control_plane/test_complete_session_binding.py)
+cover readback, refusal without effects and once-only original-source recovery.
+This is a source migration checkpoint; installed Host adoption, the remaining
+C1/C4/C9 cutover, product composition and outcome/full-cost benefit stay open.
+If the session-policy transport response is unavailable, recovery remains a
+structured Host Session refusal with the original journal and identity intact;
+it does not become an unrelated execution ambiguity.
+
+**Source checkpoint: Host retry and settlement recovery (2026-11-21).** A failed
+Host result that requires another model attempt now uses the existing TypeScript
+heartbeat work-requalification owner through the
+[launch adapter](../../../loopx/cli_commands/turn_decision.py). The
+[Turn adapter](../../../loopx/cli_commands/turn_run_once.py) retains the recorded
+preparation before launch and resolves a recovery lease only for a validated
+settlement effect. This removes pre-launch lease replacement rather than adding
+another generation rule. The
+[File/SQLite controls](../../../tests/test_codex_turn_completion.py) distinguish
+same-generation Host retry, replaced-generation refusal, failed task validation,
+frozen-result completion, interruption after lease retirement and once-only
+replay. On `main@3d15059fef14`, the replaced-generation counterexample reruns the
+Host and settles; the candidate refuses it while retaining the other controls.
+Full execution cutover, installed adoption, other-backend qualification and
+independent method/outcome benefit remain open.
+
 The first task needs an actual feedback or method-choice requirement. Reuse complete existing paths; real consumers must demonstrate gaps before repairing them rather than manufacturing a failure for the example. Experiments, training and procedural publication retain original authority. This document allocates neither another lane's quota nor a prescribed PR count.
 
 ## 12. Consequential choices to confirm

@@ -75,8 +75,10 @@ def _paths_overlap(left: Path, right: Path) -> bool:
 
 
 def _scan_public_text(path: Path, relative_path: str) -> None:
-    if path.suffix.lower() not in _TEXT_SUFFIXES or path.stat().st_size > 2_000_000:
+    if path.suffix.lower() not in _TEXT_SUFFIXES:
         return
+    # A size exemption would certify the unscanned tail as public-safe; the caller
+    # already reads the whole file for its digest, so scan every text byte copied.
     text = path.read_text(encoding="utf-8", errors="replace")
     for label, pattern in _PUBLIC_BOUNDARY_PATTERNS:
         if pattern.search(text):

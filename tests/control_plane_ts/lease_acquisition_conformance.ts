@@ -254,11 +254,16 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
   });
 
   for (const dimension of ["live", "archived", "excluded", "claim", "deregistered", "expired"] as const) {
-    test(`${provider} complete scope scan adjudicates ${dimension} holder beyond display limits`, async t => {
-      const {store, request, fixture} = await setup(t, "native", (p, _target, conflict) => {
+    test(`${provider} complete scope scan adjudicates ${dimension} same-checkout holder beyond display limits`, async t => {
+      const checkout = {host: "1".repeat(64), common_directory: "2".repeat(64),
+        worktree: "3".repeat(64), repository: "git:github.com/team/a"};
+      const {store, request, fixture} = await setup(t, "native", (p, target, conflict) => {
+        (p.todos as JsonObject[]).find(r => r.todo_id === target)!.task_repository = checkout.repository;
         const todo = (p.todos as JsonObject[]).find(r => r.todo_id === conflict)!;
         const lease = (p.leases as JsonObject[]).find(r => r.todo_id === conflict)!;
         lease.write_scopes = ["lease-admission/shared/**"];
+        lease.write_workspace = checkout;
+        lease.write_repository = checkout.repository;
         if (dimension === "archived") todo.archive_state = "archive";
         if (dimension === "excluded") todo.excluded_agents = ["agent-b"];
         if (dimension === "claim") todo.claimed_by = "agent-a";
@@ -266,9 +271,9 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
         if (dimension === "expired") lease.expires_at = "2026-09-13T10:00:00Z";
       });
       const before = await loaded(store);
-      const result = await acquire(store, request);
+      const result = await acquire(store, {...request, write_workspace: checkout});
       if (dimension === "live") {
-        assert.equal(result.reason_code, "write_scope_conflict");
+        assert.equal(result.reason_code, "workspace_lease_conflict");
         assert.equal((result.conflicts as JsonObject[])[0]!.todo_id, fixture.acquisition.conflict_todo_id);
         assert.deepEqual(await loaded(store), before);
       } else assert.equal(result.status, "applied", JSON.stringify(result));
@@ -321,29 +326,27 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
     assert.equal((result.lease as JsonObject).version, 1);
   });
 
-  for (const [kind, repository, frozen, allowed] of [
-    ["different", "git:github.com/team/a", "git:github.com/team/b", true],
-    ["same", "git:github.com/team/a", "git:github.com/team/a", false],
-    ["case-alias", "git:github.com/Team/A", "git:github.com/team/a", false],
-    ["legacy-holder", "git:github.com/team/a", null, false],
-    ["unknown-requester", null, "git:github.com/team/b", false],
+  for (const [kind, repository, frozen] of [
+    ["different", "git:github.com/team/a", "git:github.com/team/b"],
+    ["same", "git:github.com/team/a", "git:github.com/team/a"],
+    ["case-alias", "git:github.com/Team/A", "git:github.com/team/a"],
+    ["legacy-holder", "git:github.com/team/a", null],
+    ["unknown-requester", null, "git:github.com/team/b"],
   ] as const) {
-    test(`${provider} repository namespace ${kind} retains complete-scan admission`, async t => {
+    test(`${provider} repository namespace ${kind} acquires without per-path write_scope_conflict`, async t => {
       const {store, request} = await setup(t, "native", (p, target, conflict) => {
         (p.todos as JsonObject[]).find(r => r.todo_id === target)!.task_repository = repository;
-        // Even a known current Todo cannot backfill an old unknown grant.
         (p.todos as JsonObject[]).find(r => r.todo_id === conflict)!.task_repository = "git:github.com/team/b";
         const holder = (p.leases as JsonObject[]).find(r => r.todo_id === conflict)!;
         holder.write_scopes = ["lease-admission/shared/**"];
         if (frozen !== null) holder.write_repository = frozen;
       });
-      const before = await loaded(store), result = await acquire(store, request);
-      if (allowed) {
-        assert.equal(result.status, "applied", JSON.stringify(result));
+      const result = await acquire(store, request);
+      assert.equal(result.status, "applied", JSON.stringify(result));
+      if (repository !== null) {
         assert.equal((result.lease as JsonObject).write_repository, repository);
       } else {
-        assert.equal(result.reason_code, "write_scope_conflict", JSON.stringify(result));
-        assert.deepEqual(await loaded(store), before);
+        assert.equal((result.lease as JsonObject).write_repository, undefined);
       }
     });
   }
@@ -365,7 +368,7 @@ export function registerLeaseAcquisitionConformance(provider: string, factory: A
       lease_request: {idempotency_key: "repository-b", expected_version: 0, ttl_seconds: 600}, dry_run: false, now: request.now});
     assert.equal(second.status, "applied", JSON.stringify(second));
     assert.equal((second.lease as JsonObject).write_repository, "git:github.com/team/b");
-    assert.deepEqual((second.lease as JsonObject).write_scopes, ["tests/**"]);
+    assert.deepEqual((second.lease as JsonObject).write_scopes, []);
     const maintenance = {...request, operation: "renew" as const, expected_version: 1};
     const renewed = await mutate(store, maintenance);
     assert.equal(renewed.status, "applied");

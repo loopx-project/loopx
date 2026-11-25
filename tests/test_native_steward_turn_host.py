@@ -1237,7 +1237,7 @@ def test_native_steward_advancement_and_report_run_on_qualified_antigravity_fall
 
     def fake_start(cls, *, work_dir, objective, resume_thread_id=None, history=None,
                    runtime_profile="restricted", team_plan_context=None, executor_model=None,
-                   env=None, hard_timeout_sec=None):
+                   env=None, idle_timeout_sec=None, hard_timeout_sec=None):
         return cls(
             work_dir=work_dir,
             objective=objective,

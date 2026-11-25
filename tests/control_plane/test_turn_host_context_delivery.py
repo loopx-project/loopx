@@ -72,7 +72,7 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "host-context-turn", "--codex-app",
         "--available-capability", "filesystem_read", "--available-capability", "subagent_spawn",
-        "--turn-envelope", "--decision-output-dir", str(capture), *delivery]
+        "--decision-output-dir", str(capture), *delivery]
     produced = subprocess.run(guard, cwd=project, text=True, capture_output=True, timeout=30)
     assert produced.returncode == 0, produced.stdout + produced.stderr
     original = (capture / "decision.json").read_bytes()
@@ -208,7 +208,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
     code, emitted = _run_cli(registry, runtime, "quota", "should-run",
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
         "--todo-id", SELECTED_REPLAN_TODO_ID, "--turn-instance-id", turn,
-        "--codex-app", "--turn-envelope", "--decision-output-dir", str(capture), cwd=project)
+        "--codex-app", "--decision-output-dir", str(capture), cwd=project)
     assert code == 0, emitted
     original = (capture / "decision.json").read_bytes()
     source = json.loads(original)

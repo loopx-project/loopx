@@ -69,6 +69,11 @@
       "any_count": 16,
       "dict_any_count": 0
     },
+    "loopx/collaboration_mcp.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1792
+    },
     "loopx/control_plane/agents/agent_lane_recommendation.py": {
       "any_count": 0,
       "dict_any_count": 0,
@@ -151,7 +156,7 @@
     "loopx/history.py": {
       "any_count": 0,
       "dict_any_count": 0,
-      "lines": 1035
+      "lines": 1122
     },
     "loopx/pr_review.py": {
       "any_count": 49,

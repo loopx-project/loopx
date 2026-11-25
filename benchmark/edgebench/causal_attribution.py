@@ -18,6 +18,23 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
+# Values historical arms may have recorded. New LoopX arms always record
+# evidence_conditioned_v1; absence (None) and "off" remain readable history.
+_HISTORICAL_STRIDE_STRATEGIES: Tuple[Optional[str], ...] = (None, "off", "evidence_conditioned_v1")
+
+
+def historical_stride_strategy_options() -> Tuple[Optional[str], ...]:
+    """Return read-only stride strategy values accepted in historical records."""
+    return _HISTORICAL_STRIDE_STRATEGIES
+
+
+def validate_historical_stride_strategy(value: Any) -> Optional[str]:
+    """Validate a recorded stride strategy without selecting a live policy."""
+    if value not in _HISTORICAL_STRIDE_STRATEGIES:
+        raise ValueError("stride_strategy must be absent, off or evidence_conditioned_v1")
+    return value
+
+
 @dataclass(frozen=True)
 class InflectionPoint:
     """A decisive inflection point in an agent's execution trajectory."""
@@ -67,6 +84,9 @@ class ArmPerformance:
     stride_strategy: Optional[str] = None
     explore_enabled: bool = False
     grounding_retention_ratio: float = 1.0  # last_score / best_score
+
+    def __post_init__(self) -> None:
+        validate_historical_stride_strategy(self.stride_strategy)
 
 
 def compute_sha256(data: bytes) -> str:
@@ -149,6 +169,8 @@ def load_cross_task_data(data_dir: Path) -> Dict[str, Any]:
             raise FileNotFoundError(f"Missing required study data file: {path}")
         with path.open("r", encoding="utf-8") as f:
             loaded[key] = json.load(f)
+    for arm in loaded["five_arms_matrix"].get("arms", []):
+        validate_historical_stride_strategy(arm.get("stride_strategy"))
     return loaded
 
 

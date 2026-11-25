@@ -17,6 +17,7 @@ from loopx.control_plane.status.autonomous_replan_projection import (
 from loopx.control_plane.work_items.semantic_replan_writeback import (
     ReplanWritebackRejected,
     enforce_open_replan_writeback,
+    qualify_replan_writeback,
 )
 from tests.control_plane.test_quota_settlement_cli import (
     _bind_selected_replan_guard,
@@ -40,6 +41,20 @@ def successor_state(obligation_id: str, *, owner: str = AGENT) -> str:
             f"updated_at={quote('2026-08-01T01:00:00Z', safe='')} -->\n")
 
 
+def stride_vision(stride: dict, *, evidence_ref: str) -> dict:
+    return {
+        "state": "vision_patch_proposed",
+        "vision_patch": {"acceptance_summary": "Verify the source in one bounded review."},
+        "path_delta": {
+            "schema_version": "goal_path_delta_v0", "outcome": "replan",
+            "prior_assumption": "The review used the existing source.",
+            "observed_reality": "An independent source can verify the outcome.",
+            "changed": ["Check the independent source."], "evidence_refs": [evidence_ref],
+        },
+        "stride_decision": stride,
+    }
+
+
 def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: Path, capsys) -> None:
     from canonical_authority_fixture import initialize_canonical_authority
     from loopx.control_plane.coordination.runtime_shadow import (
@@ -49,15 +64,24 @@ def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: P
     project = tmp_path / "project"
     project.mkdir()
     state = project / "ACTIVE_GOAL_STATE.md"
-    state.write_text("# Goal\n\n## Agent Todo\n")
+    state.write_text("# Project\n\n## Goal\n\nVerify the independent source.\n\n## Agent Todo\n")
     runtime = tmp_path / "runtime"
     index = runtime / "goals" / GOAL / "runs" / "index.jsonl"
     index.parent.mkdir(parents=True)
     runs = history()
+    baseline_json = index.parent / "synthetic-baseline.json"
+    baseline_markdown = index.parent / "synthetic-baseline.md"
+    baseline_json.write_text('{"ok": true}')
+    baseline_markdown.write_text("# Prior synthetic delivery\n")
+    for row in runs:
+        row.update(json_path=str(baseline_json), markdown_path=str(baseline_markdown))
     index.write_text("".join(json.dumps(row) + "\n" for row in reversed(runs)))
     registry = tmp_path / "registry.json"
     registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [{
         "id": GOAL, "status": "active", "repo": str(project), "state_file": state.name,
+        "domain": "synthetic-replan",
+        "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
+        "quota": {"compute": 1.0, "window_hours": 24},
         # Exercise the periodic-history window instead of the live machine default.
         "coordination": {"agent_model": "peer_v1", "registered_agents": [AGENT]},
         "execution_profile": {"replan_after_completed_todos": 5},
@@ -81,17 +105,29 @@ def test_cli_completed_todo_successor_refresh_resets_periodic_window(tmp_path: P
         "--replan-obligation-id", obligation["obligation_id"]]) == 0
     added = json.loads(capsys.readouterr().out)
     assert added["replan_transition"]["outcome"] == "new_runnable_successor"
-    assert cli_main(common + ["refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
+    assert cli_main(common + ["quota", "should-run", "--context-delivery", "off",
+        "--goal-id", GOAL, "--agent-id", AGENT]) == 0
+    guard = json.loads(capsys.readouterr().out)
+    stride = guard["replan_action_packet"]["stride_control"]["minimal_example"]
+    vision_path = tmp_path / "stride-vision.json"
+    vision_path.write_text(json.dumps(stride_vision(stride, evidence_ref=f"todo:{added['todo_id']}")))
+    refresh = common + ["refresh-state", "--goal-id", GOAL, "--agent-id", AGENT,
         "--progress-scope", "agent_lane", "--classification", "bounded_replan_progress",
-        "--delivery-outcome", "surface_only", "--no-global-sync"]) == 0
+        "--delivery-outcome", "surface_only", "--no-global-sync"]
+    assert cli_main(refresh) == 1
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected["replan_transition"]["reason_code"] == "stride_decision_required"
+    assert cli_main(refresh + ["--agent-vision-json", str(vision_path)]) == 0
     refreshed = json.loads(capsys.readouterr().out)
     persisted = json.loads(Path(refreshed["json_path"]).read_text())
     ack = persisted["autonomous_replan_ack"]
     assert ack["recorded"] is True
     delta = ack["semantic_delta"]
     assert delta["obligation_id"] == obligation["obligation_id"]
-    assert delta["successor_todo_id"] == added["todo_id"]
-    assert delta["satisfying_outcomes"] == ["new_runnable_successor"]
+    assert "fresh_vision_path_outcome" in delta["satisfying_outcomes"]
+    assert cli_main(common + ["todo", "list", "--goal-id", GOAL, "--todo-id", added["todo_id"]]) == 0
+    successor = json.loads(capsys.readouterr().out)["todo"]
+    assert successor["status"] == "open" and successor["claimed_by"] == AGENT
     compact = json.loads(index.read_text().splitlines()[-1])
     assert compact["autonomous_replan_ack"]["recorded"] is True
     assert autonomous_replan_obligation_from_runs(
@@ -123,13 +159,21 @@ def test_transition_cannot_settle_a_different_turn_guard(guard) -> None:
 
 
 def test_transition_settles_only_exact_guard_and_owner() -> None:
+    from loopx.control_plane.work_items.progress_observation import build_replan_action_packet
+
     runs = history()
     obligation = autonomous_replan_obligation_from_runs(runs, agent_todos={}, agent_id=AGENT)
     kwargs = dict(newest_first_runs=runs, agent_id=AGENT, goal_id=GOAL,
                   guard_scoped=True, guard_semantic_replan_obligation_id=obligation["obligation_id"])
-    delta = enforce_open_replan_writeback(
-        state_text=successor_state(obligation["obligation_id"]), **kwargs)
+    state = successor_state(obligation["obligation_id"])
+    admitted, _ = qualify_replan_writeback(state_text=state, **kwargs)
+    assert admitted["obligation_id"] == obligation["obligation_id"]
+    stride = build_replan_action_packet(admitted)["stride_control"]["minimal_example"]
+    delta = enforce_open_replan_writeback(state_text=state,
+        agent_vision=stride_vision(stride, evidence_ref="todo:todo_source_audit"), **kwargs)
     assert delta and delta["accepted"] is True
+    assert delta["obligation_id"] == obligation["obligation_id"]
+    assert "fresh_vision_path_outcome" in delta["satisfying_outcomes"]
     with pytest.raises(ReplanWritebackRejected):
         enforce_open_replan_writeback(
             state_text=successor_state(obligation["obligation_id"], owner="another-agent"), **kwargs)

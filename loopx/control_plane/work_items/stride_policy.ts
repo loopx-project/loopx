@@ -9,6 +9,10 @@ import {requireJsonObject, requireNonEmptyString, requireStringLiteral} from "..
 import {EXPLORE_RESULT_PAGE_MAX, normalizeExploreResultPages} from "../capabilities/explore_result_page.ts";
 import {PLANNING_TODO_ID} from "./planning_relations.ts";
 
+/** The only live strategy. "off" stays decodable for historical records only. */
+export const LIVE_STRIDE_STRATEGY = "evidence_conditioned_v1";
+
+/** Validate a historically recorded strategy value; never selects live behavior. */
 export function normalizeStrideStrategy(value: unknown): string {
   if (value === undefined) return schema.default;
   if (typeof value !== "string" || !schema.enum.includes(value)) {
@@ -384,12 +388,12 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
   return null;
 }
 
-export function strideControlContract(context: JsonObject, obligationId: unknown = null): JsonObject | null {
-  if (normalizeStrideStrategy(context.stride_strategy) === "off") return null;
+export function strideControlContract(context: JsonObject, obligationId: unknown = null): JsonObject {
+  if (context.stride_strategy !== undefined) normalizeStrideStrategy(context.stride_strategy);
   const follow = context.decision_followthrough as JsonObject | undefined;
   const previous = (follow?.previous_decision as JsonObject | undefined)?.evidence_ref ?? null;
   const basis = context.explore_basis as JsonObject | undefined;
-  const example: JsonObject = {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
+  const example: JsonObject = {schema_version: decisionSchema.schema_version, strategy_version: LIVE_STRIDE_STRATEGY,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     basis: "uncertain_evidence", action: "verify", axes: {
       work_slice: {plan: "Complete the work and checks for the adoption decision.", reason: "Resolve adoption uncertainty before expanding."},
@@ -401,7 +405,7 @@ export function strideControlContract(context: JsonObject, obligationId: unknown
     evidence_refs: [], lesson: "Example only: inspect subsequent work and evidence before replacing these unknowns."};
   if (basis) example.explore_review = {revision: basis.revision, disposition: basis.availability === "unavailable" ? "unavailable" : "deferred",
     considered_refs: [], reason: "Example only: inspect applicable findings, counterexamples and alternatives, then replace."};
-  return {schema_version: decisionSchema.schema_version, strategy_version: context.stride_strategy,
+  return {schema_version: decisionSchema.schema_version, strategy_version: LIVE_STRIDE_STRATEGY,
     reference_context_id: context.context_id ?? null, reference_obligation_id: obligationId,
     axis_names: decisionSchema.axis_names, actions: decisionSchema.actions,
     basis_options: decisionSchema.basis_options,

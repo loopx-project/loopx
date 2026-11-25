@@ -289,8 +289,9 @@ class FeedTests(unittest.TestCase):
             "GH_LOG": str(gh_log),
             "RELEASE_TAG": tag,
             "SOURCE_REF": "source-ref",
-            "EVENT_NAME": "release",
+            "EVENT_NAME": "workflow_dispatch" if channel == "main" else "release",
             "CHANNEL": channel,
+            "PYTHONPATH": str(WORKFLOW.parents[2]),
         }
         result = subprocess.run(
             [bash, "-c", script],

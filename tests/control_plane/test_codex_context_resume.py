@@ -1,14 +1,17 @@
 """Native replay continuity: completed deliveries, real history changes, fallback."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from loopx.cli_commands.quota_capture import model_context_reference, native_context_capture_view
 from loopx.control_plane.quota.turn_envelope import restore_context_delivery
 from loopx.control_plane.turn_driver import codex_context as context
 from tests.control_plane.test_codex_context_lifecycle import project, read_pages, setup
@@ -42,13 +45,15 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
                 stream.write(b'x' * (1024 * 1024))
             stream.write(b'"}}\n')
     history.chmod(0o600)
-    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions",
+                 turn_id="read-turn")
+    append(history, "event_msg", {"type": "task_started", "turn_id": event["turn_id"]})
     append(history, "turn_context", {"cwd": str(root), "model": "fixture"})
     payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000},
         "heartbeat_receipt": {"turn_instance_id": "first"}}
     _, first = project(root, payload=payload)
     pages = read_pages(root, first)
-    emissions = []
+    emissions, parent = [], None
     for i, page in enumerate(pages if complete else pages[:-1]):
         call = f"reader-{i}"
         body = json.dumps(page)
@@ -57,13 +62,12 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         if code_mode:
             # Native code-mode retains the parent emission; the nested hook
             # has a different call id. Its actual output must still cover all bytes.
-            if parent_batch == 1:
-                append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
-                    "output": [{"type": "input_text", "text": output}]})
-            else:
-                if not emissions:
-                    append(history, "response_item", {"type": "custom_tool_call", "call_id": f"parent-{i}"})
-                emissions.append({"type": "input_text", "text": output})
+            if not emissions:
+                parent = f"parent-{i}"
+                append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec"})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": event["turn_id"],
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+            emissions.append({"type": "input_text", "text": output})
         else:
             append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": output})
         if lost_prefix and i == len(pages) - 1:
@@ -75,7 +79,7 @@ def observed_read(root, monkeypatch, *, complete=True, shell_wrapper=False, lost
         if emissions and (len(emissions) == parent_batch or i == len(pages) - 1):
             # Nested read hooks run before the enclosing Code Mode emits its
             # complete result. Preserve every emission in that native parent.
-            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": f"parent-{i}",
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
                 "output": emissions})
             emissions = []
     return event, history, payload
@@ -140,11 +144,14 @@ def test_completed_native_resume_keeps_delta_without_old_capture_prefetch(tmp_pa
     assert_file_delta(wire, before["recovery"], current)
 
 
-@pytest.mark.parametrize("replay", ["present", "pinned", "lost_output", "partial", "compacted", "changed_source"])
+@pytest.mark.parametrize("replay", [
+    "present", "direct", "pinned", "paged", "out_of_order", "lost_page", "missing_hook", "batched",
+    "lost_output", "partial", "compacted", "changed_source",
+    "reread", "reread_lost_page", "reread_changed_page",
+    "reread_present_unhooked", "reread_lost_unhooked", "reread_lost_verified",
+])
 def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monkeypatch, replay):
     """A selected read can survive a qualified replay without proving full input."""
-    import hashlib
-
     event = setup(tmp_path, monkeypatch)
     history = tmp_path / "rollout.jsonl"
     append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
@@ -152,8 +159,15 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     history.chmod(0o600)
     event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions")
     append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
-    address = "/requirements"
-    payload = {"ok": True, "goal_id": "fixture", "requirements": "Preserve the current stop. " * 320,
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve the current stop. " * 320
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Keep the current stop."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}},
         "unread": "This is a separate source field. " * 400}
     _, wire = project(tmp_path, payload=payload)
     recovery = wire["recovery"]
@@ -167,27 +181,92 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
         assert result.returncode == 0, result.stdout + result.stderr
         return json.loads(result.stdout)
 
-    if replay == "pinned":
+    reread = replay.startswith("reread")
+    paged = reread or replay in {"paged", "out_of_order", "lost_page", "missing_hook", "batched"}
+    if paged or replay == "pinned":
         from loopx.control_plane.turn_driver.decision_capture import write_context_read_reference
 
         ref = write_context_read_reference(Path(recovery["path"]), recovery["sha256"])
         source = ["--reference-file", str(ref)]
     else:
         source = ["--capture-file", recovery["path"], "--capture-sha256", recovery["sha256"]]
-    page = command(["context-read", *source, "--select", address, "--page-bytes", "1000" if replay == "partial" else "64000",
+    page = command(["context-read", *source, "--select", address,
+        "--page-bytes", "3000" if paged or replay == "partial" else "64000",
         "--max-page-output-bytes", "64000"])
-    assert page["ok"] and page["eof"] == (replay != "partial")
+    assert page["ok"] and page["eof"] == (not paged and replay != "partial")
     hook = ["context-hook", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)]
-    # A code-mode parent may append its actual output after the nested hook.
-    append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent"})
-    command(hook, {**event, "hook_event_name": "PostToolUse", "tool_use_id": "reader",
-        "tool_response": json.dumps(page)})
+    pages = [page]
+    if paged:
+        while not pages[-1]["eof"]:
+            next_command = shlex.split(pages[-1]["next_command"])
+            pages.append(command(next_command[next_command.index("context-read"):]))
+        assert len(pages) > 2
+    if replay == "out_of_order":
+        pages = [pages[-1], *pages[:-1]]
+    replay_pages = list(pages)
+    extra_address = "/goal_boundary/stop_condition"
+    later_turn = {**event, "turn_id": "reread-turn"}
+    if reread:
+        extra = command(["context-read", *source, "--select", extra_address])
+        assert extra["ok"] and extra["eof"]
+        replay_pages.insert(0, extra)
+    emissions = []
+    for index, page in enumerate(replay_pages):
+        # A code-mode parent may append its actual output after the nested hook.
+        reader = f"reader-{index}"
+        parent = "parent-batch" if replay == "batched" else f"parent-{index}"
+        if replay == "direct":
+            append(history, "response_item", {"type": "function_call", "call_id": reader, "name": "exec_command"})
+        elif not emissions:
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": "initial-turn"}})
+        append(history, "event_msg", {"type": "item_completed",
+            "turn_id": "initial-turn", "item": {"type": "CommandExecution", "id": reader, "exit_code": 0}})
+        if replay != "missing_hook" or index != 1:
+            command(hook, {**event, "turn_id": "initial-turn", "hook_event_name": "PostToolUse", "tool_use_id": reader,
+                "tool_response": json.dumps(page)})
+        missing_page = ((replay == "lost_page" and index == 1)
+            or (replay == "reread_lost_page" and index == 2)
+            or (replay in {"reread_lost_unhooked", "reread_lost_verified"} and index == 1))
+        if replay != "lost_output" and not missing_page:
+            retained_page = {**page, "content": page["content"] + " changed"} \
+                if replay == "reread_changed_page" and index == 2 else page
+            if replay == "direct":
+                append(history, "response_item", {"type": "function_call_output",
+                    "call_id": reader, "output": json.dumps(retained_page)})
+            else:
+                emissions.append({"type": "input_text", "text": json.dumps(retained_page)})
+        if emissions and (replay != "batched" or index == len(replay_pages) - 1):
+            append(history, "response_item", {"type": "custom_tool_call_output",
+                "call_id": parent, "output": emissions})
+            emissions = []
+        elif missing_page:
+            # A complete parent result may omit the nested emission altogether.
+            append(history, "response_item", {"type": "custom_tool_call_output",
+                "call_id": parent, "output": []})
+    if reread:
+        again = command(["context-read", *source, "--select", address, "--page-bytes", "3000",
+            "--max-page-output-bytes", "64000"])
+        assert again == pages[0]
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "initial-turn"})
+        append(history, "event_msg", {"type": "task_started", "turn_id": later_turn["turn_id"]})
+        # The host may reuse the earlier parent's ID in the next Turn.
+        parent = "parent-1"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": later_turn["turn_id"]}})
+        append(history, "event_msg", {"type": "item_completed",
+            "turn_id": later_turn["turn_id"],
+            "item": {"type": "CommandExecution", "id": "reader-reread", "exit_code": 0}})
+        if not replay.endswith("_unhooked"):
+            command(hook, {**later_turn, "hook_event_name": "PostToolUse", "tool_use_id": "reader-reread",
+                "tool_response": json.dumps(again)})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": json.dumps(again)}]})
     before = context._state(tmp_path)
-    assert (address in before.get("consumed_pointers", {})) == (replay != "partial")
+    assert (address in before.get("consumed_pointers", {})) == (replay not in {"partial", "missing_hook"})
+    if reread:
+        assert extra_address in before["consumed_pointers"]
     assert "candidate" not in before
-    if replay != "lost_output":
-        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent",
-            "output": [{"type": "input_text", "text": json.dumps(page)}]})
     if replay == "compacted":
         append(history, "compacted", {"message": "Earlier model context was replaced."})
     if replay == "changed_source":
@@ -198,8 +277,30 @@ def test_native_resume_retains_only_replayed_complete_selections(tmp_path, monke
     command(hook, {**event, "source": "resume"})
     after = context._state(tmp_path)
     assert "candidate" not in after
-    expected = {address: before["consumed_pointers"][address]} if replay in {"present", "pinned"} else {}
+    retained = replay in {"present", "direct", "pinned", "paged", "out_of_order", "batched",
+                          "reread", "reread_present_unhooked", "reread_lost_verified"}
+    expected = before["consumed_pointers"] if retained else (
+        {extra_address: before["consumed_pointers"][extra_address]} if reread else {})
     assert after.get("consumed_pointers", {}) == expected
+    if paged:
+        delivered_bytes = sum(len(page["content"].encode("utf-8")) for page in pages)
+        assert delivered_bytes == pages[0]["total_bytes"] > 8_000
+        payload["goal_boundary"]["stop_condition"] = "The new stop applies before publication."
+        directory = tmp_path / "next"
+        directory.mkdir(mode=0o700)
+        prepared = context.prepare_codex_context(payload, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="next")
+        view = model_context_reference(native_context_capture_view(prepared.delivery, directory,
+            context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+        first_command = shlex.split(view["first_read_command"])
+        opening = command(first_command[first_command.index("context-read"):])
+        assert opening["eof"] and payload["goal_boundary"]["stop_condition"] in opening["content"]
+        assert (address in opening.get("previously_delivered_fields", [])) is retained
+        assert (narrative in opening["content"]) is not retained
+        if retained:
+            assert opening["total_bytes"] < len(narrative.encode("utf-8"))
+        else:
+            assert opening["total_bytes"] > len(narrative.encode("utf-8"))
 
 
 @pytest.mark.parametrize("single_page", [False, True])
@@ -406,6 +507,135 @@ def test_complete_eof_cannot_hide_a_prior_page_missing_from_native_replay(tmp_pa
     assert wire["mode"] == "full" and wire["context"] == payload
 
 
+@pytest.mark.parametrize(("replay", "retained"), [
+    ("present", True), ("batch", True), ("missing", False),
+    ("unobserved_copy", False), ("observed_reread", True),
+    ("repeated_resume", False), ("repeated_resume_lost_selection", False),
+])
+def test_full_capture_resume_requires_the_observed_native_output(tmp_path, monkeypatch, replay, retained):
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    history.chmod(0o600)
+    turn_id = "capture-turn"
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1500},
+        "heartbeat_receipt": {"turn_instance_id": "first"}}
+    repeat_resume = replay in {"repeated_resume", "repeated_resume_lost_selection"}
+    narrative = "Keep the complete validated Goal narrative. " * 280
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    if repeat_resume:
+        payload.update(goal_id="fixture", selected_todo={"todo_id": "todo_current"},
+            goal_boundary={"stop_condition": "Observe the original stop."},
+            interaction_contract={"schema_version": "loopx_interaction_contract_v0",
+                "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                    "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                    "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+                }}]}}, "user_channel": {}, "cli_channel": {}})
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    assert len(pages) >= 3 and pages[-1]["eof"]
+
+    def open_parent(parent):
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+
+    def observe(reader, page):
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": reader, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": reader, "tool_response": json.dumps(page)})
+
+    def emit(parent, contents):
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": json.dumps(page)} for page in contents]})
+
+    def read(*args):
+        body, wire_bytes, first_page = bytearray(), 0, None
+        while True:
+            result = subprocess.run([sys.executable, "-m", "loopx.entrypoint", "--format", "json", "quota",
+                "context-read", *args], capture_output=True, text=True, timeout=20, check=False)
+            assert result.returncode == 0, result.stdout + result.stderr
+            page = json.loads(result.stdout)
+            assert page["ok"] and page["offset"] == len(body)
+            first_page = first_page or page
+            body.extend(page["content"].encode())
+            wire_bytes += len(result.stdout.encode())
+            if page["eof"]:
+                assert len(body) == page["total_bytes"]
+                return first_page, body.decode(), wire_bytes
+            words = shlex.split(page["next_command"])
+            args = words[words.index("context-read") + 1:]
+
+    if repeat_resume:
+        selected, _, _ = read("--capture-file", first["recovery"]["path"], "--capture-sha256",
+            first["recovery"]["sha256"], "--select", address, "--page-bytes", "64000",
+            "--max-page-output-bytes", "64000")
+        assert selected["eof"]
+        open_parent("independent-selection")
+        observe("independent-reader", selected)
+        emit("independent-selection", [selected])
+    if replay == "batch":
+        open_parent("batch")
+        for i, page in enumerate(pages):
+            observe(f"reader-{i}", page)
+        emit("batch", pages)
+    else:
+        for i, page in enumerate(pages):
+            parent = f"parent-{i}"
+            open_parent(parent)
+            observe(f"reader-{i}", page)
+            emit(parent, [page] if i or replay == "present" else [])
+            if i == 0 and replay in {"unobserved_copy", "observed_reread"}:
+                open_parent("copy")
+                if replay == "observed_reread":
+                    observe("reader-reread", page)
+                emit("copy", [page])
+    before = context._state(tmp_path)
+    assert before["candidate"]["capture_bytes_verified"]
+    append(history, "event_msg", {"type": "task_complete", "turn_id": turn_id})
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    after = context._state(tmp_path)
+    assert bool(after.get("candidate")) is retained
+    current = {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}}
+    if repeat_resume:
+        assert after.get("consumed_pointers") == {address: before["consumed_pointers"][address]}
+        assert after["context_epoch"] != before["context_epoch"]
+        if replay == "repeated_resume_lost_selection":
+            rows = [json.loads(line) for line in history.read_text().splitlines()]
+            for row in rows:
+                if row["type"] == "response_item" and row["payload"].get("type") == "custom_tool_call_output" \
+                        and row["payload"].get("call_id") == "independent-selection":
+                    row["payload"]["output"] = []
+            history.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        # An ordinary resume can be repeated before any new capture or tool
+        # read. Its original native output must still support the selection.
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert "candidate" not in context._state(tmp_path)
+        current["goal_boundary"] = {"stop_condition": "Observe the current stop."}
+        directory = tmp_path / "second"
+        directory.mkdir(mode=0o700)
+        prepared = context.prepare_codex_context(current, directory=str(tmp_path), capture_directory=directory,
+            goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="second")
+        view = native_context_capture_view(prepared.delivery, directory, context_directory=str(tmp_path),
+            initial_read_plan=prepared.initial_read_plan)
+        assert view["mode"] == "full" and view["target"]["context_epoch"] == after["context_epoch"]
+        first_command = shlex.split(model_context_reference(view)["first_read_command"])
+        opening, opening_content, _ = read(*first_command[first_command.index("context-read") + 1:])
+        assert opening["ok"] and "Observe the current stop." in opening_content
+        if replay == "repeated_resume":
+            assert opening["eof"]
+            assert address in opening.get("previously_delivered_fields", []) and narrative not in opening_content
+        else:
+            assert address not in opening.get("previously_delivered_fields", []) and narrative in opening_content
+        return
+    _, wire = project(tmp_path, "second", payload=current)
+    assert wire["mode"] == ("delta" if retained else "full")
+
+
 @pytest.mark.parametrize("prefix_mib", [0, 96])
 def test_unrelated_history_size_does_not_change_replay_or_decode_cost(tmp_path, monkeypatch, prefix_mib):
     import tracemalloc
@@ -448,3 +678,349 @@ def test_code_mode_retained_emissions_need_complete_native_read_coverage(tmp_pat
     context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
     _, wire = project(tmp_path, "second", payload=payload)
     assert wire["mode"] == ("full" if lose_page else "delta")
+
+
+def _write_large_rollout_record(history: Path, kind: str, *, turn_id: str, mib: int = 17) -> None:
+    chunk = (b'x\\"\\\\\\u0041\xc3\xa9' * 6500)[:65536]  # exercises chunk-boundary escapes & UTF-8
+    repeat = (mib * 1024 * 1024) // len(chunk) + 1
+    if kind == "closed_output":
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "earlier-closed",
+            "name": "exec", "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"response_item","payload":{"output":[{"type":"input_text","text":"')
+            for _ in range(repeat):
+                stream.write(chunk)
+            stream.write(b'"}],"call_id":"earlier-closed","type":"custom_tool_call_output"}}\n')
+    else:
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"event_msg","payload":{"message":"')
+            for _ in range(repeat):
+                stream.write(chunk)
+            stream.write(b'","type":"background_event"}}\n')
+
+
+@pytest.mark.parametrize("same_turn", [False, True])
+@pytest.mark.parametrize("code_mode", [False, True])
+@pytest.mark.parametrize("record_kind", ["background_event", "closed_output"])
+def test_same_turn_large_earlier_record_preserves_native_full_resume(tmp_path, monkeypatch, same_turn, code_mode, record_kind):
+    import tracemalloc
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    if not same_turn:
+        append(history, "event_msg", {"type": "task_started", "turn_id": "prior-turn"})
+        _write_large_rollout_record(history, record_kind, turn_id="prior-turn")
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "prior-turn"})
+    turn_id = "current-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if same_turn:
+        _write_large_rollout_record(history, record_kind, turn_id=turn_id)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1400},
+        "heartbeat_receipt": {"turn_instance_id": "first"}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first, size=2048)
+    assert len(pages) >= 15 and pages[-1]["eof"]
+    peak = 0
+    for i, page in enumerate(pages):
+        call = f"reader-{i}"
+        body = json.dumps(page)
+        if code_mode:
+            parent = f"parent-{i}"
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        else:
+            append(history, "response_item", {"type": "function_call_output", "call_id": call, "output": body})
+        if i == 0:
+            tracemalloc.start()
+            try:
+                context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                    "tool_use_id": call, "tool_response": body})
+                _, hook_peak = tracemalloc.get_traced_memory()
+                peak = max(peak, hook_peak)
+            finally:
+                tracemalloc.stop()
+        else:
+            context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": call, "tool_response": body})
+        if code_mode:
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+                "output": [{"type": "input_text", "text": body}]})
+    assert peak < 2 * 1024 * 1024
+    before = context._state(tmp_path)
+    assert before["candidate"]["native_resume"]["reads"]
+    append(history, "event_msg", {"type": "task_complete", "turn_id": turn_id})
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" in context._state(tmp_path)
+    _, wire = project(tmp_path, "second", payload={**payload, "heartbeat_receipt": {"turn_instance_id": "second"}})
+    assert wire["mode"] == "delta" and wire["continuity_basis"] == "captured_file"
+
+
+@pytest.mark.parametrize("same_turn", [False, True])
+@pytest.mark.parametrize("code_mode", [False, True])
+def test_same_turn_large_earlier_record_preserves_native_selected_resume(tmp_path, monkeypatch, same_turn, code_mode):
+    from argparse import Namespace
+
+    from loopx.cli_commands.quota_capture import read_context_capture
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    if not same_turn:
+        append(history, "event_msg", {"type": "task_started", "turn_id": "prior-turn"})
+        _write_large_rollout_record(history, "background_event", turn_id="prior-turn")
+        append(history, "event_msg", {"type": "task_complete", "turn_id": "prior-turn"})
+    turn_id = "selection-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if same_turn:
+        _write_large_rollout_record(history, "background_event", turn_id=turn_id)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve selection across large same-turn records. " * 280
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Current boundary."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}}}
+    _, first = project(tmp_path, payload=payload)
+    selected = read_context_capture(Namespace(capture_file=first["recovery"]["path"],
+        capture_sha256=first["recovery"]["sha256"], select=[address], offset=0,
+        page_bytes=64000, max_page_output_bytes=64000, format="json"))
+    assert selected["ok"] and selected["eof"]
+    body = json.dumps(selected)
+    if code_mode:
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent-sel", "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": "reader-sel", "exit_code": 0}})
+    else:
+        append(history, "response_item", {"type": "function_call", "call_id": "reader-sel", "name": "exec_command"})
+        append(history, "response_item", {"type": "function_call_output", "call_id": "reader-sel", "output": body})
+    context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+        "tool_use_id": "reader-sel", "tool_response": body})
+    if code_mode:
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent-sel",
+            "output": [{"type": "input_text", "text": body}]})
+    assert "selected_resume" in context._state(tmp_path)
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    after = context._state(tmp_path)
+    assert address in after.get("consumed_pointers", {})
+    directory = tmp_path / "next"
+    directory.mkdir(mode=0o700)
+    prepared = context.prepare_codex_context(payload, directory=str(tmp_path), capture_directory=directory,
+        goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="next")
+    view = model_context_reference(native_context_capture_view(prepared.delivery, directory,
+        context_directory=str(tmp_path), initial_read_plan=prepared.initial_read_plan))
+    first_args = shlex.split(view["first_read_command"])
+    ref_file = first_args[first_args.index("--reference-file") + 1]
+    opening = read_context_capture(Namespace(reference_file=ref_file, offset=0,
+        page_bytes=12000, max_page_output_bytes=12000, format="json"))
+    assert opening["ok"] and address in opening.get("previously_delivered_fields", [])
+    assert narrative not in opening["content"]
+
+
+@pytest.mark.parametrize("failure_mode", ["ambiguous_open_parent", "malformed_large_record"])
+def test_same_turn_large_earlier_record_keeps_ambiguity_and_corruption_rejected(tmp_path, monkeypatch, failure_mode):
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "negative-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    if failure_mode == "ambiguous_open_parent":
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "earlier-still-open",
+            "name": "exec", "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        _write_large_rollout_record(history, "background_event", turn_id=turn_id)
+    else:
+        with history.open("ab") as stream:
+            stream.write(b'{"type":"event_msg","payload":{"message":"' + b"x" * (17 * 1024 * 1024) + b'\x01"}}\n')
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    for i, page in enumerate(pages):
+        body = json.dumps(page)
+        parent = f"current-open-{i}"
+        call = f"reader-{i}"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": body}]})
+    assert "native_resume" not in context._state(tmp_path)["candidate"]
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" not in context._state(tmp_path)
+
+
+def _write_large_decimal_rollout_record(history: Path, *, min_bytes: int, decimal_digits: int = 1100) -> int:
+    prefix = b'{"type":"event_msg","payload":{"unused_decimal":0.' + (b"1" * decimal_digits)
+    prefix += b',"nested":{"flag":true,"empty":null,"nums":[-0,123.45e+6,false]},"message":"'
+    suffix = b'","type":"background_event"}}'
+    pad_len = max(0, min_bytes - len(prefix) - len(suffix))
+    record = prefix + (b"x" * pad_len) + suffix
+    with history.open("ab") as stream:
+        stream.write(record + b"\n")
+    return len(record)
+
+
+@pytest.mark.parametrize("min_bytes", [71 * 1024, 17 * 1024 * 1024], ids=["71KiB", "17MiB"])
+@pytest.mark.parametrize("scope_mode", ["full", "selected"])
+def test_same_turn_earlier_record_with_long_decimal_preserves_native_resume(
+        tmp_path, monkeypatch, min_bytes, scope_mode):
+    from argparse import Namespace
+
+    from loopx.cli_commands.quota_capture import read_context_capture
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "long-decimal-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    raw_len = _write_large_decimal_rollout_record(history, min_bytes=min_bytes)
+    if min_bytes < history_io._MAX_RECORD_BYTES:
+        assert history_io._IO_CHUNK_BYTES < raw_len <= history_io._MAX_RECORD_BYTES
+    else:
+        assert raw_len > history_io._MAX_RECORD_BYTES
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    address = "/interaction_contract/agent_channel/work_context/sources/0/content/text"
+    narrative = "Preserve replay across long decimals. " * 280
+    payload = {"ok": True, "goal_id": "fixture", "selected_todo": {"todo_id": "todo_current"},
+        "goal_boundary": {"stop_condition": "Current boundary."},
+        "interaction_contract": {"schema_version": "loopx_interaction_contract_v0",
+            "agent_channel": {"work_context": {"sources": [{"source": "goal_state", "content": {
+                "state_file": "fixture-goal.md", "full_source": True, "text": narrative,
+                "revision": "sha256:" + hashlib.sha256(narrative.encode()).hexdigest(),
+            }}]}}, "user_channel": {}, "cli_channel": {}}}
+    _, first = project(tmp_path, payload=payload)
+    if scope_mode == "full":
+        pages = read_pages(tmp_path, first, size=2048)
+        for i, page in enumerate(pages):
+            body = json.dumps(page)
+            parent, call = f"parent-{i}", f"reader-{i}"
+            append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+                "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+            append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+                "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+            context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+                "tool_use_id": call, "tool_response": body})
+            append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+                "output": [{"type": "input_text", "text": body}]})
+        state = context._state(tmp_path)
+        assert "native_resume" in state["candidate"]
+        assert history_io.native_resume_verified(state, {**event, "source": "resume"})
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert "candidate" in context._state(tmp_path)
+        _, wire = project(tmp_path, "second", payload={**payload, "heartbeat_receipt": {"turn_instance_id": "second"}})
+        assert wire["mode"] == "delta" and wire["continuity_basis"] == "captured_file"
+    else:
+        selected = read_context_capture(Namespace(capture_file=first["recovery"]["path"],
+            capture_sha256=first["recovery"]["sha256"], select=[address], offset=0,
+            page_bytes=64000, max_page_output_bytes=64000, format="json"))
+        assert selected["ok"] and selected["eof"]
+        body = json.dumps(selected)
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": "parent-sel", "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": "reader-sel", "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": "reader-sel", "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": "parent-sel",
+            "output": [{"type": "input_text", "text": body}]})
+        state = context._state(tmp_path)
+        assert "selected_resume" in state
+        retained = history_io.native_resume_sections(state, {**event, "source": "resume"})
+        assert address in retained
+        context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+        assert address in context._state(tmp_path).get("consumed_pointers", {})
+
+
+@pytest.mark.parametrize("bad_primitive", [b"01", b"1.", b"1e+", b"tru"])
+def test_large_earlier_record_rejects_malformed_json_primitives(tmp_path, monkeypatch, bad_primitive):
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    event = setup(tmp_path, monkeypatch)
+    history = tmp_path / "rollout.jsonl"
+    append(history, "session_meta", {"id": "session", "cwd": str(tmp_path),
+        "cli_version": "0.167.0-alpha.3.2", "history_mode": "paginated"})
+    turn_id = "malformed-primitive-turn"
+    append(history, "event_msg", {"type": "task_started", "turn_id": turn_id})
+    append(history, "turn_context", {"cwd": str(tmp_path), "model": "fixture"})
+    offset = history.stat().st_size
+    with history.open("ab") as stream:
+        stream.write(b'{"type":"event_msg","payload":{"message":"' + (b"x" * (17 * 1024 * 1024))
+            + b'","unused":' + bad_primitive + b',"type":"background_event"}}\n')
+    stop = history.stat().st_size - 1
+    with history.open("rb") as stream, pytest.raises(ValueError):
+        history_io._scan_turn_prefix_record(stream, offset, stop)
+    history.chmod(0o600)
+    event.update(transcript_path=str(history), model="fixture", permission_mode="bypassPermissions", turn_id=turn_id)
+    payload = {"ok": True, "plan_summary": {"requirements": "Keep original evidence. " * 1000}}
+    _, first = project(tmp_path, payload=payload)
+    pages = read_pages(tmp_path, first)
+    for i, page in enumerate(pages):
+        body = json.dumps(page)
+        parent, call = f"parent-{i}", f"reader-{i}"
+        append(history, "response_item", {"type": "custom_tool_call", "call_id": parent, "name": "exec",
+            "internal_chat_message_metadata_passthrough": {"turn_id": turn_id}})
+        append(history, "event_msg", {"type": "item_completed", "turn_id": turn_id,
+            "item": {"type": "CommandExecution", "id": call, "exit_code": 0}})
+        context.codex_context_hook(str(tmp_path), {**event, "hook_event_name": "PostToolUse",
+            "tool_use_id": call, "tool_response": body})
+        append(history, "response_item", {"type": "custom_tool_call_output", "call_id": parent,
+            "output": [{"type": "input_text", "text": body}]})
+    assert "native_resume" not in context._state(tmp_path)["candidate"]
+    context.codex_context_hook(str(tmp_path), {**event, "source": "resume"})
+    assert "candidate" not in context._state(tmp_path)
+
+
+def test_json_slice_cursor_skip_primitive_rfc8259_and_chunk_boundaries():
+    import io
+
+    from loopx.control_plane.turn_driver import codex_context_history as history_io
+
+    chunk = history_io._IO_CHUNK_BYTES
+    long_dec = b"0." + (b"9" * (chunk + 200))
+    pad = b" " * (chunk - 2)
+    valid_records = [
+        b'{"type":"event_msg","payload":{"type":"background_event","n":0,"z":-0,"f":123.45e+6,"e":1E01}}',
+        b'{"type":"event_msg","payload":{"type":"background_event","d":' + long_dec + b"}}",
+        b'{"type":"event_msg","payload":{"type":"background_event","k":"' + (b"a" * (chunk - 56))
+        + b'","t":true,"f":false,"n":null}}',
+        b'{"type":"event_msg","payload":{"type":"background_event","k":' + pad + b"true}}",
+    ]
+    for raw in valid_records:
+        parsed = history_io._scan_turn_prefix_record(io.BytesIO(raw), 0, len(raw))
+        assert parsed["type"] == "event_msg"
+        assert parsed["payload"]["type"] == "background_event"
+
+    invalid_primitives = [
+        b"01", b"-01", b"00", b"1.", b"1.e2", b"1e", b"1e+", b"1E-",
+        b"tru", b"fals", b"nul", b"NaN", b"Infinity", b"-Infinity", b".5", b"+1", b"-", b"truefalse", b"1.2.3",
+    ]
+    for bad in invalid_primitives:
+        raw = b'{"type":"event_msg","payload":{"type":"background_event","bad":' + bad + b"}}"
+        with pytest.raises(ValueError):
+            history_io._scan_turn_prefix_record(io.BytesIO(raw), 0, len(raw))
+        cursor = history_io._JsonSliceCursor(io.BytesIO(bad), 0, len(bad))
+        with pytest.raises(ValueError):
+            cursor.skip_primitive()

@@ -74,7 +74,7 @@ from .control_plane.status.ssh_host_catalog import (
     SSH_HOST_CATALOG_PATH,
     ssh_host_catalog_payload,
 )
-from .chat_lark_api import (
+from .chat.lark_api import (
     LarkChatRequestMixin,
     build_goal_repository_contexts as build_goal_repository_contexts,
     build_lark_goal_topic_runtime_snapshot,
@@ -1614,7 +1614,7 @@ def serve_chat(
     kiro_cli_bin: str = KIRO_CLI_BIN,
     lark_cli_bin: str | None = None,
     startup_timeout_sec: float | None = None,
-    idle_timeout_sec: float = 180.0,
+    idle_timeout_sec: float | None = None,
     hard_timeout_sec: float | None = None,
     assets_dir: Path | None = None,
     open_browser: bool = False,
@@ -1686,7 +1686,7 @@ def serve_chat(
     server.chat_store = ChatSessionStore(runtime_root)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
     from .presentation.request_control_api import bound_steward_inventory_scope
-    from .chat_lark_api import manager_source_scope_resolver
+    from .chat.lark_api import manager_source_scope_resolver
     manager_scope = manager_source_scope_resolver(server,
         registry_path=resolved_registry_path, executor_runtime_root=runtime_root)
 

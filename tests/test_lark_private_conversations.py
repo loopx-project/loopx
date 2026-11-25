@@ -162,7 +162,7 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
                                     "source_unavailable", "source_changed"])
 def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
     from test_native_steward_private import finish, steward
-    from loopx import chat_ingress
+    from loopx.chat import ingress
     from loopx.capabilities.native_chat import conversation_bindings
     from loopx.file_lock import exclusive_file_lock
 
@@ -219,7 +219,7 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
                     assert runtime.close_session(sid)
             return exclusive_file_lock(path, **kwargs)
 
-        monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
+        monkeypatch.setattr(ingress, "exclusive_file_lock", publish_at_scope_fence)
         monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
         pending_ref = identity_ref(binding["provider_ref"], pending_id)
         pending_path = transport.root / f"{pending_ref}.json"
@@ -6011,7 +6011,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
 ):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     store, runtime, provider, transport = connect(ordinary)
     monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
@@ -7235,6 +7235,19 @@ def test_private_steward_app_steering_delivers_once_to_the_original_turn(tmp_pat
             assert status == 202 and pending["status"] == "queued"
             qid = pending["turn_id"]
             original_queued = store.load_turn(sid, qid)
+            queue_status, queue = request("GET", f"{session_path}/queue")
+            assert queue_status == 200
+            queued_input, = queue["turns"]
+            assert queued_input["turn_id"] == qid and queued_input["origin"] == "web"
+            assert queued_input["input_mutation_allowed"] is False
+            for mutation in (
+                {"action": "edit", "message": "A different input.", "operation_id": "edit",
+                 "expected_revision": 0},
+                {"action": "cancel", "operation_id": "cancel", "expected_revision": 0},
+            ):
+                status, denied = request("POST", f"{session_path}/queue/{qid}/input", mutation)
+                assert status == 400 and "external source admission" in denied["error"]
+            assert store.load_turn(sid, qid) == original_queued
             endpoint = wrong_endpoint = f"{session_path}/queue/{qid}/steer"
             body = {"target_turn_id": tid, "client_ingress_id": "app-correction"}
             wrong_body = {"target_turn_id": "old-turn", "client_ingress_id": "wrong-turn"}
@@ -7404,6 +7417,167 @@ def test_private_steward_native_mention_uses_original_manager_turn(tmp_path, mon
         assert sum(call["method"] in {"thread/goal/set", "turn/start"} for call in calls) == 1
         assert sum(call["method"] == "turn/steer" for call in calls) == 1
         assert not store.queued_turns(original["session_id"])
+    finally:
+        runtime.close()
+        fixture.close()
+
+
+@pytest.mark.parametrize("case", [
+    "fresh", "admission-crash", "replay", "replay-crash", "edited", "unknown", "same-topic", "stale-scope",
+])
+def test_private_steward_distinct_topic_keeps_its_own_request(tmp_path, monkeypatch, case):
+    from test_native_steward_private import finish, steward
+
+    fixture = steward.__wrapped__(tmp_path)
+    store, runtime, provider, transport, binding, capture, _ = next(fixture)
+    profile = "steward-app"
+
+    def reply(event, root):
+        event.update(root_id=root, parent_id=root, thread_id=f"omt_{root}")
+        provider.messages[event["message_id"]].update(
+            {key: event[key] for key in ("root_id", "parent_id", "thread_id")},
+        )
+        return event
+
+    def path_for(event):
+        request_ref = identity_ref(binding["provider_ref"], event["message_id"])
+        return transport.root / f"{request_ref}.json"
+
+    try:
+        from loopx.extensions.lark import private_mention_topics
+        import loopx.extensions.lark.private_conversations as private_conv_mod
+
+        first_root = provider.event(profile, "first-topic", "Original topic")["message_id"]
+        second_root = provider.event(profile, "second-topic", "Independent topic")["message_id"]
+        original_event = reply(provider.event(profile, "topic-work", "wait for steer"), first_root)
+        different = reply(_private_mention_event(provider, profile, "topic-ask", "Answer this topic independently."),
+            first_root if case == "same-topic" else second_root)
+        path = path_for(different)
+        old_notice = None
+        if case in {"fresh", "admission-crash"}:
+            assert transport.admit(profile, original_event)["status"] == "durably_accepted"
+            original = transport.core.read_request(path_for(original_event).stem)
+            _wait_private_upstream(store, original)
+            sid, old_turn = original["session_id"], original["turn_id"]
+            if case == "admission-crash":
+                with monkeypatch.context() as crash:
+                    def lose_transport_write(*_args):
+                        raise OSError("lost transport admission projection")
+
+                    crash.setattr(transport, "_record_admission", lose_transport_write)
+                    with pytest.raises(OSError, match="lost transport admission"):
+                        transport.admit(profile, different)
+                assert json.loads(path.read_text())["status"] == "captured"
+            assert transport.admit(profile, different)["status"] == "durably_accepted"
+            queued = transport.core.read_request(path.stem)
+            assert queued["turn_id"] != old_turn and queued["session_id"] != sid
+            expected_second_topic = identity_ref(binding["provider_ref"], different["chat_id"], second_root)
+            assert queued["source"]["topic_ref"] == expected_second_topic
+            assert store.load_turn(queued["session_id"], queued["turn_id"])["status"] in {"queued", "starting", "running", "completed"}
+        else:
+            with monkeypatch.context() as old_behavior:
+                if case != "same-topic":
+                    old_behavior.setattr(
+                        private_conv_mod,
+                        "resolve_private_steward_lane",
+                        lambda **kw: (kw["base_source"], False),
+                    )
+                    old_behavior.setattr(
+                        private_conv_mod,
+                        "finalize_private_steward_lane",
+                        lambda **kw: (kw["current_source"], kw["selected"]),
+                    )
+                assert transport.admit(profile, original_event)["status"] == "durably_accepted"
+                original = transport.core.read_request(path_for(original_event).stem)
+                _wait_private_upstream(store, original)
+                sid, old_turn = original["session_id"], original["turn_id"]
+                old_behavior.setattr(private_mention_topics, "distinct_reply_topic", lambda *args: False)
+                old_behavior.setattr(runtime.adapters[sid], "healthcheck", lambda: False)
+                assert transport.admit(profile, different)["status"] == "command_recorded"
+            transport.reconcile_request(path)
+            row = json.loads(path.read_text())
+            old_notice = row["deliveries"]["terminal"]
+            assert row["status"] == "delivered" and old_notice["verified"]
+            assert not store.queued_turns(sid)
+        assert not any(call["method"] == "turn/steer" for call in map(json.loads, capture.read_text().splitlines()))
+
+        completed = reply(_private_mention_event(provider, profile, "topic-finish", "Finish this original topic."), first_root)
+        assert transport.admit(profile, completed)["status"] == "command_recorded"
+        assert finish(runtime, original)["status"] == "completed"
+
+        if old_notice is not None:
+            transport.reconcile_request(path)
+            assert transport.core.read_request(path.stem)["status"] == "command_completed"
+            old_bytes = path.read_bytes()
+            plan = transport.root / "rejected-mention-replays" / path.name
+            plan.parent.mkdir()
+            plan.write_text(json.dumps({"message_id": different["message_id"],
+                "rejection_message_id": old_notice["attempt"]["message_ref"], "target_turn_id": old_turn}))
+            if case == "edited":
+                provider.messages[different["message_id"]]["content"] = "A different instruction."
+            elif case == "unknown":
+                store.update_ingress_receipt(sid, f"external-{path.stem}", native_steering={"may_have_sent": True})
+            elif case == "stale-scope":
+                store.update_session(sid, manager_authorization_scope_id="replaced-scope")
+            restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                runner=provider, cli_bin="lark-cli")
+            assert path in restarted.pending_delivery_paths()
+            if case == "replay-crash":
+                from loopx.capabilities.native_chat import external_mention_recovery
+
+                write = external_mention_recovery._atomic_write_json
+
+                def lose_core_projection(target, row):
+                    if target.stem == path.stem and row["status"] == "accepted":
+                        raise OSError("lost Core admission projection")
+                    write(target, row)
+
+                with monkeypatch.context() as crash:
+                    crash.setattr(external_mention_recovery, "_atomic_write_json", lose_core_projection)
+                    restarted.reconcile_request(path)
+                assert path.read_bytes() == old_bytes
+                committed = store.turn_for_client(sid, f"external-{path.stem}")
+                assert committed is not None
+                restarted = LarkPrivateConversations(controller=runtime, runtime_root=transport.runtime_root,
+                    runner=provider, cli_bin="lark-cli")
+                restarted.reconcile_request(path)
+                assert restarted.core.read_request(path.stem)["turn_id"] == committed["turn_id"]
+                # A redelivery may race the original reply worker after recovery.
+                assert restarted.admit(profile, different)["status"] == "durably_accepted"
+            else:
+                restarted.reconcile_request(path)
+            if case in {"edited", "unknown", "same-topic", "stale-scope"}:
+                assert path.read_bytes() == old_bytes
+                assert store.turn_for_client(sid, f"external-{path.stem}") is None
+                return
+            transport = restarted
+            queued = transport.core.read_request(path.stem)
+            assert queued["turn_id"] != old_turn and queued["session_id"] == sid
+            assert queued["mention_delivery"]["action"] == "reject"
+        result = finish(runtime, queued)
+        assert result["status"] == "completed"
+
+        def delivered():
+            return json.loads(path.read_text())["status"] == "delivered"
+
+        _drain_app_projection(transport, delivered)
+        row = json.loads(path.read_text())
+        phase = "terminal"
+        if old_notice is not None:
+            assert row["deliveries"][phase] == old_notice
+            phase = "terminal.recovery.rejected-mention.1"
+        reply_ref = row["deliveries"][phase]["attempt"]["message_ref"]
+        assert row["deliveries"][phase]["verified"]
+        assert provider.messages[reply_ref]["chat_id"] == different["chat_id"]
+        assert provider.messages[reply_ref]["parent_id"] == different["message_id"]
+        before = capture.read_bytes(), list(provider.writes)
+        for _ in range(2):
+            transport.reconcile()
+        assert before == (capture.read_bytes(), provider.writes)
+        calls = [json.loads(line) for line in capture.read_text().splitlines()]
+        assert sum(call["method"] == "turn/steer" for call in calls) == 1
+        assert sum(call["method"] == "turn/start" and "Answer this topic independently." in json.dumps(call.get("params"))
+                   for call in calls) == 1
     finally:
         runtime.close()
         fixture.close()
@@ -8186,7 +8360,7 @@ def test_rendered_cli_text_is_preserved_and_source_type_must_agree(ordinary):  #
 
 
 def test_private_app_alias_guard_rejects_unknown_or_unverified_identity():
-    from loopx.chat_lark_api import _app_identity_for_private_guard
+    from loopx.chat.lark_api import _app_identity_for_private_guard
     provider = Provider()
     assert _app_identity_for_private_guard("notes-app", provider, "lark-cli") == "cli_notes_app"
     for data in [{}, {"appId": "cli_notes_app"}, {"appId": "malformed", "identities": {"bot": {
@@ -8618,6 +8792,8 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
         "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
         "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
     _atomic_write_json(pending, {"status": "pending"})
+    cached_after = old.stat().st_ctime_ns + 3_000_000_000
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery.time_ns", lambda: cached_after)
     assert transport.pending_delivery_paths() == [pending]
     reads.clear()
     assert transport.pending_delivery_paths() == [pending] and reads == [pending]
@@ -8640,6 +8816,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
 def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
     import os
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_delivery_discovery as discovery
 
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
@@ -8649,8 +8826,13 @@ def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_pa
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
     path = tmp_path / "original.json"
     _atomic_write_json(path, {"status": "delivered"})
-    assert transport.pending_delivery_paths() == []
     before = path.stat()
+    if not replace:
+        # A filesystem may give multiple writes an identical change time.
+        observed = (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns, before.st_size)
+        monkeypatch.setattr(discovery, "file_change_fingerprint", lambda _path: observed)
+        monkeypatch.setattr(discovery, "time_ns", lambda: before.st_ctime_ns + 1)
+    assert transport.pending_delivery_paths() == []
     body = path.read_bytes().replace(b'delivered', b'uncertain')
     if replace:
         other = tmp_path / "replacement.tmp"

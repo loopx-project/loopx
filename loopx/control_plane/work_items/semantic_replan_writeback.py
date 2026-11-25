@@ -310,6 +310,7 @@ def qualify_replan_writeback(
     agent_id: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None = None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None = None,
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
@@ -411,9 +412,6 @@ def qualify_replan_writeback(
             guard_scoped=guard_scoped,
             selected_obligation_id=guard_semantic_replan_obligation_id,
             transition_candidates=context.get("replan_transition_candidates", []),
-            stride_strategy=((registry_goal or {}).get("execution_profile") or {}).get(
-                "stride_strategy", "off"
-            ),
             goal_id=goal_id,
             agent_id=safe_agent_id,
             guard_recorded_at=receipt_bound_guard_recorded_at,
@@ -447,7 +445,6 @@ def qualify_replan_writeback(
             "current_obligation": obligation,
             "receipt_review": receipt_bound_replan_review,
             "transition_candidates": context.get("replan_transition_candidates", []),
-            "stride_strategy": context["stride_strategy"],
             "goal_id": goal_id,
             "guard_recorded_at": receipt_bound_guard_recorded_at,
             "guard_turn_instance_id": receipt_bound_guard_turn_instance_id,
@@ -455,7 +452,7 @@ def qualify_replan_writeback(
         if obligation and not obligation.get("replan_context") and not obligation.get("settlement_action_packet"):
             obligation = attach_receipt_replan_context(
                 obligation, None, goal_id=goal_id, agent_id=safe_agent_id,
-                source_status=status_payload, stride_strategy=context["stride_strategy"],
+                source_status=status_payload,
                 explore_reader=replan_explore_reader,
                 goal_acceptance_contract=(
                     contract if isinstance(contract := (agent_todos or {}).get("goal_acceptance_contract"), Mapping) else None
@@ -483,6 +480,7 @@ def qualify_replan_writeback(
         progress_observation=progress_observation,
         agent_vision=agent_vision,
         history_runs=newest_first_runs,
+        recovering_writeback_path=recovering_writeback_path,
     )
     if (
         "coverage_backed_no_followup"
@@ -510,6 +508,7 @@ def enforce_open_replan_writeback(
     agent_id: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None = None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None = None,
     agent_vision: dict[str, Any] | None = None,
     completion_todo_id: str | None = None,
@@ -544,6 +543,7 @@ def enforce_open_replan_writeback(
         agent_id=agent_id,
         goal_id=goal_id,
         progress_observation=progress_observation,
+        recovering_writeback_path=recovering_writeback_path,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
         effective_turn_cadence=effective_turn_cadence,
@@ -614,6 +614,7 @@ def qualify_refresh_replan_writeback(
     state_text: str,
     goal_id: str,
     progress_observation: dict[str, Any] | None,
+    recovering_writeback_path: str | None = None,
     registry_goal: dict[str, Any] | None,
     external_progress_review: Mapping[str, Any] | None = None,
     effective_turn_cadence: dict[str, Any] | None = None,
@@ -684,6 +685,7 @@ def qualify_refresh_replan_writeback(
         agent_id=agent_id,
         goal_id=goal_id,
         progress_observation=progress_observation,
+        recovering_writeback_path=recovering_writeback_path,
         registry_goal=registry_goal,
         external_progress_review=external_progress_review,
         effective_turn_cadence=effective_turn_cadence,

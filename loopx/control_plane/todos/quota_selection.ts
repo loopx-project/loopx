@@ -781,7 +781,7 @@ function successionWarning(value: JsonObject, ref: (path: Path) => JsonObject,
     const projected: JsonObject = {index: copy("index"), text: copy("text")};
     for (const name of [
       "schema_version", "todo_id", "role", "status", "priority", "title", "archive_state", "source_section",
-      "task_class", "action_kind", "task_domain", "task_repository", "continuation_policy", "required_write_scopes",
+      "task_class", "action_kind", "task_domain", "task_repository", "continuation_policy",
       "required_capabilities", "target_capabilities", "decision_scope", "required_decision_scopes", "claimed_by",
       "blocks_agent", "excluded_agents", "unblocks_todo_id", "resume_when", "resume_monitor_generation",
       "resume_condition", "resume_ready", "no_followup", "successor_todo_ids", "target_key", "cadence", "next_due_at",
@@ -791,7 +791,7 @@ function successionWarning(value: JsonObject, ref: (path: Path) => JsonObject,
       "route_continuation_reason", "route_id", "route_key", "completed_at", "updated_at", "superseded_by",
       "completion_continuation", "completion_recovery", "completion_turn_key", "done", "succession_tracked", "recommended_action",
     ]) if (row[name] != null) projected[name] = copy(name);
-    for (const [name, normalized] of [["required_write_scopes", writeScopes(row.required_write_scopes)],
+    for (const [name, normalized] of [
       ["decision_scope", readScope(row.decision_scope)], ["required_decision_scopes", readScopes(row.required_decision_scopes)]] as const) {
       if (normalized && (!Array.isArray(normalized) || normalized.length)) projected[name] = normalized;
       else delete projected[name];

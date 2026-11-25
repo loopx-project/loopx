@@ -321,6 +321,25 @@ def _captured_view(record: dict, field: str) -> dict | None:
     }
 
 
+def _native_outcome_samples(record: dict, capture: dict) -> list | None:
+    """Read the same frozen bytes without extending persisted pack identity."""
+    try:
+        artifact = _source_path(Path(record["source_root"]), capture["artifact"])
+        raw = artifact.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != capture["artifact_sha256"]:
+            return None
+        prepared = effect_runtime_result("benchmark.trajectory.prepare", {
+            "input": record["input"], "config": record["config"],
+            "native_outcomes": json.loads(raw), "include_native_outcome_samples": True,
+        })
+        if prepared.get("native_outcomes") == capture["projection"]:
+            return prepared.get("native_outcome_samples")
+    except (OSError, ValueError, RuntimeError, EffectRuntimeRejected):
+        # Optional readback must not make the frozen summary unavailable.
+        return None
+    return None
+
+
 def _index(owner: Path) -> dict:
     path = owner / "packs.json"
     if not path.exists():
@@ -591,6 +610,7 @@ def inspect_pack(
     *, runtime_root: Path, owner_goal_id: str, pack_id: str | None = None,
     output_language: str | None = None,
     include_continuation: bool = True,
+    include_native_outcome_samples: bool = False,
 ) -> dict:
     owner, record = _resolve(runtime_root, owner_goal_id, pack_id)
     prepared = _prepared(record)
@@ -666,6 +686,11 @@ def inspect_pack(
         **({"result_job": _public_job(result_job)} if result is not None and result_job is not job else {}),
         "applicability": "historical" if reason else "current",
     }
+    native = view.get("native_outcomes")
+    if include_native_outcome_samples and reason is None and native and native["applicability"] == "current":
+        samples = _native_outcome_samples(record, native)
+        if samples is not None:
+            view["native_outcomes"] = {**native, "samples": samples}
     if include_continuation and record.get("base_pack_id"):
         continuation, _ = _continuation(
             runtime_root, owner_goal_id, record, prepared, result, output_language
@@ -787,6 +812,7 @@ def read_citation(
     view = inspect_pack(
         runtime_root=runtime_root, owner_goal_id=owner_goal_id, pack_id=pack_id,
         output_language=output_language,
+        include_native_outcome_samples=True,
     )
     result = view["result"]
     citations = [c for a in (result or {}).get("assessments", []) for c in a["citations"]]
@@ -802,8 +828,10 @@ def read_citation(
     if synthesis:
         citations.extend(c for item in [synthesis["summary"], *synthesis["findings"], *synthesis["next_experiments"]]
                          for c in item["citations"])
-    native = (view.get("native_outcomes") or {}).get("projection") or {}
+    native_readback = view.get("native_outcomes") or {}
+    native = native_readback.get("projection") or {}
     native_citations = [native[key]["citation"] for key in ("initial", "best_valid", "retained", "final_valid") if native.get(key)]
+    native_citations.extend(sample["citation"] for sample in native_readback.get("samples", []))
     improvement = native.get("retained_improvement") or {}
     if improvement.get("baseline"):
         native_citations.append(improvement["baseline"]["citation"])

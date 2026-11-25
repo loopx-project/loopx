@@ -121,6 +121,26 @@ def test_creation_queue_consumes_only_the_saved_request_and_returns_original_res
     assert status in (200, 202) and replay["proposal"]["receipt"]["original_task_request"] == saved
     assert capture.read_bytes() == after
 
+    # A fresh tab has only the original Session address. It must read the
+    # canonical completion Turn while retaining the failed creation Turn.
+    completion = finished
+    if mode == "failed":
+        (project / "execute-native").write_text("valid")
+        status, continued = request(f"/api/chat/sessions/{sid}/native-turn", {
+            "agent_id": "codex", "operation_id": "retry-cart-task", "todo_id": todo})
+        assert status == 202 and continued["created"]
+        completion = controller.wait_for_turn(session_id=sid, turn_id=continued["turn"]["turn_id"], timeout_sec=20)
+        assert completion["response"]["native_loopx"]["validation"]["status"] == "passed"
+        assert completion["turn_id"] != finished["turn_id"]
+    before_reopen = capture.read_bytes()
+    status, reopened = request(f"/api/chat/sessions/{sid}/native-turn?original_task=true&agent_id=codex")
+    assert status == 200 and reopened["turn"] is None, reopened
+    assert reopened["task"]["canonical_done"] is True
+    assert reopened["task"]["creation_turn"]["turn_id"] == finished["turn_id"]
+    assert reopened["task"]["completion_turn"]["turn_id"] == completion["turn_id"]
+    assert reopened["task"]["completion_turn"]["response"]["native_loopx"]["validation"]["status"] == "passed"
+    assert capture.read_bytes() == before_reopen
+
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_historical_creation_and_check_adoption_do_not_authorize_a_native_task(environment, cart_host, monkeypatch, provider):
@@ -369,31 +389,60 @@ def test_startup_cannot_redispatch_an_unknown_or_foreign_queued_operation(enviro
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_pending_creation_rechecks_only_after_a_content_free_signal(environment, cart_host, monkeypatch, provider):
+    from loopx.capabilities.native_chat import session_queue
     from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+
     environment[0](provider)
     _, _, controller, _, _, _ = cart_host
     original = ManagedSessionTurn._validation_source
-    attempted = threading.Event()
-    count = []
+    release = controller._release_done_event
+    drain = session_queue._drain_session_queue_events
+    idle = threading.Event()
+    terminal_signal = threading.Event()
+    release_lock = threading.Lock()
+    reads = threading.Condition()
+    count = 0
+
     def read_current(self, *args, **kwargs):
+        nonlocal count
         try:
             return original(self, *args, **kwargs)
         finally:
             if "_drain_session_queue" in threading.current_thread().name:
-                count.append(1)
-                attempted.set()
+                with reads:
+                    count += 1
+                    reads.notify_all()
+
+    def publish_release(*args, **kwargs):
+        with release_lock:
+            release(*args, **kwargs)
+            terminal_signal.set()
+
+    def observe_drain(owner, *, wakeup, **kwargs):
+        wait = wakeup.wait
+
+        def observe_wait(timeout=None):
+            with release_lock, reads:
+                if timeout is None and terminal_signal.is_set() and count and not wakeup.is_set():
+                    idle.set()
+            return wait(timeout)
+
+        with monkeypatch.context() as observed:
+            observed.setattr(wakeup, "wait", observe_wait)
+            return drain(owner, wakeup=wakeup, **kwargs)
+
     monkeypatch.setattr(ManagedSessionTurn, "_validation_source", read_current)
+    monkeypatch.setattr(controller, "_release_done_event", publish_release)
+    monkeypatch.setattr(session_queue, "_drain_session_queue_events", observe_drain)
     creation, ids, _ = create_requested_task(cart_host)
-    assert attempted.wait(timeout=10)
-    time.sleep(0.1)  # Let the original Turn's terminal signal coalesce.
-    before = len(count)
-    time.sleep(2.2)  # An old two-second polling implementation would reread.
-    assert len(count) == before
+    assert idle.wait(timeout=10)
+    with reads:
+        before = count
+        # A two-second poll would reread even after the queue has parked.
+        assert not reads.wait_for(lambda: count > before, timeout=2.2)
     controller.turn_release_wakeup.notify()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and len(count) == before:
-        time.sleep(0.02)
-    assert len(count) > before
+    with reads:
+        assert reads.wait_for(lambda: count > before, timeout=5)
     assert controller.store.turn_for_client(ids["session_id"],
         "managed." + creation["receipt"]["original_task_request"]["operation_id"]) is None
 
