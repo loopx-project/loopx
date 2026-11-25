@@ -26,6 +26,7 @@ import urllib.request
 from xml.parsers.expat import ExpatError
 
 from ..file_lock import exclusive_file_lock, write_bytes_atomic, write_json_atomic
+from ..release_manifest import RUNTIME_IDENTITY_SCHEMA_VERSION
 from .. import runtime_activation as activation
 
 
@@ -414,7 +415,9 @@ def _verify_services(
         raise RuntimeError("service_runtime_alignment_failed")
 
 
-def align_managed_runtime(executable: str) -> dict:
+def align_managed_runtime(
+    executable: str, *, expected_python_identity: dict | None = None,
+) -> dict:
     """Align the standard desktop services once, with rollback and Chat fencing.
 
     This is an explicit activation operation, not an installer or a change to
@@ -425,7 +428,9 @@ def align_managed_runtime(executable: str) -> dict:
     journal = directory / ".loopx-runtime-activation.json"
     with exclusive_file_lock(directory / ".loopx-runtime-activation.lock", timeout_seconds=2):
         _recover_alignment(journal)
-        return _align_managed_runtime(executable, journal)
+        return _align_managed_runtime(
+            executable, journal, expected_python_identity=expected_python_identity,
+        )
 
 
 def _recover_alignment(journal: Path) -> None:
@@ -510,7 +515,7 @@ def _recover_alignment(journal: Path) -> None:
         journal.unlink()
 
 
-def _align_managed_runtime(executable: str, journal: Path) -> dict:
+def _qualified_runtime(executable: str | Path) -> tuple[Path, dict, str]:
     target = Path(executable)
     if not target.is_absolute() or not target.is_file() or not os.access(target, os.X_OK):
         raise ValueError("service_runtime_unverified")
@@ -530,10 +535,34 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     python = python_info.get("executable") if isinstance(python_info, dict) else None
     if (doctor.returncode or qualified.get("ok") is not True
             or qualified.get("scope") != "installation_only"
-            or not isinstance(identity, dict) or identity.get("schema_version") != "loopx_runtime_identity_v1"
+            or not isinstance(identity, dict) or identity.get("schema_version") != RUNTIME_IDENTITY_SCHEMA_VERSION
             or not isinstance(python, str) or not Path(python).is_absolute()):
         raise ValueError("service_runtime_unverified")
+    return target, identity, python
 
+
+def qualify_expected_python_runtime(
+    executable: str | Path | None, expected_identity: dict,
+) -> tuple[Path, dict, str]:
+    """Check that the live install is the package the updater already checked."""
+    if executable is None:
+        raise activation.RuntimeActivationIdentityUnverified()
+    try:
+        qualified = _qualified_runtime(executable)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise activation.RuntimeActivationIdentityUnverified() from exc
+    if qualified[1] != expected_identity:
+        raise activation.RuntimeActivationIdentityUnverified()
+    return qualified
+
+
+def _align_managed_runtime(
+    executable: str, journal: Path, *, expected_python_identity: dict | None = None,
+) -> dict:
+    target, identity, python = (
+        qualify_expected_python_runtime(executable, expected_python_identity)
+        if expected_python_identity is not None else _qualified_runtime(executable)
+    )
     plists = [Path.home() / "Library/LaunchAgents" / f"com.loopx.{kind}.plist"
         for kind in ("status", "chat")]
     originals, updates, pids, endpoints = {}, {}, {}, {}
@@ -616,6 +645,11 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
                     or _chat_account_root(plistlib.loads(chat[0].read_bytes())) != observer_root.resolve()):
                 raise ValueError("native_observer_owner_unverified")
             observer_handed_off_from_chat = lock_pid != pid
+        # Route and service checks above can outlast an external package replacement.
+        if expected_python_identity is not None and qualify_expected_python_runtime(
+            executable, expected_python_identity,
+        ) != (target, identity, python):
+            raise activation.RuntimeActivationIdentityUnverified()
         write_json_atomic(journal, {"schema_version": "loopx_managed_runtime_handoff_v1",
             "services": {p.stem: {"original": base64.b64encode(originals[p]).decode(),
                 "candidate": base64.b64encode(updates[p]).decode()} for p in updates}},

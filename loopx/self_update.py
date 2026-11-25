@@ -1126,6 +1126,13 @@ def _execute_python_distribution_update(
                 capture_output=True, env=runtime_env,
                 timeout=timeout_seconds,
             )
+            progress("Rechecking package identity after extension validation")
+            results["activation_readback"] = subprocess.run(
+                commands["installation_readback"],
+                text=True, encoding="utf-8", errors="replace",
+                capture_output=True, env=runtime_env,
+                timeout=timeout_seconds,
+            )
 
     previous_key = _python_package_key(previous_identity)
     installed_key = _python_package_key(installed_identity)
@@ -1134,12 +1141,21 @@ def _execute_python_distribution_update(
     final_doctor = results.get("doctor")
     final_identity = _installed_readback(final_doctor) if final_doctor is not None else {}
     final_key = _python_package_key(final_identity)
-    identity_verified = (previous_key is not None and installed_key is not None
-        and (final_doctor is None or final_key == installed_key))
+    activation_doctor = results.get("activation_readback")
+    activation_identity = (
+        _installed_readback(activation_doctor, installation_only=True)
+        if activation_doctor is not None and activation_doctor.returncode == 0 else {}
+    )
+    identity_verified = (
+        previous_key is not None and installed_key is not None
+        and (final_doctor is None or final_key == installed_key)
+        and (activation_doctor is None or _python_package_key(activation_identity) == installed_key)
+    )
     installed_launcher = None
-    if final_doctor is not None and final_doctor.returncode == 0:
+    launcher_readback = activation_doctor or final_doctor
+    if launcher_readback is not None and launcher_readback.returncode == 0:
         try:
-            launcher = json.loads(final_doctor.stdout).get("path", {}).get("loopx")
+            launcher = json.loads(launcher_readback.stdout).get("path", {}).get("loopx")
             if isinstance(launcher, str) and Path(launcher).is_absolute():
                 installed_launcher = Path(launcher)
         except (ValueError, AttributeError):
@@ -1154,7 +1170,7 @@ def _execute_python_distribution_update(
         "installed_runtime_identity": installed_identity,
         "package_identity_verified": identity_verified,
     }
-    for step in ("installation_readback", *host_steps, "extension_doctor"):
+    for step in ("installation_readback", *host_steps, "extension_doctor", "activation_readback"):
         result = results.get(step)
         if result is None:
             execution[f"{step}_status"] = "skipped_prior_step_failed"
@@ -1170,16 +1186,19 @@ def _execute_python_distribution_update(
     )
     updated = dict(payload)
     updated["execution"] = execution
-    updated["ok"] = runtime_ready and extension_ready
-    updated["changes_applied"] = identity_verified and previous_key != installed_key
+    changes_applied = identity_verified and previous_key != installed_key
     execution.update(
         restart_services_for_runtime_activation(
-            changes_applied=updated["changes_applied"],
+            changes_applied=changes_applied,
             runtime_ready=runtime_ready,
-            installed_python_identity=installed_identity if identity_verified else None,
+            installed_python_identity=activation_identity if runtime_ready else None,
             installed_bin=installed_launcher,
         )
     )
+    identity_verified = execution["package_identity_verified"]
+    runtime_ready = runtime_ready and identity_verified
+    updated["changes_applied"] = changes_applied and identity_verified
+    updated["ok"] = runtime_ready and extension_ready
     if _retain_pending_service_activation(updated):
         return updated
     if updated["ok"]:

@@ -29,6 +29,10 @@ class RuntimeActivationDeferred(Exception):
         self.labels = labels
 
 
+class RuntimeActivationIdentityUnverified(Exception):
+    """Service activation could no longer verify the selected Python package."""
+
+
 class RuntimeActivationFailed(Exception):
     def __init__(self, restarted: list[str], pending: list[str]) -> None:
         super().__init__("service_restart_unverified")
@@ -274,7 +278,11 @@ def activate_runtime_services(*, service: str = "all", port: int = 8767,
         return {**payload, "ok": False, "status": "failed", "reason": reason}
 
 
-def restart_managed_loopx_services(*, plists: list[Path] | None = None) -> list[str]:
+def restart_managed_loopx_services(
+    *,
+    plists: list[Path] | None = None,
+    expected_python_installation: tuple[Path | None, dict[str, Any]] | None = None,
+) -> list[str]:
     """Switch managed macOS services only with no accepted Chat work outstanding.
 
     After ``loopx update`` replaces the installed release, running status/chat
@@ -298,6 +306,10 @@ def restart_managed_loopx_services(*, plists: list[Path] | None = None) -> list[
             # Keep admission fenced until launchctl has replaced the old process.
             # Existing workers need no new lock: any accepted queued/active work
             # was checked above, including completing and orphaned queued Turns.
+            if labels and expected_python_installation is not None:
+                from .hosts.managed_service_runtime import qualify_expected_python_runtime
+
+                qualify_expected_python_runtime(*expected_python_installation)
             for label in labels:
                 try:
                     result = subprocess.run(
@@ -383,11 +395,15 @@ def restart_services_for_runtime_activation(
                 with managed_chat_activation_guard([p for p in plists if p.stem.endswith(".chat")]):
                     pass
             if installed_bin is None:
+                if installed_python_identity is not None:
+                    raise RuntimeActivationIdentityUnverified()
                 from .doctor import current_script_invocation_path
                 installed_bin = current_script_invocation_path()
             if installed_bin is None:
                 raise RuntimeActivationDeferred("service_runtime_unverified", ["com.loopx.status", "com.loopx.chat"])
-            aligned = align_managed_runtime(str(installed_bin))
+            aligned = align_managed_runtime(
+                str(installed_bin), expected_python_identity=installed_python_identity,
+            )
             other = [p for p in plists if p.stem not in {"com.loopx.status", "com.loopx.chat"}]
             restarted = restart_managed_loopx_services(plists=other) if other else []
             restarted = [*aligned["restarted_services"], *restarted]
@@ -397,11 +413,23 @@ def restart_services_for_runtime_activation(
         if (installed_python_identity and not changes_applied
                 and managed_services_match_runtime(plists, installed_python_identity)):
             return {"restarted_services": [], "restart_status": "already_active", "activation_pending": False}
-        restarted = restart_managed_loopx_services()
+        if plists and installed_python_identity is not None:
+            restarted = restart_managed_loopx_services(
+                plists=plists, expected_python_installation=(installed_bin, installed_python_identity),
+            )
+        else:
+            restarted = restart_managed_loopx_services()
         return {
             "restarted_services": restarted,
             "restart_status": "restarted" if restarted else "not_running",
             "activation_pending": False,
+        }
+    except RuntimeActivationIdentityUnverified:
+        return {
+            "restarted_services": [],
+            "restart_status": "skipped_runtime_not_activated",
+            "restart_reason": "service_runtime_unverified",
+            "package_identity_verified": False,
         }
     except RuntimeActivationDeferred as exc:
         return {

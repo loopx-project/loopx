@@ -479,7 +479,10 @@ def test_python_distribution_apply_uses_the_owning_interpreter_pip(python_packag
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, python_package_readback(), *([passed] * 3), python_package_readback(), passed],
+            side_effect=[
+                passed, python_package_readback(), *([passed] * 3),
+                python_package_readback(), passed, python_package_readback(),
+            ],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -642,7 +645,10 @@ def test_pipx_distribution_apply_preserves_the_pipx_environment(python_package_r
     with (
         mock.patch(
             "loopx.self_update.subprocess.run",
-            side_effect=[passed, python_package_readback(), *([passed] * 3), python_package_readback(), passed],
+            side_effect=[
+                passed, python_package_readback(), *([passed] * 3),
+                python_package_readback(), passed, python_package_readback(),
+            ],
         ) as run,
         mock.patch(
             "loopx.runtime_activation.restart_managed_loopx_services",
@@ -1502,7 +1508,10 @@ def test_python_distribution_activation_ignores_archive_bin_override(
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (
         mock.patch("loopx.self_update.subprocess.run",
-            side_effect=[passed, python_package_readback(), *([passed] * 3), python_package_readback(), passed]),
+            side_effect=[
+                passed, python_package_readback(), *([passed] * 3),
+                python_package_readback(), passed, python_package_readback(),
+            ]),
         mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]) as restart,
     ):
         result = execute_update_plan(payload)
@@ -1517,11 +1526,15 @@ def test_unchanged_python_package_still_refreshes_host_material(driver, python_p
     passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
     with (
         mock.patch("loopx.self_update.subprocess.run",
-            side_effect=[passed, python_package_readback("1"), *([passed] * 3), python_package_readback("1"), passed]) as run,
+            side_effect=[
+                passed, python_package_readback("1"), *([passed] * 3),
+                python_package_readback("1"), passed, python_package_readback("1"),
+            ],
+        ) as run,
         mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]),
     ):
         result = execute_update_plan(payload)
-    assert run.call_count == 7
+    assert run.call_count == 8
     assert result["ok"] and result["changes_applied"] is False
     assert result["execution"]["package_identity_verified"] is True
     assert result["execution"]["restart_status"] == "not_running"
@@ -1558,7 +1571,7 @@ def test_python_update_rechecks_final_package_before_service_activation(
     with (
         mock.patch("loopx.self_update.subprocess.run", side_effect=[
             passed, python_package_readback("1"), passed, passed, passed,
-            python_package_readback(final_fingerprint), passed,
+            python_package_readback(final_fingerprint), passed, python_package_readback("1"),
         ]),
         mock.patch("loopx.runtime_activation.restart_managed_loopx_services", return_value=[]) as restart,
     ):
@@ -1574,6 +1587,36 @@ def test_python_update_rechecks_final_package_before_service_activation(
 
 
 @pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
+@pytest.mark.parametrize("extension_returncode", [0, 1])
+def test_python_update_rejects_package_replaced_during_extension_check(
+    driver, extension_returncode, python_package_readback, monkeypatch,
+):
+    passed = subprocess.CompletedProcess([], 0, '{"ok":true}', '')
+    extension = subprocess.CompletedProcess([], extension_returncode, '', '')
+    checked = python_package_readback("2")
+    replacement = python_package_readback("3")
+    monkeypatch.setattr("loopx.hosts.managed_service_runtime.has_runtime_binding", lambda: False)
+    with (
+        mock.patch("loopx.self_update.subprocess.run", side_effect=[
+            passed, checked, passed, passed, passed, checked, extension, replacement,
+        ]) as run,
+        mock.patch("loopx.runtime_activation.restart_managed_loopx_services") as restart,
+    ):
+        result = execute_update_plan(apply_plan_for_driver(driver))
+
+    assert result["ok"] is False
+    assert result["changes_applied"] is False
+    assert result["execution"]["install_returncode"] == 0
+    assert result["execution"]["installed_runtime_identity"]["package_fingerprint"].endswith("2" * 64)
+    assert result["execution"]["package_identity_verified"] is False
+    assert result["execution"]["extension_doctor_returncode"] == extension_returncode
+    assert result["execution"]["restart_status"] == "skipped_runtime_not_activated"
+    assert result["next_action"]["command"] == "loopx doctor --installation-only"
+    assert run.call_args_list[-1].args[0][-2:] == ["doctor", "--installation-only"]
+    restart.assert_not_called()
+
+
+@pytest.mark.parametrize("driver", ["python_pip", "python_pipx"])
 def test_python_update_passes_doctor_owned_launcher_from_background_worker(
     tmp_path, monkeypatch, driver, python_package_readback,
 ):
@@ -1586,7 +1629,8 @@ def test_python_update_passes_doctor_owned_launcher_from_background_worker(
     monkeypatch.setattr(sys, "argv", ["-c"])
     with (
         mock.patch("loopx.self_update.subprocess.run", side_effect=[
-            passed, python_package_readback(), passed, passed, passed, final, passed,
+            passed, python_package_readback(), passed, passed, passed,
+            python_package_readback(), passed, final,
         ]),
         mock.patch("loopx.self_update.restart_services_for_runtime_activation", return_value={}) as activate,
     ):

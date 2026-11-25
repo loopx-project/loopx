@@ -590,6 +590,76 @@ def test_cli_update_moves_bound_pair_and_still_restarts_other_services(managed, 
         assert str(replacement.resolve()) in loaded[f"com.loopx.{kind}"]["ProgramArguments"][2]
 
 
+def test_python_installation_is_rechecked_inside_handoff_before_mutating_services(
+    managed, monkeypatch,
+):
+    _, agents, target, _, calls, _ = managed
+    align_managed_runtime(str(target))
+    calls.clear()
+    before = {path: path.read_bytes() for path in agents.glob("*.plist")}
+    replacement = target.with_name("next-loopx")
+    installed = {
+        "schema_version": "loopx_runtime_identity_v1",
+        "package_version": "2.4.0",
+        "package_fingerprint": "sha256:" + "2" * 64,
+    }
+    doctor = {
+        "ok": True, "scope": "installation_only", "service_runtime_identity": installed,
+        "python": {"executable": sys.executable},
+    }
+    launcher = f"#!{sys.executable}\nprint({json.dumps(json.dumps(doctor))})\n"
+    replacement.write_text(launcher)
+    replacement.chmod(0o700)
+    original_guard = managed_runtime._alignment_guard
+    entered = []
+
+    @contextmanager
+    def replace_inside_handoff(*args):
+        with original_guard(*args) as owner:
+            entered.append(True)
+            replacement.write_text(launcher.replace("2" * 64, "3" * 64))
+            yield owner
+
+    monkeypatch.setattr(activation.sys, "platform", "darwin")
+    monkeypatch.setattr(managed_runtime, "_alignment_guard", replace_inside_handoff)
+    result = activation.restart_services_for_runtime_activation(
+        changes_applied=True, runtime_ready=True, installed_bin=replacement,
+        installed_python_identity=installed,
+    )
+
+    assert entered
+    assert result["package_identity_verified"] is False
+    assert result["restart_status"] == "skipped_runtime_not_activated"
+    assert result["restart_reason"] == "service_runtime_unverified"
+    assert result["restarted_services"] == []
+    assert not calls
+    assert not (agents / ".loopx-runtime-activation.json").exists()
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_python_update_checks_legacy_service_restart_inside_chat_fence(managed, monkeypatch):
+    _, _, target, _, calls, _ = managed
+    identity = json.loads(subprocess.check_output([str(target), "doctor"]))["service_runtime_identity"]
+    original_guard = activation.managed_chat_activation_guard
+
+    @contextmanager
+    def replace_inside_guard(plists):
+        with original_guard(plists):
+            target.write_text(target.read_text().replace("new-revision", "different-revision"))
+            yield
+
+    monkeypatch.setattr(activation.sys, "platform", "darwin")
+    monkeypatch.setattr(activation, "managed_chat_activation_guard", replace_inside_guard)
+    result = activation.restart_services_for_runtime_activation(
+        changes_applied=True, runtime_ready=True, installed_bin=target,
+        installed_python_identity=identity,
+    )
+
+    assert result["package_identity_verified"] is False
+    assert result["restart_status"] == "skipped_runtime_not_activated"
+    assert calls == []
+
+
 def test_unchanged_python_update_keeps_running_standard_services(managed, monkeypatch):
     _, _, _, _, calls, _ = managed
     monkeypatch.setattr(activation.sys, "platform", "darwin")
