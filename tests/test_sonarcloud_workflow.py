@@ -129,7 +129,11 @@ def test_separate_trusted_cleanup_does_not_activate_analysis() -> None:
     assert set(maintenance["on"]["pull_request_target"]["types"]) == {
         "closed", "synchronize", "opened", "reopened", "edited",
     }
-    for job in maintenance["jobs"].values():
+    for name, job in maintenance["jobs"].items():
         assert "uses" not in job and "secrets" not in job
-        assert all(not step.get("uses", "").startswith("actions/checkout@") for step in job["steps"])
+        checkouts = [step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
+        if name == "inspect-pr-diff":
+            assert [step["with"]["ref"] for step in checkouts] == ["${{ github.workflow_sha }}"]
+        else:
+            assert checkouts == []
     _assert_analysis_boundary(workflow, caller)

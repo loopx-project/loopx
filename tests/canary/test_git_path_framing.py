@@ -176,6 +176,54 @@ def test_git_byte_paths_fail_closed_before_display_and_dedupe(tmp_path: Path) ->
     assert "selection_inputs" not in payload
 
 
+@pytest.mark.parametrize(
+    ("subcommand", "extra"),
+    [("plan", []), ("premerge", ["--tier", "quick", "--no-execute"])],
+)
+def test_canary_rejects_a_missing_git_base(
+    tmp_path: Path, subcommand: str, extra: list[str],
+) -> None:
+    from loopx.canary.planner import DEFAULT_CATALOG_PATH
+
+    repo, _ = _repo_with_odd_python_path(tmp_path)
+    catalog = repo / "docs/concepts/interaction-pattern-catalog.md"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes(DEFAULT_CATALOG_PATH.read_bytes())
+    _git(repo, "add", "--", str(catalog.relative_to(repo)))
+    _git(repo, "commit", "-m", "catalog for premerge")
+    (repo / "untracked.py").write_text("value = 1\n", encoding="utf-8")
+
+    response = run_source_cli(
+        ["--format", "json", "canary", subcommand, "--from-git-diff",
+         "--git-diff-base", "refs/heads/nonexistent-base", *extra],
+        cwd=repo, check=False, timeout=60,
+    )
+    payload = json.loads(response.stdout)
+    assert response.returncode != 0, payload
+    assert payload["ok"] is False
+    assert "--git-diff-base" in payload["error"]
+    assert "gate" not in payload and "selection_inputs" not in payload
+    selector = payload["selector_sources"]["git_diff"]
+    assert selector["successful_sources"] == ["staged", "unstaged", "untracked"]
+    assert [warning["source"] for warning in selector["warnings"]] == ["base"]
+    assert selector["changed_files"] == []
+
+
+def test_canary_rejects_a_git_base_without_shared_history(tmp_path: Path) -> None:
+    repo, _ = _repo_with_odd_python_path(tmp_path)
+    unrelated = subprocess.check_output(
+        ["git", "commit-tree", "HEAD^{tree}", "-m", "separate root"], cwd=repo,
+        text=True,
+    ).strip()
+    _git(repo, "update-ref", "refs/heads/other-root", unrelated)
+
+    selector = collect_git_diff_changed_files(repo_root=repo, base_ref="other-root")
+
+    assert selector["ok"] is False
+    assert "shared history" in selector["error"]
+    assert selector["changed_files"] == []
+
+
 @pytest.mark.skipif(
     os.name != "posix",
     reason="literal backslash and trailing space pathnames are POSIX-only",

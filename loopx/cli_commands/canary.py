@@ -87,7 +87,8 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
     # that off, at which point a path can carry U+0085/U+2028/U+2029 raw and
     # `str.splitlines()` splits one path into two.
-    command = ["git", "-C", str(repo_root), *args, "-z"]
+    subcommand, *arguments = args
+    command = ["git", "-C", str(repo_root), subcommand, "-z", *arguments, "--"]
     completed = subprocess.run(
         command,
         check=False,
@@ -142,7 +143,9 @@ def collect_git_diff_changed_files(
 
     base_ref = (base_ref or "origin/main").strip() or "origin/main"
     sources = {
-        "base": _run_git_name_only(repo_root, ["diff", "--name-only", f"{base_ref}...HEAD"]),
+        "base": _run_git_name_only(
+            repo_root, ["diff", "--name-only", "--end-of-options", f"{base_ref}...HEAD"],
+        ),
         "staged": _run_git_name_only(repo_root, ["diff", "--name-only", "--cached"]),
         "unstaged": _run_git_name_only(repo_root, ["diff", "--name-only"]),
         "untracked": _run_git_name_only(repo_root, ["ls-files", "--others", "--exclude-standard"]),
@@ -173,21 +176,30 @@ def collect_git_diff_changed_files(
         int(source.get("undecodable_path_count") or 0)
         for source in sources.values()
     )
-    path_error = (
+    error = (
         "Git returned changed pathnames that are not valid UTF-8; canary "
         "cannot preserve their identity in the selector output"
         if undecodable_path_count
         else None
     )
+    if error is None and not sources["base"]["ok"]:
+        error = (
+            f"Git could not compare {base_ref!r} with HEAD. Fetch the target branch "
+            "or set --git-diff-base to a revision with shared history."
+        )
+    elif error is None and warnings:
+        failed = ", ".join(warning["source"] for warning in warnings)
+        error = f"Git could not read changed paths from {failed}; selection is incomplete."
+    selected = changed_files if error is None else []
     return {
-        "ok": bool(successful_sources) and path_error is None,
+        "ok": error is None,
         "base_ref": base_ref,
         "repo_root": str(repo_root),
-        "changed_files": [] if path_error is not None else changed_files,
-        "changed_file_count": len(changed_files),
+        "changed_files": selected,
+        "changed_file_count": len(selected),
         "successful_sources": successful_sources,
         "undecodable_path_count": undecodable_path_count,
-        **({"error": path_error} if path_error else {}),
+        **({"error": error} if error else {}),
         "warnings": warnings,
     }
 
