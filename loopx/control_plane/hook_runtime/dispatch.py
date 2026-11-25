@@ -266,6 +266,8 @@ def merge_turn_start_dispatch(
     extra: Mapping[str, object],
     *,
     include_contexts: bool = True,
+    only_nonempty_extra: bool = False,
+    include_uncertain: bool = False,
 ) -> dict[str, object]:
     """Merge an additional turn-start dispatch packet without dynamic `Any` loops."""
 
@@ -273,7 +275,11 @@ def merge_turn_start_dispatch(
     for key in ("results", "required_reads", "failures", "contexts"):
         if key == "contexts" and (not include_contexts or not extra.get(key)):
             continue
+        if only_nonempty_extra and not extra.get(key):
+            continue
         result[key] = _object_list(result.get(key)) + _object_list(extra.get(key))
     for key in ("registered_count", "invoked_count"):
         result[key] = _count_int(result.get(key)) + _count_int(extra.get(key))
+    if include_uncertain and extra.get("uncertain_local_effects"):
+        result["uncertain_local_effects"] = True
     return result

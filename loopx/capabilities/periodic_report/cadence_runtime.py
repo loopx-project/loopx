@@ -11,6 +11,7 @@ from ...control_plane.capability_hooks import (
     TurnStartHookRegistration,
     dispatch_turn_start_hooks,
     load_scoped_registry,
+    merge_turn_start_dispatch,
 )
 from ...history import load_registry
 from ...registry import find_registry_goal
@@ -122,14 +123,10 @@ def periodic_report_cadence_hooks(
 
 def extend_cadence_turn_start_dispatch(dispatch: dict, **kwargs) -> dict:
     """Same optional composition for quota and the managed turn driver."""
+    extra: dict[str, object]
     try:
         extra = dispatch_turn_start_hooks(periodic_report_cadence_hooks(**kwargs))
     except (OSError, TypeError, ValueError):
         extra = {"failures": [{"hook_id": "periodic_report.cadence",
             "capability_id": "periodic-report", "error_code": "cadence_configuration_unavailable"}]}
-    result = dict(dispatch)
-    for key in ("results", "required_reads", "failures"):
-        result[key] = list(dispatch.get(key) or []) + list(extra.get(key) or [])
-    for key in ("registered_count", "invoked_count"):
-        result[key] = int(dispatch.get(key) or 0) + int(extra.get(key) or 0)
-    return result
+    return merge_turn_start_dispatch(dispatch, extra, include_contexts=False)

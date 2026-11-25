@@ -587,3 +587,96 @@ def test_quota_turn_start_hooks_avoid_redundant_registry_reads_and_stale_cache(
         assert "agent-invalidated" in second_agents
         refreshed = load_scoped_registry(registry, loader=orig_load_reg)
         assert isinstance(refreshed.get("goals"), list)
+
+
+def _goal_ids(payload: Mapping[str, object]) -> list[object]:
+    goals = payload.get("goals")
+    assert isinstance(goals, list)
+    return [g["id"] for g in goals if isinstance(g, Mapping)]
+
+
+def test_request_scope_preserves_path_format_semantics_across_symlinks(
+    tmp_path: Path,
+) -> None:
+    project_reg = tmp_path / "registry.json"
+    envelope_bytes = registry_codec._encode_document(
+        {"goals": [{"id": "g1", "title": "Project Goal"}]},
+        format=registry_codec._ProjectRegistryFormat.STRICT_ENVELOPE_V1,
+        minimum_writer_protocol=registry_codec.CURRENT_WRITER_PROTOCOL,
+    )
+    project_reg.write_bytes(envelope_bytes)
+    global_alias = tmp_path / "registry.global.json"
+    global_alias.symlink_to(project_reg)
+
+    with pytest.raises(
+        registry_codec.ProjectRegistryError,
+        match="global registry root must be a JSON object",
+    ):
+        registry_codec.load_registry(global_alias)
+
+    with capability_hook_request_scope():
+        project_loaded = load_scoped_registry(
+            project_reg, loader=registry_codec.load_registry
+        )
+        assert _goal_ids(project_loaded) == ["g1"]
+        project_goal = agent_registry.load_goal_from_registry(project_reg, "g1")
+        assert project_goal is not None and project_goal["id"] == "g1"
+
+        with pytest.raises(
+            registry_codec.ProjectRegistryError,
+            match="global registry root must be a JSON object",
+        ):
+            load_scoped_registry(global_alias, loader=registry_codec.load_registry)
+
+        with pytest.raises(
+            registry_codec.ProjectRegistryError,
+            match="global registry root must be a JSON object",
+        ):
+            agent_registry.load_goal_from_registry(global_alias, "g1")
+
+        still_project_goal = agent_registry.load_goal_from_registry(project_reg, "g1")
+        assert still_project_goal is not None and still_project_goal["id"] == "g1"
+
+
+def test_request_scope_atomic_write_invalidates_alias_snapshots_and_goal_index(
+    tmp_path: Path,
+) -> None:
+    real_reg = tmp_path / "registry.json"
+    alias_reg = tmp_path / "alias.json"
+    alias_direct = tmp_path / "alias_direct.json"
+    v1_bytes = json.dumps(
+        {"goals": [{"id": "g-old", "title": "Old Goal"}]}
+    ).encode("utf-8")
+    v2_bytes = json.dumps(
+        {"goals": [{"id": "g-new", "title": "New Goal"}]}
+    ).encode("utf-8")
+    registry_codec._atomic_write_bytes(real_reg, v1_bytes, mode=None)
+    alias_reg.symlink_to(real_reg)
+    alias_direct.symlink_to(real_reg)
+
+    with capability_hook_request_scope() as scope:
+        first = load_scoped_registry(alias_reg, loader=registry_codec.load_registry)
+        assert _goal_ids(first) == ["g-old"]
+        old_goal = agent_registry.load_goal_from_registry(alias_reg, "g-old")
+        assert old_goal is not None and old_goal["id"] == "g-old"
+        direct_v1 = registry_codec.load_registry(
+            alias_direct, source_snapshots=scope.registry_snapshots
+        )
+        assert _goal_ids(direct_v1) == ["g-old"]
+
+        registry_codec._atomic_write_bytes(real_reg, v2_bytes, mode=None)
+
+        alias_v2 = load_scoped_registry(alias_reg, loader=registry_codec.load_registry)
+        real_v2 = load_scoped_registry(real_reg, loader=registry_codec.load_registry)
+        direct_v2 = registry_codec.load_registry(
+            alias_direct, source_snapshots=scope.registry_snapshots
+        )
+        assert _goal_ids(alias_v2) == ["g-new"]
+        assert _goal_ids(real_v2) == ["g-new"]
+        assert _goal_ids(direct_v2) == ["g-new"]
+        assert agent_registry.load_goal_from_registry(alias_reg, "g-old") is None
+        assert agent_registry.load_goal_from_registry(real_reg, "g-old") is None
+        new_alias_goal = agent_registry.load_goal_from_registry(alias_reg, "g-new")
+        new_real_goal = agent_registry.load_goal_from_registry(real_reg, "g-new")
+        assert new_alias_goal is not None and new_alias_goal["id"] == "g-new"
+        assert new_real_goal is not None and new_real_goal["id"] == "g-new"

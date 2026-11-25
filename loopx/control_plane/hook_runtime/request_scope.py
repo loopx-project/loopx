@@ -27,9 +27,9 @@ class SnapshotRegistryLoader(Protocol):
     ) -> dict[str, object]: ...
 
 
-def _normalized_registry_keys(path: Path) -> tuple[Path, Path]:
+def _normalized_registry_keys(path: Path) -> tuple[Path, Path, str]:
     expanded = path.expanduser()
-    return expanded.absolute(), expanded.resolve()
+    return expanded.absolute(), expanded.resolve(), expanded.name
 
 
 def _supports_source_snapshots(loader: RegistryLoader) -> bool:
@@ -71,11 +71,20 @@ class CapabilityHookRequestScope:
     """Single-request registry snapshot cache bound to one hook dispatch pass."""
 
     registry_snapshots: dict[Path, bytes | None] = field(default_factory=dict)
-    _decoded_registries: dict[Path, dict[str, object]] = field(default_factory=dict)
-    _goals_by_path: dict[Path, dict[str, dict[str, object]]] = field(
+    _decoded_registries: dict[tuple[Path, str], dict[str, object]] = field(
+        default_factory=dict
+    )
+    _goals_by_path: dict[tuple[Path, str], dict[str, dict[str, object]]] = field(
         default_factory=dict
     )
     _alias_to_resolved: dict[Path, Path] = field(default_factory=dict)
+
+    def _resolve_cache_key(self, path: Path) -> tuple[Path, Path, tuple[Path, str]]:
+        route, resolved, name = _normalized_registry_keys(path)
+        canonical = self._alias_to_resolved.get(route)
+        if canonical is not None and canonical == resolved:
+            return route, resolved, (canonical, name)
+        return route, resolved, (resolved, name)
 
     def load_registry(
         self,
@@ -85,21 +94,18 @@ class CapabilityHookRequestScope:
     ) -> dict[str, object]:
         """Return a fresh copy of `path` using this request's cached snapshot."""
 
-        route, resolved = _normalized_registry_keys(path)
-        canonical = self._alias_to_resolved.get(route)
-        if canonical is None and resolved in self._decoded_registries:
-            canonical = resolved
+        route, resolved, cache_key = self._resolve_cache_key(path)
+        if cache_key in self._decoded_registries:
             self._alias_to_resolved[route] = resolved
-        if canonical is not None and canonical in self._decoded_registries:
-            return copy.deepcopy(self._decoded_registries[canonical])
+            return copy.deepcopy(self._decoded_registries[cache_key])
         payload = _invoke_registry_loader(
             loader,
             path,
             source_snapshots=self.registry_snapshots,
         )
-        self._decoded_registries[resolved] = copy.deepcopy(payload)
+        self._decoded_registries[cache_key] = copy.deepcopy(payload)
         self._alias_to_resolved[route] = resolved
-        self._goals_by_path[resolved] = _extract_goals_by_id(payload)
+        self._goals_by_path[cache_key] = _extract_goals_by_id(payload)
         return payload
 
     def load_goal(
@@ -111,40 +117,48 @@ class CapabilityHookRequestScope:
     ) -> dict[str, object] | None:
         """Return an isolated Goal copy from this request's cached snapshot."""
 
-        route, resolved = _normalized_registry_keys(path)
-        canonical = self._alias_to_resolved.get(route)
-        if canonical is None and resolved in self._decoded_registries:
-            canonical = resolved
-            self._alias_to_resolved[route] = resolved
-        if canonical is None or canonical not in self._decoded_registries:
+        route, resolved, cache_key = self._resolve_cache_key(path)
+        if cache_key not in self._decoded_registries:
             if not path.exists():
                 self.registry_snapshots.setdefault(resolved, None)
                 self.registry_snapshots.setdefault(route, None)
-                self._decoded_registries[resolved] = {}
+                self._decoded_registries[cache_key] = {}
                 self._alias_to_resolved[route] = resolved
-                self._goals_by_path[resolved] = {}
+                self._goals_by_path[cache_key] = {}
                 return None
             self.load_registry(path, loader=loader)
-            canonical = self._alias_to_resolved.get(route, resolved)
-        goal = self._goals_by_path.get(canonical, {}).get(str(goal_id))
+        goal = self._goals_by_path.get(cache_key, {}).get(str(goal_id))
         return copy.deepcopy(goal) if goal is not None else None
 
     def invalidate(self, path: Path) -> None:
-        """Drop cached state for `path` and any resolved alias inside this scope."""
+        """Drop cached state and all alias snapshots resolving to `path`."""
 
-        route, resolved = _normalized_registry_keys(path)
-        canonical = self._alias_to_resolved.pop(route, resolved)
-        for key in (route, resolved, canonical):
-            self.registry_snapshots.pop(key, None)
-            self._decoded_registries.pop(key, None)
-            self._goals_by_path.pop(key, None)
-        stale_aliases = [
+        route, resolved, _ = _normalized_registry_keys(path)
+        targets = {route, resolved}
+        canonical = self._alias_to_resolved.get(route)
+        if canonical is not None:
+            targets.add(canonical)
+        matching_aliases = {
             alias
             for alias, target in self._alias_to_resolved.items()
-            if target in (route, resolved, canonical)
-        ]
-        for alias in stale_aliases:
-            self._alias_to_resolved.pop(alias, None)
+            if target in targets or alias in targets
+        }
+        targets.update(matching_aliases)
+        for snap_key in list(self.registry_snapshots):
+            if snap_key in targets:
+                continue
+            try:
+                if snap_key.resolve() in targets or snap_key.absolute() in targets:
+                    targets.add(snap_key)
+            except OSError:
+                pass
+        for key in targets:
+            self.registry_snapshots.pop(key, None)
+            self._alias_to_resolved.pop(key, None)
+        for cache_key in list(self._decoded_registries):
+            if cache_key[0] in targets:
+                self._decoded_registries.pop(cache_key, None)
+                self._goals_by_path.pop(cache_key, None)
 
 
 _ACTIVE_HOOK_REQUEST_SCOPE: ContextVar[CapabilityHookRequestScope | None] = ContextVar(
