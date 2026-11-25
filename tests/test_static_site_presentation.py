@@ -444,6 +444,18 @@ def test_cli_package_keeps_numeric_account_rules_public(
     )
     (site / "password-length.html").write_text(password_page, encoding="utf-8")
     (site / "token-expiry.html").write_text(token_page, encoding="utf-8")
+    password_range = (
+        "<html><body><h1>Password requirements</h1>\n"
+        "<p>Password: 8 to 64 characters.</p>\n"
+        "</body></html>\n"
+    )
+    token_business_days = (
+        "<html><body><h1>Token lifetime</h1>\n"
+        "<p>Token: 2 business days.</p>\n"
+        "</body></html>\n"
+    )
+    (site / "password-range.html").write_text(password_range, encoding="utf-8")
+    (site / "token-business-days.html").write_text(token_business_days, encoding="utf-8")
     output = tmp_path / "publish"
 
     assert _cli_package(site, output, tmp_path / "state") == 0
@@ -451,6 +463,8 @@ def test_cli_package_keeps_numeric_account_rules_public(
     assert payload["write_performed"] is True
     assert (output / "password-length.html").read_text(encoding="utf-8") == password_page
     assert (output / "token-expiry.html").read_text(encoding="utf-8") == token_page
+    assert (output / "password-range.html").read_text(encoding="utf-8") == password_range
+    assert (output / "token-business-days.html").read_text(encoding="utf-8") == token_business_days
 
 
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(

@@ -57,8 +57,10 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "Token: contact your administrator for a new token.\n",
         "Password: 12 characters minimum.\n",
         "Password: 8+ characters\n",
+        "Password: 8 to 64 characters.\n",
         "Token: 24 hours.\n",
         "Token: 24-hour expiry\n",
+        "Token: 2 business days.\n",
     ],
     ids=(
         "bearer prose",
@@ -71,8 +73,10 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "token sentence",
         "password length rule",
         "password length plus",
+        "password length range",
         "token expiry rule",
         "token expiry hyphen",
+        "token business days",
     ),
 )
 def test_credential_prose_stays_public(text: str) -> None:

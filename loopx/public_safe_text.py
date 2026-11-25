@@ -393,17 +393,18 @@ _PRESENTATION_KEY_LABELS_SOURCE = (
 # Account help often states a rule as `Password: 12 characters` or
 # `Token: 24 hours`. A bare number after a label is not by itself a secret;
 # when it is a quantity with a length or time unit it is a public rule. The
-# negative lookahead keeps that shape out of the value-evidence arms while a
-# bare number (`Password: 12345678`) and a mixed value (`token: abc123`) still
-# fail closed.
+# negative lookahead also covers word ranges (`8 to 64 characters`) and
+# qualified units (`2 business days`) while a bare number (`Password:
+# 12345678`) and a mixed value (`token: abc123`) still fail closed.
 _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?![\"']?\d+(?:\.\d+)?"
-    r"(?:\s*[-\u2013]\s*\d+|\+)?"
+    r"(?:\s*[-\u2013]\s*\d+|\s+(?:to|through|and)\s+\d+|\+)?"
     r"(?:\s+or\s+(?:more|fewer|less))?"
     r"\s*[-\u2013]?\s*"
+    r"(?:(?:business|working|calendar|full|consecutive)[-\s]+)?"
     r"(?:characters?|chars?|letters?|digits?|symbols?"
     r"|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s"
-    r"|days?|d|weeks?|months?|years?)\b)"
+    r"|days?|workdays?|d|weeks?|months?|years?)\b)"
 )
 _PRESENTATION_COLON_VALUE_SOURCE = (
     _PRESENTATION_RULE_QUANTITY_SOURCE
