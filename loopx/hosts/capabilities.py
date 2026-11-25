@@ -92,7 +92,7 @@ _DESCRIPTOR_KEYS: frozenset[str] = frozenset(
 )
 
 BUILTIN_HOST_ADAPTER_MODULES: Mapping[str, str] = {
-    "agy": "loopx.agy_goal_mode.host_runtime",
+    "agy": "loopx.agy_goal_mode",
     "claude": "loopx.claude_goal_mode",
     "dsh": "loopx.dsh_goal_mode.turn_host_adapter",
 }

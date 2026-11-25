@@ -161,13 +161,35 @@ def test_capabilities_lookup_loads_flagship_adapters_lazily_without_cold_import_
     script = """
 import sys
 from loopx.hosts.capabilities import get_host_capabilities
+assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
 agy = get_host_capabilities('agy')
 assert agy is not None and agy.integration_tier == 'orchestrated_app'
-assert 'loopx.agy_goal_mode.host_runtime' in sys.modules
+assert 'loopx.agy_goal_mode' in sys.modules
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_importing_agy_package_registers_capabilities_without_loading_host_runtime() -> None:
+    script = """
+import sys
+import loopx.agy_goal_mode as agy_pkg
+from loopx.hosts.capabilities import get_host_capabilities
+
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert get_host_capabilities('agy') is agy_pkg.AGY_HOST_CAPABILITIES
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -204,6 +226,7 @@ with pytest.raises(ValueError, match='conflicting host capabilities registration
     register_host_capabilities(conflicting_claude)
 
 assert 'loopx.claude_goal_mode' in sys.modules
+assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 
@@ -232,6 +255,7 @@ override_claude = HostHarnessCapabilities(
 )
 registered = register_host_capabilities(override_claude, replace=True)
 assert registered == override_claude
+assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 
@@ -267,6 +291,7 @@ assert get_host_capabilities('claude') == authoritative
 assert register_host_capabilities(authoritative) == authoritative
 replaced = register_host_capabilities(conflicting_claude, replace=True)
 assert get_host_capabilities('claude') == replaced
+assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 """
@@ -485,6 +510,7 @@ assert t2_result == turn_adapter.DSH_HOST_CAPABILITIES
 assert get_host_capabilities("dsh") == turn_adapter.DSH_HOST_CAPABILITIES
 assert isinstance(t3_error, ValueError), repr(t3_error)
 assert "conflicting host capabilities registration for dsh" in str(t3_error)
+assert "loopx.agy_goal_mode" not in sys.modules
 assert "loopx.agy_goal_mode.host_runtime" not in sys.modules
 assert "loopx.claude_goal_mode" not in sys.modules
 """

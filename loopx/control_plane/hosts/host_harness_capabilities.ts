@@ -42,12 +42,8 @@ const MAX_DESCRIPTION_CODE_POINTS = 512;
 // Explicit cross-runtime edge-whitespace set matching Python _DESCRIPTION_WHITESPACE_CHARS:
 // trims ASCII whitespace, U+0085 NEL, Unicode Zs/Zl/Zp separators, and U+FEFF BOM,
 // while deliberately NOT stripping ASCII separators U+001C..U+001F.
-const DESCRIPTION_EDGE_WHITESPACE_CHARS =
-  "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
-const DESCRIPTION_EDGE_WHITESPACE_RE = new RegExp(
-  `^[${DESCRIPTION_EDGE_WHITESPACE_CHARS}]+|[${DESCRIPTION_EDGE_WHITESPACE_CHARS}]+$`,
-  "g",
-);
+const DESCRIPTION_EDGE_WHITESPACE_RE =
+  /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+|[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+$/g;
 
 const DESCRIPTOR_KEYS = new Set<string>([
   "schema_version",

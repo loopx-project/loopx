@@ -22,34 +22,13 @@ from typing import Any
 from ..command_invocation import loopx_cli_argv
 from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
+from . import AGY_HOST_CAPABILITIES as AGY_HOST_CAPABILITIES
 from .launchd_watchdog import (
     DEFAULT_LAUNCHD_INTERVAL_SECONDS,
     DEFAULT_LONG_IDLE_SECONDS,
     MIN_STALL_COOLDOWN_SECONDS,
     build_antigravity_launchd_plist as build_antigravity_launchd_plist,
     install_launchd as install_launchd,
-)
-from ..hosts.capabilities import (
-    HostHarnessCapabilities,
-    _register_builtin_host_capabilities,
-)
-
-AGY_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
-    HostHarnessCapabilities(
-        host_id="agy",
-        integration_tier="orchestrated_app",
-        adapter_module="loopx.agy_goal_mode",
-        supported_capabilities=(),
-        hook_events=("Stop",),
-        requires_utf8_stdio=True,
-        native_goal_primitive=True,
-        native_scheduler_primitive=True,
-        description=(
-            "Antigravity CLI and App orchestrated adapter with native /goal, "
-            "schedule wake tools, Stop EOF recovery hook, and "
-            "ANTIGRAVITY_CONVERSATION_ID binding."
-        ),
-    )
 )
 
 DEFAULT_STALL_COOLDOWN_SECONDS = MIN_STALL_COOLDOWN_SECONDS
