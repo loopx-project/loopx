@@ -614,14 +614,21 @@ Self-service:
      fi
    else
      mkdir -p ~/.local/bin &&
-     if ln -s "$node" ~/.local/bin/node &&
-        installed_raw="$("$HOME/.local/bin/node" --version)" &&
-        installed_ver="$(node_trim "$installed_raw")" &&
-        node_qualifies "$installed_ver"; then
-       echo "Node launcher created at ~/.local/bin/node (remove the link to undo)"
+     created=0
+     if ln -s "$node" ~/.local/bin/node; then
+       created=1
+       if installed_raw="$("$HOME/.local/bin/node" --version)" &&
+          installed_ver="$(node_trim "$installed_raw")" &&
+          node_qualifies "$installed_ver"; then
+         echo "Node launcher created at ~/.local/bin/node (remove the link to undo)"
+       else
+         rm -f ~/.local/bin/node &&
+         echo "The candidate failed the final check; nothing was changed." &&
+         exit 1
+       fi
      else
-       rm -f ~/.local/bin/node &&
-       echo "The candidate failed the final check; nothing was changed." &&
+       # the entry already exists: another window's successful repair owns it
+       echo "Another repair created the launcher; nothing was changed." &&
        exit 1
      fi
    fi
@@ -639,12 +646,12 @@ Self-service:
    a base sitting exactly on the minimum is rejected when a prerelease is
    present, while `22.22.3+build-5`, whose hyphen belongs to the build
    metadata, still qualifies. The installed link is qualified through the
-   same function after the swap; the two failure branches above are the undo
+   same function after the swap; the failure branches above are the undo
    paths, and the `--version` lines remain as the readback prints. When
    `~/.local/bin/node` does not exist yet — an nvm-managed old Node can be
-   first in the search order with no local launcher — the `else` branch
-   creates the link for the first time, and removing that link undoes the
-   whole step.
+   first in the search order with no local launcher — the first-creation
+   branch creates the link; its `ln` failure means another window's repair
+   already created and qualified one, and that entry is left in place.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
