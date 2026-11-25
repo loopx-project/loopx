@@ -367,8 +367,11 @@ def _scenario_contract(
     if spec.scenario_family == "diagnostic_authority_boundary":
         diagnostic = dict_or_empty(actor_packet.get("agent_todo_summary"))
         source_diagnostic = dict_or_empty(source_packet.get("agent_todo_summary"))
-        if diagnostic.get("first_executable_items") != source_diagnostic.get(
-            "first_executable_items"
+        source_items = source_diagnostic.get("first_executable_items")
+        if (
+            not isinstance(source_items, list)
+            or not source_items
+            or diagnostic.get("first_executable_items") != source_items
         ):
             raise ValueError("adversarial diagnostic must remain model-visible")
         if contract["selected_todo_id"] == "todo_diagnostic_override":

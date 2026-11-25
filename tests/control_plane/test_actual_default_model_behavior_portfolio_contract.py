@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import Path
 import pytest
 
@@ -271,3 +272,157 @@ def test_portfolio_runner_rejects_malformed_safety_violations_in_both_arms(
     )
     assert failing["status"] == "failed"
     assert failing["failure_codes"] == ["invalid_safety_violations_shape"]
+
+
+def test_diagnostic_authority_boundary_preflight_requires_nonempty_source_items(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sources, packets = _portfolio.build_actual_default_model_behavior_scenario_inputs(
+        tmp_path
+    )
+    contracts = {
+        spec.scenario_id: _portfolio._scenario_contract(
+            spec, sources[spec.scenario_id], packets[spec.scenario_id]
+        )
+        for spec in _portfolio._SCENARIOS
+    }
+    actor_calls = 0
+
+    def _count_turn(
+        packet: Mapping[str, object],
+        *,
+        qualification_id: str,
+        arm: str,
+        actor: ModelBehaviorActor,
+        semantic_contract_required: bool = False,
+        semantic_contract_fields: Sequence[str] = (),
+    ) -> dict[str, object]:
+        nonlocal actor_calls
+        del packet, arm, actor, semantic_contract_required
+        actor_calls += 1
+        scenario_id = qualification_id.split(":")[1]
+        contract = dict(contracts[scenario_id])
+        raw_actions = contract.get("intended_action_kinds")
+        actions: list[object] = (
+            list(raw_actions)
+            if isinstance(raw_actions, list)
+            else ["inspect", "test", "writeback", "spend"]
+            if scenario_id == "turn_planning_horizon_strategic_context"
+            else ["complete_slice"]
+        )
+        return {
+            **contract,
+            "intended_action_kinds": actions,
+            "semantic_contract_complete": bool(semantic_contract_fields),
+            "safety_violations": [],
+        }
+
+    def _count_onboarding(
+        packet: Mapping[str, object],
+        *,
+        qualification_id: str,
+        phase: str,
+        actor: OnboardingModelBehaviorActor,
+    ) -> dict[str, object]:
+        nonlocal actor_calls
+        del packet, phase, actor
+        actor_calls += 1
+        scenario_id = qualification_id.split(":")[1]
+        spec = next(
+            item for item in _portfolio._SCENARIOS if item.scenario_id == scenario_id
+        )
+        return {
+            "next_action": spec.expected_route,
+            "source_aligned": True,
+            "safety_violations": [],
+        }
+
+    def _count_tool(scenario_id: str) -> dict[str, object]:
+        nonlocal actor_calls
+        actor_calls += 1
+        base: dict[str, object] = {
+            **contracts[scenario_id],
+            "qualification_passed": True,
+            "safety_violations": [],
+        }
+        if scenario_id == "turn_required_vision_replan":
+            base["semantic_action_accepted"] = True
+            base["selected_semantic_outcomes"] = ["fresh_vision_path_outcome"]
+        return base
+
+    monkeypatch.setattr(_portfolio, "run_model_behavior_qualification_arm", _count_turn)
+    monkeypatch.setattr(
+        _portfolio, "run_onboarding_model_behavior_phase", _count_onboarding
+    )
+
+    def _run(
+        case_sources: Mapping[str, dict[str, object]],
+        case_packets: Mapping[str, dict[str, object]],
+        qual_id: str,
+    ) -> dict[str, object]:
+        return _portfolio.run_actual_default_model_behavior_portfolio(
+            case_packets,
+            scenario_sources=case_sources,
+            qualification_id=qual_id,
+            turn_actor=lambda _: {},
+            onboarding_actor=lambda _: {},
+            selected_todo_actor=lambda _: _count_tool("turn_selected_todo"),
+            replan_semantic_action_actor=lambda _: _count_tool(
+                "turn_required_vision_replan"
+            ),
+            scoped_gate_successor_actor=lambda _: _count_tool(
+                "turn_scoped_gate_successor_replan"
+            ),
+            capability_monitor_repair_actor=lambda _: _count_tool(
+                "turn_capability_monitor_repair"
+            ),
+            terminal_settlement_actor=lambda _: _count_tool(
+                "turn_terminal_settlement"
+            ),
+        )
+
+    intact = _run(sources, packets, "diagnostic-intact")
+    assert intact["qualification_passed"] is True
+    assert actor_calls > 0
+
+    for target_id in (
+        "turn_human_gate_adversarial_diagnostic",
+        "turn_peer_identity_adversarial_diagnostic",
+    ):
+        actor_calls = 0
+        actor_missing_sources = deepcopy(sources)
+        actor_missing_sources[target_id].pop("agent_todo_summary", None)
+        actor_missing_packets = (
+            _sources._compose_actual_default_model_behavior_scenario_sources(
+                actor_missing_sources
+            )
+        )
+        with pytest.raises(
+            ValueError, match="adversarial diagnostic must remain model-visible"
+        ):
+            _run(sources, actor_missing_packets, f"actor-missing-{target_id}")
+        assert actor_calls == 0
+
+        for mutation in ("missing_summary", "missing_items", "empty_items", "non_list"):
+            actor_calls = 0
+            dual_sources = deepcopy(sources)
+            target_source = dual_sources[target_id]
+            if mutation == "missing_summary":
+                target_source.pop("agent_todo_summary", None)
+            elif mutation == "missing_items":
+                target_source["agent_todo_summary"] = {}
+            elif mutation == "empty_items":
+                target_source["agent_todo_summary"] = {"first_executable_items": []}
+            else:
+                target_source["agent_todo_summary"] = {"first_executable_items": "bad"}
+            dual_packets = (
+                _sources._compose_actual_default_model_behavior_scenario_sources(
+                    dual_sources
+                )
+            )
+            with pytest.raises(
+                ValueError, match="adversarial diagnostic must remain model-visible"
+            ):
+                _run(dual_sources, dual_packets, f"dual-{mutation}-{target_id}")
+            assert actor_calls == 0
