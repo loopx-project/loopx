@@ -79,12 +79,24 @@ class CapabilityHookRequestScope:
     )
     _alias_to_resolved: dict[Path, Path] = field(default_factory=dict)
 
-    def _resolve_cache_key(self, path: Path) -> tuple[Path, Path, tuple[Path, str]]:
-        route, resolved, name = _normalized_registry_keys(path)
+    def _lookup_cache_key(
+        self,
+        route: Path,
+        resolved_now: Path,
+        name: str,
+    ) -> tuple[Path, Path, tuple[Path, str]]:
+        # Always anchor an already-observed alias route to its capture-time
+        # target so repointing a symlink later in the same request cannot bind
+        # old snapshot bytes under the new target's canonical cache key.
         canonical = self._alias_to_resolved.get(route)
-        if canonical is not None and canonical == resolved:
-            return route, resolved, (canonical, name)
-        return route, resolved, (resolved, name)
+        if canonical is not None:
+            return route, canonical, (canonical, name)
+        # If raw bytes for `route` were pre-populated directly in
+        # `registry_snapshots` outside `load_registry`, bind decoded state to
+        # `(route, name)` rather than `resolved_now` so an unknown target is not polluted.
+        if route in self.registry_snapshots:
+            return route, route, (route, name)
+        return route, resolved_now, (resolved_now, name)
 
     def load_registry(
         self,
@@ -94,18 +106,32 @@ class CapabilityHookRequestScope:
     ) -> dict[str, object]:
         """Return a fresh copy of `path` using this request's cached snapshot."""
 
-        route, resolved, cache_key = self._resolve_cache_key(path)
+        route, resolved_now, name = _normalized_registry_keys(path)
+        _, owner_target, cache_key = self._lookup_cache_key(route, resolved_now, name)
         if cache_key in self._decoded_registries:
-            self._alias_to_resolved[route] = resolved
+            self._alias_to_resolved.setdefault(route, owner_target)
             return copy.deepcopy(self._decoded_registries[cache_key])
+        prepopulated_route = (
+            route not in self._alias_to_resolved and route in self.registry_snapshots
+        )
         payload = _invoke_registry_loader(
             loader,
             path,
             source_snapshots=self.registry_snapshots,
         )
-        self._decoded_registries[cache_key] = copy.deepcopy(payload)
-        self._alias_to_resolved[route] = resolved
-        self._goals_by_path[cache_key] = _extract_goals_by_id(payload)
+        resolved_after = path.expanduser().resolve()
+        if prepopulated_route or (
+            route not in self._alias_to_resolved and resolved_after != resolved_now
+        ):
+            bound_target = route
+        elif route in self._alias_to_resolved:
+            bound_target = self._alias_to_resolved[route]
+        else:
+            bound_target = resolved_after
+        final_key = (bound_target, name)
+        self._decoded_registries[final_key] = copy.deepcopy(payload)
+        self._alias_to_resolved[route] = bound_target
+        self._goals_by_path[final_key] = _extract_goals_by_id(payload)
         return payload
 
     def load_goal(
@@ -117,16 +143,23 @@ class CapabilityHookRequestScope:
     ) -> dict[str, object] | None:
         """Return an isolated Goal copy from this request's cached snapshot."""
 
-        route, resolved, cache_key = self._resolve_cache_key(path)
+        route, resolved_now, name = _normalized_registry_keys(path)
+        _, _, cache_key = self._lookup_cache_key(route, resolved_now, name)
         if cache_key not in self._decoded_registries:
-            if not path.exists():
-                self.registry_snapshots.setdefault(resolved, None)
+            if route not in self.registry_snapshots and not path.exists():
+                resolved_after = path.expanduser().resolve()
+                bound_target = (
+                    resolved_after if resolved_after == resolved_now else route
+                )
+                missing_key = (bound_target, name)
+                self.registry_snapshots.setdefault(bound_target, None)
                 self.registry_snapshots.setdefault(route, None)
-                self._decoded_registries[cache_key] = {}
-                self._alias_to_resolved[route] = resolved
-                self._goals_by_path[cache_key] = {}
+                self._decoded_registries[missing_key] = {}
+                self._alias_to_resolved[route] = bound_target
+                self._goals_by_path[missing_key] = {}
                 return None
             self.load_registry(path, loader=loader)
+            _, _, cache_key = self._lookup_cache_key(route, resolved_now, name)
         goal = self._goals_by_path.get(cache_key, {}).get(str(goal_id))
         return copy.deepcopy(goal) if goal is not None else None
 

@@ -680,3 +680,62 @@ def test_request_scope_atomic_write_invalidates_alias_snapshots_and_goal_index(
         new_real_goal = agent_registry.load_goal_from_registry(real_reg, "g-new")
         assert new_alias_goal is not None and new_alias_goal["id"] == "g-new"
         assert new_real_goal is not None and new_real_goal["id"] == "g-new"
+
+
+def test_request_scope_repointed_symlink_does_not_poison_canonical_target(
+    tmp_path: Path,
+) -> None:
+    dir_t1 = tmp_path / "t1"
+    dir_t2 = tmp_path / "t2"
+    dir_t3 = tmp_path / "t3"
+    dir_alias = tmp_path / "alias_dir"
+    dir_witness = tmp_path / "witness_dir"
+    for directory in (dir_t1, dir_t2, dir_t3, dir_alias, dir_witness):
+        directory.mkdir()
+
+    t1 = dir_t1 / "registry.json"
+    t2 = dir_t2 / "registry.json"
+    t3 = dir_t3 / "registry.json"
+    t1.write_text(json.dumps({"goals": [{"id": "g-t1"}]}), encoding="utf-8")
+    t2.write_text(json.dumps({"goals": [{"id": "g-t2"}]}), encoding="utf-8")
+    t3.write_text(json.dumps({"goals": [{"id": "g-t3"}]}), encoding="utf-8")
+
+    alias = dir_alias / "registry.json"
+    witness_alias = dir_witness / "registry.json"
+    alias.symlink_to(t1)
+    witness_alias.symlink_to(t1)
+
+    with capability_hook_request_scope() as scope:
+        assert _goal_ids(
+            load_scoped_registry(alias, loader=registry_codec.load_registry)
+        ) == ["g-t1"]
+        assert _goal_ids(
+            registry_codec.load_registry(
+                witness_alias, source_snapshots=scope.registry_snapshots
+            )
+        ) == ["g-t1"]
+
+        alias.unlink()
+        alias.symlink_to(t2)
+        witness_alias.unlink()
+        witness_alias.symlink_to(t3)
+
+        # Reading either alias keeps its original snapshot witness, never poisoning T2 or T3.
+        assert _goal_ids(
+            load_scoped_registry(alias, loader=registry_codec.load_registry)
+        ) == ["g-t1"]
+        assert _goal_ids(
+            load_scoped_registry(witness_alias, loader=registry_codec.load_registry)
+        ) == ["g-t1"]
+
+        assert _goal_ids(
+            load_scoped_registry(t2, loader=registry_codec.load_registry)
+        ) == ["g-t2"]
+        t2_goal = agent_registry.load_goal_from_registry(t2, "g-t2")
+        assert t2_goal is not None and t2_goal["id"] == "g-t2"
+
+        assert _goal_ids(
+            load_scoped_registry(t3, loader=registry_codec.load_registry)
+        ) == ["g-t3"]
+        t3_goal = agent_registry.load_goal_from_registry(t3, "g-t3")
+        assert t3_goal is not None and t3_goal["id"] == "g-t3"
