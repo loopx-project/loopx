@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -18,6 +19,18 @@ from loopx.presentation.static_site import (
     package_static_site,
     rollback_static_site,
     verify_static_site_readback,
+)
+
+# A real 16x16 AVIF written by Pillow's libavif encoder and read back at that size,
+# so the media-compatibility case exercises bytes a browser decodes rather than a
+# synthetic payload under a media suffix.
+_AVIF_16X16 = base64.b64decode(
+    "AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAADrbWV0YQAAAAAAAAAhaGRscgAA"
+    "AAAAAAAAcGljdAAAAAAAAAAAAAAAAAAAAAAOcGl0bQAAAAAAAQAAAB5pbG9jAAAAAEQAAAEAAQ"
+    "AAAAEAAAETAAAAOAAAAChpaW5mAAAAAAABAAAAGmluZmUCAAAAAAEAAGF2MDFDb2xvcgAAAABq"
+    "aXBycAAAAEtpcGNvAAAAFGlzcGUAAAAAAAAAEAAAABAAAAAQcGl4aQAAAAADCAgIAAAADGF2MU"
+    "OBAAwAAAAAE2NvbHJuY2x4AAEADQAGgAAAABdpcG1hAAAAAAAAAAEAAQQBAoMEAAAAQG1kYXQS"
+    "AAoJGAz/2iAhoNCAMikXh4eGIYSSSSZQAAAAOtUs5tqInBL0Pog/t6d/UvOhu9plDueWx8dawA=="
 )
 
 
@@ -339,6 +352,42 @@ def test_package_still_copies_binary_assets_without_text_scanning(
     assert (tmp_path / "publish" / "render.png").is_file()
 
 
+def test_package_copies_a_real_avif_asset_byte_for_byte(tmp_path: Path) -> None:
+    """A browser-decodable image container is media, not unreviewable text."""
+    site = _site(tmp_path)
+    (site / "assets" / "hero.avif").write_bytes(_AVIF_16X16)
+    result = _package(site, tmp_path / "publish", tmp_path / "state")
+
+    assert result["write_performed"] is True
+    assert (tmp_path / "publish" / "assets" / "hero.avif").read_bytes() == _AVIF_16X16
+    manifest = json.loads(
+        (tmp_path / "publish" / MANIFEST_FILE).read_text(encoding="utf-8")
+    )
+    files = {str(item["path"]): item for item in manifest["files"]}
+    assert files["assets/hero.avif"]["sha256"] == hashlib.sha256(
+        _AVIF_16X16
+    ).hexdigest()
+    assert files["assets/hero.avif"]["size"] == len(_AVIF_16X16)
+
+
+def test_package_rejects_a_text_asset_next_to_a_real_avif(tmp_path: Path) -> None:
+    """The media exemption must not disarm the text boundary in the same bundle."""
+    site = _site(tmp_path)
+    (site / "assets" / "hero.avif").write_bytes(_AVIF_16X16)
+    token = "ghp_" + "a" * 36
+    (site / "assets" / "export.csv").write_text(
+        f"name,value\napi,{token}\n", encoding="utf-8"
+    )
+    destination = tmp_path / "publish"
+
+    with pytest.raises(
+        StaticSiteContractError,
+        match="public boundary scan failed for assets/export.csv",
+    ):
+        _package(site, destination, tmp_path / "state")
+    assert not destination.exists()
+
+
 def test_package_rejects_reserved_paths_symlinks_and_public_boundary_leaks(
     tmp_path: Path,
 ) -> None:
@@ -450,3 +499,53 @@ def test_cli_package_preview_is_read_only_and_exposes_publisher_as_first_class_p
     assert payload["dry_run"] is True
     assert payload["publisher"]["kind"] == "github-pages"
     assert output.exists() is False
+
+
+def test_cli_package_copies_a_real_avif_and_still_rejects_a_text_asset(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The shipped entrypoint must keep both halves of the boundary: media copies
+    byte for byte, and a text asset carrying a credential still fails the bundle."""
+    site = _site(tmp_path)
+    (site / "assets" / "hero.avif").write_bytes(_AVIF_16X16)
+
+    def run(output: Path) -> int:
+        return main(
+            [
+                "--format",
+                "json",
+                "presentation",
+                "package",
+                "--site-dir",
+                str(site),
+                "--output-dir",
+                str(output),
+                "--site-id",
+                "avif-cli-demo",
+                "--desktop-visual-check",
+                "passed",
+                "--mobile-visual-check",
+                "passed",
+                "--link-check",
+                "passed",
+                "--execute",
+            ]
+        )
+
+    accepted_output = tmp_path / "publish"
+    assert run(accepted_output) == 0
+    accepted = json.loads(capsys.readouterr().out)
+    assert accepted["write_performed"] is True
+    assert (accepted_output / "assets" / "hero.avif").read_bytes() == _AVIF_16X16
+
+    token = "ghp_" + "a" * 36
+    (site / "assets" / "export.csv").write_text(
+        f"name,value\napi,{token}\n", encoding="utf-8"
+    )
+    rejected_output = tmp_path / "publish-rejected"
+    assert run(rejected_output) == 2
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected["ok"] is False
+    assert "public boundary scan failed for assets/export.csv" in rejected["error"]
+    assert not rejected_output.exists()
