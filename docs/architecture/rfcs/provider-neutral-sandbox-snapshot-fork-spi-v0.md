@@ -254,9 +254,15 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 
 ## 7. Safety, privacy, and compatibility
 
-- **Default-off & feature-off parity:** When no Sandbox SPI extension is
-  enabled, `ReplayPointRegistry`, `research-checkpoint`, and ordinary Git
-  worktree turns behave identically with zero extra latency or schema fields.
+- **Default-off SPI & M0 shared-runtime hardening:** Sandbox SPI providers
+  remain opt-in and default-off with zero new activation latency, schema
+  fields, or provider dependencies on `research-checkpoint` and ordinary Git
+  worktree turns. M0 also hardens shared `ReplayPointRegistry.run_from` cleanup,
+  `FAILED` quarantine, and non-`Exception` `BaseException` unwind priority across
+  restore, equivalence, agent-state restore, and suffix finalization (calling
+  `finalize_replay_suffix(..., suffix_succeeded=False)` on early pre-suffix
+  exceptions/interrupts while preserving base `suffix_minutes` windows and
+  raising finalizer `BaseException`s over ordinary `Exception` stage errors).
 - **Credential & lease hygiene:** Parent sandboxes MUST NOT hold persistent
   LoopX writer credentials inside snapshotted RAM/rootfs; `snapshot()` scrubs
   configured env vars and token paths before sealing, and child forks receive
@@ -315,7 +321,7 @@ via existing Explore/Benchmark run surfaces.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Bilingual RFC + 17-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
+| M0 | Bilingual RFC + 17-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) + shared `ReplayPointRegistry.run_from` cleanup/unwind hardening | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/tests plus the bounded `ReplayPointRegistry.run_from` hunk in `replay_runtime.py`; SPI providers stay default-off |
 | M1 | First opt-in provider adapter (`firecracker_local` or `e2b_microvm`) behind extension package | M0 accepted; Linux/E2B test fixture pinned | Real pause/resume/snapshot/fork + scrub + symlink preservation + feature-off parity | Disable extension profile |
 | M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5-metric cost attribution + Tier-2 $\tau_B(s; a, a_0, \pi)$ evaluation via `counterfactual_runtime.py` & `#9211` §§5.5/6.2 | Stop pilot; retain negative/null data |
 | M3 | Optional product / benchmark promotion decision | M2 replicated net gain ($\Delta J(B \mid s_0) > 0$) + UI readback | Maintainer sign-off + packaged unavailability/recovery UX | Keep optional / retire adapter |

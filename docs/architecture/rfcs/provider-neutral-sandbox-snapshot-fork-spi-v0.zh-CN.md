@@ -183,7 +183,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 ## 7. 安全、隐私与兼容性
 
-- **默认关闭与零干扰校验：** 未开启沙箱 SPI 扩展时，`ReplayPointRegistry`、`research-checkpoint` 与常规 Git worktree 保持 100% 原样零开销。
+- **默认关闭扩展与 M0 共享回放加固：** 所有沙箱 SPI provider 默认保持关闭且零激活开销，`research-checkpoint` 与常规 Git worktree 均不新增字段或外部依赖；M0 同步加固共享 `ReplayPointRegistry.run_from` 在恢复、等价校验、Agent 状态恢复与后缀执行各阶段的清理边界、`FAILED` 隔离及 `BaseException` 异常优先级（前置 `Exception`/`BaseException` 中断均会调用 `finalize_replay_suffix(..., suffix_succeeded=False)`，非 `Exception` 的清理 `BaseException` 优先于普通阶段 `Exception` 抛出，同时保持原有 `suffix_minutes` 统计窗口）。
 - **凭据与租约擦除：** 母沙箱内不得持久化保存 LoopX 写入租约凭据；`snapshot()` 封存前擦除声明密钥路径，子分支仅在通过 `assess_replay_child_intent` 后按需注入短期受限令牌。
 - **公开载荷零句柄泄露：** 所有 `sandbox_id`、快照路径与连接串严格保留在 `AdapterStateLease.binding_key` / `ReplayChildLease.child_key`，`ReplayPoint.to_record()` 与 `CounterfactualReplayResult.to_record()` 保持完全公开安全。
 - **低保真降级保底：** 当候选仅提供 `filesystem_only`（`SEMANTIC_EQUIVALENT` / `BEST_EFFORT`）快照而假设要求 `ReplayFidelity.EXACT` 时，必须诚实判为 `OBSERVED_ONLY`，禁止按 `PROMOTED` 合入。
@@ -219,7 +219,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 | 里程碑 | 交付行为 | 进入门禁 | 退出证据 | 回退方式 |
 | --- | --- | --- | --- | --- |
-| M0 | 双语 SPI RFC + 17 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461` / `#9209` / `#9211` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
+| M0 | 双语 SPI RFC + 17 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`）+ 共享 `ReplayPointRegistry.run_from` 清理与异常优先级加固 | 完成 `#8461` / `#9209` / `#9211` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档、测试及 `replay_runtime.py` 中 `run_from` 收口片段；SPI provider 默认关闭 |
 | M1 | 首个可选扩展实现（`firecracker_local` 或 `e2b_microvm`） | M0 合入；固定 Linux/E2B 验证镜像 | 真机 `pause`/`resume`/`snapshot`/`fork`、密钥擦除、symlink 与关闭态等价性 | 停用扩展 profile |
 | M2 | 与热 `git worktree` / `layerfs_cow` 的配对反事实对比 | M1 通过；冻结题目、预算与评估器 | 基于 `counterfactual_runtime.py` 与 `#9211` §§5.5/6.2 输出完整 5 维成本与 Tier-2 $\tau_B(s; a, a_0, \pi)$ 对照结论 | 终止试验，如实保留负结果/平手数据 |
 | M3 | 可选产品/评测推广评审 | M2 复现净收益（$\Delta J(B \mid s_0) > 0$）且 UI 回读齐备 | 维护者批准与打包态不可用/恢复闭环验收 | 维持默认关闭或退役扩展 |

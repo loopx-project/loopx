@@ -1155,6 +1155,10 @@ class ReplayPointRegistry:
                         )
                     self._metrics.increment("replay_point_quarantine_count")
                     if stage_error is not None:
+                        if isinstance(stage_error, Exception) and not isinstance(
+                            finalization_error, Exception
+                        ):
+                            raise finalization_error from stage_error
                         raise stage_error from finalization_error
                     raise finalization_error
                 if stage_error is not None:

@@ -1157,3 +1157,103 @@ def test_suffix_minutes_includes_finalizer_duration_for_existing_adapters(
             execute_suffix=_ten_second_suffix,
         )
     assert failed_registry.metrics()["suffix_minutes"] == 0.0
+
+
+@pytest.mark.parametrize("stage_kind", ["restore_agent_state", "execute"])
+def test_exception_priority_prefers_finalizer_base_exception_and_keeps_double_exception_order(
+    stage_kind: str,
+) -> None:
+    class _ConfiguredFinalizerAdapter(SyntheticReplayAdapter):
+        def __init__(self, *, finalizer_exc: BaseException) -> None:
+            super().__init__(prefix_reused=True)
+            self.finalizer_exc = finalizer_exc
+
+        def finalize_replay_suffix(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+            *,
+            suffix_succeeded: bool,
+        ) -> None:
+            assert binding_key in self.active_bindings
+            assert request.replay_point_id == "replay-before-change"
+            assert suffix_succeeded is False
+            raise self.finalizer_exc
+
+    # 1) Ordinary stage Exception + KeyboardInterrupt in finalizer must raise KeyboardInterrupt
+    #    (not Exception) chained from the stage exception and quarantine the point.
+    ki_adapter = _ConfiguredFinalizerAdapter(
+        finalizer_exc=KeyboardInterrupt("aborted during cleanup")
+    )
+    ki_trace, ki_store, _, ki_registry = _capture_point(adapter=ki_adapter)
+    if stage_kind == "restore_agent_state":
+
+        def _fail_agent_restore(_state_key: object) -> None:
+            raise ValueError("stage restore error")
+
+        setattr(ki_store, "restore_agent_state", _fail_agent_restore)
+
+    def _fail_suffix(_: object) -> dict[str, bool]:
+        if stage_kind == "execute":
+            raise ValueError("stage suffix error")
+        return {
+            "target-created": True,
+            "dependent-update": True,
+            "constraint-health": True,
+            "resource-cleanup": True,
+        }
+
+    with pytest.raises(KeyboardInterrupt, match="aborted during cleanup") as ki_exc:
+        run_counterfactual_suffix_replay(
+            ki_registry,
+            trace=ki_trace,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id=f"stage-exc-finalizer-ki-{stage_kind}",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_fail_suffix,
+        )
+
+    assert isinstance(ki_exc.value.__cause__, ValueError)
+    assert ki_registry.get("replay-before-change").lifecycle == ReplayPointLifecycle.FAILED
+    ki_metrics = ki_registry.metrics()
+    assert ki_metrics["replay_point_quarantine_count"] == 1
+    assert ki_metrics["suffix_finalization_failure_count"] == 1
+    assert ki_metrics["replay_failure_count"] == 0
+    assert ki_metrics["suffix_failure_count"] == (1 if stage_kind == "execute" else 0)
+    assert ki_registry.release("replay-before-change").lifecycle == ReplayPointLifecycle.RELEASED
+
+    # 2) Double-Exception parity: stage Exception + finalizer Exception still raises
+    #    the stage Exception chained from the finalizer Exception and quarantines.
+    dbl_adapter = _ConfiguredFinalizerAdapter(
+        finalizer_exc=RuntimeError("finalizer runtime failure")
+    )
+    dbl_trace, dbl_store, _, dbl_registry = _capture_point(adapter=dbl_adapter)
+    if stage_kind == "restore_agent_state":
+
+        def _fail_dbl_restore(_state_key: object) -> None:
+            raise ValueError("stage restore error")
+
+        setattr(dbl_store, "restore_agent_state", _fail_dbl_restore)
+
+    with pytest.raises(ValueError, match="stage ") as dbl_exc:
+        run_counterfactual_suffix_replay(
+            dbl_registry,
+            trace=dbl_trace,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id=f"stage-exc-finalizer-exc-{stage_kind}",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_fail_suffix,
+        )
+
+    assert isinstance(dbl_exc.value.__cause__, RuntimeError)
+    assert dbl_registry.get("replay-before-change").lifecycle == ReplayPointLifecycle.FAILED
+    dbl_metrics = dbl_registry.metrics()
+    assert dbl_metrics["replay_point_quarantine_count"] == 1
+    assert dbl_metrics["suffix_finalization_failure_count"] == 1
+    assert dbl_metrics["replay_failure_count"] == 1
+    assert dbl_metrics["suffix_failure_count"] == (1 if stage_kind == "execute" else 0)
+    assert dbl_registry.release("replay-before-change").lifecycle == ReplayPointLifecycle.RELEASED
