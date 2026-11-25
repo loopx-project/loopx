@@ -167,6 +167,85 @@ def test_rehearsal_rejects_empty_database_url_and_conflicting_flags() -> None:
     assert "simulation" not in ts_conflict.stdout.lower()
 
 
+def test_rehearsal_shell_rejects_conflicting_modes_both_orders_without_side_effects(
+    tmp_path: Path,
+) -> None:
+    """Conflicting shell mode flags fail closed in all orders before Docker, Node, or PG I/O."""
+    script_path = REPO_ROOT / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.sh"
+    shim_dir = tmp_path / "shims"
+    shim_dir.mkdir()
+    side_effect_log = tmp_path / "invocations.log"
+    for tool in ("docker", "colima", "node"):
+        shim = shim_dir / tool
+        shim.write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "%s %s\\n" "{tool}" "$*" >> "{side_effect_log}"\n'
+            "exit 99\n",
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+
+    # Bind a listening TCP socket to assert zero PostgreSQL connections or DDL occur.
+    connections = 0
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    port = server.getsockname()[1]
+    stop_event = threading.Event()
+
+    def accept_loop() -> None:
+        nonlocal connections
+        server.settimeout(0.1)
+        while not stop_event.is_set():
+            try:
+                conn, _ = server.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            connections += 1
+            conn.close()
+
+    listener = threading.Thread(target=accept_loop, daemon=True)
+    listener.start()
+    try:
+        db_url = f"postgresql://postgres:secret@127.0.0.1:{port}/postgres"
+        env = {
+            **os.environ,
+            "PATH": f"{shim_dir}:{os.environ.get('PATH', '')}",
+        }
+        conflict_cases = [
+            ["--simulate", "--database-url", db_url],
+            ["--database-url", db_url, "--simulate"],
+            ["--simulate", "--rehearsal"],
+            ["--rehearsal", "--simulate"],
+            ["--simulate", "--start-colima"],
+            ["--start-colima", "--simulate"],
+            ["--rehearsal", "--database-url", db_url],
+            ["--database-url", db_url, "--rehearsal"],
+            ["--start-colima", "--database-url", db_url],
+            ["--database-url", db_url, "--start-colima"],
+            ["--database-url", db_url, "--database-url", db_url],
+        ]
+        for args in conflict_cases:
+            res = subprocess.run(
+                [str(script_path), *args],
+                capture_output=True,
+                text=True,
+                env=env,
+                cwd=REPO_ROOT,
+            )
+            assert res.returncode == 1, f"{args}: rc={res.returncode}, stderr={res.stderr}"
+            assert res.stdout == "", f"{args}: unexpected stdout {res.stdout!r}"
+            assert "mutually exclusive" in res.stderr.lower(), res.stderr
+        assert not side_effect_log.exists(), side_effect_log.read_text(encoding="utf-8")
+        assert connections == 0
+    finally:
+        stop_event.set()
+        server.close()
+        listener.join(timeout=2)
+
+
 def _pg_frame(msg_type: bytes, body: bytes) -> bytes:
     return msg_type + struct.pack("!I", 4 + len(body)) + body
 

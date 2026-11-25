@@ -22,12 +22,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MODE="simulate"
+EXPLICIT_MODE=""
+EXPLICIT_FLAG=""
 DATABASE_URL="${LOOPX_AUTHORITY_DATABASE_URL:-}"
 START_COLIMA=false
 CONTAINER_NAME="loopx-canary-pg16-rehearsal-$$-$(date +%s)"
 PG_PORT=""
 PORT_EXPLICIT=false
 CONTAINER_STARTED=false
+
+set_explicit_mode() {
+  local target_mode="$1"
+  local flag="$2"
+  if [ -n "${EXPLICIT_MODE}" ] && { [ "${EXPLICIT_MODE}" != "${target_mode}" ] || [ "${flag}" = "--database-url" ]; }; then
+    echo "Error: conflicting mode flags (${EXPLICIT_FLAG} and ${flag}) are mutually exclusive." >&2
+    exit 1
+  fi
+  EXPLICIT_MODE="${target_mode}"
+  EXPLICIT_FLAG="${flag}"
+  MODE="${target_mode}"
+}
 
 cleanup() {
   if [ "${CONTAINER_STARTED}" = true ]; then
@@ -57,16 +71,16 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --simulate)
-      MODE="simulate"
+      set_explicit_mode "simulate" "--simulate"
       shift
       ;;
     --rehearsal)
-      MODE="container"
+      set_explicit_mode "container" "--rehearsal"
       shift
       ;;
     --start-colima)
       START_COLIMA=true
-      MODE="container"
+      set_explicit_mode "container" "--start-colima"
       shift
       ;;
     --database-url)
@@ -74,8 +88,8 @@ while [[ $# -gt 0 ]]; do
         echo "Error: --database-url requires a non-empty PostgreSQL URL." >&2
         exit 1
       fi
+      set_explicit_mode "real_url" "--database-url"
       DATABASE_URL="$2"
-      MODE="real_url"
       shift 2
       ;;
     --port)
