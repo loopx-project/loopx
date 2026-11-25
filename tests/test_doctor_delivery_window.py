@@ -66,6 +66,18 @@ def _event(timestamp: str, kind: str, **payload: object) -> dict[str, object]:
     }
 
 
+def _task_started(
+    timestamp: str, *, trigger: str = "automation_heartbeat", **attribution: object
+) -> dict[str, object]:
+    """A turn the host opens, with the attribution a real rollout carries."""
+
+    return _event(
+        timestamp,
+        "task_started",
+        turn_attribution={"turn_trigger": trigger, **attribution},
+    )
+
+
 class _CodexHome:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -248,7 +260,7 @@ def test_a_recent_manual_message_is_not_a_scheduled_delivery(tmp_path: Path) -> 
         tmp_path,
         [
             _event(_ts(old), "task_complete"),
-            _event(_ts(recent), "task_started"),
+            _task_started(_ts(recent), trigger="composer"),
             _user_message(_ts(recent), "can you also rename the release notes?"),
             _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
         ],
@@ -268,7 +280,7 @@ def test_a_delivered_scheduled_prompt_is_fresh(tmp_path: Path) -> None:
         tmp_path,
         [
             _event(_ts(old), "task_complete"),
-            _event(_ts(recent), "task_started"),
+            _task_started(_ts(recent)),
             _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
             _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
         ],
@@ -279,6 +291,185 @@ def test_a_delivered_scheduled_prompt_is_fresh(tmp_path: Path) -> None:
     [lane] = diagnosis["lanes"]
     assert lane["window_state"] == "fresh"
     assert datetime.fromisoformat(lane["delivery_evidence_at"]) == recent
+
+
+def test_a_manual_retelling_of_the_prompt_is_not_a_scheduled_delivery(
+    tmp_path: Path,
+) -> None:
+    # The prompt text is public in the manifest; a person can paste it, and a
+    # workspace whose automation is broken can look busy because of it. Only the
+    # host's own turn attribution proves the scheduler delivered anything.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent), trigger="composer"),
+            _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert lane["last_observed_at"] == _ts(recent + timedelta(seconds=30))
+    assert "delivery_evidence_at" not in lane
+    assert diagnosis["status"] == "unverified"
+    assert diagnosis["stale_lanes"] == []
+
+
+def test_a_manual_retelling_of_the_envelope_is_not_a_scheduled_delivery(
+    tmp_path: Path,
+) -> None:
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent), trigger="composer"),
+            _user_message(
+                _ts(recent),
+                _heartbeat_envelope(_automation_prompt("release-work", "operations")),
+            ),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert "delivery_evidence_at" not in lane
+
+
+def test_a_heartbeat_turn_carrying_another_automations_envelope_is_unverified(
+    tmp_path: Path,
+) -> None:
+    # Two automations can hold the same body in different envelopes; the id is
+    # what says whose tick this is.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    envelope = _heartbeat_envelope(
+        _automation_prompt("release-work", "operations")
+    ).replace(
+        "<automation_id>nightly</automation_id>",
+        "<automation_id>sidecar</automation_id>",
+    )
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent)),
+            _user_message(_ts(recent), envelope),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert "delivery_evidence_at" not in lane
+
+
+def test_a_heartbeat_trigger_with_a_non_user_transport_is_unverified(
+    tmp_path: Path,
+) -> None:
+    # The trigger alone is not the contract: the same routing contract requires a
+    # ``heartbeat_xml`` user message, so a turn that says it delivered the prompt
+    # as tool output is not this lane's scheduled delivery.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent), delivery_kind="tool_output"),
+            _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+
+
+def test_a_turn_without_attribution_cannot_prove_a_delivery(tmp_path: Path) -> None:
+    # Older rollouts and the resumed record shape report no attribution at all;
+    # text inside them stays a pointer until the host names the trigger.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+
+
+def test_an_envelope_without_an_automation_id_falls_back_to_the_body(
+    tmp_path: Path,
+) -> None:
+    # Older envelopes name no installation; the attributed turn plus the body
+    # still prove this lane's tick received its installed prompt.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    envelope = _heartbeat_envelope(
+        _automation_prompt("release-work", "operations")
+    ).replace("  <automation_id>nightly</automation_id>\n", "")
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent)),
+            _user_message(_ts(recent), envelope),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    assert diagnosis["status"] == "fresh"
+    assert diagnosis["lanes"][0]["window_state"] == "fresh"
+
+
+def test_an_envelope_with_an_unreadable_automation_id_is_unverified(
+    tmp_path: Path,
+) -> None:
+    # An empty element names an automation the lane cannot be; it must not be
+    # read as "no id" and fall back to the body.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    envelope = _heartbeat_envelope(
+        _automation_prompt("release-work", "operations")
+    ).replace("<automation_id>nightly</automation_id>", "<automation_id> </automation_id>")
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _task_started(_ts(recent)),
+            _user_message(_ts(recent), envelope),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
 
 
 def test_a_long_quiet_lane_stays_stale_without_delivery_evidence(tmp_path: Path) -> None:
@@ -319,7 +510,7 @@ def test_a_heartbeat_envelope_delivery_is_attributed_to_the_installed_prompt(
         tmp_path,
         [
             _event(_ts(old), "task_complete"),
-            _event(_ts(recent), "task_started"),
+            _task_started(_ts(recent)),
             _user_message(
                 _ts(recent),
                 _heartbeat_envelope(_automation_prompt("release-work", "operations")),
@@ -342,7 +533,7 @@ def test_a_delivered_prompt_survives_a_long_turn_ahead_of_it(tmp_path: Path) -> 
     old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
     recent = old + timedelta(hours=3)
     noisy = [
-        _event(_ts(recent), "task_started"),
+        _task_started(_ts(recent)),
         _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
     ] + [
         {
@@ -894,7 +1085,7 @@ def test_doctor_keeps_a_quiet_workspace_healthy(
     home.thread(
         "thread-lane",
         [
-            _event(_ts(tick), "task_started"),
+            _task_started(_ts(tick)),
             _user_message(_ts(tick), _automation_prompt("release-work", "operations")),
             _event(_ts(tick), "task_complete"),
         ],
