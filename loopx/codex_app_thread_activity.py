@@ -10,6 +10,7 @@ only record types and timestamps; message content is never projected.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -406,6 +407,17 @@ def _automation_rrule_interval_minutes(rrule: Any) -> int | None:
 def _installed_automation_intervals(
     homes: list[Path] | None = None,
 ) -> dict[tuple[str, str, str], int]:
+    values: dict[tuple[str, str, str], int] = {}
+    for key, entry in _installed_automations(homes).items():
+        interval = entry.get("interval_minutes")
+        if isinstance(interval, int):
+            values[key] = interval
+    return values
+
+
+def _installed_automations(
+    homes: list[Path] | None = None,
+) -> dict[tuple[str, str, str], dict[str, object]]:
     """Map each installed heartbeat automation to the lane it serves.
 
     A lane is identified the way the canonical resolver identifies it
@@ -416,9 +428,13 @@ def _installed_automation_intervals(
     instead of being measured against another lane's cadence.
     """
 
-    from .upgrade import infer_agent_id_from_prompt, infer_goal_id_from_prompt
+    from .upgrade import (
+        infer_agent_id_from_prompt,
+        infer_goal_id_from_prompt,
+        prompt_digest,
+    )
 
-    intervals: dict[tuple[str, str, str], int] = {}
+    intervals: dict[tuple[str, str, str], dict[str, object]] = {}
     ambiguous: set[tuple[str, str, str]] = set()
     identities: set[tuple[int, int]] = set()
     for home in codex_homes() if homes is None else homes:
@@ -455,6 +471,9 @@ def _installed_automation_intervals(
             interval = _automation_rrule_interval_minutes(item.get("rrule"))
             if not goal_id or not agent_id or not target_thread_id or interval is None:
                 continue
+            # The digest, not the body, is what reaches an evidence comparison:
+            # the installed prompt is the only text a scheduled delivery must
+            # reproduce byte-for-byte, and a digest never leaves this process.
             key = (goal_id, agent_id, target_thread_id)
             if key in intervals:
                 # Two automations claim one lane: neither is that lane's cadence.
@@ -462,8 +481,216 @@ def _installed_automation_intervals(
                 ambiguous.add(key)
                 continue
             if key not in ambiguous:
-                intervals[key] = interval
+                intervals[key] = {
+                    "interval_minutes": interval,
+                    # A scheduled tick wraps the installed prompt in the host's
+                    # heartbeat envelope, so the envelope is stripped before the
+                    # digest is taken and compared against each message the same
+                    # way.
+                    "prompt_sha256": prompt_digest(prompt.strip()),
+                }
     return intervals
+
+
+# The backward scan mirrors the activity observer's budget: a heartbeat turn can
+# append hundreds of tool records, so a record count would stop long before the
+# `task_started` that opens it. A turn larger than this budget is reported as
+# unattributed rather than guessed.
+_EVIDENCE_TAIL_BYTES = 8 * 1024 * 1024
+_INSTRUCTIONS_OPEN = "<instructions>"
+_INSTRUCTIONS_CLOSE = "</instructions>"
+
+
+def _message_text(payload: Mapping[str, Any]) -> str | None:
+    """Return one user message's text, or ``None`` for any other record shape."""
+
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    parts = [
+        item.get("text")
+        for item in content
+        if isinstance(item, Mapping) and item.get("type") == "input_text"
+    ]
+    if not parts or not all(isinstance(part, str) for part in parts):
+        return None
+    return "".join(parts)
+
+
+def _delivered_prompt_digests(payload: Mapping[str, Any]) -> set[str]:
+    """Return the digests a delivered heartbeat message can carry.
+
+    Codex App injects a scheduled prompt either verbatim or inside its
+    ``<heartbeat>`` envelope, where the installed body sits in
+    ``<instructions>``. Both spellings of the same delivery must compare equal;
+    a message with neither is a hand-written one and matches nothing here.
+    """
+
+    text = _message_text(payload)
+    if text is None:
+        return set()
+    digests: set[str] = set()
+    stripped = text.strip()
+    if stripped:
+        digests.add(_prompt_digest_of(stripped))
+    start = text.find(_INSTRUCTIONS_OPEN)
+    if start >= 0:
+        start += len(_INSTRUCTIONS_OPEN)
+        end = text.find(_INSTRUCTIONS_CLOSE, start)
+        if end > start:
+            inner = text[start:end].strip()
+            if inner:
+                digests.add(_prompt_digest_of(inner))
+    return digests
+
+
+def _rollout_prompt_evidence(path: Path, digest: str) -> str | None:
+    """Return when this thread's newest turn received the installed prompt.
+
+    Walks a bounded tail of the thread's own rollout backward. The newest
+    ``task_started`` opens the turn under examination; a user message inside
+    that turn whose prompt (or heartbeat-envelope body) hashes to the installed
+    prompt is its scheduled delivery. A hand-written message, a resumed turn or
+    an empty turn produces no match, so none of them can make a silent lane look
+    healthy.
+    """
+
+    try:
+        with open_rollout(path) as handle:
+            size = os.fstat(handle.fileno()).st_size
+            truncated = size > _EVIDENCE_TAIL_BYTES
+            handle.seek(max(0, size - _EVIDENCE_TAIL_BYTES))
+            tail = handle.read()
+    except OSError:
+        return None
+    lines = tail.split(b"\n")
+    if truncated:
+        # The first fragment starts mid-record; drop it.
+        lines = lines[1:]
+    delivered_at: str | None = None
+    trailing = True
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            # The host appends while this runs, so the last line can be a
+            # record still being written. It carries no delivery yet; one
+            # unreadable record anywhere else is a broken store, not evidence.
+            if trailing:
+                trailing = False
+                continue
+            return None
+        trailing = False
+        if not isinstance(row, Mapping):
+            return None
+        payload = row.get("payload")
+        timestamp = row.get("timestamp")
+        if not isinstance(payload, Mapping) or not isinstance(timestamp, str):
+            return None
+        if row.get("type") == "event_msg" and payload.get("type") == "task_started":
+            # The newest turn decides: a match inside it is this lane's latest
+            # scheduled delivery; without one the turn proves nothing.
+            return delivered_at
+        if row.get("type") == "response_item" and digest in _delivered_prompt_digests(
+            payload
+        ):
+            # A prompt repeated inside one turn is still that turn's delivery.
+            delivered_at = delivered_at or timestamp
+    # The whole bounded tail belongs to one turn that never showed its start.
+    return None
+
+
+def _prompt_digest_of(text: str) -> str:
+    from .upgrade import prompt_digest
+
+    return prompt_digest(text)
+
+
+def _thread_rollouts(
+    thread_ids: Iterable[str], homes: list[Path] | None
+) -> dict[str, Path]:
+    """Map each thread this local store records to its rollout file."""
+
+    remaining = sorted(set(thread_ids))
+    paths: dict[str, Path] = {}
+    for home in codex_homes() if homes is None else homes:
+        if not remaining:
+            break
+        try:
+            db = _state_db(home)
+            if db is None:
+                continue
+            rows = _thread_rows(db, remaining)
+        except _UnrecognizedStore:
+            continue
+        except (OSError, sqlite3.Error):
+            continue
+        root = Path(os.path.realpath(home))
+        for thread_id, (rollout_path, archived) in rows.items():
+            if archived not in (0, False) or not isinstance(rollout_path, str):
+                continue
+            if not rollout_path:
+                continue
+            path = Path(os.path.realpath(rollout_path))
+            # The same boundary the activity observer keeps: a store row is not
+            # a license to read a file outside the home that records it.
+            if not path.is_relative_to(root):
+                continue
+            paths[thread_id] = path
+            remaining = [item for item in remaining if item != thread_id]
+    return paths
+
+
+def codex_delivery_evidence(
+    scopes: Iterable[HostDeliveryScope],
+    *,
+    homes: list[Path] | None = None,
+) -> dict[HostDeliveryScope, str | None]:
+    """Resolve when each lane last received its installed heartbeat prompt.
+
+    Only an installed ``heartbeat`` automation names a prompt a scheduled tick
+    must reproduce, and only the thread it targets can hold that delivery. A
+    lane without one is omitted, so its window stays unverified rather than
+    being measured against another lane's prompt. This reads the thread's own
+    rollout read-only and never starts a turn or writes the host store.
+    """
+
+    wanted = [
+        scope
+        for scope in scopes
+        if scope.host_surface == CODEX_APP_BINDING_SURFACE and scope.thread_id
+    ]
+    if not wanted:
+        return {}
+    automations = _installed_automations(homes)
+    placements: dict[HostDeliveryScope, Mapping[str, object]] = {}
+    for scope in wanted:
+        entry = automations.get((scope.goal_id, scope.agent_id, scope.thread_id or ""))
+        if entry is not None:
+            placements[scope] = entry
+    if not placements:
+        return {}
+    rollouts = _thread_rollouts(
+        (scope.thread_id or "" for scope in placements), homes
+    )
+    cache: dict[tuple[Path, str], str | None] = {}
+    evidence: dict[HostDeliveryScope, str | None] = {}
+    for scope, entry in placements.items():
+        path = rollouts.get(scope.thread_id or "")
+        if path is None:
+            continue
+        digest = str(entry.get("prompt_sha256") or "")
+        if not digest:
+            continue
+        key = (path, digest)
+        if key not in cache:
+            cache[key] = _rollout_prompt_evidence(path, digest)
+        evidence[scope] = cache[key]
+    return evidence
 
 
 def codex_delivery_expectations(

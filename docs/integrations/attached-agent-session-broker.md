@@ -118,12 +118,29 @@ and agent and whose `target_thread_id` is the lane's canonical binding; another
 lane's automation is never read as this one's, and two automations claiming one
 lane leave the window `unknown`. Other surfaces report `unknown` there.
 
+Activity alone does not prove a scheduled prompt arrived: an empty Turn, a
+resumed Turn and a hand-written message leave the same trace. `loopx doctor`
+therefore also asks for *delivery evidence* and only reads a lane `fresh` when
+the thread's newest Turn carries a user message whose text matches the installed
+prompt — either verbatim or as the body of the host's `<heartbeat>` envelope
+`<instructions>` block. That message's time is published as
+`delivery_evidence_at`. The scan reads a bounded 8 MiB tail of the thread's own
+rollout and stops at the newest `task_started`; a Turn that arrives without its
+opening record, or one larger than that budget, is unattributed rather than
+guessed.
+
 | `state` | Meaning |
 | --- | --- |
-| `fresh` | The lane produced activity inside `expected_interval_minutes × tolerance` (tolerance defaults to 2). |
+| `fresh` | The lane received its installed prompt inside `expected_interval_minutes × tolerance` (tolerance defaults to 2). |
 | `stale` | The lane's last recorded tick is older than that window. This names the symptom only; it does not name a cause. |
 | `missing` | No observation of this lane was available at all. |
-| `unknown` | The window could not be computed; `reason` is `no_expectation`, `no_observation` or `unparseable_observation`. |
+| `unknown` | The window could not be computed; `reason` is `no_expectation`, `no_observation`, `unparseable_observation` or `unverified_activity`. |
+
+`unverified_activity` is the middle case: the lane moved inside its window but
+nothing ties that activity to the installed prompt. Its last activity time is
+still reported, so an operator can tell "quiet" from "busy, but not scheduled".
+The Dashboard status route keeps its existing activity-only semantics; only the
+`doctor` readback asks for delivery evidence.
 
 `loopx doctor` reads the same projection once per run and reports it as the
 optional `host_prompt_delivery_windows` check and the `host_prompt_delivery`
@@ -146,6 +163,12 @@ was hit). The shared observer also keeps at most 32 bindings per Goal; a Goal
 past that cap is counted in `incomplete_goals` and also sets `truncated`, since a
 silent lane can hide among the bindings that were not read.
 
+Lane identity is resolved over the Goal's complete binding list, before that
+bound trims what the run reads. An agent bound to two threads on one surface has
+no canonical thread, so its window stays `unknown/no_expectation` whether the
+second binding sits at position 2 or past the cap; truncation removes
+observations, never identities.
+
 A run that did not measure every lane never reports `fresh`: the lanes it did
 read may all be inside their window while an unread lane is silent. Such a run
 reports `unverified` with `reason = scan_truncated` when the lane bound was hit,
@@ -156,7 +179,10 @@ a Goal whose activation record cannot be read
 `reason = unmeasured_lane`.
 
 Doctor reads each lane's store read-only and never starts a Turn, writes the host
-store or spends quota. A registry this build cannot decode is reported as
+store or spends quota. The diagnostic registry is the one the run resolved: an
+explicit `--registry` replaces the default global path for every diagnostic this
+run projects, so a moved registry is measured where it lives instead of reading
+as an empty workspace. A registry this build cannot decode is reported as
 `not_applicable` with `reason = registry_requires_upgrade`, and a missing or
 unreadable one as `registry_unavailable`, so a broken workspace never turns this
 optional check into a doctor failure. `loopx doctor --installation-only` does

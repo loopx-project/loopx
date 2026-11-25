@@ -32,6 +32,7 @@ from .host_thread_activity import (
     DEFAULT_DELIVERY_WINDOW_TOLERANCE,
     HOST_DELIVERY_WINDOW_SCHEMA_VERSION,
     MAX_OBSERVED_THREADS_PER_GOAL,
+    HostDeliveryEvidenceProvider,
     HostDeliveryWindowState,
     HostThreadObservationCompleteness,
     HostDeliveryExpectationProvider,
@@ -98,6 +99,26 @@ def _observed_bindings(
             # thread, so it would vanish from the report entirely.
             unmeasured += 1
     return bindings, unmeasured
+
+
+def _ambiguous_lanes(bindings: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
+    """Return the ``(agent, surface)`` lanes bound to more than one thread.
+
+    This reads the Goal's complete binding list, before the lane bound trims
+    what this run observes. Truncation removes observations, not identities: a
+    lane that names two threads is ambiguous whether the second binding sits at
+    position 2 or 65, and slicing first would let the survivor look like a
+    single canonical thread.
+    """
+
+    counts: dict[tuple[str, str], int] = {}
+    for raw in bindings:
+        key = (
+            str(raw.get("agent_id") or "").strip(),
+            str(raw.get("host_surface") or "").strip(),
+        )
+        counts[key] = counts.get(key, 0) + 1
+    return {key for key, count in counts.items() if count > 1}
 
 
 _SAFE_LABEL_TAIL = re.compile(r"[A-Za-z0-9._-]{1,40}")
@@ -188,6 +209,7 @@ def _lane_payload(goal_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
         "window_minutes",
         "source",
         "reason",
+        "delivery_evidence_at",
     ):
         if window.get(key) is not None:
             lane[key] = window[key]
@@ -232,12 +254,18 @@ def collect_host_delivery_diagnosis(
     now: datetime | None = None,
     tolerance: int = DEFAULT_DELIVERY_WINDOW_TOLERANCE,
     max_lanes: int = MAX_DIAGNOSED_LANES,
+    evidence: HostDeliveryEvidenceProvider | None = None,
 ) -> dict[str, Any]:
     """Report one typed delivery window per bound host lane of ``goals``.
 
     ``goals`` is the registry view the caller already read; this function never
     writes it. Stopped goals are skipped: their automations are not a live
     promise, so a quiet lane there is not a missed delivery.
+
+    ``evidence`` names the most recent tick each lane's scheduled prompt
+    produced. When it is given, recent activity alone no longer reads ``fresh``:
+    an empty turn or a hand-written message leaves the lane unverified while its
+    activity time is still reported.
     """
 
     if max_lanes < 1:
@@ -249,6 +277,7 @@ def collect_host_delivery_diagnosis(
     truncated = False
     unreadable_activation = 0
     unmeasured_bindings = 0
+    ambiguous_by_goal: dict[str, set[tuple[str, str]]] = {}
     for goal in goals:
         if not isinstance(goal, Mapping) or not str(goal.get("id") or "").strip():
             continue
@@ -267,6 +296,10 @@ def collect_host_delivery_diagnosis(
         unmeasured_bindings += unmeasured
         if not local:
             continue
+        goal_id = str(goal["id"])
+        # Resolve identity over every binding this Goal records, then trim what
+        # the run reads.
+        ambiguous_by_goal.setdefault(goal_id, set()).update(_ambiguous_lanes(local))
         remaining = max_lanes - lanes_seen
         if remaining <= 0:
             truncated = True
@@ -276,7 +309,7 @@ def collect_host_delivery_diagnosis(
             truncated = True
         lanes_seen += len(local)
         projection_goals.append(
-            {"id": str(goal["id"]), "coordination": {"thread_agent_bindings": local}}
+            {"id": goal_id, "coordination": {"thread_agent_bindings": local}}
         )
 
     payload: dict[str, Any] = {"run_history": {"goals": projection_goals}}
@@ -284,7 +317,12 @@ def collect_host_delivery_diagnosis(
     if projection_goals:
         attach_host_thread_activity(payload, observers=observers, now=observed_at)
         attach_host_delivery_windows(
-            payload, expectations=expectations, tolerance=tolerance, now=observed_at
+            payload,
+            expectations=expectations,
+            tolerance=tolerance,
+            now=observed_at,
+            evidence=evidence,
+            ambiguous_lanes=ambiguous_by_goal,
         )
 
     lanes: list[dict[str, Any]] = []
@@ -429,6 +467,7 @@ def collect_registry_host_delivery_diagnosis(
 
     from ...codex_app_thread_activity import (
         CODEX_APP_BINDING_SURFACE,
+        codex_delivery_evidence,
         codex_delivery_expectations,
         codex_thread_observers,
     )
@@ -446,6 +485,7 @@ def collect_registry_host_delivery_diagnosis(
         goals,
         observers=observers,
         expectations=codex_delivery_expectations,
+        evidence=codex_delivery_evidence,
         max_lanes=max_lanes,
     )
 

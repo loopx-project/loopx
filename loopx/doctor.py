@@ -996,6 +996,11 @@ def collect_doctor(
         ),
     }
     default_global_registry = global_registry_path(selected_runtime_root)
+    # The caller may have selected its registry explicitly; every diagnostic
+    # below reads that same file, so a moved registry is not reported empty.
+    diagnostic_registry_path = (
+        registry_path if registry_path is not None else default_global_registry
+    )
     global_registry_writability = (
         probe_registry_write_path(default_global_registry, create_parent=True)
         if local_state_route["status"] not in {"conflict", "invalid"}
@@ -1003,13 +1008,14 @@ def collect_doctor(
     )
     runtime_projection_routes = (
         collect_runtime_projection_route_diagnostics(
-            registry_path=default_global_registry,
+            registry_path=diagnostic_registry_path,
             runtime_root=selected_runtime_root,
         )
-        if default_global_registry.exists() and local_state_route["status"] not in {"conflict", "invalid"}
+        if diagnostic_registry_path.exists()
+        and local_state_route["status"] not in {"conflict", "invalid"}
         else {
             "schema_version": "runtime_projection_route_diagnostics_v0",
-            "registry": str(default_global_registry.resolve()),
+            "registry": str(diagnostic_registry_path.resolve()),
             "runtime_root": str(selected_runtime_root.resolve()),
             "goal_filter": None,
             "activation_state_filter": None,
@@ -1030,7 +1036,7 @@ def collect_doctor(
     )
 
     host_delivery_diagnosis = collect_host_delivery_diagnosis_route(
-        registry_path=default_global_registry,
+        registry_path=diagnostic_registry_path,
         route_status=str(local_state_route["status"]),
     )
 

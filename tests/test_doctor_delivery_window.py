@@ -36,6 +36,28 @@ def _ts(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+def _automation_prompt(goal_id: str, agent_id: str) -> str:
+    return f"Advance `{goal_id}` from active state. Agent: `{agent_id}`."
+
+
+def _user_message(timestamp: str, text: str) -> dict[str, object]:
+    """A user-authored message record, the shape a delivered prompt leaves."""
+
+    return {
+        "timestamp": timestamp,
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+            "internal_chat_message_metadata_passthrough": {
+                "content_item_kinds": ["user.text"],
+                "content_item_metadata": [{"provenance": {"type": "user"}}],
+            },
+        },
+    }
+
+
 def _event(timestamp: str, kind: str, **payload: object) -> dict[str, object]:
     return {
         "timestamp": timestamp,
@@ -90,7 +112,7 @@ class _CodexHome:
             f'version = 1\nid = "{automation_id}"\nkind = "heartbeat"\n'
             f'status = "{status}"\nrrule = "{rrule}"\n'
             f'target_thread_id = "{target_thread_id}"\n'
-            f'prompt = "Advance `{goal_id}` from active state. Agent: `{agent_id}`."\n',
+            f'prompt = "{_automation_prompt(goal_id, agent_id)}"\n',
             encoding="utf-8",
         )
 
@@ -174,6 +196,192 @@ def test_a_lane_inside_its_window_is_quiet(tmp_path: Path) -> None:
     assert diagnosis["reason"] is None
     assert diagnosis["stale_lanes"] == []
     assert "diagnosis" not in diagnosis["lanes"][0]
+
+
+def _proof(tmp_path: Path, records: list[dict[str, object]], *, now: datetime):
+    home = _CodexHome(tmp_path / ".codex")
+    home.thread("thread-lane", records)
+    home.automation(
+        "nightly", goal_id="release-work", agent_id="operations", target_thread_id="thread-lane"
+    )
+    return home, collect_host_delivery_diagnosis(
+        [_goal()],
+        observers={"codex-app": lambda ids: observe_codex_threads(ids, homes=[home.root])},
+        expectations=lambda scopes: {
+            scope: HostDeliveryExpectation(20, "codex_app_automation_rrule") for scope in scopes
+        },
+        evidence=lambda scopes: codex_activity.codex_delivery_evidence(scopes, homes=[home.root]),
+        now=now,
+    )
+
+
+def test_a_recent_empty_turn_is_unverified_and_keeps_its_activity_time(
+    tmp_path: Path,
+) -> None:
+    # The empty turn #3927 describes: the host started and finished a turn with
+    # no message at all. Nothing in it can be attributed to the scheduled prompt.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert lane["last_observed_at"] == _ts(recent + timedelta(seconds=30))
+    assert lane["diagnosis"]["code"] == HOST_PROMPT_DELIVERY_UNVERIFIED
+    assert diagnosis["status"] == "unverified"
+    assert diagnosis["stale_lanes"] == []
+
+
+def test_a_recent_manual_message_is_not_a_scheduled_delivery(tmp_path: Path) -> None:
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _user_message(_ts(recent), "can you also rename the release notes?"),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert lane["last_observed_at"] == _ts(recent + timedelta(seconds=30))
+
+
+def test_a_delivered_scheduled_prompt_is_fresh(tmp_path: Path) -> None:
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    assert diagnosis["status"] == "fresh"
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "fresh"
+    assert datetime.fromisoformat(lane["delivery_evidence_at"]) == recent
+
+
+def test_a_long_quiet_lane_stays_stale_without_delivery_evidence(tmp_path: Path) -> None:
+    # A missed window is still a missed window: requiring evidence must not turn
+    # a silent lane into an unverified one.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    _home, diagnosis = _proof(
+        tmp_path, [_event(_ts(old), "task_complete")], now=old + timedelta(hours=3)
+    )
+
+    assert diagnosis["status"] == "stale"
+    assert diagnosis["lanes"][0]["diagnosis"]["code"] == HOST_PROMPT_DELIVERY_MISSED
+
+
+def _heartbeat_envelope(prompt: str) -> str:
+    """The shape Codex App wraps a scheduled automation prompt in."""
+
+    return (
+        "<heartbeat>\n"
+        "  <automation_id>nightly</automation_id>\n"
+        "  <current_time_iso>2026-09-25T13:00:00Z</current_time_iso>\n"
+        "  <instructions>\n"
+        f"{prompt}\n"
+        "  </instructions>\n"
+        "</heartbeat>"
+    )
+
+
+def test_a_heartbeat_envelope_delivery_is_attributed_to_the_installed_prompt(
+    tmp_path: Path,
+) -> None:
+    # The host injects the installed body inside its envelope; comparing the
+    # message text verbatim to the manifest prompt would leave every real
+    # scheduled turn unverified and the check permanently amber.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _user_message(
+                _ts(recent),
+                _heartbeat_envelope(_automation_prompt("release-work", "operations")),
+            ),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    assert diagnosis["status"] == "fresh"
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "fresh"
+    assert datetime.fromisoformat(lane["delivery_evidence_at"]) == recent
+
+
+def test_a_delivered_prompt_survives_a_long_turn_ahead_of_it(tmp_path: Path) -> None:
+    # One heartbeat turn appends far more than a few dozen records: tool calls,
+    # reasoning and token counts. A record-count bound would exhaust itself on
+    # the newest turn and report a delivered lane as unverified forever.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    noisy = [
+        _event(_ts(recent), "task_started"),
+        _user_message(_ts(recent), _automation_prompt("release-work", "operations")),
+    ] + [
+        {
+            "timestamp": _ts(recent + timedelta(seconds=index)),
+            "type": "event_msg",
+            "payload": {"type": "token_count", "index": index},
+        }
+        for index in range(400)
+    ]
+    _home, diagnosis = _proof(
+        tmp_path,
+        [_event(_ts(old), "task_complete"), *noisy],
+        now=recent + timedelta(minutes=1),
+    )
+
+    assert diagnosis["status"] == "fresh"
+    assert diagnosis["lanes"][0]["window_state"] == "fresh"
+
+
+def test_a_prompt_matched_before_that_turn_does_not_prove_this_turn(tmp_path: Path) -> None:
+    # The newest turn is what is in question. An earlier delivered prompt is
+    # outside the window, so it cannot make the lane fresh now.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_started"),
+            _user_message(_ts(old), _automation_prompt("release-work", "operations")),
+            _event(_ts(old), "task_complete"),
+            _event(_ts(recent), "task_started"),
+            _event(_ts(recent + timedelta(seconds=5)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
 
 
 def test_a_lane_without_a_cadence_is_unverified_not_healthy(tmp_path: Path) -> None:
@@ -335,6 +543,49 @@ def test_two_bindings_of_one_lane_report_one_window() -> None:
     assert diagnosis["lane_count"] == 1
     assert diagnosis["lanes"][0]["lane"] == "release-work/operations/codex-app"
     assert diagnosis["lanes"][0]["window_state"] == "unknown"
+
+
+def _wide_goal(duplicate_at: int) -> dict:
+    bindings = [
+        {
+            "agent_id": f"agent-{index}",
+            "host_surface": "codex-app",
+            "thread_id": f"thread-{index}",
+        }
+        for index in range(64)
+    ]
+    # The same agent and surface twice: no single canonical thread.
+    bindings.insert(duplicate_at, dict(bindings[0], thread_id="thread-other"))
+    return {"id": "wide-goal", "coordination": {"thread_agent_bindings": bindings}}
+
+
+@pytest.mark.parametrize("duplicate_at", [1, 64])
+def test_a_duplicate_binding_stays_ambiguous_wherever_it_sits(duplicate_at: int) -> None:
+    # The same 65 bindings, only moving the duplicate from position 2 to 65. The
+    # lane has no single identity in either case, so neither may be measured as
+    # a confirmed miss by the survivor that happened to fit the lane bound.
+    observed = _ts(datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc))
+
+    def observe(thread_ids):
+        return {
+            thread_id: HostThreadActivity(HostThreadState.IDLE, last_event_at=observed)
+            for thread_id in thread_ids
+        }
+
+    diagnosis = collect_host_delivery_diagnosis(
+        [_wide_goal(duplicate_at)],
+        observers={"codex-app": observe},
+        expectations=_observers_and_expectations()[1],
+        now=datetime(2026, 9, 27, 10, 0, tzinfo=timezone.utc),
+    )
+
+    assert diagnosis["truncated"] is True
+    lane = next(
+        row for row in diagnosis["lanes"] if row["agent_id"] == "agent-0"
+    )
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "no_expectation"
+    assert diagnosis["counts"]["stale"] == diagnosis["lane_count"] - 1
 
 
 def test_the_lane_scan_is_bounded_and_says_so() -> None:
@@ -637,7 +888,17 @@ def test_doctor_keeps_a_quiet_workspace_healthy(
 ) -> None:
     codex_home, runtime = _isolated_doctor(monkeypatch, tmp_path)
     home = _CodexHome(codex_home)
-    home.thread("thread-lane", [_event(_ts(datetime.now(timezone.utc)), "task_complete")])
+    # A quiet workspace is a lane whose scheduled prompt was delivered inside
+    # its window: the turn carries the installed automation's own text.
+    tick = datetime.now(timezone.utc)
+    home.thread(
+        "thread-lane",
+        [
+            _event(_ts(tick), "task_started"),
+            _user_message(_ts(tick), _automation_prompt("release-work", "operations")),
+            _event(_ts(tick), "task_complete"),
+        ],
+    )
     home.automation(
         "nightly", goal_id="release-work", agent_id="operations", target_thread_id="thread-lane"
     )
@@ -680,6 +941,69 @@ def test_a_lane_bound_to_a_non_app_surface_is_not_reported_as_unverified(
     assert payload["host_prompt_delivery"]["reason"] == "no_bound_host_lane"
     check = next(item for item in payload["checks"] if item["id"] == HOST_DELIVERY_CHECK_ID)
     assert check["ok"] is True
+
+
+def test_an_explicit_registry_is_what_the_delivery_check_reads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The CLI hands `collect_doctor` the registry it resolved. A registry kept
+    # outside the default runtime root must still be the one measured, or a moved
+    # workspace reads `registry_empty` instead of its silent lane.
+    codex_home, runtime = _isolated_doctor(monkeypatch, tmp_path)
+    home = _CodexHome(codex_home)
+    old_tick = _ts(datetime.now(timezone.utc) - timedelta(days=3))
+    home.thread("thread-lane", [_event(old_tick, "task_complete")])
+    home.automation(
+        "nightly", goal_id="release-work", agent_id="operations", target_thread_id="thread-lane"
+    )
+    explicit = tmp_path / "moved" / "registry.global.json"
+    explicit.parent.mkdir()
+    explicit.write_text(
+        json.dumps({"goals": [dict(_goal(), revision="rev-1")]}), encoding="utf-8"
+    )
+
+    payload = doctor.collect_doctor(registry_path=explicit)
+
+    diagnosis = payload["host_prompt_delivery"]
+    assert diagnosis["status"] == "stale"
+    assert diagnosis["reason"] == HOST_PROMPT_DELIVERY_MISSED
+    [lane] = diagnosis["lanes"]
+    assert lane["lane"] == "release-work/operations/codex-app"
+    assert lane["last_observed_at"] == old_tick
+    # The default location has no registry at all; nothing else supplied it.
+    assert not (runtime / "registry.global.json").exists()
+    check = next(item for item in payload["checks"] if item["id"] == HOST_DELIVERY_CHECK_ID)
+    assert check["ok"] is False
+
+
+def test_a_missing_default_registry_does_not_hide_the_explicit_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    codex_home, runtime = _isolated_doctor(monkeypatch, tmp_path)
+    home = _CodexHome(codex_home)
+    recent = _ts(datetime.now(timezone.utc))
+    home.thread("thread-lane", [_event(recent, "task_complete")])
+    home.automation(
+        "nightly", goal_id="release-work", agent_id="operations", target_thread_id="thread-lane"
+    )
+    explicit = tmp_path / "moved" / "registry.global.json"
+    explicit.parent.mkdir()
+    explicit.write_text(
+        json.dumps({"goals": [dict(_goal(), revision="rev-1")]}), encoding="utf-8"
+    )
+
+    default_only = doctor.collect_doctor()
+    explicit_scope = doctor.collect_doctor(registry_path=explicit)
+
+    # No registry at the default location decodes to an empty goal list, which
+    # is exactly the reading the explicit path must not inherit.
+    assert default_only["host_prompt_delivery"]["reason"] == "registry_empty"
+    assert default_only["host_prompt_delivery"]["lane_count"] == 0
+    # A recent tick with no delivery evidence is unverified, not a fault; this
+    # only asserts the explicit registry was read at all.
+    assert explicit_scope["host_prompt_delivery"]["reason"] == "no_comparable_tick"
+    assert explicit_scope["host_prompt_delivery"]["lane_count"] == 1
+    assert not (runtime / "registry.global.json").exists()
 
 
 def test_doctor_reports_no_bound_lane_without_a_fault(
