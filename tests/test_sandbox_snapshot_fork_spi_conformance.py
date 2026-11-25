@@ -716,6 +716,7 @@ class SpiReplayAdapter:
     )
     _committed_release_holders: set[str] = field(default_factory=set, repr=False)
     _committed_released_children: set[str] = field(default_factory=set, repr=False)
+    _destroyed_child_sandboxes: set[str] = field(default_factory=set, repr=False)
 
     def _try_get_snapshot_live(
         self, snapshot_id: str
@@ -931,12 +932,10 @@ class SpiReplayAdapter:
         request: RestoreReplayStateRequest,
     ) -> RestoreReceipt:
         assert isinstance(binding_key, _SnapshotRef)
-        stale_target = self._active_replay_targets.pop(binding_key.snapshot_id, None)
-        if stale_target is not None:
-            self._target_bindings.pop(
-                (request.replay_point_id, stale_target.target_branch_id), None
-            )
-            self.release_replay_child(stale_target)
+        self._release_active_replay_target(
+            binding_key.snapshot_id,
+            record_finalized=False,
+        )
         fork_min_fidelity = (
             ReplayFidelity.BEST_EFFORT
             if request.minimum_fidelity == ReplayFidelity.NON_REPLAYABLE
@@ -985,6 +984,27 @@ class SpiReplayAdapter:
             check_prefix="sandbox",
         )
 
+    def _release_active_replay_target(
+        self,
+        snapshot_id: str,
+        *,
+        record_finalized: bool,
+    ) -> None:
+        target_ref = self._active_replay_targets.get(snapshot_id)
+        if target_ref is None:
+            return
+        self.release_replay_child(target_ref)
+        self._active_replay_targets.pop(snapshot_id, None)
+        stale_keys = [
+            key
+            for key, bound_ref in self._target_bindings.items()
+            if bound_ref.branch_sandbox_id == target_ref.branch_sandbox_id
+        ]
+        for key in stale_keys:
+            self._target_bindings.pop(key, None)
+        if record_finalized:
+            self._finalized_replay_targets[snapshot_id] = target_ref
+
     def finalize_replay_suffix(
         self,
         binding_key: object,
@@ -994,21 +1014,20 @@ class SpiReplayAdapter:
     ) -> None:
         del suffix_succeeded
         assert isinstance(binding_key, _SnapshotRef)
-        target_ref = self._active_replay_targets.pop(binding_key.snapshot_id, None)
+        self._release_active_replay_target(
+            binding_key.snapshot_id,
+            record_finalized=True,
+        )
         self._target_bindings.pop(
             (request.replay_point_id, request.target_branch_id), None
         )
-        if target_ref is not None:
-            self._finalized_replay_targets[binding_key.snapshot_id] = target_ref
-            self.release_replay_child(target_ref)
 
     def release_replay_state(self, binding_key: object) -> None:
         assert isinstance(binding_key, _SnapshotRef)
-        stale_target = self._active_replay_targets.get(binding_key.snapshot_id)
-        if stale_target is not None:
-            self.release_replay_child(stale_target)
-            self._active_replay_targets.pop(binding_key.snapshot_id, None)
-            self._finalized_replay_targets[binding_key.snapshot_id] = stale_target
+        self._release_active_replay_target(
+            binding_key.snapshot_id,
+            record_finalized=True,
+        )
         effective_holder = binding_key.holder_id
         if not effective_holder:
             has_lookup, live = self._try_get_snapshot_live(binding_key.snapshot_id)
@@ -1095,7 +1114,9 @@ class SpiReplayAdapter:
         assert isinstance(child_key, _BranchRef)
         if child_key.branch_sandbox_id in self._committed_released_children:
             return
-        self._destroy_provider_sandbox(child_key.branch_sandbox_id)
+        if child_key.branch_sandbox_id not in self._destroyed_child_sandboxes:
+            self._destroy_provider_sandbox(child_key.branch_sandbox_id)
+            self._destroyed_child_sandboxes.add(child_key.branch_sandbox_id)
         self._release_provider_snapshot(
             child_key.source_snapshot_id,
             holder_id=child_key.holder_id,
@@ -1948,13 +1969,35 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
             execute_suffix=_never_promote,
         )
     assert drop_suffix_called is False
-    lost_report = adapter_drop.validate_replay_equivalence(
-        _SnapshotRef(snapshot_id=next(iter(drop_provider.snapshots))),
-        RestoreReceipt(
-            achieved_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
-            restored_projection_digest=None,
-        ),
+    drop_snap_id = next(iter(drop_provider.snapshots))
+    assert drop_provider.snapshots[drop_snap_id].refcount == 1
+    assert (
+        drop_provider.sandboxes[
+            adapter_drop.last_target_sandboxes[0].branch_sandbox_id
+        ].status
+        == "destroyed"
     )
+    probe_req = RestoreReplayStateRequest(
+        replay_point_id=reg_drop.records()[0]["replay_point_id"],
+        target_branch_id="lost-daemon-probe",
+        minimum_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+    )
+    adapter_drop.restore_replay_state(_SnapshotRef(snapshot_id=drop_snap_id), probe_req)
+    try:
+        lost_report = adapter_drop.validate_replay_equivalence(
+            _SnapshotRef(snapshot_id=drop_snap_id),
+            RestoreReceipt(
+                achieved_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+                restored_projection_digest=None,
+            ),
+        )
+    finally:
+        adapter_drop.finalize_replay_suffix(
+            _SnapshotRef(snapshot_id=drop_snap_id),
+            probe_req,
+            suffix_succeeded=False,
+        )
+    assert drop_provider.snapshots[drop_snap_id].refcount == 1
     assert not lost_report.equivalent
     checks_by_id = {c.check_id: c.passed for c in lost_report.checks}
     assert checks_by_id == {
@@ -2808,3 +2851,336 @@ def test_parent_release_retry_after_lost_ack_preserves_live_child_holder_referen
 
     _run_lost_ack_probe(drop_holder_kwarg=False)
     _run_lost_ack_probe(drop_holder_kwarg=True)
+
+
+def test_single_branch_exact_equivalence_failure_destroys_isolated_fork_and_allows_retry() -> (
+    None
+):
+    """Failed equivalence or post-fork restore must immediately clean up the temporary target fork."""
+
+    class _TamperOnceForkSpiProvider(InMemorySandboxSpiProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fork_calls = 0
+
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            target_branch_id: str | None = None,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            self.fork_calls += 1
+            child, isolation_id = super().fork(
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
+            )
+            if self.fork_calls == 1:
+                child.rootfs["src/state.txt"] = "tampered-branch"
+            return child, isolation_id
+
+    provider = _TamperOnceForkSpiProvider()
+    live_sb = provider.create_sandbox(
+        sandbox_id="sb-eq-cleanup",
+        rootfs={"src/state.txt": "1"},
+        symlinks={"bin/cur": "v1"},
+        env={"REV": "1"},
+        processes={42: "worker-v1"},
+        daemon_health={"worker-v1": True},
+        memory_pages={"state_mem": "1"},
+    )
+    provider.pause("sb-eq-cleanup")
+    adapter = SpiReplayAdapter(
+        provider,
+        source_sandbox_id="sb-eq-cleanup",
+        target_tier="microvm_memory_exact",
+    )
+    registry = ReplayPointRegistry()
+    store = SpiAgentStateStore()
+    trace, point = _prepare_trace_point(
+        "trace-eq-cleanup", registry=registry, store=store, adapter=adapter
+    )
+    snap_id = next(iter(provider.snapshots))
+    parent_holder_id = provider.snapshots[snap_id].owner_holder_id
+
+    provider.resume("sb-eq-cleanup")
+    live_sb.rootfs["src/state.txt"] = "2"
+    live_sb.symlinks["bin/cur"] = "v2"
+    live_sb.env["REV"] = "2"
+    live_sb.memory_pages["state_mem"] = "2"
+
+    hyp = CounterfactualHypothesis(
+        hypothesis_id="hyp-eq-cleanup",
+        first_affected_event_id="trace-eq-cleanup-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+
+    first_suffix_called = False
+
+    def _never_execute(_req: RestoreReplayStateRequest) -> Mapping[str, bool]:
+        nonlocal first_suffix_called
+        first_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(ValueError, match="exact replay requires equal"):
+        run_counterfactual_suffix_replay(
+            registry,
+            trace=trace,
+            hypothesis=hyp,
+            candidate=CounterfactualCandidate("tampered-attempt", {"op": "retry"}),
+            execute_suffix=_never_execute,
+        )
+
+    assert first_suffix_called is False
+    assert len(adapter.last_target_sandboxes) == 1
+    leaked_candidate = adapter.last_target_sandboxes[0]
+    assert provider.sandboxes[leaked_candidate.branch_sandbox_id].status == "destroyed"
+    assert provider.snapshots[snap_id].refcount == 1
+    assert provider.snapshots[snap_id].active_holder_ids == (parent_holder_id,)
+    assert live_sb.rootfs["src/state.txt"] == "2"
+    assert live_sb.memory_pages["state_mem"] == "2"
+    assert registry.get(point.replay_point_id).lifecycle.value == "ready"
+    eq_metrics = registry.metrics()
+    assert eq_metrics["equivalence_failure_count"] == 1
+    assert eq_metrics["suffix_finalization_attempt_count"] == 1
+    assert eq_metrics["suffix_finalization_success_count"] == 1
+    assert eq_metrics["suffix_failure_count"] == 0
+    assert eq_metrics["replay_point_quarantine_count"] == 0
+    assert eq_metrics["replay_failure_count"] == 1
+
+    # Retrying the same READY ReplayPoint once the fork is untampered succeeds cleanly.
+    retry_result = run_counterfactual_suffix_replay(
+        registry,
+        trace=trace,
+        hypothesis=hyp,
+        candidate=CounterfactualCandidate("clean-retry", {"op": "retry"}),
+        execute_suffix=lambda req: {
+            "fix": adapter.target_sandbox_for_request(req).rootfs["src/state.txt"]
+            == "1",
+            "guard": adapter.target_sandbox_for_request(req).memory_pages["state_mem"]
+            == "1"
+            and live_sb.rootfs["src/state.txt"] == "2",
+        },
+    )
+    assert retry_result.decision == CounterfactualDecision.PROMOTED
+    assert len(adapter.last_target_sandboxes) == 2
+    assert (
+        provider.sandboxes[adapter.last_target_sandboxes[1].branch_sandbox_id].status
+        == "destroyed"
+    )
+    assert provider.snapshots[snap_id].refcount == 1
+    assert live_sb.rootfs["src/state.txt"] == "2"
+
+    # A post-fork failure inside restore_replay_state also triggers immediate cleanup without quarantine.
+    class _FailAfterForkAdapter(SpiReplayAdapter):
+        def __init__(
+            self,
+            spi_provider: InMemorySandboxSpiProvider,
+            *,
+            source_sandbox_id: str,
+            target_tier: str,
+        ) -> None:
+            super().__init__(
+                spi_provider,
+                source_sandbox_id=source_sandbox_id,
+                target_tier=target_tier,
+            )
+            self.fail_next_restore = True
+
+        def restore_replay_state(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+        ) -> RestoreReceipt:
+            receipt = super().restore_replay_state(binding_key, request)
+            if self.fail_next_restore:
+                self.fail_next_restore = False
+                raise RuntimeError("post-fork restore setup failed")
+            return receipt
+
+    restore_provider = InMemorySandboxSpiProvider()
+    restore_sb = restore_provider.create_sandbox(
+        sandbox_id="sb-restore-cleanup",
+        rootfs={"src/state.txt": "1"},
+        symlinks={"bin/cur": "v1"},
+        env={"REV": "1"},
+        processes={43: "worker-v1"},
+        daemon_health={"worker-v1": True},
+        memory_pages={"state_mem": "1"},
+    )
+    restore_provider.pause("sb-restore-cleanup")
+    restore_adapter = _FailAfterForkAdapter(
+        restore_provider,
+        source_sandbox_id="sb-restore-cleanup",
+        target_tier="microvm_memory_exact",
+    )
+    restore_reg = ReplayPointRegistry()
+    restore_trace, restore_pt = _prepare_trace_point(
+        "trace-restore-cleanup",
+        registry=restore_reg,
+        store=SpiAgentStateStore(),
+        adapter=restore_adapter,
+    )
+    restore_snap_id = next(iter(restore_provider.snapshots))
+    restore_provider.resume("sb-restore-cleanup")
+    restore_sb.rootfs["src/state.txt"] = "2"
+
+    restore_hyp = CounterfactualHypothesis(
+        hypothesis_id="hyp-restore-cleanup",
+        first_affected_event_id="trace-restore-cleanup-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+    with pytest.raises(RuntimeError, match="post-fork restore setup failed"):
+        run_counterfactual_suffix_replay(
+            restore_reg,
+            trace=restore_trace,
+            hypothesis=restore_hyp,
+            candidate=CounterfactualCandidate("post-fork-fail", {"op": "noop"}),
+            execute_suffix=_never_execute,
+        )
+    assert len(restore_adapter.last_target_sandboxes) == 1
+    assert (
+        restore_provider.sandboxes[
+            restore_adapter.last_target_sandboxes[0].branch_sandbox_id
+        ].status
+        == "destroyed"
+    )
+    assert restore_provider.snapshots[restore_snap_id].refcount == 1
+    assert restore_reg.get(restore_pt.replay_point_id).lifecycle.value == "ready"
+    assert restore_reg.metrics()["restore_failure_count"] == 1
+    assert restore_reg.metrics()["replay_point_quarantine_count"] == 0
+
+    released_restore = restore_reg.release(restore_pt.replay_point_id)
+    assert released_restore.lifecycle.value == "released"
+    assert restore_snap_id not in restore_provider.snapshots
+    released_eq = registry.release(point.replay_point_id)
+    assert released_eq.lifecycle.value == "released"
+    assert snap_id not in provider.snapshots
+
+
+def test_finalize_child_ref_release_failure_retries_via_public_release_and_reclaims_snapshot() -> (
+    None
+):
+    """Pre-commit child holder release failure during finalize keeps child binding so ReplayPoint.release retries cleanly."""
+
+    class _PreCommitChildReleaseFailureProvider(InMemorySandboxSpiProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.destroy_calls: list[str] = []
+            self.child_release_attempts: list[tuple[str, str | None]] = []
+
+        def destroy_sandbox(self, sandbox_id: str) -> None:
+            self.destroy_calls.append(sandbox_id)
+            super().destroy_sandbox(sandbox_id)
+
+        def release_snapshot(
+            self,
+            snapshot_id: str,
+            *,
+            holder_id: str | None = None,
+        ) -> None:
+            sealed = self._sealed_snapshots.get(snapshot_id)
+            if (
+                holder_id is not None
+                and sealed is not None
+                and holder_id != sealed.owner_holder_id
+            ):
+                self.child_release_attempts.append((snapshot_id, holder_id))
+                if len(self.child_release_attempts) == 1:
+                    raise RuntimeError("transient pre-commit child ref release failure")
+            super().release_snapshot(snapshot_id, holder_id=holder_id)
+
+    provider = _PreCommitChildReleaseFailureProvider()
+    live_sb = provider.create_sandbox(
+        sandbox_id="sb-child-release-retry",
+        rootfs={"src/state.txt": "1"},
+        symlinks={"bin/cur": "v1"},
+        env={"REV": "1"},
+        processes={44: "worker-v1"},
+        daemon_health={"worker-v1": True},
+        memory_pages={"state_mem": "1"},
+    )
+    provider.pause("sb-child-release-retry")
+    adapter = SpiReplayAdapter(
+        provider,
+        source_sandbox_id="sb-child-release-retry",
+        target_tier="microvm_memory_exact",
+    )
+    registry = ReplayPointRegistry()
+    store = SpiAgentStateStore()
+    trace, point = _prepare_trace_point(
+        "trace-child-release-retry", registry=registry, store=store, adapter=adapter
+    )
+    snap_id = next(iter(provider.snapshots))
+    parent_holder_id = provider.snapshots[snap_id].owner_holder_id
+
+    provider.resume("sb-child-release-retry")
+    live_sb.rootfs["src/state.txt"] = "2"
+
+    hyp = CounterfactualHypothesis(
+        hypothesis_id="hyp-child-release-retry",
+        first_affected_event_id="trace-child-release-retry-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+
+    with pytest.raises(
+        RuntimeError, match="transient pre-commit child ref release failure"
+    ):
+        run_counterfactual_suffix_replay(
+            registry,
+            trace=trace,
+            hypothesis=hyp,
+            candidate=CounterfactualCandidate("fail-child-ref-release", {"op": "ok"}),
+            execute_suffix=lambda req: {
+                "fix": adapter.target_sandbox_for_request(req).rootfs["src/state.txt"]
+                == "1",
+                "guard": True,
+            },
+        )
+
+    assert len(adapter.last_target_sandboxes) == 1
+    target_ref = adapter.last_target_sandboxes[0]
+    assert provider.sandboxes[target_ref.branch_sandbox_id].status == "destroyed"
+    assert provider.destroy_calls == [target_ref.branch_sandbox_id]
+    assert provider.child_release_attempts == [(snap_id, target_ref.holder_id)]
+    assert snap_id in provider.snapshots
+    assert provider.snapshots[snap_id].refcount == 2
+    assert set(provider.snapshots[snap_id].active_holder_ids) == {
+        parent_holder_id,
+        target_ref.holder_id,
+    }
+    assert registry.get(point.replay_point_id).lifecycle.value == "failed"
+    metrics_after_fail = registry.metrics()
+    assert metrics_after_fail["suffix_finalization_failure_count"] == 1
+    assert metrics_after_fail["replay_point_quarantine_count"] == 1
+
+    # Public ReplayPoint.release retries the child holder cleanup cleanly without double-destroying
+    # the already-destroyed target sandbox, then releases the parent holder and reclaims snapshot.
+    released_second = registry.release(point.replay_point_id)
+    assert released_second.lifecycle.value == "released"
+    assert provider.destroy_calls == [target_ref.branch_sandbox_id]
+    assert provider.child_release_attempts == [
+        (snap_id, target_ref.holder_id),
+        (snap_id, target_ref.holder_id),
+    ]
+    assert snap_id not in provider.snapshots
+    assert registry.metrics()["release_success_count"] == 1
+
+    # Subsequent release call is an idempotent no-op returning released.
+    released_third = registry.release(point.replay_point_id)
+    assert released_third.lifecycle.value == "released"
+    assert provider.destroy_calls == [target_ref.branch_sandbox_id]
+    assert len(provider.child_release_attempts) == 2
+    assert snap_id not in provider.snapshots

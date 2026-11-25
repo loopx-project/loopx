@@ -1003,161 +1003,174 @@ class ReplayPointRegistry:
                     target_branch_id=target_branch_id,
                     minimum_fidelity=minimum,
                 )
-                restore_started = time.perf_counter()
-                self._metrics.increment("restore_attempt_count")
-                try:
-                    receipt = entry.adapter.restore_replay_state(
-                        entry.adapter_binding_key,
-                        request,
-                    )
-                    if not isinstance(receipt, RestoreReceipt):
-                        raise TypeError(
-                            "restore_replay_state must return a RestoreReceipt"
-                        )
-                    if receipt.achieved_fidelity == ReplayFidelity.NON_REPLAYABLE:
-                        raise RuntimeError(
-                            "Adapter reported non_replayable while restoring a ReplayPoint"
-                        )
-                    if not fidelity_meets(
-                        entry.point.fidelity,
-                        receipt.achieved_fidelity,
-                    ):
-                        raise ValueError(
-                            "restore achieved a fidelity stronger than the captured "
-                            "ReplayPoint"
-                        )
-                except Exception:
-                    self._metrics.increment("restore_failure_count")
-                    raise
-                else:
-                    self._metrics.increment("restore_success_count")
-                    if receipt.prefix_reused is True:
-                        self._metrics.increment("prefix_reuse_verified_count")
-                    elif receipt.prefix_reused is False:
-                        self._metrics.increment("prefix_reconstruction_count")
-                    else:
-                        self._metrics.increment("prefix_reuse_unknown_count")
-                finally:
-                    restore_minutes = (time.perf_counter() - restore_started) / 60.0
-                    self._metrics.add_seconds(
-                        "restore_minutes",
-                        time.perf_counter() - restore_started,
-                    )
-
-                equivalence_started = time.perf_counter()
-                self._metrics.increment("equivalence_attempt_count")
-                try:
-                    report = entry.adapter.validate_replay_equivalence(
-                        entry.adapter_binding_key,
-                        receipt,
-                    )
-                    if not isinstance(report, EquivalenceReport):
-                        raise TypeError(
-                            "validate_replay_equivalence must return an "
-                            "EquivalenceReport"
-                        )
-                    promotion_eligible = _validate_equivalence_contract(
-                        entry.point,
-                        receipt,
-                        report,
-                        minimum,
-                    )
-                    trusted_fidelity = fidelity_meets(
-                        report.achieved_fidelity,
-                        ReplayFidelity.SEMANTIC_EQUIVALENT,
-                    )
-                except Exception:
-                    self._metrics.increment("equivalence_failure_count")
-                    raise
-                else:
-                    if report.equivalent and trusted_fidelity:
-                        self._metrics.increment("equivalence_verified_count")
-                    else:
-                        self._metrics.increment("equivalence_unverified_count")
-                finally:
-                    equivalence_minutes = (
-                        time.perf_counter() - equivalence_started
-                    ) / 60.0
-                    self._metrics.add_seconds(
-                        "equivalence_minutes",
-                        time.perf_counter() - equivalence_started,
-                    )
-                self._metrics.observe_fidelity(report.achieved_fidelity.value)
-                entry.agent_state_store.restore_agent_state(entry.agent_state_key)
-                restore = ReplayRestoreResult(
-                    replay_point_id=replay_point_id,
-                    target_branch_id=target_branch_id,
-                    achieved_fidelity=report.achieved_fidelity,
-                    equivalent=report.equivalent,
-                    promotion_eligible=promotion_eligible,
-                    prefix_reused=receipt.prefix_reused,
-                    report=report,
-                    restore_minutes=restore_minutes,
-                    equivalence_minutes=equivalence_minutes,
-                    suffix_minutes=0.0,
-                    replay_wall_minutes=0.0,
-                )
-                suffix_started = time.perf_counter()
-                self._metrics.increment("suffix_attempt_count")
-                suffix_error: Exception | None = None
+                restore_attempted = False
+                suffix_attempted = False
+                stage_error: Exception | None = None
                 finalization_error: Exception | None = None
+                restored_state: ReplayRestoreResult | None = None
+                suffix_minutes = 0.0
+                outcomes: list[object] = []
                 try:
-                    outcome = execute(restore)
-                except Exception as error:
-                    suffix_error = error
-                finally:
-                    finalizer = getattr(
-                        entry.adapter,
-                        "finalize_replay_suffix",
-                        None,
-                    )
-                    if callable(finalizer):
-                        self._metrics.increment("suffix_finalization_attempt_count")
-                        try:
-                            finalizer(
-                                entry.adapter_binding_key,
-                                request,
-                                suffix_succeeded=suffix_error is None,
+                    restore_started = time.perf_counter()
+                    self._metrics.increment("restore_attempt_count")
+                    restore_attempted = True
+                    try:
+                        receipt = entry.adapter.restore_replay_state(
+                            entry.adapter_binding_key,
+                            request,
+                        )
+                        if not isinstance(receipt, RestoreReceipt):
+                            raise TypeError(
+                                "restore_replay_state must return a RestoreReceipt"
                             )
-                        except Exception as error:
-                            finalization_error = error
-                            self._metrics.increment("suffix_finalization_failure_count")
+                        if receipt.achieved_fidelity == ReplayFidelity.NON_REPLAYABLE:
+                            raise RuntimeError(
+                                "Adapter reported non_replayable while restoring a ReplayPoint"
+                            )
+                        if not fidelity_meets(
+                            entry.point.fidelity,
+                            receipt.achieved_fidelity,
+                        ):
+                            raise ValueError(
+                                "restore achieved a fidelity stronger than the captured "
+                                "ReplayPoint"
+                            )
+                    except Exception:
+                        self._metrics.increment("restore_failure_count")
+                        raise
+                    else:
+                        self._metrics.increment("restore_success_count")
+                        if receipt.prefix_reused is True:
+                            self._metrics.increment("prefix_reuse_verified_count")
+                        elif receipt.prefix_reused is False:
+                            self._metrics.increment("prefix_reconstruction_count")
                         else:
-                            self._metrics.increment("suffix_finalization_success_count")
-                    suffix_minutes = (time.perf_counter() - suffix_started) / 60.0
-                    self._metrics.add_seconds(
-                        "suffix_minutes",
-                        time.perf_counter() - suffix_started,
-                    )
-                if suffix_error is not None:
-                    self._metrics.increment("suffix_failure_count")
-                    if finalization_error is not None:
-                        with self._lock:
-                            entry.point = replace(
-                                entry.point,
-                                lifecycle=ReplayPointLifecycle.FAILED,
+                            self._metrics.increment("prefix_reuse_unknown_count")
+                    finally:
+                        restore_minutes = (
+                            time.perf_counter() - restore_started
+                        ) / 60.0
+                        self._metrics.add_seconds(
+                            "restore_minutes",
+                            time.perf_counter() - restore_started,
+                        )
+
+                    equivalence_started = time.perf_counter()
+                    self._metrics.increment("equivalence_attempt_count")
+                    try:
+                        report = entry.adapter.validate_replay_equivalence(
+                            entry.adapter_binding_key,
+                            receipt,
+                        )
+                        if not isinstance(report, EquivalenceReport):
+                            raise TypeError(
+                                "validate_replay_equivalence must return an "
+                                "EquivalenceReport"
                             )
-                        self._metrics.increment("replay_point_quarantine_count")
-                        raise suffix_error from finalization_error
-                    raise suffix_error
+                        promotion_eligible = _validate_equivalence_contract(
+                            entry.point,
+                            receipt,
+                            report,
+                            minimum,
+                        )
+                        trusted_fidelity = fidelity_meets(
+                            report.achieved_fidelity,
+                            ReplayFidelity.SEMANTIC_EQUIVALENT,
+                        )
+                    except Exception:
+                        self._metrics.increment("equivalence_failure_count")
+                        raise
+                    else:
+                        if report.equivalent and trusted_fidelity:
+                            self._metrics.increment("equivalence_verified_count")
+                        else:
+                            self._metrics.increment("equivalence_unverified_count")
+                    finally:
+                        equivalence_minutes = (
+                            time.perf_counter() - equivalence_started
+                        ) / 60.0
+                        self._metrics.add_seconds(
+                            "equivalence_minutes",
+                            time.perf_counter() - equivalence_started,
+                        )
+                    self._metrics.observe_fidelity(report.achieved_fidelity.value)
+                    entry.agent_state_store.restore_agent_state(entry.agent_state_key)
+                    restored_state = ReplayRestoreResult(
+                        replay_point_id=replay_point_id,
+                        target_branch_id=target_branch_id,
+                        achieved_fidelity=report.achieved_fidelity,
+                        equivalent=report.equivalent,
+                        promotion_eligible=promotion_eligible,
+                        prefix_reused=receipt.prefix_reused,
+                        report=report,
+                        restore_minutes=restore_minutes,
+                        equivalence_minutes=equivalence_minutes,
+                        suffix_minutes=0.0,
+                        replay_wall_minutes=0.0,
+                    )
+                    suffix_started = time.perf_counter()
+                    self._metrics.increment("suffix_attempt_count")
+                    suffix_attempted = True
+                    try:
+                        outcomes.append(execute(restored_state))
+                    finally:
+                        suffix_minutes = (time.perf_counter() - suffix_started) / 60.0
+                        self._metrics.add_seconds(
+                            "suffix_minutes",
+                            time.perf_counter() - suffix_started,
+                        )
+                except Exception as error:
+                    stage_error = error
+                finally:
+                    if restore_attempted:
+                        finalizer = getattr(
+                            entry.adapter,
+                            "finalize_replay_suffix",
+                            None,
+                        )
+                        if callable(finalizer):
+                            self._metrics.increment("suffix_finalization_attempt_count")
+                            try:
+                                finalizer(
+                                    entry.adapter_binding_key,
+                                    request,
+                                    suffix_succeeded=stage_error is None,
+                                )
+                            except Exception as error:
+                                finalization_error = error
+                                self._metrics.increment(
+                                    "suffix_finalization_failure_count"
+                                )
+                            else:
+                                self._metrics.increment(
+                                    "suffix_finalization_success_count"
+                                )
                 if finalization_error is not None:
-                    self._metrics.increment("suffix_failure_count")
+                    if stage_error is None or suffix_attempted:
+                        self._metrics.increment("suffix_failure_count")
                     with self._lock:
                         entry.point = replace(
                             entry.point,
                             lifecycle=ReplayPointLifecycle.FAILED,
                         )
                     self._metrics.increment("replay_point_quarantine_count")
+                    if stage_error is not None:
+                        raise stage_error from finalization_error
                     raise finalization_error
+                if stage_error is not None:
+                    if suffix_attempted:
+                        self._metrics.increment("suffix_failure_count")
+                    raise stage_error
+                assert restored_state is not None
                 self._metrics.increment("suffix_success_count")
                 replay_wall_minutes = (time.perf_counter() - replay_started) / 60.0
                 restore = replace(
-                    restore,
+                    restored_state,
                     suffix_minutes=suffix_minutes,
                     replay_wall_minutes=replay_wall_minutes,
                 )
                 self._metrics.increment("replay_success_count")
-                return restore, outcome
+                return restore, outcomes[0]
         except Exception:
             self._metrics.increment("replay_failure_count")
             raise
