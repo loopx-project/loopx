@@ -1,17 +1,20 @@
 import { pastedQuote } from '../clipboard';
-import { referencePreview, mergeReferences, splitReferences, withReferences, type ContextReference } from '../context-references';
+import { attachedReferences, recoverNoteReferences, replaceAutomaticReference, sameReferencedMessage, referencePreview, mergeReferences, withReferences, type ContextReference, type ReferenceAction } from '../context-references';
+import { parseReferenceDraft } from '../reference-drafts';
 import { ReferenceChips, ReferencePicker, type ReferenceSource } from './ContextReferences';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type DragEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
 import { ApiError, MAX_QUEUED, type AgentMention, type ModelQueue, type OutgoingImage, type QueuedMessage, type SlashCommand } from '../api';
 import { commandDraft, searchCommands, slashQuery, type HubAction, type MenuRow } from '../commands';
 import { useIsNarrow, useIsTouch } from '../hooks';
-import { readDrafts, SendCancelled, writeDraft, type Sending } from '../drafts';
+import { DRAFTS_KEY, hasDraftContent, readDrafts, SendCancelled, storedDraftKeys, writeDraft, type Sending } from '../drafts';
+import { isOptimisticThreadId } from '../optimistic';
 import { sizeLabel } from '../files';
 import { mentionAt } from '../mentions';
 import { takeoverMention } from '../handover';
 import { MAX_IMAGES, prepareImage, restoreImage, type PreparedImage } from '../images';
-import { channelRows, splitNotes, withNotes, type Note, type NoteSource } from '../timeline';
+import { channelRows, withNotes, type Note, type NoteSource } from '../timeline';
+import { usePendingReferences, useReferencePaste } from '../reference-input';
 import { Popover } from './Popover';
 import { ComposerMenu, goalMenuActions, type GoalAction, type GoalCapability, type WritingMode } from './ComposerMenu';
 import { GoalCard } from './GoalCard';
@@ -72,7 +75,7 @@ interface Draft {
 }
 
 /** A box's content as the one text it is sent as: the notes, numbered, then the words. */
-const asMessage = (text: string, notes: Note[], references: ContextReference[] = []) => withNotes(notes, withReferences(references, text));
+const asMessage = (text: string, notes: Note[], references: ContextReference[] = []) => withNotes(notes, withReferences(attachedReferences(references, notes), text));
 
 /** How long a send may take before the button says it is still going. */
 const SLOW_SEND_MS = 400;
@@ -80,6 +83,9 @@ const SLOW_SEND_MS = 400;
 const SEND_TAP_SLOP = 12;
 /** Mobile browsers may deliver the compatibility click after pointerup; keep it from sending twice. */
 const SEND_CLICK_SUPPRESS_MS = 500;
+/** Safety timeout if a mobile IME commits silently on blur without firing compositionend. */
+const IME_FALLBACK_MS = 120;
+const SUPPORTS_FIELD_SIZING = typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('field-sizing', 'content');
 
 /** Safari may report composition as ended on the Enter keydown that still belongs to the IME. */
 export const isImeComposing = (event: Pick<KeyboardEvent<HTMLElement>, 'nativeEvent'>): boolean =>
@@ -94,6 +100,10 @@ const noteId = () => `note-${Date.now()}-${++noteSeq}`;
  * kept on the device and outlast a reload; pictures only last as long as the page.
  */
 const drafts = new Map<string, Draft>();
+const draftListeners = new Set<() => void>();
+/** Live presence reported by mounted composers so the list updates before the storage debounce. */
+const liveDrafts = new Map<symbol, { key: string; present: boolean }>();
+let cachedDraftKeys: ReadonlySet<string> | null = null;
 
 const storage = (): Storage | null => {
   try {
@@ -103,24 +113,100 @@ const storage = (): Storage | null => {
   }
 };
 
+function computeDraftKeys(): ReadonlySet<string> {
+  const keys = new Set<string>();
+  const store = storage();
+  if (store) {
+    for (const key of storedDraftKeys(store)) keys.add(key);
+  }
+  for (const [key, draft] of drafts) {
+    if (hasDraftContent(draft)) keys.add(key);
+  }
+  const liveByKey = new Map<string, boolean>();
+  for (const { key, present } of liveDrafts.values()) {
+    liveByKey.set(key, (liveByKey.get(key) ?? false) || present);
+  }
+  for (const [key, present] of liveByKey) {
+    if (present) keys.add(key);
+    else keys.delete(key);
+  }
+  return keys;
+}
+
+function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const item of a) if (!b.has(item)) return false;
+  return true;
+}
+
+function notifyDraftKeys(): void {
+  const next = computeDraftKeys();
+  if (cachedDraftKeys && setsEqual(cachedDraftKeys, next)) return;
+  cachedDraftKeys = next;
+  for (const listener of draftListeners) listener();
+}
+
+function getDraftKeysSnapshot(): ReadonlySet<string> {
+  if (!cachedDraftKeys) cachedDraftKeys = computeDraftKeys();
+  return cachedDraftKeys;
+}
+
+/** Reactive set of composer draft keys that currently hold unsent content. */
+export function useDraftKeys(): ReadonlySet<string> {
+  return useSyncExternalStore(
+    (listener) => {
+      draftListeners.add(listener);
+      const onStorage = (event: StorageEvent) => {
+        if (event.key === null || event.key === DRAFTS_KEY) notifyDraftKeys();
+      };
+      if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+        window.addEventListener('storage', onStorage);
+      }
+      return () => {
+        draftListeners.delete(listener);
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('storage', onStorage);
+        }
+      };
+    },
+    getDraftKeysSnapshot,
+    getDraftKeysSnapshot,
+  );
+}
+
 function loadDraft(key: string): Draft | undefined {
   const inMemory = drafts.get(key);
   if (inMemory) return inMemory;
   const store = storage();
   const stored = store ? readDrafts(store)[key] : undefined;
-  return stored && { text: stored.text, references: stored.references, mentions: stored.mentions, notes: stored.notes.map((n) => ({ ...n, id: noteId() })), images: [], sending: stored.sending };
+  if (!stored) return undefined;
+  const recovered = recoverNoteReferences(stored.notes, stored.references ?? []);
+  return { text: stored.text, references: recovered.references, mentions: stored.mentions, notes: recovered.notes.map(n => ({ ...n, id: noteId() })), images: [], sending: stored.sending };
 }
 
 function keepDraft(key: string, draft: Draft | null): void {
-  if (draft && (draft.text.trim() || draft.notes.length || draft.images.length || draft.videos?.length || draft.mentions?.length || draft.references?.length)) drafts.set(key, draft);
+  if (hasDraftContent(draft) && draft) drafts.set(key, draft);
   else drafts.delete(key);
   const store = storage();
   if (store) writeDraft(store, key, draft);
+  notifyDraftKeys();
+}
+
+/** Restore metadata as visible attachments, including permissions owned by a quoted note. */
+function messageDraft(text: string): Pick<Draft, 'text' | 'notes' | 'references'> {
+  const draft = parseReferenceDraft(text);
+  return { ...draft, notes: draft.notes.map(note => ({ ...note, id: noteId() })) };
 }
 
 /** Seeds a newly created thread before the composer opens it, including an immediate durable copy. */
 export function prefillComposerDraft(key: string, text: string): void {
-  keepDraft(key, { text, notes: [], images: [], focus: true });
+  keepDraft(key, { ...messageDraft(text), images: [], focus: true });
+}
+
+/** Workspace navigation replaces only its own visible source, before a composer can mount or reload. */
+export function replaceAutomaticComposerReference(key: string, source: ContextReference | null): void {
+  const saved = loadDraft(key) ?? { text: '', notes: [], images: [] };
+  keepDraft(key, { ...saved, references: replaceAutomaticReference(saved.references ?? [], source) });
 }
 
 /** How long typing pauses before the draft is written down. */
@@ -128,15 +214,19 @@ const SAVE_DELAY_MS = 400;
 
 interface Props {
   referenceSource?: ReferenceSource;
-  reference?: { value: ContextReference; nonce: number } | null;
-  onReferenceConsumed?: (id: string) => void;
+  reference?: ReferenceAction | null;
+  onReferenceConsumed?: (id?: string) => void;
   /**
    * Whose draft the box holds: a thread's id, or one key for the new thread being started. Without
    * one the box keeps nothing once it is gone, as for a side chat, which is new each time.
    */
   draftKey?: string;
+  /** Reusing a new-thread key for a different source invalidates old clipboard and picker work. */
+  draftGeneration?: number;
   running: boolean;
   disabled?: boolean;
+  /** Disables submission without blocking typing (e.g. while draft model preferences are loading). */
+  sendDisabled?: boolean;
   placeholder: string;
   mentionOptions?: AgentMention[];
   collaboration?: (select: (mention: AgentMention) => void, selected: AgentMention[], anchorRef: RefObject<HTMLButtonElement>, openSignal: number) => ReactNode;
@@ -148,8 +238,8 @@ interface Props {
   mentionExtra?: (mention: AgentMention) => ReactNode;
   /** The mark of the agent behind a choice, for the @ list. */
   mentionIcon?: (mention: AgentMention) => string | undefined;
-  /** Report the created thread's scoped draft key before uploads, independently of navigation. */
-  onSend: (text: string, images: PreparedImage[], mentions?: AgentMention[], videos?: PreparedVideo[], onCreated?: (draftKey: string) => void) => Promise<void> | void;
+  /** Report the created thread's scoped draft key before uploads, or null on rollback. */
+  onSend: (text: string, images: PreparedImage[], mentions?: AgentMention[], videos?: PreparedVideo[], onCreated?: (draftKey: string | null) => void, references?: string[]) => Promise<void> | void;
   onStop: () => void;
   /** Strip above the text area: which agent and which directory. */
   header: ReactNode;
@@ -166,7 +256,7 @@ interface Props {
    * The thread's agent (`current`, shown as `from`) is out of plan: one instance brought in with @
    * takes the thread over through `go`, with what was written as its note, instead of being sent work.
    */
-  takeover?: { from: string; current: string; go: (agent: string, note: string) => Promise<void> };
+  takeover?: { from: string; current: string; go: (agent: string, note: string, references: string[]) => Promise<void> };
   /** Controls at the left of the bottom bar, after the add menu. */
   left: ReactNode;
   /** Controls at the right of the bottom bar, before the send button. */
@@ -230,12 +320,20 @@ const ACTION_ICONS: Record<string, (p: { size?: number }) => JSX.Element> = {
   help: IconHelp,
 };
 
+const sameSending = (a?: Sending | null, b?: Sending | null): boolean =>
+  Boolean(a && b && a.text === b.text && a.after === b.after);
+
+const isOptimisticDraftKey = (key: string | undefined): boolean =>
+  Boolean(key && (isOptimisticThreadId(key) || (key.startsWith('host:') && isOptimisticThreadId(key.slice(key.indexOf(':', 5) + 1)))));
+
 type Selectable = Exclude<MenuRow, { type: 'heading' }>;
 
 export function Composer({
   draftKey,
+  draftGeneration = 0,
   running,
   disabled,
+  sendDisabled,
   placeholder,
   onSend,
   onStop,
@@ -322,8 +420,35 @@ export function Composer({
   const addRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const isTouch = useIsTouch();
+  const scope = JSON.stringify([draftKey, draftGeneration]);
+  const scopeRef = useRef(scope); scopeRef.current = scope;
+  const loadedScope = useRef(scope);
+  const inFlight = useRef<Sending | null>(null);
+  const unsettled = inFlight.current !== null && sameReferencedMessage(asMessage(text, notes, references), inFlight.current.text);
+  const draftRef = useRef<Draft>({ text, notes, references, images, videos });
+  // A navigation renders before its layout cleanup. Keep the departing draft, not the arriving key's stale state.
+  if (loadedScope.current === scope) draftRef.current = { text, notes, references, images, videos, mentions, ...(unsettled ? { sending: inFlight.current! } : {}) };
+  const sendingRef = useRef<{ key: string | undefined; origin: string | undefined; scope: string; mark: Sending } | null>(null);
+  const previousDraftKey = useRef<string | undefined>(draftKey);
+  const keyRef = useRef(draftKey);
+  keyRef.current = draftKey;
+  const updateDraft = (change: Partial<Draft>, durable = true) => {
+    const next = { ...draftRef.current, ...change };
+    if (next.sending && !sameReferencedMessage(asMessage(next.text, next.notes, next.references), next.sending.text)) delete next.sending;
+    draftRef.current = next;
+    if (change.text !== undefined) setText(change.text);
+    if (change.references !== undefined) setReferences(change.references);
+    if (change.notes !== undefined) setNotes(change.notes);
+    if (change.mentions !== undefined) setMentions(change.mentions);
+    if (change.images !== undefined) setImages(change.images);
+    if (change.videos !== undefined) setVideos(change.videos);
+    if (keyRef.current !== undefined && sendingRef.current?.key !== keyRef.current) {
+      if (durable) keepDraft(keyRef.current, next);
+      else drafts.set(keyRef.current, next);
+    }
+  };
 
-  useEffect(() => { setAddOpen(false); }, [draftKey, narrow]);
+  useEffect(() => { setAddOpen(false); }, [draftKey, draftGeneration, narrow]);
   useEffect(() => { setCollaborationSignal(0); }, [draftKey]);
   useEffect(() => {
     if (!addOpen) return;
@@ -352,7 +477,7 @@ export function Composer({
     setMenuBusy(true);
     try {
       // Menu controls are independent of the unsent draft and its attachments.
-      await onSend(command, []);
+      await onSend(command, [], undefined, undefined, undefined, []);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally { setMenuBusy(false); }
@@ -405,30 +530,59 @@ export function Composer({
   const mentionRows = mentionOptions.filter(m => !mentions.some(v => v.id === m.id && v.kind === m.kind) && (!mentionMatch?.query || `${m.label} ${m.id}`.toLowerCase().includes(mentionMatch.query.toLowerCase())));
   const mentionOpen = !referenceSource && Boolean(mentionMatch && mentionRows.length && !mentionDismissed && !addOpen);
   const openReferences = (query = '') => { setReferenceQuery(query); setReferenceSignal(value => value + 1); setMentionDismissed(true); };
-  const referenceMention = useRef<{ draftKey: string | undefined; prefix: string } | null>(null);
+  const referenceMention = useRef<{ scope: string; prefix: string } | null>(null);
   useEffect(() => {
     const previous = referenceMention.current;
-    if (previous && (previous.draftKey !== draftKey || !text.startsWith(previous.prefix))) referenceMention.current = null;
-    if (!referenceSource || !mentionMatch || addOpen) return;
+    if (previous && (previous.scope !== scope || !text.startsWith(previous.prefix))) referenceMention.current = null;
+    if (!referenceSource || !mentionMatch || addOpen || text !== draftRef.current.text) return;
     const prefix = text.slice(0, mentionMatch.start + 1);
     // Closing a picker dismisses this @ even if focus/caret events or a parent refresh arrive later.
     if (referenceMention.current?.prefix === prefix) return;
-    referenceMention.current = { draftKey, prefix };
+    referenceMention.current = { scope, prefix };
     openReferences(mentionMatch.query);
-  }, [referenceSource, text, draftKey, mentionMatch?.start, mentionMatch?.query, addOpen]);
+  }, [referenceSource, text, scope, mentionMatch?.start, mentionMatch?.query, addOpen]);
+  const pickerPending = useRef(false);
+  const [pickingReference, setPickingReference] = useState(false);
+  const setPickerPending = (value: boolean) => { pickerPending.current = value; setPickingReference(value); };
+  const referencePaste = useReferencePaste(referenceSource?.api, scope, {
+    text,
+    readText: () => draftRef.current.text,
+    changeText: value => updateDraft({ text: value }),
+    attach: (reference, pointer, value) => {
+      const current = draftRef.current;
+      const addedNote: DraftNote | null = pointer.quote !== undefined && reference.turnId && reference.sourceId
+        ? { id: noteId(), quote: pointer.quote, comment: '', reference, source: { threadId: reference.sourceId, turnId: reference.turnId, elsewhere: true } }
+        : null;
+      const nextReferences = addedNote ? current.references ?? [] : mergeReferences(current.references ?? [], [reference]);
+      const nextNotes = addedNote ? [...current.notes, addedNote] : current.notes;
+      if (attachedReferences(nextReferences, nextNotes).length > 12) { onError(t('references.limit', 12)); return; }
+      updateDraft({ text: value, references: nextReferences, notes: nextNotes });
+    },
+    onError,
+  });
+  usePendingReferences(referenceSource?.api, scope, attachedReferences(references, notes), (id, resolved) => {
+    const current = draftRef.current;
+    const replace = (value: ContextReference) => value.id === id ? { ...resolved, ...(value.automatic ? { automatic: true } : {}) } : value;
+    updateDraft({ references: (current.references ?? []).map(replace), notes: current.notes.map(note => note.reference?.id === id ? { ...note, reference: replace(note.reference) } : note) });
+  }, onError, () => attachedReferences(draftRef.current.references ?? [], draftRef.current.notes));
+  const referencePending = () => referencePaste.isPending() || pickerPending.current || attachedReferences(draftRef.current.references ?? [], draftRef.current.notes).some(value => value.pending);
+  useLayoutEffect(() => {
+    setReferenceSignal(0); setReferenceQuery(''); setPickerPending(false);
+    referenceMention.current = null;
+  }, [scope]);
   const chooseReference = (reference: ContextReference) => {
-    if (references.length >= 12 && !references.some(r => r.id === reference.id)) { onError(t('references.limit', 12)); return; }
-    setReferences(current => mergeReferences(current, [reference]));
-    if (mentionMatch) setText(current => current.slice(0, mentionMatch.start) + current.slice(mentionMatch.end));
+    const current = draftRef.current;
+    const next = mergeReferences(current.references ?? [], [reference]);
+    if (attachedReferences(next, current.notes).length > 12) { onError(t('references.limit', 12)); return; }
+    updateDraft({ references: next, ...(mentionMatch ? { text: current.text.slice(0, mentionMatch.start) + current.text.slice(mentionMatch.end) } : {}) });
     setMentionDismissed(true);
     ref.current?.focus();
   };
   const restoreMessage = (value: string) => {
-    const noted = splitNotes(value);
-    const referenced = splitReferences(noted.body);
-    setReferences(current => mergeReferences(referenced.references, current));
-    setNotes(current => [...noted.notes.map(n => ({ ...n, id: noteId() })), ...current]);
-    setText(current => [referenced.body, current].filter(s => s.trim()).join('\n\n'));
+    referencePaste.invalidate();
+    const restored = messageDraft(value);
+    const current = draftRef.current;
+    updateDraft({ references: mergeReferences(restored.references ?? [], current.references ?? []), notes: [...restored.notes, ...current.notes], text: [restored.text, current.text].filter(s => s.trim()).join('\n\n') });
   };
   const taskRefs = useRef<Array<HTMLTextAreaElement | null>>([]);
   const mentionListRef = useRef<HTMLDivElement>(null);
@@ -463,7 +617,9 @@ export function Composer({
   useEffect(() => {
     if (!note) return;
     const { nonce: _nonce, ...added } = note;
-    setNotes((prev) => prev.some((existing) => existing.id === added.id) ? prev : [...prev, added]);
+    const current = draftRef.current;
+    if (attachedReferences(current.references ?? [], [...current.notes, added]).length > 12) onError(t('references.limit', 12));
+    else if (!current.notes.some(existing => existing.id === added.id)) updateDraft({ notes: [...current.notes, added] });
     onNoteConsumed?.(added.id);
     ref.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -471,9 +627,12 @@ export function Composer({
   useEffect(() => onNotesChange?.(notes), [notes, onNotesChange]);
   useEffect(() => {
     if (!reference) return;
-    if (references.length >= 12 && !references.some(value => value.id === reference.value.id)) onError(t('references.limit', 12));
-    else setReferences(current => mergeReferences(current, [reference.value]));
-    onReferenceConsumed?.(reference.value.id);
+    const current = draftRef.current;
+    const next = reference.replaceAutomatic ? replaceAutomaticReference(current.references ?? [], reference.value)
+      : mergeReferences(current.references ?? [], reference.value ? [reference.value] : []);
+    if (attachedReferences(next, current.notes).length > 12) onError(t('references.limit', 12));
+    else updateDraft({ references: next });
+    onReferenceConsumed?.(reference.value?.id);
     ref.current?.focus();
     // Delivery is keyed to one action, like a picked note.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -498,21 +657,17 @@ export function Composer({
 
   // Each thread has its own draft. Swapped before paint, so the old text never flashes in the new
   // thread. The pictures' object URLs go with the draft; they are released once it is sent.
-  // A send this page never saw succeed: the page was reloaded meanwhile, or the answer got lost on
-  // the way back. The box stays marked for as long as it still holds exactly what was sent.
-  const inFlight = useRef<Sending | null>(null);
-  const unsettled = inFlight.current !== null && asMessage(text, notes, references) === inFlight.current.text;
-  const draftRef = useRef<Draft>({ text, notes, references, images, videos });
-  draftRef.current = { text, notes, references, images, videos, mentions, ...(unsettled ? { sending: inFlight.current! } : {}) };
-  const sendingRef = useRef<{ key: string | undefined; mark: Sending } | null>(null);
   const showDraft = (saved: Draft | undefined) => {
-    inFlight.current = saved?.sending ?? null;
-    setText(saved?.text ?? '');
-    setReferences(saved?.references ?? []);
-    setMentions(saved?.mentions ?? []);
-    setNotes(saved?.notes ?? []);
-    setImages(saved?.images ?? []);
-    setVideos(saved?.videos ?? []);
+    const next: Draft = saved ?? { text: '', notes: [], references: [], mentions: [], images: [], videos: [] };
+    loadedScope.current = scope;
+    draftRef.current = next;
+    inFlight.current = next.sending ?? null;
+    setText(next.text);
+    setReferences(next.references ?? []);
+    setMentions(next.mentions ?? []);
+    setNotes(next.notes);
+    setImages(next.images);
+    setVideos(next.videos ?? []);
     setVideoPreview(null);
     if (saved?.focus) {
       saved.focus = false;
@@ -520,32 +675,50 @@ export function Composer({
     }
   };
   useLayoutEffect(() => {
-    if (draftKey === undefined) return;
-    showDraft(loadDraft(draftKey));
+    const previous = previousDraftKey.current;
+    previousDraftKey.current = draftKey;
+    if (draftKey === undefined) {
+      loadedScope.current = scope;
+      return;
+    }
+    const activeSend = sendingRef.current;
+    const inActiveFlow = Boolean(
+      activeSend
+      && (draftKey === activeSend.key || isOptimisticDraftKey(draftKey))
+      && (previous === activeSend.origin || previous === activeSend.key || isOptimisticDraftKey(previous)),
+    );
+    if (inActiveFlow) {
+      loadedScope.current = scope;
+    } else {
+      const saved = loadDraft(draftKey);
+      showDraft(activeSend && draftKey === activeSend.key && sameSending(saved?.sending, activeSend.mark) ? undefined : saved);
+    }
     return () => {
       const draft = draftRef.current;
+      // A same-key navigation already replaced the automatic source in memory and storage.
+      if (keyRef.current === draftKey && scopeRef.current !== scope) return;
+      // Keep the durable `sending` marker intact until the in-flight request settles.
+      if (sendingRef.current?.key === draftKey || isOptimisticDraftKey(draftKey)) return;
       // A creation receipt or send completion may already have moved/cleared this marked draft.
       // A late layout cleanup must not resurrect it or replace a newer draft.
-      if (draft.sending && loadDraft(draftKey)?.sending !== draft.sending) return;
+      if (draft.sending && !sameSending(loadDraft(draftKey)?.sending, draft.sending)) return;
       keepDraft(draftKey, draft);
     };
-  }, [draftKey]);
+  }, [draftKey, draftGeneration]);
 
-  const takeDraft = () => {
-    const message = asMessage(text, notes, references);
-    setText('');
-    setNotes([]);
-    setReferences([]);
+  const takeDraft = (): string => {
+    if (sendingRef.current) return '';
+    const current = draftRef.current;
+    const message = asMessage(current.text, current.notes, current.references);
+    referencePaste.invalidate();
+    setReferenceSignal(0);
     // The box may be gone before it renders again; its last word on the draft must be the empty one.
-    draftRef.current = { ...draftRef.current, text: '', notes: [], references: [] };
-    if (draftKey !== undefined) keepDraft(draftKey, draftRef.current);
+    updateDraft({ text: '', notes: [], references: [] });
     return message;
   };
 
   // Written down shortly after typing pauses, so a reload keeps it. The timer reads the box as it
   // is when it fires, so a switch to another thread in between saves under the right one.
-  const keyRef = useRef(draftKey);
-  keyRef.current = draftKey;
   useEffect(() => {
     if (draftKey === undefined) return;
     const timer = setTimeout(() => {
@@ -575,7 +748,7 @@ export function Composer({
   useEffect(() => {
     const mark = inFlight.current;
     if (!unsettled || !mark || !lastSent) return;
-    if (lastSent.turnId === mark.after || lastSent.text.trim() !== mark.text.trim()) return;
+    if (lastSent.turnId === mark.after || !sameReferencedMessage(lastSent.text, mark.text)) return;
     inFlight.current = null;
     draftRef.current.images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     draftRef.current.videos?.forEach(video => URL.revokeObjectURL(video.previewUrl));
@@ -588,6 +761,25 @@ export function Composer({
     if (draftKey !== undefined) keepDraft(draftKey, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [unsettled, lastSent?.turnId, lastSent?.text, draftKey]);
+  const draftSlot = useRef<symbol | null>(null);
+  if (draftSlot.current === null) draftSlot.current = Symbol('composer-draft');
+  const hasDraftBox = hasDraftContent({ text, notes, images, videos, mentions, references });
+  useEffect(() => {
+    const slot = draftSlot.current!;
+    if (draftKey === undefined) {
+      if (liveDrafts.delete(slot)) notifyDraftKeys();
+      return;
+    }
+    const previous = liveDrafts.get(slot);
+    if (previous?.key !== draftKey || previous.present !== hasDraftBox) {
+      liveDrafts.set(slot, { key: draftKey, present: hasDraftBox });
+      notifyDraftKeys();
+    }
+    return () => {
+      if (liveDrafts.delete(slot)) notifyDraftKeys();
+    };
+  }, [draftKey, hasDraftBox]);
+
   // Without a draft to keep them, thumbnails left in the box are released when it goes away.
   useEffect(
     () => () => {
@@ -797,20 +989,32 @@ export function Composer({
     };
   }, []);
   const collapsed = !voiceControls && narrow && !header && !hasContent && queued.length === 0 && !modelQueue && preparing === 0 && !focused;
+  // Fallback auto-resize for browsers without CSS `field-sizing: content` (older iOS Safari, Firefox).
+  useLayoutEffect(() => {
+    if (SUPPORTS_FIELD_SIZING) return;
+    const el = ref.current;
+    if (!el || !el.style) return;
+    if (collapsed || !text) { el.style.height = ''; return; }
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [text, collapsed]);
   const goalControl = text.trim() === '/goal' ? 'show' : text.trim() === '/goal pause' ? 'pause' : text.trim() === '/goal clear' ? 'clear' : null;
   const immediate = !!goalControl && !!goal?.controls.includes(goalControl) && !images.length && !videos.length && !notes.length && !references.length && !mentions.length;
   const queueFull = running && !immediate && queued.length >= MAX_QUEUED;
-  const canSend = hasContent && !busy && !menuBusy && !disabled && preparing === 0 && !queueFull;
+  const resolvingReference = referencePaste.pending > 0 || pickingReference || attachedReferences(references, notes).some(value => value.pending);
+  const canSend = hasContent && !busy && !menuBusy && !disabled && !sendDisabled && preparing === 0 && !queueFull && !resolvingReference;
   const sendPress = useRef<{ pointerId: number; x: number; y: number; moved: boolean } | null>(null);
   const suppressSendClick = useRef(false);
   const sendClickReset = useRef<number | null>(null);
   const composing = useRef(false);
   const pendingImeSend = useRef(false);
   const imeSendTask = useRef<number | null>(null);
+  const imeFallbackTask = useRef<number | null>(null);
   useEffect(() => () => {
     if (sendClickReset.current !== null) window.clearTimeout(sendClickReset.current);
     if (imeSendTask.current !== null) window.clearTimeout(imeSendTask.current);
-    sendClickReset.current = imeSendTask.current = null;
+    if (imeFallbackTask.current !== null) window.clearTimeout(imeFallbackTask.current);
+    sendClickReset.current = imeSendTask.current = imeFallbackTask.current = null;
     sendPress.current = null;
     suppressSendClick.current = composing.current = pendingImeSend.current = false;
   }, [draftKey]);
@@ -821,11 +1025,27 @@ export function Composer({
       }
     : null;
 
+  const flushPendingImeSend = () => {
+    if (!pendingImeSend.current || !ref.current) return;
+    pendingImeSend.current = false;
+    composing.current = false;
+    const committedText = ref.current.value;
+    flushSync(() => updateDraft({ text: committedText }));
+    void submitRef.current();
+  };
+
   const submit = async () => {
+    if (referencePending()) { onError(t('references.pending')); return; }
     if (!canSend || sendingRef.current || pendingImeSend.current) return;
     if (composing.current) {
-      // Keep this tap: blur asks the native IME to commit, and compositionend resumes the send.
+      // Keep this tap: blur asks the native IME to commit, and compositionend (or a short fallback
+      // if the keyboard commits silently on blur) resumes the send without deadlocking the button.
       pendingImeSend.current = true;
+      if (imeFallbackTask.current !== null) window.clearTimeout(imeFallbackTask.current);
+      imeFallbackTask.current = window.setTimeout(() => {
+        imeFallbackTask.current = null;
+        flushPendingImeSend();
+      }, IME_FALLBACK_MS);
       ref.current?.blur();
       return;
     }
@@ -833,86 +1053,129 @@ export function Composer({
     if (uploadsBlocked && videos.length) return onError(uploadsBlocked);
     if (images.length && attachBlocked) return onError(attachBlocked);
     if (taker && (images.length || videos.length)) return onError(t('composer.takeoverAttachments'));
+    const sent: Draft = {
+      text: draftRef.current.text,
+      notes: [...draftRef.current.notes],
+      references: [...(draftRef.current.references ?? [])],
+      mentions: [...(draftRef.current.mentions ?? [])],
+      images: [...draftRef.current.images],
+      videos: [...(draftRef.current.videos ?? [])],
+    };
+    const attached = attachedReferences(sent.references ?? [], sent.notes).map(value => value.id);
+    if (attached.length > 12) return onError(t('references.limit', 12));
+    referencePaste.invalidate();
+    setReferenceSignal(0);
     setBusy(true);
-    const message = asMessage(text, notes, references);
+    const message = asMessage(sent.text, sent.notes, sent.references);
     const mark: Sending = { text: message, after: lastSent?.turnId ?? null };
-    const sendOwner = { key: draftKey, mark };
-    const sentDraft = { text, notes, references, images, videos, mentions, sending: mark };
+    const sentFrom = draftKey;
+    const sendOwner = { key: sentFrom, origin: sentFrom, scope, mark };
+    const sentDraft: Draft = { ...sent, sending: mark };
     sendingRef.current = sendOwner;
-    // Carry the send identity when the new draft becomes its created conversation.
-    inFlight.current = mark;
-    draftRef.current = sentDraft;
-    // On the device the draft now says it is on its way. Should the page be reloaded before the
-    // send comes back, it is neither lost nor taken for something still to send.
-    if (sendOwner.key !== undefined) keepDraft(sendOwner.key, sentDraft);
-    const onCreated = (createdKey: string) => {
-      if (sendingRef.current !== sendOwner || createdKey === sendOwner.key) return;
+    // Persist the in-flight marker so a mid-send reload still recovers an undelivered draft,
+    // while immediately clearing the visible box so follow-up typing never sticks to sent text.
+    const store = storage();
+    if (sentFrom !== undefined && store) writeDraft(store, sentFrom, sentDraft);
+    inFlight.current = null;
+    const emptyDraft: Draft = { text: '', notes: [], references: [], mentions: [], images: [], videos: [] };
+    draftRef.current = emptyDraft;
+    if (sentFrom !== undefined) drafts.delete(sentFrom);
+    setText('');
+    setNotes([]);
+    setReferences([]);
+    setMentions([]);
+    setImages([]);
+    setVideos([]);
+    setVideoPreview(null);
+    notifyDraftKeys();
+    const onCreated = (createdKey: string | null) => {
+      if (sendingRef.current !== sendOwner) return;
+      const nextKey = createdKey ?? sendOwner.origin;
+      if (nextKey === sendOwner.key) return;
       const previousKey = sendOwner.key;
-      sendOwner.key = createdKey;
-      const saved = loadDraft(createdKey);
-      if (!saved) keepDraft(createdKey, sentDraft);
-      if (previousKey !== undefined && loadDraft(previousKey)?.sending === mark) keepDraft(previousKey, null);
-      if (keyRef.current === createdKey && !saved) showDraft(sentDraft);
+      sendOwner.key = nextKey;
+      const s = storage();
+      if (previousKey !== undefined && sameSending(loadDraft(previousKey)?.sending, mark)) {
+        drafts.delete(previousKey);
+        if (s) writeDraft(s, previousKey, null);
+        notifyDraftKeys();
+      }
+      if (nextKey !== undefined && !loadDraft(nextKey) && s) {
+        writeDraft(s, nextKey, sentDraft);
+        notifyDraftKeys();
+      }
     };
     const slowTimer = setTimeout(() => setSlow(true), SLOW_SEND_MS);
     try {
-      if (taker) await takeover!.go(taker.id, [message, taker.task?.trim()].filter(Boolean).join('\n\n'));
-      else await onSend(message, images, mentions, videos, onCreated);
-      const ownsDraft = sendOwner.key === undefined || loadDraft(sendOwner.key)?.sending === mark;
-      if (sendOwner.key !== undefined && ownsDraft) keepDraft(sendOwner.key, null);
-      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-      videos.forEach(video => URL.revokeObjectURL(video.previewUrl));
-      // The same composer may now hold another conversation's draft.
-      if (!ownsDraft || keyRef.current !== sendOwner.key || inFlight.current !== mark) return;
-      if (draftRef.current.sending !== mark) {
-        // Edits made while sending are a new draft, not part of the completed message.
-        inFlight.current = null;
-        if (sendOwner.key !== undefined) keepDraft(sendOwner.key, draftRef.current);
-        return;
+      if (taker) await takeover!.go(taker.id, [message, taker.task?.trim()].filter(Boolean).join('\n\n'), attached);
+      else await onSend(message, sent.images, sent.mentions, sent.videos, onCreated, attached);
+      const sentKey = sendOwner.key;
+      const ownsDraft = sentKey === undefined || sameSending(loadDraft(sentKey)?.sending, mark);
+      if (sentKey !== undefined && ownsDraft) {
+        if (keyRef.current === sentKey && hasDraftContent(draftRef.current)) keepDraft(sentKey, draftRef.current);
+        else keepDraft(sentKey, null);
       }
-      setMentions([]);
-      inFlight.current = null;
-      draftRef.current = { text: '', notes: [], images: [] };
-      setNotes([]);
-      setReferences([]);
-      setVideos([]);
-      setImages([]);
-      setText(current => current === text ? '' : current);
+      if (sentFrom !== undefined && sentFrom !== sentKey && sameSending(loadDraft(sentFrom)?.sending, mark)) {
+        keepDraft(sentFrom, null);
+      }
+      sent.images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      sent.videos?.forEach(video => URL.revokeObjectURL(video.previewUrl));
     } catch (error) {
       const sentKey = sendOwner.key;
-      if (error instanceof SendCancelled) {
-        if (sentKey !== undefined && loadDraft(sentKey)?.sending === mark) {
-          const draft = keyRef.current === sentKey ? draftRef.current : { text, notes, references, images, videos, mentions };
-          keepDraft(sentKey, { ...draft, sending: undefined });
+      const stored = sentKey !== undefined ? loadDraft(sentKey) : undefined;
+      const ownsStorage = sentKey === undefined || !stored || sameSending(stored.sending, mark);
+      const viewingOwner = keyRef.current === sentKey || isOptimisticDraftKey(keyRef.current);
+      const current = viewingOwner ? draftRef.current : emptyDraft;
+      const restored: Draft = {
+        text: [sent.text, current.text].filter(s => s.trim()).join('\n\n'),
+        notes: [...sent.notes, ...current.notes],
+        references: mergeReferences(sent.references ?? [], current.references ?? []),
+        mentions: [...(sent.mentions ?? []), ...(current.mentions ?? [])],
+        images: [...sent.images, ...current.images],
+        videos: [...(sent.videos ?? []), ...(current.videos ?? [])],
+        ...(error instanceof SendCancelled ? {} : { sending: mark }),
+      };
+      if (keyRef.current !== undefined && keyRef.current !== sentKey && isOptimisticDraftKey(keyRef.current)) {
+        drafts.delete(keyRef.current);
+      }
+      if (ownsStorage) {
+        if (sentKey !== undefined) keepDraft(sentKey, restored);
+        if (keyRef.current === sentKey) {
+          inFlight.current = restored.sending ?? null;
+          updateDraft(restored, false);
         }
-        if (keyRef.current === sentKey && inFlight.current === mark) inFlight.current = null;
-      } else {
-        // A failed read can follow a successful send, so retain the mark until history resolves it.
-        if (keyRef.current === sentKey && (sentKey === undefined || loadDraft(sentKey)?.sending === mark)) inFlight.current = mark;
       }
     } finally {
       clearTimeout(slowTimer);
       setSlow(false);
       if (sendingRef.current === sendOwner) sendingRef.current = null;
       setBusy(false);
-      if (keyRef.current === sendOwner.key) ref.current?.focus();
+      if (keyRef.current === sendOwner.key) {
+        if (!isTouch) {
+          ref.current?.focus();
+        } else if (!hasDraftContent(draftRef.current)) {
+          ref.current?.blur();
+          setFocused(false);
+        }
+      }
     }
   };
   const submitRef = useRef(submit);
   submitRef.current = submit;
   const compositionEnd = () => {
     composing.current = false;
+    if (imeFallbackTask.current !== null) {
+      window.clearTimeout(imeFallbackTask.current);
+      imeFallbackTask.current = null;
+    }
     if (!pendingImeSend.current) return;
     if (imeSendTask.current !== null) window.clearTimeout(imeSendTask.current);
     // Some IMEs emit their final input after compositionend. Read the committed DOM value and
     // latest submit in the next task; compositionend, rather than elapsed time, permits sending.
     imeSendTask.current = window.setTimeout(() => {
       imeSendTask.current = null;
-      if (composing.current || !pendingImeSend.current || !ref.current) return;
-      pendingImeSend.current = false;
-      const committedText = ref.current.value;
-      flushSync(() => setText(committedText));
-      void submitRef.current();
+      if (composing.current || !pendingImeSend.current) return;
+      flushPendingImeSend();
     }, 0);
   };
   const endSendPress = (button: HTMLButtonElement, pointerId: number) => {
@@ -944,8 +1207,11 @@ export function Composer({
     if (!press || press.pointerId !== e.pointerId) return;
     e.preventDefault();
     const target = document.elementFromPoint(e.clientX, e.clientY);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const nearButton = e.clientX >= rect.left - SEND_TAP_SLOP && e.clientX <= rect.right + SEND_TAP_SLOP
+      && e.clientY >= rect.top - SEND_TAP_SLOP && e.clientY <= rect.bottom + SEND_TAP_SLOP;
     endSendPress(e.currentTarget, e.pointerId);
-    if (!press.moved && target && e.currentTarget.contains(target)) void submit();
+    if (!press.moved && ((target && e.currentTarget.contains(target)) || nearButton)) void submit();
   };
   const sendPointerCancel = (e: ReactPointerEvent<HTMLButtonElement>) => {
     if (sendPress.current?.pointerId === e.pointerId) {
@@ -1002,11 +1268,13 @@ export function Composer({
       void addFiles(files);
       return;
     }
+    if (referencePaste.paste(e)) return;
+    // Old copied passages remain notes, but their text alone never creates permission.
     const quote = pastedQuote(e.clipboardData.getData('text/plain'));
     if (!quote) return;
     e.preventDefault();
     const source = quote.threadId && quote.turnId ? quoteSource?.(quote.threadId, quote.turnId, quote.host) : undefined;
-    setNotes(previous => [...previous, { id: noteId(), quote: quote.text, comment: '', ...(source ? { source } : {}) }]);
+    updateDraft({ notes: [...draftRef.current.notes, { id: noteId(), quote: quote.text, comment: '', ...(source ? { source } : {}) }] });
   };
 
   const hasFiles = (e: DragEvent) => [...e.dataTransfer.types].includes('Files');
@@ -1091,6 +1359,12 @@ export function Composer({
         <div
           ref={boxRef}
           className={`composer-box${dragOver ? ' drag-over' : ''}${collapsed ? ' collapsed' : ''}`}
+          onPointerMove={(e) => {
+            if (e.pointerType !== 'mouse') return;
+            const r = e.currentTarget.getBoundingClientRect();
+            e.currentTarget.style.setProperty('--lg-mx', `${e.clientX - r.left}px`);
+            e.currentTarget.style.setProperty('--lg-my', `${e.clientY - r.top}px`);
+          }}
           onPointerDownCapture={(e) => {
             if (e.pointerType === 'mouse') return;
             if (boxPress.current !== null) window.clearTimeout(boxPress.current);
@@ -1119,6 +1393,7 @@ export function Composer({
           }}
           onDrop={onDrop}
         >
+          <span className="composer-sheen" aria-hidden="true" />
           {header && <div className="composer-context">{header}</div>}
 
           {modelQueueNotice && (
@@ -1193,7 +1468,7 @@ export function Composer({
             </div>
           )}
 
-          <ReferenceChips references={references} onRemove={id => setReferences(current => current.filter(r => r.id !== id))} />
+          <ReferenceChips references={references} onRemove={id => updateDraft({ references: (draftRef.current.references ?? []).filter(value => value.id !== id) })} />
           {notes.length > 0 && (
             <div className="notes" aria-label={t('composer.notes', notes.length)}>
               {notes.map((n, i) => (
@@ -1211,7 +1486,7 @@ export function Composer({
                     className="quote-remove"
                     aria-label={t('composer.removeNote', i + 1)}
                     title={t('composer.removeNoteTitle')}
-                    onClick={() => setNotes((prev) => prev.filter((x) => x.id !== n.id))}
+                    onClick={() => updateDraft({ notes: draftRef.current.notes.filter(value => value.id !== n.id) })}
                   >
                     <IconClose size={13} />
                   </button>
@@ -1239,7 +1514,7 @@ export function Composer({
             rows={1}
             value={text}
             placeholder={dragOver ? t('composer.drop') : collapsed && running ? t('composer.appendOne') : placeholder}
-            onChange={(e) => { setText(e.target.value); readSelection(e.target); }}
+            onChange={(e) => { updateDraft({ text: e.target.value }, false); readSelection(e.target); }}
             onCompositionStart={() => { composing.current = true; }}
             onCompositionEnd={compositionEnd}
             onSelect={(e) => readSelection(e.currentTarget)}
@@ -1321,10 +1596,11 @@ export function Composer({
             </Popover> : <button ref={addRef} type="button" className={`tool-btn icon-only composer-add${collaborationActive ? ' on' : ''}`}
               aria-label={t('composer.addAndMode')} aria-haspopup="listbox" aria-expanded={addOpen} title={t('composer.addActionsSkills')} disabled={disabled || menuBusy || busy}
               onClick={() => { setCatalog('all'); setAddQuery(''); setAddOpen(!addOpen); setDismissed(true); }}><IconPlus size={20} /></button>}
-            {referenceSource && <Popover label={t('references.add')} triggerLabel={t('references.add')} triggerClassName="tool-btn icon-only"
+            {referenceSource && <Popover key={scope} label={t('references.add')} triggerLabel={t('references.add')} triggerClassName="tool-btn icon-only"
               trigger={<span aria-hidden="true">@</span>} openSignal={referenceSignal} panelClassName="context-picker-panel" disabled={disabled || busy}>
-              {close => <ReferencePicker source={referenceSource} initialQuery={referenceQuery} agents={mentionOptions.filter(m => !mentions.some(v => v.id === m.id && v.kind === m.kind))}
-                onAgent={agent => { close(); chooseMention(agent); }} onPick={reference => { close(); chooseReference(reference); }} />}
+              {close => <ReferencePicker source={referenceSource} scope={scope} initialQuery={referenceQuery} agents={mentionOptions.filter(m => !mentions.some(v => v.id === m.id && v.kind === m.kind))}
+                onPending={value => { if (scopeRef.current === scope) setPickerPending(value); }}
+                onAgent={agent => { close(); chooseMention(agent); }} onPick={reference => { if (scopeRef.current !== scope) return; close(); chooseReference(reference); }} />}
             </Popover>}
             {!collapsed && left}
             {/* Only active modes take space; their compact marks can turn them off. */}
@@ -1344,13 +1620,13 @@ export function Composer({
             <div className="spacer" />
             {!collapsed && right}
             {composerActions}
-            {running && (
+            {running && !slow && (
               <button className="send-btn stop" onClick={onStop} aria-label={t('composer.stop')} title={t('composer.stopTurn')}>
                 <IconStop size={16} />
               </button>
             )}
-            {/* While a turn runs the send button appears only once there is something to queue. */}
-            {(voiceControls ? hasContent : !running || hasContent) && (
+            {/* While a turn runs the send button appears once there is something to queue, or while a slow send is in flight. */}
+            {(voiceControls ? hasContent || slow : !running || hasContent || slow) && (
               <button
                 className={`send-btn${slow ? ' sending' : ''}`}
                 onPointerDown={sendPointerDown}

@@ -43,11 +43,12 @@ type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem'>;
 function readNotes(value: { notes?: unknown; quote?: unknown }): StoredDraft['notes'] {
   if (Array.isArray(value.notes)) {
     return value.notes
-      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; source?: { threadId?: unknown; turnId?: unknown; elsewhere?: unknown } } => !!n && typeof n.quote === 'string')
+      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; reference?: unknown; source?: { threadId?: unknown; turnId?: unknown; elsewhere?: unknown } } => !!n && typeof n.quote === 'string')
       .map((n) => ({
         quote: n.quote, comment: typeof n.comment === 'string' ? n.comment : '',
         ...(typeof n.file === 'string' && n.file ? { file: n.file } : {}),
         ...(typeof n.source?.threadId === 'string' && typeof n.source.turnId === 'string' ? { source: { threadId: n.source.threadId, turnId: n.source.turnId, ...(n.source.elsewhere === true ? { elsewhere: true } : {}) } } : {}),
+        ...(readReferences([n.reference])[0] ? { reference: readReferences([n.reference])[0] } : {}),
       }));
   }
   // Drafts saved before notes held a single quote.
@@ -72,15 +73,52 @@ export function readDrafts(storage: Storage): Record<string, StoredDraft> {
   }
 }
 
+export interface DraftContent {
+  text: string;
+  notes: readonly unknown[];
+  images?: readonly unknown[];
+  videos?: readonly unknown[];
+  mentions?: readonly unknown[];
+  references?: readonly unknown[];
+}
+
+/** Whether a draft holds anything unsent in the composer box. */
+export function hasDraftContent(draft: DraftContent | null | undefined): boolean {
+  return Boolean(
+    draft && (
+      draft.text.trim()
+      || draft.notes.length
+      || draft.images?.length
+      || draft.videos?.length
+      || draft.mentions?.length
+      || draft.references?.length
+    ),
+  );
+}
+
+/** Keys of persisted drafts that currently hold unsent content. */
+export function storedDraftKeys(storage: Storage): Set<string> {
+  const keys = new Set<string>();
+  for (const [key, value] of Object.entries(readDrafts(storage))) {
+    if (hasDraftContent(value)) keys.add(key);
+  }
+  return keys;
+}
+
+/** Draft key a thread's composer uses on a given host (`null` for the hub's own host). */
+export function threadDraftKey(threadId: string, hostId: string | null = null): string {
+  return hostId ? `host:${hostId}:${threadId}` : threadId;
+}
+
 /** Keeps `draft` under `key`, or forgets it when there is nothing left to keep. */
 export function writeDraft(storage: Storage, key: string, draft: { text: string; notes: StoredDraft['notes']; sending?: Sending; mentions?: AgentMention[]; references?: ContextReference[] } | null, now = Date.now()): void {
   const all = readDrafts(storage);
-  if (draft && (draft.text.trim() || draft.notes.length || draft.mentions?.length || draft.references?.length)) {
+  if (hasDraftContent(draft) && draft) {
     all[key] = {
       text: draft.text,
       ...(draft.references?.length ? { references: draft.references } : {}),
       ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
-      notes: draft.notes.map(({ quote, comment, file, source }) => ({ quote, comment, ...(file ? { file } : {}), ...(source ? { source } : {}) })),
+      notes: draft.notes.map(({ quote, comment, file, source, reference }) => ({ quote, comment, ...(file ? { file } : {}), ...(source ? { source } : {}), ...(reference ? { reference } : {}) })),
       at: now,
       ...(draft.sending !== undefined ? { sending: draft.sending } : {}),
     };

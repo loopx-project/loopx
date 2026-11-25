@@ -97,6 +97,12 @@ export function Popover({
       const panel = { width: panelRef.current.offsetWidth, height: panelRef.current.offsetHeight };
       const viewport = window.visualViewport;
       const edge = 12;
+      const pane = at.closest<HTMLElement>('.main, .chat-main, .agent-panel, .files-panel, .thread-peek, .git-panel, .trace-side');
+      const paneRect = pane?.getBoundingClientRect();
+      const minX = (paneRect ? Math.max(0, paneRect.left) : 0) + edge;
+      const maxX = (paneRect ? Math.min(innerWidth, paneRect.right) : innerWidth) - edge;
+      const maxWidth = Math.max(200, Math.min(380, maxX - minX));
+      const clampedW = Math.min(panel.width, maxWidth);
       const minY = (viewport?.offsetTop ?? 0) + edge;
       const maxY = minY + (viewport?.height ?? innerHeight) - edge * 2;
       const below = maxY - anchor.bottom - 8;
@@ -105,8 +111,8 @@ export function Popover({
       const useBelow = belowFirst ? below >= Math.min(panel.height, 240) || below >= above : above < Math.min(panel.height, 240) && below > above;
       const height = Math.max(0, Math.min(520, maxY - minY, Math.max(80, useBelow ? below : above)));
       const top = Math.max(minY, Math.min(useBelow ? anchor.bottom + 8 : anchor.top - Math.min(panel.height, height) - 8, maxY - Math.min(panel.height, height)));
-      const left = Math.max(edge, Math.min(align === 'end' ? anchor.right - panel.width : anchor.left, innerWidth - panel.width - edge));
-      const next = { '--pop-top': `${top}px`, '--pop-left': `${left}px`, '--pop-height': `${height}px` } as CSSProperties;
+      const left = Math.max(minX, Math.min(align === 'end' ? anchor.right - clampedW : anchor.left, maxX - clampedW));
+      const next = { '--pop-top': `${top}px`, '--pop-left': `${left}px`, '--pop-height': `${height}px`, '--pop-max-width': `${maxWidth}px` } as CSSProperties;
       setPosition(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
     };
     place();
