@@ -373,22 +373,57 @@ PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
 # identifier, so a design token such as `--color-token`, or a flag such as
 # `--client-secret`, is a compound name and not a label beside an operator.
 # `\b` alone fires after that hyphen, so the classifier's assignment arms read
-# the suffix as a short credential and a valid site stopped packaging. The
-# presentation policy asks the same label set at a token start; the
+# the suffix as a short credential and a valid site stopped packaging.
+#
+# A colon is also how an ordinary help page introduces a field, `Password:` or
+# `Token:` followed by an explanatory sentence. Presentation therefore accepts
+# `=` as an assignment without a shape check (a help heading does not spell
+# `Password =`) but asks for value evidence after a colon: a quoted value, a
+# token carrying a digit or base64 character, or a letter-only run long enough
+# to be opaque. That keeps `password=hunter2`, `{"token": "abc123"}` and
+# `secret: hunter2` while releasing `Password: sign in with the account you
+# use for email`.
+# The presentation policy asks these label sets at a token start; the
 # free-standing `\b` form stays the classifier contract, and a field-name
 # compound remains the owner's separate opt-in arm (Refs #5136).
 _PRESENTATION_LABEL_TOKEN_START = r"(?<![A-Za-z0-9_-])"
+_PRESENTATION_KEY_LABELS_SOURCE = (
+    r"(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)"
+)
+_PRESENTATION_COLON_VALUE_SOURCE = (
+    r"(?:"
+    r"[\"'][^\"'\n]+[\"']|"
+    + _SHAPE_VALUE_TOKEN_SOURCE
+    + r"|"
+    + _OPAQUE_VALUE_RUN_SOURCE
+    + r")"
+)
 PRESENTATION_CREDENTIAL_VALUE_PATTERN_SOURCE = (
     r"\bbearer\s+[a-z0-9._~+/=-]{16,}|"
     r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
     + _PRESENTATION_LABEL_TOKEN_START
-    + r"(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)"
-    r"[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    + _PRESENTATION_KEY_LABELS_SOURCE
+    + r"[\"']?\s*=\s*"
+    r"[\"']?[^\s`'\"<>]+|"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + _PRESENTATION_KEY_LABELS_SOURCE
+    + r"[\"']?\s*:\s*"
+    + _PRESENTATION_COLON_VALUE_SOURCE
+    + r"|"
     + _PRESENTATION_LABEL_TOKEN_START
     + CREDENTIAL_LABEL_PATTERN_SOURCE
-    + r"[\"']?\s*[:=]|"
+    + r"[\"']?\s*=\s*"
+    r"[\"']?[^\s`'\"<>]+|"
     + _PRESENTATION_LABEL_TOKEN_START
-    + r"refresh[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}"
+    + CREDENTIAL_LABEL_PATTERN_SOURCE
+    + r"[\"']?\s*:\s*"
+    + _PRESENTATION_COLON_VALUE_SOURCE
+    + r"|"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + r"refresh[_-]?token[\"']?\s*=\s*[\"']?[^\s`'\"<>]{12,}|"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + r"refresh[_-]?token[\"']?\s*:\s*"
+    + _PRESENTATION_COLON_VALUE_SOURCE
 )
 PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     tuple[str, re.Pattern[str]], ...

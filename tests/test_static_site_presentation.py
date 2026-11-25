@@ -401,6 +401,32 @@ def test_cli_package_keeps_a_css_design_token_public(
     assert (output / "styles.css").read_text(encoding="utf-8") == stylesheet
 
 
+def test_cli_package_keeps_login_help_headings_public(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    site = _site(tmp_path)
+    help_page = (
+        "<html><body><h1>Account help</h1>\n"
+        "<h2>Password:</h2><p>Sign in with the password you use for email.</p>\n"
+        "</body></html>\n"
+    )
+    token_page = (
+        "<html><body><h1>Device setup</h1>\n"
+        "<h2>Token:</h2><p>Ask your administrator to issue a token for this device.</p>\n"
+        "</body></html>\n"
+    )
+    (site / "help.html").write_text(help_page, encoding="utf-8")
+    (site / "token-help.html").write_text(token_page, encoding="utf-8")
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_performed"] is True
+    assert (output / "help.html").read_text(encoding="utf-8") == help_page
+    assert (output / "token-help.html").read_text(encoding="utf-8") == token_page
+
+
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

@@ -51,7 +51,21 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "The password rotation policy applies to every service account.",
         "Authorization: Bearer <redacted>",
         "https://example.com/a",
+        "<h2>Password:</h2><p>Sign in with the password you use for your email.</p>",
+        "<h2>Token:</h2><p>Ask your administrator to issue a token for this device.</p>",
+        "Password: sign in with the account you use for email.\n",
+        "Token: contact your administrator for a new token.\n",
     ],
+    ids=(
+        "bearer prose",
+        "password prose",
+        "redacted bearer",
+        "plain url",
+        "password heading",
+        "token heading",
+        "password sentence",
+        "token sentence",
+    ),
 )
 def test_credential_prose_stays_public(text: str) -> None:
     assert public_safety.scan_public_boundary_text(text) == {
@@ -64,9 +78,11 @@ SHORT_ASSIGNMENT_VALUES = [
     "password=hunter2",
     "token=abc123",
     "secret: hunter2",
+    "token: abc123def456ghi",
     '{"password": "hunter2"}',
     '{"token": "abc123"}',
     '{"secret": "abcd1234"}',
+    "refresh_token: abcdefghijklmnop",
 ]
 
 
