@@ -61,9 +61,9 @@ copy under `$DSH_AGENTS_HOME/runtime/dsh-loopx-plugin` (default
 `~/.agents/runtime/dsh-loopx-plugin`) and never mutates the system Python
 environment. This works with externally managed Python distributions that
 enforce PEP 668; the plugin does not use `--break-system-packages`.
-The next plugin release requires LoopX 2.4.0 or newer for the original-Turn
-`quota receipt` reader. Publish the matching Core release before distributing
-the plugin; published LoopX 2.3.0 does not provide that command.
+The `0.1.1-beta.8` package retains the Core floor of LoopX 2.4.0
+(`loopx>=2.4.0`) for the original-Turn `quota receipt` reader. LoopX 2.3.0
+does not provide that command.
 Bootstrap, Driver and GoalBar use the same
 version floor; an older global or managed CLI is upgraded or rejected before
 business commands run. An explicit outdated `LOOPX_BIN` must be upgraded by its
@@ -71,22 +71,30 @@ owner. Older plugin releases retain their original CLI requirements.
 The continuation driver follows LoopX's context delivery setting.
 When the guard returns a capture reference, the driver reads the
 admission fields from that same capture.
-Install the prebuilt release into the web profile:
+The Driver uses Core's `--cli-bin` to keep thin heartbeat and quota settlement
+commands on the same LoopX installation as admission. The resolver normalizes
+relative `PATH` entries at discovery. On POSIX, the plugin-managed runtime
+provides a launcher that runs the selected Python interpreter and managed
+script by absolute path. If the plugin cannot bind a launcher (including on
+Windows), or uses the `python -m loopx.cli` fallback, the Driver logs
+`cli_route_unpinned` and Core renders bare `loopx` commands. Set `LOOPX_BIN`
+to an absolute LoopX executable to pin those sessions.
+
+After the beta.8 GitHub release lists its tarball, install the pinned
+`0.1.1-beta.8` asset into the web profile. If the asset is not yet listed,
+keep your installed version or use the source-build instructions below:
 
 ```bash
 dsh plugin --profile web add \
-  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz"
+  "https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.8/dsh-loopx-plugin-0.1.1-beta.8.tgz"
 ```
 
-The beta.6 package targets the qualified DSH 0.2.0-rc.2 API and retains the
-qualified frozen 0.1.5 and 0.1.7-rc.2 compatibility ranges. The exported legacy
-RPC registration remains available to explicit callers, but plugin startup
-always uses the shared API.
-
-The beta.7 source candidate adds DSH 0.2.2-rc.1 and 0.2.2-rc.3 qualification,
-with Cordis 4.1.0 as the pinned development host. The earlier 0.2.1-rc.2
-combination remains covered. Its frozen source host uses MCP client 2.3.0 and
-SDK 1.32.0 to address
+The `0.1.1-beta.8` package requires `loopx>=2.4.0`. The qualified DSH versions
+are `0.2.2-rc.1`, `0.2.2-rc.3`, `0.1.5`, `0.1.7-rc.2`, `0.2.0-rc.2`,
+`0.2.1-rc.1`, and `0.2.1-rc.2`. The development host pins Cordis 4.1.0.
+The exported legacy RPC registration remains available to explicit
+callers, but plugin startup always uses the shared API. Its frozen development
+host uses MCP client 2.3.0 and SDK 1.32.0 to address
 [GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw).
 These dependency overrides do not patch an independently installed DSH binary;
 that host's owner must update its affected MCP dependencies separately.
@@ -101,9 +109,10 @@ cd packages/dsh-loopx-plugin
 Start DSH on loopback (port `0` asks the OS for a free port) and open the
 printed URL. The plugin finishes its idempotent LoopX CLI and skill bootstrap
 before DSH publishes the Web URL through its native Loader readiness boundary.
-The source candidate gates only LoopX's Host and Driver on `loopxBootstrap`,
-so disabling or uninstalling it keeps the shared Web server and runtime alive.
-The published beta.6 limitation is described under automatic initialization:
+The plugin gates only LoopX's Host and Driver on `loopxBootstrap`,
+so disabling or uninstalling it keeps the shared Web server and runtime alive
+(see the earlier published `0.1.1-beta.6` limitation under automatic
+initialization):
 
 ```bash
 dsh --profile web --port 0
@@ -261,10 +270,20 @@ For every DSH plugin release:
    or configured trusted publishing belongs to the release operator.
 
    For token-free CI publication, configure the package's npm Trusted Publisher
-   with organization `loopx-project`, repository `loopx`, and workflow filename
-   `dsh-plugin-publish.yml`, permitting `npm publish`. Then dispatch **Publish
-   DSH Plugin to npm** on the existing published plugin tag, using that same tag
-   for the `release_tag` input. This keeps npm provenance on the artifact's commit.
+   on `https://www.npmjs.com/package/dsh-loopx-plugin/access` with provider
+   `GitHub Actions`, organization `loopx-project`, repository `loopx`, workflow
+   filename `dsh-plugin-publish.yml`, blank `Environment name`, and **`Allow npm publish`**
+   checked (default stage-only mode rejects direct `npm publish`).
+   Because npm rejects Trusted Publisher creation before a package exists (`HTTP
+   404` catch-22), enable `auth-and-writes` 2FA on the npm account first, run a
+   one-time web-auth `npm publish <release-tgz> --access public --tag latest
+   --ignore-scripts` against the exact GitHub Release tarball, then immediately
+   `npm logout` before binding Trusted Publishing. Dispatch **Publish
+   DSH Plugin to npm** on the existing published plugin tag or on `main`, using
+   that same tag for the `release_tag` input. Dispatching from `main` still
+   checks out `refs/tags/<release_tag>` (while refreshing
+   `scripts/verify-distribution.mjs` from `origin/main` when present) so the
+   artifact commit and npm provenance stay pinned to the immutable tag.
    The workflow requires a merged tag, consumes its GitHub asset without
    rebuilding, and verifies npm bytes and discovery. It neither creates a
    GitHub release nor replaces npm account ownership or the release guide gate.
@@ -485,9 +504,9 @@ rows unavailable while DSH remains usable. Removing the package's
 rows releases its routes without stopping the shared Web server or runtime.
 Automatic startup does not create Agent followups or model calls.
 
-The host-isolation repair in this source is pending a new plugin release.
-Published beta.6 still adds the shared Web dependency and can disconnect DSH
-during hot uninstall, including with Hub 1.6.4. For that published package,
+Release `0.1.1-beta.7` ships this host-isolation repair. Earlier published
+`0.1.1-beta.6` still added the shared Web dependency and could disconnect DSH
+during hot uninstall, including with Hub 1.6.4. When removing `0.1.1-beta.6`,
 close DSH, remove it with the native plugin CLI, then restart DSH.
 
 The repair command has no arguments. Extra input returns a usage error before any
@@ -680,10 +699,9 @@ qualified 0.1.7-rc.2, 0.2.0-rc.2, 0.2.1-rc.1, 0.2.1-rc.2, 0.2.2-rc.1 and
 0.2.2-rc.3 candidates. It excludes earlier 0.2 candidates, stable 0.2.1 and
 0.2.2, and other unqualified prerelease
 tuples. A stable-version range alone does not admit every prerelease.
-The immutable beta.6 download above is the published package. Building this
-checkout produces the separate beta.7 candidate; it never replaces the
-immutable beta.6 asset. Candidate qualification is separate from publishing
-and public npm/Hub adoption.
+Building this checkout produces the `0.1.1-beta.8` package. It retains the
+`loopx>=2.4.0` floor and the qualified DSH versions listed above. A local build
+does not publish an immutable asset, change npm tags, or update the Hub.
 
 If a marketplace reports `loopx-repository: entry file missing: index.js`, it
 selected the monorepo root instead of this plugin package. Installing
@@ -691,9 +709,9 @@ selected the monorepo root instead of this plugin package. Installing
 plugin. The marketplace's npm route requires a published `dsh-loopx-plugin`
 whose repository points here and whose keywords include `dsh-plugin`; otherwise
 older Hubs fall back to that invalid Git target.
-The [source catalog entry](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6633)
-points to the published beta.6 release tarball, though the live [marketplace listing](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
-may still show the cached beta.5 install command until the site redeploys.
+The [marketplace listing](https://dsh-plugin.org/plugins/loopx-project/loopx?ref=hub)
+and npm can show an older version. Check which version each channel actually
+serves before using it for a beta.8 upgrade.
 [DSH Plugin Hub v1.6.0](https://github.com/dshplugin/dsh-plugin-hub/releases/tag/v1.6.0)
 or later provides profile-specific install guidance and includes the earlier
 fixes for release-package readback, stale npm targets, and desktop-profile
@@ -703,12 +721,15 @@ installs. Upgrade the Hub in the profile you use:
 dsh plugin --profile web add dsh-plugin
 ```
 
-Replace `web` with `desktop` when using the desktop app. LoopX is not currently
-published to npm as `dsh-loopx-plugin`. While the web catalog entry redeploys its
-command, install the verified beta.6 release package directly from its immutable asset:
+Replace `web` with `desktop` when using the desktop app. For a beta.8 upgrade,
+use the pinned beta.8 GitHub command above once its asset is listed, then run
+`dsh plugin --profile web` to confirm the version (use the same profile for
+both commands). To roll back to beta.7, remove beta.8 from the same profile and
+install the historical beta.7 asset. Beta.7 lacks the beta.8 Driver pause fix:
 
 ```bash
-dsh plugin --profile web add https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.6/dsh-loopx-plugin-0.1.1-beta.6.tgz
+dsh plugin --profile web remove dsh-loopx-plugin
+dsh plugin --profile web add https://github.com/loopx-project/loopx/releases/download/dsh-loopx-plugin-v0.1.1-beta.7/dsh-loopx-plugin-0.1.1-beta.7.tgz
 ```
 
 To build from source instead, use the package installer with

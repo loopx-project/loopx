@@ -96,6 +96,48 @@ def test_thin_cli_preserves_readable_admission_and_authority_with_host_scope(tmp
         assert clause in body
 
 
+def test_bound_codex_resume_shortens_wake_without_changing_the_guard(tmp_path):
+    from loopx.control_plane.turn_driver.codex_sessions import _store_codex_cli_session
+
+    goal, agent, turn = "resume-wake-goal", "worker-a", "new-wake"
+    runtime = tmp_path / "runtime"
+    (tmp_path / "state.md").write_text("# Current Goal\n", encoding="utf-8")
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{"id": goal, "repo": str(tmp_path), "state_file": "state.md",
+                   "coordination": {"registered_agents": [agent]}}],
+    }), encoding="utf-8")
+    command = [sys.executable, "-m", "loopx.entrypoint", "--format", "json",
+               "--registry", str(registry), "--runtime-root", str(runtime),
+               "heartbeat-prompt", "--goal-id", goal, "--agent-id", agent, "--thin",
+               "--runtime-profile", "generic_cli", "--turn-instance-id", turn,
+               "--agent-scope", "Finish the accepted task within its declared scope.",
+               "--permission-rule", "Only use the assigned workspace."]
+
+    def body(*args):
+        packet = json.loads(subprocess.check_output(command + list(args), text=True))
+        assert packet["ok"] and packet["turn_instance_id"] == turn
+        return packet["task_body"]
+
+    cold = body()
+    assert body("--resume-codex-session-id", "existing-session") == cold
+    _store_codex_cli_session(
+        runtime, lineage={"goal_id": goal, "agent_id": agent},
+        session_scope="agent", session_id="existing-session", session_profile_digest="a" * 64,
+    )
+    assert body("--resume-codex-session-id", "stale-session") == cold
+    resumed = body("--resume-codex-session-id", "existing-session")
+    assert resumed.startswith(f"Resume `{goal}`")
+    assert len(resumed.encode("utf-8")) <= len(cold.encode("utf-8")) * 0.75
+    assert resumed.split("```sh\n", 1)[1].split("```", 1)[0] == cold.split("```sh\n", 1)[1].split("```", 1)[0]
+    for obligation in ("required_reads before work", "selection_command", "claim/lease",
+                       "Only use the assigned workspace", "DONT_NOTIFY: no chat text",
+                       "settlement_plan.ordered_steps", "No spend for waiting alone"):
+        assert obligation in resumed
+    assert "existing-session" not in resumed
+
+
 def test_thin_agent_input_excludes_generator_and_embedded_command_duplicates() -> None:
     generated = build_heartbeat_prompt(
         goal_id="heartbeat-agent-input",

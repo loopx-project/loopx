@@ -16,7 +16,7 @@ from unittest import mock
 import pytest
 
 from loopx.chat_store import ChatSessionStore
-from loopx.chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+from loopx.chat.ingress import chat_runtime_activation_lock, chat_runtime_activation_state
 from loopx.runtime_activation import restart_services_for_runtime_activation
 from loopx.self_update import execute_update_plan, render_update_plan_markdown
 from loopx.chat_runtime import ChatRuntimeController
@@ -103,7 +103,7 @@ def test_same_process_worker_exit_is_recovered_without_replay(tmp_path, released
     with mock.patch.object(runtime, "_start_adapter", side_effect=AssertionError("no provider")):
         runtime.recover_exited_turn(sid, tid)
         failed = store.load_turn(sid, tid)
-        assert failed["status"] == "failed" and failed["error_code"] == "runtime_error"
+        assert failed["status"] == "failed" and failed["error_code"] == "execution_worker_exited"
         assert "execution worker exited" in failed["error"]
         assert "execution may have occurred" in failed["error"]
         assert "not retried automatically" in failed["error"]
@@ -111,7 +111,8 @@ def test_same_process_worker_exit_is_recovered_without_replay(tmp_path, released
         assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == ["Keep the original request."]
         events = store.events_after(sid, tid, None)
         assert any(e["kind"] == "answer.delta" for e in events)
-        assert sum(e["kind"] == "turn.failed" for e in events) == 1
+        failure, = [e for e in events if e["kind"] == "turn.failed"]
+        assert failure["payload"]["error_code"] == failed["error_code"]
         runtime.recover_exited_turn(sid, tid)
         assert store.events_after(sid, tid, None) == events
         assert lock_holder_path(path).read_bytes() == record
@@ -136,7 +137,7 @@ def test_recovery_preserves_stop_after_the_live_service_worker_retires(tmp_path,
     holder["pid"] = process.pid
     lock_holder_path(path).write_text(json.dumps(holder))
     runtime.recover_exited_turn(sid, tid)
-    assert store.load_turn(sid, tid)["error_code"] == ("runtime_error" if released else "server_restarted")
+    assert store.load_turn(sid, tid)["error_code"] == ("execution_worker_exited" if released else "server_restarted")
     assert store.load_session(sid)["active_turn_id"] is None
 
 
@@ -170,18 +171,39 @@ def test_unproven_worker_exit_never_releases_accepted_work(tmp_path, fault):
 def test_activation_recovers_only_unowned_execution_and_preserves_queued_input(services):
     root, _agents, calls = services
     store = ChatSessionStore(root)
+    session(store)  # An idle Session has no execution to reconcile.
     sid, tid, _path = lost_execution(store)
     queued, _ = store.create_queued_turn(sid, client_turn_id="saved-followup", message="Original queued follow-up.")
     before = store.load_turn(sid, queued["turn_id"])
-    with mock.patch.object(ChatRuntimeController, "_start_adapter", side_effect=AssertionError("no provider")), \
-            mock.patch.object(ChatRuntimeController, "resume_session_queue", side_effect=AssertionError("no second consumer")):
+    with (
+        mock.patch.object(ChatRuntimeController, "_start_adapter", side_effect=AssertionError("no provider")),
+        mock.patch.object(ChatRuntimeController, "resume_session_queue", side_effect=AssertionError("no second consumer")),
+        mock.patch.object(ChatRuntimeController, "recover_exited_turn", autospec=True,
+                          side_effect=ChatRuntimeController.recover_exited_turn) as recover,
+    ):
         result = activate()
+    recover.assert_called_once_with(mock.ANY, sid)
     assert result["activation_pending"] and result["restart_reason"] == "chat_work_pending"
     assert not calls
     assert store.load_turn(sid, tid)["status"] == "failed"
     assert store.load_turn(sid, queued["turn_id"]) == before
     assert [m["text"] for m in store.messages(sid) if m["role"] == "user"] == [
         "Keep the original request.", "Original queued follow-up."]
+
+
+def test_completion_recovery_does_not_publish_under_a_live_worker(tmp_path):
+    store = ChatSessionStore(tmp_path)
+    sid = session(store)
+    turn, _ = store.create_turn(sid, client_turn_id="live", message="Still finalizing.")
+    tid = turn["turn_id"]
+    runtime = ChatRuntimeController(store=store, codex_bin="must-not-execute")
+    with try_exclusive_file_lock(store.turn_execution_lock_path(sid, tid),
+                                 agent_id="loopx-chat", operation="execute_chat_turn"):
+        store.update_turn(sid, tid, status="completing", response={"message": "Pending answer."})
+        runtime.recover_exited_turn(sid, tid)
+        assert store.load_turn(sid, tid)["status"] == "completing"
+        assert store.load_session(sid)["active_turn_id"] == tid
+        assert not any(m["role"] == "agent" for m in store.messages(sid))
 
 
 def test_activation_does_not_recover_a_live_execution_fence(services):
@@ -413,7 +435,9 @@ def test_queue_without_an_active_pointer_still_defers_until_original_work_finish
         sid, client_turn_id="queued", message="later input"
     )
     assert not store.load_session(sid).get("active_turn_id")
-    assert activate()["restart_status"] == "deferred"
+    with mock.patch.object(ChatRuntimeController, "recover_exited_turn", autospec=True) as recover:
+        assert activate()["restart_status"] == "deferred"
+        recover.assert_not_called()
     assert not calls
     # The original consumer, represented here by the real store's terminal write,
     # finishes the same Turn. Activation never creates or replays a business Turn.
@@ -482,7 +506,7 @@ def test_a_queued_turn_still_defers_the_restart_with_a_pending_ingress_receipt(
 
 
 @pytest.mark.parametrize(
-    "damage", ["session", "turn", "active_missing", "unknown_status", "invalid_status"]
+    "damage", ["session", "turn", "active_missing", "active_session_mismatch", "unknown_status", "invalid_status"]
 )
 def test_unreadable_or_inconsistent_work_fails_closed(services, damage):
     runtime, _agents, calls = services
@@ -495,6 +519,9 @@ def test_unreadable_or_inconsistent_work_fails_closed(services, damage):
         store._turn_path(sid, turn["turn_id"]).write_text("{broken")
     elif damage == "active_missing":
         store._turn_path(sid, turn["turn_id"]).unlink()
+    elif damage == "active_session_mismatch":
+        path = store._session_path(sid)
+        path.write_text(json.dumps({**store.load_session(sid), "session_id": "other"}))
     elif damage == "unknown_status":
         store.update_turn(sid, turn["turn_id"], status="unrecognized")
     else:
@@ -610,7 +637,7 @@ def test_contended_admission_is_not_treated_as_idle(services, monkeypatch):
     session(store)
     original = chat_runtime_activation_lock
     monkeypatch.setattr(
-        "loopx.chat_ingress.chat_runtime_activation_lock",
+        "loopx.chat.ingress.chat_runtime_activation_lock",
         lambda root, **_kwargs: original(root, timeout_seconds=0),
     )
     with original(runtime):

@@ -29,6 +29,12 @@ from ..control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
 )
+from ..control_plane.goals.planning_batch import (
+    DirectPlanningBatchBackend,
+    apply_planning_batch,
+    product_planning_batch_schema,
+    render_planning_batch_markdown,
+)
 from ..control_plane.goals.source_session_registry_state import exact_goal_ref
 from ..control_plane.goals.task_planning import (
     build_task_planning_packet,
@@ -58,6 +64,7 @@ from .todo_argument_validation import (
     validate_todo_claim_options,
     validate_todo_complete_options,
     validate_todo_execution_recovery_options,
+    validate_todo_plan_batch_options,
     validate_todo_plan_options,
     validate_todo_project_markdown_options,
     validate_todo_receipt_options,
@@ -174,9 +181,12 @@ def handle_todo_command(
             format_name=format_name,
             list_reader=list_goal_todos,
         )
+    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     renderer = render_todo_markdown
     if args.todo_command == "plan":
         renderer = render_task_planning_packet
+    elif args.todo_command == "plan-batch":
+        renderer = render_planning_batch_markdown
     elif args.todo_command == "receipt":
         renderer = _render_todo_receipt
     elif args.todo_command == "result-read":
@@ -192,6 +202,8 @@ def handle_todo_command(
             )
         if args.todo_command == "claim":
             validate_todo_claim_options(args)
+        elif args.todo_command == "plan-batch":
+            validate_todo_plan_batch_options(args)
         validate_shared_todo_options(args)
         validate_todo_execution_recovery_options(args)
         validate_capability_gap_options(args)
@@ -217,6 +229,36 @@ def handle_todo_command(
                 text=args.text,
                 project=Path(args.project).expanduser() if args.project else None,
             )
+        elif args.todo_command == "plan-batch":
+            import json
+
+            if getattr(args, "schema", False):
+                payload = {
+                    "ok": True,
+                    "dry_run": True,
+                    **product_planning_batch_schema(
+                        registry_path=registry_path,
+                        goal_id=getattr(args, "goal_id", None),
+                        agent_id=getattr(args, "agent_id", None),
+                        text=getattr(args, "text", None),
+                    ),
+                }
+            else:
+                proposal = json.loads(Path(args.document).expanduser().read_text(encoding="utf-8"))
+                payload = apply_planning_batch(
+                    proposal=proposal,
+                    backend=DirectPlanningBatchBackend(
+                        registry_path=registry_path,
+                        runtime_root_arg=runtime_root_arg,
+                        goal_id=args.goal_id,
+                        agent_id=args.agent_id,
+                        project=Path(args.project).expanduser() if args.project else None,
+                        text=args.text,
+                    ),
+                    execute=bool(args.execute) and not bool(args.dry_run),
+                    require_input_digest=bool(args.text),
+                    operation_id=args.operation_id,
+                )
         elif args.todo_command == "receipt":
             validate_todo_receipt_options(args)
             runtime_root = resolve_runtime_root(
@@ -454,6 +496,7 @@ def handle_todo_command(
                 claim_operation_id=args.claim_operation_id,
                 task_lease_idempotency_key=args.task_lease_idempotency_key,
                 task_lease_expected_version=args.task_lease_expected_version,
+                ttl_seconds=args.ttl_seconds,
                 **_todo_path_args(args),
                 dry_run=bool(args.dry_run),
             )
@@ -493,10 +536,22 @@ def handle_todo_command(
                 ]
                 payload["instruction"] = (
                     "Continue the task. Use this original claim reference for progress "
-                    "or completion; retain normal Turn settlement when applicable."
+                    "or completion; pass --ttl-seconds on claim (1..86400) for long "
+                    "(>45m) execution wakes or renew via `loopx task-lease renew` "
+                    "before lease_expires_at, and retain normal Turn settlement "
+                    "(omitting --next-action on completed-Todo semantic_closeout "
+                    "refresh-state)."
                 )
-                # Normal callers need the accepted task reference, not lease
-                # counters or a second inline copy of the native receipt.
+                # Extract compact lease deadline/TTL scalars before removing
+                # internal lease CAS counters or a second copy of the receipt.
+                lease = payload.get("lease")
+                if isinstance(lease, dict):
+                    expires_at = lease.get("expires_at")
+                    if isinstance(expires_at, str) and expires_at:
+                        payload["lease_expires_at"] = expires_at
+                    acquire_ttl = lease.get("acquire_ttl_seconds")
+                    if isinstance(acquire_ttl, int) and not isinstance(acquire_ttl, bool):
+                        payload["lease_ttl_seconds"] = acquire_ttl
                 for internal in (
                     "lease",
                     "lease_changed",
@@ -872,7 +927,6 @@ def handle_todo_command(
             post_writeback_projection_builder=post_writeback_projection_builder,
             admission_factory=FirstPartyHostGoalAdmission,
         )
-    output_format = format_name or str(getattr(args, "format", None) or "markdown")
     print_payload(
         payload,
         output_format,

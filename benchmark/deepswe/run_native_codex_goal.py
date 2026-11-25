@@ -15,9 +15,11 @@ if str(REPO_ROOT) not in sys.path:
 
 from loopx.capabilities.benchmark_toolkit.native_codex_goal import (  # noqa: E402
     NativeGoalConfig,
+    StdioNativeGoalTransport,
     compact_native_goal_receipt,
     probe_native_goal_process,
     run_native_goal_process_until_terminal,
+    run_retained_decision_turn,
 )
 from loopx.capabilities.benchmark_toolkit.public_trajectory import (  # noqa: E402
     build_native_goal_public_trajectory_summary,
@@ -56,6 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--token-budget", type=int)
     parser.add_argument("--response-timeout-seconds", type=float, default=30)
     parser.add_argument("--goal-timeout-seconds", type=float, default=21_600)
+    parser.add_argument("--decision-capture", type=Path, help="Original private decision.json for one ephemeral Turn")
+    parser.add_argument("--decision-sha256", help="Exact SHA-256 of --decision-capture")
     parser.add_argument(
         "--isolate",
         action="store_true",
@@ -88,6 +92,10 @@ def _rebase_count(value: NativeCodexLoopXStateRebase | None) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
+    if (args.decision_capture is None) != (args.decision_sha256 is None):
+        parser.error("--decision-capture and --decision-sha256 must be supplied together")
+    if args.decision_capture is not None and (args.preflight_only or args.token_budget is not None):
+        parser.error("the retained decision mode runs one read-only Turn without a native Goal budget")
     isolation_paths = (
         args.isolation_work_dir,
         args.private_root,
@@ -145,7 +153,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             effort=args.effort,
             token_budget=args.token_budget,
         )
-        if args.preflight_only:
+        if args.decision_capture is not None:
+            with StdioNativeGoalTransport.spawn(
+                process_command or [args.codex_bin, "app-server", "--listen", "stdio://"],
+                cwd=process_cwd or runtime_cwd, response_timeout_sec=args.response_timeout_seconds,
+            ) as transport:
+                turn = run_retained_decision_turn(transport, config, capture=args.decision_capture,
+                    digest=args.decision_sha256, timeout_sec=args.goal_timeout_seconds)
+            mode = "retained_decision_turn"
+        elif args.preflight_only:
             turn = probe_native_goal_process(
                 config,
                 codex_bin=args.codex_bin,
@@ -174,6 +190,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     receipt = compact_native_goal_receipt(turn)
     receipt["execution_mode"] = mode
+    if args.decision_capture is not None:
+        receipt["decision_capture_sha256"] = args.decision_sha256
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        return int(turn.turn_status != "completed")
     receipt["public_trajectory_summary"] = (
         build_native_goal_public_trajectory_summary(
             receipt,

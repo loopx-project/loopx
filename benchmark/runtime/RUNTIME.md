@@ -81,30 +81,46 @@ agents:
       replan_after_turns: 6
 ```
 
-Historical Short trials request `turn_envelope: true` in heartbeat `kwargs`.
-Before planning or execution starts a model, the worker previews the selected
-product's quota response through the same CLI. Its wake receipt records the
-expected and observed versions and eligibility in `quota_input_contract`. C1
-sources return v1 and the Short request fails before Host preparation. A
-`fresh_replan` checkpoint preloads a distinct view and also prevents a Short
-launch. The preview has no Turn identity and creates no admission or capture.
-Ordinary and explicit Complete wakes proceed without this Short preview.
+### Official-style Codex Stop hook
 
-Use the recorded product and runner revisions to reproduce a historical
-treatment. On a qualified v0 source, an execution wake records
-`turn_envelope_source=explicit` once it renders the Short bootstrap. Its
-same-invocation full decision remains available through `detail_ref.full_decision`.
-The planning prompt has its own input. Include the preview in startup
-and wake cost when measuring a new attempt with this runner. Keep captures
-private and preserve the settings and receipts of existing attempts.
+Set `execution_mode: plain` and `official_stop_hook: true` in
+`BenchmarkCodex` kwargs for a native Codex baseline. One
+`codex exec` owns the conversation. On attempted completion, the native Stop
+hook asks Codex to continue working, using the same instruction as EdgeBench's
+SForge official profile. The worker uses the remaining phase clock through
+native execution. The task controller may stop it earlier when the task's
+original final submission is accepted.
+
+The runner stages only its own hook in the trial's Codex home and trusts the
+exact handler identity discovered by that Codex binary. Both discovery requests
+share the worker deadline when one is declared. With no worker or phase deadline,
+discovery retains its bounded RPC timeouts while model work has no independent
+cutoff; the task controller still owns submission and cancellation. If the phase expires during discovery, the wake
+records budget exhaustion and no model launch. Earlier discovery failures
+still fail the trial before inference. Install and trajectory receipts record
+the opt-in. The wake receipt records successful hook discovery.
+Use the same pinned task, model, reasoning effort, time and evaluator in
+comparison arms. The benchmark adapter still owns feedback, final submission,
+and scoring. EdgeBench's SForge auto-resume remains a provider-specific part of
+its official profile. Use a fresh trial with the option omitted for a
+single-pass Codex baseline.
+
+### Historical heartbeat formats
+
+Historical Short trials used `turn_envelope: true` and verified a v0 guard
+response before launching a model. Reproduce them with their recorded product
+and runner revisions. Include the original preview in startup and wake cost.
+The current runner rejects explicit historical display requests before Host
+preparation. Current heartbeat runs use the complete v1 default. Preserve the
+original decision, preview eligibility and complete settings of frozen runs.
 
 New native heartbeat trials default to context delivery `on`. Add
 `context_delivery: "off"` to the same heartbeat agent `kwargs` to disable it.
 An explicit off is pinned into both native tools and worker preflight; it cannot
 inherit a machine-wide on. Plain, native-Goal and Turn execution remain off.
 Only the existing Codex heartbeat worker accepts `"on"`; booleans, other modes and
-scenario names are rejected. This is an experimental transport setting, separate
-from `turn_envelope`.
+scenario names are rejected. This transport setting preserves the default
+complete v1 source.
 The existing EdgeBench/SForge entry exposes the same selection through
 `--context-delivery off` to disable a heartbeat worker's on default. Existing
 running or frozen trials retain their recorded source and treatment; do not
@@ -176,9 +192,11 @@ release remains the original typed transport failure, without publishing an
 optimized result or rerunning the guard. An interrupted guard continues with
 the original full packet; no delta is required for checkpoint recovery. Native
 cursor verification binds the context-directory/root option and the worker's
-original `--complete-turn` and `--turn-envelope` choices. A checkpoint without
-a complete-mode binding cannot verify a pending command that uses
-`--complete-turn`. Historical ordinary and envelope guards remain readable.
+original `--complete-turn` and `--turn-envelope` choices. Current generated
+heartbeat guards use the default complete v1 contract without emitting either
+alias. A checkpoint without a complete-mode binding cannot verify a pending
+command that uses `--complete-turn`. Historical ordinary and envelope guards
+remain readable.
 The existing Darwin native-checkpoint refusal remains in force.
 
 Restoring a pending replan for a fresh native conversation and checking whether
@@ -222,12 +240,10 @@ Do not modify an active/frozen trial. Set `context_delivery: "off"` for a new tr
 to roll back; default runs install no hooks, trust or trace settings. No scorer,
 budget, task semantics or launch authority changes with this option.
 
-Checkpoint capture is independent of this display experiment. A `fresh_replan`
-declaration may establish a private capture/handoff socket while
-`turn_envelope` remains false: the worker keeps the ordinary dispatcher and quota
-input, and only an explicit true setting selects the short view. This replaces
-the earlier implicit activation by checkpoint handoff. Do not relabel older
-receipts or trajectories as feature-off; qualify their actual input separately.
+A `fresh_replan` declaration can establish a private capture and handoff socket
+with either inline or progressive delivery. Both consume the same complete v1
+decision. Interpret old receipts and trajectories according to their recorded
+treatment and product revision.
 
 | Mode | Execution/continuation | LoopX skills and state |
 | --- | --- | --- |
@@ -399,7 +415,10 @@ require separate run evidence.
 For an empty planning frontier, the model can save the same requirement
 declaration and ordered advancement Todos in one JSON proposal and invoke
 `python -m benchmark.runtime.planning_batch PROPOSAL.json` during the planning
-wake. Use the checkpoint's exact input digest and acceptance provider revision.
+wake (`--schema` prints the full JSON proposal schema and UTF-16 code unit field limits;
+product CLI callers reuse the same general `loopx.control_plane.goals.planning_batch`
+owner via `loopx todo plan-batch`). Use the
+checkpoint's exact input digest and acceptance provider revision.
 The command declares requirements, writes Todos and binds their actual IDs
 through public LoopX operations. Each write has its own receipt. If the command
 is interrupted, reuse the unchanged proposal so the original effects can be

@@ -11,7 +11,6 @@ from ..scheduler.execution_context import (
     scheduler_runtime_profile_for_execution_context,
 )
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
-from .effect_program import SettlementStepKind, settlement_step_command
 
 DEFAULT_SLOT_SPEND_SOURCE = "heartbeat"
 VISIBLE_GOAL_SLOT_SPEND_SOURCE = "visible-goal"
@@ -95,9 +94,10 @@ def host_goal_turn_start_args(
     profile = scheduler_runtime_profile_for_execution_context(scheduler_execution_context)
     if profile is SchedulerRuntimeProfile.CODEX_APP_SSH_VISIBLE:
         return " --begin-turn"
-    if profile not in VISIBLE_GOAL_SETTLEMENT_RUNTIME_PROFILES:
-        return ""
-    # CLI/managed Goal hosts own their iteration identity.
+    # Every other host owns its iteration identity. This also covers an
+    # unprofiled/manual guard: an explicit Todo selection must not project a
+    # follow-up command that the quota validator will reject for lacking a
+    # Turn identity.
     return " --turn-instance-id '<unique-work-iteration-id-reuse-on-retry>'"
 
 
@@ -112,6 +112,8 @@ def build_quota_spend_action(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
 ) -> str:
+    from .effect_program import SettlementStepKind, settlement_step_command
+
     source = quota_spend_source_for_execution_context(scheduler_execution_context)
     typed_command = settlement_step_command(
         settlement_plan,

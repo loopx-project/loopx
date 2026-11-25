@@ -25,10 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from loopx.presentation.chat_bundle import source_digest, validate_bundle  # noqa: E402
 from loopx.cli_commands.update_artifact import (  # noqa: E402
+    QUALIFIED_DEFAULT_CONTRACT_FIELD,
     RUNTIME_ARTIFACT_SCHEMA_VERSION,
     extract_artifact,
     validate_default_contract,
-    validate_manifest,
+    validate_published_manifest,
 )
 from scripts.qualify_runtime_artifact import observe_default_contract  # noqa: E402
 
@@ -128,14 +129,15 @@ def build(root: Path, output: Path, *, repository: str, channel: str) -> dict:
         raise ValueError("Git runtime archive failed")
     tag = f"runtime-main-{revision}" if channel == "main" else "v" + version
     archive = output / filename
-    result = validate_manifest({"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
+    published = {"schema_version": RUNTIME_ARTIFACT_SCHEMA_VERSION, "source_revision": revision,
         "package_version": version, "channel": channel, "size": archive.stat().st_size,
-        "default_contract": default_contract,
+        QUALIFIED_DEFAULT_CONTRACT_FIELD: default_contract,
         "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "urls": [f"https://github.com/{repository}/releases/download/{tag}/{filename}"],
         "resources": {"filename": optional_name, "size": (output / optional_name).stat().st_size,
-            "sha256": hashlib.sha256((output / optional_name).read_bytes()).hexdigest()}})
-    (output / "loopx-runtime.json").write_text(json.dumps(result, indent=2) + "\n")
+            "sha256": hashlib.sha256((output / optional_name).read_bytes()).hexdigest()}}
+    result = validate_published_manifest(published)
+    (output / "loopx-runtime.json").write_text(json.dumps(published, indent=2) + "\n")
     (output / "runtime-inventory.json").write_text(json.dumps(inventory, indent=2) + "\n")
     print(json.dumps({"revision": revision, "runtime_bytes": result["size"],
         "optional_bytes": result["resources"]["size"],

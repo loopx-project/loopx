@@ -64,10 +64,14 @@ test("supplemental citations keep available evidence distinct from unreadable or
   assert.deepEqual(projectExploreTurnContext({...input, graph_enabled: false, review_pages: [page]}).review_pages, []);
   const withoutPages = {...proposal, explore_review: {...proposal.explore_review as JsonObject}};
   delete (withoutPages.explore_review as JsonObject).result_pages;
-  const off = projectReplanContext({operation: "project", goal_id: goal, agent_id: agent, rows: [],
+  const legacyOff = projectReplanContext({operation: "project", goal_id: goal, agent_id: agent, rows: [],
     goal_facts: {}, obligation: null, stride_strategy: "off", explore_context: first});
-  assert.equal(off.explore_basis, undefined);
-  assert.equal(off.explore_result_pages, undefined);
+  assert.equal(legacyOff.stride_strategy, "evidence_conditioned_v1");
+  assert.ok(legacyOff.explore_basis);
+  const disabledExplore = projectReplanContext({operation: "project", goal_id: goal, agent_id: agent, rows: [],
+    goal_facts: {}, obligation: null, explore_context: projectExploreTurnContext({...input, graph_enabled: false, harness_gate: {enabled: false}, plan: {}})});
+  assert.equal(disabledExplore.explore_basis, undefined);
+  assert.equal(disabledExplore.explore_result_pages, undefined);
   const [, before] = normalizeStrideDecision(withoutPages);
   const [, after] = normalizeStrideDecision(proposal);
   assert.equal(Object.values(after).reduce((a,b) => a+b, 0) - Object.values(before).reduce((a,b) => a+b, 0),

@@ -132,8 +132,7 @@ def test_projected_vision_replan_settles_without_a_meta_successor(
                     )
 
     call("configure-goal", "--goal-id", GOAL_ID,
-         "--execution-replan-after-turns", "6",
-         "--execution-stride-strategy", "evidence_conditioned_v1", "--execute")
+         "--execution-replan-after-turns", "6", "--execute")
 
     shared = call("quota", "should-run", "--runtime-profile", "generic_cli",
                   "--goal-id", GOAL_ID, "--agent-id", AGENT_ID)

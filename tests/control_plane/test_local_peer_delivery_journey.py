@@ -12,7 +12,7 @@ import test_quota_settlement_cli as cli
 from canonical_authority_fixture import isolate_sqlite_runtime
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_bound_repository_is_checked_from_the_complete_todo_source(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry, _, _ = journey._source(
@@ -84,6 +84,8 @@ def test_local_peer_delivery_completes_and_settles_without_git(tmp_path, monkeyp
                         "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID,
                         "--task-lease-idempotency-key", key)
     assert code == 0 and claimed["ok"], claimed
+    code, guard = journey._guard(project, runtime, registry)
+    assert code == 0 and guard["decision"] == "run", guard
     proof = ("--task-lease-idempotency-key", key,
              "--task-lease-expected-version", str(claimed["lease"]["version"]))
     # A successful caller preflight cannot substitute for controller validation.
@@ -125,7 +127,7 @@ def test_local_peer_delivery_completes_and_settles_without_git(tmp_path, monkeyp
                                 "--todo-id", cli.TODO_ID, "--turn-instance-id", cli.TURN_ID,
                                 "--delivery-outcome", "outcome_progress", "--no-global-sync", cwd=outside)
     assert not wrong_workspace["ok"] and not wrong_workspace["appended"], wrong_workspace
-    code, refreshed = journey._refresh(project, runtime, registry)
+    code, refreshed = journey._refresh(project, runtime, registry, *proof)
     assert code == 0 and refreshed["ok"], json.dumps(refreshed)
     assert refreshed["delivery_workspace"]["identity_kind"] == "local_goal"
     assert refreshed["delivery_workspace"]["workspace_identity"] == f"loopx:{cli.GOAL_ID}"
@@ -156,6 +158,19 @@ def test_local_in_flight_progress_keeps_completion_independent(tmp_path, monkeyp
                                 "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID,
                                 "--task-lease-idempotency-key", "local-in-flight", cwd=project)
     assert code == 0 and claimed["ok"], claimed
+    code, guard = journey._guard(project, runtime, registry)
+    assert code == 0 and guard["decision"] == "run", guard
+    proof = ("--task-lease-idempotency-key", "local-in-flight",
+             "--task-lease-expected-version", str(claimed["lease"]["version"]))
+    code, refreshed = cli._run_cli(
+        registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
+        "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+        "--turn-instance-id", cli.TURN_ID, "--delivery-boundary", "in_flight_continuation",
+        "--delivery-outcome", "outcome_progress", "--delivery-batch-scale", "multi_surface",
+        *proof,
+        "--no-global-sync", "--suppress-external-sinks", cwd=project,
+    )
+    assert code == 0 and refreshed["ok"], json.dumps(refreshed)
     if release_execution_lease:
         code, released = cli._run_cli(
             registry, runtime, "task-lease", "release", "--goal-id", cli.GOAL_ID,
@@ -164,14 +179,6 @@ def test_local_in_flight_progress_keeps_completion_independent(tmp_path, monkeyp
             "--expected-version", str(claimed["lease"]["version"]), cwd=project,
         )
         assert code == 0 and released["ok"], released
-    code, refreshed = cli._run_cli(
-        registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
-        "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
-        "--turn-instance-id", cli.TURN_ID, "--delivery-boundary", "in_flight_continuation",
-        "--delivery-outcome", "outcome_progress", "--delivery-batch-scale", "multi_surface",
-        "--no-global-sync", "--suppress-external-sinks", cwd=project,
-    )
-    assert code == 0 and refreshed["ok"], json.dumps(refreshed)
     assert refreshed["delivery_workspace"]["workspace_kind"] == "local_goal_workspace"
     code, spent = journey._execute(refreshed["settlement_owed"]["command"], project, runtime, registry)
     assert code == 0 and spent["settlement_progress"]["state"] == "settled", spent
@@ -194,7 +201,9 @@ def test_local_receipt_cannot_satisfy_an_explicit_git_task(tmp_path, monkeypatch
     data["goals"][0]["coordination"]["registered_agents"].append("peer-researcher")
     registry.write_text(json.dumps(data))
     code, guard = journey._guard(project, runtime, registry)
-    assert code == 0 and guard["decision"] == "run", guard
+    assert code == 0 and guard["decision"] == "workspace_guard", guard
+    assert guard["workspace_guard"]["required_workspace"] == "independent_git_worktree"
+    assert guard["normal_delivery_allowed"] is False
     code, rejected = cli._run_cli(
         registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
         "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
@@ -254,7 +263,7 @@ def test_local_blocked_writeback_preserves_retry_and_spends_nothing(tmp_path, mo
     assert cli._spend_run_count(runtime) == 0
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("explicit_repository", [False, True])
 def test_originless_local_git_settles_without_fabricating_repository(tmp_path, monkeypatch, provider, explicit_repository):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -285,7 +294,7 @@ def test_originless_local_git_settles_without_fabricating_repository(tmp_path, m
     assert cli._spend_run_count(runtime) == 1
 
 
-@pytest.mark.parametrize("provider", ["legacy", "file", "sqlite"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_nested_originless_delivery_recovery_names_registered_workspace(tmp_path, monkeypatch, provider):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry, _, _ = journey._source(

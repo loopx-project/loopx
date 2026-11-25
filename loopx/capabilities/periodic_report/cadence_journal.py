@@ -194,6 +194,15 @@ def _missed_windows(previous: dict[str, Any], window: Mapping[str, Any]) -> bool
         and not previous.get("retirement") and not previous.get("task_completion"))
 
 
+def _next_window_due(previous: dict[str, Any], window: Mapping[str, Any]) -> bool:
+    old = previous["window"]
+    return (old["agent_id"] == window["agent_id"]
+        and old["subscription_revision"] == window["subscription_revision"]
+        and old["next_due_at"] == window["due_at"]
+        and previous["publication"] is None
+        and not previous.get("retirement") and not previous.get("task_completion"))
+
+
 def missed_cadence_bounds(*, runtime_root: Path, window: dict[str, Any]) -> dict[str, str] | None:
     """Read the skipped due boundaries from the retained predecessor chain."""
     goal_id = window["goal_id"]
@@ -206,7 +215,7 @@ def missed_cadence_bounds(*, runtime_root: Path, window: dict[str, Any]) -> dict
         previous = _read_journal(path.parent / "superseded-cadence" / (predecessor + ".json"), goal_id)
         if not previous or previous["window"]["window_id"] != predecessor:
             raise ValueError("cadence predecessor archive is unavailable")
-        if not _missed_windows(previous, current["window"]):
+        if not (_missed_windows(previous, current["window"]) or _next_window_due(previous, current["window"])):
             break
         first_due_at = previous["window"]["due_at"]
         current = previous
@@ -230,6 +239,7 @@ def admit_cadence_window(
     subscription: Mapping[str, Any], now: datetime,
     subscription_resolver: Callable[[], Mapping[str, Any] | None] | None = None,
     can_replace_failed_window: Callable[[dict[str, Any]], bool] | None = None,
+    can_replace_exhausted_failed_window: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     """Freeze the latest due interval, preserving unfinished prepared work.
 
@@ -241,8 +251,10 @@ def admit_cadence_window(
     A configuration change may supersede an unprepared interval under the same
     lock used by consumption, preserving its predecessor as immutable history.
     An original Session report can also keep a proven generation failure as
-    missed history when more than one new boundary has elapsed. The original
-    execution owner supplies that proof; ordinary callers preserve the window.
+    missed history when more than one new boundary has elapsed, or at the next
+    boundary once its bounded recovery attempt has also terminally failed. The
+    original execution owner supplies that proof; ordinary callers preserve the
+    window.
     """
     if not REPORT_IDENTITY_PATTERN.fullmatch(agent_id):
         raise ValueError("cadence Agent identity is invalid")
@@ -260,13 +272,15 @@ def admit_cadence_window(
             return {"status": "disabled", "mutated": False, "window": None}
         return _admit_cadence_window_locked(runtime_root=runtime_root, goal_id=goal_id,
             agent_id=agent_id, subscription=current, now=now, path=path,
-            can_replace_failed_window=can_replace_failed_window)
+            can_replace_failed_window=can_replace_failed_window,
+            can_replace_exhausted_failed_window=can_replace_exhausted_failed_window)
 
 
 def _admit_cadence_window_locked(
     *, runtime_root: Path, goal_id: str, agent_id: str,
     subscription: Mapping[str, Any], now: datetime, path: Path,
     can_replace_failed_window: Callable[[dict[str, Any]], bool] | None,
+    can_replace_exhausted_failed_window: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any]:
     if subscription.get("enabled") is not True or subscription.get("schedule") is None:
         return {"status": "disabled", "mutated": False, "window": None}
@@ -323,8 +337,15 @@ def _admit_cadence_window_locked(
                 from .pending_intent import _attempt_dir
                 if old["subscription_revision"] == subscription.get("effective_revision"):
                     pending = {"status": "pending", "mutated": False, "window": old}
-                    if (can_replace_failed_window is None or proposed is None
-                            or not _missed_windows(previous, proposed)):
+                    if proposed is None:
+                        return pending
+                    if _missed_windows(previous, proposed):
+                        checker = can_replace_failed_window
+                    elif _next_window_due(previous, proposed):
+                        checker = can_replace_exhausted_failed_window
+                    else:
+                        return pending
+                    if checker is None:
                         return pending
                     folder = _attempt_dir(runtime_root, goal_id, cadence_intent(old))
                     if not folder.is_dir() or folder.is_symlink():
@@ -332,7 +353,7 @@ def _admit_cadence_window_locked(
                     # Archive and replace under the same lock as generation.
                     with try_exclusive_file_lock(folder / "generation.lock",
                             operation="replace_failed_report_window") as ownership:
-                        if ownership is None or not can_replace_failed_window(old):
+                        if ownership is None or not checker(old):
                             return pending
                         return _reserve_window(path, proposed, now, _archive_predecessor(path, previous))
                 # Admission and consumption share this lock. Once any

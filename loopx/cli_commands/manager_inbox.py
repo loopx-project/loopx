@@ -110,9 +110,13 @@ def _render_read_markdown(result: dict) -> str:
 
 def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
     """Deliver the already-recorded scoped read without repeating its effects."""
-    from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    from ..control_plane.turn_driver.native_context_profile import (
+        NATIVE_CONTEXT_OUTPUT_ENV,
+        NATIVE_INBOX_MARKDOWN_OUTPUT_BYTES,
+        native_context_page_budget,
+    )
 
-    limit = NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES
+    limit = NATIVE_INBOX_MARKDOWN_OUTPUT_BYTES
     view = _share_item_guidance(result)
     body = _render_read_markdown(view)
     size = len((body + os.linesep).encode("utf-8"))
@@ -135,14 +139,20 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
             path = Path(reference["path"])
             digest = reference["sha256"]
             reader_argv = current_loopx_cli_argv()
+            page_bytes, output_bytes = native_context_page_budget()
+            # Use the generated host declaration only for the captured reader.
+            # The Markdown opening also has to fit when no tool budget is known.
+            if os.environ.get(NATIVE_CONTEXT_OUTPUT_ENV) != str(output_bytes):
+                page_bytes = output_bytes = limit
             direct_command = context_capture_read_command(path, digest,
-                page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
             opening = {"ok": True, "read_complete": False, "sha256": digest, "command": direct_command,
                 "instruction": "Run command to read this exact Inbox page; do not call manager-inbox read again for it. "
                     "Follow next_command through eof in UTF-8 byte-offset order. Compare each reported digest with "
                     "this opening's SHA-256. Check each "
                     "page's content length against its offsets, and complete coverage through total_bytes. "
-                    "If output is missing or truncated, reread that range of the same capture with a smaller page. "
+                    "If output is missing or truncated, reread that range of the same capture with smaller "
+                    "--page-bytes and --max-page-output-bytes. "
                     + CONTEXT_CAPTURE_CODE_MODE_GUIDANCE
                     + "Apply any shared_item_guidance to the items on this page. After the page is complete, "
                       "follow its next_cursor, operation_handoff_next_cursor, or native_child_results.next_cursor with the original Inbox command. "
@@ -154,7 +164,7 @@ def _read_markdown(result: dict, *, runtime_root: Path) -> tuple[str, bool]:
                     reader = None
                 if reader is not None:
                     short_command = context_capture_read_command(path, digest, reference_file=reader,
-                        page_bytes=limit, max_page_output_bytes=limit, reader_argv=reader_argv)
+                        page_bytes=page_bytes, max_page_output_bytes=output_bytes, reader_argv=reader_argv)
                     short_opening = _render_read_markdown({**opening, "command": short_command,
                         "recovery_command": direct_command,
                         "instruction": opening["instruction"] + " If the reader reference is unavailable or the "
@@ -236,6 +246,8 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--sender-id", help="For configuring a new delivery source: its independently verified sender.")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--request-id", help="For read: inspect this exact current or concluded request instead of the pending inbox.")
+    parser.add_argument("--attention-only", action="store_true",
+                        help="For read: page through incoming briefs, summaries of partial conclusions and open sent requests.")
     parser.add_argument(
         "--phase", choices=("decision", "conclusion"), default="conclusion"
     )
@@ -264,6 +276,9 @@ def handle_manager_inbox(args, registry_path, runtime_root):
     try:
         remainder = getattr(args, "remaining_work", None)
         resume = getattr(args, "resume_when", None)
+        attention_only = getattr(args, "attention_only", False)
+        if attention_only and (args.manager_inbox_action != "read" or getattr(args, "request_id", None) is not None):
+            raise ValueError("--attention-only requires read without --request-id")
         if remainder is not None or resume is not None:
             if args.manager_inbox_action != "report" or remainder is None or resume is None:
                 raise ValueError("--remaining-work and --resume-when require report and each other")
@@ -319,10 +334,8 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                     raise ValueError("control parameters must be an object; use --operation-id for retry identity")
             if args.control_operation in {"revise", "cancel"}:
                 parameters["operation_id"] = args.operation_id
-            from ..capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
 
             result = control_request(registry_path=registry_path, runtime_root=runtime_root,
-                replan_configuration_reader=resolve_todo_replan_cadence_goal,
                 goal_ref=exact_goal_ref(args.goal_id, args.goal_instance_id), receiver_agent_id=receiver,
                 request_id=args.request_id, actor_agent_id=args.agent_id, operation=args.control_operation,
                 parameters=parameters, execute=args.execute)
@@ -469,7 +482,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             # Only the invocation-bound host reader can record Turn delivery.
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
-                                request_id=request_id)
+                                request_id=request_id, attention_only=attention_only)
             result["instruction"] += " " + collaboration_answer_instruction()
             if request_id is None:
                 result["followthrough"] += (

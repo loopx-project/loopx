@@ -147,7 +147,7 @@ Externalized state carries costs. Naming them is what lets you judge when it pay
 
 ## Invariants
 
-1. Inspect addressable records, identity, and revision rather than whether a window is open.
+1. **Prompt content alone does not prove durable writeback.** Inspect addressable records, identity, and revision rather than whether a window is open.
 2. **The execution plane and control plane cannot substitute for each other.** The control plane does not write code; the execution plane does not decide whether it is allowed.
 3. **What is reused is lifecycle invariants, not a prompt.** That is what lets three different domains share one control plane.
 4. **The next executor does not need to trust the previous one's account.** If it does, the state was not externalized far enough.

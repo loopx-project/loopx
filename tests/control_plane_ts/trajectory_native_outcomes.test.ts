@@ -95,6 +95,19 @@ test("native facts preserve first quality, actual retention and submission order
     prepareTrajectoryAssessment({input,config}).analysis_key,"native readback does not rerun unchanged analysis");
   assert.equal(Object.hasOwn(prepareTrajectoryAssessment({input,config}),"native_outcomes"),false);
 });
+
+test("opt-in native samples retain non-headline results and invalid submissions without changing summary or analysis", () => {
+  const recorded = capture();
+  const raw = {...recorded, samples: recorded.samples.map((sample, index) => index === 1 ? {...sample, valid: false, value: null} : sample)};
+  const summary = prepareTrajectoryAssessment({input, config, native_outcomes: raw});
+  const expanded = prepareTrajectoryAssessment({input, config, native_outcomes: raw, include_native_outcome_samples: true});
+  assert.deepEqual(expanded.native_outcome_samples?.map(sample => [sample.submission_index, sample.value, sample.citation.first_line]),
+    [[1, 2, 1], [2, null, 2], [3, 1, 3]]);
+  assert.equal(summary.native_outcome_samples, undefined);
+  assert.deepEqual(expanded.native_outcomes, summary.native_outcomes);
+  assert.equal(expanded.analysis_key, summary.analysis_key);
+  assert.equal(expanded.prompt, summary.prompt);
+});
 test("a declared baseline measures adopted improvement in native units, including lower-is-better and losses",()=>{
   const raw={...capture(), comparison:{baseline_result_id:"result-1",retention_citation:{source_id:"s",first_line:3,last_line:3}}};
   let native=project(raw);

@@ -33,6 +33,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -565,6 +566,25 @@ def _log(line: str) -> None:
     print(f"{stamp} {line}", flush=True)
 
 
+def _disable_core_dumps() -> None:
+    """Keep crashed child runtimes from spilling multi-GB core files into /tmp."""
+    if os.name != "posix":
+        return
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_CORE)
+    if soft != 0:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, hard))
+
+
+def _wake_stderr_tail(result: CappedProcessResult, *, limit: int = 400) -> str:
+    raw = getattr(result, "stderr", b"")
+    if not isinstance(raw, (bytes, bytearray)) or not raw:
+        return ""
+    collapsed = " ".join(bytes(raw).decode("utf-8", errors="replace").split())
+    return collapsed[-limit:] if collapsed else ""
+
+
 def _shell_argv(command: str) -> list[str]:
     if os.name == "nt":  # pragma: no cover - exercised on Windows hosts.
         return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
@@ -628,10 +648,11 @@ def _host_attempt(state: dict[str, Any], scope: str) -> dict[str, Any]:
 
 
 def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: float) -> dict[str, Any] | None:
-    """Consume only the configured Host's content-free failure receipt."""
+    """Decode native IO; the typed owner qualifies success and same-session failure."""
+    from loopx.control_plane.effect_runtime import effect_runtime_result
     from loopx.control_plane.turn_driver.codex_sessions import _valid_session_id
     from loopx.control_plane.turn_driver.host_failure import (
-        build_host_failure_record, normalize_host_failure_record,
+        normalize_host_failure_record,
     )
 
     try:
@@ -646,23 +667,29 @@ def _host_result(result: CappedProcessResult, attempt: dict[str, Any], now: floa
                   if session.get("binding_scope") == "agent" and isinstance(candidate, str) else None)
     if session_id != candidate:
         session_id = None
-    same_session = not attempt.get("session_id") or attempt["session_id"] == session_id
-    if (result.failure_kind is None and result.returncode == 0 and receipt.get("ok") is True
-            and not receipt.get("timed_out") and not receipt.get("error_kind")
-            and "host_failure" not in receipt and session_id and same_session):
+    # Native record decoding retains the existing Mapping API and error
+    # ordering. No provider prose or unbounded receipt fields cross the RPC.
+    try:
+        native_failure = normalize_host_failure_record(receipt.get("host_failure"))
+    except (ValueError, TypeError):
+        native_failure = None
+    count = attempt["attempt"]
+    observed = effect_runtime_result("host_failure.observe", {
+        "session_id": session_id, "prior_session_id": attempt.get("session_id") or None,
+        "ok": receipt.get("ok") if type(receipt.get("ok")) is bool else None,
+        "timed_out": bool(receipt.get("timed_out")), "error_kind": bool(receipt.get("error_kind")),
+        "has_host_failure": "host_failure" in receipt, "native_failure": native_failure,
+        "transport_ok": result.failure_kind is None, "exit_zero": result.returncode == 0,
+        "attempt_text": format(Decimal(int(count)), "f") if isinstance(count, int) and not isinstance(count, bool) else None,
+    })
+    if not isinstance(observed, dict) or "failure" not in observed:
+        raise RuntimeError("Native Host observation is unavailable")
+    failure = observed["failure"]
+    if failure is None:
         return None
-    kind = "unknown"
-    if (result.failure_kind is None and result.returncode != 0 and receipt.get("ok") is False
-            and not receipt.get("timed_out") and not receipt.get("error_kind") and same_session):
-        try:
-            failure = normalize_host_failure_record(receipt.get("host_failure"))
-            if failure["attempt"] == 1:
-                kind = failure["kind"]
-        except (ValueError, TypeError):
-            pass
-    failure = build_host_failure_record(kind, attempt=attempt["attempt"])
+    failure["attempt"] = count
     return {**attempt, "status": "failed", "host_failure": failure,
-            "session_id": attempt.get("session_id") or session_id,
+            "session_id": observed["session_id"],
             "not_before": now + failure.get("retry", {}).get("backoff_seconds", 0)}
 
 
@@ -859,6 +886,7 @@ def _run_worker_locked(
                 wake_rc = None
                 wake_failure_kind = None
                 wake_failed = False
+                wake_stderr_tail = ""
                 if args.wake_cmd:
                     environment = None
                     if host_guard:
@@ -997,6 +1025,8 @@ def _run_worker_locked(
                             # commit, resolves the independent witness.
                             _save_host_pending(state_path, False)
                     wake_status = "wake_failed" if wake_failed else "wake_ok"
+                    if wake_failed:
+                        wake_stderr_tail = _wake_stderr_tail(wake_result)
                 _log(
                     f"status=should_run {wake_status} "
                     f"action={decision.action} class={decision.cadence_class} "
@@ -1004,6 +1034,7 @@ def _run_worker_locked(
                     f"todo={selected_id or '-'} "
                     f"reason={shlex.quote(decision.reason)}"
                     + (f" wake_rc={wake_rc}" if wake_rc is not None else "")
+                    + (f" stderr_tail={shlex.quote(wake_stderr_tail)}" if wake_stderr_tail else "")
                 )
                 if wake_failed:
                     save({
@@ -1188,6 +1219,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.registry = str(global_registry_path())
         except ValueError as exc:
             parser.error(str(exc))
+    _disable_core_dumps()
     return run_worker(args)
 
 

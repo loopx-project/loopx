@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  cp,
   readFile,
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
+  symlink,
   unlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -33,6 +36,9 @@ import {
   quotaSpendIndexDigest,
   QUOTA_SPEND_COMMIT_REQUEST_SCHEMA,
 } from "../../loopx/control_plane/quota/spend_commit.ts";
+import {
+  readQuotaSpendEventFromRun,
+} from "../../loopx/control_plane/quota/accounting_artifact_transaction.ts";
 
 const goalId = "quota-spend-transaction";
 const instanceA = "ginst_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -665,6 +671,48 @@ test("native replay validates legacy rows by goal and agent", async (t) => {
   }
 });
 
+test("read-only replay returns the digest of the index that supplied its record", async (t) => {
+  const root = await tempRuntime(t);
+  const runsDir = join(root, "goals", goalId, "runs");
+  await mkdir(runsDir, { recursive: true });
+  const index = join(runsDir, "index.jsonl");
+  const effect = "replayed-effect";
+  const revisions = ["first", "second"].map((revision) => {
+    const row = {
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      agent_id: "codex-main-control",
+      effect_ref: effect,
+      revision,
+    };
+    const content = JSON.stringify(row) + "\r\n";
+    const digest = "sha256:" + createHash("sha256").update(content).digest("hex");
+    return { revision, content, digest };
+  });
+  await writeFile(index, revisions[0].content);
+  const publish = async () => {
+    for (let i = 1; i <= 32; i++) {
+      await writeFile(index + ".next", revisions[i % 2].content);
+      await rename(index + ".next", index);
+    }
+  };
+  const replay = async () => {
+    for (let i = 0; i < 32; i++) {
+      const result = await evaluateQuotaSpendCommit({
+        ...replayRequest(root, effect), read_only: true,
+      });
+      assert.equal(result.status, "replayed");
+      const observed = revisions.find((entry) => entry.revision === result.record?.revision);
+      assert.ok(observed);
+      assert.equal(result.index_digest, observed.digest);
+    }
+  };
+  // Finish both filesystem users before the fixture is removed, even on failure.
+  const [writer, reader] = await Promise.allSettled([publish(), replay()]);
+  if (writer.status === "rejected") throw writer.reason;
+  if (reader.status === "rejected") throw reader.reason;
+});
+
 test("native replay rejects incomplete transaction metadata", async (t) => {
   for (const quotaSpendCommit of [{}, { effect_id: "" }, { effect_id: null }]) {
     const runtimeRoot = await tempRuntime(t);
@@ -1147,4 +1195,226 @@ test("concurrent exact-effect retries serialize to one spend", async (t) => {
   );
   const indexPath = String(results[0].payload.index_path);
   assert.equal((await readFile(indexPath, "utf8")).trim().split("\n").length, 1);
+});
+
+test("readQuotaSpendEventFromRun resolves checkpoint-relocated run json_path and rejects arbitrary outside paths", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const relocatedRoot = await tempRuntime(t);
+  const originalRunsDir = join(originalRoot, "goals", goalId, "runs");
+  const relocatedRunsDir = join(relocatedRoot, "goals", goalId, "runs");
+  await mkdir(originalRunsDir, { recursive: true });
+  await mkdir(relocatedRunsDir, { recursive: true });
+
+  const fileName = "2026-08-25T12-00-00Z-quota-spend.json";
+  const originalJson = join(originalRunsDir, fileName);
+  const relocatedJson = join(relocatedRunsDir, fileName);
+  await writeFile(
+    originalJson,
+    JSON.stringify({
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      effect_ref: "stale-original",
+      quota_event: { schema_version: "quota_event_v0", effect_id: "stale-original" },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    relocatedJson,
+    JSON.stringify({
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      effect_ref: "quota-spend-effect-1",
+      quota_event: { schema_version: "quota_event_v0", effect_id: "quota-spend-effect-1" },
+    }),
+    "utf8",
+  );
+
+  const event = await readQuotaSpendEventFromRun(
+    relocatedRunsDir,
+    { effect_ref: "quota-spend-effect-1", json_path: originalJson },
+    goalId,
+  );
+  assert.equal(event?.effect_id, "quota-spend-effect-1");
+
+  const otherGoalRuns = join(originalRoot, "goals", "other-goal", "runs");
+  await mkdir(otherGoalRuns, { recursive: true });
+  const otherGoalJson = join(otherGoalRuns, fileName);
+  const outsideJson = join(originalRoot, "outside.json");
+  await writeFile(
+    otherGoalJson,
+    JSON.stringify({ classification: "quota_slot_spent", goal_id: goalId, effect_ref: "quota-spend-effect-1" }),
+    "utf8",
+  );
+  await writeFile(
+    outsideJson,
+    JSON.stringify({ classification: "quota_slot_spent", goal_id: goalId, effect_ref: "quota-spend-effect-1" }),
+    "utf8",
+  );
+
+  for (const unsafePath of [otherGoalJson, outsideJson]) {
+    await assert.rejects(
+      () => readQuotaSpendEventFromRun(relocatedRunsDir, { effect_ref: "quota-spend-effect-1", json_path: unsafePath }, goalId),
+      /quota spend json_path must stay inside the goal runs directory/,
+    );
+  }
+});
+
+function spendRunsDir(runtimeRoot: string): string {
+  return join(runtimeRoot, "goals", goalId, "runs");
+}
+
+function spendReceiptPath(runsDir: string, effectId: string): string {
+  const digest = createHash("sha256").update(effectId, "utf8").digest("hex").slice(0, 24);
+  return join(runsDir, ".transactions", "quota-spend", `${digest}.json`);
+}
+
+function retargetReceiptPath(
+  receipt: Record<string, unknown>,
+  key: "json_path" | "markdown_path" | "index_path",
+  next: string,
+): void {
+  receipt[key] = next;
+  for (const projection of ["index_record", "payload"] as const) {
+    const record = receipt[projection];
+    if (record && typeof record === "object") {
+      (record as Record<string, unknown>)[key] = next;
+    }
+  }
+}
+
+test("spend receipt replay follows a copied runtime and keeps the original tree untouched", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const copiedRoot = await tempRuntime(t);
+  const params = request(originalRoot);
+  const written = await evaluateQuotaSpendCommit(params);
+  assert.equal(written.status, "written");
+  const originalRuns = spendRunsDir(originalRoot);
+  const copiedRuns = spendRunsDir(copiedRoot);
+  const originalJson = String(written.payload.json_path);
+  const originalMarkdown = String(written.payload.markdown_path);
+  const originalIndex = await readFile(join(originalRuns, "index.jsonl"), "utf8");
+  const originalJsonBytes = await readFile(originalJson);
+  await cp(originalRuns, copiedRuns, { recursive: true });
+
+  const preview = await evaluateQuotaSpendCommit(request(copiedRoot, { execute: false }));
+  assert.equal(preview.status, "preview");
+  assert.equal(preview.written, false);
+
+  const copiedParams = request(copiedRoot);
+  const replayed = await evaluateQuotaSpendCommit(copiedParams);
+  assert.equal(replayed.status, "replayed");
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayed.payload.markdown_path, join(copiedRuns, basename(originalMarkdown)));
+  assert.equal(replayed.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.deepEqual(await readFile(originalJson), originalJsonBytes);
+  const copiedReceiptPath = spendReceiptPath(copiedRuns, String(params.effect_id));
+  const storedReceipt = JSON.parse(await readFile(copiedReceiptPath, "utf8")) as Record<string, unknown>;
+  assert.equal(storedReceipt.json_path, originalJson);
+  assert.equal(storedReceipt.request_digest, written.request_digest);
+
+  const repeated = await evaluateQuotaSpendCommit(copiedParams);
+  assert.equal(repeated.status, "replayed");
+  assert.equal(repeated.payload.json_path, replayed.payload.json_path);
+  assert.equal(await readFile(join(originalRuns, "index.jsonl"), "utf8"), originalIndex);
+  const changedSource = await evaluateQuotaSpendCommit(request(copiedRoot, { source: "visible-goal" }));
+  assert.equal(changedSource.status, "conflict");
+  assert.equal(changedSource.reason_code, "effect_id_conflict");
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+
+  const copiedIndex = await readFile(join(copiedRuns, "index.jsonl"));
+  const truncated = copiedIndex.subarray(0, Math.max(1, Math.floor(copiedIndex.length / 2)));
+  await writeFile(join(copiedRuns, "index.jsonl"), truncated);
+  const repaired = await evaluateQuotaSpendCommit(copiedParams);
+  assert.equal(repaired.status, "repaired");
+  assert.equal(repaired.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.equal(await readFile(join(originalRuns, "index.jsonl"), "utf8"), originalIndex);
+  const repairedReceipt = JSON.parse(await readFile(copiedReceiptPath, "utf8")) as Record<string, unknown>;
+  assert.equal(repairedReceipt.status, "committed");
+  assert.equal(repairedReceipt.json_path, originalJson);
+  assert.equal(repairedReceipt.request_digest, written.request_digest);
+  assert.equal(
+    (repairedReceipt.index_record as Record<string, unknown>).json_path,
+    originalJson,
+  );
+  const replayedAfterRepair = await evaluateQuotaSpendCommit(copiedParams);
+  assert.equal(replayedAfterRepair.status, "replayed");
+  assert.equal(replayedAfterRepair.payload.json_path, join(copiedRuns, basename(originalJson)));
+  assert.equal(replayedAfterRepair.payload.index_path, join(copiedRuns, "index.jsonl"));
+  assert.equal(await readFile(join(copiedRuns, "index.jsonl"), "utf8"), originalIndex);
+  assert.equal(
+    (JSON.parse(await readFile(copiedReceiptPath, "utf8")) as Record<string, unknown>).json_path,
+    originalJson,
+  );
+});
+
+test("copied spend receipts still reject other goals, outside paths, symlinks, and missing files", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const copiedRoot = await tempRuntime(t);
+  const params = request(originalRoot, { effect_id: "quota-spend-effect-copied-reject" });
+  const written = await evaluateQuotaSpendCommit(params);
+  assert.equal(written.status, "written");
+  const originalRuns = spendRunsDir(originalRoot);
+  const copiedRuns = spendRunsDir(copiedRoot);
+  await cp(originalRuns, copiedRuns, { recursive: true });
+  const originalJson = String(written.payload.json_path);
+  const originalJsonBytes = await readFile(originalJson);
+  const fileName = basename(originalJson);
+  const copiedJson = join(copiedRuns, fileName);
+  const receiptPath = spendReceiptPath(copiedRuns, String(params.effect_id));
+  const copiedParams = request(copiedRoot, { effect_id: params.effect_id });
+
+  const rejectOutside = async (nextJson: string) => {
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as Record<string, unknown>;
+    retargetReceiptPath(receipt, "json_path", nextJson);
+    await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`, "utf8");
+    await assert.rejects(
+      () => evaluateQuotaSpendCommit(copiedParams),
+      (error: unknown) => {
+        assert.ok(error instanceof EffectRuntimeRequestError);
+        assert.equal(error.code, "malformed_transaction_receipt");
+        assert.match(error.message, /JSON path is outside its run directory/);
+        return true;
+      },
+    );
+    assert.deepEqual(await readFile(originalJson), originalJsonBytes);
+  };
+
+  const otherGoalRuns = join(copiedRoot, "goals", "other-goal", "runs");
+  await mkdir(otherGoalRuns, { recursive: true });
+  const otherGoalJson = join(otherGoalRuns, fileName);
+  await writeFile(otherGoalJson, originalJsonBytes);
+  await rejectOutside(otherGoalJson);
+
+  const outsideJson = join(copiedRoot, fileName);
+  await writeFile(outsideJson, originalJsonBytes);
+  await rejectOutside(outsideJson);
+
+  const receipt = JSON.parse(await readFile(receiptPath, "utf8")) as Record<string, unknown>;
+  retargetReceiptPath(receipt, "json_path", originalJson);
+  await writeFile(receiptPath, `${JSON.stringify(receipt)}\n`, "utf8");
+  await unlink(copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(originalJson), originalJsonBytes);
+  await assert.rejects(() => readFile(copiedJson), { code: "ENOENT" });
+
+  await symlink(originalJson, copiedJson);
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(copiedParams),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(originalJson), originalJsonBytes);
 });

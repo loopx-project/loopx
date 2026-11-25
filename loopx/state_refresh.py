@@ -97,13 +97,14 @@ from .file_lock import exclusive_file_lock
 from .global_registry import sync_project_registry_to_global
 from .history import (
     append_run_index_record,
-    load_index,
+    load_index_snapshot,
     load_registry,
     reserve_unique_run_paths,
     unique_run_paths,
 )
 from .control_plane.runtime.local_state_write_correctness import build_local_state_write_correctness_dry_run_packet
 from .paths import resolve_runtime_root
+from .presentation.markdown import append_operator_action_markdown
 from .control_plane.goals.vision_checkpoint import (
     build_vision_checkpoint,
     prepare_vision_refresh,
@@ -562,6 +563,7 @@ def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- error: {payload.get('error')}")
         if payload.get("error_detail"):
             lines.append(f"- detail: {payload['error_detail']}")
+        append_operator_action_markdown(lines, payload)
         return "\n".join(lines)
 
     repair_delta = (
@@ -759,6 +761,8 @@ def refresh_state_run(
     goal_ref: dict[str, str] | None = None,
     goal_acceptance_preview: dict[str, Any] | None = None,
     task_lease_proof: dict[str, Any] | None = None,
+    allow_same_generation_lease_renewal: bool = False,
+    validation_recovery_turn_instance_id: str | None = None,
 ) -> dict[str, Any]:
     from .control_plane.todos.provider_projection import recover_refresh_todo_projection
 
@@ -874,6 +878,7 @@ def refresh_state_run(
         refresh_recovery = None
         prior_writeback_run = None
         checkpoint_supplement = False
+        recovering_writeback_path = None
         if todo_id or normalized_replan_obligation_id or turn_instance_id:
             if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
                 require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
@@ -939,13 +944,23 @@ def refresh_state_run(
             checkpoint_supplement = bool(
                 refresh_recovery["decision"] == "supplement_checkpoint"
             )
+            if (
+                checkpoint_supplement
+                and refresh_recovery["reason"] == "complete_missing_replan_qualification_on_original_turn"
+            ):
+                recovering_writeback_path = (prior_writeback_run or {}).get("json_path")
+                if not isinstance(recovering_writeback_path, str) or not recovering_writeback_path:
+                    raise ValueError("the original blocked writeback has no indexed artifact path")
+            checkpoint_replay = None
             if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
-                inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
+                checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
             recovery_payload = refresh_recovery_payload(
                 settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
             )
             if recovery_payload is not None:
+                if checkpoint_replay is not None:
+                    recovery_payload.update({key: checkpoint_replay[key] for key in ("json_path", "markdown_path")})
                 return recover_refresh_todo_projection(
                     recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
@@ -1059,9 +1074,12 @@ def refresh_state_run(
         autonomous_replan_frontier_identity: str | None = None
         newest_first_runs: list[dict[str, Any]] = []
         if normalized_agent_id:
-            existing_runs, _ = load_index(
-                runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl"
-            )
+            # Vision, recommendation and replan decisions use the indexed records.
+            # Checking each historical artifact here holds up other writers.
+            existing_runs = load_index_snapshot(
+                runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl",
+                include_artifact_status=False,
+            ).records
             newest_first_runs = [
                 run
                 for _, run in sorted(
@@ -1089,10 +1107,6 @@ def refresh_state_run(
                 existing_agent_vision=existing_agent_vision,
                 merge_patch=merge_agent_vision_patch,
                 require_path_delta_for_durable_change=autonomous_replan_recorded,
-                allow_terminal_stride_path=(
-                    (effective_replan_goal.get("execution_profile") or {}).get("stride_strategy")
-                    == "evidence_conditioned_v1"
-                ),
             )
         generated_at = now_local()
         # Next Action is now an actor/Todo-bound recommendation in the existing
@@ -1182,6 +1196,7 @@ def refresh_state_run(
             state_text=state_text,
             goal_id=safe_goal_id,
             progress_observation=normalized_progress_observation,
+            recovering_writeback_path=recovering_writeback_path,
             registry_goal=effective_replan_goal,
             effective_turn_cadence=effective_turn_cadence_context(
                 effective_replan_goal, runtime_root,
@@ -1614,6 +1629,8 @@ def refresh_state_run(
                         requested_proof=task_lease_proof,
                         settlement=settlement_readback,
                         locked_goal=current_goal if normalized_next_action else None,
+                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
                     ))
                 if settlement_readback is not None:
                     persist_external_delivery_pause(

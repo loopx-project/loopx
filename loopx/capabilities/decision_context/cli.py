@@ -243,7 +243,7 @@ def register_decision_context_commands(
     settle_review = commands.add_parser(
         "settle-review",
         help=(
-            "Exact-read a user-gate event or semantic no-change result, append "
+            "Validate a user-gate decision or evidence-only review, append "
             "validated writeback, and CAS-commit private cursors."
         ),
     )
@@ -256,6 +256,15 @@ def register_decision_context_commands(
     settle_review.add_argument("--event-log", required=True)
     settle_review.add_argument("--proposal-json")
     settle_review.add_argument("--source-event-id")
+    settle_review.add_argument(
+        "--disposition",
+        choices=("no_change", "observed"),
+        help=(
+            "Evidence-only review: observed records new facts without action "
+            "authority; no_change requires explicit no-change proof. Omit for "
+            "a user-gate decision, whose disposition is read from its event."
+        ),
+    )
     settle_review.add_argument("--actor-ref", required=True)
     settle_review.add_argument("--reason-code", required=True)
     settle_review.add_argument("--summary", required=True)
@@ -427,6 +436,7 @@ def handle_decision_context_command(
             actor_ref=args.actor_ref,
             reason_code=args.reason_code,
             summary=args.summary,
+            disposition=args.disposition,
             proposal=proposal,
             source_event_id=(
                 str(args.source_event_id).strip()

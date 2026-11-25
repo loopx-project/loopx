@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from typing import Any
 
@@ -36,6 +37,15 @@ def markdown_table_separator(column_count: int) -> str:
     if column_count < 1:
         raise ValueError("markdown table must have at least one column")
     return markdown_table_row(["---"] * column_count)
+
+
+def render_json_object_block(payload: dict[str, Any]) -> str:
+    fields = ",\n".join(
+        json.dumps(key, ensure_ascii=False) + ":"
+        + json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        for key, value in payload.items()
+    )
+    return "```json\n{\n" + fields + "\n}\n```"
 
 
 def append_operator_action_markdown(

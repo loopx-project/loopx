@@ -247,7 +247,9 @@ class PrivateWebProjectionMixin:
             enabled = {row["binding_id"] for row in self.bindings.read()["bindings"]
                        if row.get("enabled") is True and row.get("audience", "owner") == "owner"}
             sources: dict[str, Path] = {}
-            for path, row, _ in self._delivery_discovery.rows():
+            cached_rows = getattr(self, "_web_projection_scan_rows", None)
+            discovery_rows = cached_rows if cached_rows is not None else self._delivery_discovery.rows()
+            for path, row, _ in discovery_rows:
                 if _projection_source_eligible(row, enabled):
                     sources.setdefault(row["session_id"], path)
             store = self.core.controller.store
@@ -437,8 +439,8 @@ class PrivateWebProjectionMixin:
                         return name, pending in self._web_projection_messages(row)
                     except (OSError, ValueError, KeyError):
                         return None, False
-                who = "你" if pending["role"] == "user" else "LoopX"
-                text = f"**{who}（App）**\n\n{pending['text']}"
+                from .manager_returns import prepare_app_mirror_text
+                text = prepare_app_mirror_text(self, path, row, messages, pending)
                 phase_key = "web." + pending["message_id"]
                 if self.reaction_feedback and pending["role"] == "user":
                     # Persist feedback intent before a mirror write/recovery;

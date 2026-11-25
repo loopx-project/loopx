@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shlex
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -13,27 +12,24 @@ from typing import Any
 from ...heartbeat_prompt import build_heartbeat_prompt
 from ..quota.effective_action import EffectiveAction
 from ..quota.turn_envelope import quota_action_signature_document
-from ..work_items.progress_observation import (
-    ProgressResultClass,
-    semantic_delta_from_writeback,
-)
-from .doubao_model_behavior_actor import (
-    ARK_API_KEY_ENV,
-    DOUBAO_2_1_PRO_MODEL,
-    DOUBAO_MODEL_ENV,
-    DoubaoActorTransport,
-    _direct_ark_transport,
-)
+from ..work_items.progress_observation import ProgressResultClass
 from .model_tool_behavior import (
     _module_reader_tokens,
-    QuotaToolContext,
-    is_context_read_command,
-    LoopxCliExecutionError,
+    DoubaoExecToolBehaviorActorBase,
     DoubaoExecToolClient,
+    LoopxCliExecutionError,
+    QuotaToolContext,
+    append_exec_tool_exchange,
     argument_value,
+    build_qualification_receipt,
     digest_text,
+    execute_bounded_read_steps,
     execute_loopx_cli,
+    hermetic_clock_output,
+    is_context_read_command,
+    is_fixture_quota_guard,
     loopx_command_tokens,
+    qualification_turn_instance_id,
     replan_view_command_tokens,
 )
 from .selected_todo_tool_behavior import bounded_workspace_read_plan
@@ -54,6 +50,7 @@ REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION = (
 REPLAN_SEMANTIC_ACTION_BEHAVIOR_MAX_CALLS = 7
 REPLAN_SEMANTIC_ACTION_NATIVE_READ_MAX_CALLS = 3
 _NATIVE_CONTEXT_READ_KINDS = frozenset({"context_read", "replan_context_read"})
+_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS = 8192
 
 
 class _HostToolError(RuntimeError):
@@ -521,37 +518,18 @@ def _build_fixture(
 
 
 def _clock_output(command: str) -> str | None:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return None
-    if not tokens or Path(tokens[0]).name != "date" or len(tokens) > 4:
-        return None
-    if any(
-        token in {";", "&&", "||", "|"}
-        or (index > 0 and not token.startswith(("-", "+")))
-        for index, token in enumerate(tokens)
-    ):
-        return None
-    if "-u" in tokens or "--utc" in tokens:
-        return "2026-08-12T16:00:00Z\n"
-    return "2026-08-13T00:00:00+08:00\n"
+    return hermetic_clock_output(
+        command,
+        utc_output="2026-08-12T16:00:00Z\n",
+        local_output="2026-08-13T00:00:00+08:00\n",
+    )
 
 
 def _is_quota_guard(command: str) -> bool:
-    tokens = loopx_command_tokens(command)
-    if not tokens:
-        return False
-    try:
-        quota_index = tokens.index("quota")
-    except ValueError:
-        return False
-    return bool(
-        tokens[quota_index : quota_index + 2] == ["quota", "should-run"]
-        and argument_value(tokens, "--goal-id") == _FIXTURE_GOAL_ID
-        and argument_value(tokens, "--agent-id") == _FIXTURE_AGENT_ID
-        and "--codex-app" in tokens
-        and argument_value(tokens, "--turn-instance-id")
+    return is_fixture_quota_guard(
+        command,
+        goal_id=_FIXTURE_GOAL_ID,
+        agent_id=_FIXTURE_AGENT_ID,
     )
 
 
@@ -939,44 +917,22 @@ def _execute_workspace_read(
     plan = _bounded_workspace_read_plan(command, fixture=fixture)
     if plan is None:
         raise ValueError("workspace read is outside the hermetic fixture")
-    outputs: list[str] = []
-    status = 0
-    frontier_read = False
-    work_source_read = False
-    for step in plan:
-        should_run = bool(
-            step.operator == ";"
-            or (step.operator == "&&" and status == 0)
-            or (step.operator == "||" and status != 0)
-        )
-        if not should_run:
-            continue
-        completed = subprocess.run(
-            list(step.argv),
-            cwd=fixture.project_root,
-            check=False,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            timeout=10,
-        )
-        status = completed.returncode
-        output = completed.stdout
-        if step.line_limit is not None:
-            output = "".join(output.splitlines(keepends=True)[: step.line_limit])
-        outputs.append(output)
-        frontier_read = frontier_read or (
-            status == 0
-            and step.target is not None
-            and step.target.resolve() == fixture.frontier_target.resolve()
-        )
-        work_source_read = work_source_read or (
-            status == 0
-            and step.target is not None
-            and step.target.resolve() == fixture.work_source_target.resolve()
-        )
+    results, status = execute_bounded_read_steps(plan, cwd=fixture.project_root)
+    frontier_read = any(
+        step_status == 0
+        and step.target is not None
+        and step.target.resolve() == fixture.frontier_target.resolve()
+        for step, step_status, _ in results
+    )
+    work_source_read = any(
+        step_status == 0
+        and step.target is not None
+        and step.target.resolve() == fixture.work_source_target.resolve()
+        for step, step_status, _ in results
+    )
     if status != 0:
         raise RuntimeError(f"workspace read failed with exit={status}")
-    return "".join(outputs), frontier_read, work_source_read
+    return "".join(output for _, _, output in results), frontier_read, work_source_read
 
 
 def _receipt(
@@ -991,32 +947,27 @@ def _receipt(
     local_fixture_writes_executed: bool,
     read_only_host_commands_executed: bool,
 ) -> dict[str, Any]:
-    receipt = {
-        "schema_version": REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
-        "qualification_id": qualification_id,
-        "actor_ref": actor_ref,
-        "qualification_passed": passed,
-        "failure_code": failure_code,
-        "observed_tool_sequence": [step["kind"] for step in steps],
-        "tool_call_count": len(steps),
-        "semantic_action_accepted": bool(
-            passed and semantic_delta and semantic_delta.get("accepted") is True
-        ),
-        "selected_semantic_outcomes": list(
-            (semantic_delta or {}).get("satisfying_outcomes") or []
-        ),
-        "tool_call_receipts": steps,
-        "boundary": {
-            "raw_prompt_persisted": False,
-            "raw_provider_response_persisted": False,
-            "raw_command_persisted": False,
+    receipt = build_qualification_receipt(
+        schema_version=REPLAN_SEMANTIC_ACTION_BEHAVIOR_RECEIPT_SCHEMA_VERSION,
+        qualification_id=qualification_id,
+        actor_ref=actor_ref,
+        passed=passed,
+        failure_code=failure_code,
+        steps=steps,
+        extra_fields={
+            "semantic_action_accepted": bool(
+                passed and semantic_delta and semantic_delta.get("accepted") is True
+            ),
+            "selected_semantic_outcomes": list(
+                (semantic_delta or {}).get("satisfying_outcomes") or []
+            ),
+        },
+        boundary={
             "filesystem_writes_executed": local_fixture_writes_executed,
             "writes_limited_to_temporary_fixture": local_fixture_writes_executed,
-            "external_writes_executed": False,
-            "shell_commands_executed": False,
             "read_only_host_commands_executed": read_only_host_commands_executed,
         },
-    }
+    )
     if quota_observation is not None:
         receipt.update(dict(quota_observation))
     return receipt
@@ -1450,7 +1401,6 @@ def _handle_semantic_writeback(
     observation: Mapping[str, Any],
     state: _QualificationState,
 ) -> str:
-    obligation_id = _expected_obligation_id(state)
     result_class = str(observation.get("result_class") or "")
     terminal_result = result_class in {
         ProgressResultClass.BLOCKED.value,
@@ -1471,19 +1421,8 @@ def _handle_semantic_writeback(
         )
         if not matches_observed_surface:
             raise ValueError("semantic_action_misses_uncovered_frontier")
-    obligation = dict(
-        (state.quota_packet or {}).get("autonomous_replan_obligation") or {}
-    )
-    if obligation.get("obligation_id") != obligation_id:
-        raise ValueError("quota_obligation_missing")
-    semantic_delta = semantic_delta_from_writeback(
-        obligation=obligation,
-        progress_observation=observation,
-        agent_vision=_authored_vision(command, state),
-        history_runs=_fixture_runs(state),
-    )
-    if semantic_delta.get("accepted") is not True:
-        raise ValueError("non_semantic_replan_action")
+    # The writer owns semantic acceptance and recovery for the original Turn.
+    # A compact admission packet may omit the review basis that it resolves.
     state.semantic_result_class = result_class
     return _bound_semantic_writeback(command, state)
 
@@ -1616,7 +1555,6 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "successor_reentry_not_runnable",
         "successor_reentry_composition_not_scheduled",
         "quota_obligation_missing",
-        "non_semantic_replan_action",
         "semantic_writeback_failed",
         "semantic_writeback_binding_mismatch",
         "semantic_writeback_requires_authored_draft",
@@ -1655,19 +1593,8 @@ def _append_tool_response(
     tool_call: Any,
     output: str,
 ) -> None:
-    state.messages.extend(
-        [
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [tool_call.provider_value],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": tool_call.call_id,
-                "content": output,
-            },
-        ]
+    append_exec_tool_exchange(
+        state.messages, tool_call, output, include_assistant_content=False
     )
 
 
@@ -1760,7 +1687,8 @@ def _run_qualification_loop(
                               exit_code=exc.exit_code, error_code=exc.code)
             _append_tool_response(state, tool_call=tool_call, output=json.dumps({
                 "error_code": exc.code, "exit_code": exc.exit_code,
-                "output": exc.output[:4096], "truncated": len(exc.output) > 4096,
+                "output": exc.output[:_MAX_HOST_TOOL_ERROR_OUTPUT_CHARS],
+                "truncated": len(exc.output) > _MAX_HOST_TOOL_ERROR_OUTPUT_CHARS,
             }))
             continue
         except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
@@ -1791,44 +1719,8 @@ def _run_qualification_loop(
     )
 
 
-class DoubaoReplanSemanticActionBehaviorActor:
+class DoubaoReplanSemanticActionBehaviorActor(DoubaoExecToolBehaviorActorBase):
     """Qualify a model-selected semantic replan through the real CLI boundary."""
-
-    def __init__(
-        self,
-        *,
-        api_key: str,
-        model: str = DOUBAO_2_1_PRO_MODEL,
-        timeout_seconds: float = 90.0,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-    ) -> None:
-        self._client = DoubaoExecToolClient(
-            api_key=api_key,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        environ: Mapping[str, str] | None = None,
-        transport: DoubaoActorTransport = _direct_ark_transport,
-        timeout_seconds: float = 90.0,
-    ) -> DoubaoReplanSemanticActionBehaviorActor:
-        values = os.environ if environ is None else environ
-        api_key = values.get(ARK_API_KEY_ENV, "")
-        if not api_key.strip():
-            raise RuntimeError(
-                "ARK_API_KEY is not injected; live Doubao qualification is unavailable"
-            )
-        return cls(
-            api_key=api_key,
-            model=values.get(DOUBAO_MODEL_ENV, DOUBAO_2_1_PRO_MODEL),
-            timeout_seconds=timeout_seconds,
-            transport=transport,
-        )
 
     def qualify(
         self,
@@ -1882,12 +1774,11 @@ class DoubaoReplanSemanticActionBehaviorActor:
             },
             {"role": "user", "content": fixture.task_body},
         ]
-        digest = sha256(qualification_id.encode()).hexdigest()[:16]
         state = _QualificationState(
             fixture=fixture,
             messages=messages,
             steps=[],
-            turn_instance_id=f"qualification-{digest}",
+            turn_instance_id=qualification_turn_instance_id(qualification_id),
         )
         if required_vision:
             def invoke(argv: list[str], cwd: Path, output: str) -> str:

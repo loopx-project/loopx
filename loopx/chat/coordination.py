@@ -10,9 +10,15 @@ from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
-import shutil
 import stat
 import sys
+from typing import Any, Callable, TYPE_CHECKING, cast
+
+from ..control_plane.goals.acceptance_oracle_io import ORACLE_HOST_PYTHON, oracle_host_python
+
+if TYPE_CHECKING:
+    from ..capabilities.native_chat.codex_adapter import CodexAppServerAdapter
+    from ..chat_runtime import ChatRuntimeAdapter, EventSink
 
 PROJECT_COORDINATION_GUIDANCE = (
     "This conversation concerns only the selected LoopX Goal. Read its current work, "
@@ -40,10 +46,10 @@ PROJECT_COORDINATION_GUIDANCE = (
 PROJECT_CONTEXT_VERSION = 2
 
 
-def check_preparation_tool():
+def check_preparation_tool() -> dict[str, Any]:
     """Project the existing proposal action for a newly bound managed thread."""
     from ..chat_loopx_mode import TOOL
-    tool = deepcopy(TOOL)
+    tool: dict[str, Any] = deepcopy(TOOL)
     tool["description"] = (
         "Prepare a reviewable delivery check for this original registered Goal and Agent. "
         "Use action=prepare_check with a stable operation_id and the existing compact "
@@ -51,7 +57,7 @@ def check_preparation_tool():
         "Read retained requirements with loopx_context_read first. Select an existing "
         "independent checker from this Goal workspace using [python3, relative.py] or "
         "[relative/executable], without options or extra arguments. The host pins its "
-        "actual source bytes and verifies python3 resolves to the host interpreter. Each oracle "
+        "actual source bytes and uses the LoopX runtime's Python for Python scripts. Each oracle "
         "is {kind: owner_pinned_oracle, source_id, input_refs, output_refs}; name the "
         "explicit delivery files in output_refs. Do not invent a checker or replace "
         "owner intent. The host supplies Goal, Agent, workspace and runtime identity. "
@@ -127,7 +133,9 @@ def _workspace_file(workspace: Path, ref: str, *, required: bool) -> str | None:
 
 class _GoalSessionCheckPreparation:
     """Per-Turn source IO over the existing typed identity and acceptance owners."""
-    def __init__(self, controller, adapter, session, turn_id, read):
+    def __init__(self, controller: Any, adapter: CodexAppServerAdapter,
+                 session: dict[str, Any], turn_id: str,
+                 read: Callable[[str, Any], dict[str, Any]]) -> None:
         self.controller, self.adapter, self.read = controller, adapter, read
         self.session_id, self.turn_id = session["session_id"], turn_id
         self.workspace = Path(adapter.session.work_dir)
@@ -136,7 +144,7 @@ class _GoalSessionCheckPreparation:
         self.original = deepcopy(session)
         self.identity = self._current_identity()
 
-    def _current_identity(self):
+    def _current_identity(self) -> dict[str, Any]:
         from ..capabilities.native_chat.steward_managed_mode import registered_managed_session_identity
         from ..control_plane.collaboration import conversation_scope
         controller = self.controller
@@ -162,37 +170,32 @@ class _GoalSessionCheckPreparation:
                 or conversation_scope(session, origin="web")["kind"] != "owner_goal"):
             raise ValueError("the original local-owner managed Session and active read-only Turn are unavailable")
         return registered_managed_session_identity(registry_path=self.registry_path,
-            goal_id=session.get("goal_id"), agent_id=session.get("managed_agent_id"),
+            goal_id=cast(str, session.get("goal_id")),
+            agent_id=cast(str, session.get("managed_agent_id")),
             workspace=self.workspace, session=session)
 
-    def _current(self):
+    def _current(self) -> None:
         if self._current_identity() != self.identity:
             raise ValueError("the original managed Goal lifetime or Agent scope changed")
 
-    @staticmethod
-    def _python_interpreter():
-        executable = shutil.which("python3")
-        if executable is None or Path(executable).resolve() != Path(sys.executable).resolve():
-            raise ValueError("the supported python3 token is unavailable for this host interpreter")
-
-    def _document(self, document):
+    def _document(self, document: dict[str, Any]) -> dict[str, Any]:
         # Accepted document syntax, requirements, scope and oracle semantics
         # remain with the TS owner. Only invocation/source IO is narrowed here.
         document = deepcopy(document)
         criteria = document.get("criteria")
         if not isinstance(criteria, list) or not 1 <= len(criteria) <= 64:
             raise ValueError("select bounded existing acceptance criteria and independent checker sources")
-        sources = {}
+        sources: dict[str, str | None] = {}
         for criterion in criteria:
             if not isinstance(criterion, dict):
                 raise ValueError("a check requires its existing criterion and checker source")
             argv = criterion.get("validation_argv")
             if (not isinstance(argv, list) or not argv or any(not isinstance(arg, str) for arg in argv)):
                 raise ValueError("select an immediate Python script or direct pinned executable")
-            if len(argv) == 2 and argv[0] in {"python", "python3", sys.executable} and argv[1].endswith(".py"):
+            python_tokens = {"python", "python3", sys.executable, ORACLE_HOST_PYTHON}
+            if len(argv) == 2 and argv[0] in python_tokens and argv[1].endswith(".py"):
                 source = argv[1]
-                self._python_interpreter()
-                criterion["validation_argv"] = ["python3", source]
+                criterion["validation_argv"] = [ORACLE_HOST_PYTHON, source]
             elif len(argv) == 1 and "/" in argv[0]:
                 source = argv[0]
             else:
@@ -227,11 +230,14 @@ class _GoalSessionCheckPreparation:
             if _workspace_file(self.workspace, source, required=True) != digest:
                 raise ValueError("the checker source changed during preparation")
             self._current()
-        if any(row["validation_argv"][0] == "python3" for row in criteria):
-            self._python_interpreter()
+        if any(row["validation_argv"][0] == ORACLE_HOST_PYTHON for row in criteria):
+            try:
+                oracle_host_python()
+            except FileNotFoundError as exc:
+                raise ValueError("the LoopX runtime's Python is unavailable") from exc
         return document
 
-    def __call__(self, tool, arguments):
+    def __call__(self, tool: str, arguments: Any) -> dict[str, Any]:
         from ..chat_loopx_mode import TOOL
         if tool != TOOL["name"]:
             return self.read(tool, arguments)
@@ -245,18 +251,28 @@ class _GoalSessionCheckPreparation:
                 raise ValueError("prepare_check accepts only its stable operation_id and acceptance document; the host supplies actor and source identity")
             document = self._document(arguments["document"])
             self._current()
+            # Resolve retries from before host-bound Python was explicit without
+            # replacing the original approved argv or review basis.
+            legacy_document = {**document, "criteria": [
+                {**row, "validation_argv": ["python3", row["validation_argv"][1]]}
+                if row["validation_argv"][0] == ORACLE_HOST_PYTHON else row
+                for row in document["criteria"]
+            ]}
             return prepare_acceptance_check(registry_path=self.registry_path,
                 runtime_root=str(self.runtime_root), goal_id=self.original["goal_id"],
                 agent_id=self.original["managed_agent_id"], document=document,
-                operation_id=arguments["operation_id"], execute=True)
+                operation_id=arguments["operation_id"], execute=True,
+                legacy_document=legacy_document)
         except (ActionConflictError, ValueError) as exc:
             return {"ok": False, "error": "collaboration_request_rejected",
                 "next_action": f"Check preparation was refused ({exc}). Read the original Goal and saved proposal; retry an operation only with unchanged intent and sources. A new intent needs a new operation id. Preparation cannot change authority or run the check."}
 
 
 def apply_context_handoff(
-    controller, scope, session, turn, response, context, *, execution_allowed
-):
+    controller: Any, scope: dict[str, Any], session: dict[str, Any],
+    turn: dict[str, Any], response: dict[str, Any], context: dict[str, Any], *,
+    execution_allowed: Callable[[], bool],
+) -> dict[str, Any]:
     """Apply a requested handoff while the source scope remains current."""
     if response.get("context_handoff") is None:
         return response
@@ -290,7 +306,10 @@ def apply_context_handoff(
     )
 
 
-def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, scope, preserve_original_thread=False):
+def prepare_turn_context(controller: Any, adapter: ChatRuntimeAdapter,
+                         session: dict[str, Any], turn_id: str, event_sink: EventSink, *,
+                         scope: dict[str, Any], preserve_original_thread: bool = False,
+                         ) -> tuple[ChatRuntimeAdapter, dict[str, Any]]:
     """Prepare the same evidence/handoff path for each supported conversation."""
     from ..chat_runtime import CodexAppServerAdapter, CodexChatAgentError
     from ..chat_manager import (MANAGER_AGENT_GOAL_ID, MANAGER_AGENT_OBJECTIVE,
@@ -400,7 +419,15 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
     )
     if execution_catalog["bindings"] or not execution_catalog["available"]:
         context["context_execution"] = execution_catalog
-    if isinstance(adapter, CodexAppServerAdapter):
+    from ..capabilities.native_chat.antigravity_adapter import AntigravityAdapter
+    current_turn = controller.store.load_turn(session_id, turn_id) or {}
+    antigravity_report = (
+        not isinstance(adapter, CodexAppServerAdapter)
+        and isinstance(adapter, AntigravityAdapter)
+        and (current_turn.get("loopx_request") or {}).get("operation") == "native_turn"
+        and (current_turn.get("loopx_request") or {}).get("work_kind") == "report"
+    )
+    if isinstance(adapter, CodexAppServerAdapter) or antigravity_report:
         from ..capabilities.manager_context.inspection import ManagerInspection, manager_index
         from ..chat_manager_context import manager_authorization_scope_is_current
         expected_scope_id = context.get("authorization_scope_id")
@@ -438,19 +465,22 @@ def prepare_turn_context(controller, adapter, session, turn_id, event_sink, *, s
                 session_id, turn_id, kind="manager.evidence_read", payload=result,
             ),
         )
-        adapter.session.read_tool_handler = inspection.read
-        adapter._managed_read_turn_guard = None
-        if (session.get("managed_agent_id") and turn.get("origin") == "web"
-                and not turn.get("loopx_request") and not turn.get("loopx_execution")
-                and not session.get("loopx_tools") and not (session.get("loopx_mode") or {}).get("enabled")
-                and not adapter.session.execution_mode and not adapter.session.read_only_review
-                and getattr(adapter, "goal_driver", None) is None
-                and scope["kind"] == "owner_goal" and session.get("upstream_mode") == "chat"):
-            adapter.session.read_tool_handler = _GoalSessionCheckPreparation(
-                controller, adapter, session, turn_id, inspection.read)
-            adapter._managed_read_turn_guard = adapter.session.read_tool_handler._current
-        context["evidence_sources"] = inspection.sources()
-        context = manager_index(context, status_on_demand=status_on_demand)
+        if isinstance(adapter, CodexAppServerAdapter):
+            adapter.session.read_tool_handler = inspection.read
+            adapter._managed_read_turn_guard = None
+            if (session.get("managed_agent_id") and turn.get("origin") == "web"
+                    and not turn.get("loopx_request") and not turn.get("loopx_execution")
+                    and not session.get("loopx_tools") and not (session.get("loopx_mode") or {}).get("enabled")
+                    and not adapter.session.execution_mode and not adapter.session.read_only_review
+                    and getattr(adapter, "goal_driver", None) is None
+                    and scope["kind"] == "owner_goal" and session.get("upstream_mode") == "chat"):
+                adapter.session.read_tool_handler = _GoalSessionCheckPreparation(
+                    controller, adapter, session, turn_id, inspection.read)
+                adapter._managed_read_turn_guard = adapter.session.read_tool_handler._current
+            context["evidence_sources"] = inspection.sources()
+            context = manager_index(context, status_on_demand=status_on_demand)
+        else:
+            adapter._steward_report_reader = inspection.read
     from ..capabilities.native_chat.external_conversations import ChatExternalConversations
     recovery = ChatExternalConversations(controller).recovery_context(
         session, controller.store.load_turn(session_id, turn_id) or {}) if scope.get("bound_steward") else None

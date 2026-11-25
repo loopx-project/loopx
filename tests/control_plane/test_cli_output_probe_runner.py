@@ -306,3 +306,24 @@ def test_complete_plan_receipt_checks_original_goal_bytes(tmp_path):
         goal["content"]["text"] += "\nChanged acceptance or stop condition\n"
         with pytest.raises(AssertionError):
             receipt_row(**kwargs, measurement=measure)
+
+
+def test_historical_quota_measurement_does_not_accept_unknown_or_incomplete_carriers():
+    runner = runpy.run_path(str(RUNNER))
+    spec = probe.CLI_OUTPUT_BUDGET_BY_ID['quota_should_run']
+    historical = {'mode': 'should-run', 'goal_id': 'fixture', 'decision': 'run',
+        'should_run': True, 'interaction_contract': {}, 'scheduler_hint': {}, 'selected_todo': None}
+    measured = runner['_historical_ordinary_quota_carrier'](spec,
+        {'payload': historical}, 'json', json.dumps(historical))
+    assert measured.output_contract_version is None
+    assert spec.output_contract_version == 'loopx_turn_envelope_v1'
+    # Even measurement-only does not waive a missing historical identity.
+    del historical['goal_id']
+    with pytest.raises(AssertionError, match='goal_id'):
+        runner['_assert_output_contract'](output_format='json', text=json.dumps(historical),
+            measurement={'payload': historical}, semantic_json_keys=measured.semantic_json_keys,
+            markdown_anchor=measured.markdown_anchor)
+    for version in ('loopx_turn_envelope_v1', 'unknown'):
+        value = {**historical, 'schema_version': version}
+        assert runner['_historical_ordinary_quota_carrier'](spec,
+            {'payload': value}, 'json', json.dumps(value)) is spec

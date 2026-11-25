@@ -152,6 +152,8 @@ class QuotaRunDecision:
     quota: dict[str, Any]
     replan_decision_allowed: bool
     goal_route_hint_override: dict[str, Any] | None = None
+    agent_scope_frontier: dict[str, Any] | None = None
+    vision_baseline_initialization: bool = False
 
 
 def refine_quota_recommended_action(
@@ -266,6 +268,7 @@ def resolve_quota_run_decision(
     task_orchestration_contract: dict[str, Any] | None,
     receipt_bound_replan_phase: ReceiptBoundReplayPhase | None = None,
     receipt_bound_replan_execution_pending: bool = False,
+    vision_initialization_context: dict[str, Any] | None = None,
 ) -> QuotaRunDecision:
     """Apply the ordered final guards for one quota run decision."""
 
@@ -311,6 +314,7 @@ def resolve_quota_run_decision(
             and settlement_packet.get("settlement_only") is True
             and settlement_packet.get("decision") == receipt_bound_replan_phase.value
         ),
+        "vision_initialization_context": vision_initialization_context,
         "goal_health_ok": goal_health_ok,
         "inbox_reply_due": inbox_reply_due,
         "inbox_material_review_due": inbox_material_review_due,

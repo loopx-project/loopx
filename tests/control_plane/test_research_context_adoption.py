@@ -265,16 +265,17 @@ def test_retained_context_is_adopted_only_with_fresh_current_ownership(tmp_path,
 def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatch, work=None):
     """Real current-owner replan consumes inherited counterevidence, then work."""
     monkeypatch.chdir(workspace)
-    run('configure-goal', '--goal-id', 'branch', '--execution-replan-after-turns', '1',
-        '--execution-stride-strategy', 'evidence_conditioned_v1', '--execute')
+    run('configure-goal', '--goal-id', 'branch', '--execution-replan-after-turns', '1', '--execute')
     actor = ['--goal-id', 'branch', '--agent-id', 'branch-actor']
-    def settle(turn, vision, *, review=False):
+    def settle(turn, vision, *, review=False, lease_proof=None):
         path = tmp_path / (turn + '.json')
         path.write_text(json.dumps(vision))
+        proof_args = (['--task-lease-idempotency-key', lease_proof['idempotency_key'],
+            '--task-lease-expected-version', str(lease_proof['expected_version'])] if lease_proof else [])
         written = run('refresh-state', *actor, '--todo-id', todo, '--turn-instance-id', turn,
             '--classification', 'ordinary_checkpoint_research', '--delivery-batch-scale', 'single_surface',
             '--delivery-outcome', 'outcome_progress', '--delivery-boundary', 'semantic_closeout' if review else 'in_flight_continuation',
-            '--agent-vision-json', str(path), '--no-global-sync', '--suppress-external-sinks')
+            '--agent-vision-json', str(path), *proof_args, '--no-global-sync', '--suppress-external-sinks')
         run('quota', 'spend-slot', *actor, '--todo-id', todo, '--turn-instance-id', turn,
             '--slots', '1', '--source', 'heartbeat', '--execute')
         return written
@@ -286,7 +287,8 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     initial = run('quota', 'should-run', *actor, '--todo-id', todo, '--turn-instance-id', 'ordinary-preparation',
         '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert initial['interaction_contract']['agent_channel']['delivery_allowed']
-    settle('ordinary-preparation', vision)
+    initial_proof = initial['execution_preparation']['lease_proof']
+    settle('ordinary-preparation', vision, lease_proof=initial_proof)
     review = run('quota', 'should-run', *actor, '--turn-instance-id', 'ordinary-review',
         '--runtime-profile', 'generic_cli', '--context-delivery', 'off', '--available-capability', 'shell')
     assert review['interaction_contract']['mode'] == 'autonomous_replan'
@@ -312,7 +314,7 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     revised['stride_decision'] = decision
     revised['path_delta'].update(outcome='replan', observed_reality='Current review read the source-bound refuted finding.',
         changed=['Complete candidates 8 and 9 together, keeping the rejected route excluded.'])
-    reviewed = settle('ordinary-review', revised, review=True)
+    reviewed = settle('ordinary-review', revised, review=True, lease_proof=(review.get('execution_preparation') or {}).get('lease_proof') or initial_proof)
     from loopx.history import load_index_snapshot
     indexed = load_index_snapshot(Path(reviewed['index_path']), include_artifact_status=False).records
     accepted = next(row for row in indexed if row.get('turn_instance_id') == 'ordinary-review')
@@ -334,7 +336,7 @@ def _ordinary_review_and_work(run, workspace, tmp_path, todo, digest, monkeypatc
     # Settlement proves actual current work can continue under the original lease.
     revised.pop('stride_decision')
     revised['path_delta'].update(outcome='continue', observed_reality='Candidates 8 and 9 were completed in one ordinary work unit.')
-    settle('ordinary-experiment', revised)
+    settle('ordinary-experiment', revised, lease_proof=following['execution_preparation']['lease_proof'])
 
 
 def test_research_history_is_complete_and_bound_to_original_source(tmp_path, monkeypatch, capsys):

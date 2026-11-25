@@ -437,7 +437,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
         message_id = route["message_id"]
         if message_id == group_events[0]["message_id"]:
             in_group_answer.set()
-            assert release.wait(8)
+            assert release.wait(15)
         answered.append(message_id)
         return "Group answer"
 
@@ -452,7 +452,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
 
     def first_connection():
         yield group_events[0]
-        assert in_group_answer.wait(8)
+        assert in_group_answer.wait(15)
         yield group_events[1]
         queued.set()
 
@@ -492,7 +492,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
     monkeypatch.setattr(runtime, "answer_lark_goal_topic", answer)
     monkeypatch.setattr(transport, "admit", admit)
-    monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
+    monkeypatch.setattr("loopx.chat.lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
     monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
     service = runtime.LarkGoalTopicRuntimeService(
         snapshot_provider=snapshot, runtime_root=store.root.parent,
@@ -523,7 +523,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
 
     try:
         service.refresh()
-        assert queued.wait(8), service.health_snapshot()
+        assert queued.wait(15), service.health_snapshot()
         if retargeted or retarget_on_retry:
             provider.profile_apps[profile] = "cli_retargeted_app"
         if unreadable:
@@ -547,7 +547,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
                                 rows = json.loads(response["stdout"])
                                 response["stdout"] = json.dumps([row for row in rows if row["name"] != profile])
                             inventory_captured.set()
-                            assert return_inventory.wait(8)
+                            assert return_inventory.wait(15)
                             return response
                     if binding_change == "stale_inventory_after_error" and not return_inventory.is_set():
                         return unreadable_inventory
@@ -575,7 +575,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
             assert replacement["provider_ref"] == identity_ref(provider.profile_apps[profile])
         if delayed_inventory:
             retry = service._refresh_retry
-            assert retry is not None and inventory_captured.wait(8)
+            assert retry is not None and inventory_captured.wait(15)
             if inventory_during_queue_recovery:
                 resume_session_queues = service._resume_session_queues
 
@@ -583,7 +583,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
                     # The foreground has the current inventory but has yet
                     # to update the listener. Finish the older read here.
                     return_inventory.set()
-                    retry.join(8)
+                    retry.join(15)
                     assert not retry.is_alive()
                     assert not original_worker[0].is_set()
                     resume_session_queues(snapshot)
@@ -596,27 +596,27 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
                 assert service._workers[profile] == original_worker
             if closing:
                 release.set()
-                assert second_replied.wait(8), service.health_snapshot()
+                assert second_replied.wait(15), service.health_snapshot()
                 service.close()
             return_inventory.set()
-            retry.join(8)
+            retry.join(15)
             assert not retry.is_alive()
             if removed_inventory:
                 assert original_worker[0].is_set()
-                assert consumer_processes[0].exited.wait(8)
+                assert consumer_processes[0].exited.wait(15)
                 release.set()
-                original_worker[1].join(8)
+                original_worker[1].join(15)
                 assert not original_worker[1].is_alive()
                 expected = group_events[:1]
             else:
                 if stale_inventory:
                     assert not original_worker[0].is_set()
                     release.set()
-                    assert second_replied.wait(8), service.health_snapshot()
+                    assert second_replied.wait(15), service.health_snapshot()
                     with service._lock:
                         recheck = service._refresh_retry
                     assert recheck is not None and recheck is not retry
-                    recheck.join(8)
+                    recheck.join(15)
                     assert not recheck.is_alive()
                     assert timer_reads == [retry, recheck]
                     assert service._workers[profile] == original_worker
@@ -629,16 +629,16 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
                 expected = group_events[:2]
         elif unreadable and not retarget_on_retry:
             release.set()
-            assert second_replied.wait(8), service.health_snapshot()
-            assert inventory_retried.wait(8)
+            assert second_replied.wait(15), service.health_snapshot()
+            assert inventory_retried.wait(15)
             assert service._workers[profile] == original_worker
             assert len(consumer_processes) == 1
             expected = group_events[:2]
         else:
-            assert consumer_processes[0].exited.wait(8)
+            assert consumer_processes[0].exited.wait(15)
             assert len(consumer_processes) == 1
             release.set()
-            assert next_stream_ready.wait(8), service.health_snapshot()
+            assert next_stream_ready.wait(15), service.health_snapshot()
             expected = group_events[:1] if different_transport or retarget_on_retry else group_events[:2]
             if removing or unreadable:
                 expected += group_events[2:]

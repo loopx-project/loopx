@@ -5,7 +5,7 @@ import shlex
 
 import pytest
 
-from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+from canonical_authority_fixture import empty_todo_display, initialize_canonical_authority, isolate_sqlite_runtime
 from test_canonical_frontier_revision import _fixture
 from test_goal_amendment_proposal import _write_fixture, _stall_runs, _ack_run, GOAL_ID
 from loopx.control_plane.testing.canary_harness import run_json_cli_result
@@ -22,7 +22,8 @@ def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypat
     projection = _fixture()
     initialize_canonical_authority(paths["runtime"], GOAL_ID, projection,
                                    state_path=paths["state_file"], provider=provider)
-    # The display is absent: the production reader must use persisted authority.
+    # Missing Goal intent is a rejection case, separate from absent Todo display.
+    original_source = paths["state_file"].read_bytes()
     paths["state_file"].unlink()
     goal = json.loads(paths["registry"].read_text())["goals"][0]
     summary = active_state_todo_fields(goal, runtime_root=paths["runtime"])["agent_todos"]
@@ -40,12 +41,26 @@ def test_complex_provider_snapshot_replan_and_quota_readback(tmp_path, monkeypat
     index = paths["runtime"] / "goals" / GOAL_ID / "runs" / "index.jsonl"
     index.parent.mkdir(parents=True, exist_ok=True)
     index.write_text("".join(json.dumps(row) + "\n" for row in reversed(history)))
+    original_history = index.read_bytes()
+    code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
+        "--agent-id", "agent-a", registry_path=paths["registry"])
+    assert code == 1 and result["ok"] is False, result
+    assert result["decision"] == "skip" and result["should_run"] is False
+    assert result["reason"] == "Complete Goal source is required before host dispatch"
+    assert not paths["state_file"].exists()
+    assert index.read_bytes() == original_history
+    assert active_state_todo_fields(goal, runtime_root=paths["runtime"])["agent_todos"] == summary
+
+    paths["state_file"].write_bytes(original_source)
+    empty_todo_display(paths["state_file"])
+    display = paths["state_file"].read_bytes()
+    assert b"todo_stage2_a" not in display
     code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
         "--agent-id", "agent-a", registry_path=paths["registry"])
     assert code == 0, result
     assert "typed_progress_repeat" in json.dumps(result)
     assert active_state_todo_fields(goal, runtime_root=paths["runtime"])["agent_todos"] == summary
-    assert not paths["state_file"].exists()
+    assert paths["state_file"].read_bytes() == display
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])

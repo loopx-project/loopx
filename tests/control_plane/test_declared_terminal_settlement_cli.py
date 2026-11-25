@@ -130,7 +130,9 @@ def test_declared_leased_completion_writeback_spend_terminal_and_replay(
     completion_command = recovery["ordered_steps"][0]["command_template"]
     assert "--project" in recovery["ordered_steps"][1]["command_template"]
     assert "--state-file" in recovery["ordered_steps"][1]["command_template"]
-    assert "--project" not in recovery["ordered_steps"][2]["command_template"]
+    assert "--settle-turn" in recovery["ordered_steps"][1]["command_template"]
+    assert recovery["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in recovery["ordered_steps"][2]
     assert "--no-follow-up" not in shlex.split(completion_command)
     assert completion_command in render_todo_markdown(premature)
     completion_command = completion_command.replace("<validated evidence>", complete_args[-1])
@@ -358,7 +360,11 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
     refused = call(*refresh, expected=1)
     assert refused["ok"] is False
     assert "vision" in str(refused).lower()
+    stride = recovered["replan_action_packet"]["stride_control"]["minimal_example"]
+    assert stride["reference_obligation_id"] == identity["replan_obligation_id"]
+    assert stride["reference_context_id"] == recovered["autonomous_replan_obligation"]["replan_context"]["context_id"]
     vision = {"state": "vision_closed", "summary": "Original outcome independently checked.",
+              "stride_decision": stride,
               "vision_patch": {"acceptance_summary": "Original source and declared check remain valid."},
               "path_delta": {"outcome": "no_change", "prior_assumption": "Original source acceptance requires validation.",
                              "observed_reality": "The declared validator and original settlement passed.",
@@ -410,16 +416,16 @@ def test_no_followup_transition_recovers_bound_review_through_writeback_and_sing
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("legacy_unqualified", [False, True])
+@pytest.mark.parametrize("prior_observation", ["none", "same_turn", "another_turn"])
 def test_same_turn_terminal_recovery_accepts_a_real_blocker_without_another_debit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
-    legacy_unqualified: bool, capsys: pytest.CaptureFixture[str],
+    prior_observation: str, capsys: pytest.CaptureFixture[str],
 ) -> None:
     _, workspace, runtime, registry, run, lease, marker, _, _ = _fixture(tmp_path, monkeypatch, provider)
 
-    def call(*args: str):
+    def call(*args: str, expected: int = 0):
         code, payload = run(*args)
-        assert code == 0, json.dumps(payload, ensure_ascii=False, indent=2)
+        assert code == expected, json.dumps(payload, ensure_ascii=False, indent=2)
         return payload
 
     binding = ("--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
@@ -456,7 +462,7 @@ def test_same_turn_terminal_recovery_accepts_a_real_blocker_without_another_debi
          "--no-global-sync", "--suppress-external-sinks")
     legacy_path = None
     legacy_bytes = None
-    if legacy_unqualified:
+    if prior_observation != "none":
         # Fault-inject the old qualifier omission through the real CLI. The
         # synthetic provider, journal and original guard are never rewritten.
         import loopx.state_refresh as state_refresh
@@ -474,9 +480,49 @@ def test_same_turn_terminal_recovery_accepts_a_real_blocker_without_another_debi
         assert unqualified["autonomous_replan_recorded"] is False
         legacy_path = Path(unqualified["json_path"])
         legacy_bytes = legacy_path.read_bytes()
-        context = call("checkpoint-context", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
-                       "--turn-instance-id", turn, "--replan-obligation-id", replan)
+        unqualified_guard = call(*guard)
+        assert unqualified_guard["heartbeat_receipt"]["settlement_identity"] == identity
+        no_debit = call("quota", "spend-slot", "--goal-id", cli.GOAL_ID, "--agent-id", cli.AGENT_ID,
+                        "--turn-instance-id", turn, "--replan-obligation-id", replan,
+                        "--slots", "1", "--source", "heartbeat", "--execute", expected=1)
+        assert no_debit.get("appended") is not True
+        assert "checkpoint-context" in no_debit["reason"]
+        assert cli._spend_run_count(runtime) == 1
+        assert "settlement_owed" not in unqualified_guard
+        cli_channel = unqualified_guard["interaction_contract"]["cli_channel"]
+        assert cli_channel.get("settlement_plan") is None
+        assert cli_channel["spend_after_validation"] is False
+        [read_command] = cli_channel["next_cli_actions"]
+        assert read_command == unqualified_guard["settlement_progress"]["checkpoint_context_command"]
+        if prior_observation == "another_turn":
+            # Supply independent historical evidence with the same blocker but
+            # its own Turn, work item and proof. The supplement cannot hide it.
+            from loopx.history import append_run_index_record
+
+            other = {
+                "generated_at": "2001-01-02T00:00:00Z",
+                "goal_id": cli.GOAL_ID, "agent_id": cli.AGENT_ID,
+                "turn_instance_id": "turn-independent-earlier-observation",
+                "progress_observation": {
+                    **json.loads(legacy_bytes)["progress_observation"],
+                    "work_item_id": "separate-historical-review",
+                    "evidence_ids": ["evidence:separate-source-read-failed"],
+                },
+            }
+            append_run_index_record(legacy_path.parent / "index.jsonl", other)
+        argv = shlex.split(read_command)
+        context = call(*argv[argv.index("checkpoint-context"):])
         refresh = (*refresh, "--checkpoint-read-context", context["read_context_id"])
+    if prior_observation == "another_turn":
+        assert legacy_path is not None
+        index = legacy_path.parent / "index.jsonl"
+        index_before = index.read_bytes()
+        refused = call(*refresh, expected=1)
+        assert refused["replan_transition"]["reason_code"] == "progress_observation_replayed"
+        assert index.read_bytes() == index_before
+        assert legacy_path.read_bytes() == legacy_bytes
+        assert cli._spend_run_count(runtime) == 1
+        return
     refreshed = call(*refresh)
     assert refreshed["autonomous_replan_recorded"] is True
     assert refreshed["settlement_progress"]["state"] == "settled"

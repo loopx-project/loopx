@@ -52,6 +52,8 @@ def register_history_command(subparsers: argparse._SubParsersAction) -> None:
     )
     history_parser.add_argument("--goal-id", help="Only show one goal.")
     history_parser.add_argument("--limit", type=int, default=10)
+    history_parser.add_argument("--since", help="Include runs at or after this ISO timestamp (UTC when no offset is given).")
+    history_parser.add_argument("--until", help="Include runs before this ISO timestamp; filter before --limit (UTC when no offset is given).")
     history_parser.add_argument("--agent-id", help="Scope compact history to one Agent.")
     history_parser.add_argument("--evidence-ref", help="Read the exact public-safe evidence reference supplied by replan_context.")
     history_parser.add_argument(
@@ -80,6 +82,10 @@ def handle_history_command(
     runtime_root_arg: str | None,
     print_payload: PrintPayload,
 ) -> int:
+    if (args.since is not None or args.until is not None) and (args.history_action or args.evidence_ref):
+        print_payload({"ok": False, "error": "--since/--until cannot be combined with a history action or --evidence-ref"},
+                      args.format, render_history_markdown)
+        return 1
     if args.agent_id and (not args.goal_id or args.history_action):
         print_payload({"ok": False, "error": "--agent-id requires --goal-id without a history action"},
                       args.format, render_history_markdown)
@@ -246,6 +252,8 @@ def handle_history_command(
             limit=max(0, args.limit),
             agent_lane_id=args.agent_id,
             scoped_agent_id=args.agent_id,
+            since=args.since,
+            until=args.until,
             # This display shows what remains readable and reports the quota as
             # unreadable; no projection or export is built from it.
             tolerate_undecodable=True,

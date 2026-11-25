@@ -6,6 +6,7 @@ from itertools import count
 from pathlib import Path
 from threading import Barrier, Event, Lock
 from time import sleep
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,24 @@ def test_source_changes_become_visible_on_the_next_request(
         "_control_plane_root",
         lambda: tmp_path,
     )
+
+    with effect_runtime.effect_runtime_request_scope():
+        first = effect_runtime._runtime_fingerprint_for_request()
+        source.write_text("export const revision = 2;\n", encoding="utf-8")
+        assert effect_runtime._runtime_fingerprint_for_request() == first
+
+    with effect_runtime.effect_runtime_request_scope():
+        assert effect_runtime._runtime_fingerprint_for_request() != first
+
+
+def test_recent_write_rehashes_even_when_file_metadata_is_equal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "runtime.ts"
+    source.write_text("export const revision = 1;\n", encoding="utf-8")
+    timestamp = 10_000
+    snapshot = ((source.name, timestamp, timestamp, source.stat().st_size),)
+    monkeypatch.setattr(effect_runtime, "_control_plane_root", lambda: tmp_path)
+    monkeypatch.setattr(effect_runtime, "_runtime_source_snapshot", lambda _root: snapshot)
+    monkeypatch.setattr(effect_runtime, "time", SimpleNamespace(time_ns=lambda: timestamp + 1))
 
     with effect_runtime.effect_runtime_request_scope():
         first = effect_runtime._runtime_fingerprint_for_request()
@@ -232,6 +251,7 @@ def test_common_command_dispatch_defines_one_effect_runtime_request(
         *,
         registry_path: Path,
         allow_missing_registry: bool,
+        registry_was_configured: bool | None = None,
     ) -> int:
         assert registry_path == Path("registry.json")
         assert allow_missing_registry is False

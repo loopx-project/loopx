@@ -73,7 +73,6 @@ from .control_plane.todos.todo_semantics import (
 )
 from .execution_profile import execution_profile_outcome_floor, outcome_floor_threshold
 from .presentation.renderers.quota_event_markdown import (
-    render_quota_monitor_poll_markdown as _render_quota_monitor_poll_markdown,
     render_quota_slot_preview_markdown as render_quota_slot_preview_markdown,
 )
 from .presentation.renderers.quota_markdown import (
@@ -370,7 +369,7 @@ def goal_quota_with_spend_ledger(
     goal: Mapping[str, object] | None,
     runs: Sequence[Mapping[str, object]],
     *,
-    now: datetime | None = None,
+    now: datetime | None = None, runs_dir: Path | None = None,
 ) -> dict[str, object]:
     payload = goal_quota_config(goal)
     goal_id = str(goal.get("id") or "") if goal else ""
@@ -410,7 +409,7 @@ def goal_quota_with_spend_ledger(
         generated_at = _parse_timestamp(run.get("generated_at"))
         if generated_at is None or generated_at < window_start or generated_at > current_time:
             continue
-        contribution, unreadable_reason = quota_slot_observation(run)
+        contribution, unreadable_reason = quota_slot_observation(run, runs_dir=runs_dir, goal_id=goal_id)
         if unreadable_reason is not None:
             # The index row claims a spend or a void that cannot be read back.
             # Counting it as no spend would silently hand the Goal fresh quota,
@@ -1030,7 +1029,7 @@ def _attach_auxiliary_monitor_settlement_resume(
         goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
         turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
         command_prefix=prefix, scoped_cli_args=scoped_args, lifecycle_actor_args="",
-        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref,
+        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref, composed_settlement=True,
     )
     ordered_steps = _dict_items(plan.as_dict().get("ordered_steps"))
     result["settlement_resume"] = {
@@ -1151,7 +1150,7 @@ def record_quota_monitor_poll(
         ).get("todo")
     effective_todo_id = normalized_observation_todo_id or (normalized_receipt_todo_id if not target_key else None)
     result: dict[str, object] = record_quota_monitor_poll_for_decision(
-        before, status_payload, goal_id=safe_goal_id, render_markdown=_render_quota_monitor_poll_markdown,
+        before, status_payload, goal_id=safe_goal_id,
         after_decision=should_run, registry_path=registry_path, execute=execute, source=source,
         reason_summary=reason_summary, agent_id=agent_id, settlement_todo_id=normalized_receipt_todo_id,
         auxiliary_settlement_todo=auxiliary_settlement_todo, todo_id=effective_todo_id,
@@ -1166,6 +1165,7 @@ def record_quota_monitor_poll(
         task_lease_expected_version=task_lease_expected_version, use_current_task_lease=use_current_task_lease,
         turn_instance_id=turn_instance_id, status_reloader=status_reloader, goal_ref=goal_ref,
         recovery_effect_id=recovery_effect_id,
+        todo_id_explicit=normalized_requested_todo_id is not None,
     )
     continuation = result.get("turn_continuation")
     if (
@@ -1387,9 +1387,9 @@ def spend_quota_slot(
             )
         spent_result = settlement_readback.settlement
         if spent_result.failure is None:
-            no_spend = (
-                _as_dict(settlement_readback.progress).get("closeout_kind")
-                == "capability_duty_retired_no_spend"
+            progress = _as_dict(settlement_readback.progress)
+            no_spend = progress.get("no_spend") is True or (
+                progress.get("closeout_kind") == "capability_duty_retired_no_spend"
             )
             return _spend_slot_reply(
                 ok=True, execute=execute, goal_id=safe_goal_id, goal_ref=goal_ref,
@@ -1419,9 +1419,8 @@ def spend_quota_slot(
         turn_instance_id=turn_instance_id, effect_ref=normalized_effect_ref or None,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
     )
-    if not preview.get("ok"):
-        return preview
     return record_quota_slot_spend_from_preview(
         preview, status_payload, goal_id=safe_goal_id, execute=execute,
         source=source, registry_path=registry_path, goal_ref=goal_ref,
+        settlement_identity=settlement_readback.identity.value if settlement_readback else None,
     )

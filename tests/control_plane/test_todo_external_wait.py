@@ -467,3 +467,57 @@ def test_waiting_prose_without_typed_condition_remains_runnable(tmp_path: Path) 
     assert fields is not None
     executable = fields["agent_todos"]["first_executable_items"]
     assert WAITING_ID in {item["todo_id"] for item in executable}
+
+
+def test_scoped_material_poll_allows_subsequent_unchanged_poll(
+    tmp_path: Path,
+) -> None:
+    registry, runtime, state_file = _write_fixture(tmp_path, provider="sqlite")
+
+    scoped = write_monitor_poll_todo_state(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        execute=True,
+        generated_at="2026-08-25T01:00:00Z",
+        todo_id=MONITOR_ID,
+        result_hash="review-v3-scoped",
+        material_change=True,
+        material_change_scope="case-a/run-1",
+        next_due_at="2026-08-25T02:00:00Z",
+        next_agent_todo="Handle scoped transition case-a/run-1.",
+        next_action_kind="external_intake",
+        agent_id=AGENT_ID,
+        monitor_effect_id="quota-monitor-poll:scoped-material-step",
+    )
+    assert scoped is not None
+    assert scoped["material_change_scope"] == "case-a/run-1"
+    persisted_after_scoped = _todos(runtime)[MONITOR_ID]
+    assert persisted_after_scoped["material_change_scope"] == "case-a/run-1"
+    scoped_generations = str(
+        persisted_after_scoped["material_change_scope_generations"]
+    )
+
+    unchanged = write_monitor_poll_todo_state(
+        registry_path=registry,
+        runtime_root=runtime,
+        goal_id=GOAL_ID,
+        execute=True,
+        generated_at="2026-08-25T02:00:00Z",
+        todo_id=MONITOR_ID,
+        result_hash="review-v3-scoped",
+        material_change=False,
+        next_due_at="2026-08-25T03:00:00Z",
+        agent_id=AGENT_ID,
+        monitor_effect_id="quota-monitor-poll:unchanged-after-scoped",
+    )
+    assert unchanged is not None
+    assert unchanged["material_change"] is False
+    assert unchanged["consecutive_no_change"] == 1
+    persisted_after_unchanged = _todos(runtime)[MONITOR_ID]
+    assert "material_change_scope" not in persisted_after_unchanged
+    assert (
+        persisted_after_unchanged["material_change_scope_generations"]
+        == scoped_generations
+    )
+    assert "material_change_scope=" not in state_file.read_text(encoding="utf-8")

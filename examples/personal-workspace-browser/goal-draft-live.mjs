@@ -52,7 +52,7 @@ export const goalDraftLiveScenario = {
           });
         }});
         const {page} = session;
-        await page.getByRole("navigation", {name: "管家视图"}).getByRole("button", {name: "对话", exact: true}).click();
+        await page.getByTestId("personal-first-goal").waitFor({state: "visible"});
         await page.locator(".personal-channel-composer textarea").fill(draft.objective);
         await page.getByRole("button", {name: "发送", exact: true}).click();
         const card = page.getByRole("region", {name: "目标草稿"}).last();

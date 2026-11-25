@@ -7,13 +7,15 @@ import os
 import shlex
 import shutil
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from loopx.cli import main as cli_main
+from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.control_plane.testing.cli_output_budget import (
@@ -353,6 +355,14 @@ def _measure_context_output(text, *, output_format):
 
 def _quota_payload_without_rollout_receipt(text: str) -> dict[str, object]:
     payload = _json_payload(text)
+    if payload.get("schema_version") == "loopx_turn_envelope_v1":
+        from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
+
+        # Verify each original signature before comparing independent observations.
+        # The rollout receipt changes both derived hashes, not the task or authority.
+        assert_complete_turn_decision(payload)
+        payload["contract_binding"].pop("content_hash")
+        payload["contract_binding"].pop("source_decision_hash")
     payload.pop("rollout_event", None)
     return payload
 
@@ -365,10 +375,7 @@ def _surface_commands(
     state_file: Path,
     output_format: str,
     context_delivery: str | None = "off",
-    complete_quota: bool = True,
 ) -> dict[str, list[str]]:
-    # Keep the Complete Turn budget workload on its declared carrier.
-    quota_view = ["--turn-envelope"] if complete_quota else []
     delivery = ["--context-delivery", context_delivery] if context_delivery else []
     common = [
         "--registry",
@@ -418,7 +425,7 @@ def _surface_commands(
             GOAL_ID,
             "--agent-id",
             AGENT_IDS[0],
-        ] + quota_view + delivery,
+        ] + delivery,
         "loopx_turn_plan": common
         + [
             "turn",
@@ -923,8 +930,13 @@ def test_turn_envelope_references_selected_todo_without_duplicate_context(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    assert payload["action"]["selected_todo"]["text_ref"] == "action.recommended_action"
-    work_context = payload["work_context"]
+    assert payload["schema_version"] == "loopx_turn_envelope_v1"
+    assert payload["selected_todo"]["todo_id"] == "todo_fixture_000"
+    assert payload["selected_todo"]["text"] == (
+        "[P0] Validate public fixture lane 00 without reading archival detail."
+    )
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
+    assert work_context["selected_todo_text_verified"] is True
     assert work_context["selected_todo_ref"] == "selected_todo"
     source = next(row for row in work_context["sources"] if row["source"] == "selected_todo")
     authority = source["content"]["authority_read"]
@@ -983,11 +995,7 @@ def test_compact_selected_todo_markdown_preserves_work_context_instruction(
     assert json_exit_code == 0, json_text
     assert markdown_exit_code == 0, markdown_text
     payload = _json_payload(json_text)
-    work_context = (
-        payload["interaction_contract"]["agent_channel"]["work_context"]
-        if surface_id == "quota_should_run"
-        else payload["work_context"]
-    )
+    work_context = payload["interaction_contract"]["agent_channel"]["work_context"]
     instruction = work_context["instruction"]
     assert instruction
     assert markdown_text.count(instruction) == 1
@@ -1042,12 +1050,12 @@ def test_quota_should_run_no_format_uses_machine_contract_json(
     assert no_format_exit_code == 0, no_format_text
     assert _json_payload(no_format_text)["goal_id"] == GOAL_ID
     assert markdown_exit_code == 0, markdown_text
-    assert markdown_text.startswith("# LoopX Quota Should Run")
+    assert markdown_text.startswith("# LoopX Turn Envelope")
     assert not markdown_text.lstrip().startswith("{")
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.name)
-def test_public_quota_packet_keeps_original_control_keys_and_output_budget(
+def test_ordinary_quota_uses_complete_contract_with_delivery_off(
     tmp_path: Path, scenario: Scenario,
 ) -> None:
     with _stable_budget_fixture_root(tmp_path / scenario.name) as stable_root:
@@ -1055,22 +1063,21 @@ def test_public_quota_packet_keeps_original_control_keys_and_output_budget(
         import_fixture_authority(registry_path, GOAL_ID)
         command = _surface_commands(
             project=project, runtime=runtime, registry_path=registry_path, state_file=state_file,
-            output_format="json", complete_quota=False,
+            output_format="json",
         )["quota_should_run"]
         exit_code, output = _invoke_cli(command)
         assert exit_code == 0, output
         measurement = _measure_context_output(output, output_format="json")
 
     packet = _measured_payload(measurement)
-    assert packet.get("schema_version") is None
+    assert packet["schema_version"] == "loopx_turn_envelope_v1"
+    assert packet["contract_binding"]
+    assert "reference_file" not in packet
     assert packet["goal_id"] == GOAL_ID
     assert packet["interaction_contract"]["schema_version"] == "loopx_interaction_contract_v0"
-    spec = replace(
-        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], output_contract_version=None,
-        semantic_json_keys=("interaction_contract", "scheduler_hint", "selected_todo"),
-    )
     assert_cli_output_baseline(
-        spec, scenario=scenario.name, output_format="json", text=output, measurement=measurement,
+        CLI_OUTPUT_BUDGET_BY_ID["quota_should_run"], scenario=scenario.name,
+        output_format="json", text=output, measurement=measurement,
     )
 
 
@@ -1103,8 +1110,6 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    assert '"content_revision"' not in default_text
-    assert '"content_revision"' not in detail_text
     default_payload = _json_payload(default_text)
     detail_payload = _json_payload(detail_text)
     default_summary = default_payload["agent_todo_summary"]
@@ -1116,18 +1121,15 @@ def test_quota_cli_keeps_full_agent_todo_diagnostics_on_explicit_cold_path(
     )
     assert detail_inventory["item_detail_ref"] == "$.agent_todo_summary"
     assert detail_inventory["items"]
-    assert default_summary["payload_compaction"]["schema_version"] == (
-        "quota_cli_todo_summary_compaction_v0"
-    )
-    assert default_payload["todo_summary_projection"]["detail_ref"] == (
-        "quota should-run --include-detail agent-todos"
-    )
-    assert "backlog_items" not in default_summary
-    assert detail_summary["backlog_items"]
-    assert detail_payload["todo_summary_projection"]["compacted_roles"] == ["user"]
-    assert detail_payload["todo_summary_projection"]["detail_ref"] == (
-        "quota should-run --include-detail user-todos"
-    )
+    # Detail selectors add planning diagnostics, not a second task contract.
+    assert default_summary == detail_summary
+    assert default_summary["total_count"] == SCENARIOS[1].todo_count
+    assert default_summary["backlog_items"]
+    assert default_summary["first_executable_items"][0]["todo_id"] == "todo_fixture_000"
+    assert len(detail_inventory["items"]) == SCENARIOS[1].todo_count
+    assert {row["todo_id"] for row in detail_inventory["items"]} == {
+        f"todo_fixture_{index:03d}" for index in range(SCENARIOS[1].todo_count)
+    }
     for key in ("interaction_contract", "scheduler_hint", "selected_todo"):
         assert default_payload.get(key) == detail_payload.get(key)
 
@@ -1177,6 +1179,72 @@ def test_unmigrated_malformed_todo_state_stays_bounded_and_refuses_ordinary_read
         assert state_file.read_bytes() == before
 
 
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_complete_turn_shares_vision_audit_with_exact_native_and_stateless_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    from loopx.control_plane.turn_driver.decision_capture import read_context_read_reference
+    from loopx.control_plane.turn_driver.native_context_selection import verified_context_selection
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+
+    with _stable_budget_fixture_root(tmp_path / "complete-vision-audit") as stable_root:
+        isolate_sqlite_runtime(stable_root, monkeypatch)
+        project, runtime, registry, _ = _write_fixture(stable_root, SCENARIOS[1], include_agent_vision=True)
+        import_fixture_authority(registry, GOAL_ID, provider=provider)
+        monkeypatch.chdir(project)
+        common = ["--format", "json", "--registry", str(registry), "--runtime-root", str(runtime)]
+        guard = common + ["quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", AGENT_IDS[0]]
+        fixed_route = ["--cli-bin", "/fixture/bin/loopx"]
+        code, text = _invoke_cli(fixed_route + guard + ["--context-delivery", "off"])
+        assert code == 0, text
+        assert len(text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"].max_chars["json"]
+        payload = json.loads(text)
+        assert_complete_turn_decision(payload)
+        root_audit = payload["vision_continuation_audit"]
+        cli_audit = payload["interaction_contract"]["cli_channel"]["vision_continuation_audit"]
+        assert cli_audit == {"projection_ref": "$.vision_continuation_audit",
+            "projection_view": "cli_channel", "required": True}
+        assert root_audit["required_before_closeout"] and root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        captures = stable_root / "decisions"
+        captures.mkdir(mode=0o700)
+        code, text = _invoke_cli(guard + ["--codex-app", "--context-delivery", "on",
+            "--turn-instance-id", "fixture-vision-audit", "--decision-output-root", str(captures)])
+        assert code == 0, text
+        navigation = json.loads(text)
+        _, reference = read_context_read_reference(navigation["recovery"]["reference_file"])
+        capture = Path(reference["path"])
+        original = capture.read_bytes()
+        assert sha256(original).hexdigest() == reference["sha256"]
+        assert json.loads(original)["interaction_contract"]["cli_channel"]["vision_continuation_audit"] == cli_audit
+        section = "/interaction_contract/cli_channel/vision_continuation_audit"
+        child = section + "/required_before_closeout"
+        judge = section + "/vision_gap_judge/registry_read_instruction"
+        initial, _, _ = read_pinned_cli_body(navigation["first_read_command"])
+        first = selected_context_values(initial)
+        assert first[child] == root_audit["required_before_closeout"]
+        assert first[judge] == root_audit["vision_gap_judge"]["registry_read_instruction"]
+
+        select = common + ["quota", "context-read", "--capture-file", str(capture),
+            "--capture-sha256", reference["sha256"]]
+        code, text = _invoke_cli(select + ["--select", child, "--select", judge])
+        assert code == 0, text
+        page = json.loads(text)
+        values = selected_context_values(page["content"])
+        assert values[child] == first[child] and values[judge] == first[judge]
+        observation = verified_context_selection({"source_recovery": reference}, page)
+        assert observation is not None and observation["source_sha256"] == reference["sha256"]
+        assert set(observation["selected_pointers"]) == {child, judge}
+        code, text = _invoke_cli(select + ["--select", section, "--list", "--list-depth", "2"])
+        assert code == 0, text
+        fields = json.loads(json.loads(text)["content"])["selections"][0]["fields"]
+        assert {child, judge} <= {field["pointer"] for field in fields}
+        whole, _, _ = read_pinned_cli_body(navigation["recovery"]["command"] + " --select ''")
+        assert json.loads(whole)["selections"] == [{"pointer": "", "value": json.loads(original)}]
+        assert capture.read_bytes() == original
+
+
 def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
     tmp_path: Path,
 ) -> None:
@@ -1207,43 +1275,27 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
 
     assert default_exit_code == 0, default_text
     assert detail_exit_code == 0, detail_text
-    # Same 36-Todo / 12-run workload: 45,313 lossy -> 48,418 complete chars.
-    # Retain the required clauses; the qualified complete-body ceiling is owned
-    # by the budget spec and leaves bounded headroom above the measured payload.
-    # The separate 40k compactor fixture and collection-growth guards stay fixed.
-    assert len(default_text) <= CLI_OUTPUT_MODE_VARIANT_BY_ID[
-        "quota_should_run_vision_detail"
-    ].max_chars["json"]
     default_payload = _json_payload(default_text)
     detail_payload = _json_payload(detail_text)
     compact_audit = default_payload["vision_continuation_audit"]
     detailed_audit = detail_payload["vision_continuation_audit"]
     assert compact_audit["required"] is True
     assert compact_audit["vision_gap_judge"]["decision"] == "continue"
-    assert compact_audit["payload_compaction"]["full_detail_cold_path"] == (
-        "quota should-run --include-detail vision"
-    )
+    assert compact_audit == detailed_audit
     assert compact_audit["vision_gap_judge"]["registry_read_instruction"]
-    assert {k: v for k, v in compact_audit.items() if k != "payload_compaction"} == (
-        detailed_audit
-    )
+    assert compact_audit["vision_gap_judge"]["external_research_instruction"]
+    assert compact_audit["required_before_closeout"]
     for compact_container, detailed_container in (
         (default_payload["goal_frontier_projection"], detail_payload["goal_frontier_projection"]),
         (default_payload["interaction_contract"]["agent_channel"], detail_payload["interaction_contract"]["agent_channel"]),
         (default_payload["interaction_contract"]["cli_channel"], detail_payload["interaction_contract"]["cli_channel"]),
     ):
-        if "vision_continuation_audit" not in detailed_container:
-            continue
-        audit = dict(compact_container["vision_continuation_audit"])
+        assert compact_container.get("vision_continuation_audit") == detailed_container.get("vision_continuation_audit")
+        audit = compact_container.get("vision_continuation_audit", {})
         if "projection_ref" in audit:
             assert audit["projection_ref"] == "$.vision_continuation_audit"
-            audit = {k: v for k, v in compact_audit.items() if k != "payload_compaction"}
         elif "projection_ref" in audit.get("vision_gap_judge", {}):
-            assert audit["vision_gap_judge"]["projection_ref"] == (
-                "$.vision_continuation_audit.vision_gap_judge"
-            )
-            audit["vision_gap_judge"] = compact_audit["vision_gap_judge"]
-        assert audit == detailed_container["vision_continuation_audit"]
+            assert audit["vision_gap_judge"]["projection_ref"] == "$.vision_continuation_audit.vision_gap_judge"
     compact_replan = default_payload["replan_action_packet"]
     detailed_replan = detail_payload["replan_action_packet"]
     assert compact_replan["writeback_contract"] == detailed_replan["writeback_contract"]
@@ -1284,6 +1336,18 @@ def test_quota_cli_keeps_complete_vision_rules_with_reachable_duplicate_refs(
     assert default_interaction["cli_channel"]["next_cli_actions"] == (
         detail_interaction["cli_channel"]["next_cli_actions"]
     )
+
+    # The measured baseline allowance is not evidence of output reduction.
+    spec = CLI_OUTPUT_MODE_VARIANT_BY_ID["quota_should_run_vision_detail"]
+    assert len(default_text) <= spec.max_chars["json"]
+    # A bounded calibration must still reject a body beyond its allowance.
+    # JSON whitespace preserves all semantics while adding presentation cost.
+    oversized = default_text + " " * (spec.max_chars["json"] + 1 - len(default_text))
+    with pytest.raises(AssertionError, match="variant ceiling"):
+        assert_cli_output_mode_variant(
+            spec, output_format="json", text=oversized,
+            measurement=measure_cli_output(oversized, output_format="json"),
+        )
 
 
 @pytest.mark.parametrize("include_agent_vision", [False, True])
@@ -1492,22 +1556,19 @@ def test_quota_cli_keeps_full_user_todo_diagnostics_on_explicit_cold_path(
     detail_payload = _json_payload(detail_text)
     default_summary = default_payload["user_todo_summary"]
     detail_summary = detail_payload["user_todo_summary"]
-    assert default_summary["payload_compaction"]["schema_version"] == (
-        "quota_cli_user_todo_summary_compaction_v0"
-    )
-    assert default_summary["payload_compaction"]["full_detail_cold_path"] == (
-        "quota should-run --include-detail user-todos"
-    )
-    assert default_summary["gate_open_items"][0]["todo_id"] == "todo_user_gate_001"
-    assert default_summary["gate_open_items"][0]["blocks_agent"] == "codex-alpha"
-    assert "other_agent_bound_user_action_items" not in default_summary
-    assert detail_summary["other_agent_bound_user_action_items"][0]["todo_id"] == (
-        "todo_user_action_001"
-    )
-    assert detail_summary["payload_compaction"]["schema_version"] == (
-        "quota_todo_summary_payload_compaction_v0"
-    )
-    assert detail_payload["todo_summary_projection"]["compacted_roles"] == ["agent"]
+    assert default_summary == detail_summary
+    assert default_summary["total_count"] == 2
+    assert default_summary["open_count"] == 1
+    # The shared owner aliases equal lanes; resolve its reference rather than
+    # requiring duplicate bodies or the retired CLI-only compaction format.
+    assert default_summary["gate_open_items_ref"] == "$.user_todo_summary.first_open_items"
+    gate = default_summary["first_open_items"][0]
+    assert gate["todo_id"] == "todo_user_gate_001"
+    assert gate["blocks_agent"] == AGENT_IDS[0]
+    other = default_summary["other_agent_bound_user_action_items"][0]
+    assert other["todo_id"] == "todo_user_action_001"
+    assert other["bound_agent"] == AGENT_IDS[1]
+    assert default_summary["user_action_agent_scope_filter"]["other_agent_bound_user_action_open_count"] == 1
     for key in ("interaction_contract", "scheduler_hint", "selected_todo"):
         assert default_payload[key] == detail_payload[key]
 
@@ -1550,23 +1611,14 @@ def test_quota_cli_keeps_goal_boundary_authority_on_explicit_cold_path(
     detail_boundary = detail_payload["goal_boundary"]
     default_authority = default_boundary["checkpointed_boundary_authority"]
     detail_authority = detail_boundary["checkpointed_boundary_authority"]
-    assert default_authority["payload_compaction"] == {
-        "schema_version": "quota_cli_goal_boundary_compaction_v0",
-        "omitted_entry_count": 1,
-        "full_detail_cold_path": "quota should-run --include-detail goal-boundary",
-    }
-    assert "entries" not in default_authority
-    assert detail_authority["entries"]
-    for key in ("active_count", "inactive_count", "active_write_scope"):
-        assert default_authority[key] == detail_authority[key]
-    expected_boundary = dict(detail_boundary)
-    expected_authority = dict(detail_authority)
-    expected_authority.pop("entries")
-    expected_authority["payload_compaction"] = default_authority[
-        "payload_compaction"
-    ]
-    expected_boundary["checkpointed_boundary_authority"] = expected_authority
-    assert default_boundary == expected_boundary
+    assert default_authority == detail_authority
+    assert default_authority["active_count"] == 1
+    assert default_authority["inactive_count"] == 0
+    assert default_authority["active_write_scope"] == ["docs/**"]
+    assert default_authority["entries"][0]["decision_id"] == "todo_fixture_boundary_001"
+    assert default_authority["entries"][0]["decision"] == "approve"
+    assert default_authority["entries"][0]["write_scope"] == ["docs/**"]
+    assert default_boundary == detail_boundary
     for key in ("interaction_contract", "scheduler_hint", "selected_todo"):
         assert default_payload[key] == detail_payload[key]
 
@@ -2262,16 +2314,21 @@ def test_turn_envelope_cli_preserves_codex_app_scheduler_binding(
 
     assert exit_code == 0, text
     payload = _json_payload(text)
-    full_decision = shlex.split(payload["detail_ref"]["full_decision"])
-    # A cold read must preserve the complete originating source and host profile.
-    assert full_decision == [
-        "loopx", "--registry", str(registry_path), "--runtime-root", str(runtime),
-        "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", AGENT_IDS[0], "--codex-app",
-    ]
-    read_rc, read_text = _invoke_cli(full_decision[1:], read_context=True)
+    assert shlex.split(payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
+    assert payload["scheduler_hint"]["app_automation"]["host_surface"] == "codex_app"
+    # A fresh codex-app read preserves the same host profile.
+    read_rc, read_text = _invoke_cli(
+        [
+            "--registry", str(registry_path), "--runtime-root", str(runtime),
+            "--format", "json", "quota", "should-run", "--goal-id", GOAL_ID,
+            "--agent-id", AGENT_IDS[0], "--codex-app",
+        ],
+        read_context=True,
+    )
     assert read_rc == 0, read_text
-    assert _json_payload(read_text)["goal_id"] == GOAL_ID
+    read_payload = _json_payload(read_text)
+    assert read_payload["goal_id"] == GOAL_ID
+    assert shlex.split(read_payload["contract_binding"]["scheduler_execution_args"]) == ["--codex-app"]
 
 
 def test_quota_should_run_cli_actions_keep_explicit_runtime_root(

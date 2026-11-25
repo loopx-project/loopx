@@ -91,11 +91,11 @@ test('Claude exposes native goal, forwards the session command and clears during
 
 test('agy native goals, when advertised, stay in the resumed conversation', { timeout: 5000 }, async () => {
   const a = new AgyAdapter([process.execPath, join(here, 'fixtures/fake-agy.mjs')], { FAKE_AGY_GOAL: '1' });
-  assert.ok((await a.commands(here)).some(c => c.name === 'goal'));
   const s = await a.start({ cwd: here, resumeId: 'existing-conversation' });
   const events: EmittedEvent[] = [];
   try {
     await s.prompt(input('/goal test'), hooks(events));
+    assert.ok((await a.commands(here)).some(c => c.name === 'goal'));
     const text = events.filter(e => e.type === 'message.delta').map(e => e.data.text).join('');
     assert.match(text, /echo:\/goal test/);
     assert.match(text, /conv:existing-conversation/);

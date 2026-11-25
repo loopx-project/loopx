@@ -236,11 +236,20 @@ def commit_checkpoint_run(
     return result
 
 
-def inspect_checkpoint_replay(runtime_root: Path, goal_id: str, prior: dict[str, Any]) -> None:
-    if isinstance(prior.get("vision_checkpoint"), dict) and prior["vision_checkpoint"].get("read_context"):
-        _checkpoint_effect("goal.checkpoint_read_context.inspect_replay", {
-            "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id, "prior": prior,
-        })
+def inspect_checkpoint_replay(
+    runtime_root: Path, goal_id: str, prior: dict[str, Any],
+) -> dict[str, Any] | None:
+    checkpoint = prior.get("vision_checkpoint")
+    if not isinstance(checkpoint, dict) or not checkpoint.get("read_context"):
+        return None
+    result = _checkpoint_effect("goal.checkpoint_read_context.inspect_replay", {
+        "runtime_root": str(runtime_root.resolve()), "goal_id": goal_id, "prior": prior,
+    })
+    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+        raise RuntimeError("invalid typed checkpoint replay result")
+    if not result["ok"]:
+        raise CheckpointReadContextRejected(result)
+    return result
 
 
 def render_checkpoint_context(payload: dict[str, Any]) -> str:

@@ -1439,7 +1439,7 @@ handler 不会新增 server。
 | TS CLI cutover 后的 CLI-only | CLI 进程内 import 并执行 TS kernel；没有 daemon |
 | 仅 App | App runtime 内嵌同一 kernel |
 | App + CLI + scheduler，或多个并发 client | 一个 managed local authority daemon；client 连接当前 writer |
-| Python 仍是 CLI 的迁移期 | 一个 idle-exiting loopback runtime 把 Python 桥接到已迁 TS kernel |
+| Python 仍是 CLI 的迁移期 | 默认由空闲退出的回环 runtime 把 Python 桥接到已迁 TS kernel。POSIX 可显式选择由每个 CLI 进程持有的标准输入输出子进程。 |
 
 如果 authority daemon 已拥有某个 registry/workspace，CLI 必须连接它，而不能
 绕过它再打开第二个直接 writer。Runtime discovery 与启动全自动；用户无需配置
@@ -1451,6 +1451,11 @@ handler 不会新增 server。
 原有锁预算内启动。真实 Node 发布反例覆盖首次 ping 与类型化写入，随后强制退出
 并验证替代 runtime 写入和回执重放；锁的 stale age、启动预算、认证、writer 权限
 和重试分类均保持不变。这只关闭该发布顺序缺口，不代表长期运维或跨平台资格完成。
+
+宿主禁止本地 socket 时，Python CLI 和它启动的结算子进程可用标准输入输出
+桥接。同一套类型化分派、限长文件快照、权威存储与写入栅栏适用于两种传输。
+调用方先认证子进程，再发送业务请求。管道关闭后，子进程完成当前请求再退出。
+响应不明确时，重试前先读取该操作的确切持久回执。
 
 ### 2.3 TypeScript 拥有已迁 effect
 

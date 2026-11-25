@@ -180,9 +180,12 @@ export function canonicalAuthorityObjectList(
   if (!Array.isArray(value)) {
     throw new AuthorityStoreProtocolError(`${name} must be an array`);
   }
-  return value.map((item, index) =>
-    canonicalAuthorityObject(item, `${name}[${index}]`)
-  );
+  const objects: JsonObject[] = [];
+  // Validate every persisted slot: map skips holes that JSON encodes as null.
+  for (let index = 0; index < value.length; index++) {
+    objects.push(canonicalAuthorityObject(value[index], `${name}[${index}]`));
+  }
+  return objects;
 }
 
 export function canonicalAuthorityBytes(value: unknown): Buffer {

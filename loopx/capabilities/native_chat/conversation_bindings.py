@@ -212,9 +212,11 @@ class ChatConversationBindings:
         binding_id = row["binding_id"]
         endpoint = defaults["executor_endpoint"]
         channel_prefix = f"manager.external.native.{binding_id}."
-        candidates = [s for s in store.list_sessions()
-                      if s.get("channel_id", "").startswith(channel_prefix) and s.get("status") != "closed"]
-        if len(candidates) != 1 or candidates[0].get("agent_id") != endpoint or candidates[0].get("status") != "ready":
+        all_open = [s for s in store.list_sessions()
+                    if s.get("channel_id", "").startswith(channel_prefix) and s.get("status") != "closed"]
+        candidates = [s for s in all_open if not (s.get("steward_context") or {}).get("topic_ref")]
+        if (len(candidates) != 1 or candidates[0].get("agent_id") != endpoint or candidates[0].get("status") != "ready"
+                or any(s.get("status") != "ready" or s.get("active_turn_id") is not None for s in all_open)):
             return  # Defaults alone do not retarget an existing session.
         observation = self.observe(row["transport_ref"])
         with exclusive_file_lock(self.path, operation="reconcile_steward_executor"):
@@ -369,8 +371,9 @@ class ChatConversationBindings:
             **({"origin": origin} if origin is not None else {}),
             **({"session_context": session_context} if session_context is not None else {}),
             **({"session": self._session_observation(session)} if session is not None else {}),
-            **({"group_ref": group_ref, "topic_ref": topic_ref,
-                "group_human_message": group_human_message} if group_ref is not None or topic_ref is not None or group_human_message else {}),
+            **({"group_ref": group_ref} if group_ref is not None else {}),
+            **({"topic_ref": topic_ref} if topic_ref is not None else {}),
+            **({"group_human_message": group_human_message} if group_ref is not None or group_human_message else {}),
         })
         # Presentation may need the name from this exact verified read. Keep it
         # outside the persisted context and opt-in; it is never a cached grant
@@ -395,7 +398,8 @@ class ChatConversationBindings:
         """
         if origin == "web":
             source = {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
-                      "private_human_message": False, "origin": "web", "session_context": saved}
+                      "private_human_message": False, "origin": "web", "session_context": saved,
+                      **({"topic_ref": saved["topic_ref"]} if saved.get("topic_ref") else {})}
         elif origin in {"lark", "external"}:
             source = self._session_source(saved)
         else:
@@ -539,7 +543,8 @@ class ChatConversationBindings:
                     "private_human_message": False, "group_ref": saved["group_ref"],
                     "topic_ref": saved["topic_ref"], "group_human_message": True, "session_context": saved}
         return {"source_ref": saved["source_ref"], "sender_ref": saved["operator_ref"],
-                "private_human_message": True, "session_context": saved}
+                "private_human_message": True, "session_context": saved,
+                **({"topic_ref": saved["topic_ref"]} if saved.get("topic_ref") else {})}
 
     def session_context(self, saved: dict[str, Any], *, session: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.resolve(binding_id=saved["binding_id"], session=session, **self._session_source(saved))

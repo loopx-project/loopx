@@ -458,7 +458,7 @@ def test_native_restart_uses_real_accepted_work_fence_before_app_quit(native, mo
     quits = []
     def quit_client(*_args, **_kwargs):
         quits.append("quit")
-        from loopx.chat_ingress import chat_runtime_activation_lock
+        from loopx.chat.ingress import chat_runtime_activation_lock
         with pytest.raises(TimeoutError):
             with chat_runtime_activation_lock(tmp_path / "runtime", timeout_seconds=0.01):
                 pytest.fail("new input was not fenced during client quit")

@@ -267,6 +267,9 @@ test("the admission bound keeps debt identity, deduplicates replays, and accepts
     const observed = await preflight(runtime.root);
     assert.deepEqual(observed.recovery_admissions,
       {count: RECOVERY_ADMISSION_LIMIT, owner_action_id: null, checkpoint});
+    const observedNull = await preflight(runtime.root, null);
+    assert.deepEqual(observedNull.recovery_admissions,
+      {count: RECOVERY_ADMISSION_LIMIT, owner_action_id: null, checkpoint});
     const decide = (facts: JsonObject, missing = observed.missing_receipts) => reduceUnsettledHostTurnRecovery({
       schema_version: UNSETTLED_HOST_TURN_RECOVERY_REQUEST_SCHEMA,
       goal_id: GOAL, agent_id: AGENT, candidate, missing_receipts: missing,
@@ -275,6 +278,14 @@ test("the admission bound keeps debt identity, deduplicates replays, and accepts
     const attention = decide(READ_TODO(ADVANCEMENT_OPEN));
     assert.equal(attention.status, "attention_required");
     assert.equal((attention.obligation as JsonObject).must_attempt_work, false);
+    const attentionNull = reduceUnsettledHostTurnRecovery({
+      schema_version: UNSETTLED_HOST_TURN_RECOVERY_REQUEST_SCHEMA,
+      goal_id: GOAL, agent_id: AGENT, candidate: candidateFrom(observedNull),
+      missing_receipts: observedNull.missing_receipts,
+      recovery_admissions: observedNull.recovery_admissions, binding_facts: READ_TODO(ADVANCEMENT_OPEN),
+    });
+    assert.equal(attentionNull.status, "attention_required");
+    assert.equal((attentionNull.obligation as JsonObject).must_attempt_work, false);
     assert.equal((attention.recovery as JsonObject).settlement_effect_id, candidate.settlement_effect_id);
     assert.equal(decide(READ_TODO({...ADVANCEMENT_OPEN, status: "blocked"})).status, "none");
     const owner = await preflightPriorHostTurnCloseout({

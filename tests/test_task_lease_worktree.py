@@ -93,16 +93,16 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
     assert "write_workspace" in first["lease"]
     assert first["lease"]["write_repository"] == repository
     assert first["lease"]["write_workspace"]["repository"] == repository
-    assert first["integration_overlap_advisories"][0]["todo_id"] == "todo_worktree_d"
+    assert "integration_overlap_advisories" not in first
     assert cli("inspect", "d")["lease"] == legacy["lease"]
     assert str(tmp_path) not in json.dumps(first["lease"])
     conflict = acquire("c", alias, expected=1)
-    assert conflict["error_code"] == "write_scope_conflict"
+    assert conflict["error_code"] == "workspace_lease_conflict"
     assert conflict["conflicts"][0]["owner"] == "agent-a"
     assert "--write-worktree" in conflict["recommended_action"]
-    assert acquire("e", None, expected=1)["error_code"] == "write_scope_conflict"
+    assert acquire("e", None)["acquired"] is True
     second = acquire("b", Path("../b"))
-    assert {row["todo_id"] for row in second["integration_overlap_advisories"]} == {"todo_worktree_a", "todo_worktree_d"}
+    assert "integration_overlap_advisories" not in second
     assert second["lease"]["write_workspace"] != first["lease"]["write_workspace"]
     replay = acquire("a", alias)
     assert replay["original_receipt"] == first["original_receipt"]
@@ -121,9 +121,13 @@ def test_worktree_scope_admission_and_replay(tmp_path, monkeypatch, capsys, prov
 
 @pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="worktree fixture requires symlinks")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider):
+@pytest.mark.parametrize("large_peer_scope", [False, True], ids=["small-scope", "large-scope"])
+def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, capsys, provider, large_peer_scope):
     """Normal claims admit sibling edits without weakening physical collisions."""
+    import os
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", f"{Path(sys.executable).parent}{os.pathsep}{os.environ.get('PATH', '')}")
     project = tmp_path / "repo"
     project.mkdir()
 
@@ -145,11 +149,14 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         "id": goal, "repo": str(project), "state_file": str(state),
         "coordination": {"registered_agents": ["agent-a", "agent-b"]},
     }]}))
+    peer_scopes = ["src/**"]
+    if large_peer_scope:
+        peer_scopes.extend(f"tests/fixtures/peer-scope/module_{i:03}.py" for i in range(92))
     projection = build_todo_runtime_shadow_projection(goal_id=goal, handoff_mode="hard_lease", leases=[], todos=[{
         "schema_version": "todo_item_v0", "todo_id": f"todo_ordinary_{key}", "role": "agent", "status": "open", "done": False,
         "text": "Edit isolated source", "archive_state": "active", "source_section": "Agent Todo", "index": i,
         "task_class": "advancement_task", "task_domain": "code", "task_repository": "git:github.com/example/project",
-        "required_write_scopes": ["src/**"],
+        "required_write_scopes": peer_scopes if key == "a" else ["src/**"],
     } for i, key in enumerate(("a", "b"), 1)])
     initialize_canonical_authority(runtime, goal, projection, state_path=state, provider=provider)
 
@@ -160,9 +167,9 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
         assert rc == expected, output
         return json.loads(output)
 
-    def claim(key, operation, expected=0):
+    def claim(key, operation, *options, expected=0):
         return cli(["todo", "claim"], key, "--agent-id", f"agent-{key}", "--claimed-by", f"agent-{key}",
-                   "--claim-operation-id", operation, expected=expected)
+                   "--claim-operation-id", operation, *options, expected=expected)
 
     monkeypatch.chdir(a)
     assert claim("a", "claim-a")["execution_managed"]
@@ -179,22 +186,27 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
     git("remote", "set-url", "origin", "https://github.com/example/project.git")
     (b / "nested").mkdir()
     monkeypatch.chdir(b / "nested")
-    accepted = claim("b", "claim-b")
+    if large_peer_scope:
+        preview = claim("b", "preview-b", "--thin", "--dry-run")
+        assert "integration_overlap_advisories" not in preview
+        assert "integration_overlap_detail_command" not in preview
+    accepted = claim("b", "claim-b", "--thin")
     assert accepted["execution_managed"]
-    assert accepted["integration_overlap_advisories"] == [{
-        "todo_id": "todo_ordinary_a", "owner": "agent-a", "write_scopes": ["src/**"],
-        "reason": "independent_worktree_integration_overlap",
-    }]
+    assert "integration_overlap_advisories" not in accepted
+    assert "integration_overlap_detail_command" not in accepted
     second = cli(["task-lease", "inspect"], "b")["lease"]
     assert "write_workspace" in first
     assert first["write_workspace"] != second["write_workspace"]
+    assert second["write_scopes"] == []
     assert str(tmp_path) not in json.dumps(second)
     assert cli(["todo", "list"], "b")["todo"]["claimed_by"] == "agent-b"
     replay = claim("b", "claim-b")
     assert replay["status"] == "replayed"
+    assert "integration_overlap_advisories" not in replay
     assert cli(["task-lease", "inspect"], "b")["lease"] == second
-    cli(["task-lease", "release"], "b", "--owner", "agent-b", "--idempotency-key", second["idempotency_key"],
-        "--expected-version", str(second["version"]))
+    released = cli(["task-lease", "release"], "b", "--owner", "agent-b",
+        "--idempotency-key", second["idempotency_key"], "--expected-version", str(second["version"]))
+    assert released["released"]
     assert claim("b", "claim-b", expected=1)["ok"] is False
     assert not cli(["task-lease", "inspect"], "b")["active"]
 
@@ -251,7 +263,7 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     # Only the accepted operation's clock is synthetic. Git observation, the
     # managed claim, its receipt and both provider transactions remain real.
     with monkeypatch.context() as clock:
-        clock.setattr("loopx.control_plane.coordination.local_authority.now_local", lambda: "2001-01-01T00:00:00Z")
+        clock.setattr("loopx.control_plane.coordination.local_authority.now_local_iso", lambda *, timespec: "2001-01-01T00:00:00Z")
         assert claim("a", "expired-original")["execution_managed"]
     monkeypatch.chdir(b)
     assert claim("b", "peer-current")["execution_managed"]
@@ -273,10 +285,7 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     monkeypatch.chdir(a)
     ordinary_preview = claim("a", "independent-preview", preview=True)
     assert ordinary_preview["status"] == "planned"
-    assert ordinary_preview["integration_overlap_advisories"] == [{
-        "todo_id": "todo_expiry_b", "owner": "agent-b", "write_scopes": ["src/**"],
-        "reason": "independent_worktree_integration_overlap",
-    }]
+    assert "integration_overlap_advisories" not in ordinary_preview
     refused = run(attempt, expected=1)
     assert refused["error_code"] == "claim_execution_unavailable"
     assert snapshot() == original, "recovery previews cannot acquire or renew either execution"
@@ -284,7 +293,8 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     assert recovery["action"] == "claim_task", recovery
     assert recovery["execution_authority_granted"] is False
     prepared = run([*recovery["claim"]["cli_args"], "--claim-operation-id", "explicit-recovery"], route=False)
-    assert prepared["integration_overlap_advisories"] == ordinary_preview["integration_overlap_advisories"]
+    assert prepared["execution_managed"]
+    assert "integration_overlap_advisories" not in prepared
     assert run(attempt, expected=1)["recovery"]["action"] == "reconcile_lease_owner"
     retry = [prepared["claim_operation_id"] if arg == "expired-original" else arg for arg in attempt]
     assert run(retry)["ok"]

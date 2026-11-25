@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from ..effect_runtime import _node_executable
+from ..runtime.node_probe import node_typescript_flags
 from ..runtime.time import now_local_iso
 from ..scheduler.state import (
     CODEX_APP_STATEFUL_BACKOFF_STATE_KEY,
@@ -217,6 +218,7 @@ def _run_native_followup(
         _node_executable(),
         "--no-warnings",
         "--experimental-strip-types",
+        *node_typescript_flags(),
         str(
             Path(__file__).resolve().parents[1]
             / "scheduler"

@@ -39,9 +39,15 @@ def test_closed_replan_only_accepts_existing_native_operations(
         "--replan-obligation-id", guard["autonomous_replan_obligation"]["obligation_id"])
     assert added["replan_transition"]["recorded"] is True
     binding = ("--goal-id", GOAL, "--agent-id", AGENT, "--todo-id", TODO, "--turn-instance-id", TURN)
+    current = call("quota", "should-run", "--codex-app", *binding)
+    assert current["heartbeat_receipt"]["settlement_identity"] == original
+    stride = current["replan_action_packet"]["stride_control"]["minimal_example"]
+    assert stride["reference_obligation_id"] == guard["autonomous_replan_obligation"]["obligation_id"]
+    assert stride["reference_context_id"] == current["autonomous_replan_obligation"]["replan_context"]["context_id"]
     vision = tmp_path / "replan-vision.json"
     vision.write_text(json.dumps({
         "schema_version": "goal_vision_replan_contract_v0", "state": "vision_patch_proposed",
+        "stride_decision": stride,
         "vision_patch": {
             "acceptance_summary": "Validate each source slice before dependent work proceeds.",
             "advancement_policy": "as_needed",
@@ -63,9 +69,10 @@ def test_closed_replan_only_accepts_existing_native_operations(
     assert refreshed["settlement_progress"]["state"] == "spend_required"
     ack = json.loads(Path(refreshed["json_path"]).read_text())["autonomous_replan_ack"]
     assert ack["recorded"] is True
-    # The preceding Todo add durably acknowledged the runnable successor.
-    # Refresh reads that original ACK rather than substituting a later path outcome.
-    assert "new_runnable_successor" in ack["semantic_delta"]["outcomes"]
+    # The graph receipt above verifies the runnable successor. The admitted
+    # review also needs its own evidence-linked stride before settlement.
+    assert ack["semantic_delta"]["obligation_id"] == guard["autonomous_replan_obligation"]["obligation_id"]
+    assert "fresh_vision_path_outcome" in ack["semantic_delta"]["satisfying_outcomes"]
     reject(*base, "record", "--operation-id", "op-new", "--stage", "decision",
         "--operation", "spawn", "--outcome", "started", "--entrypoint-id", "generic_host",
         "--execute", reason="open, work-admitted")

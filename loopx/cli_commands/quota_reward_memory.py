@@ -110,6 +110,7 @@ def attach_reward_memory_recall_after_should_run(
     registry_path: Path,
     goal_id: str,
     agent_id: str,
+    decision: Mapping[str, Any] | None = None,
 ) -> None:
     heartbeat_receipt = payload.get("heartbeat_receipt")
     if (
@@ -128,6 +129,6 @@ def attach_reward_memory_recall_after_should_run(
         registry_path=registry_path,
         goal_id=goal_id,
         agent_id=agent_id,
-        decision=payload,
+        decision=payload if decision is None else decision,
         turn_instance_id=heartbeat_turn_id,
     )

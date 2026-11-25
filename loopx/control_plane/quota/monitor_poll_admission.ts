@@ -66,6 +66,7 @@ function dueMonitorAllowed(
   decision: MonitorDecision,
   observation: MonitorObservation,
   facts: MonitorLaneFacts,
+  historicalAdmission: boolean,
 ): boolean {
   if (!facts.must_attempt_work) return false;
   const candidate = decision.due_monitor_candidates.find((item) => candidateMatches(item, observation));
@@ -73,7 +74,11 @@ function dueMonitorAllowed(
   const registryAllowed = registry.due === true &&
     registry.claimed_by === decision.agent_id && candidateMatches(registry, observation);
   if (facts.obligation === "attempt_due_monitor") {
-    return Boolean(candidate) || (!decision.requires_user_action && registryAllowed);
+    // A key lookup establishes observation identity. Only an explicit Todo can
+    // select another due Monitor. Older frozen admissions keep their basis.
+    const explicitRegistryTarget = (observation.todo_id !== null && registry.todo_id_explicit === true) ||
+      (historicalAdmission && registry.todo_id_explicit === undefined);
+    return Boolean(candidate) || (!decision.requires_user_action && registryAllowed && explicitRegistryTarget);
   }
   if (facts.reason_codes.has("due_monitor_context") && candidate) return true;
   return facts.reason_codes.has("due_monitor_context") && registryAllowed;
@@ -157,7 +162,7 @@ async function auxiliaryMonitorAllowed(
   // Retain ordinary quota/due-work admission and capability/gate projections;
   // lifecycle lookup must not become a second should-run bypass.
   return monitorGateAllowsObservation(decision) &&
-    dueMonitorAllowed(decision, observation, monitorLaneFacts(decision)) &&
+    dueMonitorAllowed(decision, observation, monitorLaneFacts(decision), historicalAdmission) &&
     monitor.due === true && candidateMatches(monitor, observation) &&
     (monitor.claimed_by == null || monitor.claimed_by === decision.agent_id);
 }
@@ -188,7 +193,7 @@ export async function admission(
   const blocked = blockedSuccessorAllowed(request.decision);
   const external = externalMonitorAllowed(request.decision, laneFacts);
   const auxiliary = await auxiliaryMonitorAllowed(request, historicalAdmission);
-  const due = auxiliary ?? dueMonitorAllowed(request.decision, request.observation, laneFacts);
+  const due = auxiliary ?? dueMonitorAllowed(request.decision, observation, laneFacts, historicalAdmission);
   if (auxiliary === false) {
     throw new EffectRuntimeRequestError(
       "auxiliary monitor-poll requires its own due Monitor target", "monitor_poll_admission_rejected",

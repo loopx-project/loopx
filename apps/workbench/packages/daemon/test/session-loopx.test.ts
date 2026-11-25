@@ -58,7 +58,7 @@ before(async () => {
 });
 after(() => server.close());
 
-interface Fixture { id: string; text: string; ageMs?: number; originator?: string }
+interface Fixture { id: string; text: string; ageMs?: number; originator?: string; cwd?: string }
 
 /** Four kinds of conversation, as session files the fake agent reads back. */
 function world(fixtures: Fixture[]) {
@@ -73,7 +73,7 @@ function world(fixtures: Fixture[]) {
   const adapter = {
     id: 'codex',
     capabilities: { history: true },
-    listSessions: async () => fixtures.map((f) => ({ id: f.id, cwd: goalRoot, title: `title ${f.id}`, updatedAt: new Date(Date.now() - (f.ageMs ?? 3_600_000)).toISOString() })),
+    listSessions: async () => fixtures.map((f) => ({ id: f.id, cwd: f.cwd ?? goalRoot, title: `title ${f.id}`, updatedAt: new Date(Date.now() - (f.ageMs ?? 3_600_000)).toISOString() })),
     sessionLocation: async (id: string | null) => ({ configDir: dir, sessionPath: files.get(id ?? '') ?? null }),
     sessionOrigin: (line: string) => new CodexAppServerAdapter(['codex']).sessionOrigin(line),
   };
@@ -153,6 +153,16 @@ test('scanning again imports and binds nothing twice', async () => {
   await local.scan();
   assert.equal(imports.length, before);
   assert.equal(service.bindings.entries().length, bindings);
+});
+
+test('a Goal session outside the workdirs is listed but left for the person to import', async () => {
+  const elsewhere = mkdtempSync(join(tmpdir(), 'loopx-sessions-elsewhere-'));
+  const { local, imports } = world([{ id: 's-away', text: bootstrap('g-text'), cwd: elsewhere }]);
+  await local.scan();
+  await local.scan();
+  // The sidebar has it, but the background sync neither imports it nor widens the workdirs.
+  assert.equal(local.find('s-away')?.loopx?.goalId, 'g-text');
+  assert.deepEqual(imports, []);
 });
 
 test('a session its host is still writing to waits until it has been quiet', async () => {

@@ -22,12 +22,12 @@ from .decision_capture import (
     context_capture_read_command,
 )
 from .native_context_profile import (
-    NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
+    NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES, NATIVE_CONTEXT_PAGE_OUTPUT_BYTES,
     NATIVE_CONTEXT_LARGE_OUTPUT_BYTES, NATIVE_CONTEXT_HISTORY_TOKENS, NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget,
 )
 from ..content_digest import BARE_SHA256_PATTERN
-from .codex_execution_preparation import compact_execution_preparation_request
+from .codex_execution_preparation import compact_execution_preparation_request, native_preparation_workspace
 
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.
@@ -210,6 +210,14 @@ def _save(root: Path, state: dict[str, Any]) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
 
 
+def _write_native_claim_source(root: Path, session: str | None, digest: str) -> None:
+    # Only a live guard records its process workdir. Projecting a saved
+    # capture, including from another checkout, cannot select it again.
+    write_decision_capture(root / "claim-source.json", {
+        "session_id": session, "sha256": digest, "workspace": native_preparation_workspace(Path.cwd()),
+    }, publish=os.replace)
+
+
 def record_native_claim_source(
     payload: Mapping[str, Any], digest: str, *, directory: str | None, context_root: str | None,
 ) -> None:
@@ -227,27 +235,27 @@ def record_native_claim_source(
             return
         # A caller outside the Host can explicitly select its private directory.
         # The journal identifies that session even without an ambient thread ID.
-        write_decision_capture(root / "claim-source.json",
-            {"session_id": session or active_session, "sha256": digest}, publish=os.replace)
+        _write_native_claim_source(root, session or active_session, digest)
 
 
 def _original_native_claim_source(
     root: Path, session: str, digest: object, *, bind_unattached: bool = False,
-) -> bool:
+) -> dict[str, Any] | None:
     if not isinstance(digest, str):
-        return False
+        return None
     try:
         path = root / "claim-source.json"
         saved = _read(path)
     except (OSError, ValueError):
-        return False
-    bound = {"session_id": session, "sha256": digest}
+        return None
+    bound: dict[str, Any] = {"session_id": session, "sha256": digest}
+    if "workspace" in saved:
+        bound["workspace"] = saved["workspace"]
     if bind_unattached and saved == {**bound, "session_id": None}:
-        # An explicit private directory can receive a guard before startup.
-        # Adopt it once from the live session while holding its journal lock.
+        # Adopt a guard captured before startup, retaining its actual workdir.
         write_decision_capture(path, bound, publish=os.replace)
-        return True
-    return saved == bound
+        return bound
+    return bound if saved == bound else None
 
 
 def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_id: str | None) -> tuple[str, str]:
@@ -349,11 +357,17 @@ def codex_context_configuration(directory: str, *, goal_id: str, agent_id: str,
         *(["--codex-app"] if scenario == "codex_app_heartbeat" else
           ["--runtime-profile", "codex_app_ssh_goal" if scenario == "codex_app_ssh_goal" else "generic_cli"]),
         option, directory]), "timeout": 10}
+    config_overrides = {
+        "tool_output_token_limit": NATIVE_CONTEXT_HISTORY_TOKENS,
+        "shell_environment_policy.set." + NATIVE_CONTEXT_OUTPUT_ENV: str(NATIVE_CONTEXT_LARGE_OUTPUT_BYTES),
+    }
+    # The App shell sandbox can deny even loopback TCP. Use the existing local
+    # pipe transport for POSIX App shell calls without opening sandbox networking.
+    if scenario == "codex_app_heartbeat" and os.name == "posix":
+        config_overrides["shell_environment_policy.set.LOOPX_EFFECT_RUNTIME_TRANSPORT"] = "stdio"
     # Native Interrupt handlers have a 3s ceiling. Declare the effective value
     # rather than letting discovery silently clamp a different configuration.
-    return {"config_overrides": {
-            "tool_output_token_limit": NATIVE_CONTEXT_HISTORY_TOKENS,
-            "shell_environment_policy.set." + NATIVE_CONTEXT_OUTPUT_ENV: str(NATIVE_CONTEXT_LARGE_OUTPUT_BYTES)},
+    return {"config_overrides": config_overrides,
         "hooks": {event: [{**({"matcher": "^Bash$"} if event == "PostToolUse" else {}),
                               "hooks": [{**handler, "timeout": 3} if event == "Interrupt" else handler]}]
                       for event in CONTEXT_LIFECYCLE_HOOKS},
@@ -373,7 +387,7 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
     from ..effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from .codex_context_history import (
         checkpoint_native_read, checkpoint_native_selection, native_resume_sections, native_resume_verified,
-        observe_native_read,
+        observe_completed_native_reread, observe_native_read,
     )
 
     if directory is None:
@@ -413,13 +427,14 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     resume_verified=resume_verified,
                     resume_sections=native_resume_sections(state, event) if name == "SessionStart" and not resume_verified else None)
                 if name == "PostToolUse" and same:
-                    checkpoint_native_read(read_state, updated, event,
-                        [page for page in pages if "read_sections" not in page])
+                    full_pages = [page for page in pages if "read_sections" not in page]
+                    checkpoint_native_read(read_state, updated, event, full_pages)
+                    observe_completed_native_reread(read_state, updated, event, full_pages)
                     checkpoint_native_selection(state, updated, event, raw_pages, pages)
                     previous = updated.get("host_execution_preparation")
                     ready = previous.get("ready_capture") if isinstance(previous, dict) else None
                     ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
+                    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
                         page.get("ok") is True
                         and ready_digest in (page.get("sha256"), page.get("source_sha256"))
                         for page in pages
@@ -515,12 +530,16 @@ def native_execution_preparation_request(
             if readback_for is not None and readback_for != source_sha256:
                 return None
             action = {**request, "source_sha256": source_sha256}
+            action.pop("claim_workspace", None)  # Only the live guard marker supplies the workdir.
             claim_source_sha256 = action.get("claim_source_sha256")
-            if not _original_native_claim_source(root, session, claim_source_sha256):
+            marker = _original_native_claim_source(root, session, claim_source_sha256)
+            if marker is None:
                 action.pop("claim_source_sha256", None)
                 if readback_for is not None:
                     return None
                 return action
+            if "workspace" in marker:
+                action["claim_workspace"] = marker["workspace"]
             previous = state.get("host_execution_preparation")
             if isinstance(previous, dict) and (
                 previous.get("source_sha256") == source_sha256
@@ -529,6 +548,8 @@ def native_execution_preparation_request(
                     and previous.get("claim_source_sha256") == claim_source_sha256
                 )
             ):
+                if previous.get("state") == "rejected":
+                    return None
                 if previous.get("state") in {"attempted", "ready"}:
                     return _preparation_readback(action, previous, event_name=event["hook_event_name"])
             if readback_for is not None:
@@ -560,6 +581,7 @@ def record_native_execution_preparation(
     *,
     source_sha256: str,
     receipt: Mapping[str, Any] | None,
+    claim_rejected: bool = False,
 ) -> None:
     """Publish readiness, or retire a refused claim, for the same saved source."""
 
@@ -577,6 +599,10 @@ def record_native_execution_preparation(
         ):
             raise ValueError("execution-preparation source moved before receipt publication")
         if receipt is None:
+            previous = state.get("host_execution_preparation")
+            if (claim_rejected and isinstance(previous, dict) and previous.get("source_sha256") == source_sha256
+                    and previous.get("state") == "attempted"):
+                previous["state"] = "rejected"
             recovery.pop("execution_preparation", None)
             try:
                 _save(root, state)
@@ -741,7 +767,7 @@ def _native_context_request(state: dict[str, Any], scope: dict[str, Any], captur
     if isinstance(target, dict) and target.get("capture_id") == capture_id:
         #  A retry may use
         # the original predecessor, but never this offer as its own baseline.
-        previous = previous.get("comparison_base")
+        previous = previous.get("comparison_base") if isinstance(previous, dict) else None
     if isinstance(previous, dict) and isinstance(previous.get("target"), dict):
         try:
             path, raw, payload = read_context_capture_file(previous["path"], previous["sha256"], private=True)
@@ -858,8 +884,7 @@ def _commit_native_context_recovery(
             claim_source = capture_id
         elif not saved_capture and preparation.get("turn_instance_id"):
             claim_source = capture_id if BARE_SHA256_PATTERN.fullmatch(capture_id) else reference["sha256"]
-            write_decision_capture(root / "claim-source.json",
-                {"session_id": session, "sha256": claim_source}, publish=os.replace)
+            _write_native_claim_source(root, session, claim_source)
         if claim_source is not None:
             preparation = compact_execution_preparation_request(payload, claim_source_sha256=claim_source)
     page_bytes, output_bytes = page_budget
@@ -903,7 +928,7 @@ def _record_native_delivery(root: Path, state: dict[str, Any], result: dict[str,
             if pinned is not None:
                 reference, opening = pinned
                 state["pending"]["observed_first_read"] = reference
-                if opening is not None:
+                if opening is not None and read_plan is not None:
                     read_plan = {**read_plan, "observed_opening": opening}
         _save(root, state)
     if read_plan is None:
@@ -916,6 +941,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           continuity_generation: str | None = None,
                           include_initial_read_plan: bool = True,
                           progressive_enabled: bool | None = None,
+                          max_page_output_bytes: int | None = None,
                           selection_command_args_template: str | None = None,
                           captured_decision: dict[str, str] | None = None,
                           hook_session: str | None = None,
@@ -941,7 +967,12 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
         from .decision_capture import capture_progressive_context
 
         return NativeContextPreparation(capture_progressive_context(
-            payload, directory=capture_directory, surface=surface)[0])
+            payload,
+            directory=capture_directory,
+            surface=surface,
+            selection_command_args_template=selection_command_args_template,
+            captured_decision=captured_decision,
+        )[0])
     try:
         with _locked(directory) as root:
             recovery_committed = False
@@ -998,6 +1029,11 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                 # Legacy direct native callers omitted the presentation option.
                 progressive = progressive_enabled is not False
                 presentation = progressive or selection_command_args_template is not None
+                first_read_output_bytes = (
+                    min(output_bytes, max_page_output_bytes)
+                    if max_page_output_bytes is not None and max_page_output_bytes > 0
+                    else min(output_bytes, NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES)
+                )
                 try:
                     transaction = prepare_context_delivery(payload, scope=scope, capture_id=capture_id,
                         surface=surface, baseline=request.get("baseline"),
@@ -1009,6 +1045,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                                 if selection_command_args_template is not None else {}),
                             **({"captured_decision": captured_decision} if captured_decision is not None else {}),
                             **({"progressive_enabled": False} if not progressive else {}),
+                            **({"initial_read_output_bytes": first_read_output_bytes}
+                                if include_initial_read_plan and progressive else {}),
                             "command_template": recovery["command"] + " --select '<pointer>'",
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive)

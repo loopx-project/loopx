@@ -257,7 +257,7 @@ def assert_quota_read_path(*, runtime_root: Path, registry_path: Path) -> None:
     assert payload["ok"] is True, payload
     assert payload["decision"] == "run", payload
     assert payload["effective_action"] == "normal_run", payload
-    assert "active_state_next_action" not in payload, payload
+    assert payload["active_state_next_action"] == GOAL_NEXT_ACTION, payload
     assert payload["goal_route_hint"]["selected_action_differs_from_durable"] is True, payload
     assert payload["goal_route_hint"]["goal_next_action_mutation"] == "none", payload
     next_action = payload["agent_lane_next_action"]

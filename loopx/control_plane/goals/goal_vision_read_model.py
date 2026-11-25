@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .goal_vision_state import (
@@ -180,3 +181,27 @@ def acceptance_gaps_from_agent_vision(
     if generated_at:
         gap["generated_at"] = generated_at
     return [gap]
+
+
+def cli_vision_audit_view(vision_continuation_audit: Mapping[str, object]) -> dict[str, object]:
+    """Return the CLI-owned view of the complete Vision audit."""
+    cli_audit: dict[str, object] = {
+        "required": True,
+        "required_before_closeout": vision_continuation_audit.get("required_before_closeout") or [],
+        "recommended_action": vision_continuation_audit.get("recommended_action"),
+    }
+    vision_gap_judge = vision_continuation_audit.get("vision_gap_judge")
+    if isinstance(vision_gap_judge, Mapping) and vision_gap_judge:
+        cli_audit["vision_gap_judge"] = {
+            **{
+                key: vision_gap_judge.get(key)
+                for key in (
+                    "done", "decision", "reason", "agent_judge_instruction",
+                    "evidence_read_instruction", "registry_read_instruction",
+                )
+            },
+            "done_only_when": vision_gap_judge.get("done_only_when") or [],
+            "continue_when": vision_gap_judge.get("continue_when") or [],
+            "otherwise": vision_gap_judge.get("otherwise"),
+        }
+    return cli_audit

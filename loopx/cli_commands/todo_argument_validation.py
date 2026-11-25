@@ -46,6 +46,7 @@ TODO_OPTION_FIELDS = (
     ("--claimed-by", "claimed_by"),
     ("--task-lease-idempotency-key", "task_lease_idempotency_key"),
     ("--task-lease-expected-version", "task_lease_expected_version"),
+    ("--ttl-seconds", "ttl_seconds"),
     ("--bound-agent", "bound_agent"),
     ("--goal-bound", "goal_bound"),
     ("--blocks-agent", "blocks_agent"),
@@ -88,6 +89,8 @@ TODO_OPTION_FIELDS = (
     ("--state-file", "state_file"),
     ("--execute", "execute"),
     ("--provider-revision", "provider_revision"),
+    ("--document", "document"),
+    ("--schema", "schema"),
 )
 
 _TODO_UPDATE_MUTABLE_FIELDS = (
@@ -151,10 +154,11 @@ TODO_ACTION_FIELDS = {
     "receipt": frozenset({"operation_id"}),
     "result-read": frozenset({"todo_id"}),
     "plan": frozenset({"text", "agent_id", "project"}),
+    "plan-batch": frozenset({"agent_id", "project", "text", "document", "operation_id", "execute", "dry_run", "schema"}),
     "project-markdown": frozenset({"state_file", "execute", "provider_revision", "project"}),
     "claim": frozenset({"role", "todo_id", "claimed_by", "agent_id", "state_file",
-                        "claim_operation_id", "task_lease_idempotency_key", "task_lease_expected_version",
-                        "project", "dry_run", "todo_thin"}),
+                        "claim_operation_id", "ttl_seconds", "task_lease_idempotency_key",
+                        "task_lease_expected_version", "project", "dry_run", "todo_thin"}),
     "update": frozenset(_TODO_UPDATE_MUTABLE_FIELDS) | frozenset({
         "role", "todo_id", "agent_id", "state_file", "project", "dry_run", "authority_reason",
         "claim_operation_id", "update_operation_id", "update_expected_provider_revision",
@@ -348,6 +352,29 @@ def validate_todo_plan_options(args: argparse.Namespace) -> None:
         raise ValueError("todo plan requires --text and a registered --agent-id")
 
 
+def validate_todo_plan_batch_options(args: argparse.Namespace) -> None:
+    _validate_todo_option_subset(
+        args,
+        TODO_ACTION_FIELDS["plan-batch"],
+        "todo plan-batch only accepts --goal-id, --agent-id, --document, --text, --project, --operation-id, --dry-run, --execute, --schema and --format; unsupported: ",
+    )
+    if getattr(args, "schema", False):
+        if any(getattr(args, field, None) for field in ("document", "operation_id", "execute", "dry_run")):
+            raise ValueError("todo plan-batch --schema is read-only and cannot be combined with proposal execution flags")
+        if getattr(args, "text", None) is not None:
+            if not str(args.text).strip():
+                raise ValueError("todo plan-batch --schema requires non-empty --text when supplied")
+            if not getattr(args, "goal_id", None) or not getattr(args, "agent_id", None):
+                raise ValueError("todo plan-batch --schema with --text requires --goal-id and --agent-id")
+        return
+    if not getattr(args, "goal_id", None):
+        raise ValueError("todo plan-batch requires --goal-id (or pass --schema)")
+    if not args.agent_id or getattr(args, "document", None) is None:
+        raise ValueError("todo plan-batch requires --document and a registered --agent-id (or pass --schema)")
+    if args.dry_run and args.execute:
+        raise ValueError("todo plan-batch accepts either --dry-run or --execute, not both")
+
+
 def validate_todo_project_markdown_options(args: argparse.Namespace) -> None:
     if not getattr(args, "provider_revision", None):
         raise ValueError("todo project-markdown requires --provider-revision")
@@ -437,7 +464,7 @@ def validate_todo_claim_options(args: argparse.Namespace) -> None:
     if unsupported:
         raise TodoClaimArgumentError(
             "todo claim only accepts --todo-id, --claimed-by, --agent-id, optional --role, "
-            "--claim-operation-id, --task-lease-idempotency-key, "
+            "--claim-operation-id, --ttl-seconds, --task-lease-idempotency-key, "
             "--task-lease-expected-version, --project, --state-file, --dry-run, and --thin; unsupported: "
             + ", ".join(unsupported)
         )
@@ -445,6 +472,16 @@ def validate_todo_claim_options(args: argparse.Namespace) -> None:
         raise TodoClaimArgumentError(
             "--task-lease-expected-version requires --task-lease-idempotency-key"
         )
+    if args.ttl_seconds is not None:
+        if args.ttl_seconds <= 0 or args.ttl_seconds > 86400:
+            raise ValueError("ttl seconds must be between 1 and 86400")
+        if args.task_lease_idempotency_key is None and (
+            args.agent_id is None or args.agent_id != args.claimed_by
+        ):
+            raise ValueError(
+                "--ttl-seconds requires managed execution (--agent-id matching --claimed-by) "
+                "or --task-lease-idempotency-key"
+            )
 
 
 def validate_todo_update_options(args: argparse.Namespace) -> None:
@@ -650,8 +687,12 @@ def validate_todo_archive_completed_options(args: argparse.Namespace) -> None:
 
 
 def validate_shared_todo_options(args: argparse.Namespace) -> None:
-    if getattr(args, "operation_id", None) and args.todo_command not in {"receipt", "add"}:
-        raise ValueError("--operation-id is supported only by todo receipt and canonical todo add")
+    if getattr(args, "operation_id", None) and args.todo_command not in {"receipt", "add", "plan-batch"}:
+        raise ValueError("--operation-id is supported only by todo receipt, canonical todo add, and todo plan-batch")
+    if getattr(args, "document", None) is not None and args.todo_command != "plan-batch":
+        raise ValueError("--document is supported only by todo plan-batch")
+    if getattr(args, "schema", False) and args.todo_command != "plan-batch":
+        raise ValueError("--schema is supported only by todo plan-batch")
     if args.result_file and args.todo_command != "complete":
         raise ValueError("--result-file is supported only by todo complete")
     agent_id_allowed_for_user_authoring = (
@@ -718,6 +759,8 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
             "--task-lease-idempotency-key and --task-lease-expected-version "
             "are supported only by todo claim, todo update, todo complete, and todo supersede"
         )
+    if args.todo_command != "claim" and getattr(args, "ttl_seconds", None) is not None:
+        raise ValueError("--ttl-seconds is supported only by todo claim")
     if args.capability_binding_ref and args.todo_command != "add":
         raise ValueError(
             "--capability-binding-ref is immutable and supported only by todo add"
@@ -727,7 +770,7 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
             "--authority-reason is supported only by todo update/complete/supersede"
         )
     if (
-        args.todo_command != "plan"
+        args.todo_command not in {"plan", "plan-batch"}
         and args.agent_id
         and not agent_id_allowed_for_user_authoring
         and not agent_id_allowed_for_read
@@ -766,8 +809,11 @@ def validate_shared_todo_options(args: argparse.Namespace) -> None:
         raise ValueError(
             "--limit is supported only by todo list"
         )
-    if args.todo_thin and args.todo_command not in {"list", "claim"}:
-        raise ValueError("--thin is supported only by todo list and todo claim")
+    if args.todo_thin and "todo_thin" not in TODO_ACTION_FIELDS.get(args.todo_command, ()):
+        supported = ", ".join(
+            f"todo {action}" for action, fields in TODO_ACTION_FIELDS.items() if "todo_thin" in fields
+        )
+        raise ValueError(f"--thin is supported only by {supported}")
     if getattr(args, "todo_summary", False):
         if args.todo_command != "list":
             raise ValueError("--summary is supported only by todo list")

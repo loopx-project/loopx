@@ -6,6 +6,8 @@
 .goal-loopx-mode-status[data-active="true"] > i { background: var(--pw-green, #13804a); }
 .goal-loopx-mode p { font-size: var(--text-caption); color: var(--pw-muted, #666); margin: 8px 0; line-height: var(--leading-caption); }
 .goal-loopx-mode .personal-composer-error { color: var(--pw-red, #b42318); }
+.goal-loopx-task-check { font-weight: 500; }
+.goal-loopx-mode .goal-loopx-task-check[data-status="failed"] { color: var(--pw-red, #b42318); }
 .goal-loopx-mode button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; border: 1px solid var(--pw-line, #ebebeb); background: var(--pw-surface, #fff); color: inherit; border-radius: 6px; padding: 8px 12px; font: inherit; cursor: pointer; }
 .goal-loopx-mode .goal-loopx-primary { font-weight: 500; border-color: var(--pw-line-strong, #ddd); }
 .goal-loopx-mode .goal-loopx-team-trigger { border-color: transparent; background: transparent; }

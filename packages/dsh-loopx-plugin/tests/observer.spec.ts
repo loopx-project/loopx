@@ -343,6 +343,8 @@ describe('shadow observer envelopes', () => {
       ['password_label', 'pass' + 'word:abcdefghijkl'],
       ['secret_label', 'sec' + 'ret:abcdefghijkl'],
       ['windows_drive_outside_user_profile', drivePath],
+      ['bare_unix_root_in_summary_token', 't_' + '/' + 'Users/'],
+      ['bare_drive_root_in_summary_token', 'C' + ':/'],
     ]
     for (const [label, value] of refused) {
       const { appended, observer } = observerWithCapture()

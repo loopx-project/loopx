@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, Logger, LoggerService } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
-import type { FileRunner } from '../src/cli.ts'
-import { LoopXCliError } from '../src/cli.ts'
+import type { FileRunner, LoopXCommand } from '../src/cli.ts'
+import { LoopXCliError, resolveLoopXCommand, runFile } from '../src/cli.ts'
 import {
   apply as applyDriver,
   LoopXContinuationDriver,
@@ -41,7 +44,7 @@ function userMessage(text: string): UserMessage {
   }
 }
 
-function fakeAgent(id = sessionId): FakeAgent {
+function fakeAgent(id = sessionId, sessionCwd = '/fixture/project'): FakeAgent {
   const nextTurn: UserMessage[] = []
   const nextStep: UserMessage[] = []
   let status: 'idle' | 'running' = 'idle'
@@ -87,7 +90,7 @@ function fakeAgent(id = sessionId): FakeAgent {
     version: 0,
     id,
     createdAt: 1,
-    cwd: '/fixture/project',
+    cwd: sessionCwd,
     seedLength: 0,
   })
   const agent = {
@@ -676,6 +679,156 @@ describe('driver diagnostic records', () => {
 })
 
 describe('pre-step authority diagnostics', () => {
+  it.each(['human input', 'verified Start'])(
+    'retains a typed admission failure across Driver replacement until %s', async recovery => {
+      const fixture = runnerFixture()
+      const denied = runnerFixture({ typedQuotaFailure: true })
+      const host = fakeAgent()
+      const capture = { agent: host.agent, session: host.agent.session }
+      const failed = { state: 'failed', category: 'admission_rejected' }
+      const onAdmissionChange = vi.fn()
+      let reject = false
+      const createDriver = () => new LoopXContinuationDriver({ isLiveAgent: () => true,
+        retryDelaysMs: [0, 0], onAdmissionChange,
+        runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options),
+      })
+      let driver = createDriver()
+      try {
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        const queued = host.nextTurn.shift()!
+        host.setStatus('running')
+        driver.onInboxClaimed(host.agent, queued)
+        reject = true
+        const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [queued] }))
+        expect(await driver.onPreStep(host.agent, [queued], new AbortController().signal, next))
+          .toEqual({ kind: 'reject' })
+        expect(next).not.toHaveBeenCalled()
+        expect(driver.readContinuationAdmission(capture)).toEqual(failed)
+        await driver.dispose('replacement')
+
+        driver = createDriver()
+        host.setStatus('idle')
+        driver.observeAgent(host.agent)
+        driver.onAgentStatus(host.agent, 'idle')
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(denied.quotaCalls).toHaveLength(1)
+        expect(host.nextTurn).toEqual([])
+        expect(driver.readContinuationAdmission(capture)).toEqual(failed)
+
+        reject = false
+        onAdmissionChange.mockClear()
+        if (recovery === 'human input') {
+          driver.onInboxInserted(host.agent, userMessage('Resume'))
+          expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+          driver.onAgentStatus(host.agent, 'idle')
+          await waitFor(() => host.nextTurn.length === 1)
+        } else {
+          await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+          expect(host.nextTurn).toHaveLength(1)
+        }
+        expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+        expect(onAdmissionChange).toHaveBeenCalledExactlyOnceWith(capture.session)
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('surfaces a typed quota rejection at pre-step and waits for explicit Start', async () => {
+    const fixture = runnerFixture()
+    const denied = runnerFixture({ typedQuotaFailure: true })
+    const host = fakeAgent()
+    const capture = { agent: host.agent, session: host.agent.session }
+    const onAdmissionChange = vi.fn()
+    let reject = false
+    const driver = new LoopXContinuationDriver({
+      isLiveAgent: () => true, retryDelaysMs: [0, 0], onAdmissionChange,
+      runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options),
+    })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => host.nextTurn.length === 1)
+      const submitted = host.nextTurn.shift()!
+      host.setStatus('running')
+      driver.onInboxClaimed(host.agent, submitted)
+      reject = true
+      const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [submitted] }))
+      await expect(driver.onPreStep(host.agent, [submitted], new AbortController().signal, next))
+        .resolves.toEqual({ kind: 'reject' })
+      expect(next).not.toHaveBeenCalled()
+      expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'failed', category: 'admission_rejected' })
+      expect(onAdmissionChange).toHaveBeenCalledWith(capture.session)
+      host.setStatus('idle')
+      driver.onAgentStatus(host.agent, 'idle')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(denied.quotaCalls).toHaveLength(1)
+      reject = false
+      await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn).toHaveLength(1)
+      expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+    } finally { await driver.dispose() }
+  })
+
+  it.each(['admission', 'pre-step'])(
+    'retries on the next idle after a recoverable receipt write failure at %s', async phase => {
+      const fixture = runnerFixture()
+      const host = fakeAgent()
+      const capture = { agent: host.agent, session: host.agent.session }
+      let failing = phase === 'admission'
+      // Core's own projection when it cannot persist this Turn's heartbeat receipt.
+      const writeFailed = (args: readonly string[]) => ({ exitCode: 1, stderr: '', stdout: JSON.stringify({
+        ok: false, mode: 'should-run', goal_id: goalId, decision: 'skip', should_run: false,
+        effective_action: 'heartbeat_receipt_write_failed', state: 'blocked_health',
+        agent_identity: { agent_id: agentId, registered: true },
+        heartbeat_receipt: { schema_version: 'heartbeat_quota_receipt_v0', status: 'write_failed',
+          turn_instance_id: args[args.indexOf('--turn-instance-id') + 1], stall_observation: 'not_evaluated' },
+      }) })
+      const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, retryDelaysMs: [0, 0],
+        runner: async (file, args, options) => failing && args.includes('should-run')
+          ? writeFailed(args) : fixture.runner(file, args, options) })
+      try {
+        observeActivated(driver, host)
+        if (phase === 'pre-step') {
+          await waitFor(() => host.nextTurn.length === 1)
+          const queued = host.nextTurn.shift()!
+          host.setStatus('running')
+          driver.onInboxClaimed(host.agent, queued)
+          failing = true
+          const next = vi.fn(async () => ({ kind: 'enter' as const, messages: [queued] }))
+          expect(await driver.onPreStep(host.agent, [queued], new AbortController().signal, next))
+            .toEqual({ kind: 'reject' })
+          expect(next).not.toHaveBeenCalled()
+        }
+        await waitFor(() => driver.readContinuationAdmission(capture).state === 'failed')
+        failing = false
+        host.setStatus('idle')
+        driver.onAgentStatus(host.agent, 'idle')
+        await waitFor(() => host.nextTurn.length === 1)
+        expect(driver.readContinuationAdmission(capture)).toEqual({ state: 'clear' })
+      } finally { await driver.dispose() }
+    },
+  )
+
+  it('holds a genuine typed quota rejection at admission until explicit Start', async () => {
+    const fixture = runnerFixture()
+    const denied = runnerFixture({ typedQuotaFailure: true })
+    const host = fakeAgent()
+    const capture = { agent: host.agent, session: host.agent.session }
+    let reject = true
+    const driver = new LoopXContinuationDriver({ isLiveAgent: () => true, retryDelaysMs: [0, 0],
+      runner: (file, args, options) => (reject ? denied : fixture).runner(file, args, options) })
+    try {
+      observeActivated(driver, host)
+      await waitFor(() => driver.readContinuationAdmission(capture).state === 'failed')
+      reject = false
+      driver.onAgentStatus(host.agent, 'idle')
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toHaveLength(0)
+      expect(host.nextTurn).toEqual([])
+      await expect(driver.evaluateActivatedSession(capture)).resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn).toHaveLength(1)
+    } finally { await driver.dispose() }
+  })
+
   it('records a failed recheck before rejecting its continuation', async () => {
     const fixture = runnerFixture()
     const host = fakeAgent()
@@ -1170,6 +1323,38 @@ describe('same-session LoopX driver', () => {
     expect(fixture.calls).toHaveLength(0)
 
     publishEvent(driver, host, modelSkillResultEvent('call-loopx'))
+    await waitFor(() => host.nextTurn.length === 1)
+
+    expect(fixture.heartbeatCalls).toBe(1)
+    await driver.dispose()
+  })
+
+  it('activates on the DSH 0.2.2 tool-role result shape and still rejects its error results', async () => {
+    // Shape recorded by DSH 0.2.2-rc.3: role "tool", call id and error flag on the message, text content.
+    const toolRoleResult = (callId: string, isError = false): SessionEvent => sessionEvent('tool/result', {
+      turn: 0,
+      step: 0,
+      message: {
+        id: randomUUID(),
+        role: 'tool',
+        toolCallId: callId,
+        isError,
+        content: [{ type: 'text', text: '<skill_content name="loopx">' }],
+        source: { kind: 'tool', callId },
+      },
+    })
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const driver = makeDriver(fixture)
+
+    driver.observeAgent(host.agent)
+    publishEvent(driver, host, modelSkillCallEvent('failed-load', '{"name":"loopx"}'))
+    publishEvent(driver, host, toolRoleResult('failed-load', true))
+    await new Promise<void>(resolve => setTimeout(resolve, 0))
+    expect(fixture.calls).toHaveLength(0)
+
+    publishEvent(driver, host, modelSkillCallEvent('call-loopx', '{"name":"loopx"}'))
+    publishEvent(driver, host, toolRoleResult('call-loopx'))
     await waitFor(() => host.nextTurn.length === 1)
 
     expect(fixture.heartbeatCalls).toBe(1)
@@ -3102,11 +3287,14 @@ describe('GoalBar exact-Session Driver bridge', () => {
     await driver.dispose()
   })
 
-  it('Pause preserves the exact claimed turn after Goal stop without opening new work', async () => {
+  it('Pause drains the exact claimed Turn without probing, then Start admits under a fresh identity', async () => {
     let shouldRun = true
     const fixture = runnerFixture({ shouldRun: () => shouldRun })
     const host = fakeAgent()
-    const driver = makeDriver(fixture)
+    let turn = 0
+    const newDriver = () => new LoopXContinuationDriver({ runner: fixture.runner, isLiveAgent: () => true,
+      makeTurnInstanceId: () => `pause-turn-${++turn}`, retryDelaysMs: [0, 0] })
+    const driver = newDriver()
     observeActivated(driver, host)
     await waitFor(() => host.nextTurn.length === 1)
     const queued = host.nextTurn.shift() as UserMessage
@@ -3140,10 +3328,23 @@ describe('GoalBar exact-Session Driver bridge', () => {
 
     host.setStatus('idle')
     driver.onAgentStatus(host.agent, 'idle')
-    await waitFor(() => fixture.quotaCalls.length === 2)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(fixture.quotaCalls).toHaveLength(1)
     expect(host.nextTurn).toHaveLength(0)
-    await driver.dispose()
+    await driver.dispose('replacement')
     expect(host.cancelCalls).toBe(0)
+
+    const replacement = newDriver()
+    try {
+      replacement.observeAgent(host.agent)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(fixture.quotaCalls).toHaveLength(1)
+      shouldRun = true
+      await expect(replacement.evaluateActivatedSession({ agent: host.agent, session: host.agent.session }))
+        .resolves.toEqual({ kind: 'applied' })
+      expect(host.nextTurn[0]?.source).toMatchObject({ turnInstanceId: 'pause-turn-2' })
+      expect(fixture.quotaCalls).toHaveLength(2)
+    } finally { await replacement.dispose() }
   })
 
   it('Pause preserves a claimed turn when stop lands during its quota recheck', async () => {
@@ -3299,4 +3500,293 @@ describe('plugin unload cause classification', () => {
       dispose.mockRestore()
     }
   })
+})
+
+describe('continuation Core command route parity', () => {
+  function pinnedRouteDriver(
+    fixture: ReturnType<typeof runnerFixture>,
+    resolved: LoopXCommand,
+    warnings: string[],
+  ): LoopXContinuationDriver {
+    return new LoopXContinuationDriver({
+      runner: fixture.runner,
+      isLiveAgent: () => true,
+      makeTurnInstanceId: () => 'turn-stable',
+      retryDelaysMs: [0, 0],
+      resolveCommand: async () => resolved,
+      warn: message => { warnings.push(message) },
+    })
+  }
+
+  async function admittedQuotaAndHeartbeat(
+    driver: LoopXContinuationDriver,
+    host: FakeAgent,
+  ): Promise<void> {
+    observeActivated(driver, host)
+    await waitFor(() => host.nextTurn.length === 1)
+    await driver.dispose()
+  }
+
+  it('pins quota and heartbeat commands to the resolved single executable', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file: '/opt/pinned/loopx',
+      prefix: [],
+      skillCommand: '"$LOOPX_BIN"',
+      version: 'loopx 2.4.0',
+      candidate: 'configured-command',
+      cliBin: '/opt/pinned/loopx',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    expect(fixture.quotaCalls.length).toBeGreaterThan(0)
+    for (const argv of fixture.quotaCalls) {
+      const flag = argv.indexOf('--cli-bin')
+      expect(flag).toBeGreaterThanOrEqual(0)
+      expect(argv[flag + 1]).toBe('/opt/pinned/loopx')
+      // Core binds the global route only before the subcommand token.
+      expect(flag).toBeLessThan(argv.indexOf('quota'))
+    }
+    expect(fixture.heartbeatArgv.length).toBeGreaterThan(0)
+    for (const argv of fixture.heartbeatArgv) {
+      const flags = argv
+        .map((value, index) => (value === '--cli-bin' ? index : -1))
+        .filter(index => index >= 0)
+      // One global route binding plus the heartbeat-prompt option that feeds
+      // the rendered task-body command prefixes.
+      expect(flags).toHaveLength(2)
+      expect(argv[flags[0]! + 1]).toBe('/opt/pinned/loopx')
+      expect(flags[0]!).toBeLessThan(argv.indexOf('heartbeat-prompt'))
+      expect(argv[flags[1]! + 1]).toBe('/opt/pinned/loopx')
+      expect(flags[1]!).toBeGreaterThan(argv.indexOf('heartbeat-prompt'))
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it('keeps bare loopx text and discloses once for a non-executable route', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file: '/opt/managed/python3',
+      prefix: ['/opt/managed/loopx_cli.py'],
+      skillCommand: "/opt/managed/python3 '/opt/managed/loopx_cli.py'",
+      version: 'loopx 2.4.0',
+      candidate: 'managed-launcher',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    for (const argv of [...fixture.quotaCalls, ...fixture.heartbeatArgv]) {
+      expect(argv).not.toContain('--cli-bin')
+    }
+    const unpinned = warnings.filter(value => value.includes('cli_route_unpinned'))
+    expect(unpinned).toHaveLength(1)
+    expect(unpinned[0]).toContain('candidate=managed-launcher')
+  })
+
+  it('keeps a host-injected absolute executable pinned without the resolver field', async () => {
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const injected = join(tmpdir(), 'injected', 'loopx')
+    const driver = pinnedRouteDriver(fixture, {
+      file: injected,
+      prefix: [],
+      skillCommand: 'loopx',
+      version: 'loopx 2.4.0',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    // The injected file is exactly what the Driver spawns, so Core embeds it.
+    expect(fixture.quotaCalls.length).toBeGreaterThan(0)
+    for (const argv of fixture.quotaCalls) {
+      expect(argv[argv.indexOf('--cli-bin') + 1]).toBe(injected)
+    }
+    expect(fixture.heartbeatArgv.length).toBeGreaterThan(0)
+    for (const argv of fixture.heartbeatArgv) {
+      expect(argv.filter(value => value === '--cli-bin')).toHaveLength(2)
+      expect(argv[argv.indexOf('--cli-bin') + 1]).toBe(injected)
+    }
+    expect(warnings).toEqual([])
+  })
+
+  it.each([
+    ['bare', 'loopx'],
+    ['relative', join('bin', 'loopx')],
+  ])('leaves a host-injected %s name unbound and discloses it once', async (_kind, file) => {
+    // A name that depends on the caller's PATH or working directory is not a
+    // file the Driver can hand to Core; it keeps Core's default route.
+    const fixture = runnerFixture()
+    const host = fakeAgent()
+    const warnings: string[] = []
+    const driver = pinnedRouteDriver(fixture, {
+      file, prefix: [], skillCommand: file, version: 'loopx 2.4.0',
+    }, warnings)
+    await admittedQuotaAndHeartbeat(driver, host)
+
+    for (const argv of [...fixture.quotaCalls, ...fixture.heartbeatArgv]) {
+      expect(argv).not.toContain('--cli-bin')
+    }
+    expect(warnings.filter(value => value.includes('cli_route_unpinned'))).toHaveLength(1)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')(
+  'continuation Core command route parity through the real resolver',
+  () => {
+    it('pins the PATH-resolved executable the resolver probed', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'dsh-cli-parity-'))
+      const pinned = join(dir, 'loopx')
+      writeFileSync(pinned, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+      try {
+        const fixture = runnerFixture()
+        const host = fakeAgent()
+        const driver = new LoopXContinuationDriver({
+          runner: fixture.runner,
+          isLiveAgent: () => true,
+          makeTurnInstanceId: () => 'turn-stable',
+          retryDelaysMs: [0, 0],
+          resolveCommand: signal => resolveLoopXCommand({
+            runner: fixture.runner,
+            signal,
+            env: { PATH: dir },
+          }),
+        })
+        observeActivated(driver, host)
+        await waitFor(() => host.nextTurn.length === 1)
+        await driver.dispose()
+
+        const quotaArgv = fixture.quotaCalls[0] as string[]
+        const quotaFlag = quotaArgv.indexOf('--cli-bin')
+        expect(quotaFlag).toBeGreaterThanOrEqual(0)
+        expect(quotaArgv[quotaFlag + 1]).toBe(pinned)
+        const heartbeatArgv = fixture.heartbeatArgv[0] as string[]
+        expect(heartbeatArgv.filter(value => value === '--cli-bin')).toHaveLength(2)
+        expect(heartbeatArgv[heartbeatArgv.indexOf('--cli-bin') + 1]).toBe(pinned)
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }, 15_000)
+  },
+)
+
+describe.skipIf(process.platform === 'win32')('route binding across working directories', () => {
+  // One LoopX-shaped script per working directory; each reports its own
+  // absolute path on stderr so every stage records the executable that ran.
+  function writeLoopxFixture(directory: string): string {
+    const binDirectory = join(directory, 'bin')
+    mkdirSync(binDirectory, { recursive: true })
+    const file = join(binDirectory, 'loopx')
+    writeFileSync(file, [
+      '#!/bin/sh',
+      'self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")',
+      'echo "SELF=$self" >&2',
+      'case "$*" in',
+      "  *'--version'*) echo 'loopx 2.4.0';;",
+      "  *'resolve-agent-thread'*) echo '{\"ok\":true,\"schema_version\":\"loopx_thread_agent_binding_resolution_v0\",\"host_surface\":\"deepseek-harness-native\",\"thread_id\":\"session-fixture\",\"status\":\"bound\",\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\",\"matches\":[{\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\"}]}';;",
+      "  *'should-run'*) echo '{\"ok\":true,\"mode\":\"should-run\",\"goal_id\":\"goal-fixture\",\"should_run\":true,\"agent_identity\":{\"agent_id\":\"agent-fixture\",\"registered\":true},\"heartbeat_receipt\":{\"schema_version\":\"heartbeat_quota_receipt_v0\",\"turn_instance_id\":\"turn-stable\",\"status\":\"committed\"},\"scheduler_hint\":{\"action\":\"run_now\"}}';;",
+      "  *'heartbeat-prompt'*) echo '{\"ok\":true,\"schema_version\":\"heartbeat_agent_input_v1\",\"goal_id\":\"goal-fixture\",\"agent_id\":\"agent-fixture\",\"turn_instance_id\":\"turn-stable\",\"task_body\":\"LOOPX_TURN=turn-stable Continue through the authoritative LoopX workflow.\"}';;",
+      'esac',
+      '',
+    ].join('\n'), { mode: 0o755 })
+    return file
+  }
+
+  function selfPaths(stderr: string): string[] {
+    return stderr
+      .split('\n')
+      .filter(line => line.startsWith('SELF='))
+      .map(line => line.slice('SELF='.length))
+  }
+
+  async function runRouteMatrix(
+    pathEntries: string[],
+    expectedLoopx: string,
+    resolveCwd: string,
+  ): Promise<void> {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-route-matrix-'))
+    const projectDir = join(root, 'project')
+    const agentDir = join(root, 'agent')
+    for (const directory of [projectDir, agentDir]) {
+      // Decoy installs the PATH must never select once the route is bound.
+      writeLoopxFixture(directory)
+    }
+    const searchEnv = { PATH: pathEntries.join(delimiter) }
+    const originalCwd = process.cwd()
+    const spawned: string[] = []
+    const runner: FileRunner = (file, args, options) => runFile(file, args, {
+      ...options,
+      env: { ...options.env, ...searchEnv },
+    }).then(result => {
+      spawned.push(...selfPaths(result.stderr))
+      return result
+    })
+    try {
+      process.chdir(resolveCwd)
+      // Stage 1: the version probe runs from the host working directory.
+      const resolved = await resolveLoopXCommand({ runner, env: searchEnv })
+      expect(resolved.candidate).toBe('path-loopx')
+      expect(resolved.cliBin).toBeDefined()
+      expect(isAbsolute(resolved.cliBin as string)).toBe(true)
+      expect(resolved.cliBin).toBe(expectedLoopx)
+
+      // Stage 2: driver admission spawns from the Session working directory.
+      const host = fakeAgent(sessionId, projectDir)
+      const admissionWarnings: string[] = []
+      const driver = new LoopXContinuationDriver({
+        runner,
+        isLiveAgent: () => true,
+        makeTurnInstanceId: () => 'turn-stable',
+        retryDelaysMs: [0, 0],
+        resolveCommand: async () => resolved,
+        warn: message => { admissionWarnings.push(message) },
+      })
+      observeActivated(driver, host)
+      // Real subprocess admission needs a wall-clock budget, not microtask polls.
+      for (let attempt = 0; attempt < 400 && host.nextTurn.length === 0; attempt += 1) {
+        await new Promise<void>(resolve => setTimeout(resolve, 10))
+      }
+      expect([...admissionWarnings, `spawned=${spawned.length}`]).toEqual([`spawned=${spawned.length}`])
+      expect(host.nextTurn).toHaveLength(1)
+      await driver.dispose()
+      expect(spawned.length).toBeGreaterThan(3)
+      expect(new Set(spawned)).toEqual(new Set([expectedLoopx]))
+
+      // Stage 3: the Core-rendered route executes in the agent directory.
+      const route = resolved.cliBin as string
+      const rendered = `${route} --cli-bin ${route} --format json quota should-run --goal-id goal-fixture`
+      const executed = await runFile('/bin/sh', ['-c', rendered], {
+        cwd: agentDir,
+        env: searchEnv,
+      })
+      expect(selfPaths(executed.stderr)).toEqual([expectedLoopx])
+    } finally {
+      process.chdir(originalCwd)
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+
+  it('binds probe, admission, and rendered execution to one executable through relative PATH entries', async () => {
+    const hostDir = mkdtempSync(join(tmpdir(), 'dsh-route-host-'))
+    try {
+      const hostLoopx = realpathSync(writeLoopxFixture(hostDir))
+      await runRouteMatrix(['bin', '/usr/bin', '/bin'], hostLoopx, hostDir)
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it('keeps the same single executable when PATH entries are absolute', async () => {
+    // Control group: absolute PATH entries resist the per-cwd decoy installs,
+    // and an explicit absolute entry stays bound exactly as written.
+    const hostDir = mkdtempSync(join(tmpdir(), 'dsh-route-host-'))
+    try {
+      const hostLoopx = writeLoopxFixture(hostDir)
+      await runRouteMatrix([join(hostDir, 'bin'), '/usr/bin', '/bin'], hostLoopx, tmpdir())
+    } finally {
+      rmSync(hostDir, { recursive: true, force: true })
+    }
+  }, 20_000)
 })

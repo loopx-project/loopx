@@ -208,6 +208,10 @@ whole Goal/Todo narrative, source availability/revisions and read routes. Detail
 history and optional authoring recipes remain expandable from the same capture.
 Current narrative sources and their provenance precede other sources, including
 large scoped preferences; both retain their complete selected values.
+Todo `required_write_scopes` are omitted from default quota summaries,
+capability gates, action portfolios, and `selected_todo` projections so initial
+decision context stays compact without truncation pointers. Canonical Todo
+reads (`todo list`) retain the full declared scopes when explicitly inspected.
 The preference source's complete `current` view also stays in the initial read:
 corrections, retirement/expiry and empty replacements retain their provenance,
 revision and advisory authority. This captured pre-work view does not replace the
@@ -221,9 +225,20 @@ applies during explicit Todo selection when work and quota spending are
 still disabled. A complete scan can still hit the summary's display limit.
 The initial view then also keeps the exact omitted count and reconciliation
 guidance. The required read and its existing cursor deliver the scoped request
-rows. The captured summary remains available at its original address. An
-incomplete scan, unavailable scan records or an unmatched read keeps the whole
-summary inline.
+rows. With `--attention-only`, each incoming page keeps full `items` for
+requests still needing their briefs and `open_request_summaries` for requests
+whose latest delivered conclusion leaves remaining work. Follow `next_cursor`
+even on summary-only pages. The same cursor continues to open sent requests
+after the incoming rows. Pages with only sent summaries do not deliver or
+consume results. A nonzero `unavailable_count` calls for receipt recovery.
+For peer returns, folding a brief requires a delivery receipt that binds its
+request ID and exact result key. An older receipt without that binding keeps
+the full brief visible until an authorized read supplies the specific result.
+Use `--request-id` without `--attention-only` to read a complete incoming
+brief. Inspect a sent Goal request with `manager-inbox status` using the
+summary's receiver `agent_id` and exact `request_id` in the same Goal.
+The captured summary remains available at its original address. An incomplete
+scan, unavailable scan records or an unmatched read keeps the whole summary inline.
 Adoption and queued returns are intermediate states. Read the full current request before
 assessing, executing or returning it. Use the existing scoped request and
 consumption routes for those actions.
@@ -334,20 +349,21 @@ Native ready decisions from `quota should-run` and saved `quota context-project`
 can link two reads when boundary detail pushes controls past the serialized
 first page budget. When those controls fit, the ordinary reader keeps its cursor.
 Read `first_read_command` for the decision, stop conditions and required reads.
-If `remaining_read_command` is present,
-follow it and its cursor before work, even when the opening reports EOF. It
-starts with the complete current write scope and any checkpointed approval
-entries. The opening shows the current approval counts and active scope summary.
+If `remaining_read_command` is present, follow it and its cursor before work,
+even when the opening reports EOF. The remainder supplies deferred Goal write
+scopes, checkpointed `active_write_scope`, and checkpointed approval entries.
+The opening keeps only the current approval counts (`active_count` and
+`inactive_count`), while Goal wildcard subpaths fold automatically.
 The remainder can refer to other fully observed, unchanged fields. If the
 observation is lost, its same-capture fallback restores the full remainder.
 
 When the guard requires an independent worktree before delivery, the opening
-keeps the relocation instructions and the current decision controls. Large
-Goal and selected Todo write scope lists are available from the same capture
-at `/goal_boundary/write_scope` and `/selected_todo/required_write_scopes`.
-Select them if the relocation needs them. Once relocated, rerun the guard for
-the same Turn and read its complete current scopes before editing. This
-presentation changes neither admission nor the explicit off view.
+keeps the relocation instructions and the current decision controls. If the
+relocation needs a large Goal write scope list, select
+`/goal_boundary/write_scope` from the same capture (and inspect Todo metadata
+with `todo list` if needed). Once relocated, rerun the guard for the same Turn
+and read its complete current scopes before editing. This presentation changes
+neither admission nor the explicit off view.
 
 中文：对于已保存的 benchmark 准入结果，唤醒正文直接给出首读命令。一次调用即可
 取得首屏，已知字段可改用多个 `--select`。首读默认最多 12,000 个 UTF-8 字节，含导航。
@@ -372,15 +388,14 @@ presentation changes neither admission nor the explicit off view.
 控制信息超出序列化后的首页预算，导航可给出两段读取。控制信息能放进首页时，沿用普通游标。
 先用 `first_read_command` 取得决策、停止条件和必读项。如果给出
 `remaining_read_command`，即使首段已到 EOF，也要在开工前沿该命令及其游标读完。
-续读从完整的当前写入范围和已记录的审批条目开始，两段绑定同一份捕获。首段保留当前审批
-数量和生效范围摘要。
+续读提供延后交付的 Goal 写入范围、checkpointed `active_write_scope` 与已记录的
+审批条目。两段绑定同一份捕获；首段仅保留当前审批数量摘要，并自动折叠 Goal 通配符子路径。
 续读可引用其他已完整送达且未变化的字段。观察失效时，从同一捕获恢复完整续段。
 
 准入检查要求先切换到独立工作树时，首读保留迁移指引和当前决策控制信息。
-如迁移需要较长的 Goal 或选中 Todo 写入范围，可从同一捕获按
-`/goal_boundary/write_scope` 和 `/selected_todo/required_write_scopes` 读取。
-切换后以原 Turn 重新准入，编辑前读取其完整的当前范围。该展示调整不改变准入判定
-或显式关闭渐进读取时的视图。
+如迁移需要较长的 Goal 写入范围，可从同一捕获按 `/goal_boundary/write_scope`
+读取（如需查看 Todo 元数据可运行 `todo list`）。切换后以原 Turn 重新准入，编辑前
+读取其完整的当前范围。该展示调整不改变准入判定或显式关闭渐进读取时的视图。
 
 When the existing acceptance owner supplies complete `outcome_context`
 navigation matching this capture's Goal, Agent, selected Todo, outcome revision
@@ -436,8 +451,17 @@ full/delta 字节比较计入这些 reader 命令元数据；既有进程内引�
 首读包含有界 `unfinished_delegations` 投影和 `read_complete` 标记。已准入的普通
 工作 Turn 若有大型委派摘要、扫描完整，且必读列表中有同一条管家收件箱命令，首读保留
 收发请求计数、扫描状态和必读命令。扫描完整但摘要达到展示上限时，首读同时保留精确的
-省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。原摘要仍可从同一
-捕获取回。扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
+省略数量与核对指引。逐条请求通过必读命令及其现有分页游标交付。`--attention-only`
+下，需要原简报的收件仍在 `items`，最近一次结论已送达且有剩余工作的收件在
+`open_request_summaries`。只有摘要的页也继续跟随 `next_cursor`，收件读完后
+沿同一游标查阅未结外发委派。只含外发摘要的续页不送达或消费结果。
+`Peer` 回传只有在送达回执绑定请求 ID 和确切结果键时才折叠简报。缺少绑定的旧回执
+继续保留完整简报，直到有权限的读取实际交付该条结果。
+`unavailable_count` 大于零时须恢复对应回执。收件全文用不带
+`--attention-only` 的 `--request-id` 精读。Goal 外发委派可在同一 Goal 下用
+摘要中的接收方 `agent_id` 和精确 `request_id` 查阅 `manager-inbox status`。
+原摘要仍可从同一捕获取回。
+扫描不完整、扫描记录不可读或没有匹配必读命令时，首读保留完整摘要。
 采纳和回传入队是中间状态，评估、执行或回传前须读当前请求全文，并沿已有范围约束和
 消费入口办理。
 
@@ -517,9 +541,8 @@ capture，活跃会话的认领来源保持原样。恢复前先核对原 Turn �
 After a Host claim, the ready guard uses the private
 `--prepared-capture-reference` route. It publishes the complete decision and
 returns its writer digest with the fields needed to verify the same Todo and
-Turn. The default guard and the `--turn-envelope` and `--complete-turn`
-compatibility spellings use the same complete v1 capture. The hook verifies
-that digest when it opens the original file. If the
+Turn. The guard captures the complete v1 decision. The hook verifies the
+writer digest when it opens the original file. If the
 file changed, the receipt preserves the claim and pins recovery to the original
 bytes before work can continue.
 The private native journal reserves automatic preparation before claiming a
@@ -1168,8 +1191,8 @@ Checkpoint Host 预检在显式开启 native JSON `should-run` 捕获时使用�
 读取。未绑定任务的分阶段重规划继续沿用 review 所属的原始 Goal 读取。
 
 Host 领取 Todo 后，就绪检查使用内部 `--prepared-capture-reference` 路径。它保存完整决策，
-只返回写入时的摘要和核对同一 Todo、Turn 所需的字段。默认 guard 和 `--turn-envelope`、
-`--complete-turn` 两个兼容别名均使用同一份完整 v1 捕获。hook 打开原文件时校验该摘要。
+只返回写入时的摘要和核对同一 Todo、Turn 所需的字段。guard 捕获完整 v1 决策。
+hook 打开原文件时校验写入摘要。
 若文件已被替换，回执保留原领取记录，恢复原始内容后才能继续工作。
 
 Goal adapter 仍完整读取文件、校验 UTF-8，并以全部字节计算修订摘要；关闭 native

@@ -56,3 +56,35 @@ test("invalid retained epochs and ambiguous observations stay unselected", () =>
   assert.equal(stewardRoute({...input, native: {...input.native, api_active: true,
     action: "api_active", policy: {...input.native.policy, api_fallback: false}}}).endpoint, null);
 });
+
+test("codex primary fails over to antigravity only when all codex slots are exhausted and restores when ready", () => {
+  const futureReset = now + 3600;
+  const agCapacity = {observed_at: now, account_ref: "b".repeat(64), model_id: "gemini-4-carbon-high",
+    execution_id: "endpoint-probe:ok", remaining_fraction: 0.9, reset_time: "2026-01-02T00:00:00Z",
+    quota_exhausted: false, normal_completion: true};
+  const exhausted = {
+    now, primary: "codex", pool: ["codex", "antigravity"], current: "codex",
+    primary_capacity: null, fallback_capacity: agCapacity, api_ready: false,
+    native: {
+      policy: {enabled: true, slots: ["slot-a", "slot-b"], api_fallback: true},
+      active_slot: "slot-a", action: "selection_changed", login_matches: true, recovery_required: false,
+      accounts: [
+        {slot: "slot-a", observed_at: now - 600, availability: "exhausted", reset_at: futureReset},
+        {slot: "slot-b", observed_at: now - 600, availability: "exhausted", reset_at: futureReset},
+      ],
+    },
+  };
+  assert.equal(stewardRoute(exhausted).endpoint, "antigravity");
+  assert.equal(stewardRoute({...exhausted, api_ready: true}).endpoint, null);
+  assert.equal(stewardRoute({...exhausted, native: {...exhausted.native, recovery_required: true}}).endpoint, null);
+  assert.equal(stewardRoute({...exhausted, fallback_capacity: {...agCapacity, quota_exhausted: true, normal_completion: false, remaining_fraction: 0}}).endpoint, null);
+  assert.equal(stewardRoute({
+    ...exhausted,
+    current: "antigravity",
+    native: {
+      ...exhausted.native,
+      action: "ready",
+      accounts: [{slot: "slot-a", observed_at: now, availability: "available"}, exhausted.native.accounts[1]],
+    },
+  }).endpoint, "codex");
+});

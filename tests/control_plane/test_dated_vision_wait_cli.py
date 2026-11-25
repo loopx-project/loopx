@@ -232,8 +232,7 @@ def test_watch_only_monitor_preserves_dated_successor_wait(
             "--available-capability", "network", "--available-capability", "external_evidence_poll",
             "--turn-instance-id")
     details = ("--include-detail", "agent-todos") if scenario == "unproven" else ()
-    saved_alias = ("--turn-envelope",) if details else ()
-    rc, first = cli(registry, runtime, *args, "watch-first", *details, *saved_alias)
+    rc, first = cli(registry, runtime, *args, "watch-first", *details)
     assert rc == 0, first
     if scenario == "successor_due":
         assert first["effective_action"] == "successor_replan_required"

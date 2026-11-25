@@ -18,6 +18,10 @@ progress, decisions and verifiable results so work can continue across sessions.
 
 </div>
 
+https://github.com/user-attachments/assets/6d459488-4834-40ef-90bc-d6649c4f0ef1
+
+<p align="center"><sub><b>60-second overview</b> — one sentence sets a long-horizon goal across Codex, Claude Code, Gemini &amp; DeepSeek; LoopX keeps Todos, replanning, human sign-off, and 3% first-read session recovery verifiable across 200+ hour runs (community film by <a href="https://x.com/lemomo_ai">@lemomo_ai</a> · <a href="#see-loopx-in-action">more product recordings below</a>).</sub></p>
+
 ---
 
 <a id="quick-start"></a>
@@ -138,7 +142,7 @@ LoopX is useful when you run:
 - creator, research, or operations workflows whose progress must remain
   legible to a non-engineering operator.
 
-Dangerous permissions,
+LoopX is not an autonomous production controller. Dangerous permissions,
 publishing, production writes, and final ownership stay with the human.
 
 </details>
@@ -228,6 +232,13 @@ contract](docs/reference/protocols/lark-manager-context-authority-v0.md).
 ```bash
 loopx dashboard
 ```
+
+For the optional [Workbench](apps/workbench/README.md#统一启动命令), use
+`loopx workbench start`, `loopx workbench status`, and `loopx workbench stop`
+after installing its separate application. These commands preserve its data and
+leave independently managed Core services running. Opt in to current-user login
+startup and crash recovery with `loopx workbench start --autostart` (macOS launchd
+or Linux systemd); `stop --disable-autostart` removes that registration and keeps data.
 
 `loopx dashboard` is the supported browser/PWA launch path. You can also download
 native desktop previews from the [current release](https://github.com/loopx-project/loopx/releases/latest);

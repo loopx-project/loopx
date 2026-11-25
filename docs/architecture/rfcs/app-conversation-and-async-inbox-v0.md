@@ -298,6 +298,11 @@ it or starts model work. Before every write and receipt recovery, Core rechecks
 the Session, current binding and audience, and the provider verifies the original
 source. Posts identify the App speaker, stay in canonical append order within
 that outbox and retain complete long text through the existing rich-post parts.
+When Lark supplies a message link for the verified App input mirror, a new
+answer includes a link to the question from the same Turn. Multipart inputs
+use the last concrete post. The outbox retains the link before the first send
+and reuses it when recovering the same attempt. If Lark cannot supply a link in
+the original private chat, the existing body delivery proceeds.
 An exact App-origin terminal error also projects a public-safe failure notice
 with the original completion time. The notice is derived from the stored Turn
 and its matching error row, without exporting raw diagnostics. It uses the same
@@ -336,10 +341,10 @@ actual provider presentation remain separate acceptance work.
 
 Use **Continue original conversation** or the explicitly selected App steward
 entry above to reach this path. Old ordinary history is retained separately.
-This checkpoint covers text and bounded App image projection, not reply/thread
-relation mirroring, retroactive insertion into Lark chronology or all-channel
-broadcast. Canonical App images reuse the existing resource uploader and post
-sender, retaining caption and ordered inline images in the original private
+This checkpoint covers text, question links and bounded App image projection.
+Native reply and topic placement, retroactive insertion into Lark chronology,
+and all-channel broadcast remain open. Canonical App images reuse the existing
+resource uploader and post sender, retaining caption and ordered inline images in the original private
 chat. Long captions keep images on the final concrete post only. Every upload
 and send rechecks the original source and current Core message/grant. Sends and
 edits check again after provider preview, before recording the write intent;
@@ -1039,7 +1044,7 @@ packaged UI with synthetic fixtures and qualify the chosen real query separately
 | Boundary inspected | Existing implementation | Gap to address through that owner |
 | --- | --- | --- |
 | App free text | `personal-workspace-page.tsx`, `workspace-action-form.tsx` | Retire browser intent classification for Goal creation, Todo changes, assignment and scheduling. All free text reaches Chat intact; explicit controls open typed forms and reviewed previews |
-| Chat request and observation | `chat_ingress.py`, `chat_store.py`, dashboard `data/chat.ts` | Existing client ingress/Turn identity and event cursors are assets. Prove response-loss, same-key/different-payload and reload recovery before claiming durable end-to-end entry |
+| Chat request and observation | `chat/ingress.py`, `chat_store.py`, dashboard `data/chat.ts` | Existing client ingress/Turn identity and event cursors are assets. Prove response-loss, same-key/different-payload and reload recovery before claiming durable end-to-end entry |
 | Collaboration | `control_plane/collaboration/inbox.py`, typed collaboration rules and return-delivery owner | Already Agent-neutral despite legacy storage names. Preserve decision/read/return distinctions; do not build another manager-only inbox |
 | Operator inbox | `control_plane/work_items/operator_inbox.py` | A source contract and shared urgency projection already exist; inspect and migrate the real pending/read/ack lifecycle rather than adding another generic wrapper |
 | Lark transport | `extensions/lark/event_inbox.py`, `routed_inbox.py`, `inbox_reply.py` and reaction adapter | Provider normalization, idempotent capture, read/processed records and reply recovery coexist with Lark ids/policy. Extract only demonstrated reusable semantics; keep authentication, addressing, provider ids, reactions and message limits in the adapter |
@@ -1757,6 +1762,14 @@ Attached hosts, other executors and linked/Lark conversations reject this new
 input before admission; this is not a file-sync or arbitrary-path grant. Images
 retain their existing routes. Source delivery does not prove comprehension,
 automatic material adoption, full GQ06 qualification or lower model cost.
+
+A local managed Codex Goal can also return a requested Markdown or plain-text
+file in its web reply. Open the original conversation and choose **Download
+source**. Reopening the message retrieves the captured bytes even after the
+workspace file changes. The Agent supplies the filename, MIME type, byte count
+and inline base64 data in the reply envelope. The same count, size and UTF-8
+checks apply. A file containing a protected local path is withheld and the
+answer reports the delivery failure. LoopX never opens a path from the reply.
 
 ### Default Lark private images reuse native Turn attachments
 

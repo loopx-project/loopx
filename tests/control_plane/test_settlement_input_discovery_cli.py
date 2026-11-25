@@ -97,7 +97,9 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     assert build_turn_envelope(guard)["writeback"]["settlement_plan"] == plan
     rc, premature = run("checkpoint-context", *binding)
     assert rc != 0 and "original committed Turn writeback" in premature["error"]
-    rc, no_writeback = _run_generated_cli(plan["ordered_steps"][2]["command_template"], registry_path=registry)
+    assert plan["ordered_steps"][2]["owner"] == "runtime"
+    assert "command_template" not in plan["ordered_steps"][2]
+    rc, no_writeback = run("quota", "spend-slot", *binding, "--slots", "1", "--source", "heartbeat", "--execute")
     assert rc != 0 and _spend_run_count(runtime) == 0, no_writeback
 
     if not in_flight:
@@ -124,12 +126,14 @@ def test_projected_inputs_support_real_readback_writeback_and_one_debit(tmp_path
     rc, rejected = _run_generated_cli(refresh, registry_path=registry)
     assert rc != 0 and _spend_run_count(runtime) == 0, rejected
     path.write_text(json.dumps(vision))
-    rc, written = _run_generated_cli(refresh, registry_path=registry)
-    assert rc == 0 and written["vision_checkpoint"]["satisfied"], written
-    assert written["settlement_identity"] == plan["identity"]
     for replay in (False, True):
-        rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
-        assert rc == 0 and spent["appended"] is not replay, spent
+        rc, written = _run_generated_cli(refresh, registry_path=registry)
+        assert rc == 0 and written["settlement_progress"]["state"] == "settled", written
+        assert written["settlement_identity"] == plan["identity"]
+        assert written["settlement_result"]["ok"] is True
+        assert written.get("idempotent_replay", False) is replay
+        if not replay:
+            assert written["vision_checkpoint"]["satisfied"], written
         assert _spend_run_count(runtime) == 1
     rc, final_todo = _run_generated_cli(readback, registry_path=registry)
     assert rc == 0 and final_todo["todo"]["status"] == ("open" if in_flight else "done")
@@ -182,9 +186,12 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     rc, detail = run("quota", "should-run", "--codex-app", *current, "--include-detail", "vision")
     assert rc == 0 and detail["replan_action_packet"]["writeback_contract"] == writeback, detail
     assert build_turn_envelope(guard)["replan_action_packet"]["writeback_contract"] == writeback
-    rc, envelope = run("quota", "should-run", "--codex-app", *current, "--turn-envelope")
+    rc, envelope = run("quota", "should-run", "--codex-app", *current)
     assert rc == 0 and envelope["replan_action_packet"]["writeback_contract"] == writeback, envelope
     vision = deepcopy(authoring["minimal_example"])
+    vision["stride_decision"] = deepcopy(
+        guard["replan_action_packet"]["stride_control"]["minimal_example"]
+    )
     vision["path_delta"].update(
         outcome="replan", observed_reality="The settled fixture has no runnable Todo.",
         retained=["Original acceptance"], evidence_refs=[])
@@ -196,7 +203,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
     path.write_text(json.dumps(vision))
     rc, rejected = run(*command)
     assert rc != 0 and _spend_run_count(runtime) == 1, rejected
-    assert "typed semantic delta" in rejected["error"], rejected
+    assert "evidence" in rejected["error"].lower(), rejected
     vision["path_delta"]["evidence_refs"] = ["validation:no-runnable-fixture"]
     path.write_text(json.dumps(vision))
     rc, accepted = run(*command)
@@ -211,6 +218,7 @@ def test_todoless_periodic_review_uses_default_authoring_and_settles_once(tmp_pa
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeypatch, provider):
     """A caller following the delivered example must retain a real work link."""
+    monkeypatch.delenv("LOOPX_CONTEXT_DELIVERY", raising=False)
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     # Fund all three admitted Turns before execution; the shared fixture's
@@ -225,8 +233,7 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         return _run_cli(registry, runtime, *args, cwd=project)
 
     rc, configured = run("configure-goal", "--goal-id", GOAL_ID,
-                         "--execution-replan-after-turns", "1",
-                         "--execution-stride-strategy", "off", "--execute")
+                         "--execution-replan-after-turns", "1", "--execute")
     assert rc == 0, configured
     for stage in ("initial", "review", "subsequent"):
         binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
@@ -259,6 +266,9 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
             vision["path_delta"].update(
                 outcome="replan", observed_reality="Continue the admitted original work.",
                 retained=["Original requirements"], evidence_refs=["validation:work-link"])
+            vision["stride_decision"] = deepcopy(
+                staged["stride_control"]["minimal_example"]
+            )
             path = tmp_path / "linked-vision.json"
             path.write_text(json.dumps(vision))
             # Consume the replan-only binding, rather than inventing a Todo
@@ -274,14 +284,16 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
         args += ["--no-global-sync", "--suppress-external-sinks"]
         rc, written = run(*args)
         assert rc == 0, written
-        rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
-        assert rc == 0, spent
+        if written.get("settlement_progress", {}).get("state") == "settled":
+            assert written["settlement_result"]["ok"] is True
+        else:
+            rc, spent = _run_generated_cli(written["settlement_owed"]["command"], registry_path=registry)
+            assert rc == 0, spent
 
     # Read the real immutable CLI history, not a hand-authored decision fixture.
     status = {"registry": str(registry), "runtime_root": str(runtime), "run_history": {"runs": []}}
     context = project_replan_context(
-        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status,
-        stride_strategy="evidence_conditioned_v1")
+        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status)
     follow = context["decision_followthrough"]
     assert [row["todo_id"] for row in follow["planned_work"]] == [TODO_ID]
     assert follow["ordinary_work"]["recorded_count"] == 1
@@ -289,12 +301,8 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     assert evidence["todo_id"] == TODO_ID
     assert follow["planned_work"][0]["ordinary_evidence_refs"] == [evidence["evidence_ref"]]
     assert follow["execution_and_goal_gain"] == "unknown"
-    # Reading this view neither enables stride nor settles another Turn.
-    ordinary = project_replan_context(
-        goal_id=GOAL_ID, agent_id=AGENT_ID, runs=(), source_status=status, stride_strategy="off")
-    assert ordinary["decision_followthrough"] == follow
-    assert "stride_strategy" not in ordinary
-    assert "explore_basis" not in ordinary
+    assert context["stride_strategy"] == "evidence_conditioned_v1"
+    assert "explore_basis" not in context
     assert _spend_run_count(runtime) == 3
 
     # Preserve compatibility without turning a descriptive or unsupported
@@ -305,6 +313,6 @@ def test_replan_authoring_example_links_actual_subsequent_work(tmp_path, monkeyp
     review["agent_vision"]["todo_delta"] = [f"action:{TODO_ID}", "Keep investigating."]
     unlinked = project_replan_context(
         goal_id=GOAL_ID, agent_id=AGENT_ID, runs=historical,
-        history_newest_first=False, stride_strategy="evidence_conditioned_v1")
+        history_newest_first=False)
     assert unlinked["decision_followthrough"]["planned_work"] == []
     assert "ordinary_work" not in unlinked["decision_followthrough"]

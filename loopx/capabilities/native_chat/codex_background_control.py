@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ...chat_store import CHAT_SESSION_MODE_ATTACHED, TERMINAL_TURN_STATES
-from ...chat_codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
+from ...chat.codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
 
 
 def _adapter(controller: Any, session: dict[str, Any]) -> Any:

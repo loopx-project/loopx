@@ -128,7 +128,7 @@ def managed_chat_activation_guard(
     an empty Session summary is not sufficient evidence of an idle service.
     The caller must still verify its loaded service/PID before stopping it.
     """
-    from .chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+    from .chat.ingress import chat_runtime_activation_lock, chat_runtime_activation_state
 
     labels = [plist.stem for plist in plists]
     roots = sorted({_chat_runtime_root(plist) for plist in plists})
@@ -139,7 +139,11 @@ def managed_chat_activation_guard(
             if plist not in plists or _managed_service_pid(plist, label=label) != pid:
                 raise ValueError("chat_service_route_unresolved")
         for root in roots:
-            if chat_runtime_activation_state(root)["nonterminal_turns"]:
+            active_sessions: list[str] = []
+            state = chat_runtime_activation_state(root, active_session_ids=active_sessions)
+            if state["nonterminal_turns"]:
+                if not active_sessions:
+                    raise RuntimeActivationDeferred("chat_work_pending", labels)
                 from .chat_runtime import ChatRuntimeController
                 from .chat_store import ChatSessionStore
 
@@ -148,8 +152,8 @@ def managed_chat_activation_guard(
                 # unrelated completion/compaction out of this scoped repair.
                 store = ChatSessionStore(root, startup_maintenance=False)
                 recovery = ChatRuntimeController(store=store, codex_bin="codex")
-                for session in store.list_sessions():
-                    recovery.recover_exited_turn(str(session["session_id"]))
+                for session_id in active_sessions:
+                    recovery.recover_exited_turn(session_id)
                 if chat_runtime_activation_state(root)["nonterminal_turns"]:
                     raise RuntimeActivationDeferred("chat_work_pending", labels)
         yield
@@ -166,7 +170,7 @@ def replace_managed_loopx_chat(
     SIGTERM and port release. An unresolved manager or store leaves it running.
     """
     from .chat_server import is_loopback_host
-    from .chat_ingress import chat_runtime_activation_lock, chat_runtime_activation_state
+    from .chat.ingress import chat_runtime_activation_lock, chat_runtime_activation_state
     from .dashboard_launcher import (
         _is_same_user_loopx_chat_process, _listener_pids, _probe_existing_chat,
     )

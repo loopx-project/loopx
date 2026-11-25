@@ -113,6 +113,13 @@ export function optionalNonEmptyString(
   return requireNonEmptyString(value, label);
 }
 
+export function pythonString(value: unknown): string {
+  if (value === null || value === undefined) return "None";
+  if (value === true) return "True";
+  if (value === false) return "False";
+  return String(value);
+}
+
 export function requireStringArray(value: unknown, label: string): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
     throw new EffectRuntimeRequestError(`${label} must be an array of strings`);

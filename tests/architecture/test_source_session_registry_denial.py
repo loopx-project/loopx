@@ -28,6 +28,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/cli_runtime.py",
     "loopx/cli_commands/coordination_shadow.py",
     "loopx/cli_commands/manager_inbox.py",
+    "loopx/cli_commands/registry_authority_read.py",
     "loopx/configure_goal.py",
     "loopx/control_plane/collaboration/goal_instance_scope.py",
     "loopx/control_plane/collaboration/peers.py",
@@ -42,6 +43,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/coordination/authority_source_capture.py",
     "loopx/control_plane/coordination/shadow_goal_scope.py",
     "loopx/control_plane/projects/registry.py",
+    "loopx/control_plane/quota/execution_preparation.py",
     "loopx/control_plane/turn_driver/codex_sessions.py",
     "loopx/kunluncode_goal_mode/cli.py",
     "loopx/state_migration.py",
@@ -57,10 +59,11 @@ METADATA_READER_FUNCTIONS = {
     "loopx/control_plane/goals/source_session_recreation.py": {"_canonical_runtime_root"},
     "loopx/capabilities/issue_fix/correction_settlement.py": {"_require_origin_registry"},
     "loopx/hosts/managed_service_runtime.py": {"_chat_account_root"},
+    "loopx/cli_commands/registry_authority_read.py": {"list_authority_sources"},
 }
 
 
-def _assert_metadata_reader_functions(tree: ast.Module, expected: set[str]) -> None:
+def _assert_direct_loader_functions(tree: ast.Module, expected: set[str]) -> None:
     loader_functions = {
         node.name
         for node in ast.walk(tree)
@@ -130,7 +133,14 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
         "loopx/control_plane/coordination/authority_source_capture.py",
         "loopx/control_plane/coordination/shadow_goal_scope.py",
         "loopx/control_plane/projects/registry.py",
+        "loopx/control_plane/quota/execution_preparation.py",
     }
+    # Closeout admits the exact source-session GoalRef through quota accounting
+    # before handing the registry snapshots to the typed writer.
+    closeout_tree = ast.parse(
+        (REPO_ROOT / "loopx/control_plane/quota/execution_preparation.py").read_text(encoding="utf-8")
+    )
+    _assert_direct_loader_functions(closeout_tree, {"commit_execution_loss_closeout"})
     # Metadata discovery and named lifecycle/settings owners grant no generic
     # runtime admission. Keep every exception at its exact function; HTTP and
     # native creation tests additionally prove the executable refusal boundary.
@@ -149,7 +159,7 @@ def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     }
     for relative, expected in metadata_readers.items():
         tree = ast.parse((REPO_ROOT / relative).read_text(encoding="utf-8"))
-        _assert_metadata_reader_functions(tree, expected)
+        _assert_direct_loader_functions(tree, expected)
         if relative == "loopx/control_plane/goals/source_session_recreation.py":
             _assert_recreation_reader_is_location_only(tree)
     for relative in callers - source_session_owners - metadata_readers.keys():
@@ -167,7 +177,7 @@ def test_metadata_exception_rejects_another_direct_loader(relative: str) -> None
     source = (REPO_ROOT / relative).read_text(encoding="utf-8")
     tree = ast.parse(source + "\n\ndef execute_goal(registry_path):\n    return load_project_registry(registry_path)\n")
     with pytest.raises(AssertionError):
-        _assert_metadata_reader_functions(tree, METADATA_READER_FUNCTIONS[relative])
+        _assert_direct_loader_functions(tree, METADATA_READER_FUNCTIONS[relative])
 
 
 @pytest.mark.parametrize("reader_name", ["_canonical_runtime_root", "_canonical_writer_guard_path"])
@@ -200,3 +210,47 @@ def test_generic_registry_decoder_enforces_source_session_denial() -> None:
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
     }
     assert "require_runtime_compatible_project_registry" in calls
+
+
+def test_cold_snapshot_rejects_routed_source_session_registry(tmp_path: Path) -> None:
+    import json
+    from types import SimpleNamespace
+
+    from loopx.control_plane.projects.registry_codec import (
+        ProjectRegistryProtocolError,
+        SOURCE_SESSION_PROFILE_ID,
+    )
+    from loopx.presentation.goal_storage_api import GoalStorageRequestMixin
+
+    invoked_registry = tmp_path / "global" / "registry.global.json"
+    invoked_registry.parent.mkdir(mode=0o700, parents=True)
+    source_registry = tmp_path / "source" / "registry.json"
+    source_registry.parent.mkdir(mode=0o700, parents=True)
+    source_registry.write_text(
+        json.dumps(
+            {
+                "profile_id": SOURCE_SESSION_PROFILE_ID,
+                "goals": [
+                    {
+                        "id": "cold",
+                        "repo": str(tmp_path / "project"),
+                        "state_file": str(tmp_path / "project" / "STATE.md"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    handler = GoalStorageRequestMixin()
+    handler.server = SimpleNamespace(
+        registry_path=invoked_registry,
+        runtime_root=tmp_path / "runtime",
+    )
+    with pytest.raises(ProjectRegistryProtocolError, match=SOURCE_SESSION_PROFILE_ID):
+        handler._storage_cold_snapshot(
+            "cold",
+            {},
+            {"id": "cold"},
+            tmp_path / "runtime",
+            source_registry,
+        )

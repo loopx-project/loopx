@@ -322,11 +322,11 @@ no key in arguments):
 
 ```sh
 uv run --extra test python examples/evaluations/chat-intake.py --live \
-  --model deepseek-flash --repeats 2 --output /tmp/chat-intake-results.json
+  --model deepseek-flash --workers 6 --repeats 2 --output /tmp/chat-intake-results.json
 ```
 
-It uses the production prompt/parser, 28 public-safe cases, two concurrent calls
-and at most 8,192 output tokens per request. Nothing is dispatched or written to
+It uses the production prompt/parser, 30 public-safe cases, six concurrent calls
+by default (`--workers 6`, range `1–12`) and at most 8,192 output tokens per request. Nothing is dispatched or written to
 an active Goal. Skipping `--live` refuses paid calls. CI tests the evaluator and
 contracts without credentials; real model results include failures, repeats,
 usage and exact prompt/case hashes. To exercise the actual restricted Codex Chat

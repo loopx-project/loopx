@@ -1212,10 +1212,14 @@ main blocker or keeps following a stale local-only benchmark staging todo.
 
 - a typed machine-configuration namespace is about to change; the built-in
   namespaces are `change_quality_qualification`, `codex_chat`, `context_delivery`,
-  `explore_harness`, `goal_storage`, `manager_runtime`, `periodic_report`, `pull_request_review`,
-  `steward_executor`, and `todo_replan_cadence`. The public catalog returned by
+  `explore_harness`, `goal_closeout`, `goal_storage`, `manager_runtime`,
+  `periodic_report`, `pull_request_review`, `steward_executor`, `steward_memory`,
+  and `todo_replan_cadence`. The public catalog returned by
   `loopx machine-config describe` is authoritative, so this inventory has to stay
   complete rather than approximate;
+- `goal_closeout` configures an optional command for terminal Goal transitions.
+  The local operator sets the command through the machine-config CLI. The
+  Dashboard shows whether a command is configured and can adjust its timeout.
 - `goal_storage` carries the storage target a newly created Goal is fixed to
   (`new_goal_provider`, canonical `sqlite` with hard leases by default; explicit
   `file` and soft-claim creation choices remain available).
@@ -1246,6 +1250,12 @@ main blocker or keeps following a stale local-only benchmark staging todo.
   authority, and it precedes the Chat service environment rather than replacing
   it, so a machine-local decision is editable in the Dashboard and readable from
   `loopx machine-config inspect`;
+- `steward_memory` carries the default-off isolated OpenViking memory setting
+  (`enabled`, `user_space`, `auto_recall`, and `recall_timeout_seconds` from `1`
+  to `15`) for verified owner private Steward conversations. It stores no
+  credentials (`OPENVIKING_*` stays in the Chat host environment and is scrubbed
+  from worker environments) and never leaks into group chats, project
+  conversations, or worker Agents;
 - `loopx machine-config preview` returns a `plan_revision` for the exact
   envelope, namespace patch, removal, or rollback that would be applied;
 - a Goal-level override and a live machine default may both be in scope.
@@ -2700,7 +2710,7 @@ keep "we stopped supporting this" from becoming "this was never configured".
    (`loopx/control_plane/coordination/local_authority_shadow.ts:57`) rather than
    disappearing into a transport error, because a rejection that looks like a
    transient failure invites a retry loop.
-3. One setting is retired; the
+3. **Clearing is neither enable nor bootstrap.** One setting is retired; the
    replacement capture path is configured on its own terms.
    `apply_coordination_shadow_changes` is documented as "Clear retired settings
    and configure the transaction-bound shadow independently"

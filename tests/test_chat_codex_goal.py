@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError, CodexChatAgentSession
-from loopx.chat_codex_goal import (
+from loopx.chat.codex_goal import (
     CodexGoalDriver,
     parse_native_goal_command,
     validate_goal_chat,
@@ -757,3 +757,77 @@ def test_mismatched_adapter_is_typed_rejection_and_recovery_closes_it(tmp_path, 
         controller.resume_session(session_id=sid, work_dir=tmp_path, objective="Research")
     assert caught.value.__cause__.error_code == "native_goal_adapter_mismatch"
     assert closed == [True]
+
+
+def test_stop_with_unbounded_default_exits_quiet_real_queue_after_pause_and_interrupt(
+    tmp_path, monkeypatch
+):
+    import threading
+    import time
+
+    goal = None
+    turn_status = "inProgress"
+    interrupted = []
+    closed = []
+    sent_begin = False
+    session = CodexChatAgentSession(
+        process=SimpleNamespace(poll=lambda: None),
+        messages=queue.Queue(),
+        thread_id="thread-fixture",
+        work_dir=tmp_path,
+    )
+    assert session.idle_timeout_sec is None
+
+    def fake_write(payload, **_kwargs):
+        nonlocal goal, turn_status, sent_begin
+        rid, method, params = payload.get("id"), payload.get("method"), payload.get("params") or {}
+        if method == "thread/goal/get":
+            session.messages.put({"id": rid, "result": {"goal": dict(goal) if goal else None}})
+        elif method == "thread/goal/set":
+            if goal is None:
+                goal = native_goal("active")
+            goal.update(params)
+            session.messages.put({"id": rid, "result": {"goal": dict(goal)}})
+            if params.get("status") == "active" and not sent_begin:
+                sent_begin = True
+                session.messages.put(begin("turn-live"))
+        elif method == "thread/turns/list":
+            session.messages.put({"id": rid, "result": {"data": [{"id": "turn-live", "status": turn_status}]}})
+        elif method == "turn/interrupt":
+            interrupted.append(params.get("turnId"))
+            turn_status = "interrupted"
+            session.messages.put({"id": rid, "result": {}})
+        elif method in {"thread/items/list", "thread/backgroundTerminals/list"}:
+            session.messages.put({"id": rid, "result": {"data": []}})
+        else:
+            raise AssertionError(f"unexpected wire method: {method}")
+
+    monkeypatch.setattr(session, "_write", fake_write)
+    monkeypatch.setattr(session, "close", lambda: closed.append(True))
+    driver = CodexGoalDriver(session)
+    result = {}
+    errors = []
+
+    def worker():
+        try:
+            result["response"] = driver.run(
+                parse_native_goal_command("/goal start --tokens 1000 quiet stop"),
+                lambda *_a: None,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    wait_until = time.monotonic() + 3.0
+    while session.current_turn_id != "turn-live":
+        assert time.monotonic() < wait_until and not errors
+        time.sleep(0.01)
+
+    driver.pause()
+    thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert not errors
+    assert interrupted == ["turn-live"]
+    assert "Codex Goal: paused" in result["response"]["message"]
+    assert not closed

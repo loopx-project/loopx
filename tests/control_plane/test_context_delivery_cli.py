@@ -239,14 +239,24 @@ def test_resumed_task_keeps_its_condition_without_expanding_diagnostic_siblings(
         "--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
         "--turn-instance-id", "mixed-diagnostics", cwd=project)
     assert code == 0 and guard["should_run"], guard
+    assert guard["schema_version"] == "loopx_turn_envelope_v1"
     summary = guard["agent_todo_summary"]
-    assert [item["todo_id"] for item in summary["backlog_items"]] == ["todo_work_1"]
-    condition = summary["backlog_items"][0]["resume_condition"]
+    # The complete writer retains the original bounded source rows. It no
+    # longer emits the legacy display projection as its canonical decision.
+    assert [item["todo_id"] for item in summary["backlog_items"]] == [TODO_ID, "todo_work_1"]
+    condition = summary["backlog_items"][1]["resume_condition"]
     assert condition["satisfied"] and condition["target_todo_id"] == "todo_dependency"
     assert len(summary["first_executable_items"]) == 3
     candidates = guard["capability_gate"]["runnable_candidates"]
     assert {row["todo_id"] for row in candidates} == {row["todo_id"] for row in todos[:8]}
     assert all(row["title"].endswith("Final condition: stop before publication.") for row in candidates)
+    # The shared historical display owner still isolates the exceptional row;
+    # no resumed row expands known diagnostic siblings in that projection.
+    from loopx.control_plane.quota.cli_projection import compact_quota_should_run_cli_payload
+    displayed = compact_quota_should_run_cli_payload(deepcopy(guard))["agent_todo_summary"]
+    assert [item["todo_id"] for item in displayed["backlog_items"]] == ["todo_work_1"]
+    assert displayed["backlog_items"][0]["resume_condition"] == condition
+    assert len(displayed["first_executable_items"]) == 3
     assert state.read_bytes() == before and _spend_run_count(runtime) == 0
     code, detailed = _run_cli(registry, runtime, "todo", "list", "--goal-id", GOAL_ID,
         "--todo-id", "todo_work_7", cwd=project)
@@ -412,8 +422,7 @@ def test_real_cli_host_rendezvous_sends_delta_and_keeps_same_capture_full(tmp_pa
                         "--turn-instance-id", "host-context-delivery",
                         "--context-delivery", setting,
                         "--decision-output-root", str(root), "--decision-handoff-socket", str(endpoint),
-                        *(["--codex-context-dir", str(native_directory)] if native_context else []),
-                        *(["--turn-envelope"] if surface == "turn_envelope" else []), cwd=project)
+                        *(["--codex-context-dir", str(native_directory)] if native_context else []), cwd=project)
                     path, raw = future.result(timeout=30)
         assert code == 0, wire
         assert path.read_bytes() == raw
@@ -484,6 +493,63 @@ def test_optional_capture_projection_failure_falls_back_without_hiding_source(tm
         "goal_id": "fixture", "agent_id": "agent", "session_id": "session", "context_epoch": "epoch"}},
         goal_id="fixture", agent_id="agent", surface="quota_packet", capture_id="fixture-capture") is payload
     assert json.loads((tmp_path / "projection.json").read_bytes()) == payload
+
+
+@pytest.mark.parametrize("case", ["inline", "stateless_inline", "large_todo", "small_output"])
+def test_c1_work_opening_carries_current_inputs_or_preserves_the_reader(tmp_path, monkeypatch, case):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_hook
+    from test_quota_settlement_cli import _initialize_fixture_authority
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    if case == "large_todo":
+        source = project / f".codex/goals/{GOAL_ID}/ACTIVE_GOAL_STATE.md"
+        original = source.read_text(encoding="utf-8")
+        source.write_text(original.replace("Validate and settle the selected delivery.",
+            "Validate the current decision, then preserve each obligation. " * 60), encoding="utf-8")
+    _initialize_fixture_authority(project, runtime, provider="sqlite", handoff_mode="hard_lease")
+    binding = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID)
+    rc, claim = _run_cli(registry, runtime, "todo", "claim", *binding, "--claimed-by", AGENT_ID, cwd=project)
+    assert rc == 0 and claim["ok"]
+    native, captures = tmp_path / "native", tmp_path / "captured"
+    native.mkdir(mode=0o700)
+    captures.mkdir()
+    monkeypatch.setenv("CODEX_THREAD_ID", "inline-work-session")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", "on" if case != "stateless_inline" else "auto")
+    monkeypatch.setenv("LOOPX_EXECUTION_MODE", "heartbeat")
+    codex_context_hook(str(native), {"session_id": "inline-work-session", "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup"})
+    turn = "inline-work"
+    limit = ("--max-page-output-bytes", "5000") if case == "small_output" else ()
+    delivery = ("--context-delivery", "auto") if case == "stateless_inline" else (
+        "--context-delivery", "on", "--codex-context-dir", str(native))
+    rc, view = _run_cli(registry, runtime, "quota", "should-run", "--runtime-profile", "generic_cli", *binding,
+        "--turn-instance-id", turn, "--decision-output-root", str(captures), *delivery, *limit,
+        cwd=project)
+    assert rc == 0 and view["ok"], view
+    original, = captures.rglob("decision.json")
+    complete = json.loads(original.read_bytes())
+    assert complete["normal_delivery_allowed"] and complete["heartbeat_receipt"]["turn_instance_id"] == turn
+    recovery = read_context_read_reference(view["recovery"]["reference_file"])[1]
+    assert hashlib.sha256(Path(recovery["path"]).read_bytes()).hexdigest() == recovery["sha256"]
+    if case in {"inline", "stateless_inline"}:
+        opening = view["work_opening"]
+        interaction = complete["interaction_contract"]
+        plan = interaction["cli_channel"]["settlement_plan"]
+        writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+        assert opening["selected_todo"] == complete["selected_todo"]
+        assert opening["settlement_identity"] == plan["identity"]
+        assert opening["settlement_command"] == writeback["semantic_closeout_command_template"]
+        assert view["before_work"]["work_context"] == interaction["agent_channel"]["work_context"]
+        assert view["before_work"]["execution_preparation"] == interaction["cli_channel"]["execution_preparation"]
+        assert view["before_work"]["work_lane_contract"] == complete["work_lane_contract"]
+        assert len(json.dumps(opening, ensure_ascii=False, separators=(",", ":")).encode()) <= 2048
+    else:
+        assert "work_opening" not in view and "before_work" not in view
+        assert "context-read" in view["recovery"]["command"]
+        if case == "small_output":
+            assert len(json.dumps(view, ensure_ascii=False, separators=(",", ":")).encode()) + 1 <= 5000
+    assert _heartbeat_receipt_count(runtime, turn) == 1 and _spend_run_count(runtime) == 0
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -648,16 +714,16 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     from hashlib import sha256
 
     from loopx.cli import build_parser
-    from loopx.cli_commands import quota, quota_context_reader
+    from loopx.cli_commands import quota, quota_context_reader, quota_result_delivery
     from loopx.control_plane.turn_driver import codex_context
 
     args = build_parser().parse_args(["--format", "json", "quota", "should-run",
         "--goal-id", "fixture", "--agent-id", "worker", "--context-delivery", "on", "--codex-app", "--codex-context-dir", str(tmp_path)])
     original = {"ok": True, "goal_id": "fixture", "agent_identity": {"agent_id": "worker"},
         "heartbeat_receipt": {"turn_instance_id": "original-turn", "status": "committed"}}
-    monkeypatch.setattr(quota, "handoff_decision",
+    monkeypatch.setattr(quota_result_delivery, "handoff_decision",
         lambda *args, capture_sha256: ({"scope": "host-request"}, capture_sha256))
-    monkeypatch.setattr(quota, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
+    monkeypatch.setattr(quota_result_delivery, "_project_quota_cli_payload", lambda payload, *args, **kwargs: payload)
 
     def competing(*args, **kwargs):
         pytest.fail("explicit native observation must not compose two projection owners")
@@ -676,7 +742,7 @@ def test_native_projection_never_layers_host_projection(tmp_path, monkeypatch, n
     def unavailable_reference(*args, **kwargs):
         raise OSError("synthetic reader metadata unavailable")
 
-    monkeypatch.setattr(quota, "project_captured_context", competing)
+    monkeypatch.setattr(quota_result_delivery, "project_captured_context", competing)
     monkeypatch.setattr(codex_context, "prepare_codex_context", native)
     if native_failure == "directory":
         monkeypatch.setattr(codex_context, "codex_context_directory", unavailable_directory)

@@ -43,11 +43,11 @@ type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem'>;
 function readNotes(value: { notes?: unknown; quote?: unknown }): StoredDraft['notes'] {
   if (Array.isArray(value.notes)) {
     return value.notes
-      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; source?: { threadId?: unknown; turnId?: unknown } } => !!n && typeof n.quote === 'string')
+      .filter((n): n is { quote: string; comment?: unknown; file?: unknown; source?: { threadId?: unknown; turnId?: unknown; elsewhere?: unknown } } => !!n && typeof n.quote === 'string')
       .map((n) => ({
         quote: n.quote, comment: typeof n.comment === 'string' ? n.comment : '',
         ...(typeof n.file === 'string' && n.file ? { file: n.file } : {}),
-        ...(typeof n.source?.threadId === 'string' && typeof n.source.turnId === 'string' ? { source: { threadId: n.source.threadId, turnId: n.source.turnId } } : {}),
+        ...(typeof n.source?.threadId === 'string' && typeof n.source.turnId === 'string' ? { source: { threadId: n.source.threadId, turnId: n.source.turnId, ...(n.source.elsewhere === true ? { elsewhere: true } : {}) } } : {}),
       }));
   }
   // Drafts saved before notes held a single quote.

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 
 import type { JsonObject } from "../effect_program.ts";
@@ -7,8 +6,8 @@ import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   commitQuotaAccountingArtifactTransaction,
   nextQuotaAccountingArtifactPaths,
-  parseQuotaAccountingIndex,
   quotaAccountingIndexDigest,
+  readQuotaAccountingIndex,
   readQuotaSpendEventFromRun,
   renderQuotaSlotMarkdown,
   type QuotaAccountingArtifactPrepareContext,
@@ -649,18 +648,7 @@ async function previewCommit(
   runsDir: string,
 ): Promise<QuotaVoidCommitResult> {
   const indexPath = join(runsDir, "index.jsonl");
-  let content: string | null;
-  try {
-    content = await readFile(indexPath, "utf8");
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      content = null;
-    } else {
-      throw error;
-    }
-  }
-  const records = parseQuotaAccountingIndex(content);
-  const indexDigest = await quotaAccountingIndexDigest(indexPath);
+  const { records, indexDigest } = await readQuotaAccountingIndex(indexPath);
   if (request.operation === "preview") {
     const target = await findTargetSpend(
       runsDir,
@@ -756,6 +744,7 @@ async function evaluateCommit(
       expectedIndexDigest: request.expected_index_digest,
       ...(goalRef === null ? {} : { goalRef }),
       indexLockHeld,
+      digestAtRuntimeRoot: (runtimeRoot) => requestDigest({ ...request, runtime_root: runtimeRoot }),
       prepare: async (context) =>
         await prepareArtifacts(request, fingerprint, runsDir, context),
     });

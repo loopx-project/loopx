@@ -20,6 +20,7 @@ TODO_EVENT_KINDS = {
     "complete": "todo_complete",
     "supersede": "todo_supersede",
     "archive-completed": "todo_archive_completed",
+    "plan-batch": "todo_plan_batch",
 }
 
 
@@ -161,6 +162,11 @@ def todo_error_payload(
         payload["error_code"] = exc.code
         if exc.authoring_contract is not None:
             payload["authoring_contract"] = exc.authoring_contract
+    else:
+        from ..control_plane.goals.planning_batch import PlanningBatchCommandError
+
+        if isinstance(exc, PlanningBatchCommandError) and exc.payload:
+            payload.update(exc.payload)
     _route_native_recovery(payload, args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
     return payload
 

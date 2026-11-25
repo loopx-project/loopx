@@ -132,7 +132,7 @@ CLI_OUTPUT_BUDGET_SPECS: tuple[CliOutputBudgetSpec, ...] = (
     ),
     CliOutputBudgetSpec(
         surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off",
+        command="quota should-run --context-delivery off",
         owner="quota guard",
         consumer_action="inspect the complete inline quota policy",
         qualification_policy="absolute_hot_path",
@@ -418,7 +418,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_scheduler_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail scheduler",
+        command="quota should-run --context-delivery off --include-detail scheduler",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -429,7 +429,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_todo_summary_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail agent-todos",
+        command="quota should-run --context-delivery off --include-detail agent-todos",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -440,7 +440,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_user_todo_summary_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail user-todos",
+        command="quota should-run --context-delivery off --include-detail user-todos",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -451,7 +451,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_goal_boundary_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail goal-boundary",
+        command="quota should-run --context-delivery off --include-detail goal-boundary",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -462,20 +462,22 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_vision_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail vision",
+        command="quota should-run --context-delivery off --include-detail vision",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
-        # The complete captured Vision projection measures 58,393 JSON chars.
-        # Preserve the original 55,000 failure; keep a 607-character allowance.
-        max_chars={'json': 59000, 'markdown': 26000},
+        # The crowded fixture measures 60,826 JSON characters on both the
+        # previous explicit C1 path and the new default. The old default
+        # measured 50,549. Preserve the 55,000/59,000 misses and allow 274
+        # characters of headroom without changing the wire or model budget.
+        max_chars={'json': 61100, 'markdown': 26000},
         max_lines={"json": 1_350, "markdown": 190},
         output_contract_version="loopx_turn_envelope_v1",
     ),
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_all_detail",
         parent_surface_id="quota_should_run",
-        command="quota should-run --turn-envelope --context-delivery off --include-detail all",
+        command="quota should-run --context-delivery off --include-detail all",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -486,7 +488,7 @@ CLI_OUTPUT_MODE_VARIANT_SPECS: tuple[CliOutputModeVariantSpec, ...] = (
     CliOutputModeVariantSpec(
         variant_id="quota_should_run_turn_envelope",
         parent_surface_id="quota_should_run",
-        command="quota should-run --context-delivery off --turn-envelope",
+        command="quota should-run --context-delivery off",
         output_formats=("json", "markdown"),
         semantic_json_keys=("schema_version", "contract_binding", "interaction_contract", "scheduler_hint", "selected_todo"),
         markdown_anchor="# LoopX Turn Envelope",
@@ -782,6 +784,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="explicit operator preview, stop, and resume command family",
     ),
 
+    CliOutputCommandClassification(
+        command_id="workbench",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="operator-invoked optional Workbench start, status, and stop commands",
+    ),
     CliOutputCommandClassification(
         command_id="agent-capabilities",
         qualification="explicit_cold_path_exception",

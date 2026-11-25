@@ -38,18 +38,34 @@ const metadata = {
   ...manifest,
   dist: { integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}` },
 }
+let repositorySearchObjects = searchObjects
+let maintainerSearchObjects = []
+let delayedRepoSearchAttemptsRemaining = 0
+const previousRegistrySnapshots = []
 const server = createServer((request, response) => {
   const url = new URL(request.url, registry)
   requested.add(url.pathname)
   if (url.pathname === `/${manifest.name}`) {
     response.setHeader('Content-Type', 'application/json')
-    response.end(JSON.stringify({ name: manifest.name,
-      'dist-tags': distTags, versions: { [manifest.version]: metadata } }))
+    response.end(JSON.stringify(previousRegistrySnapshots.shift() ?? {
+      name: manifest.name, maintainers: [{ name: 'fixture-maintainer' }],
+      'dist-tags': distTags, versions: { [manifest.version]: metadata },
+    }))
   } else if (url.pathname === '/artifact.tgz') {
     response.end(bytes)
   } else if (url.pathname === '/-/v1/search') {
     response.setHeader('Content-Type', 'application/json')
-    response.end(JSON.stringify({ objects: searchObjects }))
+    const query = url.searchParams.get('text') ?? ''
+    let objects
+    if (query.startsWith('maintainer:')) {
+      objects = maintainerSearchObjects
+    } else if (delayedRepoSearchAttemptsRemaining > 0) {
+      delayedRepoSearchAttemptsRemaining -= 1
+      objects = [searchObjects[1]]
+    } else {
+      objects = repositorySearchObjects
+    }
+    response.end(JSON.stringify({ objects }))
   } else {
     // DSH still resolves its own real host dependencies through the registry.
     // Their metadata is not simulated by this package-distribution test.
@@ -106,18 +122,39 @@ try {
     assert((await readFile(join(dirname(installedManifest), entry.default)))
       .equals(await readFile(join(packageRoot, entry.default))), `installed ${entry.default} differs from the build`)
   }
+  // Live npmjs tokenizes repository: broadly so zero-score prereleases can fall
+  // past rank 250; verify the maintainer: fallback finds the package too.
+  repositorySearchObjects = [searchObjects[0]]
+  maintainerSearchObjects = [searchObjects[2]]
+  await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '0'])
+  // Retry until the plugin itself appears even when non-plugin packages under
+  // the same repository are already indexed on early search polls.
+  delayedRepoSearchAttemptsRemaining = 1
+  maintainerSearchObjects = []
+  repositorySearchObjects = searchObjects
+  await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '2000', '--search-poll-ms', '50'])
+  // A successful publish can become visible before its latest tag propagates.
+  previousRegistrySnapshots.push(
+    { 'dist-tags': { latest: '0.0.0' }, versions: {} },
+    { 'dist-tags': { latest: '0.0.0' }, versions: { [manifest.version]: metadata } },
+  )
+  await run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
+    '--tarball', tarball, '--registry', registry, '--registry-propagation-timeout-ms', '12000'])
+  assert.equal(previousRegistrySnapshots.length, 0)
   // Existing publication metadata cannot hide a wrong tag or discovery target.
   distTags.latest = '0.0.0'
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
-    '--tarball', tarball, '--registry', registry]), /latest must name the qualified release/u)
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '0']), /latest must name the qualified release/u)
   distTags.latest = manifest.version
   searchObjects.unshift({ package: { name: 'other-plugin', keywords: ['dsh-plugin'], links: { repository: manifest.repository.url } } })
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
-    '--tarball', tarball, '--registry', registry]), /repository search does not yet select this plugin/u)
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '0']), /repository search does not yet select this plugin/u)
   searchObjects.shift()
   metadata.dist.integrity = 'sha512-unqualified'
   await assert.rejects(run(process.execPath, [join(packageRoot, 'scripts', 'verify-distribution.mjs'),
-    '--tarball', tarball, '--registry', registry]), /registry integrity differs/u)
+    '--tarball', tarball, '--registry', registry, '--search-timeout-ms', '0']), /registry integrity differs/u)
   await runDsh(['plugin', '--profile', 'web', 'remove', manifest.name])
   const removed = await runDsh(['--profile', 'web', '--dump-config'])
   assert(!removed.includes('name: dsh-loopx-plugin'), 'removal retained a plugin row')

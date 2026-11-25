@@ -3,6 +3,7 @@ import {ChevronDown} from "lucide-react";
 import {acceptanceRequest} from "../../data/goal-acceptance-actions";
 import type {OutcomeRequirements} from "../../data/goal-acceptance-observation";
 import {useWorkspaceI18n} from "./i18n";
+import {GoalOutcomeHandoff} from "./goal-outcome-handoff";
 import {ContextHelp} from "./context-help";
 
 type Requirement = OutcomeRequirements["outcomes"][number]["requirements"][number];
@@ -60,6 +61,8 @@ export function GoalOutcomeRequirements({goalId, declaration, fresh, canManage, 
     {declaration.outcomes.length > preview.length ? <button className="goal-outcomes-more" type="button" aria-expanded={all} aria-controls={listId} onClick={() => setAll(value => !value)}>
       {all ? (zh ? "收起完整列表" : "Collapse full list") : (zh ? `查看全部 ${declaration.outcomes.length} 项成果` : `View all ${declaration.outcomes.length} outcomes`)}<ChevronDown aria-hidden size={15}/>
     </button> : null}
+    <GoalOutcomeHandoff goalId={goalId} declaration={declaration} canManage={canManage && declaration.current_lifetime}
+      revision={current ? providerRevision : null} onRefresh={onRefresh} zh={zh}/>
   </section>;
 }
 function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, shown}: {
@@ -107,7 +110,9 @@ function Outcome({goalId, outcome, fresh, canManage, revision, onRefresh, zh, sh
           <RequirementRow requirement={requirement} fresh={fresh} zh={zh}/>
         </li>)}</ul>
     <details><summary>{zh ? "关联工作与来源" : "Linked work and sources"}</summary>
-      <p>{outcome.owner_agent_id} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
+      <p>{outcome.owner_agent_id}{outcome.owner_registration_missing
+        ? (zh ? "（该身份在本次读回时未注册到此目标）" : " (unregistered for this Goal at readback)") : ""} · {zh ? "版本" : "Revision"} {outcome.revision}</p>
+      {outcome.declaration_owner_agent_id ? <p>{zh ? "原声明身份" : "Original declaration"} · {outcome.declaration_owner_agent_id}</p> : null}
       <ul>{outcome.work.map(work => <li key={work.todo_id}><code>{work.todo_id}</code> · {work.status}</li>)}</ul>
       {!outcome.work.length ? <p>{zh ? "尚未关联执行任务" : "No execution task linked"}</p> : null}
       <ul>{outcome.sources.map(source => <li key={source.ref}>{source.summary}</li>)}</ul>
@@ -135,6 +140,7 @@ function RequirementRow({requirement, fresh, zh}: {requirement: Requirement; fre
     <summary aria-expanded={open}><ChevronDown aria-hidden size={15}/><span>{requirement.description}</span><small className={`is-${fresh ? displayState(requirement) : "recorded"}`}>{stateLabel(requirement, zh)}</small></summary>
     {review && (review.note.trim() || review.evidence_refs.length > 0) ? <div className="goal-outcome-evidence">
       <h6>{zh ? "上次 Agent 自查" : "Previous Agent review"} · {({met: zh ? "满足" : "Met", unmet: zh ? "有缺口" : "Unmet", uncertain: zh ? "不确定" : "Uncertain"})[review.conclusion]}</h6>
+      {review.recorded_for_agent_id ? <p>{zh ? "自查归属" : "Review recorded for"} · {review.recorded_for_agent_id}</p> : null}
       {review.note.trim() ? <p>{review.note}</p> : null}
       {review.evidence_refs.length ? <ul>{review.evidence_refs.map(ref => <li key={ref}><code>{ref}</code></li>)}</ul> : null}
     </div> : null}

@@ -28,6 +28,16 @@ test("oracle admits explicit Python script forms and pinned direct executables",
   assert.doesNotThrow(() => normalizeGoalAcceptanceDocument({...doc, criteria: [{...criterion,
     validation_argv: ["checks/verify"], validation_files: [{path: "checks/verify", sha256: "a".repeat(64)}]}]}));
 });
+test("LoopX runtime Python accepts only an immediate pinned .py script", () => {
+  const doc = document(), criterion = doc.criteria[0];
+  const configure = (validation_argv: string[]) =>
+    normalizeGoalAcceptanceDocument({...doc, criteria: [{...criterion, validation_argv}]});
+  assert.deepEqual(configure(["loopx:python", "check.py"]).criteria[0].validation_argv, ["loopx:python", "check.py"]);
+  for (const invalid of [["loopx:python", "unpinned.py"], ["loopx:python", "-c", "pass"],
+    ["loopx:python", "check.py", "--script-argument"]]) {
+    assert.throws(() => configure(invalid), /oracle requires a pinned relative executable/);
+  }
+});
 test("ordinary criteria keep their command and canonical shape outside oracle invocation rules", () => {
   const doc = document(), {oracle: _oracle, ...criterion} = doc.criteria[0];
   const ordinary = {...doc, criteria: [{...criterion, validation_argv: ["/usr/bin/true", "check.py"]}]};

@@ -17,7 +17,7 @@ import zlib
 import pytest
 
 from loopx.chat_runtime import ChatRuntimeController
-from loopx.chat_attachments import CHAT_TURN_MAX_BODY_BYTES
+from loopx.chat.attachments import CHAT_TURN_MAX_BODY_BYTES
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.chat_store import ChatSessionStore
 
@@ -62,6 +62,12 @@ def image_conversation(tmp_path):
         f'        with open({str(capture)!r}, "w") as output:\n'
         '            json.dump([hashlib.sha256(i["url"].encode()).hexdigest() for i in request["params"]["input"] if i["type"] == "image"], output)\n'
         "        turn_count += 1",
+    )
+    source = source.replace(
+        '"message": "Runtime response.",',
+        '"message": "Runtime response.",\n'
+        f'            **({{"attachments": [{document_attachment()!r}]}} if "Deliver the fixture file" in '
+        'json.dumps(request["params"].get("input")) else {}),',
     )
     executable = tmp_path / "codex"
     executable.write_text(source, encoding="utf-8")
@@ -296,3 +302,69 @@ def test_document_waits_for_busy_session_without_second_executor(image_conversat
     result = runtime.wait_for_turn(session_id=session, turn_id=queued["turn_id"], timeout_sec=10)
     assert result["status"] == "completed", result
     assert json.loads(capture.with_suffix(".inputs.json").read_text())[-1]["text"] == DOCUMENT_BYTES.decode()
+
+
+def test_local_goal_reply_preserves_file_on_session_reopen(image_conversation):
+    store, runtime, session, post, capture = image_conversation
+    request = {"message": "Deliver the fixture file", "client_turn_id": "download-first-reply"}
+    status, receipt = post(request)
+    assert status == 202, receipt
+    turn = runtime.wait_for_turn(session_id=session, turn_id=receipt["turn_id"], timeout_sec=10)
+    assert turn["status"] == "completed", turn
+    assert "review JSON attachments" in json.loads(capture.with_suffix(".inputs.json").read_text())[0]["text"]
+    assert post(request)[1]["created"] is False
+    reopened = ChatSessionStore(store.root.parent)
+    replies = [row for row in reopened.messages(session) if row["role"] == "agent"]
+    assert len(replies) == 1
+    assert replies[0]["turn_id"] == receipt["turn_id"]
+    document, = replies[0]["attachments"]
+    assert document["name"] == "requirements.md"
+    assert document["id"] != "requirements"
+    assert base64.b64decode(document["data_url"].split(",", 1)[1], validate=True) == DOCUMENT_BYTES
+
+
+@pytest.mark.parametrize("change", [
+    {"name": "../notes.md"}, {"mime_type": "application/octet-stream"},
+    {"size": 1}, {"data_url": "https://example.com/notes.md"},
+])
+def test_invalid_reply_file_keeps_the_answer(change):
+    from loopx.chat import normalize_agent_response
+
+    payload = {"message": "Here is the result.", "attachments": [{**document_attachment(), **change}]}
+    result = normalize_agent_response(payload, reply_documents=True)
+    assert result["message"].startswith("Here is the result.")
+    assert "could not be attached" in result["message"]
+    assert "attachments" not in result
+
+
+def test_reply_document_limits_and_path_privacy(tmp_path):
+    from loopx.chat import normalize_agent_response
+
+    for data, message in [
+        (str(tmp_path / "private" / "keys.txt").encode(), "Read the result."),
+        (b"x" * 24000, "m" * 34000),
+        (b"\xff", "Read the result."),
+    ]:
+        payload = {"message": message, "attachments": [document_attachment(data)]}
+        result = normalize_agent_response(payload, protected_paths=[tmp_path], reply_documents=True)
+        assert "attachments" not in result
+        assert "could not be attached" in result["message"]
+    payload = {"message": "Ordinary answer.", "attachments": [document_attachment()]}
+    ordinary = normalize_agent_response(payload)
+    assert ordinary["message"] == "Ordinary answer."
+    assert "attachments" not in ordinary
+
+
+@pytest.mark.parametrize(("changes", "origin", "scope_kind"), [
+    ({"agent_id": "other"}, "web", "owner_goal"),
+    ({"session_mode": "attached_host"}, "web", "owner_goal"),
+    ({"project_context": {"audience": "bound_owner"}}, "web", "owner_goal"),
+    ({"steward_context": {"audience": "bound_group"}}, "web", "owner_goal"),
+    ({}, "peer", "owner_goal"),
+    ({}, "web", "owner_portfolio"),
+])
+def test_reply_documents_stay_on_the_local_goal(changes, origin, scope_kind):
+    from loopx.chat.attachments import local_goal_reply_route
+
+    session = {"agent_id": "codex", "session_mode": "managed_runtime", **changes}
+    assert not local_goal_reply_route(session, {"origin": origin}, scope_kind=scope_kind)

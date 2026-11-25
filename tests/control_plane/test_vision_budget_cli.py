@@ -96,7 +96,7 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     guard = fixture.run_quota(registry, runtime)
     assert guard["effective_action"] == "autonomous_replan_required"
     assert guard["requires_user_action"] is False
-    assert guard["replan_action_packet"].get("stride_control") is None
+    stride = guard["replan_action_packet"]["stride_control"]["minimal_example"]
     contract = guard["replan_action_packet"]["writeback_contract"]["vision_authoring"]
     packet = copy.deepcopy(contract["minimal_example"])
     assert "JSON replaces the complete packet" in contract["authoring_hint"]
@@ -121,6 +121,7 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
         current_packet["vision_patch"].update(packet["vision_patch"])
         current_packet["path_delta"] = packet["path_delta"]
         packet = current_packet
+    packet["stride_decision"] = stride
     fixture.write_json(document, packet)
     result = fixture.run_cli(registry, runtime, vision_path=document,
         check=False, dry_run=False, autonomous_replan_recorded=True)
@@ -128,7 +129,7 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     assert result.returncode == 0, accepted.get("error") or accepted
     assert accepted["ok"] and accepted["appended"]
     assert accepted["agent_vision"]["path_delta"]["outcome"] == "replan"
-    assert "stride_decision" not in accepted["agent_vision"]
+    assert accepted["agent_vision"]["stride_decision"] == stride
     assert original_goal in state.read_text()
 
     # A separate CLI read must preserve every existing field, not merely echo
@@ -159,9 +160,14 @@ def test_projected_autonomous_example_updates_evidence_without_changing_goal(
     packet["vision_patch"] = accepted["agent_vision"]["vision_patch"]
     for disposition in ("continue", "no_change"):
         packet["path_delta"]["outcome"] = disposition
+        current = fixture.run_quota(registry, runtime).get("replan_action_packet")
+        if current and current.get("stride_control"):
+            packet["stride_decision"] = current["stride_control"]["minimal_example"]
         fixture.write_json(document, packet)
-        retained = fixture.payload(fixture.run_cli(registry, runtime, vision_path=document,
-            check=True, dry_run=False, autonomous_replan_recorded=True))
+        result = fixture.run_cli(registry, runtime, vision_path=document,
+            check=False, dry_run=False, autonomous_replan_recorded=True)
+        retained = fixture.payload(result)
+        assert result.returncode == 0, retained.get("error") or retained
         assert retained["agent_vision"]["vision_patch"] == packet["vision_patch"]
         assert retained["agent_vision"]["path_delta"]["outcome"] == disposition
         assert original_goal in state.read_text()
@@ -312,7 +318,7 @@ def test_authoring_example_material_closeout_has_no_missing_path_replan(tmp_path
         registry, runtime, vision_path=path, check=True,
         dry_run=False, autonomous_replan_recorded=False,
     ))
-    assert result["vision_checkpoint"]["satisfied"] is True
+    assert result["vision_checkpoint"]["satisfied"] is (omitted != "wait")
     quota = fixture.run_quota(registry, runtime)
     gaps = quota["goal_frontier_projection"]["acceptance_gaps"]
     outcome_gaps = [g for g in gaps if g["kind"] == "vision_outcome_checkpoint_required"]

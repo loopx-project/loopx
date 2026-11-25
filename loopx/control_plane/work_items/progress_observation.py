@@ -236,14 +236,11 @@ def required_semantic_outcomes(obligation: Mapping[str, Any]) -> list[str]:
     return list(replan_writeback_requirements(obligation)["required_any_of"])
 
 
-def replan_successor_transition_allowed(
-    obligation: Mapping[str, Any], *, stride_strategy: str = "off",
-) -> bool:
+def replan_successor_transition_allowed(obligation: Mapping[str, Any]) -> bool:
     """Ask the typed owner whether a Todo transition can settle this review."""
     try:
         result = project_replan_semantics({
             "operation": "transition_eligibility", "obligation": dict(obligation),
-            "stride_strategy": stride_strategy,
         })
     except EffectRuntimeRejected as exc:
         raise ValueError(str(exc)) from None
@@ -254,7 +251,7 @@ def replan_successor_transition_allowed(
 
 def guarded_replan_transition_delta(
     *, guard_scoped: bool, selected_obligation_id: str | None,
-    transition_candidates: list[dict[str, Any]], stride_strategy: str = "off",
+    transition_candidates: list[dict[str, Any]],
     goal_id: str | None = None, agent_id: str | None = None,
     guard_recorded_at: str | None = None,
     guard_turn_instance_id: str | None = None,
@@ -265,7 +262,6 @@ def guarded_replan_transition_delta(
             "operation": "turn_transition", "guard_scoped": guard_scoped,
             "selected_obligation_id": selected_obligation_id,
             "transition_candidates": transition_candidates,
-            "stride_strategy": stride_strategy,
             "goal_id": goal_id,
             "agent_id": agent_id,
             "guard_recorded_at": guard_recorded_at,
@@ -319,6 +315,7 @@ def semantic_delta_from_writeback(
     progress_observation: Mapping[str, Any] | None,
     agent_vision: Mapping[str, Any] | None = None,
     history_runs: Iterable[Mapping[str, Any]] | None = None,
+    recovering_writeback_path: str | None = None,
 ) -> dict[str, Any]:
     """Qualify concrete typed writeback evidence against one obligation.
 
@@ -360,18 +357,30 @@ def semantic_delta_from_writeback(
             raise ValueError("replan context obligation identity mismatch")
     coverage = context["coverage_ledger"] if context is not None else None
     claimed = list(window) if isinstance(window, list) else []
-    if isinstance(coverage, list):
+    # During an exact supplement, the current observation is already in the
+    # displayed ledger. The full index below can distinguish its source row
+    # from every other occurrence of the same observation.
+    if isinstance(coverage, list) and recovering_writeback_path is None:
         claimed.extend(coverage)
     if runs is not None and context is not None:
         from .replan_context_codec import replan_evidence_rows
 
         # The readable context has a display budget; admission does not forget
         # an older claim merely because it was omitted from that display.
+        novelty_runs = runs
+        if recovering_writeback_path is not None:
+            # The settlement owner bound this supplement to an existing
+            # unqualified observation. It is the input being qualified.
+            novelty_runs = [run for run in runs if run.get("json_path") != recovering_writeback_path]
+            if len(novelty_runs) != len(runs) - 1:
+                raise ValueError("the original blocked writeback is not unique in replan history")
         claimed.extend(
             row["progress_observation"]
-            for row in replan_evidence_rows(runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
+            for row in replan_evidence_rows(novelty_runs, goal_id=context["goal_id"], agent_id=context["agent_id"])
             if row["progress_observation"] is not None
         )
+    elif recovering_writeback_path is not None:
+        raise ValueError("blocked writeback recovery requires the original replan context and full history")
     elif context is not None and context.get("coverage_truncated"):
         raise ValueError("replan writeback requires the complete evidence history when coverage is truncated")
     progress_source = None
@@ -387,7 +396,7 @@ def semantic_delta_from_writeback(
     source_review = None
     stride = vision.get("stride_decision")
     review = stride.get("previous_review") if isinstance(stride, Mapping) else None
-    if (runs is not None and context is not None and context.get("stride_strategy") != "off"
+    if (runs is not None and context is not None
             and context.get("decision_followthrough") and isinstance(review, Mapping)):
         from .replan_context_codec import replay_stride_review_evidence
 
@@ -412,7 +421,6 @@ def build_replan_context(
     obligation: Mapping[str, Any], *, goal_id: str, agent_id: str | None,
     newest_first_runs: Iterable[Mapping[str, Any]],
     source_status: Mapping[str, Any] | None = None,
-    stride_strategy: str = "off",
     explore_context: Mapping[str, Any] | None = None,
     goal_acceptance_contract: Mapping[str, Any] | None = None,
     todo_items: Iterable[Mapping[str, Any]] | None = None,
@@ -422,7 +430,7 @@ def build_replan_context(
     return project_replan_context(
         goal_id=goal_id, agent_id=agent_id or obligation.get("agent_id"),
         runs=newest_first_runs, obligation=obligation, source_status=source_status,
-        goal_acceptance_contract=goal_acceptance_contract, stride_strategy=stride_strategy,
+        goal_acceptance_contract=goal_acceptance_contract,
         history_newest_first=True, explore_context=explore_context,
         todo_items=todo_items,
     )

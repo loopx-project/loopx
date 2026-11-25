@@ -1,14 +1,29 @@
 """IO admission to the existing same-Session queue; Core owns source authority."""
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...chat_attachments import require_text_document_route
+from ...chat.attachments import require_text_document_route
 from ...attached_session import enqueue_attached_agent_turn
-from ...chat_store import CHAT_SESSION_MODE_ATTACHED
+from ...chat_store import CHAT_SESSION_MODE_ATTACHED, CHAT_SESSION_MODE_MANAGED
 from ...control_plane.collaboration import conversation_scope
 from . import project_context as project_context_policy
+
+if TYPE_CHECKING:
+    from ...chat_runtime import ChatRuntimeController
+
+
+def unbound_input_source_denial(session: dict[str, Any]) -> str | None:
+    """Identify Sessions whose input must pass through their original source."""
+    if session.get("steward_context") is not None:
+        return "bound steward Chat requires its external source admission"
+    context = session.get("project_context") or {}
+    if context.get("audience") in {"bound_owner", "bound_group"}:
+        return "bound project steering requires its external source admission"
+    return None
 
 
 def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, message: str,
@@ -66,6 +81,119 @@ def enqueue_turn(controller: Any, *, session_id: str, client_turn_id: str, messa
         )
     return turn, created
 
+
+@contextmanager
+def bound_steward_web_steering_context(controller: "ChatRuntimeController",
+                                       session_id: str) -> Iterator[dict[str, Any] | None]:
+    """Authorize steering from the loopback App across the binding fence."""
+    session = controller.store.load_session(session_id)
+    if session is None or (session.get("steward_context") or {}).get("audience") != "bound_owner":
+        yield None
+        return
+    saved = session["steward_context"]
+    contexts = controller.project_contexts
+    bindings = contexts.conversation_bindings
+    if bindings is None or controller.registry_path is None:
+        raise ValueError("bound steward authority is unavailable")
+
+    from ...chat_manager_context import manager_authorization_scope_id_for_registry
+
+    # Reuse the local Web source grant. Keep its binding fence through the
+    # exact-Turn receipt and native delivery, including concurrent revocation.
+    with bindings.input_context(saved, origin="web", session=session, store=controller.store) as selected:
+        fresh = controller.store.load_session(session_id)
+        if fresh is None or fresh.get("status") == "closed":
+            raise KeyError("chat session was not found")
+        if any(fresh.get(key) != session.get(key) for key in
+               ("steward_context", "project_context", "channel_id", "goal_id", "agent_id", "executor_endpoint_id")):
+            raise ValueError("bound Session changed before input admission")
+        contexts.runtime_context(fresh, selected)
+        scope = manager_authorization_scope_id_for_registry(controller.registry_path,
+            selected["context"]["goal_ids"], runtime_root=controller.coordination_runtime_root,
+            channel_id=fresh["channel_id"])
+        if scope is None or scope != fresh.get("manager_authorization_scope_id"):
+            raise ValueError("bound steward authorization changed before steering")
+        yield fresh
+
+
+def steer_admitted_web_turn(controller: "ChatRuntimeController", session: dict[str, Any], *,
+                             expected_turn_id: str, client_ingress_id: str, message: str,
+                             queued_turn_id: str | None = None) -> tuple[dict[str, Any], bool]:
+    session_id = session["session_id"]
+    with controller.store.steering_delivery_lock(session_id, client_ingress_id):
+        return controller._steer_active_turn(session=session, session_id=session_id, expected_turn_id=expected_turn_id,
+            client_ingress_id=client_ingress_id, message=message, _queued_turn_id=queued_turn_id, origin="web")
+
+
+def steer_web_turn(controller: "ChatRuntimeController", *, session_id: str, expected_turn_id: str,
+                   client_ingress_id: str, message: str) -> tuple[dict[str, Any], bool]:
+    with bound_steward_web_steering_context(controller, session_id) as session:
+        if session is None:
+            return controller.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                                                client_ingress_id=client_ingress_id, message=message)
+        return steer_admitted_web_turn(controller, session, expected_turn_id=expected_turn_id,
+                                       client_ingress_id=client_ingress_id, message=message)
+
+
+def steer_queued_web_turn(controller: "ChatRuntimeController", *, session_id: str, queued_turn_id: str,
+                          expected_turn_id: str, client_ingress_id: str) -> dict[str, Any]:
+    with bound_steward_web_steering_context(controller, session_id) as session:
+        if session is None:
+            return controller.steer_queued_turn(session_id=session_id, queued_turn_id=queued_turn_id,
+                                               expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id)
+        return steer_queued_turn(controller, session_id=session_id, queued_turn_id=queued_turn_id,
+            expected_turn_id=expected_turn_id, client_ingress_id=client_ingress_id, admitted_steward=session)
+
+
+def steer_queued_turn(
+    controller: "ChatRuntimeController", *, session_id: str, queued_turn_id: str, expected_turn_id: str,
+    client_ingress_id: str, admitted_steward: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from ...control_plane.chat_turn_acceptance import plan_queued_chat_steering
+
+    ingress_id = "queue-steer-" + hashlib.sha256(
+        json.dumps([session_id, queued_turn_id, client_ingress_id]).encode()
+    ).hexdigest()[:40]
+    with controller.store.queue_steering_lock(session_id, queued_turn_id):
+        session = controller.store.load_session(session_id)
+        turn = controller.store.load_turn(session_id, queued_turn_id)
+        if session is None or turn is None:
+            raise KeyError("chat turn was not found")
+        if admitted_steward is not None and any(session.get(key) != admitted_steward.get(key) for key in (
+            "steward_context", "project_context", "channel_id", "goal_id", "agent_id",
+            "executor_endpoint_id", "manager_authorization_scope_id",
+        )):
+            raise ValueError("bound Session changed before queue steering")
+        active = controller.store.load_turn(session_id, str(session.get("active_turn_id") or "")) if session.get("active_turn_id") else None
+
+        def plan(phase):
+            return plan_queued_chat_steering(session, turn, active,
+                controller.store.steering_receipt(session_id, ingress_id),
+                ingress_id=ingress_id, operation_id=client_ingress_id, target=expected_turn_id, phase=phase,
+                web_origin_only=admitted_steward is not None)
+
+        decision = plan("prepare")
+        if decision["action"] in {"dispatch", "unresolved"}:
+            if decision["action"] == "dispatch":
+                turn = controller.store.write_queue_steering(session_id, turn, decision)
+            try:
+                if admitted_steward is not None:
+                    steer_admitted_web_turn(controller, session, expected_turn_id=expected_turn_id,
+                        client_ingress_id=ingress_id, message=turn["message"], queued_turn_id=queued_turn_id)
+                else:
+                    controller.steer_active_turn(session_id=session_id, expected_turn_id=expected_turn_id,
+                        client_ingress_id=ingress_id, message=turn["message"], _queued_turn_id=queued_turn_id)
+            except Exception:
+                # The durable ingress, including absence before any send,
+                # owns the outcome. Exception wording cannot release work.
+                pass
+            decision = plan("settle")
+        controller.store.write_queue_steering(session_id, turn, decision)
+        if decision["action"] != "complete":
+            raise RuntimeError(decision["error_code"])
+        return {"session_id": session_id, "queued_turn_id": queued_turn_id,
+            "turn_id": expected_turn_id, "client_ingress_id": client_ingress_id,
+            "status": "delivered"}
 
 def deliver_native_mention(
     controller, *, session_id: str, ingress_id: str, target_turn_id: str | None,
@@ -172,21 +300,43 @@ def reconcile_steering_delivery(controller, session, receipt) -> dict[str, Any] 
     from .codex_adapter import CodexAppServerAdapter
     from ...control_plane.effect_runtime import effect_runtime_result
 
-    with controller.lock:
-        adapter = controller.adapters.get(session["session_id"])
-    if not isinstance(adapter, CodexAppServerAdapter) or not adapter.healthcheck():
-        return None
     capture = receipt.get("native_steering")
     if not isinstance(capture, dict) or not isinstance(capture.get("local_turn_id"), str):
         return None
-    turn = controller.store.load_turn(session["session_id"], capture["local_turn_id"])
-    facts = {"receipt": receipt, "session_thread_id": session.get("upstream_thread_id"),
-             "adapter_thread_id": adapter.upstream_thread_id, "turn": turn or {}}
+    session_id = session["session_id"]
+    turn = controller.store.load_turn(session_id, capture["local_turn_id"])
+    adapter = controller.adapters.get(session_id)
+    live = isinstance(adapter, CodexAppServerAdapter) and adapter.healthcheck()
+    session_thread_id = session.get("upstream_thread_id")
+    facts = {"receipt": receipt, "session_thread_id": session_thread_id,
+             "adapter_thread_id": adapter.upstream_thread_id if live else session_thread_id, "turn": turn or {}}
     try:
         decision = effect_runtime_result("chat.queue.steering_readback", facts)
         if decision["action"] != "read":
             return None
-        facts["items"] = adapter.steering_delivery_readback(decision["turn_id"])
+        if live:
+            facts["items"] = adapter.steering_delivery_readback(decision["turn_id"])
+        else:
+            # The original managed host store remains authoritative after restart.
+            if (session.get("session_mode") != CHAT_SESSION_MODE_MANAGED or session.get("agent_id") != "codex"
+                    or session.get("project_context") is not None or not session.get("codex_home")):
+                return None
+            from .codex_context import checked_session_home
+
+            home = checked_session_home(controller.codex_home, session)
+            if str(home) != session["codex_home"]:
+                return None
+            facts["items"] = CodexAppServerAdapter.persisted_steering_delivery_readback(
+                codex_bin=controller.codex_bin, codex_home=home,
+                thread_id=session_thread_id, turn_id=decision["turn_id"],
+            )
+            fresh = controller.store.load_session(session_id)
+            if (fresh is None or fresh.get("status") == "closed"
+                    or any(fresh.get(key) != session.get(key) for key in (
+                        "session_mode", "agent_id", "codex_home", "upstream_thread_id",
+                        "channel_id", "goal_id", "steward_context", "project_context", "manager_authorization_scope_id",
+                    ))):
+                return None
         facts["inventory_complete"] = True
         if effect_runtime_result("chat.queue.steering_readback", facts)["action"] != "confirmed":
             return None

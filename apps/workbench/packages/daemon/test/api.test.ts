@@ -995,9 +995,11 @@ const events = async (threadId: string) =>
 test('import: Codex reads just the chosen session and rechecks its directory and duplicate status', async () => {
   const file = join(dataDir, 'codex-import-sessions.json');
   const log = join(dataDir, 'codex-import-rpc.jsonl');
+  const elsewhere = mkdtempSync(join(tmpdir(), 'loochat-test-codex-elsewhere-'));
   writeFileSync(file, JSON.stringify([
     { id: 'hist-indexed', cwd: workdir, name: 'Indexed session' },
-    { id: 'hist-outside', cwd: tmpdir(), name: 'Outside' },
+    { id: 'hist-outside', cwd: elsewhere, name: 'Outside' },
+    { id: 'hist-home', cwd: homedir(), name: 'In home' },
     { id: 'hist-removed', cwd: join(workdir, 'missing-project'), name: 'Removed' },
     { id: 'hist-subagent', cwd: workdir, name: 'Scratch', source: { subAgent: 'review' } },
   ]));
@@ -1013,9 +1015,12 @@ test('import: Codex reads just the chosen session and rechecks its directory and
     body: JSON.stringify({ agent: 'codex', sessionId }),
   });
   try {
-    for (const id of ['hist-outside', 'hist-removed', 'hist-missing', 'hist-subagent']) {
+    for (const id of ['hist-removed', 'hist-missing', 'hist-subagent']) {
       assert.equal((await requestImport(id)).status, 404, id);
     }
+    // The home directory itself is too wide to become a workdir, so its session cannot come in.
+    assert.equal((await requestImport('hist-home')).status, 400);
+    assert.ok(!m.workdirsConfig().workdirs.includes(homedir()));
     const imported = await requestImport('hist-indexed');
     assert.equal(imported.status, 201);
     const thread = await imported.json() as { id: string; title: string; agentSessionId: string };
@@ -1026,13 +1031,127 @@ test('import: Codex reads just the chosen session and rechecks its directory and
     const calls = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
     assert.equal(calls.filter((c) => c.method === 'thread/list').length, 0);
     assert.equal(calls.filter((c) => c.method === 'thread/turns/list').length, 1, 'only the valid import reads history');
+
+    // A session from outside the workdirs comes in when the person imports it, and brings its directory.
+    const outside = await requestImport('hist-outside');
+    assert.equal(outside.status, 201);
+    assert.equal(((await outside.json()) as { cwd: string }).cwd, elsewhere);
+    assert.ok(m.workdirsConfig().workdirs.includes(elsewhere));
+    // An import nobody clicked (the LoopX Goal sync) never widens the workdirs.
+    writeFileSync(file, JSON.stringify([{ id: 'hist-quiet', cwd: join(dataDir), name: 'Quiet' }]));
+    await assert.rejects(() => m.importSession({ agent: 'codex', sessionId: 'hist-quiet' }), /outside the allowed workdirs/);
+    assert.ok(!m.workdirsConfig().workdirs.includes(dataDir));
   } finally {
     srv.close();
     await m.shutdown();
+    rmSync(elsewhere, { recursive: true, force: true });
   }
 });
 
-test('import: sessions the agent already has are listed, and only those in allowed directories', async () => {
+test('import: a failed import leaves the workdirs as they were; hidden directories are not offered', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-fail-'));
+  const project = join(base, 'project');
+  const child = join(project, 'child');
+  const hidden = join(base, 'hidden');
+  mkdirSync(child, { recursive: true });
+  mkdirSync(hidden);
+  const sessions = [
+    { id: 'in-project', cwd: project, title: 'Unreadable history', updatedAt: '2026-03-02T10:00:00.000Z' },
+    { id: 'in-hidden', cwd: hidden, title: 'Kept out', updatedAt: '2026-03-01T10:00:00.000Z' },
+  ];
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => sessions,
+    loadHistory: async () => { throw new Error('history unreadable'); },
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], join(base, 'workdirs.json'));
+  dirs.add(child);
+  const m = new ThreadManager(store, new Map([['stub', adapter]]), dirs, new AttachmentStore(dataDir));
+  m.hiddenSessionDirs = [hidden];
+  try {
+    // The per-agent list follows the sidebar's rule: the hidden directory's session is not offered.
+    assert.deepEqual((await m.listAgentSessions('stub')).map((s) => s.id), ['in-project']);
+    // Its history cannot be read: no thread, and the added child is not replaced by its parent.
+    await assert.rejects(() => m.importSession({ agent: 'stub', sessionId: 'in-project', addDirectory: true }), /history unreadable/);
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir, child]);
+    assert.deepEqual(JSON.parse(readFileSync(join(base, 'workdirs.json'), 'utf8')), [child]);
+    assert.equal(store.findThreadByAgentSession('stub', 'in-project'), null);
+  } finally {
+    await m.shutdown();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('import: a workdir save failure creates no thread and can be retried', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-retry-'));
+  const outside = join(base, 'outside');
+  const workdirsFile = join(base, 'workdirs.json');
+  mkdirSync(outside);
+  // A directory at the file path makes the durable workdir write fail.
+  mkdirSync(workdirsFile);
+  const sessionId = 'outside-retry';
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => [{ id: sessionId, cwd: outside, title: 'Retry me' }],
+    loadHistory: async () => [{ text: 'Retry me', images: [], events: [] }],
+    resumeCommand: () => 'stub --resume',
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], workdirsFile);
+  const m = new ThreadManager(store, new Map([['stub', adapter]]), dirs, new AttachmentStore(dataDir));
+  try {
+    await assert.rejects(
+      () => m.importSession({ agent: 'stub', sessionId, addDirectory: true }),
+      /EISDIR|illegal operation on a directory/i,
+    );
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir]);
+    assert.equal(store.findThreadByAgentSession('stub', sessionId), null);
+
+    rmSync(workdirsFile, { recursive: true, force: true });
+    const imported = await m.importSession({ agent: 'stub', sessionId, addDirectory: true });
+    assert.equal(imported.cwd, outside);
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir, outside]);
+    assert.deepEqual(JSON.parse(readFileSync(workdirsFile, 'utf8')), [outside]);
+  } finally {
+    await m.shutdown();
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('import: a thread transaction failure restores the newly saved workdir', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'loochat-test-import-rollback-'));
+  const outside = join(base, 'outside');
+  const workdirsFile = join(base, 'workdirs.json');
+  mkdirSync(outside);
+  const localData = mkdtempSync(join(tmpdir(), 'loochat-test-import-store-'));
+  const localStore = new Store(localData);
+  const sessionId = 'outside-rollback';
+  const adapter = {
+    id: 'stub', capabilities: { history: true },
+    listSessions: async () => [{ id: sessionId, cwd: outside, title: 'Rollback me' }],
+    loadHistory: async () => [{ text: 'Rollback me', images: [], events: [] }],
+  } as unknown as AgentAdapter;
+  const dirs = new Workdirs([workdir], workdirsFile);
+  const m = new ThreadManager(localStore, new Map([['stub', adapter]]), dirs, new AttachmentStore(localData));
+  const transaction = localStore.transaction;
+  localStore.transaction = () => { throw new Error('thread transaction failed'); };
+  try {
+    await assert.rejects(
+      () => m.importSession({ agent: 'stub', sessionId, addDirectory: true }),
+      /thread transaction failed/,
+    );
+    assert.deepEqual(m.workdirsConfig().workdirs, [workdir]);
+    assert.deepEqual(JSON.parse(readFileSync(workdirsFile, 'utf8')), []);
+    assert.equal(localStore.findThreadByAgentSession('stub', sessionId), null);
+  } finally {
+    localStore.transaction = transaction;
+    await m.shutdown();
+    localStore.close();
+    rmSync(base, { recursive: true, force: true });
+    rmSync(localData, { recursive: true, force: true });
+  }
+});
+
+test('import: sessions the agent already has are listed from every existing directory', async () => {
   const outside = mkdtempSync(join(tmpdir(), 'loochat-test-outside-'));
   try {
     writeFileSync(
@@ -1048,17 +1167,14 @@ test('import: sessions the agent already has are listed, and only those in allow
     const res = await api('/api/agents/claude/sessions');
     assert.equal(res.status, 200);
     const list = (await res.json()) as Array<{ id: string; cwd: string; title: string; threadId: string | null }>;
-    // Five sessions over three pages; the one outside the workdirs and the one whose directory is gone are left out.
-    // Newest first, and the one with no date last.
-    assert.deepEqual(list.map((s) => s.id), ['hist-b', 'hist-a', 'hist-c']);
+    // Five sessions over three pages; the one whose directory is gone is left out, the one outside
+    // the workdirs is offered (importing it adds its directory). Newest first, and the one with no date last.
+    assert.deepEqual(list.map((s) => s.id), ['hist-elsewhere', 'hist-b', 'hist-a', 'hist-c']);
     assert.ok(list.every((s) => s.threadId === null));
 
     assert.equal((await api('/api/agents/nope/sessions')).status, 404);
     assert.equal((await api('/api/agents/claude/sessions', {}, false)).status, 401);
 
-    // A session outside the allowed directories cannot be imported by naming it directly.
-    const sneaky = await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'claude', sessionId: 'hist-elsewhere' }) });
-    assert.equal(sneaky.status, 404);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'claude', sessionId: 'no-such' }) })).status, 404);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({ agent: 'nope', sessionId: 'hist-a' }) })).status, 400);
     assert.equal((await api('/api/threads/import', { method: 'POST', body: JSON.stringify({}) })).status, 400);
@@ -1624,25 +1740,29 @@ test('matchTurns pairs the two histories from the start and gives up when they d
   assert.deepEqual(matchTurns([], ['a'], 3), { hubToAgent: [-1], agentNext: 0 });
 });
 
-test('agy: two permission levels, no approvals, no images; settings are flags of its process', async () => {
+test('agy: ACP approvals, images, compact and per-session settings', async () => {
   const agents = (await (await api('/api/agents')).json()) as Array<{ id: string; label: string; available: boolean; capabilities: any }>;
   const agy = agents.find((a) => a.id === 'agy')!;
   assert.equal(agy.label, 'Antigravity');
   assert.equal(agy.available, true);
-  assert.deepEqual(agy.capabilities.permissionModes, ['auto_edit', 'full_access']);
-  assert.deepEqual([agy.capabilities.approvals, agy.capabilities.images, agy.capabilities.effortLevels.length], [false, true, 0]);
-  const models = (await (await api('/api/agents/agy/models')).json()) as Array<{ id: string; efforts: string[] }>;
-  assert.deepEqual(models.map((m) => m.id), ['fast-low', 'fast-high', 'big-thinking']);
+  assert.deepEqual(agy.capabilities.permissionModes, ['ask', 'auto_edit', 'full_access']);
+  assert.equal(agy.capabilities.compact, true);
+  assert.deepEqual([agy.capabilities.approvals, agy.capabilities.images, agy.capabilities.effortLevels], [true, true, ['low', 'medium', 'high', 'xhigh', 'max']]);
+  const models = (await (await api('/api/agents/agy/models')).json()) as Array<{ id: string; label: string; efforts: string[]; isDefault?: boolean }>;
+  assert.deepEqual(models, [
+    { id: 'fast', label: 'Fast', efforts: ['low', 'high'], isDefault: true },
+    { id: 'big-thinking', label: 'Big (Thinking)', efforts: [] },
+  ]);
 
-  // It cannot ask, so "ask" is not offered, and a new thread starts with full access: at the lower
-  // level every command is refused. The lower level can still be chosen; other agents keep theirs.
+  // ACP adds ask while preserving the existing full-access default.
   assert.equal(agy.capabilities.defaultPermissionMode, 'full_access');
   const ask = await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'agy', cwd: workdir, permissionMode: 'ask' }) });
-  assert.equal(ask.status, 400);
-  assert.equal((await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'agy', cwd: workdir, effort: 'high' }) })).status, 400);
+  assert.equal(ask.status, 201);
+  assert.equal((await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'agy', cwd: workdir, effort: 'max' }) })).status, 400);
+  assert.equal((await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'agy', cwd: workdir, model: 'big-thinking', effort: 'low' }) })).status, 400);
   assert.equal(((await newThread({ agent: 'agy' })) as { permissionMode?: string }).permissionMode, 'full_access');
   assert.equal(((await newThread({ agent: 'claude' })) as { permissionMode?: string }).permissionMode, 'auto_edit');
-  const thread = (await newThread({ agent: 'agy', model: 'fast-low', permissionMode: 'auto_edit' })) as { id: string; permissionMode?: string };
+  const thread = (await newThread({ agent: 'agy', model: 'fast', effort: 'low', permissionMode: 'auto_edit' })) as { id: string; permissionMode?: string };
   assert.equal(thread.permissionMode, 'auto_edit');
 
   const replyOf = (list: Array<{ type: string; turnId: string | null; data: any }>, turnId: string | null) =>
@@ -1660,25 +1780,41 @@ test('agy: two permission levels, no approvals, no images; settings are flags of
 
   const first = await sendAndWait('use a tool');
   assert.equal(first.end.type, 'turn.done');
-  assert.equal(replyOf(first.list, first.turnId), 'echo:use a tool;model:fast-low;mode:accept-edits;conv:agy-conv-1');
+  assert.equal(replyOf(first.list, first.turnId), 'echo:use a tool;model:fast;effort:low;mode:accept-edits;conv:agy-conv-1');
   assert.ok(first.list.some((e) => e.type === 'tool.end' && e.data.output === 'hi\r\n'));
   const view = (await (await api(`/api/threads/${thread.id}`)).json()) as { agentSessionId: string; resumeCommand: string };
   assert.equal(view.agentSessionId, 'agy-conv-1');
-  assert.equal(view.resumeCommand, `cd ${workdir} && agy --conversation agy-conv-1`);
+  assert.match(view.resumeCommand, /fake-agy\.mjs' --conversation 'agy-conv-1'$/);
 
-  // A command needs a permission it cannot ask for: the turn ends with an explanation.
-  const refused = await sendAndWait('run a command');
-  assert.equal(refused.end.type, 'turn.error');
-  assert.match(refused.end.data.message, /full access/);
-  assert.deepEqual([refused.end.data.code, refused.end.data.refused], ['permission_refused', ['RunCommand']]);
+  // Native approval requests reach the ordinary approval API.
+  await post(`/api/threads/${thread.id}/turns`, { text: 'run a command' });
+  const approval = await waitFor(async () => {
+    const log = await events(thread.id);
+    return log.find(e => e.type === 'approval.request') ?? null;
+  });
+  await post(`/api/approvals/${approval.data.approvalId}`, { optionId: 'allow' });
+  await untilIdle(thread.id);
 
-  // Raising the level and changing the model both carry on in the same conversation.
+  // Raising the level, changing the effort, and switching to a fixed-effort model all carry on in the same conversation.
+  assert.equal((await api(`/api/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify({ effort: 'high' }) })).status, 200);
+  const higher = await sendAndWait('think harder');
+  assert.equal(higher.end.type, 'turn.done');
+  assert.equal(replyOf(higher.list, higher.turnId), 'echo:think harder;model:fast;effort:high;mode:accept-edits;conv:agy-conv-1');
+
   assert.equal((await api(`/api/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify({ permissionMode: 'full_access', model: 'big-thinking' }) })).status, 200);
   const allowed = await sendAndWait('run a command');
   assert.equal(allowed.end.type, 'turn.done');
-  assert.equal(replyOf(allowed.list, allowed.turnId), 'echo:run a command;model:big-thinking;mode:always-proceed;conv:agy-conv-1');
+  assert.equal(replyOf(allowed.list, allowed.turnId), 'echo:run a command;model:big-thinking;mode:auto;conv:agy-conv-1');
 
-  // Pictures go in as paths to the stored files; agy opens them itself.
+  // The picker sends null effort alongside a model even when effort is already unset.
+  // It must not discard the ACP session that just accepted the model.
+  const closes = (await events(thread.id)).filter(e => e.type === 'session.lifecycle' && e.data.action === 'close').length;
+  await post(`/api/threads/${thread.id}/turns`, { text: 'before model picker' });
+  await untilIdle(thread.id);
+  assert.equal((await api(`/api/threads/${thread.id}`, { method: 'PATCH', body: JSON.stringify({ model: 'fast', effort: null }) })).status, 200);
+  assert.equal((await events(thread.id)).filter(e => e.type === 'session.lifecycle' && e.data.action === 'close').length, closes);
+
+  // Pictures are native ACP image blocks.
   const image = await sendAndWait('look at this');
   assert.equal(image.end.type, 'turn.done');
   const pictured = await api(`/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'look', images: [{ data: PNG, mimeType: 'image/png' }] }) });
@@ -1688,9 +1824,8 @@ test('agy: two permission levels, no approvals, no images; settings are flags of
     const all = await events(thread.id);
     return all.some((e) => e.turnId === picturedTurn && e.type === 'turn.done') ? all : null;
   });
-  const stored = withPicture.find((e) => e.turnId === picturedTurn && e.type === 'turn.started')!.data.images[0];
   const said = withPicture.filter((e) => e.turnId === picturedTurn && e.type === 'message.delta').map((e) => e.data.text).join('');
-  assert.ok(said.includes(join(dataDir, 'attachments', thread.id, `${stored.id}.png`)), said);
+  assert.ok(said.includes(';image:embedded;'), said);
 
   // What it cannot do is refused up front.
   assert.equal((await api(`/api/threads/${thread.id}/fork`, { method: 'POST' })).status, 400);
@@ -2427,7 +2562,7 @@ test('download serves any readable file whole or by range, with the name it has'
 test('commands: agy lists and answers its own commands; the answer is a normal turn in the thread', async () => {
   const list = (await (await api(`/api/agents/agy/commands?cwd=${encodeURIComponent(workdir)}`)).json()) as Array<{ name: string; kind: string }>;
   assert.ok(list.some((c) => c.name === 'usage' && c.kind === 'command'));
-  assert.ok(list.some((c) => c.name === 'make-video' && c.kind === 'skill'));
+  assert.ok(list.some((c) => c.name === 'make-video'));
   assert.ok(!list.some((c) => c.name === 'model'));
 
   const thread = await newThread({ agent: 'agy' });
@@ -2674,7 +2809,7 @@ test('agents: instances beyond the built-ins are listed, and PATH discovery offe
   process.env.PATH = `${bin}:${oldPath}`;
   try {
     const found = (await (await regApi('/api/agents/discover')).json()) as Array<{ id: string; adapter: string; command: string; label?: string; icon?: string }>;
-    const ours = found.filter((f) => f.command.startsWith(bin));
+    const ours = found.filter((f) => f.command?.startsWith(bin));
     assert.deepEqual(ours.map((f) => f.id), ['agy2']);
     assert.equal(ours[0].adapter, 'agy');
     assert.equal(ours[0].label, 'Antigravity');

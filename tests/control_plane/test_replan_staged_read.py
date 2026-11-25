@@ -30,16 +30,20 @@ def json_bytes(value):
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def without_example(contract):
+def without_example(contract, source=None):
     expected = copy.deepcopy(contract)
+    if "vision_authoring_ref" in expected and source is not None:
+        expected.pop("vision_authoring_ref")
+        steps = source["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+        step = next(row for row in steps if row.get("kind") == "durable_writeback" and "vision_authoring" in row)
+        expected["vision_authoring"] = copy.deepcopy(step["vision_authoring"])
     if "vision_authoring" in expected:
-        expected["vision_authoring"].pop("minimal_example")
+        expected["vision_authoring"].pop("minimal_example", None)
     return expected
 
 
-@pytest.mark.parametrize("stride", ["off", "evidence_conditioned_v1"])
-def test_staged_packet_budget_and_lossless_authority(stride):
-    source = _quota_payload(stride_strategy=stride)
+def test_staged_packet_budget_and_lossless_authority():
+    source = _quota_payload()
     legacy = build_turn_envelope(source)
     source["replan_read_path"] = "/synthetic/decision.json"
     original = copy.deepcopy(source)
@@ -84,16 +88,13 @@ def test_staged_packet_budget_and_lossless_authority(stride):
     assert json_bytes(review) <= 16384
     assert "guidance" not in review
     assert json_bytes(writer) <= 16384
-    if stride != "off":
-        assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
-        control = writer["stride_control"]
-        assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
-        assert "decision_followthrough" not in control and "decision_value_review" not in control
-        assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
-        assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
-        assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
-    else:
-        assert "decision_value_review" not in review
+    assert review["decision_value_review"] == source["replan_action_packet"]["stride_control"]["decision_value_review"]
+    control = writer["stride_control"]
+    assert control["previous_decision_ref"] == source["replan_action_packet"]["stride_control"]["previous_decision_ref"]
+    assert "decision_followthrough" not in control and "decision_value_review" not in control
+    assert control["minimal_example"] == source["replan_action_packet"]["stride_control"]["minimal_example"]
+    assert control["basis_options"] == ["supported_progress", "unexplained_gap", "uncertain_evidence", "useful_new_route", "decision_failure"]
+    assert {"basis", "action", "axes", "next_probe"} <= set(control["required_fields"])
     assert source == original
 
 
@@ -123,8 +124,10 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
         source = json.loads((capture / "decision.json").read_bytes())
         original = explore_source(source)["content"]["graph"]
         graph = explore_source(entry)["content"]["graph"]
+        raw_graph = call("explore", "turn-context", "--goal-id", goal, "--agent-id", agent)["graph"]
         assert entry["heartbeat_receipt"]["settlement_identity"]["binding_kind"] == "autonomous_replan"
         assert not entry.get("selected_todo")
+        assert graph == original
         assert "result_attachment_template" not in graph and "result_writeback_read" not in graph
         assert "unavailable for this pure replan" in graph["result_writeback_guidance"]
         assert "Read measurement_feedback before repeating a measured route" in graph["result_writeback_guidance"]
@@ -132,16 +135,17 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
         assert "Capture is optional, not a settlement obligation." in graph["result_writeback_guidance"]
         for key in ("writeback_results", "measurement_feedback", "result_page", "recent_findings",
                     "record_node_template", "record_finding_template", "guidance"):
-            assert graph.get(key) == original.get(key)
-        assert json_bytes(original) - json_bytes(graph) > 2000
-        writer_run = subprocess.run(shlex.split(entry["replan_action_packet"]["writeback"]),
+            assert graph.get(key) == raw_graph.get(key)
+        assert json_bytes(raw_graph) - json_bytes(graph) > 2000
+        writer_run = subprocess.run(
+            shlex.split(_turn_envelope_result("replan_cli_view", payload=entry)["replan_action_packet"]["writeback"]),
             capture_output=True, text=True, check=True)
         writer = json.loads(writer_run.stdout)
         assert all(not row.get("optional_attachments")
             for row in writer["writeback"]["settlement_plan"]["ordered_steps"])
         # Prove the real attachment owner rejects this binding; projection must
         # not suggest a new way around it or change its primary commit behavior.
-        attachment = {**original["result_attachment_template"], "question": "Is the source valid?",
+        attachment = {**raw_graph["result_attachment_template"], "question": "Is the source valid?",
             "applicability": "Synthetic source", "input_revision": "source-v1", "observation": "Reviewed",
             "interpretation": "Unresolved", "status": "tentative", "evidence_refs": ["evidence:source-review"]}
         with pytest.raises(ValueError, match="requires agent, Todo and Turn identity"):
@@ -151,6 +155,7 @@ def test_pure_replan_does_not_advertise_unavailable_explore_attachment(tmp_path,
         # identity keep the old payload rather than guessing applicability.
         for mutation in ("capture", "custom", "identity", "attachment"):
             changed = copy.deepcopy(source)
+            explore_source(changed)["content"]["graph"] = copy.deepcopy(raw_graph)
             expected = explore_source(changed)["content"]
             if mutation == "capture":
                 changed.pop("replan_read_path")
@@ -188,9 +193,23 @@ def assert_explore_entry_and_writer(source, entry, writer):
         assert graph.get(key) == original.get(key)
     step = next(row for row in writer["writeback"]["settlement_plan"]["ordered_steps"] if row["kind"] == "durable_writeback")
     attachment = next(row for row in step["optional_attachments"] if row["capability_id"] == "explore")
-    assert attachment["guidance"] == original["result_writeback_guidance"]
+    original_guidance = original.get("result_writeback_guidance")
+    if original_guidance is None and isinstance(original.get("result_writeback_guidance_ref"), str):
+        node = source
+        for part in original["result_writeback_guidance_ref"].removeprefix("$.").split("."):
+            if "[" in part and part.endswith("]"):
+                key, index = part[:-1].split("[", 1)
+                node = node[key][int(index)]
+            else:
+                node = node[part]
+        original_guidance = node
+    assert attachment["guidance"] == original_guidance
     assert attachment["attachment_template"] == original["result_attachment_template"]
-    assert json_bytes(original) - json_bytes(graph) > 2000
+    resolved_original = dict(original)
+    if original_guidance is not None and "result_writeback_guidance" not in resolved_original:
+        resolved_original.pop("result_writeback_guidance_ref", None)
+        resolved_original["result_writeback_guidance"] = original_guidance
+    assert json_bytes(resolved_original) - json_bytes(graph) > 2000
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
@@ -307,8 +326,9 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert "replan_action_packet" not in view
             return
         assert source["autonomous_replan_obligation"]["replan_context"]["context_id"]
-        assert "replan_context" not in view["autonomous_replan_obligation"]
-        packet = view["replan_action_packet"]
+        staged_view = view if context_delivery else _turn_envelope_result("replan_cli_view", payload=view)
+        assert "replan_context" not in staged_view["autonomous_replan_obligation"]
+        packet = staged_view["replan_action_packet"]
         assert "planning_guidance" not in packet
         capture = Path(source["replan_read_path"])
         assert capture.read_bytes() == source_path.read_bytes()
@@ -320,7 +340,7 @@ def test_checkpoint_preflight_delivers_the_real_cli_view_and_retains_full_source
             assert read["obligation_id"] == selector["obligation_id"]
             assert read["stage"] == stage
             if stage == "writeback":
-                assert_explore_entry_and_writer(source, view, read)
+                assert_explore_entry_and_writer(source, staged_view, read)
         assert {key: fixture[key].read_bytes() for key in before} == before
         assert capture.read_bytes() == source_path.read_bytes()
         assert len(commands) == 1  # Reads did not re-enter checkpoint preflight.
@@ -357,7 +377,9 @@ def test_review_routes_to_selection_before_the_bound_writer(tmp_path, monkeypatc
             "--context-delivery", mode, "--delta-delivery", "auto" if mode == "on" else "off",
             "--decision-output-root", str(captures),
             "--codex-context-dir", str(native), *(["--defer-context-presentation"] if mode == "on" else []))
-        review_argv = shlex.split(entry["replan_action_packet"]["review"])
+        assert entry["interaction_contract"]["cli_channel"]["selection_required"] is True
+        assert not entry["interaction_contract"]["cli_channel"].get("settlement_plan")
+        review_argv = shlex.split(build_turn_envelope(entry)["replan_action_packet"]["review"])
         review = json.loads(invoke(review_argv).stdout)
         assert review["next"]["selection_required"] is True and "writeback" not in review["next"]
         selection = entry
@@ -412,30 +434,34 @@ def test_review_retains_scoped_dependencies_and_unknown_outcomes():
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("envelope", [False, True])
-def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider, envelope):
+def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.quota.turn_envelope import project_captured_replan_cli_view
+
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
     capture = tmp_path / "capture"
+    host = ["--codex-app"]
     try:
-        initial = call_progress_cli(fixture, "quota", "should-run", "--codex-app",
+        initial = call_progress_cli(fixture, "quota", "should-run", *host,
             "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN)
         assert initial["decision"] == "autonomous_replan_required"
         # Exercise the emitted command verbatim even with a hostile ambient
         # PATH entry. The captured reader belongs to the originating checkout.
         pinned_cli = str(Path(sys.executable).with_name("loopx"))
-        guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", "--codex-app",
-            "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
-            "--todo-id", TODO, "--decision-output-dir", str(capture),
-            *(["--turn-envelope"] if envelope else []))
-        guard = read_cli_policy_payload(json.dumps(guard), returncode=0)
-        packet = guard["replan_action_packet"]
-        if not envelope:
-            assert "settlement_plan" not in guard["interaction_contract"]["cli_channel"]
-            assert guard["interaction_contract"]["cli_channel"]["settlement_read_ref"] == "$.replan_action_packet.writeback"
-        saved = (capture / "decision.json").read_bytes()
+        guard = call_progress_cli(fixture, "--cli-bin", pinned_cli, "quota", "should-run", *host,
+            "--context-delivery", "off", "--goal-id", GOAL, "--agent-id", AGENT, "--turn-instance-id", TURN,
+            "--todo-id", TODO, "--decision-output-dir", str(capture))
+        source_path = capture / "decision.json"
+        saved = source_path.read_bytes()
         source = json.loads(saved)
+        # Verify the bound Complete Turn before reading its staged view.
+        assert guard["schema_version"] == "loopx_turn_envelope_v1"
+        assert guard["contract_binding"] == source["contract_binding"]
+        assert guard["interaction_contract"]["cli_channel"] == source["interaction_contract"]["cli_channel"]
+        entry = project_captured_replan_cli_view(source, captured_decision_path=str(source_path))
+        capture_sha256 = json.loads(source_path.with_suffix(".reader.json").read_bytes())["sha256"]
+        packet = entry["replan_action_packet"]
         # Unknown old/custom prose, different templates, ambiguous/missing
         # writers and missing capture must remain fully inline.
         for mutation in ("custom", "template", "duplicate", "missing", "capture"):
@@ -444,6 +470,9 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
             step = next(row for row in changed["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
                 if row["kind"] == "durable_writeback")
             attachment = next(row for row in step["optional_attachments"] if row["capability_id"] == "explore")
+            if "result_writeback_guidance_ref" in graph and mutation != "capture":
+                graph.pop("result_writeback_guidance_ref")
+                graph["result_writeback_guidance"] = attachment["guidance"]
             if mutation == "custom":
                 graph["result_writeback_guidance"] += " Stop before a new operation."
                 attachment["guidance"] = graph["result_writeback_guidance"]
@@ -457,7 +486,8 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 changed.pop("replan_read_path")
             projected = _turn_envelope_result("replan_cli_view", payload=changed)
             assert explore_source(projected)["content"]["graph"] == graph
-        entry_writeback = guard["writeback"] if envelope else guard["interaction_contract"]["cli_channel"]
+        entry_writeback = entry["interaction_contract"]["cli_channel"]
+        assert entry_writeback["settlement_read_ref"] == "$.replan_action_packet.writeback"
         assert "settlement_plan" not in entry_writeback and "next_cli_actions" not in entry_writeback
         assert entry_writeback["settlement_identity"] == source["heartbeat_receipt"]["settlement_identity"]
         original_files = {key: fixture[key].read_bytes() for key in ("registry", "state", "index")}
@@ -468,34 +498,29 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
         (trap / "loopx").write_text("#!/bin/sh\nexit 73\n")
         (trap / "loopx").chmod(0o700)
         reader_fixture = {**fixture, "registry": tmp_path / "missing-registry.json"}
-        def read(stage, expected_code=0):
+        def read(stage, expected_code=0, *, bind_capture=False):
             args = shlex.split(packet[stage])
             assert args[:3] == [pinned_cli, "--cli-bin", pinned_cli]
+            if bind_capture:
+                args.extend(("--capture-sha256", capture_sha256))
             result = subprocess.run([args[0], "--registry", str(reader_fixture["registry"]), *args[1:]],
                 cwd=fixture["project"], env={**os.environ, "PATH": str(trap) + os.pathsep + os.environ["PATH"],
                     "LOOPX_USAGE_PING": "0"}, capture_output=True, text=True, timeout=60)
             assert result.returncode == expected_code, (result.stdout, result.stderr)
             return json.loads(result.stdout)
         review, writer = read("review"), read("writeback")
-        if not envelope:
-            assert_explore_entry_and_writer(source, guard, writer)
-        else:
-            assert_explore_entry_and_writer(source, {
-                "interaction_contract": {"agent_channel": {"work_context": guard["work_context"]}},
-                "replan_action_packet": packet}, writer)
+        assert_explore_entry_and_writer(source, entry, writer)
         assert writer["writeback"]["settlement_plan"] == source["interaction_contract"]["cli_channel"]["settlement_plan"]
         assert writer["settlement_command"].endswith(" --settle-turn")
-        # Real CLI/default-off and native readers both deliver the original
-        # planning facts after admission, without a second body in the entry.
+        # The staged reader delivers planning facts from the original admission.
         expected_goal = source["autonomous_replan_obligation"]["replan_context"]["core_goal"]
         assert review["core_goal"] == expected_goal
         assert review["action_portfolio"] == source.get("action_portfolio")
-        if not envelope:
-            assert "core_goal" not in guard and "planning_horizon" not in guard
-            assert guard.get("action_portfolio") == source.get("action_portfolio")
+        assert "core_goal" not in entry and "planning_horizon" not in entry
+        assert entry.get("action_portfolio") == source.get("action_portfolio")
         assert review["context_id"] == writer["context_id"]
         assert review["obligation_id"] == source["replan_action_packet"]["obligation_id"]
-        assert {k: v for k, v in writer["writeback_contract"].items() if k not in {"successor_binding_args", "successor_settlement"}} == without_example(source["replan_action_packet"]["writeback_contract"])
+        assert writer["writeback_contract"] == without_example(source["replan_action_packet"]["writeback_contract"], source)
         assert (capture / "decision.json").read_bytes() == saved
         assert {key: fixture[key].read_bytes() for key in original_files} == original_files
         assert not reader_fixture["registry"].exists()
@@ -513,11 +538,42 @@ def test_real_guard_capture_read_and_writeback_without_another_guard(tmp_path, m
                 target = target[key]
             target[field] = value
             (capture / "decision.json").write_text(json.dumps(source))
-            rejected = read("review", expected_code=1)
-            assert "source hash" in rejected["reason"]
-        (capture / "decision.json").write_bytes(saved)
+            rejected = read("review", expected_code=1, bind_capture=True)
+            assert rejected["reason"] == "capture digest mismatch; restore the original capture, do not rerun admission"
+        source_hash_error = read("review", expected_code=1)
+        assert source_hash_error["reason"] == "complete Turn decision content integrity mismatch"
+        source_path.write_bytes(saved)
+        bound_review = read("review", bind_capture=True)
+        writer_args = shlex.split(review["next"]["writeback"])
+        assert shlex.split(bound_review.pop("next")["writeback"]) == [
+            *writer_args[:-2], "--capture-sha256", capture_sha256, *writer_args[-2:],
+        ]
+        expected_review = copy.deepcopy({key: value for key, value in review.items() if key != "next"})
+        explore_read = expected_review.get("capabilities", {}).get("explore", {}).pop("read_action", None)
+        if explore_read is not None:
+            explore_args = shlex.split(explore_read)
+            assert shlex.split(bound_review["capabilities"]["explore"].pop("read_action")) == [
+                *explore_args[:-2], "--capture-sha256", capture_sha256, *explore_args[-2:],
+            ]
+        assert bound_review == expected_review
         # A valid next operation still reaches the existing writer and semantic gate.
-        result = call_progress_cli(fixture, *fixture["refresh"])
+        vision_path = tmp_path / "staged-vision.json"
+        vision_path.write_text(json.dumps({
+            "schema_version": "goal_vision_replan_contract_v0",
+            "state": "vision_patch_proposed",
+            "vision_patch": {"acceptance_summary": "Retain the current validation acceptance and verify the next probe."},
+            "path_delta": {
+                "outcome": "replan",
+                "prior_assumption": "The previous validation probe stalled without fresh evidence.",
+                "observed_reality": "An independent validation probe produced current evidence.",
+                "retained": ["Original validation acceptance criteria"],
+                "evidence_refs": ["evidence-current"],
+            },
+            "stride_decision": writer["stride_control"]["minimal_example"],
+        }))
+        refresh = [arg for idx, arg in enumerate(fixture["refresh"])
+            if arg != "--vision-unchanged-reason" and (idx == 0 or fixture["refresh"][idx - 1] != "--vision-unchanged-reason")]
+        result = call_progress_cli(fixture, *refresh, "--agent-vision-json", str(vision_path))
         assert result["autonomous_replan_ack"]["semantic_delta"]["accepted"] is True
     finally:
         restart_effect_runtime(wait_for_exit=True)
@@ -751,7 +807,7 @@ def test_native_reader_keeps_its_installation_across_acceptance_and_writeback(tm
     monkeypatch.setenv("LOOPX_RELEASE_ROOT", str(release_root))
     monkeypatch.setenv("PYTHONPATH", str(stale_root))
 
-    source = _quota_payload(stride_strategy="evidence_conditioned_v1")
+    source = _quota_payload()
     outcome = {"id": "original-outcome", "objective": "Deliver the original accepted artifact.",
         "requirements": [{"id": "original-stop", "description": "Stop before publication."}]}
     source["autonomous_replan_obligation"]["replan_context"]["core_goal"]["acceptance_contract"] = {
@@ -901,9 +957,6 @@ def test_measurement_groups_keep_bounded_replan_detail_and_reachable_remainder(t
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     fixture = make_progress_cli_fixture(tmp_path, provider, "advanced")
     enable_explore(fixture)
-    registry = json.loads(fixture["registry"].read_text())
-    registry["goals"][0]["execution_profile"]["stride_strategy"] = "evidence_conditioned_v1"
-    fixture["registry"].write_text(json.dumps(registry))
     log = explore_result_log_path(fixture["runtime"], GOAL)
     append_explore_result_event(log, build_explore_node_event(goal_id=GOAL, agent_id=AGENT,
         node_id="question-measurement", node_kind="question", title="Does this candidate improve the outcome?"))

@@ -5,6 +5,9 @@ on:
     paths:
       - 'apps/desktop/**'
       - 'scripts/desktop_*'
+      - 'tests/desktop/**'
+      - 'loopx/cli_commands/public_default_contract.json'
+      - 'loopx/cli_commands/update_artifact.py'
       - '.github/workflows/desktop-updater.yml'
   release:
     types: [published]
@@ -107,6 +110,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - name: Resolve macOS signing mode
+        id: macos-signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 scripts/desktop_macos_signing.py resolve-mode
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -120,12 +134,38 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          EXPECTED_SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           VERSION: ${{ needs.identity.outputs.version }}
           BUNDLE: app
         run: |
           set -euo pipefail
           test -n "$TAURI_SIGNING_PRIVATE_KEY"
-          npm run build -- --bundles "$BUNDLE" --config "{\"version\":\"$VERSION\",\"bundle\":{\"createUpdaterArtifacts\":true,\"macOS\":{\"signingIdentity\":\"-\"}}}"
+          python3 ../../../scripts/desktop_macos_signing.py build \
+            --version "$VERSION" \
+            --bundles "$BUNDLE" \
+            --create-updater-artifacts \
+            --expected-mode "$EXPECTED_SIGNING_MODE"
+      - name: Verify macOS updater bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.macos-signing.outputs.signing-mode }}
+        run: |
+          set -euo pipefail
+          app_path="apps/desktop/loopx-control-plane/src-tauri/target/release/bundle/macos/LoopX.app"
+          updater_tar_gz="$(find apps/desktop/loopx-control-plane/src-tauri/target/release/bundle -type f -name '*.app.tar.gz' -print -quit)"
+          test -n "${updater_tar_gz}"
+          python3 scripts/desktop_macos_signing.py verify \
+            --signing-mode "${SIGNING_MODE}" \
+            --app "${app_path}" \
+            --updater-tar-gz "${updater_tar_gz}"
       - name: Collect native updater artifacts
         shell: bash
         env:
@@ -257,7 +297,7 @@ jobs:
           # before the feed and channel pointer are published.
           shopt -s nullglob
           if [ "$EVENT_NAME" != release ]; then
-            gh release create "$RELEASE_TAG" --prerelease --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime preview."
+            gh release create "$RELEASE_TAG" --prerelease --latest=false --target "$SOURCE_REF" --title "Desktop main $SOURCE_REF" --notes "Signed App and matching runtime candidate for exact-revision qualification."
           fi
           for artifact in dist/updater/*.gz dist/updater/*.sig dist/updater/*.exe; do
             gh release upload "$RELEASE_TAG" "$artifact"
@@ -272,7 +312,16 @@ jobs:
           decision=advance
           if grep -Fxq desktop-updater.json <<<"$pointer_assets"; then
             mkdir -p dist/current-pointer
-            gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer
+            for attempt in 1 2 3 4; do
+              rm -f dist/current-pointer/desktop-updater.json
+              if gh release download "$pointer" --pattern desktop-updater.json --dir dist/current-pointer; then
+                break
+              fi
+              if [ "$attempt" -eq 4 ]; then
+                exit 1
+              fi
+              sleep "$((1 << (attempt - 1)))"
+            done
             decision="$(python scripts/desktop_update_feed.py \
               --channel-pointer-decision "$CHANNEL" \
               --current-feed dist/current-pointer/desktop-updater.json \

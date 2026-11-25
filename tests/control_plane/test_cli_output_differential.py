@@ -182,7 +182,8 @@ def _receipt(*rows: dict[str, object]) -> dict[str, object]:
 
 
 @pytest.mark.parametrize('damage', [None, 'missing', 'changed', 'material', 'unknown', 'later', 'row', 'growth'])
-def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage):
+@pytest.mark.parametrize('variant', [None, 'quota_should_run_turn_envelope_blocking_user_gate'])
+def test_complete_quota_migration_requires_original_controls_and_bounded_scope(tmp_path, damage, variant):
     import runpy
     from pathlib import Path
     from tests.control_plane import test_cli_output_budget as probe
@@ -211,6 +212,9 @@ def test_complete_quota_migration_requires_original_controls_and_bounded_scope(t
         chars=1000, utf8_bytes=1000, compact_payload_chars=1000, lines=1,
         semantic_json_keys=['interaction_contract'], markdown_anchor='# LoopX Quota Should Run',
         projection_envelope_schema_versions=['loopx_projection_envelope_v0'], quota_controls=before)
+    if variant:
+        base.update(row_id=f'variant/{variant}/small/json', variant_id=variant,
+                    qualification_policy='explicit_opt_in_cold_path')
     candidate = {**copy.deepcopy(base), 'chars': 2500, 'utf8_bytes': 2500, 'compact_payload_chars': 2500,
         'output_contract_version': 'loopx_turn_envelope_v1', 'markdown_anchor': '# LoopX Turn Envelope',
         'quota_controls': after}
@@ -320,15 +324,14 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
         row_id="surface/quota_should_run/crowded/json", surface_id="quota_should_run",
         scenario="crowded", chars=chars, lines=1,
     )
-    probes, git_commands, workloads = [], [], []
+    probes, materialized, workloads = [], [], []
     fixture_bytes = namespace["PROBE_TEST"].read_bytes()
 
-    def git_transport(command, **_):
-        git_commands.append(command)
-        if "add" in command:
-            base_test = Path(command[-2]) / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
-            base_test.parent.mkdir(parents=True)
-            base_test.write_text("# Synthetic historical fixture\n")
+    def materialize(base_ref, base_root):
+        materialized.append((base_ref, base_root))
+        base_test = base_root / namespace["PROBE_TEST"].relative_to(namespace["REPO_ROOT"])
+        base_test.parent.mkdir(parents=True)
+        base_test.write_text("# Synthetic historical fixture\n")
 
     def probe_transport(**kwargs):
         probes.append(kwargs["enforce_budget"])
@@ -343,7 +346,7 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
                 measurement={"chars": chars, "lines": 1},
             )
 
-    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_materialize_base_source", materialize)
     monkeypatch.setitem(namespace, "_run_probe", probe_transport)
     monkeypatch.setitem(namespace, "_is_ancestor", lambda *_: True)
     monkeypatch.setitem(namespace, "_pin_probe_base_ref", lambda ref, **_: ref)
@@ -354,7 +357,8 @@ def test_over_budget_base_is_reported_before_candidate_failure_without_waiver(
     assert workloads[0][0] == workloads[1][0]
     assert all(body == fixture_bytes for _, body, _ in workloads)
     assert workloads[0][2] != workloads[1][2]
-    assert "remove" in git_commands[-1]
+    assert materialized == [("synthetic-base", workloads[0][2])]
+    assert not workloads[0][2].exists()
     output = capsys.readouterr().out
     prefix = "cli-output-base-current-ceilings "
     assert output.startswith(prefix)
@@ -709,12 +713,18 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     probe_test = repo / "tests" / "probe.py"
     probe_test.parent.mkdir()
     probe_test.write_text("# Public synthetic probe\n", encoding="utf-8")
-    git("add", "packet.json", "tests/probe.py")
+    base_package = repo / "loopx" / "__init__.py"
+    base_package.parent.mkdir()
+    base_package.write_bytes(b"# Fixture package\n")
+    attributes = repo / ".gitattributes"
+    attributes.write_bytes(b"*.py text eol=lf\n")
+    git("add", ".gitattributes", "packet.json", "tests/probe.py", "loopx/__init__.py")
     git("commit", "-m", "common baseline")
     common = git("rev-parse", "HEAD")
     git("checkout", "-b", "candidate")
+    attributes.write_bytes(b"*.py text eol=crlf\n")
     packet.write_text(json.dumps({**common_payload, "note": "x" * (4000 + growth)}), encoding="utf-8")
-    git("add", "packet.json")
+    git("add", ".gitattributes", "packet.json")
     git("commit", "--allow-empty", "-m", "candidate")
     candidate = git("rev-parse", "HEAD")
     git("checkout", "main")
@@ -725,19 +735,28 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     upstream = git("rev-parse", "HEAD")
     git("update-ref", "refs/remotes/origin/main", upstream)
     git("checkout", "candidate")
+    (repo / "staged.txt").write_text("Uncommitted fixture change\n", encoding="utf-8")
+    git("add", "staged.txt")
+    original_index = git("ls-files", "--stage")
     probes = []
     pinned = []
-    run = namespace["_run"]
+    materialize = namespace["_materialize_base_source"]
 
-    def git_transport(command, **kwargs):
-        if "worktree" in command and "add" in command:
-            pinned.append(command[-1])
-            # Advance the ref again after selection but before checkout.
-            git("update-ref", "refs/remotes/origin/main", candidate)
-        run(command, **kwargs)
+    def observe_materialization(base_ref, base_root):
+        pinned.append(base_ref)
+        # Advance the ref again after selection but before materialization.
+        git("update-ref", "refs/remotes/origin/main", candidate)
+        materialize(base_ref, base_root)
 
     def probe_transport(**kwargs):
-        text = (kwargs["source_root"] / "packet.json").read_text(encoding="utf-8")
+        source_root = kwargs["source_root"]
+        if not kwargs["enforce_budget"]:
+            assert (source_root / "loopx" / "__init__.py").read_bytes() == b"# Fixture package\n"
+            assert not (source_root / "tests").exists()
+            assert not (source_root / "staged.txt").exists()
+            assert not (source_root / ".git").exists()
+            assert git("worktree", "list", "--porcelain").count("worktree ") == 1
+        text = (source_root / "packet.json").read_text(encoding="utf-8")
         measured = measure_cli_output(text, output_format="json")
         row = _row(
             row_id="surface/quota_should_run/crowded/json",
@@ -756,7 +775,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
 
     monkeypatch.setitem(namespace, "REPO_ROOT", repo)
     monkeypatch.setitem(namespace, "PROBE_TEST", probe_test)
-    monkeypatch.setitem(namespace, "_run", git_transport)
+    monkeypatch.setitem(namespace, "_materialize_base_source", observe_materialization)
     monkeypatch.setitem(namespace, "_run_probe", probe_transport)
     # An explicit historical commit remains authoritative even off this branch.
     args = ["probe", "--base-ref", upstream] if explicit_base else ["probe"]
@@ -772,6 +791,7 @@ def test_probe_compares_pinned_candidate_ancestry_when_main_advances(
     assert pinned == [upstream if explicit_base else common]
     assert git("worktree", "list", "--porcelain").count("worktree ") == 1
     assert git("rev-parse", "HEAD") == candidate
+    assert git("ls-files", "--stage") == original_index
     assert git("show", f"{common}:packet.json") == json.dumps(common_payload)
 
 
@@ -789,6 +809,30 @@ def test_probe_rejects_an_unresolvable_base(tmp_path, monkeypatch, base_ref):
     monkeypatch.setitem(pin.__globals__, "REPO_ROOT", tmp_path)
     with pytest.raises(RuntimeError, match="select an explicit --base-ref commit"):
         pin(base_ref, main_ref="origin/main")
+
+
+def test_probe_rejects_a_commit_without_its_own_cli_source(tmp_path, monkeypatch):
+    import os
+    import runpy
+    import subprocess
+    from pathlib import Path
+
+    materialize = runpy.run_path(str(
+        Path(__file__).resolve().parents[2]
+        / "examples/control_plane/cli-output-base-head-differential-smoke.py"
+    ))["_materialize_base_source"]
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run([
+        "git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "-c", f"core.hooksPath={os.devnull}", "-c", "commit.gpgsign=false",
+        "commit", "--allow-empty", "-m", "Commit before the CLI existed",
+    ], cwd=repo, check=True, capture_output=True)
+    monkeypatch.setitem(materialize.__globals__, "REPO_ROOT", repo)
+    source_root = tmp_path / "base"
+    with pytest.raises(ValueError, match="has no LoopX Python source"):
+        materialize("HEAD", source_root)
+    assert not source_root.exists()
 
 
 @pytest.mark.parametrize("row_kind", ["surface", "variant"])

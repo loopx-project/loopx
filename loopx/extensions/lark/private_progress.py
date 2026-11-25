@@ -260,6 +260,7 @@ class PrivateProgressMixin:
             return False
         result = verify_lark_inbox_reply(project=self.runtime_root, config_path=inbox(), message_id=record["event"]["message_id"],
             text=stream.get("confirmed_text") or progress["text"], attempt=attempt, runner=self._reply_runner,
+            reply_placement="source_thread" if record.get("auto_topic_lane") is True else None,
             finalize_reactions=False, source_authority_verifier=partial(self._source_authority, record))
         stream["blocker"] = result.get("blocker")
         verified = result.get("reply_verified") is True and result.get("ok") is True

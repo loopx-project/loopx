@@ -10,7 +10,10 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from ...control_plane.turn_driver.codex_worker_identity import CodexWorkerIdentity
 
 
 def codex_home(base_home: Path, policy: Mapping[str, Any] | None) -> Path:
@@ -43,7 +46,7 @@ def checked_session_home(base_home: Path, session: Mapping[str, Any]) -> Path:
 
 
 def managed_upstream_mode(session: Mapping[str, Any]) -> str:
-    from ...chat_codex_goal import UPSTREAM_MODE
+    from ...chat.codex_goal import UPSTREAM_MODE
     if session.get("agent_id") == "codex":
         return UPSTREAM_MODE if session.get("upstream_mode") == UPSTREAM_MODE else "chat"
     return str(session.get("upstream_mode") or "default")
@@ -113,6 +116,16 @@ def process_environment(home: Path, *, isolated: bool) -> dict[str, str]:
         env.update({key: os.environ[key] for key in ("SystemRoot", "WINDIR") if key in os.environ})
         env["USERPROFILE"] = str(host_home)
     return env
+
+
+def process_profile(configured_home: Path | None, policy: Mapping[str, Any] | None,
+                    isolated: bool, worker: CodexWorkerIdentity | None) -> tuple[Path, Path, dict[str, str]]:
+    """Resolve the host store and environment without preparing Worker-owned paths as Core."""
+    if worker is not None:
+        return worker.codex_home, worker.codex_home, worker.environment
+    base = (configured_home or Path(os.environ.get("CODEX_HOME") or "~/.codex")).expanduser().resolve()
+    home = codex_home(base, policy)
+    return base, home, process_environment(home, isolated=isolated)
 
 
 def shared_chatgpt_transport(host_config: Mapping[str, Any], native_config: Mapping[str, Any], *,

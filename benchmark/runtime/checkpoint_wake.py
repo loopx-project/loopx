@@ -135,8 +135,9 @@ class CheckpointWake:
                          "registry": self.env["LOOPX_REGISTRY"], "runtime_root": self.env["LOOPX_RUNTIME_ROOT"],
                          "goal_id": self.env["LOOPX_GOAL_ID"], "agent_id": self.env["LOOPX_AGENT_ID"],
                          "turn_instance_id": held["quota"]["heartbeat_receipt"]["turn_instance_id"],
-                         "turn_envelope": self.receipt.get("turn_envelope", False),
-                         "complete_turn": self.receipt.get("complete_turn", False),
+                         # Pin the current command grammar against the recorded invocation.
+                         "turn_envelope": False,
+                         "complete_turn": False,
                          "capture_root": str(self.capture_root), "socket_path": self.socket_path,
                          "decision_sha256": held["sha256"]}
                 if self.env.get("LOOPX_CODEX_CONTEXT_DIR"):
@@ -156,8 +157,12 @@ class CheckpointWake:
                 metadata["native_session"] = {**native["metadata"], "store_members": [
                     {**member, "id": allocated[member["id"]]} for member in native["metadata"]["store_members"]]}
                 metadata["held_decision_component_id"] = decision_id
+            from .research_artifacts import research_component_exclusions
+
+            exclusions = research_component_exclusions(components)
             probe = effect_runtime_result("runtime.checkpoint_artifacts", {
                 "action": "probe", "components": components, "deadline_epoch_ms": window * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
             if native is not None:
                 if restored_capture_history(self.env, self.receipt.get("checkpoint_restore"),
@@ -182,6 +187,7 @@ class CheckpointWake:
                 "action": "capture", "components": components, "destination": str(destination),
                 "expected_source_sha256": probe["source_sha256"], "point_metadata": metadata,
                 "deadline_epoch_ms": window * 1000,
+                **({"component_exclusions": exclusions} if exclusions else {}),
             }, timeout=max(.1, window - time.time()), retry_safe=False, large_local_snapshot=True)
 
     def _write_input(self, process, body, command, deadline, timeout, *, phase_limited):

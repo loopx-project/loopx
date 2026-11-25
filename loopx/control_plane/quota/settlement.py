@@ -175,6 +175,7 @@ class QuotaSettlementReadback:
     completion_event: dict[str, Any] | None
     monitor_phase: ReceiptBoundMonitorPhase | None
     replay_phase: ReceiptBoundReplayPhase | None
+    supersede_event: dict[str, Any] | None = None
     refresh_recovery: dict[str, Any] | None = None
     external_delivery: dict[str, Any] | None = None
     progress: dict[str, Any] | None = None
@@ -207,7 +208,24 @@ def attach_settlement_progress(
     payload["settlement_progress"] = dict(progress)
     payload.pop("settlement_owed", None)
     identity = readback.identity.value
-    if payload.get("ok") is not True or progress.get("next_step") != "quota_spend" or identity is None:
+    if payload.get("ok") is not True or identity is None:
+        return
+    if progress.get("checkpoint_recovery_required") is True:
+        argv = [*loopx_cli_argv()]
+        if registry_path is not None:
+            argv.extend(["--registry", str(registry_path)])
+        if runtime_root is not None:
+            argv.extend(["--runtime-root", str(runtime_root)])
+        argv.extend([
+            "--format", "json", "checkpoint-context", "--goal-id", identity.goal_id,
+            "--agent-id", identity.agent_id, "--turn-instance-id", identity.turn_instance_id,
+            "--replan-obligation-id", str(identity.replan_obligation_id),
+        ])
+        if goal_ref is not None:
+            argv.extend(["--goal-instance-id", str(goal_ref["goal_instance_id"])])
+        payload["settlement_progress"]["checkpoint_context_command"] = render_owed_host_command(argv)
+        return
+    if progress.get("next_step") != "quota_spend":
         return
     route = loopx_cli_argv()
     prefix = shlex.join(route)
@@ -250,7 +268,8 @@ def render_settlement_progress_markdown(payload: dict[str, Any]) -> list[str]:
     recovery = payload.get("settlement_recovery")
     if isinstance(recovery, dict):
         identity = recovery["settlement_identity"]
-        lines = [f"- Pending settlement: `{identity['turn_instance_id']}`", recovery["instruction"]]
+        label = "Pending settlement" if recovery.get("settlement_progress") else "Settlement readback"
+        lines = [f"- {label}: `{identity['turn_instance_id']}`", recovery["instruction"]]
         for command in recovery["next_cli_actions"]:
             lines.extend(["", "```sh", command, "```"])
         return lines
@@ -575,6 +594,7 @@ def read_heartbeat_settlement(
         writeback_event=_optional_readback_record(payload.get("writeback_event")),
         spend_event=_optional_readback_record(payload.get("spend_event")),
         completion_event=_optional_readback_record(payload.get("completion_event")),
+        supersede_event=_optional_readback_record(payload.get("supersede_event")),
         monitor_phase=(
             ReceiptBoundMonitorPhase(str(monitor_phase))
             if monitor_phase is not None

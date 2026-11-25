@@ -813,19 +813,18 @@ C1 的主要对照是**同一单会话产品路径中的原 quota packet 与融�
 ### 默认采用与退役资格
 
 [上下文交付指南](../../guides/context-delivery.zh-CN.md#默认化与退役的验收) 把此比较落实为
-操作方案。文档可先交付；未来扩大默认采用范围需要明确版本的 DeepSeek 与强模型分别支持
-所声明的效果和完整成本范围。reference 已有的 Codex 范围默认仍是当前行为，不证明
-这些模型对照已通过。记录精确 model/provider/version/effort，固定 task、source、host、
+操作方案。C1 源码默认使用统一 writer，旧格式选择器已退役。公开制品仍走现有发布门。
+确认受支持 profile 的采用资格时，须用明确版本的 DeepSeek 与强模型验证所声明的
+效果和完整成本范围。记录精确 model/provider/version/effort，固定 task、source、host、
 tools、反馈、evaluator、预算与停止条件。除原生任务成果、约束遗漏、错误动作和
 一次性恢复外，计入实际最终 input/output、cached/uncached tokens、请求、详情／恢复
 补读、墙钟／IO／搭建成本与人工注意力。未知成本不记零，保留重复波动、失败与负例。
 历史最佳优化保持原生排名，终态保留事实另列。仅 Codex adapter 不资格化 DeepSeek 宿主。
 
-顺序留在 C1/C2/C9：解释 → 双模型比较 → 受支持 profile 的可回退采用／发布 → 范围化
-默认 → 点名旧路径退役。结果混合或退步时保留 opt-in 或明确限制。退役须核实际 caller
-替换、历史解码／readback、支持版本与回退覆盖；完整快照、摘要校验、权限／身份／停止
-和恢复继续保留。不长期保留两个同义决策 owner，也不因新路径存在就删除仍受支持的
-reader。这是资格方案，不授予新实验权限，不宣称已交付收益，也不阻塞其他独立获授权工作。
+C1/C2/C9 的受支持 profile 资格记录解释、双模型对照及可回退的安装和采用结果。
+结果混合或退步时记明限制。退役 writer 须核验实际 caller 替换、历史解码与读回、
+支持版本和回退覆盖。保留完整快照、摘要校验、权限、身份、停止、恢复及现有历史
+reader。模型对照遵循现有实验授权。
 
 [打包来源对照](ledger/controller-executor-unified-contract-v0/2026-10-29-packaged-source-comparison.zh-CN.md)
 固定 mainline quota 与 C1 候选版本，经真实 File/SQLite CLI 验证交付、文件差分、
@@ -1103,10 +1102,13 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 也不豁免第 9 节相对原 quota 基线的验证。
 
 公开分发隔离现在复用 runtime 制品元数据 owner：runtime 资格检查观察已安装的普通
-writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。现有 quota
-packet 默认保持支持；未资格化的完整契约默认不能只凭安装检查通过。此改动不证明
-第 9 节的成果/成本，不替换已安装 writer、不增加当前 producer，也不退役历史 reader。
-扩大支持 profile 仍须原采用证据，详见[发布边界](../../product/release-readiness.md)。
+writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。已发布的
+`v2.4.0` 标签保留 quota-packet writer。发布器和桌面更新器都支持观测到的契约后，
+C1 制品才具备发布条件。通过工程资格检查的 main 制品可从不可变预发布版本取得，供按版本
+验证。v2.4.1 切换后，Runtime 和 Desktop 的 main 与 stable 更新渠道都要求同一
+Complete Turn 契约。回退使用本机已安装的上一版本或 App 备份。记录真实安装和采用证据，
+并按第 9 节验证成果和完整成本。
+详见[发布边界](../../product/release-readiness.md)。
 
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。
 `codex-cli` 和 `codex-app-server` 都调用既有

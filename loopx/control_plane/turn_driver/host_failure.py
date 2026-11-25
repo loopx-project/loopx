@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any
 
 from .session_recovery import require_host_recovery_kind
@@ -24,20 +25,6 @@ HOST_FAILURE_KINDS = frozenset(
         "unknown",
     }
 )
-HOST_RETRY_STRATEGY = "same_configuration"
-
-# These are scheduling hints. The Turn journal
-# remains the authority for the attempt count and the outer controller decides
-# when to wake the exact same Turn again.
-_RETRY_POLICIES = {
-    "executor_timeout": (2, 5),
-    "provider_capacity": (3, 30),
-    "provider_overloaded": (3, 30),
-    "rate_limited": (3, 60),
-    "transport_lost": (3, 10),
-}
-
-
 class BuiltInHostError(RuntimeError):
     """A public-safe built-in host failure classification."""
 
@@ -64,28 +51,23 @@ def require_host_failure_kind(value: str) -> str:
 
 
 def build_host_failure_record(kind: str, *, attempt: int) -> dict[str, Any]:
-    """Build one content-free failure record from an adapter classification."""
+    """Transport a native classification to the existing typed policy owner.
+
+    Native error construction and the Python integer API remain local. Retry
+    hints grant no launch authority; journals retain their original attempts.
+    """
+    from ..effect_runtime import effect_runtime_result
 
     normalized_kind = require_host_failure_kind(kind)
     if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
         raise ValueError("host failure attempt must be a positive integer")
-    record: dict[str, Any] = {
-        "schema_version": HOST_FAILURE_SCHEMA_VERSION,
-        "kind": normalized_kind,
-        "attempt": attempt,
-        "retryable": normalized_kind in _RETRY_POLICIES,
-    }
-    policy = _RETRY_POLICIES.get(normalized_kind)
-    if policy is not None:
-        max_attempts, base_backoff_seconds = policy
-        record["retry"] = {
-            "strategy": HOST_RETRY_STRATEGY,
-            "max_attempts": max_attempts,
-            "backoff_seconds": min(
-                base_backoff_seconds * (2 ** max(0, attempt - 1)),
-                300,
-            ),
-        }
+    record = effect_runtime_result("host_failure.record", {
+        "kind": normalized_kind, "attempt_text": format(Decimal(int(attempt)), "f"),
+    })
+    if not isinstance(record, dict):
+        raise RuntimeError("Host failure policy record is unavailable")
+    # Exact decimal transport avoids JSON rounding of historical Python ints.
+    record["attempt"] = attempt
     return record
 
 
@@ -104,10 +86,9 @@ def normalize_host_failure_record(value: Any) -> dict[str, Any]:
     retryable = record.get("retryable")
     if not isinstance(retryable, bool):
         raise ValueError("host failure record has an invalid retryable marker")
-    expected_retryable = kind in _RETRY_POLICIES
-    if retryable is not expected_retryable:
-        raise ValueError("host failure record retryability does not match its kind")
     expected = build_host_failure_record(kind, attempt=attempt)
+    if retryable is not expected["retryable"]:
+        raise ValueError("host failure record retryability does not match its kind")
     if retryable:
         retry = record.get("retry")
         if not isinstance(retry, Mapping) or dict(retry) != expected["retry"]:
@@ -120,11 +101,18 @@ def normalize_host_failure_record(value: Any) -> dict[str, Any]:
 
 
 def host_failure_retry_available(record: Mapping[str, Any]) -> bool:
+    """Automatic retry remains narrower than an explicit repaired retry."""
+    from ..effect_runtime import effect_runtime_result
+
     normalized = normalize_host_failure_record(record)
     if normalized["retryable"] is not True:
         return False
-    retry = dict(normalized["retry"])
-    return int(normalized["attempt"]) < int(retry["max_attempts"])
+    result = effect_runtime_result("host_failure.retry", {
+        "failure": normalized, "retry_failed": True, "automatic_only": True,
+    })
+    if not isinstance(result, dict) or type(result.get("allowed")) is not bool:
+        raise RuntimeError("Host retry decision is unavailable")
+    return bool(result["allowed"])
 
 
 def explicit_host_failure_retry_available(record: Mapping[str, Any], *, retry_failed: bool) -> bool:
@@ -138,7 +126,7 @@ def explicit_host_failure_retry_available(record: Mapping[str, Any], *, retry_fa
     })
     if not isinstance(result, dict) or type(result.get("allowed")) is not bool:
         raise RuntimeError("Host retry decision is unavailable")
-    return result["allowed"]
+    return bool(result["allowed"])
 
 
 def record_host_failure(

@@ -210,6 +210,9 @@ Web 来源，通过已有 Core 队列及新鲜来源准入。连接列表独立�
 输入只提供地址来源证据；投影不会重新受理它或启动模型工作。每次发送和恢复回执前，
 Core 重查 Session、当前绑定与受众，provider 核验原来源。消息标明 App 发言者，在
 该 outbox 内按 canonical 追加顺序发送，长正文沿用既有富文本分段，保留完整内容。
+飞书能为已核验送达的 App 提问镜像提供消息链接时，新回复会链接到同一 Turn 的提问。
+长提问使用最后一条实际分段消息。outbox 在首次发送前保留链接，恢复时沿用同一发送
+尝试的正文。原私聊取不到链接时，正文继续沿既有路径送达。
 App 来源 Turn 的终态错误也沿原私聊补齐。根据原 Turn 与精确匹配的错误行生成
 失败提示，并标注原结束时间。原始诊断留在 App。恢复时使用原 outbox 与消息身份，
 已送达的输入可以补回一条历史失败提示。先前未确认的停止提示与已完成的 Turn
@@ -235,8 +238,8 @@ provider 消息；反馈失败保留可恢复回执，不阻断正文送达或�
 Lark 表情和 provider 呈现仍独立验收。
 
 通过上述 **继续原会话** 或明确选定的 App 管家入口使用该路径；旧普通历史继续
-独立保留。本检查点覆盖文本及有界 App 图片投影，不覆盖回复/话题关系镜像、向
-Lark 历史回插旧时间或全渠道广播。Core 中的 App 图片复用既有资源上传与 post
+独立保留。本检查点覆盖文本、提问链接及有界 App 图片投影。原生回复和话题位置、
+向 Lark 历史回插旧时间及全渠道广播仍待处理。Core 中的 App 图片复用既有资源上传与 post
 发送器，正文及有序行内图片留在原私聊；长正文只在最后一个实际分段携带图片。
 每次上传和发送均重新核验原来源、当前 Core 消息与授权。发送和编辑在 provider
 预检返回后、记录写入意图前再次检查；每个继续或恢复的富文本分段复用该边界。
@@ -684,7 +687,7 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
 | 已检查边界 | 现有实现 | 经现有 owner 解决的缺口 |
 | --- | --- | --- |
 | App 自由文本 | `personal-workspace-page.tsx`、`workspace-action-form.tsx` | 退役浏览器对 Goal 创建、Todo 改动、分配和调度的意图分类。所有自由文本完整到达 Chat；显式控件打开 typed form 与需审阅的 preview |
-| Chat 请求与观察 | `chat_ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
+| Chat 请求与观察 | `chat/ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
 | 协作 | `control_plane/collaboration/inbox.py`、typed collaboration rules 与 return-delivery owner | 虽有历史存储名称，现有语义已对 Agent 中立。保留 decision/read/return 区别，不另建 manager 专用 inbox |
 | Operator inbox | `control_plane/work_items/operator_inbox.py` | 已有 source contract 与共享 urgency projection；检查并迁移真实 pending/read/ack 生命周期，不新增泛化 wrapper |
 | Lark transport | `extensions/lark/event_inbox.py`、`routed_inbox.py`、`inbox_reply.py` 与 reaction adapter | Provider 归一化、幂等 capture、read/processed 记录、reply recovery 与 Lark id/policy 共存。只提取已有证据的可复用语义；认证、寻址、provider id、reaction 和消息限制留在 adapter |
@@ -1107,6 +1110,12 @@ Turn HTTP 预算包含既有附件额度的 base64 编码：最多四张图片�
 Attached 宿主、其他 executor 以及关联/Lark 会话在准入前拒绝这种新输入；这不
 授予文件同步或任意路径访问。图片保留现有路径。来源送达不证明理解、自动材料采用、
 完整 GQ06 验收或模型成本降低。
+
+本地托管 Codex 的 Goal 网页对话也可以返回用户要求的 Markdown 或纯文本文件。
+在原对话中点击“下载原文”即可保存。即使工作区文件后来改变，重新打开消息仍可取回当时
+的字节。Agent 在答复中提供文件名、MIME 类型、字节数和内联 Base64 数据，沿用已有的
+数量、大小及 UTF-8 校验。文件含受保护的本机路径时，答复会说明附件交付失败。
+LoopX 只使用答复携带的数据。
 
 ### 飞书私聊默认复用原生 Turn 图片附件
 

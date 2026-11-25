@@ -4,27 +4,28 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Protocol, cast
 
 from ...capabilities.manager_context import authority
-from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked
+from ...capabilities.manager_context.roundtrip import ReturnResolutionBlocked, ReturnTransportUnavailable
+from ...chat_store import _atomic_write_json
 from ...file_lock import exclusive_file_lock
 from .conversation_identity import identity_ref
 from .event_inbox import _load_processed, load_lark_event_inbox_config
 from .goal_channel_contracts import bindings_for_goal
 from .goal_channel_targets import goal_channel_target_for_name
+from .goal_channel_transport import json_payload
 from .goal_topic_runtime import _inbox_config
+from .identity_shapes import LARK_MESSAGE_ID_PATTERN
 from .inbox_reply import (
-    CommandRunner, _bot_identity_verified, _default_runner, _verified_reply_result,
+    CommandRunner, _bot_identity_verified, _call, _default_runner, _message, _verified_reply_result,
     reply_lark_event_inbox, verify_lark_inbox_reply,
 )
 from .manager_routing import authorized_manager_goal_ids
 from .outbound import present_lark_conversation_text
+from .post_delivery import attachment_reply
 from .return_files import uploaded_result_files, verify_result_files
-
-if TYPE_CHECKING:
-    from ...capabilities.manager_context.roundtrip import ReturnService
-    from ...chat_store import ChatSessionStore
 
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
@@ -33,6 +34,9 @@ AttemptRecorder = Callable[[AttemptRecord], None]
 SnapshotProvider = Callable[[], PayloadView]
 
 if TYPE_CHECKING:
+    from ...capabilities.manager_context.roundtrip import ReturnService
+    from ...chat_store import ChatSessionStore
+
     class _ControllerProtocol(Protocol):
         store: ChatSessionStore
 
@@ -136,6 +140,76 @@ def _private_return_authority(
     return private_transport
 
 
+def _private_message_link(link: object, chat_id: str) -> bool:
+    if not chat_id or not isinstance(link, str):
+        return False
+    target, _, position = link.rpartition("&position=")
+    chat_path = f"/client/chat/open?openChatId={chat_id}"
+    return target in (
+        f"https://applink.feishu.cn{chat_path}",
+        f"https://applink.larksuite.com{chat_path}",
+    ) and re.fullmatch(r"-?[0-9]+", position) is not None
+
+
+def _app_mirror_text(message: PayloadView, phase: PayloadView, chat_id: str) -> str:
+    user_input = message["role"] == "user"
+    speaker = "你" if user_input else "LoopX"
+    text = _str_field(message, "text")
+    link = phase.get("question_link")
+    if link is not None:
+        if user_input or not _private_message_link(link, chat_id):
+            raise ValueError("App mirror question link changed")
+        text = f"[查看对应提问]({link})\n\n{text}"
+    return f"**{speaker}（App）**\n\n{text}"
+
+
+def prepare_app_mirror_text(
+    transport: _PrivateTransport, path: Path, row: Payload, messages: Sequence[PayloadView], message: PayloadView,
+) -> str:
+    """Attach a provider-supplied link before the first answer attempt."""
+    deliveries = cast(dict[str, Payload], row["deliveries"])
+    key = "web." + _str_field(message, "message_id")
+    phase = deliveries.get(key, {})
+    chat = _str_field(_mapping(row["event"]), "chat_id")
+    if message["role"] != "user" and not {"question_link", "text", "started", "attempt"}.intersection(phase):
+        inputs = [item for item in messages if item["role"] == "user" and item["turn_id"] == message["turn_id"]]
+        if len(inputs) == 1:
+            original = deliveries.get("web." + _str_field(inputs[0], "message_id"), {})
+            link = _app_input_link(transport, row, original, chat)
+            if link is not None:
+                # Retain the chosen link before provider preflight. Recovery
+                # reproduces the same text even if the link later disappears.
+                phase["question_link"] = link
+                deliveries[key] = phase
+                _atomic_write_json(path, row)
+    return _app_mirror_text(message, phase, chat)
+
+
+def _app_input_link(transport: _PrivateTransport, row: Payload, original: PayloadView, chat: str) -> str | None:
+    if original.get("verified") is not True or not isinstance(original.get("attempt"), Mapping):
+        return None
+    try:
+        _, attempt = cast(Callable[..., tuple[str, object]], attachment_reply)(
+            project=transport.runtime_root, config_path=transport._inbox(row),
+            text=_str_field(original, "text"), attempt=original["attempt"])
+        if not isinstance(attempt, Mapping):
+            return None
+        ref = _str_field(attempt, "message_ref")
+    except (LookupError, OSError, TypeError, ValueError):
+        return None
+    if not LARK_MESSAGE_ID_PATTERN.fullmatch(ref):
+        return None
+    result = _call(transport._reply_runner, ["lark-cli", "--profile", _str_field(row, "profile"),
+        "im", "+messages-mget", "--message-ids", ref, "--as", "bot", "--format", "json", "--no-reactions"])
+    payload = json_payload(result)
+    observed = _message(payload, ref) if result.get("returncode") == 0 and payload.get("ok") is True else None
+    if (observed is None or observed.get("chat_id") != chat or observed.get("deleted") is True
+            or _mapping(observed.get("sender")).get("sender_type") != "app"):
+        return None
+    link = observed.get("message_app_link")
+    return link if isinstance(link, str) and _private_message_link(link, chat) else None
+
+
 def _verify_web_mirror(
     route: PayloadView, session: PayloadView, turn: PayloadView, text: str,
     private_transport: _PrivateTransport, attempt: AttemptRecord | None, record_attempt: AttemptRecorder | None,
@@ -170,7 +244,8 @@ def _verify_web_mirror(
         mirrored = phase.get("attempt")
         if phase.get("verified") is not True or not isinstance(mirrored, dict):
             raise _blocked("initial_delivery_receipt_unavailable", "App mirror remains unverified")
-        expected, phase_text = f"**LoopX（App）**\n\n{_str_field(message, 'text')}", phase.get("text")
+        expected = _app_mirror_text(message, phase, _str_field(_mapping(row["event"]), "chat_id"))
+        phase_text = phase.get("text")
         if (not isinstance(phase_text, str) or phase_text not in (expected, present_lark_conversation_text(expected))
                 or (attempt is not None and dict(attempt) != mirrored)):
             raise ValueError("App mirror intent changed")
@@ -229,12 +304,11 @@ def _return_inbox(
             return bool(transport._source_verified(record))
 
         source_verifier = verify_source
-        destination = {key: record[key] for key in ("profile", "binding_id", "source", "event")}
+        destination = {**{key: record[key] for key in ("profile", "binding_id", "source", "event")},
+                       **({"auto_topic_lane": True} if record.get("auto_topic_lane") is True else {})}
         message_id = _str_field(_mapping(record["event"]), "message_id")
     else:
-        snapshot, routing, target_config = _resolve_return(
-            root, registry, snapshot_provider, route, session, turn, cancelled
-        )
+        snapshot, routing, target_config = _resolve_return(root, registry, snapshot_provider, route, session, turn, cancelled)
         config_path, _ = _inbox_config(runtime_root=root, route=routing, target_payload=_mapping(snapshot["target_payload"]))
         destination, message_id = (routing, target_config), _str_field(route, "source_id").removeprefix("lark:")
     config = load_lark_event_inbox_config(project=project, config_path=config_path)
@@ -251,6 +325,9 @@ def _run_inbox_return(
 ) -> Payload:
     verify_only = attempt is not None
     text, steward_context = present_lark_conversation_text(text), session.get("steward_context")
+    if not verify_only and isinstance(steward_context, dict) and turn.get("origin") == "native_loopx":
+        _private_return_authority(root, registry, route, session, turn, cancelled, private_transport)
+        raise ReturnTransportUnavailable("scheduled Steward result has no private reply transport")
     if isinstance(steward_context, dict) and turn.get("origin") == "web":
         result = _web_return(
             root, registry, route, session, turn, text, cancelled, private_transport,
@@ -310,42 +387,33 @@ def _run_inbox_return(
             delivery_attempt_recorder(value)
 
     attachment_names = tuple(_str_field(attachment, "name") for attachment in attachments)
+    reply_placement = "source_thread" if isinstance(destination, Mapping) and destination.get("auto_topic_lane") is True else None
     if attempt is not None:
         result = verify_lark_inbox_reply(
             project=project, config_path=config_path, message_id=message_id, text=text, attempt=attempt,
-            runner=runner or _default_runner, source_membership_verifier=source_verifier,
-            attachment_keys=keys, attachment_names=attachment_names,
-            finalize_reactions=not attachments, resume_parts=True, before_send=before_send,
-        )
+            runner=runner or _default_runner, source_membership_verifier=source_verifier, attachment_keys=keys,
+            attachment_names=attachment_names, finalize_reactions=not attachments, resume_parts=True,
+            before_send=before_send, reply_placement=reply_placement)
     else:
         result = reply_lark_event_inbox(
-            project=project, config_path=config_path, message_id=message_id, text=text,
-            content_format="markdown", execute=True, runner=runner or _default_runner, before_send=before_send,
+            project=project, config_path=config_path, message_id=message_id, text=text, content_format="markdown",
+            execute=True, runner=runner or _default_runner, before_send=before_send,
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
-            source_membership_verifier=source_verifier,
-            # A returned manager answer keeps the provider bound, not the compact
-            # notification length.
+            source_membership_verifier=source_verifier, recover_ambiguous_send=True,
+            before_provider_send=getattr(delivery_attempt_recorder, "before_provider_send", None),
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
-            finalize_reactions=not attachments,
-        )
+            finalize_reactions=not attachments, reply_placement=reply_placement)
     if attachments and result.get("reply_verified") is True:
-        # The recorder persists the exact message locator before this read.
-        # Failure retains that attempt; recovery only reads it, never resends.
-        from .post_delivery import attachment_reply
-
+        # Recorder persists exact message locator before this read; recovery only reads it, never resends.
         file_text, file_attempt = cast(Callable[..., tuple[str, dict[str, str | None]]], attachment_reply)(
-            project=project, config_path=config_path,
-            attempt=attempt if attempt is not None else observed_attempt, text=text,
-        )
+            project=project, config_path=config_path, attempt=attempt if attempt is not None else observed_attempt, text=text)
         result.update(cast(Callable[..., Payload], verify_result_files)(
             profile=sender_profile, message_id=file_attempt["message_ref"], text=file_text,
-            attachments=attachments, keys=keys, runner=runner, private_transport=private_transport,
-        ))
+            attachments=attachments, keys=keys, runner=runner, private_transport=private_transport))
         if result.get("reply_verified") is True:
             result.update(_verified_reply_result(
                 project=project, config_path=config_path, message_id=message_id,
-                runner=runner or _default_runner, finalize_reactions=True,
-            ))
+                runner=runner or _default_runner, finalize_reactions=True))
     return result
 
 

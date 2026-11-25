@@ -16,6 +16,48 @@ When the observed execution used the finding's tested input revision, result
 attachments can bind it once and select the evidence to reuse. Readback and
 standalone observations keep the complete observation form. [Execution evidence authoring](../../../docs/reference/protocols/explore-result-from-path-delta-v0.md#execution-evidence-on-the-same-input)
 
+## Read execution evidence in the App
+
+Open a Goal's **Research / 研究** view, select its question in the history,
+then expand **Read saved findings / 阅读已保存的结论** and select the finding. Expand
+**Actual execution and resource observations / 实际执行与资源观测** to compare
+the planned and executed methods, read the change reason, elapsed time and
+limit, iterations, stop reason, and the input, candidate and result references.
+The history detail uses the same reader.
+
+![Research history and saved evidence entry](assets/execution-feedback-entry.png)
+
+Keep execution detail closed while browsing conclusions; open it when checking
+whether a result belongs to the intended execution. The example below records
+a change from `broad-search` to `targeted-check`. Its elapsed time is measured,
+while the iteration count is unknown. **Not measured / 未测量** stays unknown;
+a finding without an observation has no execution detail. A rejected response
+shows an error and hides stale result facts; use **Refresh evidence / 刷新证据**
+after the source or transport is repaired.
+
+![Execution detail with measured and unknown values](assets/execution-feedback-detail.png)
+
+On a narrow screen, references wrap within the reader. The same controls and
+unknown-value distinctions remain available.
+
+![Execution evidence on a narrow screen](assets/execution-feedback-narrow.png)
+
+These illustrations use synthetic findings with a packaged App and isolated
+SQLite backend. Reading evidence does not run a method or enable a capability.
+Recorded execution alone does not prove model adoption, method effectiveness,
+or an independently accepted outcome.
+
+### A saved finding has no execution detail
+
+First check whether that finding's source actually records an observation.
+Omission is valid and must not be replaced with guessed values. Older App
+builds can also omit recorded observations in saved findings while retaining
+them in research history. If the same source has execution detail in history
+but the saved finding looks like this earlier reader, update the App and
+refresh the evidence. Updating a reader does not execute the method again.
+
+![Earlier saved-finding reader omitting recorded execution detail](assets/execution-feedback-legacy-reader.png)
+
 ## Quantitative findings
 
 An ordinary result attachment can include `measurements`, saved on its existing
@@ -660,9 +702,9 @@ canonical truncation.
 exploration goals that need to try several plausible next todos at once. It
 uses a CPU branch-prediction analogy plus a DSpark-inspired scheduler: rank
 open agent todos, estimate branch confidence and expected evidence units,
-choose a confidence-scheduled verification prefix, select one `primary` branch
-plus safe `speculative` branches, and reject branches whose declared write
-scopes overlap an already-selected branch.
+choose a confidence-scheduled verification prefix, and select one `primary`
+branch plus eligible `speculative` branches. Distinct Todos can appear in the same plan even when their declared
+write scopes overlap. Todos claimed by another agent stay out of the selection.
 
 Accuracy note on the DSpark citation (arXiv:2607.05147): real DSpark truncates
 a semi-autoregressive draft block at the first per-step confidence below a
@@ -726,14 +768,13 @@ coordination work by default, because many exploration tasks are read-only.
 Use `--no-allow-unscoped-parallel` when the controller wants unknown scopes to
 collapse back to single-branch execution.
 
-Scope conflicts are based only on mutable `required_write_scopes`. Do not put a
-shared base checkout or an already-built immutable input in that field merely
-because multiple experiments read it. Represent reusable inputs with existing
-public-safe capability labels such as `shared_implementation:<name>` or
-`shared_artifact:<name>`, then give each experiment its own variant or launch
-output scope. Those lanes may run in parallel. If the shared build itself is
-still mutable, keep its path in `required_write_scopes`; the planner will
-correctly serialize lanes that could write the same artifact.
+The plan is read-only. At execution time the [task lease](../../../docs/reference/canonical-lease-renew.md)
+protects Todo ownership and the physical checkout. Agents editing overlapping
+repository paths for different Todos can use separate worktrees. Record mutable
+outputs in `required_write_scopes` and describe shared, immutable inputs with
+`shared_implementation:<name>` or `shared_artifact:<name>`. For a build that
+writes to a shared location outside the worktrees, coordinate access to that
+location before launching either task.
 
 ## Optional Worker Branch Plan
 
@@ -785,10 +826,10 @@ The agent must still apply the goal's evidence, serving-cost, quota, claim, and
 lease gates before launch.
 
 When a higher-ranked candidate is rejected because its dependency is not in the
-selected wave, its write scope conflicts with an already selected branch, or it
-has another planner hazard, selection keeps scanning. A later safe candidate in
-the same resource lane can backfill the released predicted slot in the same
-call. `continuous_monitor` todos stay diagnostic-only and never consume a
+selected wave or it has another planner hazard, selection keeps scanning. The
+worker planner also checks for overlapping write scopes across worker lanes. A
+later safe candidate in the same resource lane can backfill the released
+predicted slot in the same call. `continuous_monitor` todos stay diagnostic-only and never consume a
 resource slot, even if they carry a resource-lane capability.
 
 Resource inputs are optional. With no `--resource-capacity`, unlaned and legacy
