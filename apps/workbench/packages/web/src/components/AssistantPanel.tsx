@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ApiError, type AgentInfo, type ModelOption, type Api, type PersonalSettings, type ProactiveAction, type ProactiveRun, type Thread, type Todo } from '../api';
 import { historyPage, mergeHistory, mergeHistoryPage, watchHistory } from '../history';
+import { createOptimisticThreadId, createOptimisticTurn, isOptimisticThreadId, maxEventSeq, mergeOptimisticEvents, useOptimisticTurns } from '../optimistic';
+import { rememberRouterThreadId } from '../history-cache';
 import { replaceRun, startConflict, askingPins, askLine, needTarget } from '../proactive';
 import { buildDesk, briefStatus, type BriefStatus } from '../desk';
 import { buildTimeline, type StoredEvent } from '../timeline';
@@ -92,6 +94,7 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
   const [thread, setThread] = useState<Thread | null>(null);
   const [threadError, setThreadError] = useState('');
   const [events, setEvents] = useState<StoredEvent[]>([]);
+  const optimistic = useOptimisticTurns();
   const [loaded, setLoaded] = useState(false);
   const [error_, setError] = useState('');
   const [retryBusy, setRetryBusy] = useState(false);
@@ -101,7 +104,8 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
   const scroll = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const timeline = useMemo(() => buildTimeline(events), [events]);
+  const displayEvents = useMemo(() => mergeOptimisticEvents(events, optimistic.turns, threadId), [events, optimistic.turns, threadId]);
+  const timeline = useMemo(() => buildTimeline(displayEvents), [displayEvents]);
   const waiting = useMemo(() => timeline.items.flatMap((item): SheetTarget[] =>
     item.kind === 'approval' && item.decision === null ? [{ kind: 'approval', item }]
       : item.kind === 'input' && item.answer === null ? [{ kind: item.inputKind === 'plan' ? 'plan-approval' : 'question', item }] : []), [timeline]);
@@ -109,16 +113,21 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
 
   useEffect(() => {
     if (!threadId) { setThread(null); setEvents([]); setLoaded(false); setCursor(null); return; }
+    if (isOptimisticThreadId(threadId)) { setEvents([]); setLoaded(true); setCursor(null); setThreadError(''); return; }
     let live = true;
-    setThreadError(''); setLoaded(false); setEvents([]); setCursor(null);
+    setThreadError(''); setLoaded(optimistic.hasForThread(threadId)); setEvents([]); setCursor(null);
     const report = (e: unknown) => { if (live) setError(message(e)); };
     void api.thread(threadId).then(value => { if (live) setThread(value); }).catch(e => { if (live) setThreadError(message(e)); });
     const ctrl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     void watchHistory(api, threadId, ctrl.signal, {
-      page: page => { setEvents(page.events); setCursor(page.hasOlder ? page.nextCursor : null); setLoaded(true); setError(''); },
+      page: page => { setEvents(page.events); optimistic.reconcile(threadId, page.events); setCursor(page.hasOlder ? page.nextCursor : null); setLoaded(true); setError(''); },
       events: batch => {
-        setEvents(previous => mergeHistory(previous, batch));
+        setEvents(previous => {
+          const next = mergeHistory(previous, batch);
+          optimistic.reconcile(threadId, next);
+          return next;
+        });
         if (batch.some(e => e.type.startsWith('turn.') || e.type === 'history.reset' || e.type === 'thread.updated')) {
           clearTimeout(timer);
           timer = setTimeout(() => { if (!ctrl.signal.aborted) void api.thread(threadId).then(value => { if (live) setThread(value); }).catch(() => undefined); }, 200);
@@ -144,7 +153,7 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
   }, [api]);
   useEffect(() => { loadRuns(); }, [loadRuns, refreshKey]);
 
-  useEffect(() => { if (stick.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; }, [events, asks.length]);
+  useEffect(() => { if (stick.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; }, [displayEvents, asks.length]);
 
   // The unread dot is the list's; reading here counts as reading.
   useEffect(() => {
@@ -185,7 +194,7 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
     return () => document.removeEventListener('keydown', onKey);
   }, [drawer, overlay, openDrawer, focusComposer]);
 
-  const loadImage = useCallback((id: string) => threadId ? api.attachment(threadId, id) : Promise.reject(new Error('no thread')), [api, threadId]);
+  const loadImage = useCallback((id: string) => optimistic.imageBlob(id) ? Promise.resolve(optimistic.imageBlob(id)!) : threadId && !isOptimisticThreadId(threadId) ? api.attachment(threadId, id) : Promise.reject(new Error('no thread')), [api, threadId, optimistic.imageBlob]);
   const loadFile = useCallback((path: string) => threadId ? api.threadFile(threadId, path) : Promise.reject(new Error('no thread')), [api, threadId]);
   const loadOlder = async () => {
     if (cursor === null || loadingOlder || !threadId) return;
@@ -247,16 +256,48 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
   };
   const state: ProactiveState = { runs, error: runsError, load: loadRuns, pending, failures, act };
 
-  const send = async (text: string, images: { data: string; mimeType: string }[], videos: string[]) => {
+  const send = async (text: string, images: { data: string; mimeType: string }[], rawVideos: File[]) => {
+    let optTurn: ReturnType<typeof createOptimisticTurn> | null = null;
+    let tempId: string | null = null;
     try {
       if (!threadId) {
+        tempId = createOptimisticThreadId();
+        optTurn = createOptimisticTurn({ threadId: tempId, text, afterSeq: 0 });
+        optimistic.add(optTurn);
+        setThreadId(tempId);
+        stick.current = true;
         const started = await api.petSay(text);
+        optimistic.migrateThread(tempId, started.threadId);
+        rememberRouterThreadId(api.host, started.threadId);
         setThreadId(started.threadId);
         return;
       }
-      await api.startTurn(threadId, text, images, { queue: true, videos });
+      if (!running) {
+        optTurn = createOptimisticTurn({
+          threadId, text, workMode: thread?.workMode,
+          images: images.map((img, i) => ({ id: `a-${i}`, ...img })),
+          videos: rawVideos.map((file, i) => ({ id: `av-${i}`, name: file.name, file })),
+          afterSeq: maxEventSeq(events),
+        });
+        optimistic.add(optTurn);
+        stick.current = true;
+      }
+      const videos = rawVideos.length
+        ? await Promise.all(rawVideos.map(async file => (await api.uploadVideo(threadId, file)).id))
+        : [];
+      const result = await api.startTurn(threadId, text, images, { queue: true, videos });
+      if ('turnId' in result) {
+        if (optTurn) optimistic.bindTurnId(optTurn.localId, result.turnId);
+        else {
+          const late = createOptimisticTurn({ threadId, text, workMode: thread?.workMode, images: images.map((img, i) => ({ id: `a-${i}`, ...img })), videos: rawVideos.map((file, i) => ({ id: `av-${i}`, name: file.name, file })), afterSeq: maxEventSeq(events) });
+          late.turnId = result.turnId;
+          optimistic.add(late);
+        }
+      } else if (optTurn) optimistic.remove(optTurn.localId);
       await api.thread(threadId).then(setThread).catch(() => undefined);
     } catch (e) {
+      if (optTurn) optimistic.remove(optTurn.localId);
+      if (tempId) setThreadId(current => (current === tempId ? null : current));
       if (e instanceof ApiError && e.status === 409 && e.message === 'personal agent is not configured') {
         setNeedsSetup(true);
         throw new Error(t('pet.needsSetup'));
@@ -404,8 +445,7 @@ export function AssistantHome({ api, todos, loading, error, threads, threadsKnow
     <Composer attachBlocked={null} attachmentsBlocked={threadId ? undefined : t('desk.chatAttachFirst')} restore={null} note={null}
       draftKey={threadId ? `assistant-home:${threadId}` : 'assistant-home:new'} running={running} placeholder={handingTo ? t('desk.handingOver', agentLabel(handingTo)) : t('desk.chatPlaceholder')} disabled={Boolean(handingTo)}
       onSend={async (text, images, _mentions, videos = []) => {
-        await send(text, images.map(({ data, mimeType }) => ({ data, mimeType })),
-          await Promise.all(videos.map(async video => (await api.uploadVideo(threadId!, video.file)).id)));
+        await send(text, images.map(({ data, mimeType }) => ({ data, mimeType })), videos.map(video => video.file));
       }}
       onStop={() => threadId && void api.cancel(threadId).catch(report)} onError={setError}
       header={null} left={composerLeft} right={composerRight} commands={[]} actions={[]} hiddenCommands={[]} onAction={() => undefined}

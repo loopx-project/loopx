@@ -32,11 +32,9 @@ from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN as REPOSI
 
 RUNTIME_ARTIFACT_SCHEMA_VERSION = "loopx_runtime_artifact_v1"
 QUALIFIED_DEFAULT_CONTRACT_FIELD = "qualified_default_contract"
-_ARTIFACT_DEFAULT_CONTRACTS = json.loads(
+PUBLIC_DEFAULT_CONTRACT = json.loads(
     Path(__file__).with_name("public_default_contract.json").read_text(encoding="utf-8")
 )
-PUBLIC_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["current"]
-HISTORICAL_DEFAULT_CONTRACT = _ARTIFACT_DEFAULT_CONTRACTS["historical"]
 SHA = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST = 256 * 1024
 MAX_ARCHIVE = 256 * 1024 * 1024
@@ -67,11 +65,11 @@ def standalone_source() -> str:
         source = source.replace(old, "\n" + binding + "\n", 1)
     # The public installer is one file, so embed the policy that the Python
     # publishers and the native updater read from the distribution contract.
-    binding_start = source.index("\n_ARTIFACT_DEFAULT_CONTRACTS = ")
-    binding_end = source.index("\nPUBLIC_DEFAULT_CONTRACT = ", binding_start)
+    binding_start = source.index("\nPUBLIC_DEFAULT_CONTRACT = ")
+    binding_end = source.index("\nSHA = ", binding_start)
     return (
         source[:binding_start]
-        + f"\n_ARTIFACT_DEFAULT_CONTRACTS = {_ARTIFACT_DEFAULT_CONTRACTS!r}"
+        + f"\nPUBLIC_DEFAULT_CONTRACT = {PUBLIC_DEFAULT_CONTRACT!r}"
         + source[binding_end:]
     )
 
@@ -148,7 +146,7 @@ def validate_manifest(value: dict[str, Any], *, revision: str | None = None) -> 
         manifest["default_contract"] = validate_default_contract(
             manifest.pop(QUALIFIED_DEFAULT_CONTRACT_FIELD)
         )
-    elif "default_contract" in manifest and manifest["default_contract"] != HISTORICAL_DEFAULT_CONTRACT:
+    elif "default_contract" in manifest:
         validate_default_contract(manifest["default_contract"])
     return manifest
 
@@ -158,14 +156,6 @@ def validate_published_manifest(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict) or QUALIFIED_DEFAULT_CONTRACT_FIELD not in value:
         raise ValueError("Runtime publication requires a qualified default contract attestation")
     return validate_manifest(value)
-
-
-def public_channel_allows_default(observed: dict[str, Any]) -> bool:
-    """Check the reviewed release profile independently of archive qualification."""
-    approved = _ARTIFACT_DEFAULT_CONTRACTS["public_channel"]
-    if approved not in ("current", "historical"):
-        raise ValueError("Unknown public channel default contract")
-    return bool(observed == _ARTIFACT_DEFAULT_CONTRACTS[approved])
 
 
 def verify_runtime_installation_qualification(
@@ -213,10 +203,12 @@ def resolve_artifact(repo: str, ref: str) -> dict[str, Any]:
         if not (SHA.fullmatch(ref) and isinstance(exc.__cause__, HTTPError) and exc.__cause__.code == 404):
             raise
         metadata = read_json(f"https://github.com/{repo}/releases/download/runtime-main/loopx-runtime-{ref}.json")
-    artifact = validate_manifest(metadata, revision=ref if SHA.fullmatch(ref) else None)
-    if ref in {"main", "stable"} and artifact.get("channel") != ref:
-        raise ValueError("Runtime artifact belongs to another channel")
-    return artifact
+    if ref in {"main", "stable"}:
+        artifact = validate_published_manifest(metadata)
+        if artifact.get("channel") != ref:
+            raise ValueError("Runtime artifact belongs to another channel")
+        return artifact
+    return validate_manifest(metadata, revision=ref if SHA.fullmatch(ref) else None)
 
 
 def target_direction(repo: str, current: str | None, target: str) -> str:

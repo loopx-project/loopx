@@ -71,6 +71,15 @@ owner. Older plugin releases retain their original CLI requirements.
 The continuation driver follows LoopX's context delivery setting.
 When the guard returns a capture reference, the driver reads the
 admission fields from that same capture.
+The Driver uses Core's `--cli-bin` to keep thin heartbeat and quota settlement
+commands on the same LoopX installation as admission. The resolver normalizes
+relative `PATH` entries at discovery. On POSIX, the plugin-managed runtime
+provides a launcher that runs the selected Python interpreter and managed
+script by absolute path. If the plugin cannot bind a launcher (including on
+Windows), or uses the `python -m loopx.cli` fallback, the Driver logs
+`cli_route_unpinned` and Core renders bare `loopx` commands. Set `LOOPX_BIN`
+to an absolute LoopX executable to pin those sessions.
+
 After the beta.8 GitHub release lists its tarball, install the pinned
 `0.1.1-beta.8` asset into the web profile. If the asset is not yet listed,
 keep your installed version or use the source-build instructions below:

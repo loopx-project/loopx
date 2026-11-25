@@ -266,7 +266,7 @@ def test_private_http_setup_shares_existing_group_profile_without_changing_its_g
     else:
         identity["bot_app_id"] = stored_app
     frozen = json.dumps(legacy, sort_keys=True)
-    monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: legacy)
+    monkeypatch.setattr("loopx.chat.lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: legacy)
     monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.chat_store, server.runtime_controller = store, runtime

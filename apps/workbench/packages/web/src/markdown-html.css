@@ -1,0 +1,90 @@
+/*
+ * Styles for GFM-allowlisted HTML elements rendered inside `.markdown` (details/summary, kbd,
+ * sub/sup, mark, ins, dl). Built solely on the design tokens in `styles.css` so light, dark, and
+ * every palette stay in harmony.
+ */
+
+.markdown details {
+  margin: 0 0 0.8em;
+  padding: 0.45em 0.75em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.markdown details > summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text);
+  list-style-position: inside;
+}
+
+.markdown details[open] > summary {
+  margin-bottom: 0.55em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid var(--border);
+}
+
+.markdown details > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown kbd {
+  display: inline-block;
+  padding: 0.08em 0.4em;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border-strong);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.82em;
+  line-height: 1.35;
+  vertical-align: baseline;
+}
+
+.markdown sub,
+.markdown sup {
+  font-size: 0.76em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+
+.markdown sup {
+  top: -0.45em;
+}
+
+.markdown sub {
+  bottom: -0.22em;
+}
+
+.markdown mark {
+  padding: 0.05em 0.24em;
+  border-radius: var(--radius-xs);
+  background: var(--writing-todo-bg);
+  color: inherit;
+}
+
+.markdown ins {
+  text-decoration: underline;
+  text-decoration-color: var(--positive);
+  text-underline-offset: 2px;
+}
+
+.markdown dl {
+  margin: 0 0 0.8em;
+}
+
+.markdown dt {
+  font-weight: 600;
+  margin-top: 0.5em;
+}
+
+.markdown dt:first-child {
+  margin-top: 0;
+}
+
+.markdown dd {
+  margin: 0.15em 0 0.35em 1.2em;
+}

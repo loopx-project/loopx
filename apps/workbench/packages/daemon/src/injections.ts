@@ -10,7 +10,7 @@ import type { Store } from './store.js';
  * is worth a reminder. What was attached lives in the database, so a restart does not repeat it.
  */
 
-export type InjectionKind = 'coordination' | 'progress' | 'tools' | 'todo';
+export type InjectionKind = 'coordination' | 'forks' | 'progress' | 'tools' | 'todo';
 
 /** Whether a block must ride along with this message. */
 export type InjectionGate = (kind: InjectionKind, block: string) => boolean;
@@ -18,7 +18,7 @@ export type InjectionGate = (kind: InjectionKind, block: string) => boolean;
 /** Turns after which a block already read is attached once more. */
 export const REMIND_EVERY = 12;
 
-const BLOCK = /<loochat-(coordination|progress|tools|todo)>[\s\S]*?<\/loochat-\1>/;
+const BLOCK = /<loochat-(coordination|forks|progress|tools|todo)>[\s\S]*?<\/loochat-\1>/;
 const digest = (block: string) => createHash('sha256').update(block).digest('hex').slice(0, 16);
 
 export class Injections {
@@ -39,7 +39,7 @@ export class Injections {
     const session = this.store.getThread(threadId)?.agentSessionId ?? null;
     const carried = new Map<string, string>();
     for (const part of text.matchAll(new RegExp(BLOCK, 'g'))) if (!carried.has(part[1])) carried.set(part[1], part[0]);
-    for (const kind of ['coordination', 'progress', 'tools', 'todo'] as const) {
+    for (const kind of ['coordination', 'forks', 'progress', 'tools', 'todo'] as const) {
       const block = carried.get(kind);
       if (block) this.store.saveInjection(threadId, kind, { digest: digest(block), session, turns: 0 });
       else this.store.ageInjection(threadId, kind);

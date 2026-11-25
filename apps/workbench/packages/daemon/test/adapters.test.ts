@@ -661,7 +661,7 @@ test('a copy can be made for another directory, each agent in its own way', asyn
 
     assert.deepEqual(
       [claude, pi, codex, new TraexAcpAdapter(['traex']), new AgyAdapter(['agy'])].map((a) => [a.id, a.capabilities.forkInto]),
-      [['claude', true], ['pi', true], ['codex', true], ['traex', true], ['agy', false]],
+      [['claude', true], ['pi', true], ['codex', true], ['traex', true], ['agy', true]],
     );
   } finally {
     rmSync(join(tree, '..', '..'), { recursive: true, force: true });
@@ -816,7 +816,7 @@ test('AgyAdapter: lists what agy answers itself plus its skills, and answers tho
   const commands = await adapter.commands(here);
   assert.deepEqual(
     commands.map((c) => [c.name, c.kind]),
-    [['skills', 'command'], ['usage', 'command'], ['make-video', 'skill'], ['review', 'skill']],
+    [['skills', 'command'], ['usage', 'command'], ['make-video', 'skill'], ['review', 'skill'], ['goal', 'command'], ['schedule', 'command']],
     'model and effort are left out: they are set by the hub, per session',
   );
 

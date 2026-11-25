@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, cast
-
 import contextlib
-import json
 import os
 import re
 import sys
-import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 
@@ -19,12 +15,20 @@ from .agy_goal_mode import (
     antigravity_config_home as _antigravity_config_home,
     build_antigravity_hooks_template,
 )
+from .hosts.slash_command_config_io import (
+    merge_managed_json_entry as _merge_managed_json_entry,
+)
+from .hosts.slash_command_surfaces import (
+    install_codex_surface as _install_codex_surface,
+    install_opencode_surface as _install_opencode_surface,
+    install_pi_surface as _install_pi_surface,
+    installed_entry as _installed_entry,
+)
 from .kiro_cli_goal_mode import (
     KIRO_CLI_MCP_CONFIG_SUBPATH as _KIRO_MCP_CONFIG_SUBPATH,
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
     kiro_home as _kiro_home,
 )
-from .opencode_goal_mode import plugin_source, runtime_source
 from .pi_goal_mode import extension_source as pi_extension_source
 from .pi_goal_mode import runtime_source as pi_runtime_source
 from .pi_goal_mode.installation import (
@@ -39,13 +43,10 @@ from .slash_command_files import (
     front_matter as _front_matter,
     install_skill_facade as _install_skill_facade,
     managed_marker as _managed_marker,
-    retire_managed_file as _retire_managed_file,
-    retire_status as _retire_status,
     skill_body as _skill_body,
     skill_facade_content,
     target_status as _target_status,
 )
-from .skill_install_readback import retire_duplicate_managed_skills
 from .slash_commands import build_slash_command_catalog
 from .zcode_goal_mode import zcode_home as _zcode_home
 
@@ -54,6 +55,13 @@ OPENCODE_GOAL_DEPENDENCIES = {
     "@opencode-ai/plugin": ">=1.17.15 <2",
     "opencode-goal-plugin": "0.7.0",
 }
+_OPENCODE_DIRECT_GOAL_PLUGINS = frozenset(
+    {
+        "opencode-goal-plugin",
+        "@heimoshuiyu/opencode-goal-plugin",
+        "@prevalentware/opencode-goal-plugin",
+    }
+)
 
 
 def _openai_skill_metadata(*, command: str, display_name: str, short_description: str) -> str:
@@ -366,14 +374,14 @@ def inspect_skill_facades(
     skills_dir: Path,
     *,
     host_surface: str | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     """Read the canonical facades without changing files or running a host.
 
     Compare the installer's current rendering, allowing its existing cli_bin
     parameter to vary consistently. No independent phrase list defines freshness.
     """
     cli_placeholder = "__LOOPX_FACADE_CLI_PARAMETER__"
-    summaries: dict[str, dict[str, Any]] = {}
+    summaries: dict[str, dict[str, object]] = {}
     for spec in _command_prompt_specs(
         cli_bin=cli_placeholder,
         include_legacy_aliases=False,
@@ -451,7 +459,7 @@ def materialize_loopx_entry_skill(
     execute: bool,
     cli_bin: str = "loopx",
     host_surface: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, str]:
     """Materialize the generated ``$loopx`` entry skill into a host skill root."""
 
     if host_surface not in {
@@ -522,25 +530,8 @@ def materialize_loopx_entry_skill(
     return result
 
 
-def _codex_home(value: str | None = None) -> Path:
-    raw = value or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
-    return Path(raw).expanduser()
-
-
-def _claude_home(value: str | None = None) -> Path:
-    raw = value or os.environ.get("CLAUDE_HOME") or str(Path.home() / ".claude")
-    return Path(raw).expanduser()
-
-
-def _gemini_home(value: str | None = None) -> Path:
-    """Gemini CLI reads user skills from GEMINI_HOME/skills (default ~/.gemini)."""
-    raw = value or os.environ.get("GEMINI_HOME") or str(Path.home() / ".gemini")
-    return Path(raw).expanduser()
-
-
-def _cursor_home(value: str | None = None) -> Path:
-    """Cursor CLI reads MCP servers from CURSOR_HOME/mcp.json (default ~/.cursor)."""
-    raw = value or os.environ.get("CURSOR_HOME") or str(Path.home() / ".cursor")
+def _env_home(env_var: str, default_dir: str, value: str | None = None) -> Path:
+    raw = value or os.environ.get(env_var) or str(Path.home() / default_dir)
     return Path(raw).expanduser()
 
 
@@ -552,201 +543,38 @@ def _opencode_home(value: str | None = None) -> Path:
     return Path(raw).expanduser()
 
 
-def _strip_jsonc_comments(content: str) -> str:
-    output: list[str] = []
-    index = 0
-    in_string = False
-    escaped = False
-    while index < len(content):
-        char = content[index]
-        next_char = content[index + 1] if index + 1 < len(content) else ""
-        if in_string:
-            output.append(char)
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-            output.append(char)
-            index += 1
-            continue
-        if char == "/" and next_char == "/":
-            output.extend((" ", " "))
-            index += 2
-            while index < len(content) and content[index] not in "\r\n":
-                output.append(" ")
-                index += 1
-            continue
-        if char == "/" and next_char == "*":
-            output.extend((" ", " "))
-            index += 2
-            while index < len(content):
-                if index + 1 < len(content) and content[index : index + 2] == "*/":
-                    output.extend((" ", " "))
-                    index += 2
-                    break
-                output.append("\n" if content[index] == "\n" else " ")
-                index += 1
-            continue
-        output.append(char)
-        index += 1
-    return "".join(output)
-
-
-def _strip_jsonc_trailing_commas(content: str) -> str:
-    output: list[str] = []
-    index = 0
-    in_string = False
-    escaped = False
-    while index < len(content):
-        char = content[index]
-        if in_string:
-            output.append(char)
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                in_string = False
-            index += 1
-            continue
-        if char == '"':
-            in_string = True
-            output.append(char)
-            index += 1
-            continue
-        if char == ",":
-            lookahead = index + 1
-            while lookahead < len(content) and content[lookahead].isspace():
-                lookahead += 1
-            if lookahead < len(content) and content[lookahead] in "]}":
-                index += 1
-                continue
-        output.append(char)
-        index += 1
-    return "".join(output)
-
-
-def _opencode_plugin_name(plugin: Any) -> str | None:
-    if isinstance(plugin, str):
-        return plugin
-    if (
-        isinstance(plugin, list)
-        and plugin
-        and isinstance(plugin[0], str)
-    ):
-        return plugin[0]
-    return None
-
-
-def _opencode_direct_goal_plugin_conflicts(root: Path) -> tuple[list[str], list[str]]:
-    conflicts: list[str] = []
-    invalid: list[str] = []
-    goal_plugins = {
-        "opencode-goal-plugin",
-        "@heimoshuiyu/opencode-goal-plugin",
-        "@prevalentware/opencode-goal-plugin",
-    }
-    for name in ("opencode.json", "opencode.jsonc"):
-        path = root / name
-        if not path.exists():
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-            if path.suffix == ".jsonc":
-                content = _strip_jsonc_trailing_commas(_strip_jsonc_comments(content))
-            payload = json.loads(content)
-        except (json.JSONDecodeError, OSError):
-            invalid.append(str(path))
-            continue
-        if not isinstance(payload, dict):
-            invalid.append(str(path))
-            continue
-        plugins = payload.get("plugin") or []
-        if isinstance(plugins, str):
-            plugins = [plugins]
-        if not isinstance(plugins, list):
-            invalid.append(str(path))
-            continue
-        plugin_names = [
-            plugin_name
-            for plugin in plugins
-            if (plugin_name := _opencode_plugin_name(plugin)) is not None
-        ]
-        if any(
-            plugin == package or plugin.startswith(f"{package}@")
-            for plugin in plugin_names
-            for package in goal_plugins
-        ):
-            conflicts.append(str(path))
-    return conflicts, invalid
-
-
-def _target_package_dependencies(
-    path: Path,
-    dependencies: dict[str, str],
-    *,
-    execute: bool,
-) -> str:
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return "blocked_invalid_user_package_json"
-        if not isinstance(payload, dict):
-            return "blocked_invalid_user_package_json"
-        current = payload.get("dependencies")
-        if current is None:
-            current = {}
-        if not isinstance(current, dict):
-            return "blocked_invalid_user_package_json"
-        wanted = {**current, **dependencies}
-        if wanted == current:
-            return "unchanged"
-        payload["dependencies"] = wanted
-        status = "updated" if execute else "would_update"
-    else:
-        payload = {"private": True, "dependencies": dependencies}
-        status = "created" if execute else "would_create"
-    if execute:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(payload, indent=2) + "\n",
-            encoding="utf-8",
-        )
-    return status
+_SURFACE_ALIASES: dict[str, tuple[str, ...]] = {
+    "all": ("codex", "claude-code", "opencode"),
+    "codex": ("codex",),
+    "codex-app": ("codex",),
+    "codex-app-ssh": ("codex",),
+    "codex-ide-plugin": ("codex",),
+    "codex-ide": ("codex",),
+    "codex-cli": ("codex",),
+    "gemini-cli": ("gemini",),
+    "gemini-code": ("gemini",),
+    "cursor-agent": ("cursor",),
+    "cursor-cli": ("cursor",),
+    "zcode": ("zcode",),
+    "z-code": ("zcode",),
+    "agy": ("agy",),
+    "antigravity": ("agy",),
+    "antigravity-cli": ("agy",),
+    "antigravity-app": ("antigravity-app",),
+    "antigravity_app": ("antigravity-app",),
+    "agy-app": ("antigravity-app",),
+    "agy_app": ("antigravity-app",),
+    "kiro": ("kiro-cli",),
+    "kiro-cli": ("kiro-cli",),
+    "kirocli": ("kiro-cli",),
+}
 
 
 def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
     requested = surfaces or ["all"]
     normalized: list[str] = []
     for surface in requested:
-        if surface == "all":
-            candidates = ["codex", "claude-code", "opencode"]
-        elif surface == "codex":
-            candidates = ["codex"]
-        elif surface in {"codex-app", "codex-app-ssh", "codex-ide-plugin", "codex-ide", "codex-cli"}:
-            candidates = ["codex"]
-        elif surface in {"gemini-cli", "gemini-code"}:
-            candidates = ["gemini"]
-        elif surface in {"cursor-agent", "cursor-cli"}:
-            candidates = ["cursor"]
-        elif surface in {"zcode", "z-code"}:
-            candidates = ["zcode"]
-        elif surface in {"agy", "antigravity", "antigravity-cli"}:
-            candidates = ["agy"]
-        elif surface in {"antigravity-app", "antigravity_app", "agy-app", "agy_app"}:
-            candidates = ["antigravity-app"]
-        elif surface in {"kiro", "kiro-cli", "kirocli"}:
-            candidates = ["kiro-cli"]
-        else:
-            candidates = [surface]
-        for candidate in candidates:
+        for candidate in _SURFACE_ALIASES.get(surface, (surface,)):
             if candidate not in normalized:
                 normalized.append(candidate)
     return normalized
@@ -822,34 +650,6 @@ def _kiro_cli_mcp_command() -> tuple[str, str] | None:
     return _mcp_command_for_script(mcp_server_script())
 
 
-def _read_mcp_marker(marker_path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    servers = payload.get("servers")
-    return servers if isinstance(servers, dict) else {}
-
-
-def _write_json_atomic(path: Path, payload: Any) -> None:
-    """Replace `path` in one step, so an interrupted run cannot truncate it."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = path.stat().st_mode if path.exists() else None
-    handle, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(payload, indent=2) + "\n")
-        if mode is not None:
-            os.chmod(tmp, mode & 0o7777)
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
-
-
 def _merge_managed_mcp_json(
     *,
     config_path: Path,
@@ -859,87 +659,37 @@ def _merge_managed_mcp_json(
     uninstall: bool,
     execute: bool,
 ) -> str:
-    """Add or remove the `loopx` entry in a host's `mcpServers` JSON — and nothing else.
+    """Add or remove the ``loopx`` entry in a host's ``mcpServers`` JSON — and nothing else.
 
     The config is a user-owned file that LoopX did not create, so every path
     here fails closed: an unexpected shape is reported instead of normalized, a
     same-name entry LoopX cannot prove it wrote is left alone, and uninstall
     removes only an entry that still matches what LoopX recorded. Sharing the
-    `loopx` name with a user's own server is unlikely but cheap to survive;
-    silently replacing that server, or dropping their `mcpServers` list while
+    ``loopx`` name with a user's own server is unlikely but cheap to survive;
+    silently replacing that server, or dropping their ``mcpServers`` list while
     "merging", is not.
-
-    Provenance lives in a sidecar beside the config, because the config belongs
-    to the host's schema and must not carry an entry the host has to parse.
     """
-    marker_path = config_path.parent / CURSOR_MCP_MARKER_NAME
-    try:
-        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-        raw = json.loads(text) if text.strip() else {}
-    except (OSError, json.JSONDecodeError):
-        return invalid_status
-    if not isinstance(raw, dict):
-        return invalid_status
-    servers = raw.get("mcpServers")
-    if servers is None:
-        servers = {}
-    if not isinstance(servers, dict):
-        # A list-valued or scalar `mcpServers` is not something to overwrite:
-        # either the file follows a shape LoopX does not understand, or it is
-        # damaged. Both are the user's to resolve.
-        return invalid_status
 
-    existing = servers.get(MANAGED_MCP_KEY)
-    recorded = _read_mcp_marker(marker_path).get(MANAGED_MCP_KEY)
-    # Ownership is only demonstrable when the entry still matches what LoopX
-    # recorded writing. A hand-edited entry counts as the user's from then on.
-    loopx_owned = existing is not None and existing == recorded
+    def entry_factory() -> object | None:
+        command = command_factory()
+        return None if command is None else {"command": command[0], "args": [command[1]]}
 
-    # A marker that no longer describes reality is not just useless, it is
-    # dangerous: once the user deletes or edits the entry, the stale marker
-    # would still vouch for a future same-name entry and authorize deleting
-    # something LoopX never wrote. Ownership has to expire the moment it stops
-    # being demonstrable — and only in execute mode, so a dry run stays a
-    # read-only report.
-    if execute and recorded is not None and not loopx_owned:
-        marker_path.unlink(missing_ok=True)
-
-    if uninstall:
-        if existing is None:
-            return "absent"
-        if not loopx_owned:
-            return "skipped_user_owned_mcp_entry"
-        if not execute:
-            return "would_retire"
-        servers.pop(MANAGED_MCP_KEY, None)
-        raw["mcpServers"] = servers
-        _write_json_atomic(config_path, raw)
-        marker_path.unlink(missing_ok=True)
-        return "retired"
-
-    if existing is not None and not loopx_owned:
-        return "skipped_user_owned_mcp_entry"
-    if not execute:
-        # A dry run must not touch anything: provisioning `mcp` would create a
-        # venv on disk during a run whose only job is to report what would happen.
-        return "unchanged" if existing is not None else "would_write"
-    command = command_factory()
-    if command is None:
-        return "skipped_mcp_dependency_missing"
-    entry = {"command": command[0], "args": [command[1]]}
-    if existing == entry:
-        return "unchanged"
-    servers[MANAGED_MCP_KEY] = entry
-    raw["mcpServers"] = servers
-    _write_json_atomic(config_path, raw)
-    _write_json_atomic(
-        marker_path,
-        {
-            "schema_version": marker_schema_version,
-            "servers": {MANAGED_MCP_KEY: entry},
-        },
+    return _merge_managed_json_entry(
+        config_path=config_path,
+        marker_path=config_path.parent / CURSOR_MCP_MARKER_NAME,
+        marker_section="servers",
+        marker_schema_version=marker_schema_version,
+        entry_key=MANAGED_MCP_KEY,
+        container_key="mcpServers",
+        legacy_container_key=None,
+        invalid_status=invalid_status,
+        user_owned_status="skipped_user_owned_mcp_entry",
+        missing_dependency_status="skipped_mcp_dependency_missing",
+        entry_factory=entry_factory,
+        resolve_before_dry_run=False,
+        uninstall=uninstall,
+        execute=execute,
     )
-    return "written"
 
 
 def _merge_managed_hooks_json(
@@ -956,82 +706,30 @@ def _merge_managed_hooks_json(
     resolve_local_executable: bool = True,
 ) -> str:
     """Add or remove the managed ``loopx`` Stop recovery hook in Antigravity ``hooks.json``."""
-    marker_path = config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME
-    try:
-        text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-        raw = json.loads(text) if text.strip() else {}
-    except (OSError, json.JSONDecodeError):
-        return "blocked_invalid_antigravity_hooks_json"
-    if not isinstance(raw, dict):
-        return "blocked_invalid_antigravity_hooks_json"
-    try:
-        marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        marker_payload = {}
-    recorded_hooks = marker_payload.get("hooks") if isinstance(marker_payload, dict) else None
-    if not isinstance(recorded_hooks, dict):
-        recorded_hooks = {}
-    recorded = recorded_hooks.get(MANAGED_MCP_KEY)
-    # Native named hooks live at the top level. Earlier proposals wrote an
-    # ignored `hooks.loopx` wrapper; migrate it only with exact ownership proof.
-    legacy = raw.get("hooks")
-    legacy_entry = legacy.get(MANAGED_MCP_KEY) if isinstance(legacy, dict) else None
-    existing = raw.get(MANAGED_MCP_KEY)
-    legacy_owned = existing is None and legacy_entry is not None and legacy_entry == recorded
-    if legacy_owned:
-        existing = legacy_entry
-    elif existing is None and legacy_entry is not None:
-        return "skipped_user_owned_hooks_entry"
-    loopx_owned = existing is not None and existing == recorded
-    if execute and recorded is not None and not loopx_owned:
-        marker_path.unlink(missing_ok=True)
-
-    if uninstall:
-        if existing is None:
-            return "absent"
-        if not loopx_owned:
-            return "skipped_user_owned_hooks_entry"
-        if not execute:
-            return "would_retire"
-        if legacy_owned:
-            cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
-            if not legacy:
-                raw.pop("hooks")
-        else:
-            raw.pop(MANAGED_MCP_KEY)
-        _write_json_atomic(config_path, raw)
-        marker_path.unlink(missing_ok=True)
-        return "retired"
-
-    if existing is not None and not loopx_owned:
-        return "skipped_user_owned_hooks_entry"
-    entry = build_antigravity_hooks_template(
-        cli_bin=cli_bin,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        runtime_root=runtime_root,
-        conversation_id=conversation_id,
-        registry=registry,
-        resolve_local_executable=resolve_local_executable,
-    )[MANAGED_MCP_KEY]
-    if not execute:
-        return "unchanged" if existing == entry and not legacy_owned else "would_write"
-    if existing == entry and not legacy_owned:
-        return "unchanged"
-    if legacy_owned:
-        cast(dict[str, Any], legacy).pop(MANAGED_MCP_KEY)
-        if not legacy:
-            raw.pop("hooks")
-    raw[MANAGED_MCP_KEY] = entry
-    _write_json_atomic(config_path, raw)
-    _write_json_atomic(
-        marker_path,
-        {
-            "schema_version": ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION,
-            "hooks": {MANAGED_MCP_KEY: entry},
-        },
+    return _merge_managed_json_entry(
+        config_path=config_path,
+        marker_path=config_path.parent / ANTIGRAVITY_HOOKS_MARKER_NAME,
+        marker_section="hooks",
+        marker_schema_version=ANTIGRAVITY_HOOKS_MARKER_SCHEMA_VERSION,
+        entry_key=MANAGED_MCP_KEY,
+        container_key=None,
+        legacy_container_key="hooks",
+        invalid_status="blocked_invalid_antigravity_hooks_json",
+        user_owned_status="skipped_user_owned_hooks_entry",
+        missing_dependency_status="skipped_mcp_dependency_missing",
+        entry_factory=lambda: build_antigravity_hooks_template(
+            cli_bin=cli_bin,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            runtime_root=runtime_root,
+            conversation_id=conversation_id,
+            registry=registry,
+            resolve_local_executable=resolve_local_executable,
+        )[MANAGED_MCP_KEY],
+        resolve_before_dry_run=True,
+        uninstall=uninstall,
+        execute=execute,
     )
-    return "written"
 
 
 def sync_antigravity_hooks(
@@ -1064,6 +762,54 @@ def sync_antigravity_hooks(
     return {"path": str(config_path), "status": status}
 
 
+_MARKDOWN_SUMMARY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("codex_prompt_dir", "codex prompts"),
+    ("codex_skill_dir", "codex skills"),
+    ("claude_skill_dir", "claude skills"),
+    ("gemini_skill_dir", "gemini skills"),
+    ("cursor_skill_dir", "cursor skills"),
+    ("zcode_skill_dir", "zcode skills"),
+    ("kiro_cli_skill_dir", "kiro-cli skills"),
+    ("opencode_command_dir", "opencode commands"),
+    ("opencode_plugin_path", "opencode bridge"),
+    ("pi_extension_path", "pi extension"),
+    ("pi_runtime_path", "pi loop runtime"),
+)
+
+
+def _install_managed_mcp_surface(
+    *,
+    installed: list[dict[str, object]],
+    surface: str,
+    host_surfaces: list[str],
+    mechanism: str,
+    config_path: Path,
+    marker_schema_version: str,
+    invalid_status: str,
+    command_factory: McpCommandFactory,
+    uninstall: bool,
+    execute: bool,
+) -> None:
+    status = _merge_managed_mcp_json(
+        config_path=config_path,
+        marker_schema_version=marker_schema_version,
+        invalid_status=invalid_status,
+        command_factory=command_factory,
+        uninstall=uninstall,
+        execute=execute,
+    )
+    installed.append(
+        _installed_entry(
+            surface=surface,
+            host_surfaces=host_surfaces,
+            mechanism=mechanism,
+            command="loopx",
+            path=config_path,
+            status=status,
+        )
+    )
+
+
 def install_slash_commands(
     *,
     execute: bool,
@@ -1091,7 +837,7 @@ def install_slash_commands(
     pi_project: str | None = None,
     pi_scope: str = "project",
     pi_user_home: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     facade_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
     agy_facade_specs = _command_prompt_specs(
         cli_bin=cli_bin,
@@ -1102,11 +848,11 @@ def install_slash_commands(
     legacy_alias_specs = [spec for spec in facade_specs if "alias_for" in spec]
     specs = facade_specs if include_legacy_aliases else canonical_specs
     effective_surfaces = _normalize_surfaces(surfaces)
-    codex_root = _codex_home(codex_home)
-    claude_root = _claude_home(claude_home)
+    codex_root = _env_home("CODEX_HOME", ".codex", codex_home)
+    claude_root = _env_home("CLAUDE_HOME", ".claude", claude_home)
     opencode_root = _opencode_home(opencode_home)
-    gemini_root = _gemini_home(gemini_home)
-    cursor_root = _cursor_home(cursor_home)
+    gemini_root = _env_home("GEMINI_HOME", ".gemini", gemini_home)
+    cursor_root = _env_home("CURSOR_HOME", ".cursor", cursor_home)
     zcode_root = _zcode_home(zcode_home or zcode_agents_home)
     agy_root = _agy_home(agy_home)
     agy_config_root = _antigravity_config_home(agy_home)
@@ -1114,179 +860,40 @@ def install_slash_commands(
     if pi_scope not in {"project", "user"}:
         raise ValueError("pi_scope must be 'project' or 'user'")
     pi_project_root = Path(pi_project or ".").expanduser().resolve()
-    pi_agent_dir = _pi_agent_dir(pi_user_home)
     pi_extension_root = _pi_extension_root(
-        pi_project_root, scope=pi_scope, agent_dir=pi_agent_dir
+        pi_project_root, scope=pi_scope, agent_dir=_pi_agent_dir(pi_user_home)
     )
-    installed: list[dict[str, Any]] = []
+    installed: list[dict[str, object]] = []
 
     if with_goal_bridge and "opencode" not in effective_surfaces:
         installed.append(
-            {
-                "surface": "opencode",
-                "host_surfaces": ["opencode"],
-                "mechanism": "opencode_goal_bridge",
-                "command": "/goal",
-                "path": None,
-                "status": "blocked_goal_bridge_requires_opencode_surface",
-                "invoke_as": [],
-                "reason": "Select --surface opencode when using --with-goal-bridge.",
-            }
+            _installed_entry(
+                surface="opencode",
+                host_surfaces=["opencode"],
+                mechanism="opencode_goal_bridge",
+                command="/goal",
+                path=None,
+                status="blocked_goal_bridge_requires_opencode_surface",
+                reason="Select --surface opencode when using --with-goal-bridge.",
+            )
         )
 
-    codex_reconciliation = None
-    if "codex" in effective_surfaces:
-        # Codex exposes canonical skills only; retire its older managed facade,
-        # metadata and custom-prompt paths without creating replacements.
-        codex_specs = canonical_specs
-        legacy_specs = legacy_alias_specs
-        for spec in legacy_specs:
-            for path in (codex_root / "skills" / spec["name"] / "SKILL.md",
-                         codex_root / "skills" / spec["name"] / "agents" / "openai.yaml",
-                         codex_root / "prompts" / f"{spec['name']}.md"):
-                status = _retire_managed_file(path, execute=execute)
-                if status:
-                    installed.append({"surface": "codex", "mechanism": "retired_codex_legacy_alias",
-                                      "command": spec["command"], "path": str(path),
-                                      "status": status, "invoke_as": []})
-        prompt_dir = codex_root / "prompts"
-        for spec in codex_specs:
-            prompt_path = prompt_dir / f"{spec['name']}.md"
-            if uninstall:
-                retire_status: str | None = _retire_status(prompt_path, execute=execute)
-                installed.append(
-                    {
-                        "surface": "codex",
-                        "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                        "mechanism": "retired_codex_custom_prompt",
-                        "command": spec["command"],
-                        "path": str(prompt_path),
-                        "status": retire_status,
-                        "invoke_as": [],
-                    }
-                )
-                continue
-            retire_status = _retire_managed_file(prompt_path, execute=execute)
-            if retire_status:
-                installed.append(
-                    {
-                        "surface": "codex",
-                        "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                        "mechanism": "retired_codex_custom_prompt",
-                        "command": spec["command"],
-                        "path": str(prompt_path),
-                        "status": retire_status,
-                        "invoke_as": [],
-                    }
-                )
-
-        skill_dir = codex_root / "skills"
-        for spec in codex_specs:
-            skill_path = skill_dir / str(spec["name"]) / "SKILL.md"
-            metadata_path = skill_path.parent / "agents" / "openai.yaml"
-            if uninstall:
-                skill_status = _retire_status(skill_path, execute=execute)
-                installed.append(
-                    {
-                        "surface": "codex",
-                        "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                        "mechanism": "codex_explicit_skills",
-                        "command": spec["command"],
-                        "path": str(skill_path),
-                        "status": skill_status,
-                        "invoke_as": [f"${spec['name']}", "/skills"],
-                    }
-                )
-                metadata_status = _retire_status(metadata_path, execute=execute)
-                installed.append(
-                    {
-                        "surface": "codex",
-                        "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                        "mechanism": "codex_skill_openai_metadata",
-                        "command": spec["command"],
-                        "path": str(metadata_path),
-                        "status": metadata_status,
-                        "invoke_as": [f"${spec['name']}", "/skills"],
-                    }
-                )
-                continue
-            skill_content = _command_skill_content(spec, surface="codex-skills")
-            skill_status = _target_status(skill_path, skill_content, execute=execute)
-            installed.append(
-                {
-                    "surface": "codex",
-                    "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                    "mechanism": "codex_explicit_skills",
-                    "command": spec["command"],
-                    "path": str(skill_path),
-                    "status": skill_status,
-                    "invoke_as": [f"${spec['name']}", "/skills"],
-                }
-            )
-            if skill_status not in {"skipped_user_file", "preserved_existing_loopx_skill"}:
-                display_name = (
-                    "LoopX" if spec["name"] == "loopx" else "LoopX " + str(spec["name"])[6:].replace("-", " ").title().replace("Pr ", "PR ")
-                )
-                metadata = _openai_skill_metadata(
-                    command=str(spec["command"]),
-                    display_name=display_name,
-                    short_description=str(spec["description"]),
-                )
-                metadata_status = _target_status(metadata_path, metadata, execute=execute)
-                installed.append(
-                    {
-                        "surface": "codex",
-                        "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                        "mechanism": "codex_skill_openai_metadata",
-                        "command": spec["command"],
-                        "path": str(metadata_path),
-                        "status": metadata_status,
-                        "invoke_as": [f"${spec['name']}", "/skills"],
-                    }
-                )
-            elif skill_status in {"skipped_user_file", "preserved_existing_loopx_skill"}:
-                retire_status = _retire_managed_file(metadata_path, execute=execute)
-                if retire_status:
-                    installed.append(
-                        {
-                            "surface": "codex",
-                            "host_surfaces": ["codex-cli", "codex-ide-plugin", "codex-app", "codex-app-ssh"],
-                            "mechanism": "retired_codex_command_metadata",
-                            "command": spec["command"],
-                            "path": str(metadata_path),
-                            "status": retire_status,
-                            "invoke_as": [],
-                        }
-                    )
-        for spec in codex_specs:
-            installed.append(
-                {
-                    "surface": "codex",
-                    "host_surfaces": ["codex-cli"],
-                    "mechanism": "unsupported_native_slash_registry",
-                    "command": spec["command"],
-                    "path": None,
-                    "status": "unsupported_host_surface",
-                    "invoke_as": [],
-                    "reason": (
-                        "Current Codex does not support user-defined native top-level slash "
-                        "commands. Use explicit skills instead."
-                    ),
-                    "native_registry_supported": False,
-                    "failure_policy": "fail_closed_to_explicit_skill",
-                    "fallback": (
-                        f"Use `${spec['name']}` or `/skills` to explicitly invoke the LoopX "
-                        "command skill; for the visible TUI loop, run "
-                        "`loopx codex-cli-bootstrap-message --project .`, paste the setup "
-                        "message, then set `/goal <thin task_body>`."
-                    ),
-                }
-            )
-
-        if not uninstall:
-            codex_reconciliation = retire_duplicate_managed_skills(
-                skill_dir, execute=execute, retire_legacy_aliases=True,
-            )
+    codex_reconciliation = (
+        _install_codex_surface(
+            installed=installed,
+            codex_root=codex_root,
+            canonical_specs=canonical_specs,
+            legacy_alias_specs=legacy_alias_specs,
+            execute=execute,
+            uninstall=uninstall,
+            render_skill_content=lambda spec: _command_skill_content(
+                spec, surface="codex-skills"
+            ),
+            render_openai_metadata=_openai_skill_metadata,
+        )
+        if "codex" in effective_surfaces
+        else None
+    )
 
     if "claude-code" in effective_surfaces:
         _install_skill_facade(
@@ -1363,29 +970,22 @@ def install_slash_commands(
             invoke_prefix="/",
         )
 
-    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_mcp:
-        agy_mcp_path = agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME
-        mcp_status = _merge_managed_mcp_json(
-            config_path=agy_mcp_path,
+    agy_selected = "antigravity-app" in effective_surfaces or "agy" in effective_surfaces
+    if agy_selected and with_agy_mcp:
+        _install_managed_mcp_surface(
+            installed=installed,
+            surface="antigravity-app",
+            host_surfaces=["antigravity-app", "agy"],
+            mechanism="antigravity_mcp_server",
+            config_path=agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME,
             marker_schema_version=ANTIGRAVITY_MCP_MARKER_SCHEMA_VERSION,
             invalid_status="blocked_invalid_antigravity_mcp_json",
             command_factory=lambda: _loopx_mcp_command(),
             uninstall=uninstall,
             execute=execute,
         )
-        installed.append(
-            {
-                "surface": "antigravity-app",
-                "host_surfaces": ["antigravity-app", "agy"],
-                "mechanism": "antigravity_mcp_server",
-                "command": "loopx",
-                "path": str(agy_mcp_path),
-                "status": mcp_status,
-                "invoke_as": [],
-            }
-        )
 
-    if ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces) and with_agy_hooks:
+    if agy_selected and with_agy_hooks:
         agy_hooks_path = agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME
         hooks_status = _merge_managed_hooks_json(
             config_path=agy_hooks_path,
@@ -1399,26 +999,17 @@ def install_slash_commands(
             registry=agy_registry,
         )
         installed.append(
-            {
-                "surface": "antigravity-app",
-                "host_surfaces": ["antigravity-app", "agy"],
-                "mechanism": "antigravity_stop_recovery_hook",
-                "command": "loopx",
-                "path": str(agy_hooks_path),
-                "status": hooks_status,
-                "invoke_as": [],
-            }
+            _installed_entry(
+                surface="antigravity-app",
+                host_surfaces=["antigravity-app", "agy"],
+                mechanism="antigravity_stop_recovery_hook",
+                command="loopx",
+                path=agy_hooks_path,
+                status=hooks_status,
+            )
         )
 
     if "kiro-cli" in effective_surfaces:
-        # Kiro CLI discovers global skills from <KIRO_HOME>/skills/<name>/SKILL.md
-        # (workspace skills live in .kiro/skills), and exposes every discovered
-        # skill as a `/<skill-name>` slash command. KIRO_HOME is the host's own
-        # override for that global root, so the resolver honours it: installing
-        # into ~/.kiro while the active profile lives elsewhere would report a
-        # success the running host never discovers. A same-named user prompt in
-        # .kiro/prompts wins over a skill by Kiro's own resolution order; the
-        # installer never touches the prompt directories.
         _install_skill_facade(
             specs=facade_specs,
             installed=installed,
@@ -1430,34 +1021,20 @@ def install_slash_commands(
             uninstall=uninstall,
             invoke_prefix="/",
         )
-        # Kiro's default agent loads KIRO_HOME/settings/mcp.json, so the same
-        # session that runs `/loopx` gets the typed should_run/claim/complete
-        # tools without switching agents. Only the `loopx` key is touched.
-        kiro_mcp_path = kiro_root / _KIRO_MCP_CONFIG_SUBPATH
-        status = _merge_managed_mcp_json(
-            config_path=kiro_mcp_path,
+        _install_managed_mcp_surface(
+            installed=installed,
+            surface="kiro-cli",
+            host_surfaces=["kiro-cli"],
+            mechanism="kiro_cli_mcp_server",
+            config_path=kiro_root / _KIRO_MCP_CONFIG_SUBPATH,
             marker_schema_version=KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
             invalid_status="blocked_invalid_kiro_cli_mcp_json",
             command_factory=lambda: _kiro_cli_mcp_command(),
             uninstall=uninstall,
             execute=execute,
         )
-        installed.append(
-            {
-                "surface": "kiro-cli",
-                "host_surfaces": ["kiro-cli"],
-                "mechanism": "kiro_cli_mcp_server",
-                "command": "loopx",
-                "path": str(kiro_mcp_path),
-                "status": status,
-                "invoke_as": [],
-            }
-        )
 
     if "cursor" in effective_surfaces:
-        # Cursor reads SKILL.md from CURSOR_HOME/skills (its skill roots also
-        # include .claude/skills and .codex/skills, but relying on another
-        # host's directory would break the moment that host is uninstalled).
         _install_skill_facade(
             specs=facade_specs,
             installed=installed,
@@ -1468,10 +1045,11 @@ def install_slash_commands(
             execute=execute,
             uninstall=uninstall,
         )
-        # `cursor-agent mcp` can list and enable servers but not add them, so
-        # the entry is merged into CURSOR_HOME/mcp.json. Only our own `loopx`
-        # key is touched — a user's other servers are left exactly as they are.
-        status = _merge_managed_mcp_json(
+        _install_managed_mcp_surface(
+            installed=installed,
+            surface="cursor",
+            host_surfaces=["cursor-agent"],
+            mechanism="cursor_mcp_server",
             config_path=cursor_root / "mcp.json",
             marker_schema_version=CURSOR_MCP_MARKER_SCHEMA_VERSION,
             invalid_status="blocked_invalid_cursor_mcp_json",
@@ -1480,20 +1058,8 @@ def install_slash_commands(
             uninstall=uninstall,
             execute=execute,
         )
-        installed.append(
-            {
-                "surface": "cursor",
-                "host_surfaces": ["cursor-agent"],
-                "mechanism": "cursor_mcp_server",
-                "command": "loopx",
-                "path": str(cursor_root / "mcp.json"),
-                "status": status,
-                "invoke_as": [],
-            }
-        )
 
     if "zcode" in effective_surfaces:
-        # ZCode discovers user skills from ZCODE_HOME/skills (default ~/.zcode/skills).
         _install_skill_facade(
             specs=facade_specs,
             installed=installed,
@@ -1507,277 +1073,29 @@ def install_slash_commands(
         )
 
     if "opencode" in effective_surfaces:
-        # OpenCode reads global skills from OPENCODE_CONFIG_DIR/skills. The
-        # static command facade below stays as it is — a command is something
-        # the user types, a skill is something the model can reach for itself.
-        _install_skill_facade(
-            specs=facade_specs,
+        _install_opencode_surface(
             installed=installed,
-            skills_dir=opencode_root / "skills",
-            surface="opencode",
-            host_surfaces=["opencode"],
-            mechanism="opencode_skills",
+            opencode_root=opencode_root,
+            facade_specs=facade_specs,
+            specs=specs,
+            with_goal_bridge=with_goal_bridge,
+            execute=execute,
+            uninstall=uninstall,
+            dependencies=OPENCODE_GOAL_DEPENDENCIES,
+            direct_goal_plugins=_OPENCODE_DIRECT_GOAL_PLUGINS,
+            render_command_body=_opencode_command_body,
+        )
+
+    if "pi" in effective_surfaces:
+        _install_pi_surface(
+            installed=installed,
+            extension_path=_pi_extension_path(pi_extension_root, scope=pi_scope),
+            runtime_path=_pi_runtime_path(pi_extension_root),
+            extension_content=pi_extension_source(),
+            runtime_content=pi_runtime_source(),
             execute=execute,
             uninstall=uninstall,
         )
-        commands_dir = opencode_root / "commands"
-        plugin_path = opencode_root / "plugins" / "loopx-goal.js"
-        runtime_path = opencode_root / "loopx" / "goal-bridge-runtime.mjs"
-        package_path = opencode_root / "package.json"
-        plugin_content = plugin_source()
-        runtime_content = runtime_source()
-
-        bridge_preflight_blocked = False
-        if with_goal_bridge and not uninstall:
-            conflicts, invalid_configs = _opencode_direct_goal_plugin_conflicts(opencode_root)
-            if invalid_configs:
-                installed.append(
-                    {
-                        "surface": "opencode",
-                        "host_surfaces": ["opencode"],
-                        "mechanism": "opencode_goal_bridge",
-                        "command": "/goal",
-                        "path": str(plugin_path),
-                        "status": "blocked_invalid_opencode_config",
-                        "invoke_as": [],
-                        "reason": (
-                            "Repair the listed OpenCode JSON/JSONC config before installing "
-                            "the bridge so direct plugin conflicts can be checked safely."
-                        ),
-                        "invalid_configs": invalid_configs,
-                    }
-                )
-                bridge_preflight_blocked = True
-            elif conflicts:
-                installed.append(
-                    {
-                        "surface": "opencode",
-                        "host_surfaces": ["opencode"],
-                        "mechanism": "opencode_goal_bridge",
-                        "command": "/goal",
-                        "path": str(plugin_path),
-                        "status": "blocked_conflicting_direct_plugin",
-                        "invoke_as": [],
-                        "reason": (
-                            "Remove direct goal-plugin registration from the listed "
-                            "OpenCode config, then rerun installation. The bridge imports "
-                            "the pinned plugin and both must not be loaded independently."
-                        ),
-                        "conflicts": conflicts,
-                    }
-                )
-                bridge_preflight_blocked = True
-            else:
-                user_owned_bridge_paths = [
-                    str(path)
-                    for path, content in (
-                        (plugin_path, plugin_content),
-                        (runtime_path, runtime_content),
-                    )
-                    if _target_status(path, content, execute=False)
-                    == "skipped_user_file"
-                ]
-                if user_owned_bridge_paths:
-                    installed.append(
-                        {
-                            "surface": "opencode",
-                            "host_surfaces": ["opencode"],
-                            "mechanism": "opencode_goal_bridge",
-                            "command": "/goal",
-                            "path": str(plugin_path),
-                            "status": "blocked_user_owned_bridge_file",
-                            "invoke_as": [],
-                            "reason": (
-                                "Move or rename the listed user-owned OpenCode bridge "
-                                "files before installing LoopX so no partial bridge or "
-                                "dependency update is applied."
-                            ),
-                            "conflicts": user_owned_bridge_paths,
-                        }
-                    )
-                    bridge_preflight_blocked = True
-
-            if not bridge_preflight_blocked:
-                package_status = _target_package_dependencies(
-                    package_path,
-                    OPENCODE_GOAL_DEPENDENCIES,
-                    execute=False,
-                )
-                if package_status == "blocked_invalid_user_package_json":
-                    installed.append(
-                        {
-                            "surface": "opencode",
-                            "host_surfaces": ["opencode"],
-                            "mechanism": "opencode_goal_dependencies",
-                            "command": "/goal",
-                            "path": str(package_path),
-                            "status": package_status,
-                            "invoke_as": [],
-                        }
-                    )
-                    bridge_preflight_blocked = True
-
-        if with_goal_bridge and not bridge_preflight_blocked:
-            if uninstall:
-                for mechanism, path in (
-                    ("opencode_goal_bridge", plugin_path),
-                    ("opencode_goal_bridge_runtime", runtime_path),
-                ):
-                    installed.append(
-                        {
-                            "surface": "opencode",
-                            "host_surfaces": ["opencode"],
-                            "mechanism": mechanism,
-                            "command": "/goal",
-                            "path": str(path),
-                            "status": _retire_status(path, execute=execute),
-                            "invoke_as": ["/goal", "loopx_goal_activate"],
-                        }
-                    )
-                installed.append(
-                    {
-                        "surface": "opencode",
-                        "host_surfaces": ["opencode"],
-                        "mechanism": "opencode_goal_dependencies",
-                        "command": "/goal",
-                        "path": str(package_path),
-                        "status": "preserved_shared_dependencies",
-                        "invoke_as": [],
-                    }
-                )
-            else:
-                package_status = _target_package_dependencies(
-                    package_path,
-                    OPENCODE_GOAL_DEPENDENCIES,
-                    execute=execute,
-                )
-                installed.append(
-                    {
-                        "surface": "opencode",
-                        "host_surfaces": ["opencode"],
-                        "mechanism": "opencode_goal_dependencies",
-                        "command": "/goal",
-                        "path": str(package_path),
-                        "status": package_status,
-                        "invoke_as": [],
-                    }
-                )
-                if package_status == "blocked_invalid_user_package_json":
-                    bridge_preflight_blocked = True
-                else:
-                    for mechanism, path, content in (
-                        ("opencode_goal_bridge_runtime", runtime_path, runtime_content),
-                        ("opencode_goal_bridge", plugin_path, plugin_content),
-                    ):
-                        installed.append(
-                            {
-                                "surface": "opencode",
-                                "host_surfaces": ["opencode"],
-                                "mechanism": mechanism,
-                                "command": "/goal",
-                                "path": str(path),
-                                "status": _target_status(path, content, execute=execute),
-                                "invoke_as": ["/goal", "loopx_goal_activate"],
-                            }
-                        )
-
-        if not bridge_preflight_blocked:
-            for spec in specs:
-                path = commands_dir / f"{spec['name']}.md"
-                status = (
-                    _retire_status(path, execute=execute)
-                    if uninstall
-                    else _target_status(
-                        path,
-                        _opencode_command_body(spec),
-                        execute=execute,
-                    )
-                )
-                installed.append(
-                    {
-                        "surface": "opencode",
-                        "host_surfaces": ["opencode"],
-                        "mechanism": "opencode_commands",
-                        "command": spec["command"],
-                        "path": str(path),
-                        "status": status,
-                        "invoke_as": [str(spec["command"])],
-                    }
-                )
-
-    if "pi" in effective_surfaces:
-        extension_path = _pi_extension_path(pi_extension_root, scope=pi_scope)
-        runtime_path = _pi_runtime_path(pi_extension_root)
-        extension_content = pi_extension_source()
-        runtime_content = pi_runtime_source()
-        if uninstall:
-            # Uninstall stays per-file like every other surface: LoopX-managed
-            # files are removed and a user-owned file is reported as skipped.
-            # Aborting the whole scope instead would leave the managed adapter
-            # loaded and remove the only supported way to uninstall it.
-            for mechanism, path in (
-                ("pi_goal_extension", extension_path),
-                ("pi_goal_extension_runtime", runtime_path),
-            ):
-                installed.append(
-                    {
-                        "surface": "pi",
-                        "host_surfaces": ["pi"],
-                        "mechanism": mechanism,
-                        "command": "/loopx",
-                        "path": str(path),
-                        "status": _retire_status(path, execute=execute),
-                        "invoke_as": ["/loopx", "loopx_goal_activate"],
-                    }
-                )
-        else:
-            # The adapter and its loop runtime are one atomic delivery unit:
-            # preflight both targets and fail closed with zero writes when any
-            # target is a user-owned file, so a newly created managed adapter
-            # can never import an unmanaged runtime that may lack the exports
-            # it needs.
-            user_owned_pi_paths = [
-                str(path)
-                for path, content in (
-                    (extension_path, extension_content),
-                    (runtime_path, runtime_content),
-                )
-                if _target_status(path, content, execute=False) == "skipped_user_file"
-            ]
-            if user_owned_pi_paths:
-                installed.append(
-                    {
-                        "surface": "pi",
-                        "host_surfaces": ["pi"],
-                        "mechanism": "pi_goal_extension",
-                        "command": "/loopx",
-                        "path": str(extension_path),
-                        "status": "blocked_user_owned_pi_file",
-                        "invoke_as": ["/loopx", "loopx_goal_activate"],
-                        "reason": (
-                            "Move or rename the listed user-owned Pi files before "
-                            "installing LoopX so the adapter and its loop runtime "
-                            "are installed as one atomic unit; no Pi file was written."
-                        ),
-                        "conflicts": user_owned_pi_paths,
-                    }
-                )
-            else:
-                for mechanism, path, content in (
-                    ("pi_goal_extension", extension_path, extension_content),
-                    ("pi_goal_extension_runtime", runtime_path, runtime_content),
-                ):
-                    installed.append(
-                        {
-                            "surface": "pi",
-                            "host_surfaces": ["pi"],
-                            "mechanism": mechanism,
-                            "command": "/loopx",
-                            "path": str(path),
-                            "status": _target_status(path, content, execute=execute),
-                            "invoke_as": ["/loopx", "loopx_goal_activate"],
-                        }
-                    )
 
     status_counts: dict[str, int] = {}
     for item in installed:
@@ -1820,14 +1138,12 @@ def install_slash_commands(
             ),
             "antigravity_mcp_path": (
                 str(agy_config_root / ANTIGRAVITY_MCP_CONFIG_FILENAME)
-                if with_agy_mcp
-                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                if with_agy_mcp and agy_selected
                 else None
             ),
             "antigravity_hooks_path": (
                 str(agy_config_root / ANTIGRAVITY_HOOKS_CONFIG_FILENAME)
-                if with_agy_hooks
-                and ("antigravity-app" in effective_surfaces or "agy" in effective_surfaces)
+                if with_agy_hooks and agy_selected
                 else None
             ),
             "kiro_cli_skill_dir": str(kiro_root / "skills") if "kiro-cli" in effective_surfaces else None,
@@ -1868,63 +1184,41 @@ def install_slash_commands(
     }
 
 
-def render_slash_command_install_markdown(payload: dict[str, Any]) -> str:
+def render_slash_command_install_markdown(payload: Mapping[str, object]) -> str:
     operation = str(payload.get("operation") or "install")
+    raw_surfaces = payload.get("effective_surfaces")
+    surfaces = [str(item) for item in raw_surfaces] if isinstance(raw_surfaces, list) else []
+    raw_summary = payload.get("summary")
+    summary: Mapping[str, object] = raw_summary if isinstance(raw_summary, Mapping) else {}
     lines = [
         "# LoopX Slash Command Uninstall" if operation == "uninstall" else "# LoopX Slash Command Install",
         "",
         f"- operation: `{operation}`",
         f"- execute: `{payload.get('execute')}`",
-        f"- surfaces: `{','.join(payload.get('effective_surfaces') or [])}`",
-        f"- skip policy: `{payload.get('summary', {}).get('skip_policy')}`",
+        f"- surfaces: `{','.join(surfaces)}`",
+        f"- skip policy: `{summary.get('skip_policy')}`",
     ]
-    codex_prompt_dir = payload.get("summary", {}).get("codex_prompt_dir")
-    codex_skill_dir = payload.get("summary", {}).get("codex_skill_dir")
-    claude_skill_dir = payload.get("summary", {}).get("claude_skill_dir")
-    gemini_skill_dir = payload.get("summary", {}).get("gemini_skill_dir")
-    cursor_skill_dir = payload.get("summary", {}).get("cursor_skill_dir")
-    zcode_skill_dir = payload.get("summary", {}).get("zcode_skill_dir")
-    kiro_cli_skill_dir = payload.get("summary", {}).get("kiro_cli_skill_dir")
-    opencode_command_dir = payload.get("summary", {}).get("opencode_command_dir")
-    opencode_plugin_path = payload.get("summary", {}).get("opencode_plugin_path")
-    if codex_prompt_dir:
-        lines.append(f"- codex prompts: `{codex_prompt_dir}`")
-    if codex_skill_dir:
-        lines.append(f"- codex skills: `{codex_skill_dir}`")
-    if claude_skill_dir:
-        lines.append(f"- claude skills: `{claude_skill_dir}`")
-    if gemini_skill_dir:
-        lines.append(f"- gemini skills: `{gemini_skill_dir}`")
-    if cursor_skill_dir:
-        lines.append(f"- cursor skills: `{cursor_skill_dir}`")
-    if zcode_skill_dir:
-        lines.append(f"- zcode skills: `{zcode_skill_dir}`")
-    if kiro_cli_skill_dir:
-        lines.append(f"- kiro-cli skills: `{kiro_cli_skill_dir}`")
-    if opencode_command_dir:
-        lines.append(f"- opencode commands: `{opencode_command_dir}`")
-    if opencode_plugin_path:
-        lines.append(f"- opencode bridge: `{opencode_plugin_path}`")
-    pi_extension_path = payload.get("summary", {}).get("pi_extension_path")
-    if pi_extension_path:
-        lines.append(f"- pi extension: `{pi_extension_path}`")
-    pi_runtime_path = payload.get("summary", {}).get("pi_runtime_path")
-    if pi_runtime_path:
-        lines.append(f"- pi loop runtime: `{pi_runtime_path}`")
-    counts = payload.get("summary", {}).get("status_counts") or {}
-    if isinstance(counts, dict) and counts:
+    for key, label in _MARKDOWN_SUMMARY_FIELDS:
+        value = summary.get(key)
+        if value:
+            lines.append(f"- {label}: `{value}`")
+    counts = summary.get("status_counts")
+    if isinstance(counts, Mapping) and counts:
         count_text = ", ".join(f"{key}={value}" for key, value in sorted(counts.items()))
         lines.append(f"- statuses: `{count_text}`")
+    raw_installed = payload.get("installed")
+    installed_rows = raw_installed if isinstance(raw_installed, list) else []
     skipped = [
-        item for item in payload.get("installed") or []
-        if isinstance(item, dict) and item.get("status") == "skipped_user_file"
+        item for item in installed_rows
+        if isinstance(item, Mapping) and item.get("status") == "skipped_user_file"
     ]
     if skipped:
         lines.append("")
         lines.append("Skipped user-owned files:")
         for item in skipped:
             lines.append(f"- `{item.get('command')}` at `{item.get('path')}`")
-    notes = [note for note in payload.get("notes") or [] if isinstance(note, str)]
+    raw_notes = payload.get("notes")
+    notes = [note for note in raw_notes if isinstance(note, str)] if isinstance(raw_notes, list) else []
     if notes:
         lines.append("")
         lines.append("Notes:")

@@ -9,7 +9,9 @@ import { t } from '../src/i18n/index.js';
 
 (globalThis as unknown as { React: typeof React }).React = React;
 registerHooks({ load(url, context, next) {
-  return url.endsWith('.svg') ? { format: 'module', source: 'export default "icon.svg"', shortCircuit: true } : next(url, context);
+  if (url.endsWith('.svg')) return { format: 'module', source: 'export default "icon.svg"', shortCircuit: true };
+  if (url.endsWith('.css')) return { format: 'module', source: 'export default ""', shortCircuit: true };
+  return next(url, context);
 } });
 const { Sidebar } = await import('../src/components/Sidebar.js');
 

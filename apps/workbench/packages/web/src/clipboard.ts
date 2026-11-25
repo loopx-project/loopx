@@ -41,6 +41,43 @@ export function quoteMarkdown(text: string): string {
     .join('\n');
 }
 
+/** A readable, portable pointer: the hub id is not an agent's native session id. */
+export function conversationPointer(thread: { id: string; title: string }, turnId?: string, machineId?: string): string {
+  const query = [turnId ? `turn=${encodeURIComponent(turnId)}` : '', machineId ? `machine=${encodeURIComponent(machineId)}` : ''].filter(Boolean).join('&');
+  return `LoopX: ${thread.title.replace(/\s+/g, ' ').trim()}\nloopx://thread/${encodeURIComponent(thread.id)}${query ? `?${query}` : ''}`;
+}
+
+export interface PastedPointer { threadId: string; title: string; machineId?: string; turnId?: string; quote?: string }
+
+/** The title is display-only; the receiving hub resolves the id and supplies canonical metadata. */
+export function pastedPointer(pasted: string): PastedPointer | null {
+  const match = /^(?:LoopX|Calli): ([^\n]*)\n(?:loopx|calli):\/\/thread\/([^\s?#]+)(?:\?([^\s#]+))?(?:\n\n([\s\S]+))?$/.exec(pasted.replace(/\r\n?/g, '\n').trim());
+  if (!match) return null;
+  try {
+    const valid = (value: string) => Boolean(value && value.length <= 500 && !/[\s\x00-\x1f]/.test(value));
+    const threadId = decodeURIComponent(match[2]);
+    if (!valid(threadId)) return null;
+    const query = new Map<string, string>();
+    for (const part of match[3]?.split('&') ?? []) {
+      const [key, encoded, extra] = part.split('=');
+      if (!['turn', 'machine'].includes(key) || encoded === undefined || extra !== undefined || query.has(key)) return null;
+      const value = decodeURIComponent(encoded);
+      if (!valid(value)) return null;
+      query.set(key, value);
+    }
+    const turnId = query.get('turn');
+    const machineId = query.get('machine');
+    const lines = match[4]?.split('\n');
+    if (lines && (!turnId || !lines.every(line => line.startsWith('>')))) return null;
+    return { threadId, title: match[1], ...(turnId ? { turnId } : {}), ...(machineId ? { machineId } : {}),
+      ...(lines ? { quote: lines.map(line => line.replace(/^>\s?/, '')).join('\n').trim() } : {}) };
+  } catch { return null; }
+}
+
+export function copiedQuoteText(quote: CopiedQuote, title: string): string {
+  return quote.threadId && quote.turnId ? `${conversationPointer({ id: quote.threadId, title }, quote.turnId, quote.machineId)}\n\n${quoteMarkdown(quote.text)}` : quoteMarkdown(quote.text);
+}
+
 const COPIED_QUOTE = 'calli.copiedQuote';
 
 /** An ordinary copy must not inherit provenance from a previous copy-as-quote action. */
@@ -49,7 +86,7 @@ function forgetCopiedQuote(): void {
 }
 
 /** A message copied as a quote, remembered so pasting it into a box brings back a quote, not plain lines. */
-export interface CopiedQuote { text: string; threadId?: string; turnId?: string; host?: string | null }
+export interface CopiedQuote { text: string; threadId?: string; turnId?: string; host?: string | null; machineId?: string }
 
 export function rememberCopiedQuote(quote: CopiedQuote): void {
   try { localStorage.setItem(COPIED_QUOTE, JSON.stringify(quote)); } catch { /* storage off: paste stays plain */ }

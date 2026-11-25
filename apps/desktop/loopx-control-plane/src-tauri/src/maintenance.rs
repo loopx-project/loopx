@@ -906,10 +906,8 @@ async fn perform(
         .await?;
         #[cfg(target_os = "macos")]
         {
-            let version = update.version.clone();
-            let channel = channel.to_owned();
             tauri::async_runtime::spawn_blocking(move || {
-                crate::macos_update::qualify_candidate(&channel, &version, &bytes)?;
+                crate::macos_update::qualify_candidate(&bytes)?;
                 Ok::<_, String>(bytes)
             })
             .await

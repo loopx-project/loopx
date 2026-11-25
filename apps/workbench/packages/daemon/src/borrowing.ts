@@ -139,6 +139,8 @@ export class BorrowingService {
     switch (input.op) {
       case 'preview.note': return this.manager.previewNotes.read(owner, input.id, true);
       case 'references.read': return this.manager.references.read(owner, input);
+      case 'history':
+      case 'handover': return this.manager.references.command(owner, input);
       case 'signals.show': {
         if (owner === 'operator') throw new HttpError(403, 'signals require thread-scoped credentials');
         return this.scopedSignal(owner, signalArchiveKey(input.key));

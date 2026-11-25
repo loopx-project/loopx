@@ -40,9 +40,11 @@ from loopx.capabilities.explore.result_log import build_explore_node_event, buil
 goal='synthetic-record-search'
 events=[build_explore_node_event(goal_id=goal,node_id='question',title='Synthetic candidate comparison',recorded_at='2026-01-01T00:00:00Z')]
 for index in range(75):
+    recorded_at={68:'2026-03-03T01:15+0200',69:'2026-03-03T01:20:30+0200',70:'2026-03-02T10:15',71:'2026-03-02T10:15Z',72:'2026-03-03T01:05+02:00',73:'2026-02-30T16:00:00Z',74:'2026-03-03T01:00:00+02:00'}.get(index,'2026-01-01T01:00:00Z')
+    refs={68:['synthetic:compact-minute'],69:['synthetic:compact-second'],70:['synthetic:unzoned'],71:['synthetic:minute-z'],72:['synthetic:minute-offset'],73:['synthetic:invalid-calendar'],74:['synthetic:valid-offset']}.get(index,[])
     events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id=f'finding-{index}',
         title=f'Candidate {index} — '+('研究问题与完整原始结论 / original question and retained evidence. '*3)+'END OF ORIGINAL TITLE',summary='Original observation; complete costs remain unknown.',
-        status='tentative',recorded_at='2026-01-01T01:00:00Z'))
+        status='tentative',recorded_at=recorded_at,evidence_refs=refs))
 measurement=dict(metric='Synthetic score', unit='points', higher_is_better=True, comparison_scope='synthetic:fixed', input_revision='input:v1', evaluation_ref='method:v1', candidate_ref='candidate:amber', evidence_ref='result:amber')
 events.append(build_explore_finding_event(goal_id=goal,node_id='question',finding_id='retained-finding',
     title='Earlier negative observation',summary='质量下降 — original negative evidence for candidate amber.',
@@ -141,11 +143,64 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(all.goal_id, "synthetic-record-search");
       assert.equal(all.records.length, 79, "Download includes matches beyond both HTTP and display paging");
       assert.deepEqual(all.coverage, {loaded_records: 79, exported_records: 79, history_complete: true, refresh_failed: false});
+      // A date slice must find originals beyond the 50-row display page and
+      // use the same selection in both downloads, without losing the read scope.
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-01-03");
+      const dateSlice = await download();
+      assert.equal(dateSlice.records.length, 2);
+      assert.deepEqual(dateSlice.filters, {query: "", status: "", from: "2026-01-02", to: "2026-01-03"});
+      assert.equal(dateSlice.coverage.loaded_records, 79);
+      assert(dateSlice.records.every(row => row.result_id === "retained-finding"));
+      const dateReport = await report();
+      assert.match(dateReport, /Recorded dates.*UTC/);
+      assert.equal((dateReport.match(/^## \d+\./gm) ?? []).length, 2);
+      for (const width of [1440, 390]) {
+        await page.setViewportSize({width, height: 900});
+        await results.evaluate(element => element.scrollIntoView({block: "start"}));
+        assert(await results.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+        await page.screenshot({path: resolve(outputDir, `research-record-dates-${width}.png`), animations: "disabled"});
+      }
+      await page.reload();
+      await results.getByLabel("Recorded from (UTC)").waitFor();
+      assert.equal(await results.getByLabel("Recorded from (UTC)").inputValue(), "2026-01-02");
+      assert.equal((await download()).records.length, 2);
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-04");
+      await results.getByRole("alert").getByText("The start date must not be after the end date.").waitFor();
+      assert(await downloadButton.isDisabled());
+      await results.getByRole("button", {name: "Clear filters", exact: true}).click();
+      await page.setViewportSize({width: 1440, height: 900});
+      // Validate original calendar fields before converting offsets: February
+      // 30 must not be silently read as March 2 in the drawer or either export.
+      await results.getByLabel("Recorded from (UTC)").fill("2026-03-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-03-02");
+      await results.getByRole("status", {name: /^5 matches in 79 loaded records/}).waitFor();
+      const strictDates = await download();
+      assert.equal(strictDates.records.length, 5);
+      assert.deepEqual(strictDates.records.map(row => row.recorded_at).sort(), ["2026-03-02T10:15Z", "2026-03-03T01:00:00+02:00", "2026-03-03T01:05+02:00", "2026-03-03T01:15+0200", "2026-03-03T01:20:30+0200"]);
+      assert.deepEqual(strictDates.records.flatMap(row => row.evidence_refs).sort(), ["synthetic:compact-minute", "synthetic:compact-second", "synthetic:minute-offset", "synthetic:minute-z", "synthetic:valid-offset"]);
+      const strictReport = await report();
+      assert.equal((strictReport.match(/^## \d+\./gm) ?? []).length, 5);
+      assert.match(strictReport, /synthetic:valid-offset/);
+      assert.match(strictReport, /synthetic:compact-minute/);
+      assert.match(strictReport, /synthetic:compact-second/);
+      assert.match(strictReport, /synthetic:minute-z/);
+      assert.match(strictReport, /synthetic:minute-offset/);
+      assert.doesNotMatch(strictReport, /synthetic:invalid-calendar|synthetic:unzoned|2026-02-30/);
+      await results.getByRole("button", {name: "Clear filters", exact: true}).click();
+      const unfilteredDates = await download();
+      assert(unfilteredDates.records.some(row => row.recorded_at === "2026-02-30T16:00:00Z"));
+      assert(unfilteredDates.records.some(row => row.recorded_at === "2026-03-02T10:15"));
       const fullReport = await report();
       assert.equal((fullReport.match(/^## \d+\./gm) ?? []).length, 79);
       assert.match(fullReport, /\*\*Value:\*\* Unknown/);
       assert.match(fullReport, /\*\*Value:\*\* 0/);
       assert.match(fullReport, /candidate:amber-v3/);
+      assert.match(fullReport.replaceAll("\\", ""), /2026-02-30T16:00:00Z/);
+      assert.match(fullReport, /synthetic:invalid-calendar/);
+      assert.match(fullReport, /synthetic:unzoned/);
+      await results.getByLabel("Recorded from (UTC)").fill("2026-01-02");
+      await results.getByLabel("Recorded through (UTC)").fill("2026-01-03");
       await search.fill("AMBER-V1 run:old");
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       assert.equal(await results.locator("li").count(), 1, "Search reaches beyond both the display limit and HTTP page boundary");
@@ -166,7 +221,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       await results.getByRole("status", {name: /^1 matches in 79 loaded records/}).waitFor();
       await results.locator(".research-history-records > li > details > summary").click();
       const selected = await download();
-      assert.deepEqual(selected.filters, {query: "AMBER-V1 run:old", status: "refuted"});
+      assert.deepEqual(selected.filters, {query: "AMBER-V1 run:old", status: "refuted", from: "2026-01-02", to: "2026-01-03"});
       assert.equal(selected.records.length, 1);
       assert.equal(selected.records[0].summary, "质量下降 — original negative evidence for candidate amber.");
       assert.deepEqual(selected.records[0].evidence_refs, ["candidate:amber-v1"]);
@@ -253,6 +308,7 @@ Path(sys.argv[2]).write_text(json.dumps({'goal_id':other,'display_name':'Other s
       assert.equal(await results.locator("li").count(), 1);
       const stale = await download();
       assert.equal(stale.coverage.refresh_failed, true);
+      assert.deepEqual(stale.filters, selected.filters);
       assert.equal(await history.locator(".research-phase").count(), 3, "A failed refresh retains the last complete time range");
       assert.match(await report(), /Failed; previously read records retained/);
       await comparisonSummary.click();
