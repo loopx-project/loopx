@@ -418,6 +418,16 @@ BINARY_MEDIA_SUFFIXES = {
     # databases
     ".db", ".sqlite", ".sqlite3", ".mdb",
 }
+# Operating systems write these files beside real content, and a normal
+# checkout keeps them untracked (often gitignored). They are local metadata, not
+# publishable input, so an untracked one is skipped instead of decoded as UTF-8
+# and failing an otherwise clean directory scan. The name never decides alone:
+# a tracked file with the same name is repository content and stays scanned.
+LOCAL_METADATA_FILE_NAMES = {
+    ".DS_Store",  # macOS Finder
+    "Thumbs.db", "ehthumbs.db", "desktop.ini",  # Windows Explorer
+    ".directory",  # KDE
+}
 DEFAULT_SKIP_DIRS = {
     ".git",
     ".goal-harness",
@@ -1189,6 +1199,19 @@ def _is_binary_media_path(path: Path) -> bool:
     return path.suffix.lower() in BINARY_MEDIA_SUFFIXES
 
 
+def _is_local_metadata_name(name: str) -> bool:
+    """Recognize an OS-written metadata file that is not publishable input.
+
+    AppleDouble carries the real name after a ``._`` prefix (``._README.md``),
+    so the prefix also matches. Callers apply this to untracked files only: a
+    tracked file with the same name is repository content.
+    """
+
+    return name in LOCAL_METADATA_FILE_NAMES or (
+        name.startswith("._") and len(name) > len("._")
+    )
+
+
 def _resolve_scannable_file(path: Path) -> Path | None:
     # An alias name never decides eligibility: a text target stays readable
     # behind a .png alias, and a binary target stays unreadable behind a .md
@@ -1324,6 +1347,7 @@ def iter_scan_files(
         if unavailable_git_probes is not None:
             unavailable_git_probes.append(str(scan_root))
         tracked_files = []
+    tracked_paths = set(tracked_files)
     # The root is probed even when dependency pruning skips the walk, so an
     # unreadable scan target cannot pass because of how it was named.
     try:
@@ -1350,8 +1374,15 @@ def iter_scan_files(
             and not os.path.isfile(current_dir / name / "pyvenv.cfg")
         ]
         for file_name in file_names:
-            if resolved := _resolve_scannable_file(current_dir / file_name):
-                files.append(resolved)
+            resolved = _resolve_scannable_file(current_dir / file_name)
+            if resolved is None:
+                continue
+            # A normal checkout keeps OS metadata such as .DS_Store untracked;
+            # Git ownership is what separates checkout noise from a file this
+            # repository would actually publish.
+            if _is_local_metadata_name(resolved.name) and resolved not in tracked_paths:
+                continue
+            files.append(resolved)
     return sorted(set(files + tracked_files))
 
 

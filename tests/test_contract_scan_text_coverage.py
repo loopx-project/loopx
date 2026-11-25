@@ -13,9 +13,12 @@ the scanner's own repository pass stays clean.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-from loopx.contract import scan_public_boundary
+import pytest
+
+from loopx.contract import iter_scan_files, scan_public_boundary
 
 
 def _synthetic_token() -> str:
@@ -77,3 +80,57 @@ def test_undecodable_file_with_an_unknown_suffix_stays_unexamined(tmp_path: Path
 
     assert payload["ok"] is False
     assert payload["unreadable_files"] == ["payload.unknown: invalid UTF-8"]
+
+
+@pytest.mark.parametrize("metadata_name", [".DS_Store", "._README.md"])
+def test_untracked_local_metadata_does_not_block_a_clean_directory(
+    tmp_path: Path, metadata_name: str
+) -> None:
+    """A normal checkout keeps this OS metadata untracked and gitignored."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text(".DS_Store\n._*\n", encoding="utf-8")
+    (repo / "README.md").write_text("# clean\n", encoding="utf-8")
+    # Finder and AppleDouble records are binary; this payload is not UTF-8.
+    (repo / metadata_name).write_bytes(b"\x00\x00\x00\x01Bud1\xff\xfe\xc3\x28")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", ".gitignore", "README.md"],
+        check=True,
+        capture_output=True,
+    )
+    ignored = subprocess.run(
+        ["git", "-C", str(repo), "check-ignore", "-q", metadata_name],
+        capture_output=True,
+    )
+    assert ignored.returncode == 0, "the fixture metadata must be gitignored"
+
+    assert iter_scan_files(repo) == sorted([repo / ".gitignore", repo / "README.md"])
+    payload = scan_public_boundary([repo])
+
+    assert payload["ok"] is True
+    assert payload["scanned_files"] == 2
+    assert payload["unreadable_files"] == []
+
+
+def test_tracked_local_metadata_is_still_scanned(tmp_path: Path) -> None:
+    """Git ownership is what separates checkout noise from publishable input."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "README.md").write_text("# clean\n", encoding="utf-8")
+    (repo / ".DS_Store").write_bytes(b"\x00\x00\x00\x01Bud1\xff\xfe\xc3\x28")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-f", ".DS_Store", "README.md"],
+        check=True,
+        capture_output=True,
+    )
+
+    assert iter_scan_files(repo) == sorted([repo / ".DS_Store", repo / "README.md"])
+    payload = scan_public_boundary([repo])
+
+    assert payload["ok"] is False
+    assert payload["scanned_files"] == 2
+    assert payload["unreadable_files"] == [".DS_Store: invalid UTF-8"]
