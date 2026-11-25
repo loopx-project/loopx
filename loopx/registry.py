@@ -557,7 +557,10 @@ def render_registry_markdown(payload: dict[str, Any]) -> str:
     ]
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
-        return "\n".join(lines)
+        # Selection may fail after a complete inspection. Keep its global
+        # counts and diagnostics; only source-load failures lack that evidence.
+        if "goal_count" not in payload:
+            return "\n".join(lines)
 
     selection = payload.get("selection")
     if isinstance(selection, dict):

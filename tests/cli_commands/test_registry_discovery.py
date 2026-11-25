@@ -158,6 +158,38 @@ def test_unavailable_registry_keeps_original_error(tmp_path):
     assert "selection" not in payload
 
 
+def test_unknown_goal_keeps_global_diagnostics_in_both_formats(registry_path):
+    raw = json.loads(registry_path.read_text())
+    raw["goals"][0].pop("state_file")
+    registry_path.write_text(json.dumps(raw))
+    _, full = read_registry(registry_path)
+    result, selected = read_registry(registry_path, "--goal-id", "unknown-goal")
+    assert result.returncode == 1 and selected["ok"] is False
+    assert selected["error"] == "Goal is not present in this registry: unknown-goal"
+    assert selected["goals"] == []
+    for field in ("problems", "problem_diagnostics", "status_counts", "goal_count"):
+        assert selected[field] == full[field]
+    result, markdown = read_registry(
+        registry_path, "--goal-id", "unknown-goal", markdown=True
+    )
+    assert result.returncode == 1
+    assert selected["error"] in markdown
+    assert "- goals: `31`" in markdown
+    assert "missing state_file" in markdown
+
+
+def test_unreadable_registry_selection_keeps_short_original_error(tmp_path):
+    path = tmp_path / "registry.json"
+    _, original = read_registry(path)
+    result, selected = read_registry(path, "--goal-id", "unknown-goal")
+    assert result.returncode == 1 and selected == original
+    result, markdown = read_registry(path, "--goal-id", "unknown-goal", markdown=True)
+    assert result.returncode == 1
+    assert original["error"] in markdown
+    assert "Goal is not present" not in markdown
+    assert "- goals:" not in markdown and "## Problems" not in markdown
+
+
 def test_global_registry_selection_does_not_follow_source_and_keeps_duplicate_diagnostics(
     registry_path,
 ):
