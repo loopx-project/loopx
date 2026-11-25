@@ -600,11 +600,15 @@ Self-service:
    mkdir -p ~/.local/bin &&
    lock=~/.local/bin/.node-loopx-repair &&
    if mkdir "$lock" 2>/dev/null; then
+     echo "$$" > "$lock/pid" &&
      trap 'rm -rf "$lock"' EXIT
    else
-     if [ "$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || date +%s) ))" -gt 900 ] &&
+     holder_pid="$(cat "$lock/pid" 2>/dev/null)" || holder_pid=
+     case "$holder_pid" in ''|*[!0-9]*) holder_pid= ;; esac
+     if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null &&
         rm -rf "$lock" &&
         mkdir "$lock" 2>/dev/null; then
+       echo "$$" > "$lock/pid" &&
        trap 'rm -rf "$lock"' EXIT
      else
        echo "Another repair is in progress; nothing was changed." &&
@@ -677,17 +681,19 @@ Self-service:
    branch creates the link; its `ln` failure means another window's repair
    already created and qualified one, and that entry is left in place.
 
-   The whole repair runs inside one lock: the block takes
-   `~/.local/bin/.node-loopx-repair` with an exclusive `mkdir` before either
-   branch and releases it on exit, so a second window stops with
-   "Another repair is in progress; nothing was changed." instead of
-   interleaving its move, install, final check or rollback between this
-   window's steps. Rerun the block after the other window finishes. A repair
-   killed outright can leave the lock behind; after 15 minutes an attempt
-   removes and retakes it, and if the message persists while no repair is
-   running, remove that directory by hand. The inode checks inside the two
-   branches then guard the only overlap the lock cannot close — a suspended
-   window whose stale lock was retaken by another one.
+  The whole repair runs inside one lock: the block takes
+  `~/.local/bin/.node-loopx-repair` with an exclusive `mkdir` before either
+  branch, records the shell's process id inside it, and releases it on exit,
+  so a second window stops with "Another repair is in progress; nothing was
+  changed." instead of interleaving its move, install, final check or
+  rollback between this window's steps. Rerun the block after the other
+  window finishes. A repair killed outright can leave the lock behind; an
+  attempt retakes it only after checking that the recorded process id no
+  longer exists — a window that is merely suspended is still alive and
+  keeps holding the lock. If the message persists while no repair is
+  running, remove that directory by hand. The inode checks inside the two
+  branches then guard the one overlap this cannot close: the lock removed
+  by hand while a suspended window still holds the entry.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
