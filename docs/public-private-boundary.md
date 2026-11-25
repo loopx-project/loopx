@@ -260,11 +260,11 @@ document links because it is not a publishable artifact. If that same file is
 tracked by git, it enters the public boundary and is scanned like any other
 publishable file.
 
-A directory scan also walks files that git does not track. Operating-system
-metadata in a well-known local format (`.DS_Store`, AppleDouble `._*`,
-`Thumbs.db`, `desktop.ini`, `.directory`) is skipped while it stays untracked,
-because it is checkout noise rather than publishable input. If git tracks a
-file with that name, it stays in the scan like any other tracked file.
+A directory scan also walks files that git does not track. An untracked
+Finder `.DS_Store` or AppleDouble `._*` file is skipped only when its own
+header carries that format's magic number; a text file that merely shares the
+name is scanned like any other text. If git tracks a file with that name, it
+stays in the scan.
 
 Projects that intentionally publish tracked files with private document links
 can opt in through the project registry:

@@ -13,6 +13,7 @@ the scanner's own repository pass stays clean.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -82,9 +83,15 @@ def test_undecodable_file_with_an_unknown_suffix_stays_unexamined(tmp_path: Path
     assert payload["unreadable_files"] == ["payload.unknown: invalid UTF-8"]
 
 
-@pytest.mark.parametrize("metadata_name", [".DS_Store", "._README.md"])
+@pytest.mark.parametrize(
+    ("metadata_name", "payload"),
+    [
+        (".DS_Store", b"\x00\x00\x00\x01Bud1\xff\xfe\xc3\x28"),
+        ("._README.md", b"\x00\x05\x16\x07\x00\x02\x00\x00\xff\xfe"),
+    ],
+)
 def test_untracked_local_metadata_does_not_block_a_clean_directory(
-    tmp_path: Path, metadata_name: str
+    tmp_path: Path, metadata_name: str, payload: bytes
 ) -> None:
     """A normal checkout keeps this OS metadata untracked and gitignored."""
 
@@ -93,7 +100,7 @@ def test_untracked_local_metadata_does_not_block_a_clean_directory(
     (repo / ".gitignore").write_text(".DS_Store\n._*\n", encoding="utf-8")
     (repo / "README.md").write_text("# clean\n", encoding="utf-8")
     # Finder and AppleDouble records are binary; this payload is not UTF-8.
-    (repo / metadata_name).write_bytes(b"\x00\x00\x00\x01Bud1\xff\xfe\xc3\x28")
+    (repo / metadata_name).write_bytes(payload)
     subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True)
     subprocess.run(
         ["git", "-C", str(repo), "add", ".gitignore", "README.md"],
@@ -107,11 +114,76 @@ def test_untracked_local_metadata_does_not_block_a_clean_directory(
     assert ignored.returncode == 0, "the fixture metadata must be gitignored"
 
     assert iter_scan_files(repo) == sorted([repo / ".gitignore", repo / "README.md"])
-    payload = scan_public_boundary([repo])
+    payload_result = scan_public_boundary([repo])
+
+    assert payload_result["ok"] is True
+    assert payload_result["scanned_files"] == 2
+    assert payload_result["unreadable_files"] == []
+
+
+def test_text_that_shares_a_metadata_name_stays_in_a_staging_directory(
+    tmp_path: Path,
+) -> None:
+    """A Git-less staging directory has no index, so a name is not evidence."""
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "README.md").write_text("# clean\n", encoding="utf-8")
+    (staging / "._README.md").write_text(
+        f"token: {_synthetic_token()}\n", encoding="utf-8"
+    )
+
+    assert iter_scan_files(staging) == sorted(
+        [staging / "._README.md", staging / "README.md"]
+    )
+    payload = scan_public_boundary([staging])
+
+    assert payload["scanned_files"] == 2
+    assert payload["blocking_hits"] == ["._README.md:1: credential"]
+
+
+@pytest.mark.parametrize(
+    ("metadata_name", "payload"),
+    [
+        (".DS_Store", b"\x00\x00\x00\x01Bud1\xff\xfe\xc3\x28"),
+        ("._README.md", b"\x00\x05\x16\x07\x00\x02\x00\x00\xff\xfe"),
+    ],
+)
+def test_staging_directory_skips_os_metadata_by_its_own_header(
+    tmp_path: Path, metadata_name: str, payload: bytes
+) -> None:
+    """The format header, not the name or a missing Git index, decides."""
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "README.md").write_text("# clean\n", encoding="utf-8")
+    (staging / metadata_name).write_bytes(payload)
+
+    payload_result = scan_public_boundary([staging])
+
+    assert payload_result["ok"] is True
+    assert payload_result["scanned_files"] == 1
+
+
+@pytest.mark.skipif(
+    os.name == "nt" or os.geteuid() == 0,
+    reason="a read-only directory needs a non-root POSIX host",
+)
+def test_read_only_staging_directory_still_scans_text_lookalikes(
+    tmp_path: Path,
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "README.md").write_text("# clean\n", encoding="utf-8")
+    (staging / "._README.md").write_text("# also clean\n", encoding="utf-8")
+    staging.chmod(0o555)
+    try:
+        payload = scan_public_boundary([staging])
+    finally:
+        staging.chmod(0o755)
 
     assert payload["ok"] is True
     assert payload["scanned_files"] == 2
-    assert payload["unreadable_files"] == []
 
 
 def test_tracked_local_metadata_is_still_scanned(tmp_path: Path) -> None:

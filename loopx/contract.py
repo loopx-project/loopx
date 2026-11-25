@@ -418,15 +418,15 @@ BINARY_MEDIA_SUFFIXES = {
     # databases
     ".db", ".sqlite", ".sqlite3", ".mdb",
 }
-# Operating systems write these files beside real content, and a normal
-# checkout keeps them untracked (often gitignored). They are local metadata, not
-# publishable input, so an untracked one is skipped instead of decoded as UTF-8
-# and failing an otherwise clean directory scan. The name never decides alone:
-# a tracked file with the same name is repository content and stays scanned.
-LOCAL_METADATA_FILE_NAMES = {
-    ".DS_Store",  # macOS Finder
-    "Thumbs.db", "ehthumbs.db", "desktop.ini",  # Windows Explorer
-    ".directory",  # KDE
+# A normal checkout keeps Finder's .DS_Store and AppleDouble ._* files
+# untracked (often gitignored), and they are not publishable input. Only the
+# formats' own magic headers prove such a file is OS metadata rather than a
+# text file that happens to share the name, so a directory walk skips an
+# untracked file only when its header matches. A tracked file is repository
+# content and stays scanned even then.
+LOCAL_METADATA_HEADERS = {
+    ".DS_Store": (b"\x00\x00\x00\x01Bud1",),
+    "._": (b"\x00\x05\x16\x07",),
 }
 DEFAULT_SKIP_DIRS = {
     ".git",
@@ -1199,17 +1199,33 @@ def _is_binary_media_path(path: Path) -> bool:
     return path.suffix.lower() in BINARY_MEDIA_SUFFIXES
 
 
-def _is_local_metadata_name(name: str) -> bool:
-    """Recognize an OS-written metadata file that is not publishable input.
+def _local_metadata_headers(name: str) -> tuple[bytes, ...]:
+    """Return the magic headers a known OS metadata name may begin with."""
 
-    AppleDouble carries the real name after a ``._`` prefix (``._README.md``),
-    so the prefix also matches. Callers apply this to untracked files only: a
-    tracked file with the same name is repository content.
+    if name == ".DS_Store":
+        return LOCAL_METADATA_HEADERS[".DS_Store"]
+    if name.startswith("._") and len(name) > len("._"):
+        return LOCAL_METADATA_HEADERS["._"]
+    return ()
+
+
+def _has_local_metadata_header(path: Path) -> bool:
+    """Return whether the file's own bytes prove a known OS metadata format.
+
+    The name alone never decides: a text file named ``._README.md`` or
+    ``.DS_Store`` is scanned like any other text. An unreadable header also
+    keeps the file, so the scan reader reports it instead of dropping it.
     """
 
-    return name in LOCAL_METADATA_FILE_NAMES or (
-        name.startswith("._") and len(name) > len("._")
-    )
+    headers = _local_metadata_headers(path.name)
+    if not headers:
+        return False
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return False
+    return header.startswith(headers)
 
 
 def _resolve_scannable_file(path: Path) -> Path | None:
@@ -1378,9 +1394,9 @@ def iter_scan_files(
             if resolved is None:
                 continue
             # A normal checkout keeps OS metadata such as .DS_Store untracked;
-            # Git ownership is what separates checkout noise from a file this
-            # repository would actually publish.
-            if _is_local_metadata_name(resolved.name) and resolved not in tracked_paths:
+            # Git ownership plus the format's own header separate checkout
+            # noise from a text file this repository would actually publish.
+            if resolved not in tracked_paths and _has_local_metadata_header(resolved):
                 continue
             files.append(resolved)
     return sorted(set(files + tracked_files))
