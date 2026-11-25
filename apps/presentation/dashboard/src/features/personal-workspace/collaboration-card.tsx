@@ -97,7 +97,7 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
           <WorkerProgressBadge progress={status.progress} />
         </div>
       </header>
-      <WorkerNowLine now={status.now} />
+      <WorkerNowLine now={status.now === conclusionText ? null : status.now} />
       <p className="personal-collaboration-status">
         {status.revisionLabel ? <span>{status.revisionLabel}</span> : null}
         <span>{status.readLabel}</span>
