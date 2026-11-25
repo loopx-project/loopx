@@ -376,7 +376,33 @@ def _credential_hits_are_all_references(line: str) -> bool:
     return all(_credential_match_is_reference(line, match) for match in matches)
 
 
-DEFAULT_SCAN_SUFFIXES = {".md", ".py", ".toml", ".json", ".yaml", ".yml", ".sh"}
+# A selected directory owns every file in it, so only binary media is dropped
+# before reading. A seven-suffix allow-list used to make that decision silently:
+# every other text file -- on this repository the whole TypeScript control
+# plane plus .mjs, .tsx, .html, .txt, .svg and extensionless files -- was
+# certified without ever being opened. An unlisted suffix is read as UTF-8 and
+# a file that cannot be decoded is reported unreadable rather than passed, so
+# an incomplete list cannot turn into a silent skip.
+BINARY_MEDIA_SUFFIXES = {
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".avif",
+    ".tif", ".tiff", ".heic", ".psd",
+    # audio and video
+    ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus",
+    ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv",
+    # archives and packages
+    ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar",
+    ".whl", ".jar", ".egg", ".dmg", ".iso",
+    # document containers
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # fonts
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    # executables and compiled artifacts
+    ".so", ".dll", ".dylib", ".exe", ".pyd", ".pyc", ".pyo",
+    ".class", ".wasm", ".o", ".obj", ".a", ".lib",
+    # databases
+    ".db", ".sqlite", ".sqlite3", ".mdb",
+}
 DEFAULT_SKIP_DIRS = {
     ".git",
     ".goal-harness",
@@ -1144,13 +1170,20 @@ def _goal_source_and_projection_diagnostics(
     return diagnostics, checks, warnings
 
 
+def _is_binary_media_path(path: Path) -> bool:
+    return path.suffix.lower() in BINARY_MEDIA_SUFFIXES
+
+
 def _resolve_scannable_file(path: Path) -> Path | None:
-    if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+    # An alias name never decides eligibility: a text target stays readable
+    # behind a .png alias, and a binary target stays unreadable behind a .md
+    # alias. Only the resolved target suffix and local-state name decide.
+    if _is_binary_media_path(path) and not path.is_symlink():
         return None
     resolved = path.resolve()
     if resolved.name.endswith(".local.json") or not resolved.is_file():
         return None
-    return resolved if resolved.suffix in DEFAULT_SCAN_SUFFIXES else None
+    return None if _is_binary_media_path(resolved) else resolved
 
 
 def _is_skipped_dir_name(name: str) -> bool:

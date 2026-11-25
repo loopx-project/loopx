@@ -12,7 +12,7 @@ from loopx import contract
 
 
 @pytest.mark.parametrize("tracked,pruned", [(False, False), (True, False), (True, True)])
-def test_scan_enumeration_uses_resolved_symlink_suffix_and_local_name(
+def test_scan_enumeration_follows_the_resolved_target_and_binary_media(
     tmp_path: Path, tracked: bool, pruned: bool
 ) -> None:
     scan_root = tmp_path / ("node_modules" if pruned else "public")
@@ -21,17 +21,20 @@ def test_scan_enumeration_uses_resolved_symlink_suffix_and_local_name(
     target.write_text("public", encoding="utf-8")
     distinct = tmp_path / "distinct.md"
     distinct.write_text("public", encoding="utf-8")
-    unsupported = tmp_path / "target.ts"
-    unsupported.write_text("not a directory scan input", encoding="utf-8")
+    binary_target = tmp_path / "target.png"
+    binary_target.write_bytes(b"\x89PNG\r\n\x1a\n")
     local = tmp_path / "target.local.json"
     local.write_text("local", encoding="utf-8")
     regular = scan_root / "regular.md"
     regular.write_text("public", encoding="utf-8")
-    (scan_root / "regular.ts").write_text("unsupported", encoding="utf-8")
+    regular_ts = scan_root / "regular.ts"
+    regular_ts.write_text("text outside the old allow-list", encoding="utf-8")
+    (scan_root / "regular.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (scan_root / "alias.ts").symlink_to(target)
+    (scan_root / "alias.png").symlink_to(target)
     (scan_root / "distinct.txt").symlink_to(distinct)
     (scan_root / "alias.local.json").symlink_to(target)
-    (scan_root / "unsupported.md").symlink_to(unsupported)
+    (scan_root / "unsupported.md").symlink_to(binary_target)
     (scan_root / "local.md").symlink_to(local)
     (scan_root / "broken.ts").symlink_to(tmp_path / "absent.md")
     if tracked:
@@ -39,23 +42,30 @@ def test_scan_enumeration_uses_resolved_symlink_suffix_and_local_name(
         subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "--", scan_root.name], check=True)
 
     # Git ownership includes tracked files under otherwise pruned directories.
-    # Directory eligibility follows the canonical target, not the alias name.
-    # The pruned-root fast path preserves Git's per-alias observations.
-    expected = [distinct, regular, target, target] if pruned else [distinct, regular, target]
+    # Directory eligibility follows the resolved target and its local-state
+    # name, never the alias name or the retired suffix allow-list; binary media
+    # is skipped. The pruned-root fast path preserves Git's per-alias observations.
+    aliases = [target, target, target]
+    expected = (
+        [distinct, regular, regular_ts, *aliases]
+        if pruned
+        else [distinct, regular, regular_ts, target]
+    )
     assert contract.iter_scan_files(scan_root) == sorted(expected)
     if tracked:
-        assert set(contract._tracked_scan_files(scan_root)) == {distinct, regular, target}
+        assert set(contract._tracked_scan_files(scan_root)) == {distinct, regular, regular_ts, target}
 
     # A later retarget must be observed; no eligibility result may be cached.
     (scan_root / "alias.ts").unlink()
     (scan_root / "alias.ts").symlink_to(local)
+    (scan_root / "alias.png").unlink()
     (scan_root / "alias.local.json").unlink()
-    assert contract.iter_scan_files(scan_root) == sorted([distinct, regular])
+    assert contract.iter_scan_files(scan_root) == sorted([distinct, regular, regular_ts])
 
 
-def test_explicit_scan_file_keeps_unsupported_suffix(tmp_path: Path) -> None:
-    explicit = tmp_path / "explicit.ts"
-    explicit.write_text("explicit input", encoding="utf-8")
+def test_explicit_scan_file_keeps_binary_media(tmp_path: Path) -> None:
+    explicit = tmp_path / "explicit.png"
+    explicit.write_bytes(b"\x89PNG\r\n\x1a\n")
     assert contract.iter_scan_files(explicit) == [explicit]
 
 
@@ -321,5 +331,6 @@ def test_pruned_scan_root_keeps_a_carriage_return_tracked_name(tmp_path: Path) -
         check=True,
     )
 
-    assert contract._tracked_scan_files(scan_root) == [scan_root / name]
-    assert contract.iter_scan_files(scan_root) == [scan_root / name]
+    expected = sorted([scan_root / "pyvenv.cfg", scan_root / name])
+    assert contract._tracked_scan_files(scan_root) == expected
+    assert contract.iter_scan_files(scan_root) == expected
