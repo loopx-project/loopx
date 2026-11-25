@@ -442,6 +442,7 @@ def execute_steward_turn(
                             prompt,
                             invocation_sink,
                             isolated_cascade=True,
+                            raw_prompt=True,
                             idle_timeout_sec=(
                                 adapter.idle_timeout_sec
                                 if adapter.idle_timeout_sec is not None

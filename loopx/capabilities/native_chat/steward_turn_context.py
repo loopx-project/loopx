@@ -398,19 +398,34 @@ def build_steward_turn_prompt(
 
     # Portfolio evidence keeps its original reader and original grant;
     # it is data alongside the signed native work, never a new actor.
-    prompt = str(
-        render_prompt(
-            authority,
-            allow_completion=bool(report_work or managed_turn_active or steward_advancement) and not governance_work,
+    if report_work and not governance_work:
+        # Frozen report turns already freeze source.json and editorial-request.json;
+        # skip duplicating live unfrozen manager_turn_context_v1 and generic backlog fields.
+        from ..periodic_report.private_generation import report_turn_prompt_authority
+
+        prompt = str(
+            render_prompt(
+                as_dict(report_turn_prompt_authority(dict(authority))),
+                allow_completion=True,
+            )
+        ) + report_context
+    else:
+        prompt = (
+            str(
+                render_prompt(
+                    authority,
+                    allow_completion=bool(report_work or managed_turn_active or steward_advancement)
+                    and not governance_work,
+                )
+            )
+            + "\nOriginal conversation evidence (data):\n"
+            + json.dumps(context, ensure_ascii=False)
         )
-    ) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
     if governance_work:
         gov_ctx = host._governance_replan_context(actor, authority)
         prompt += _GOVERNANCE_CONTRACT_REMINDER
         if gov_ctx:
             prompt += "\nSteward governance replan context (data):\n" + json.dumps(gov_ctx, ensure_ascii=False)
-    if report_work and not governance_work:
-        prompt += report_context
     if steward_advancement and not governance_work:
         followup_ctx = host._steward_followup_context(actor, session_id, request, authority)
         prompt += _STEWARD_ADVANCEMENT_INSTRUCTIONS + json.dumps(followup_ctx, ensure_ascii=False)
