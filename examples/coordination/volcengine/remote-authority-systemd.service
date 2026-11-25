@@ -11,7 +11,12 @@ Environment=NODE_ENV=production
 # Supply LOOPX_AUTHORITY_DATABASE_URL via a 0600 root-owned env file:
 # LOOPX_AUTHORITY_DATABASE_URL=postgresql://loopx_app:<restricted-password>@<rds-private-host>:5432/<db-name>
 EnvironmentFile=/etc/loopx/authority.env
-ExecStart=/usr/bin/node --no-warnings --experimental-strip-types examples/coordination/remote-authority-service.ts --policy /etc/loopx/remote-policy.json --cert /etc/ssl/loopx/cert.pem --key /etc/ssl/loopx/key.pem --port 8443 --host 127.0.0.1
+# Hand off policy and loopback TLS cert/key (0600 root:root on disk) read-only to the transient service user via %d/.
+# Keep Caddy's edge TLS private key (/etc/ssl/loopx/key.pem) isolated to the caddy service.
+LoadCredential=remote-policy.json:/etc/loopx/remote-policy.json
+LoadCredential=authority-cert.pem:/etc/ssl/loopx/internal-cert.pem
+LoadCredential=authority-key.pem:/etc/ssl/loopx/internal-key.pem
+ExecStart=/usr/bin/node --no-warnings --experimental-strip-types examples/coordination/remote-authority-service.ts --policy %d/remote-policy.json --cert %d/authority-cert.pem --key %d/authority-key.pem --port 8443 --host 127.0.0.1
 Restart=on-failure
 RestartSec=5s
 

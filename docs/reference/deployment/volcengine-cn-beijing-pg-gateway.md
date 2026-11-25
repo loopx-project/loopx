@@ -110,11 +110,29 @@
    - 通过 `gateway_private_ips` 提供网关实际使用的私网 IPv4 地址。模板为每个地址生成 `/32` 白名单条目并绑定到 PostgreSQL 实例。更换网关地址时同步更新白名单。
    - 所有变量均由部署者显式传入或使用安全默认值（如北京地域 `cn-beijing`、默认仅放通 VPC 内网至 443 端口），并设置 `prevent_destroy = true` 避免误删。
 2. **TLS 网关配置**：`gateway-caddy-tls.Caddyfile`
-   - Caddy 自动化 TLS 反向代理至本地 Node 权威服务（`https://127.0.0.1:8443`）。
-   - 包含请求大小限制（16KB）、连接超时约束与 HSTS 安全头。
+   - Caddy（以独立系统用户 `caddy` 运行）使用 `/etc/ssl/loopx/cert.pem` 与 `/etc/ssl/loopx/key.pem` 完成对外 `:443` TLS 终止，并反向代理至本地 Node 权威服务（`https://127.0.0.1:8443`）。
+   - 包含请求大小限制（16KB）、连接超时约束与 HSTS 安全头，并与 Node 内部回环私钥及数据库/策略配置严格隔离。
 3. **网关守护进程服务**：`remote-authority-systemd.service`
-   - 以独立低特权系统用户运行 `examples/coordination/remote-authority-service.ts`。
-   - 通过仅 root 可读的 `EnvironmentFile=/etc/loopx/authority.env` 注入 `LOOPX_AUTHORITY_DATABASE_URL`（使用受限 `loopx_app` 角色），并启用 `DynamicUser=yes`, `ProtectSystem=strict`, `PrivateTmp=true` 等 systemd 安全加固。
+   - 以 `DynamicUser=yes` 临时非 root 服务身份运行 `examples/coordination/remote-authority-service.ts`，并启用 `ProtectSystem=strict`, `PrivateTmp=true`, `NoNewPrivileges=true` 等 systemd 安全加固。
+   - **凭据与数据库隔离**：仅由 systemd（root）通过 `EnvironmentFile=/etc/loopx/authority.env` 独立注入 `LOOPX_AUTHORITY_DATABASE_URL`（使用受限 `loopx_app` 角色），不与私钥混入同一传递面。
+   - **最小只读凭据移交 (`LoadCredential=` / `%d/`)**：因 `DynamicUser=yes` 进程不是 `root`，直接传入 `0600 root:root` 原始文件路径会触发 `EACCES` 退出导致网关无法监听。unit 通过 `LoadCredential=` 将 `/etc/loopx/remote-policy.json`、`/etc/ssl/loopx/internal-cert.pem` 与 `/etc/ssl/loopx/internal-key.pem` 以仅当前服务临时用户只读（`0400`）方式挂载至 `%d/remote-policy.json`、`%d/authority-cert.pem`、`%d/authority-key.pem` 传给 `ExecStart`。
+
+### 4.1 属主、最小权限与 Caddy 隔离契约
+
+部署前必须在网关 ECS 上按以下最小权限收敛目录与密钥（切勿为规避 `EACCES` 将任何私钥放宽为 `0644` 或把 Node 凭据组权限授给 `caddy`）：
+
+| 路径 | 属主 (`chown`) | 权限 (`chmod`) | 注入 / 读取方式 | 访问边界与隔离说明 |
+|---|---|---|---|---|
+| `/opt/loopx/` | `root:root` | 目录 `0755` / 文件 `0644` | Node `ExecStart` 只读运行 | 含 `examples/coordination/` 与 `node_modules`；`ProtectSystem=strict` 下只读 |
+| `/etc/loopx/` | `root:root` | `0700` | 仅 systemd PID 1 遍历 | 禁止非 root 用户（含 `caddy` 与临时服务用户）列出或直接访问 |
+| `/etc/loopx/authority.env` | `root:root` | `0600` | `EnvironmentFile=/etc/loopx/authority.env` | 仅存 `LOOPX_AUTHORITY_DATABASE_URL`（`loopx_app` 串）；不进入 `%d/`，`caddy` 不可读 |
+| `/etc/loopx/remote-policy.json` | `root:root` | `0600` | `LoadCredential=remote-policy.json:...` -> `%d/remote-policy.json` (`0400`) | 仅 Node 临时身份只读；`caddy` 不可读；原子更新文件后需 `systemctl restart remote-authority-systemd.service` 刷新 |
+| `/etc/ssl/loopx/` | `root:caddy` | `0750` | 仅 `root` 与 `caddy` 组遍历 | 阻断其他本地普通用户进入证书目录 |
+| `/etc/ssl/loopx/internal-cert.pem` | `root:root` | `0644` | `LoadCredential=authority-cert.pem:...` -> `%d/authority-cert.pem` (`0400`) | Node `127.0.0.1:8443` 回环公钥证书（非私钥；向部署检查端提供公钥 `--ca` 验证） |
+| `/etc/ssl/loopx/internal-key.pem` | `root:root` | `0600` | `LoadCredential=authority-key.pem:...` -> `%d/authority-key.pem` (`0400`) | **仅服务内部回环私钥**；非 root 直接读取原路径必报 `EACCES`；`caddy` 无权读取 |
+| `/etc/ssl/loopx/cert.pem` | `root:root` | `0644` | Caddy 只读 | 对外 `:443` TLS 公钥证书（非私钥），与客户端 `--ca` 校验对齐 |
+| `/etc/ssl/loopx/key.pem` | `root:caddy` | `0640` | Caddy 直接只读（保持 Caddy 私钥读取范围） | **仅 Caddy 对外私钥**；Node 临时用户无读取权限，两层密钥隔离 |
+| `/var/log/caddy/` | `caddy:caddy` | `0750` | Caddy 访问日志写入 | 独立日志目录，不包含数据库或 Bearer 凭据 |
 
 ---
 
@@ -219,7 +237,46 @@
      }
    '
    ```
-   在网关节点启动 `examples/coordination/remote-authority-service.ts`（配置受限 `LOOPX_AUTHORITY_DATABASE_URL` 与绑定 `store_identity` 的 `/etc/loopx/remote-policy.json`）后，客户端可通过 `examples/coordination/remote-authority-client.ts` 发送 `"operation": "snapshot"` 请求复验目标 Goal 与待办列表端到端可读，确认源 Goal 为 `hard_lease` 模式与规范 `todo_<token>` 任务后再进入步骤 3。
+   在网关 ECS 上按 4.1 节属主与最小权限就位后，启动托管单元并验证**以非 root 临时服务身份监听**以及端到端 `snapshot` 回读：
+   ```bash
+   # 1. 收敛属主与最小读取权限（先创建凭据文件再启用服务）
+   sudo install -d -o root -g root -m 0700 /etc/loopx
+   sudo install -d -o root -g caddy -m 0750 /etc/ssl/loopx
+   sudo chown root:root /etc/loopx/authority.env /etc/loopx/remote-policy.json \
+     /etc/ssl/loopx/internal-cert.pem /etc/ssl/loopx/internal-key.pem /etc/ssl/loopx/cert.pem
+   sudo chmod 0600 /etc/loopx/authority.env /etc/loopx/remote-policy.json /etc/ssl/loopx/internal-key.pem
+   sudo chmod 0644 /etc/ssl/loopx/internal-cert.pem /etc/ssl/loopx/cert.pem
+   sudo chown root:caddy /etc/ssl/loopx/key.pem
+   sudo chmod 0640 /etc/ssl/loopx/key.pem
+
+   # 2. 启动 systemd 服务（LoadCredential 将策略与回环证书/私钥只读移交 %d/）
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now remote-authority-systemd.service
+   sudo systemctl restart caddy
+
+   # 3. 确认服务进程以非 root 临时用户运行且成功监听 127.0.0.1:8443
+   systemctl show -p ActiveState,UID,GID,ExecMainPID remote-authority-systemd.service
+   ps -o uid=,user=,gid=,group=,pid=,args= -p "$(systemctl show -p ExecMainPID --value remote-authority-systemd.service)"
+   sudo ss -tlnp | grep -E ':443|:8443'
+
+   # 4. 导出公钥 CA 副本并以普通客户端身份完成一次合法 snapshot 回读（先直连回环端口，再经 Caddy 对外入口复验）
+   sudo install -m 0644 /etc/ssl/loopx/internal-cert.pem /etc/loopx-public-internal-ca.pem
+   LOOPX_AUTHORITY_CREDENTIAL="<operator-bearer-secret>" \
+   node --no-warnings --experimental-strip-types \
+     examples/coordination/remote-authority-client.ts \
+     --endpoint "https://127.0.0.1:8443" \
+     --ca /etc/loopx-public-internal-ca.pem <<'EOF'
+   {
+     "schema_version": "loopx_remote_authority_request_v0",
+     "tenant_id": "<tenant-id>",
+     "goal_id": "<goal-id>",
+     "actor_id": "<registered-actor>",
+     "store_identity": "<store-identity-from-setup>",
+     "operation": "snapshot"
+   }
+   EOF
+   ```
+   确认输出 JSON 中 `"status": "snapshot"` 且 `goal_id`、`store_identity`、`provider_revision` 与待办列表 `todos` 一致，再经 Caddy 对外地址（`--endpoint "https://<gateway-domain>" --ca "<path-to-gateway-ca.pem>"`）发送同一 `snapshot` 查询确认源 Goal 为 `hard_lease` 模式与规范 `todo_<token>` 任务，之后进入步骤 3。
 
 ### 步骤 3：多机客户端并发联调
 每个客户端仅持有所属 `principal` 的受限网关 Bearer 凭据与目标 `store_identity` / `tenant_id` / `goal_id` 参数，不接触数据库管理员凭据或彼此私钥：

@@ -11,7 +11,11 @@ import socket
 import struct
 import subprocess
 import threading
+import time
+import uuid
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -440,6 +444,40 @@ def test_volcengine_deployment_artifacts() -> None:
     assert "REPLACE_WITH_RESTRICTED_APP_PASSWORD" not in svc_content
     assert "remote-authority-service.ts" in svc_content
 
+    load_credentials = [
+        line.split("=", 1)[1].strip()
+        for line in svc_content.splitlines()
+        if line.strip().startswith("LoadCredential=")
+    ]
+    assert "remote-policy.json:/etc/loopx/remote-policy.json" in load_credentials
+    assert "authority-cert.pem:/etc/ssl/loopx/internal-cert.pem" in load_credentials
+    assert "authority-key.pem:/etc/ssl/loopx/internal-key.pem" in load_credentials
+    assert all("authority.env" not in entry for entry in load_credentials)
+    assert all("/etc/ssl/loopx/key.pem" not in entry for entry in load_credentials)
+
+    exec_lines = [
+        line.split("=", 1)[1].strip()
+        for line in svc_content.splitlines()
+        if line.strip().startswith("ExecStart=")
+    ]
+    assert len(exec_lines) == 1
+    exec_cmd = exec_lines[0]
+    assert "--policy %d/remote-policy.json" in exec_cmd
+    assert "--cert %d/authority-cert.pem" in exec_cmd
+    assert "--key %d/authority-key.pem" in exec_cmd
+    assert "/etc/loopx/" not in exec_cmd
+    assert "/etc/ssl/loopx/" not in exec_cmd
+
+    # Runbook permission & isolation contract
+    assert "LoadCredential=" in doc_content
+    assert "%d/remote-policy.json" in doc_content
+    assert "/etc/ssl/loopx/internal-key.pem" in doc_content
+    assert "/etc/ssl/loopx/key.pem" in doc_content
+    assert "root:caddy" in doc_content
+    assert "0640" in doc_content
+    assert "0600" in doc_content
+    assert "EACCES" in doc_content
+
     # Least privilege IAM policy
     iam_path = volc_dir / "least-privilege-iam-policy.json"
     assert iam_path.exists()
@@ -512,3 +550,368 @@ def test_rehearsal_symlink_directory_invocation(tmp_path: Path) -> None:
         cwd=linked_root,
     )
     assert ts_bad_url.returncode != 0
+
+
+def _docker_env() -> dict[str, str]:
+    env = dict(os.environ)
+    if "DOCKER_HOST" not in env and "DOCKER_CONFIG" not in env and os.name == "posix":
+        import pwd
+
+        docker_cfg = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker"
+        if docker_cfg.is_dir():
+            env["DOCKER_CONFIG"] = str(docker_cfg)
+    return env
+
+
+def _docker_images_ready() -> tuple[bool, str]:
+    env = _docker_env()
+    info = subprocess.run(
+        ["docker", "info", "--format", "{{.OSType}}"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env=env,
+    )
+    if info.returncode != 0 or info.stdout.strip() != "linux":
+        return False, "Linux Docker daemon unavailable"
+    for image in ("node:22-bookworm", "postgres:16-alpine"):
+        check = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+        if check.returncode != 0:
+            return False, f"Required cached Docker image missing: {image}"
+    return True, ""
+
+
+def test_systemd_load_credential_nonroot_linux_isolation_and_snapshot() -> None:
+    """Verify non-root EACCES on raw 0600 root keys vs LoadCredential readback in Linux."""
+    ready, reason = _docker_images_ready()
+    if not ready:
+        pytest.skip(reason)
+
+    docker_env = _docker_env()
+    suffix = uuid.uuid4().hex[:10]
+    net_name = f"loopx-cred-net-{suffix}"
+    pg_name = f"loopx-cred-pg-{suffix}"
+    pg_admin_pw = f"pgadm_{suffix}"
+    pg_app_pw = f"pgapp_{suffix}"
+
+    subprocess.run(
+        ["docker", "network", "create", net_name],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=docker_env,
+    )
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                pg_name,
+                "--network",
+                net_name,
+                "-e",
+                f"POSTGRES_PASSWORD={pg_admin_pw}",
+                "postgres:16-alpine",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=docker_env,
+        )
+
+        deadline = time.monotonic() + 25.0
+        while time.monotonic() < deadline:
+            probe = subprocess.run(
+                ["docker", "exec", pg_name, "pg_isready", "-U", "postgres"],
+                capture_output=True,
+                text=True,
+                env=docker_env,
+            )
+            if probe.returncode == 0:
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail("PostgreSQL container did not become ready within 25s")
+
+        container_script = r"""
+set -eu
+ln -sf "$(command -v node)" /usr/bin/node
+groupadd -r caddy
+useradd -r -g caddy -s /usr/sbin/nologin caddy
+
+install -d -o root -g root -m 0700 /etc/loopx
+install -d -o root -g caddy -m 0750 /etc/ssl/loopx
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -subj "/CN=127.0.0.1" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+  -keyout /etc/ssl/loopx/internal-key.pem -out /etc/ssl/loopx/internal-cert.pem 2>/dev/null
+chown root:root /etc/ssl/loopx/internal-key.pem /etc/ssl/loopx/internal-cert.pem
+chmod 0600 /etc/ssl/loopx/internal-key.pem
+chmod 0644 /etc/ssl/loopx/internal-cert.pem
+install -m 0644 /etc/ssl/loopx/internal-cert.pem /run/public-internal-ca.pem
+
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+  -subj "/CN=gateway.loopx.internal" \
+  -keyout /etc/ssl/loopx/key.pem -out /etc/ssl/loopx/cert.pem 2>/dev/null
+chown root:root /etc/ssl/loopx/cert.pem
+chmod 0644 /etc/ssl/loopx/cert.pem
+chown root:caddy /etc/ssl/loopx/key.pem
+chmod 0640 /etc/ssl/loopx/key.pem
+
+STORE_ID="postgresql:$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')"
+BEARER_SECRET="cred-test-secret-$(node -e 'console.log(require("crypto").randomBytes(16).toString("hex"))')"
+ADMIN_URL="postgresql://postgres:${PG_ADMIN_PW}@${PG_HOST}:5432/postgres"
+APP_URL="postgresql://loopx_app:${PG_APP_PW}@${PG_HOST}:5432/postgres"
+export ADMIN_URL APP_URL PG_APP_PW STORE_ID BEARER_SECRET
+
+node --no-warnings --experimental-strip-types --input-type=module - <<'SEED_EOF'
+import {createHash} from "node:crypto";
+import {writeFileSync} from "node:fs";
+import {Pool} from "pg";
+import {coordinationTodoReadModel} from "./loopx/control_plane/coordination/coordination_projection.ts";
+import {
+  canonicalTodoDomainRecord,
+  TODO_DOMAIN_ITEM_SCHEMA,
+  TODO_DOMAIN_READ_RECORD_SCHEMA,
+} from "./loopx/control_plane/coordination/coordination_state_contract.ts";
+import {setupPostgreSqlAuthoritySchemaAndRole} from "./loopx/control_plane/coordination/postgresql_authority_seed.ts";
+import {PostgreSqlAuthorityStore} from "./loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {REMOTE_AUTHORITY_POLICY} from "./loopx/control_plane/coordination/remote_authority_policy.ts";
+import {materializeTodoRecordForSchema} from "./loopx/control_plane/coordination/todo_presentation.ts";
+
+const makeDb = (pool) => ({
+  connect: async () => {
+    const conn = await pool.connect();
+    return {
+      query: (sql, args) => conn.query(sql, args ? [...args] : undefined),
+      release: (err) => conn.release(err),
+    };
+  },
+});
+
+const adminPool = new Pool({connectionString: process.env.ADMIN_URL});
+try {
+  await setupPostgreSqlAuthoritySchemaAndRole({
+    database: makeDb(adminPool),
+    storeIdentity: process.env.STORE_ID,
+    runtimeRole: "loopx_app",
+  });
+  await adminPool.query(
+    `ALTER ROLE loopx_app LOGIN PASSWORD '${process.env.PG_APP_PW}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`,
+  );
+  await adminPool.query("GRANT CONNECT ON DATABASE postgres TO loopx_app");
+} finally {
+  await adminPool.end();
+}
+
+const appPool = new Pool({connectionString: process.env.APP_URL});
+try {
+  const store = new PostgreSqlAuthorityStore(makeDb(appPool), {
+    tenant_id: "tenant-cred",
+    goal_id: "goal-cred",
+    expected_store_identity: process.env.STORE_ID,
+  });
+  const todo = materializeTodoRecordForSchema(
+    canonicalTodoDomainRecord({
+      schema_version: TODO_DOMAIN_ITEM_SCHEMA,
+      todo_id: "todo_cred_verify",
+      role: "agent",
+      status: "open",
+      done: false,
+      archive_state: "active",
+      text: "Verify systemd LoadCredential non-root readback",
+      priority: "P1",
+      task_class: "advancement_task",
+      required_write_scopes: ["todo_cred_verify/**"],
+    }, "cred verify todo domain"),
+    TODO_DOMAIN_READ_RECORD_SCHEMA,
+    "cred verify todo",
+  );
+  const res = await store.commitAuthority({
+    operation_id: "seed-systemd-cred-test",
+    expected_provider_revision: null,
+    next_projection: {
+      goal_id: "goal-cred",
+      handoff_mode: "hard_lease",
+      todos: [todo],
+      leases: [],
+      todo_read_model: coordinationTodoReadModel([todo], TODO_DOMAIN_READ_RECORD_SCHEMA),
+    },
+    events: [],
+    receipts: [],
+  });
+  if (res.status !== "applied") {
+    throw new Error(`Seed failed: ${JSON.stringify(res)}`);
+  }
+} finally {
+  await appPool.end();
+}
+
+const policy = {
+  schema_version: REMOTE_AUTHORITY_POLICY,
+  scopes: [{
+    tenant_id: "tenant-cred",
+    goal_id: "goal-cred",
+    store_identity: process.env.STORE_ID,
+    registered_agents: ["operator.local"],
+  }],
+  principals: [{
+    principal_id: "principal-operator",
+    credential_sha256: createHash("sha256").update(process.env.BEARER_SECRET).digest("hex"),
+    grants: [{
+      tenant_id: "tenant-cred",
+      goal_id: "goal-cred",
+      actor_id: "operator.local",
+      operations: ["read", "snapshot"],
+    }],
+  }],
+};
+writeFileSync("/etc/loopx/remote-policy.json", JSON.stringify(policy));
+SEED_EOF
+
+chown root:root /etc/loopx/remote-policy.json
+chmod 0600 /etc/loopx/remote-policy.json
+
+printf 'LOOPX_AUTHORITY_DATABASE_URL=%s\n' "$APP_URL" > /etc/loopx/authority.env
+chown root:root /etc/loopx/authority.env
+chmod 0600 /etc/loopx/authority.env
+
+UNIT_FILE="/opt/loopx/examples/coordination/volcengine/remote-authority-systemd.service"
+EXEC_TEMPLATE="$(sed -n 's/^ExecStart=//p' "$UNIT_FILE")"
+CRED_DIR="/run/credentials/remote-authority-systemd.service"
+install -d -o 1000 -g 1000 -m 0500 "$CRED_DIR"
+for spec in $(sed -n 's/^LoadCredential=//p' "$UNIT_FILE"); do
+  cid="${spec%%:*}"
+  csrc="${spec#*:}"
+  install -o 1000 -g 1000 -m 0400 "$csrc" "$CRED_DIR/$cid"
+done
+
+# 1. Negative check: non-root reading raw 0600 root-owned key directly must fail EACCES (exit 1)
+RAW_ERR_LOG="/run/raw-eacces.log"
+set +e
+LOOPX_AUTHORITY_DATABASE_URL="$APP_URL" setpriv --reuid=1000 --regid=1000 --clear-groups \
+  /usr/bin/node --no-warnings --experimental-strip-types examples/coordination/remote-authority-service.ts \
+  --policy "$CRED_DIR/remote-policy.json" --cert "$CRED_DIR/authority-cert.pem" \
+  --key /etc/ssl/loopx/internal-key.pem --port 8443 --host 127.0.0.1 > /dev/null 2>"$RAW_ERR_LOG"
+RAW_KEY_RC=$?
+set -e
+grep -q "EACCES" "$RAW_ERR_LOG"
+[ "$RAW_KEY_RC" -eq 1 ]
+
+# 2. Caddy isolation: node cannot read Caddy key/raw policy/db env; caddy reads only cert.pem & key.pem
+! setpriv --reuid=1000 --regid=1000 --clear-groups head -c 1 /etc/ssl/loopx/key.pem 2>/dev/null
+! setpriv --reuid=1000 --regid=1000 --clear-groups head -c 1 /etc/ssl/loopx/internal-key.pem 2>/dev/null
+! setpriv --reuid=1000 --regid=1000 --clear-groups head -c 1 /etc/loopx/remote-policy.json 2>/dev/null
+! setpriv --reuid=1000 --regid=1000 --clear-groups head -c 1 /etc/loopx/authority.env 2>/dev/null
+
+CADDY_UID="$(id -u caddy)"
+CADDY_GID="$(id -g caddy)"
+setpriv --reuid="$CADDY_UID" --regid="$CADDY_GID" --clear-groups head -c 1 /etc/ssl/loopx/cert.pem >/dev/null
+setpriv --reuid="$CADDY_UID" --regid="$CADDY_GID" --clear-groups head -c 1 /etc/ssl/loopx/key.pem >/dev/null
+! setpriv --reuid="$CADDY_UID" --regid="$CADDY_GID" --clear-groups head -c 1 /etc/ssl/loopx/internal-key.pem 2>/dev/null
+! setpriv --reuid="$CADDY_UID" --regid="$CADDY_GID" --clear-groups head -c 1 /etc/loopx/remote-policy.json 2>/dev/null
+! setpriv --reuid="$CADDY_UID" --regid="$CADDY_GID" --clear-groups head -c 1 /etc/loopx/authority.env 2>/dev/null
+
+# 3. Positive check: non-root ExecStart using %d/ credentials + separate EnvironmentFile listens and serves snapshot
+EXEC_CMD="${EXEC_TEMPLATE//%d/$CRED_DIR}"
+SVC_OUT="/run/svc-stdout.log"
+set -a
+. /etc/loopx/authority.env
+set +a
+CREDENTIALS_DIRECTORY="$CRED_DIR" setpriv --reuid=1000 --regid=1000 --clear-groups \
+  sh -c "exec $EXEC_CMD" >"$SVC_OUT" 2>&1 &
+SVC_PID=$!
+unset LOOPX_AUTHORITY_DATABASE_URL
+
+LISTENING_JSON=""
+for _ in $(seq 1 50); do
+  if grep -q '"status":"listening"' "$SVC_OUT" 2>/dev/null; then
+    LISTENING_JSON="$(grep '"status":"listening"' "$SVC_OUT" | head -n 1)"
+    break
+  fi
+  if ! kill -0 "$SVC_PID" 2>/dev/null; then
+    cat "$SVC_OUT" >&2
+    exit 1
+  fi
+  sleep 0.2
+done
+[ -n "$LISTENING_JSON" ]
+SVC_UID="$(ps -o uid= -p "$SVC_PID" | tr -d ' ')"
+[ "$SVC_UID" = "1000" ]
+
+SNAPSHOT_JSON="$(printf '{"schema_version":"loopx_remote_authority_request_v0","tenant_id":"tenant-cred","goal_id":"goal-cred","actor_id":"operator.local","store_identity":"%s","operation":"snapshot"}' "$STORE_ID" | \
+  LOOPX_AUTHORITY_CREDENTIAL="$BEARER_SECRET" setpriv --reuid=1000 --regid=1000 --clear-groups \
+  /usr/bin/node --no-warnings --experimental-strip-types examples/coordination/remote-authority-client.ts \
+  --endpoint https://127.0.0.1:8443 --ca /run/public-internal-ca.pem)"
+
+kill -TERM "$SVC_PID"
+wait "$SVC_PID" || true
+
+node -e '
+const listening = JSON.parse(process.argv[1]);
+const snapshot = JSON.parse(process.argv[2]);
+console.log(JSON.stringify({
+  raw_key_eacces_exit: Number(process.argv[3]),
+  service_uid: Number(process.argv[4]),
+  listening,
+  snapshot_status: snapshot.status,
+  goal_id: snapshot.goal_id,
+  store_identity: snapshot.store_identity,
+  todo_ids: (snapshot.todos || []).map(t => t.todo_id),
+  caddy_isolated: true,
+}));
+' "$LISTENING_JSON" "$SNAPSHOT_JSON" "$RAW_KEY_RC" "$SVC_UID"
+"""
+
+        res = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                net_name,
+                "-v",
+                f"{REPO_ROOT}:/opt/loopx:ro",
+                "-w",
+                "/opt/loopx",
+                "-e",
+                f"PG_HOST={pg_name}",
+                "-e",
+                f"PG_ADMIN_PW={pg_admin_pw}",
+                "-e",
+                f"PG_APP_PW={pg_app_pw}",
+                "node:22-bookworm",
+                "bash",
+                "-s",
+            ],
+            input=container_script,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=docker_env,
+        )
+        assert res.returncode == 0, (
+            f"Container verification failed (rc={res.returncode}):\n"
+            f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+        )
+        report = json.loads(res.stdout.strip().splitlines()[-1])
+        assert report["raw_key_eacces_exit"] == 1
+        assert report["service_uid"] == 1000
+        assert report["listening"] == {"status": "listening", "host": "127.0.0.1", "port": 8443}
+        assert report["snapshot_status"] == "snapshot"
+        assert report["goal_id"] == "goal-cred"
+        assert report["todo_ids"] == ["todo_cred_verify"]
+        assert report["caddy_isolated"] is True
+    finally:
+        subprocess.run(["docker", "rm", "-f", pg_name], capture_output=True, text=True, env=docker_env)
+        subprocess.run(["docker", "network", "rm", net_name], capture_output=True, text=True, env=docker_env)
