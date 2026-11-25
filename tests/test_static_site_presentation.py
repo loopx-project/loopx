@@ -427,6 +427,32 @@ def test_cli_package_keeps_login_help_headings_public(
     assert (output / "token-help.html").read_text(encoding="utf-8") == token_page
 
 
+def test_cli_package_keeps_numeric_account_rules_public(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    site = _site(tmp_path)
+    password_page = (
+        "<html><body><h1>Password requirements</h1>\n"
+        "<p>Password: 12 characters minimum.</p>\n"
+        "</body></html>\n"
+    )
+    token_page = (
+        "<html><body><h1>Token lifetime</h1>\n"
+        "<p>Token: 24 hours.</p>\n"
+        "</body></html>\n"
+    )
+    (site / "password-length.html").write_text(password_page, encoding="utf-8")
+    (site / "token-expiry.html").write_text(token_page, encoding="utf-8")
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_performed"] is True
+    assert (output / "password-length.html").read_text(encoding="utf-8") == password_page
+    assert (output / "token-expiry.html").read_text(encoding="utf-8") == token_page
+
+
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],

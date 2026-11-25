@@ -55,6 +55,10 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "<h2>Token:</h2><p>Ask your administrator to issue a token for this device.</p>",
         "Password: sign in with the account you use for email.\n",
         "Token: contact your administrator for a new token.\n",
+        "Password: 12 characters minimum.\n",
+        "Password: 8+ characters\n",
+        "Token: 24 hours.\n",
+        "Token: 24-hour expiry\n",
     ],
     ids=(
         "bearer prose",
@@ -65,6 +69,10 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "token heading",
         "password sentence",
         "token sentence",
+        "password length rule",
+        "password length plus",
+        "token expiry rule",
+        "token expiry hyphen",
     ),
 )
 def test_credential_prose_stays_public(text: str) -> None:
@@ -79,6 +87,7 @@ SHORT_ASSIGNMENT_VALUES = [
     "token=abc123",
     "secret: hunter2",
     "token: abc123def456ghi",
+    "Password: 12345678",
     '{"password": "hunter2"}',
     '{"token": "abc123"}',
     '{"secret": "abcd1234"}',

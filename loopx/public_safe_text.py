@@ -390,8 +390,24 @@ _PRESENTATION_LABEL_TOKEN_START = r"(?<![A-Za-z0-9_-])"
 _PRESENTATION_KEY_LABELS_SOURCE = (
     r"(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)"
 )
+# Account help often states a rule as `Password: 12 characters` or
+# `Token: 24 hours`. A bare number after a label is not by itself a secret;
+# when it is a quantity with a length or time unit it is a public rule. The
+# negative lookahead keeps that shape out of the value-evidence arms while a
+# bare number (`Password: 12345678`) and a mixed value (`token: abc123`) still
+# fail closed.
+_PRESENTATION_RULE_QUANTITY_SOURCE = (
+    r"(?![\"']?\d+(?:\.\d+)?"
+    r"(?:\s*[-\u2013]\s*\d+|\+)?"
+    r"(?:\s+or\s+(?:more|fewer|less))?"
+    r"\s*[-\u2013]?\s*"
+    r"(?:characters?|chars?|letters?|digits?|symbols?"
+    r"|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s"
+    r"|days?|d|weeks?|months?|years?)\b)"
+)
 _PRESENTATION_COLON_VALUE_SOURCE = (
-    r"(?:"
+    _PRESENTATION_RULE_QUANTITY_SOURCE
+    + r"(?:"
     r"[\"'][^\"'\n]+[\"']|"
     + _SHAPE_VALUE_TOKEN_SOURCE
     + r"|"
