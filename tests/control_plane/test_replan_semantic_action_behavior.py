@@ -1632,3 +1632,196 @@ def test_real_tool_loop_preserves_writeback_rejection_recovery_under_deep_path(
     test_real_tool_loop_selects_composition_gap_and_creates_bound_successor(
         deep_root, monkeypatch, "off",
     )
+
+
+def _qualify_exhausted_with_readback_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    qualification_id: str,
+    mutate_frontier: Any,
+) -> dict[str, Any]:
+    fixture = _build_fixture(tmp_path / "oracle", exhausted_frontier=True)
+    original_read_packet = replan_behavior._read_quota_packet
+
+    def patched_read_packet(
+        fixture_arg: Any, turn_instance_id: str,
+    ) -> dict[str, object]:
+        packet = original_read_packet(fixture_arg, turn_instance_id)
+        if turn_instance_id.endswith("-readback"):
+            frontier = packet.get("goal_frontier_projection")
+            assert isinstance(frontier, dict)
+            mutate_frontier(frontier)
+        return packet
+
+    monkeypatch.setattr(replan_behavior, "_read_quota_packet", patched_read_packet)
+    transport = _context_aware_transport(
+        [
+            ScriptedExecToolAction(command=fixture.quota_guard_command),
+            ScriptedExecToolAction(command="cat replan-frontier.json"),
+            _author_semantic_vision,
+            _exhausted_action,
+            _projected_spend,
+        ]
+    )
+    return DoubaoReplanSemanticActionBehaviorActor(
+        api_key="test-only-placeholder",
+        transport=transport,
+    ).qualify(
+        qualification_id=qualification_id,
+        fixture_root=tmp_path / "actor",
+        exhausted_frontier=True,
+    )
+
+
+@requires_draft_shell
+def test_semantic_reentry_accepts_complete_projection_with_explicit_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_progress: list[dict[str, object]] = []
+
+    def confirm_explicit_zero(frontier: dict[str, Any]) -> None:
+        progress = frontier.get("normalized_progress")
+        assert isinstance(progress, dict)
+        assert progress.get("agent_open_count") == 0
+        observed_progress.append(dict(progress))
+
+    receipt = _qualify_exhausted_with_readback_override(
+        tmp_path,
+        monkeypatch,
+        qualification_id="replan-contrast-explicit-zero",
+        mutate_frontier=confirm_explicit_zero,
+    )
+    assert len(observed_progress) == 1
+    assert receipt["qualification_passed"] is True, receipt
+    assert receipt["semantic_reentry"] == {
+        "decision": "skip",
+        "effective_action": "monitor_quiet_skip",
+        "replan_rule": "terminal_coverage_exhausted",
+        "replan_closed": True,
+        "exited": True,
+    }
+
+
+@requires_draft_shell
+def test_semantic_reentry_rejects_nonzero_active_open_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def set_nonzero_open(frontier: dict[str, Any]) -> None:
+        frontier["monitor_only_lanes"] = {
+            "present": False,
+            "quiet_until_material_transition": False,
+        }
+        progress = dict(frontier["normalized_progress"])
+        progress["agent_open_count"] = 1
+        frontier["normalized_progress"] = progress
+
+    receipt = _qualify_exhausted_with_readback_override(
+        tmp_path,
+        monkeypatch,
+        qualification_id="replan-contrast-nonzero-open",
+        mutate_frontier=set_nonzero_open,
+    )
+    assert receipt["qualification_passed"] is False
+    assert receipt["failure_code"] == "semantic_reentry_not_future_monitor_wait"
+
+
+@requires_draft_shell
+def test_semantic_reentry_accepts_future_due_monitor_and_rejects_due_monitor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def set_future_monitor(frontier: dict[str, Any]) -> None:
+        frontier["monitor_only_lanes"] = {
+            "present": True,
+            "quiet_until_material_transition": True,
+        }
+        progress = dict(frontier["normalized_progress"])
+        progress["agent_monitor_open_count"] = 1
+        progress["agent_monitor_due_count"] = 0
+        frontier["normalized_progress"] = progress
+
+    ok_receipt = _qualify_exhausted_with_readback_override(
+        tmp_path / "future-ok",
+        monkeypatch,
+        qualification_id="replan-contrast-future-monitor",
+        mutate_frontier=set_future_monitor,
+    )
+    assert ok_receipt["qualification_passed"] is True, ok_receipt
+    assert ok_receipt["semantic_reentry"]["replan_rule"] == "future_monitor_wait"
+
+    def set_due_monitor(frontier: dict[str, Any]) -> None:
+        frontier["monitor_only_lanes"] = {
+            "present": True,
+            "quiet_until_material_transition": True,
+        }
+        progress = dict(frontier["normalized_progress"])
+        progress["agent_monitor_open_count"] = 1
+        progress["agent_monitor_due_count"] = 1
+        frontier["normalized_progress"] = progress
+
+    due_receipt = _qualify_exhausted_with_readback_override(
+        tmp_path / "due-reject",
+        monkeypatch,
+        qualification_id="replan-contrast-due-monitor",
+        mutate_frontier=set_due_monitor,
+    )
+    assert due_receipt["qualification_passed"] is False
+    assert due_receipt["failure_code"] == "semantic_reentry_not_future_monitor_wait"
+
+
+@pytest.mark.parametrize(
+    ("case_kind", "progress_value"),
+    [
+        ("missing", ...),
+        ("none", None),
+        ("wrong_str", "missing"),
+        ("wrong_list", []),
+        ("empty_dict", {}),
+        ("null_count", {"agent_open_count": None}),
+        ("bool_count", {"agent_open_count": False}),
+    ],
+)
+def test_semantic_reentry_rejects_missing_none_or_invalid_normalized_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case_kind: str,
+    progress_value: object,
+) -> None:
+    def corrupt_progress(frontier: dict[str, Any]) -> None:
+        frontier["monitor_only_lanes"] = {
+            "present": False,
+            "quiet_until_material_transition": False,
+        }
+        if progress_value is ...:
+            frontier.pop("normalized_progress", None)
+        else:
+            frontier["normalized_progress"] = progress_value
+
+    # First verify the pure validator refuses every malformed progress shape directly.
+    packet: dict[str, Any] = {
+        "decision": "skip",
+        "effective_action": "monitor_quiet_skip",
+        "goal_frontier_projection": {
+            "replan_required": False,
+            "monitor_only_lanes": {"present": False},
+        },
+    }
+    if progress_value is not ...:
+        packet["goal_frontier_projection"]["normalized_progress"] = progress_value
+    with pytest.raises(ValueError, match="semantic_reentry_not_future_monitor_wait"):
+        replan_behavior._semantic_reentry_observation(
+            packet,
+            obligation_id="ob-1",
+            result_class="exploration_exhausted",
+        )
+
+    # Also verify full real-CLI qualification fails closed when normalized_progress is missing/None/wrong-type.
+    if case_kind in {"missing", "none", "wrong_str", "empty_dict"} and shell_isolation_available():
+        receipt = _qualify_exhausted_with_readback_override(
+            tmp_path / case_kind,
+            monkeypatch,
+            qualification_id=f"replan-contrast-{case_kind}",
+            mutate_frontier=corrupt_progress,
+        )
+        assert receipt["qualification_passed"] is False
+        assert receipt["failure_code"] == "semantic_reentry_not_future_monitor_wait"
