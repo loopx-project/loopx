@@ -559,6 +559,15 @@ def render_registry_markdown(payload: dict[str, Any]) -> str:
         lines.append(f"- error: {payload.get('error')}")
         return "\n".join(lines)
 
+    selection = payload.get("selection")
+    if isinstance(selection, dict):
+        lines.extend([
+            f"- matching Goals: `{selection.get('matched_goal_count')}`",
+            f"- returned Goals: `{selection.get('returned_goal_count')}` (offset `{selection.get('offset')}`)",
+            f"- next offset: `{selection.get('next_offset')}`",
+            "- Goal totals, status counts and diagnostics below cover the entire registry.",
+        ])
+
     lines.extend(
         [
             f"- schema_version: `{payload.get('schema_version')}`",
