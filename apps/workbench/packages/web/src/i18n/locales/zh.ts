@@ -126,6 +126,8 @@ export const zh = {
   'actions.forkModeFull': '带完整历史',
   'actions.forkModeLightweightHint': '以新会话起步，不重传全量历史；需要时通过 loochat history 按需读取主对话。',
   'actions.forkModeFullHint': '复制当前全部上下文；部分 Agent 尚未支持跨分叉前缀缓存，首轮会重新计费。',
+  'actions.forkAgentLabel': '使用的 Agent',
+  'actions.forkModeCrossAgentHint': '切换 Agent 时以轻量分支起步，无需摘要，新 Agent 可按需用 loochat history 读取主对话继续任务。',
   'actions.forkTagLabel': '用途标签（可选）',
   'actions.forkTagPlaceholder': '如：分析 one page / 写代码 / 查日志',
   'actions.forkFirstMessageLabel': '第一句（可选）',

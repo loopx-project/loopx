@@ -50,6 +50,11 @@
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
 }
 
+.fork-subchat-mode button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .fork-subchat-mode-hint {
   margin: 0;
   font-size: 12px;
@@ -58,6 +63,7 @@
 }
 
 .fork-subchat-field input,
+.fork-subchat-field select,
 .fork-subchat-field textarea {
   width: 100%;
   padding: 9px 11px;
@@ -75,6 +81,7 @@
 }
 
 .fork-subchat-field input:focus,
+.fork-subchat-field select:focus,
 .fork-subchat-field textarea:focus {
   outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
   outline-offset: 1px;

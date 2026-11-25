@@ -124,6 +124,8 @@ export const ja: Messages = {
   'actions.forkModeFull': '全履歴を引き継ぐ',
   'actions.forkModeLightweightHint': '新しいセッションで開始し、必要なときだけ loochat history で親会話を参照します。',
   'actions.forkModeFullHint': 'これまでの全履歴を複製します。一部の Agent では初回ターンでキャッシュが効かない場合があります。',
+  'actions.forkAgentLabel': '使用する Agent',
+  'actions.forkModeCrossAgentHint': '別の Agent へ切り替える場合は軽量分岐で開始し、要約なしで必要なときに loochat history から親会話を参照して作業を続けます。',
   'actions.forkTagLabel': '用途タグ（任意）',
   'actions.forkTagPlaceholder': '例：資料分析 / コード実装 / ログ調査',
   'actions.forkFirstMessageLabel': '最初のメッセージ（任意）',

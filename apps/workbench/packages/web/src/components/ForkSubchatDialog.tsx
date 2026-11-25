@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { AgentInfo } from '../api';
 import { Dialog } from './Dialog';
 import { t } from '../i18n';
 import './fork-subchat.css';
@@ -6,16 +7,23 @@ import './fork-subchat.css';
 interface Props {
   worktreeAvailable: boolean;
   allowLightweight?: boolean;
-  onConfirm: (opts: { forkTag: string; firstMessage: string; worktree: boolean; lightweight: boolean }) => void;
+  allowFullFork?: boolean;
+  agents?: AgentInfo[];
+  currentAgent: string;
+  onConfirm: (opts: { forkTag: string; firstMessage: string; worktree: boolean; lightweight: boolean; agent?: string }) => void;
   onCancel: () => void;
 }
 
 /** Light one-step card to fork a grouped sub-conversation in the current directory. */
-export function ForkSubchatDialog({ worktreeAvailable, allowLightweight = true, onConfirm, onCancel }: Props) {
-  const [lightweight, setLightweight] = useState(allowLightweight);
+export function ForkSubchatDialog({ worktreeAvailable, allowLightweight = true, allowFullFork = true, agents = [], currentAgent, onConfirm, onCancel }: Props) {
+  const [lightweight, setLightweight] = useState(allowLightweight || !allowFullFork);
+  const [agent, setAgent] = useState(currentAgent);
   const [forkTag, setForkTag] = useState('');
   const [firstMessage, setFirstMessage] = useState('');
   const hasMessage = firstMessage.trim().length > 0;
+  const availableAgents = agents.filter((a) => a.available !== false || a.id === currentAgent);
+  const switchedAgent = agent !== currentAgent;
+  const effectiveLightweight = allowLightweight && (lightweight || !allowFullFork || switchedAgent);
 
   return (
     <Dialog
@@ -25,7 +33,13 @@ export function ForkSubchatDialog({ worktreeAvailable, allowLightweight = true, 
       options={worktreeAvailable ? [{ label: t('actions.forkSubchatWorktree'), hint: t('actions.forkSubchatWorktreeHint') }] : []}
       confirmLabel={hasMessage ? t('actions.forkSubchatBackground') : t('actions.forkSubchatEnter')}
       onConfirm={(_, [worktree]) =>
-        onConfirm({ forkTag: forkTag.trim(), firstMessage: firstMessage.trim(), worktree: Boolean(worktree), lightweight: allowLightweight && lightweight })
+        onConfirm({
+          forkTag: forkTag.trim(),
+          firstMessage: firstMessage.trim(),
+          worktree: Boolean(worktree),
+          lightweight: effectiveLightweight,
+          ...(switchedAgent ? { agent } : {}),
+        })
       }
       onCancel={onCancel}
     >
@@ -37,8 +51,8 @@ export function ForkSubchatDialog({ worktreeAvailable, allowLightweight = true, 
               <button
                 type="button"
                 role="radio"
-                aria-checked={lightweight}
-                className={lightweight ? 'active' : undefined}
+                aria-checked={effectiveLightweight}
+                className={effectiveLightweight ? 'active' : undefined}
                 onClick={() => setLightweight(true)}
               >
                 {t('actions.forkModeLightweight')}
@@ -46,17 +60,39 @@ export function ForkSubchatDialog({ worktreeAvailable, allowLightweight = true, 
               <button
                 type="button"
                 role="radio"
-                aria-checked={!lightweight}
-                className={!lightweight ? 'active' : undefined}
+                aria-checked={!effectiveLightweight}
+                disabled={!allowFullFork || switchedAgent}
+                className={!effectiveLightweight ? 'active' : undefined}
                 onClick={() => setLightweight(false)}
               >
                 {t('actions.forkModeFull')}
               </button>
             </div>
             <p className="fork-subchat-mode-hint">
-              {lightweight ? t('actions.forkModeLightweightHint') : t('actions.forkModeFullHint')}
+              {switchedAgent
+                ? t('actions.forkModeCrossAgentHint')
+                : effectiveLightweight
+                  ? t('actions.forkModeLightweightHint')
+                  : t('actions.forkModeFullHint')}
             </p>
           </div>
+        )}
+        {allowLightweight && availableAgents.length > 1 && (
+          <label className="fork-subchat-field">
+            <span>{t('actions.forkAgentLabel')}</span>
+            <select
+              value={agent}
+              onChange={(e) => {
+                const next = e.target.value;
+                setAgent(next);
+                if (next !== currentAgent) setLightweight(true);
+              }}
+            >
+              {availableAgents.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+          </label>
         )}
         <label className="fork-subchat-field">
           <span>{t('actions.forkTagLabel')}</span>

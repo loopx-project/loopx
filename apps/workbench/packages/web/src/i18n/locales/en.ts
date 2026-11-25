@@ -126,6 +126,8 @@ export const en: Messages = {
   'actions.forkModeFull': 'Full history',
   'actions.forkModeLightweightHint': 'Starts a fresh session without replaying full history; reads the main thread on demand via loochat history.',
   'actions.forkModeFullHint': 'Copies the entire conversation history; some agents do not share prompt cache across forks on the first turn.',
+  'actions.forkAgentLabel': 'Agent',
+  'actions.forkModeCrossAgentHint': 'Switching agents starts a lightweight branch without a summary; the new agent reads the main thread on demand via loochat history.',
   'actions.forkTagLabel': 'Purpose tag (optional)',
   'actions.forkTagPlaceholder': 'e.g. Analyze one-pager / Write code / Check logs',
   'actions.forkFirstMessageLabel': 'First message (optional)',

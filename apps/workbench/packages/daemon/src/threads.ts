@@ -765,13 +765,18 @@ export class ThreadManager {
    */
   async forkThread(
     id: string,
-    opts: { turnId?: string; worktree?: boolean; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
+    opts: { turnId?: string; worktree?: boolean; agent?: string; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
   ): Promise<ThreadView> {
     const thread = this.getThread(id);
+    const targetAgent = typeof opts.agent === 'string' && opts.agent.trim() ? opts.agent.trim() : thread.agent;
+    const across = targetAgent !== thread.agent;
     const adapter = this.adapters.get(thread.agent);
+    const targetAdapter = this.adapters.get(targetAgent);
     const lightweight = opts.lightweight === true;
     if (!adapter) throw new HttpError(400, `no such agent: ${thread.agent}`);
+    if (!targetAdapter) throw new HttpError(400, `no such agent: ${targetAgent}`);
     if (lightweight && opts.turnId) throw new HttpError(400, 'a lightweight fork starts a fresh session and does not accept turnId');
+    if (!lightweight && across) throw new HttpError(400, 'full-history fork stays on the same agent; use lightweight fork to switch agent');
     if (!lightweight) {
       if (!adapter.capabilities.fork || !adapter.forkSession) throw new HttpError(400, `${thread.agent} cannot fork a conversation`);
       if (!thread.agentSessionId) throw new HttpError(400, 'there is nothing to fork yet; send a message first');
@@ -809,7 +814,7 @@ export class ThreadManager {
     try {
       const forkRef = !lightweight && cut ? await this.agentForkRef(thread, adapter, cut.hubIndex, cut.hubKeys) : undefined;
       if (opts.worktree) {
-        const plan = await this.worktreePlan(thread);
+        const plan = lightweight ? await this.checkoutFor(thread.cwd) : await this.worktreePlan(thread);
         if (!plan.checkout) throw new HttpError(400, WORKTREE_REFUSALS[plan.reason]);
         const tree = await addWorktree(plan.checkout, copyId.slice(0, 8)).catch((err) => {
           throw new HttpError(500, `could not add a git worktree: ${err instanceof Error ? err.message : err}`);
@@ -843,18 +848,29 @@ export class ThreadManager {
     const copyTitle = grouped
       ? (firstMessage ? firstMessage.slice(0, 40) : forkTag || `${thread.title}（分叉）`)
       : `${thread.title}（分叉）`;
+    const permissionMode = across
+      ? (targetAdapter.capabilities.permissionModes.length === 0
+          ? 'auto_edit'
+          : (targetAdapter.capabilities.permissionModes as readonly string[]).includes(thread.permissionMode)
+            ? thread.permissionMode
+            : targetAdapter.capabilities.permissionModes[0])
+      : thread.permissionMode;
+    const sourceWorkMode: WorkMode = thread.workMode ?? 'execute';
+    const workMode: WorkMode = across && !targetAdapter.capabilities.workModes?.includes(sourceWorkMode)
+      ? 'execute'
+      : sourceWorkMode;
     try {
       this.store.transaction(() => {
         this.store.createThread({
           id: copyId,
-          agent: thread.agent,
+          agent: targetAgent,
           cwd,
           title: copyTitle,
-          permissionMode: thread.permissionMode,
-          workMode: thread.workMode,
-          speed: thread.speed,
-          model: thread.model,
-          effort: thread.effort,
+          permissionMode,
+          workMode,
+          speed: across ? null : thread.speed,
+          model: across ? null : thread.model,
+          effort: across ? null : thread.effort,
           forkedFrom: thread.id,
           forkGroup,
           forkTag,
@@ -957,7 +973,7 @@ export class ThreadManager {
       const label = !t.forkGroup ? `主会话「${t.title}」` : t.forkTag ? `[${t.forkTag}] ${t.title}` : t.title;
       return `- ${label}（id: ${t.id}，状态: ${t.status === 'running' ? '运行中' : '空闲'}）`;
     });
-    return `<loochat-forks>\n同工作区关联会话（按需只读；平时不要主动读取，仅在用户提及或需要对照时用 \`loochat history <id> --user-inputs\` 查阅）：\n${lines.join('\n')}\n</loochat-forks>`;
+    return `<loochat-forks>\n同工作区关联会话（按需只读；平时不要主动读取，仅在用户提及、需要对照或接续任务时用 \`loochat history <id> --user-inputs\` 或 \`loochat history <id>\` 查阅）：\n${lines.join('\n')}\n</loochat-forks>`;
   }
 
   /** What forking this thread can offer. Asked when the user reaches for the fork button, not before. */
@@ -2140,10 +2156,20 @@ export class ThreadManager {
    * exists nowhere else (files not committed, commits no other branch has) stops this unless
    * `force` says the user has seen the count and means it.
    */
-  async deleteThread(id: string, opts: { agentSession?: boolean; worktree?: boolean; force?: boolean } = {}): Promise<void> {
+  async deleteThread(id: string, opts: { agentSession?: boolean; worktree?: boolean; force?: boolean; ifEmpty?: boolean } = {}): Promise<void> {
     const thread = this.getThread(id);
     if (this.running.has(id)) throw new HttpError(409, 'cancel the running turn before deleting this thread');
     if (this.coordination?.metadata(id)) throw new HttpError(409, '协作对话请先归档，保留成员关系与消息记录');
+    const assertEmpty = () => {
+      const current = this.store.getThread(id);
+      if (!current) throw new HttpError(404, `no such thread: ${id}`);
+      const hasQueued = (this.queues.get(id)?.length ?? 0) > 0 || this.modelQueues.has(id);
+      const hasTurns = this.store.listEventsOfType(id, 'turn.started').length > 0 || this.store.listEventsOfType(id, 'turn.done').length > 0;
+      if (this.running.has(id) || current.status === 'running' || hasQueued || hasTurns || Boolean(current.agentSessionId)) {
+        throw new HttpError(409, 'thread already has accepted or queued work', { code: 'thread_not_empty' });
+      }
+    };
+    if (opts.ifEmpty) assertEmpty();
     let doomed: { main: string; tree: ThreadWorktree } | null = null;
     if (opts.worktree) {
       const tree = thread.worktree;
@@ -2161,6 +2187,24 @@ export class ThreadManager {
       doomed = { main, tree };
     }
     await this.dropSession(id);
+    if (opts.ifEmpty) {
+      // Atomically verify the thread still has zero accepted/queued work and delete it in one transaction
+      // so a racing or previously completed turn can never be wiped.
+      this.store.transaction(() => {
+        assertEmpty();
+        this.emitThreadEvent(id, null, 'thread.updated', {});
+        this.quotaResume.drop(id);
+        this.queues.delete(id);
+        this.modelQueues.delete(id);
+        this.goals.delete(id);
+        this.store.deleteThread(id);
+      });
+      if (doomed) {
+        await removeWorktree(doomed.main, doomed.tree).catch(() => undefined);
+      }
+      this.attachments.removeThread(id);
+      return;
+    }
     this.quotaResume.drop(id);
     if (opts.agentSession && thread.agentSessionId) {
       const adapter = this.adapters.get(thread.agent);

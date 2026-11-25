@@ -1201,6 +1201,7 @@ export function createHttpServer(deps: HttpDeps): Server {
           agentSession: url.searchParams.get('agentSession') === '1',
           worktree: url.searchParams.get('worktree') === '1',
           force: url.searchParams.get('force') === '1',
+          ifEmpty: url.searchParams.get('ifEmpty') === '1',
         });
         res.writeHead(204).end();
         return;
@@ -1595,6 +1596,7 @@ export function createHttpServer(deps: HttpDeps): Server {
           201,
           await manager.forkThread(threadId, {
             ...(typeof body?.turnId === 'string' ? { turnId: body.turnId } : {}),
+            ...(typeof body?.agent === 'string' && body.agent.trim() ? { agent: body.agent.trim() } : {}),
             worktree: body?.worktree === true,
             ...(body?.grouped === true ? { grouped: true } : {}),
             ...(body?.lightweight === true ? { lightweight: true } : {}),

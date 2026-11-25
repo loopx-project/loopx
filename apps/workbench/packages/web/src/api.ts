@@ -1813,8 +1813,8 @@ export class Api {
    * `worktree` removes the git worktree the thread runs in as well. Work that exists nowhere else
    * stops that with an ApiError whose details say how much (`code: 'worktree_dirty'`), until `force`.
    */
-  deleteThread(threadId: string, opts: { agentSession?: boolean; worktree?: boolean; force?: boolean } = {}): Promise<void> {
-    const query = [opts.agentSession && 'agentSession=1', opts.worktree && 'worktree=1', opts.force && 'force=1'].filter(Boolean).join('&');
+  deleteThread(threadId: string, opts: { agentSession?: boolean; worktree?: boolean; force?: boolean; ifEmpty?: boolean } = {}): Promise<void> {
+    const query = [opts.agentSession && 'agentSession=1', opts.worktree && 'worktree=1', opts.force && 'force=1', opts.ifEmpty && 'ifEmpty=1'].filter(Boolean).join('&');
     return this.request('DELETE', `/api/threads/${threadId}${query ? `?${query}` : ''}`);
   }
 
@@ -1851,10 +1851,11 @@ export class Api {
   /** With `turnId` the copy ends where that turn ended; with `worktree` it runs in a git worktree of its own. */
   forkThread(
     threadId: string,
-    opts: { turnId?: string; worktree?: boolean; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
+    opts: { turnId?: string; worktree?: boolean; agent?: string; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
   ): Promise<Thread> {
     const body = {
       ...(opts.turnId ? { turnId: opts.turnId } : {}),
+      ...(opts.agent ? { agent: opts.agent } : {}),
       ...(opts.worktree ? { worktree: true } : {}),
       ...(opts.grouped ? { grouped: true } : {}),
       ...(opts.lightweight ? { lightweight: true } : {}),

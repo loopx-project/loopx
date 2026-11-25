@@ -105,10 +105,47 @@ test('failed first turn on a new thread rolls back to new thread, restores draft
   await page.locator('.empty').waitFor({ timeout: 5000 });
   await page.waitForFunction(() => document.querySelector('.composer-box textarea')?.value === 'must not become orphan', { timeout: 5000 });
 
-  // Wait briefly for DELETE /api/threads/:id cleanup and confirm no orphan thread remains on daemon.
+  // Wait briefly for DELETE /api/threads/:id?ifEmpty=1 cleanup and confirm no orphan thread remains on daemon.
   await page.waitForTimeout(400);
   const afterThreads = await (await api(daemon, '/api/threads')).json();
   assert.equal(afterThreads.length, beforeThreads.length, 'orphan 0-turn thread must be cleaned up on first-turn failure');
+
+  await context.close();
+});
+
+test('dropped POST /turns response after completed turn preserves durable thread and shows reply', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+  const page = await context.newPage();
+  await openUi(page, daemon);
+
+  let createdThreadId = null;
+  await page.route('**/api/threads/*/turns', async (route) => {
+    const match = route.request().url().match(/\/api\/threads\/([^/]+)\/turns/);
+    createdThreadId = match?.[1] ?? null;
+    // Deliver the POST to the real daemon and wait until the turn finishes in SQLite,
+    // then abort the client response to simulate a transport drop after acceptance.
+    const response = await route.fetch();
+    assert.equal(response.status(), 202);
+    if (createdThreadId) {
+      for (let i = 0; i < 80; i++) {
+        const res = await api(daemon, `/api/threads/${createdThreadId}`);
+        if (res.status === 200 && (await res.json()).status !== 'running') break;
+        await new Promise(r => setTimeout(r, 100));
+      }
+    }
+    await route.abort('failed');
+  });
+
+  const textarea = page.locator('.composer-box textarea');
+  await textarea.fill('must survive dropped response');
+  await page.locator('.composer .send-btn:not(.stop)').click();
+
+  // The durable thread stays HTTP 200 (never deleted as an orphan) and renders the completed answer.
+  await page.locator('.row.assistant .markdown').first().waitFor({ timeout: 15_000 });
+  assert.ok(createdThreadId, 'captured created thread id');
+  const readback = await api(daemon, `/api/threads/${createdThreadId}`);
+  assert.equal(readback.status, 200, 'completed thread must remain HTTP 200 after client response drop');
+  assert.equal(await textarea.inputValue(), '', 'accepted message must not be restored as unsent draft');
 
   await context.close();
 });

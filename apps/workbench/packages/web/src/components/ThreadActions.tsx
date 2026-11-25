@@ -68,8 +68,8 @@ type DialogState =
   | { kind: 'delete-worktree'; thread: Thread; agentSession: boolean; changes: number; commits: number }
   /** Where the copy should run: beside the original, or in a git worktree of its own. */
   | { kind: 'fork'; thread: Thread; turnId?: string; branch: string | null; changes: number }
-  /** One-step grouped sub-conversation fork in the current directory (optional tag, first message, worktree). */
-  | { kind: 'fork-subchat'; thread: Thread; turnId?: string; worktreeAvailable: boolean }
+  /** One-step grouped sub-conversation fork in the current directory (optional tag, first message, worktree, agent). */
+  | { kind: 'fork-subchat'; thread: Thread; turnId?: string; worktreeAvailable: boolean; allowFullFork: boolean }
   /** Edit the short purpose tag of a grouped forked sub-conversation. */
   | { kind: 'fork-tag'; thread: Thread }
   | { kind: 'new-section'; thread: Thread | null }
@@ -170,10 +170,11 @@ export function useThreadActions(deps: Deps) {
   const openForkSubchat = async (thread: Thread, turnId?: string) => {
     if (!api) return;
     const blocked = forkBlocked(thread, turnId);
-    if (blocked) return onError(blocked);
-    const wants = Boolean(agents.find((a) => a.id === thread.agent)?.capabilities.forkInto);
-    const options = wants ? await api.forkOptions(thread.id).catch(() => null) : null;
-    setDialog({ kind: 'fork-subchat', thread, turnId, worktreeAvailable: Boolean(options?.worktree.available) });
+    if (turnId && blocked) return onError(blocked);
+    const agentInfo = agents.find((a) => a.id === thread.agent);
+    const allowFullFork = Boolean(agentInfo?.capabilities.fork) && blocked === null;
+    const options = await api.forkOptions(thread.id).catch(() => null);
+    setDialog({ kind: 'fork-subchat', thread, turnId, worktreeAvailable: Boolean(options?.worktree.available), allowFullFork });
   };
 
   const run = (action: ThreadAction, thread: Thread) => {
@@ -362,11 +363,9 @@ export function useThreadActions(deps: Deps) {
       ],
     },
     { id: 'continuation', label: t('actions.forkAndHandover'), icon: IconHand, submenu: [
+      { id: 'fork-subchat', label: t('actions.forkSubchat'), icon: IconFork, onSelect: () => run('fork-subchat', thread) },
       ...(agents.find((a) => a.id === thread.agent)?.capabilities.fork
-        ? [
-            { id: 'fork-subchat', label: t('actions.forkSubchat'), icon: IconFork, disabled: forkBlocked(thread) !== null, onSelect: () => run('fork-subchat', thread) },
-            { id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: forkBlocked(thread) !== null, onSelect: () => run('fork', thread) },
-          ]
+        ? [{ id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: forkBlocked(thread) !== null, onSelect: () => run('fork', thread) }]
         : []),
       ...(thread.forkGroup ? [{ id: 'fork-tag', label: t('actions.editForkTag'), icon: IconEdit, onSelect: () => run('fork-tag', thread) }] : []),
       { id: 'handover', label: t('handover.title'), icon: IconHand, onSelect: () => setDialog({ kind: 'handover', thread }) },
@@ -466,16 +465,19 @@ export function useThreadActions(deps: Deps) {
         />
       );
     } else if (dialog.kind === 'fork-subchat') {
-      const { thread, turnId, worktreeAvailable } = dialog;
+      const { thread, turnId, worktreeAvailable, allowFullFork } = dialog;
       dialogNode = (
         <ForkSubchatDialog
           worktreeAvailable={worktreeAvailable}
           allowLightweight={!turnId}
-          onConfirm={({ forkTag, firstMessage, worktree, lightweight }) => {
+          allowFullFork={allowFullFork}
+          agents={agents}
+          currentAgent={thread.agent}
+          onConfirm={({ forkTag, firstMessage, worktree, lightweight, agent }) => {
             close();
             onBusy({ threadId: thread.id, message: worktree ? t('actions.forkingWorktree') : t('actions.forking') });
             void api
-              .forkThread(thread.id, { turnId, worktree, grouped: true, lightweight, forkTag, firstMessage })
+              .forkThread(thread.id, { turnId, worktree, grouped: true, lightweight, forkTag, firstMessage, ...(agent ? { agent } : {}) })
               .then((copy) => {
                 if (firstMessage) onThreadChange(copy);
                 else onThreadOpen(copy);
@@ -514,7 +516,7 @@ export function useThreadActions(deps: Deps) {
           ]}
           onPick={(id) => {
             close();
-            if (id === 'lightweight') setDialog({ kind: 'fork-subchat', thread, worktreeAvailable: true });
+            if (id === 'lightweight') setDialog({ kind: 'fork-subchat', thread, worktreeAvailable: true, allowFullFork: true });
             else void fork(thread, turnId, id === 'worktree' ? 'worktree' : 'here');
           }}
           onCancel={close}

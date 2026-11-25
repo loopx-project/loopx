@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
-import type { AgentMention, Api, MemberDefault, QueuedMessage, Thread, WorkMode, WritingStage } from './api';
+import { ApiError, type AgentMention, type Api, type MemberDefault, type QueuedMessage, type Thread, type WorkMode, type WritingStage } from './api';
 import { referencePreview, sameReferencedMessage } from './context-references';
 import { t } from './i18n';
 import type { PreparedImage } from './images';
@@ -300,8 +300,65 @@ export interface PendingThreadCreation {
   cancelled: boolean;
 }
 
+export type FailedFirstTurnOutcome =
+  | { kind: 'accepted'; thread: Thread; events: StoredEvent[] }
+  | { kind: 'deleted' }
+  | { kind: 'kept' };
+
+/**
+ * True when an error cannot rule out that the daemon already accepted or completed the turn
+ * (network drop, aborted response, timeout, or upstream gateway error).
+ */
+export function isUnknownDeliveryError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 502;
+}
+
+/**
+ * Safely settles a failed first turn on a newly created thread without deleting durable work:
+ * - On unknown delivery, reads back the thread and its history first; if any turn/event/queue
+ *   exists, keeps the thread and returns `{ kind: 'accepted' }`.
+ * - Only deletes through the daemon's atomic `ifEmpty: true` guard. If the daemon refuses with
+ *   `thread_not_empty` or readback/cleanup cannot complete, keeps the thread and draft binding.
+ */
+const hasTurnWork = (events: ReadonlyArray<StoredEvent>): boolean =>
+  events.some(ev => ev.turnId !== null || ev.type.startsWith('turn.'));
+
+export async function reconcileOrCleanupEmptyThread(
+  api: Pick<Api, 'deleteThread' | 'thread' | 'historyPage'>,
+  created: Thread,
+  error: unknown,
+): Promise<FailedFirstTurnOutcome> {
+  if (isUnknownDeliveryError(error)) {
+    let liveThread: Thread;
+    let page: { events: StoredEvent[] };
+    try {
+      [liveThread, page] = await Promise.all([api.thread(created.id), api.historyPage(created.id)]);
+    } catch {
+      return { kind: 'kept' };
+    }
+    if (liveThread.status === 'running' || liveThread.queued.length > 0 || hasTurnWork(page.events) || Boolean(liveThread.agentSessionId)) {
+      return { kind: 'accepted', thread: liveThread, events: page.events };
+    }
+  }
+  try {
+    await api.deleteThread(created.id, { worktree: Boolean(created.worktree), ifEmpty: true });
+    return { kind: 'deleted' };
+  } catch (cleanupError) {
+    if (cleanupError instanceof ApiError && cleanupError.status === 409 && cleanupError.details?.code === 'thread_not_empty') {
+      try {
+        const [liveThread, page] = await Promise.all([api.thread(created.id), api.historyPage(created.id)]);
+        return { kind: 'accepted', thread: liveThread, events: page.events };
+      } catch {
+        return { kind: 'kept' };
+      }
+    }
+    return { kind: 'kept' };
+  }
+}
+
 export interface OptimisticMainSendArgs {
-  api: Pick<Api, 'demo' | 'createThread' | 'setWriting' | 'dispatchTeam' | 'startTurn' | 'uploadVideo' | 'deleteThread'>;
+  api: Pick<Api, 'demo' | 'createThread' | 'setWriting' | 'dispatchTeam' | 'startTurn' | 'uploadVideo' | 'deleteThread' | 'thread' | 'historyPage'>;
   selectedId: string | null;
   selected: Thread | null;
   running: boolean;
@@ -470,7 +527,7 @@ export async function runOptimisticMainSend(args: OptimisticMainSendArgs): Promi
         optimistic.remove(optTurn.localId);
         setThreads(prev => prev.filter(item => item.id !== tempId && item.id !== created!.id));
         if (shownThread.current === tempId) setSelectedId(null);
-        void api.deleteThread(created.id, { worktree: Boolean(created.worktree) }).catch(() => undefined);
+        void api.deleteThread(created.id, { worktree: Boolean(created.worktree), ifEmpty: true }).catch(() => undefined);
         rejectCreated(new Error('cancelled'));
         return;
       }
@@ -508,17 +565,30 @@ export async function runOptimisticMainSend(args: OptimisticMainSendArgs): Promi
       refreshThreads();
       return;
     } catch (error) {
+      if (!created) {
+        optimistic.remove(optTurn.localId);
+        rejectCreated(error);
+        setThreads(prev => prev.filter(item => item.id !== tempId));
+        if (shownThread.current === tempId) setSelectedId(null);
+        throw error;
+      }
+      const outcome = await reconcileOrCleanupEmptyThread(api, created, error);
+      if (outcome.kind === 'accepted') {
+        optimistic.reconcile(created.id, outcome.events);
+        if (outcome.events.length > 0) optimistic.remove(optTurn.localId);
+        setThreads(prev => [outcome.thread, ...prev.filter(item => item.id !== tempId && item.id !== created!.id)]);
+        refreshThreads();
+        return;
+      }
       optimistic.remove(optTurn.localId);
-      if (created) {
+      if (outcome.kind === 'deleted') {
         pinnedThreadIds.current.delete(created.id);
         onRollback?.();
-        void api.deleteThread(created.id, { worktree: Boolean(created.worktree) }).catch(() => undefined);
+        setThreads(prev => prev.filter(item => item.id !== tempId && item.id !== created!.id));
+        if (shownThread.current === tempId || shownThread.current === created.id) setSelectedId(null);
       } else {
-        rejectCreated(error);
+        refreshThreads();
       }
-      const createdId = created?.id;
-      setThreads(prev => prev.filter(item => item.id !== tempId && item.id !== createdId));
-      if (shownThread.current === tempId || (createdId && shownThread.current === createdId)) setSelectedId(null);
       throw error;
     } finally {
       pendingCreations.current.delete(tempId);

@@ -17,7 +17,7 @@ import {
   type PendingThreadCreation,
 } from '../src/optimistic';
 import { createThreadFeed } from '../src/extensions/thread-feed';
-import type { Thread } from '../src/api';
+import { ApiError, type Thread } from '../src/api';
 import type { StoredEvent } from '../src/timeline';
 
 const event = (seq: number, type: string, turnId: string | null, data: Record<string, unknown> = {}): StoredEvent => ({
@@ -110,6 +110,8 @@ test('runOptimisticMainSend transitions a new thread at 0ms and migrates seamles
     startTurn: () => new Promise<{ turnId: string }>(r => { resolveTurn = r; }),
     uploadVideo: async () => { throw new Error('unused'); },
     deleteThread: async () => undefined,
+    thread: async () => { throw new Error('unused'); },
+    historyPage: async () => ({ events: [], hasOlder: false, nextCursor: null, snapshotSeq: 0, total: 0 }),
   };
 
   const sendPromise = runOptimisticMainSend({
@@ -179,12 +181,13 @@ test('runOptimisticMainSend transitions a new thread at 0ms and migrates seamles
   assert.equal(optimistic.current()[0].turnId, 'turn-real-1');
 });
 
-test('runOptimisticMainSend deletes 0-turn orphan thread and rolls back when first startTurn fails', async () => {
+test('runOptimisticMainSend deletes 0-turn orphan thread via ifEmpty and rolls back when first startTurn fails', async () => {
   let threads: Thread[] = [];
   let selectedId: string | null = null;
   const shownThread = { current: null as string | null };
   const setSelectedId = (id: string | null) => { selectedId = id; shownThread.current = id; };
-  const deleted: string[] = [];
+  const deleted: Array<{ id: string; ifEmpty?: boolean }> = [];
+  let rolledBack = 0;
   const optimistic = makeController();
 
   const api = {
@@ -192,9 +195,11 @@ test('runOptimisticMainSend deletes 0-turn orphan thread and rolls back when fir
     createThread: async () => createOptimisticThread({ id: 'orphan-1', agent: 'agy', cwd: '/proj', title: 'New thread', permissionMode: 'auto_edit' }),
     setWriting: async () => { throw new Error('unused'); },
     dispatchTeam: async () => { throw new Error('unused'); },
-    startTurn: async () => { throw new Error('boom'); },
+    startTurn: async () => { throw new ApiError('boom', {}, 500); },
     uploadVideo: async () => { throw new Error('unused'); },
-    deleteThread: async (id: string) => { deleted.push(id); },
+    deleteThread: async (id: string, opts?: { ifEmpty?: boolean }) => { deleted.push({ id, ifEmpty: opts?.ifEmpty }); },
+    thread: async () => { throw new Error('unused'); },
+    historyPage: async () => ({ events: [], hasOlder: false, nextCursor: null, snapshotSeq: 0, total: 0 }),
   };
 
   await assert.rejects(() => runOptimisticMainSend({
@@ -239,12 +244,100 @@ test('runOptimisticMainSend deletes 0-turn orphan thread and rolls back when fir
     optimistic,
     pendingCreations: { current: new Map() },
     refreshThreads: () => undefined,
+    onRollback: () => { rolledBack++; },
   }), /boom/);
 
   assert.equal(selectedId, null);
   assert.deepEqual(threads, []);
   assert.deepEqual(optimistic.current(), []);
-  assert.deepEqual(deleted, ['orphan-1']);
+  assert.deepEqual(deleted, [{ id: 'orphan-1', ifEmpty: true }]);
+  assert.equal(rolledBack, 1);
+});
+
+test('runOptimisticMainSend preserves thread when first turn completed on daemon but client lost the POST response', async () => {
+  let threads: Thread[] = [];
+  let selectedId: string | null = null;
+  const shownThread = { current: null as string | null };
+  const setSelectedId = (id: string | null) => { selectedId = id; shownThread.current = id; };
+  const deleted: string[] = [];
+  let rolledBack = 0;
+  const optimistic = makeController();
+
+  const createdThread = createOptimisticThread({ id: 'durable-1', agent: 'agy', cwd: '/proj', title: 'New thread', permissionMode: 'auto_edit' });
+  const completedThread: Thread = { ...createdThread, status: 'idle', agentSessionId: 'sess-1', title: 'Delivered ask' };
+  const api = {
+    demo: false,
+    createThread: async () => createdThread,
+    setWriting: async () => { throw new Error('unused'); },
+    dispatchTeam: async () => { throw new Error('unused'); },
+    startTurn: async () => { throw new TypeError('Failed to fetch'); },
+    uploadVideo: async () => { throw new Error('unused'); },
+    deleteThread: async (id: string) => { deleted.push(id); },
+    thread: async () => completedThread,
+    historyPage: async () => ({
+      events: [
+        event(1, 'thread.created', null, {}),
+        event(2, 'turn.started', 'turn-1', { text: 'Delivered ask' }),
+        event(3, 'turn.done', 'turn-1', { stopReason: 'end_turn' }),
+      ],
+      hasOlder: false,
+      nextCursor: null,
+      snapshotSeq: 3,
+      total: 3,
+    }),
+  };
+
+  await runOptimisticMainSend({
+    api,
+    selectedId: null,
+    selected: null,
+    running: false,
+    events: [],
+    draftTeam: null,
+    draftAgent: 'agy',
+    draftCwd: '/proj',
+    draftScratch: false,
+    draftPermission: 'auto_edit',
+    draftWorkMode: 'execute',
+    draftModel: null,
+    draftEffort: null,
+    draftSpeed: null,
+    draftSectionId: null,
+    draftWorktree: false,
+    draftWriting: null,
+    hasWorktreeOffer: false,
+    draftCollaboration: false,
+    collaborationDirectories: [],
+    startingDefaults: {},
+    memberPermission: 'full_access',
+    text: 'Delivered ask',
+    images: [],
+    isNewThread: true,
+    videos: [],
+    references: [],
+    teamAttachmentsError: 'no attachments',
+    setThreads: updater => { threads = typeof updater === 'function' ? updater(threads) : updater; },
+    setSelectedId,
+    setView: () => undefined,
+    setDraftWriting: () => undefined,
+    setDraftSectionId: () => undefined,
+    setDraftWorktree: () => undefined,
+    setDraftTeam: () => undefined,
+    pinnedThreadIds: { current: new Set() },
+    shownThread,
+    stickToBottom: { current: false },
+    optimistic,
+    pendingCreations: { current: new Map() },
+    refreshThreads: () => undefined,
+    onRollback: () => { rolledBack++; },
+  });
+
+  assert.equal(selectedId, 'durable-1', 'keeps the created thread selected');
+  assert.equal(threads.length, 1);
+  assert.equal(threads[0].id, 'durable-1');
+  assert.equal(threads[0].status, 'idle');
+  assert.deepEqual(deleted, [], 'never deletes a thread whose turn was accepted/completed');
+  assert.equal(rolledBack, 0, 'does not roll back draft when turn was already accepted');
 });
 
 test('appendQueuedToThreads adds optimistic queued preview without duplicating', () => {

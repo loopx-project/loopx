@@ -1,5 +1,5 @@
 import { mergeHistory, watchHistory } from '../history';
-import { createOptimisticThread, createOptimisticThreadId, createOptimisticTurn, isOptimisticThreadId, maxEventSeq, mergeOptimisticEvents, useOptimisticTurns } from '../optimistic';
+import { createOptimisticThread, createOptimisticThreadId, createOptimisticTurn, isOptimisticThreadId, maxEventSeq, mergeOptimisticEvents, reconcileOrCleanupEmptyThread, useOptimisticTurns } from '../optimistic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Api, type AgentInfo, type AgentMention, type ModelOption, type Thread } from '../api';
 import type { PreparedImage } from '../images';
@@ -289,9 +289,23 @@ export function SideChat({
       }
     } catch (error) {
       if (!api.demo) {
-        optimistic.remove(optTurn.localId);
-        if (created) void api.deleteThread(created.id).catch(() => undefined);
-        setThread(null);
+        if (created) {
+          const outcome = await reconcileOrCleanupEmptyThread(api, created, error);
+          if (outcome.kind === 'accepted') {
+            optimistic.reconcile(created.id, outcome.events);
+            if (outcome.events.some(ev => ev.turnId !== null || ev.type.startsWith('turn.'))) {
+              optimistic.remove(optTurn.localId);
+            }
+            setThread(outcome.thread);
+            setEvents(created.forkedFrom ? outcome.events.filter(e => e.seq > baseSeq.current) : outcome.events);
+            return;
+          }
+          optimistic.remove(optTurn.localId);
+          if (outcome.kind === 'deleted') setThread(null);
+        } else {
+          optimistic.remove(optTurn.localId);
+          setThread(null);
+        }
       }
       throw error;
     }

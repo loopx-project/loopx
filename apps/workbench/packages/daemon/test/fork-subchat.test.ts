@@ -163,6 +163,33 @@ test('grouped fork keeps same cwd, supports optional firstMessage and forkTag, a
     assert.match(String(lightTurn.data.text), /<loochat-forks>[\s\S]*主线重构[\s\S]*<\/loochat-forks>/);
     const lightReadsRoot = (await h.manager.references.command(light.id, { op: 'history', target: root.id, userInputs: true })) as any;
     assert.ok(Array.isArray(lightReadsRoot.inputs) && lightReadsRoot.inputs.some((i: any) => String(i.text).includes('主线架构方案')));
+
+    // Cross-agent lightweight fork: switch to another agent (e.g. when quota runs out) and pull parent history on demand.
+    const badFullAcross = await h.req('POST', `/api/threads/${root.id}/fork`, {
+      grouped: true,
+      lightweight: false,
+      agent: 'pi-b',
+    });
+    assert.equal(badFullAcross.status, 400);
+
+    const crossRes = await h.req('POST', `/api/threads/${root.id}/fork`, {
+      grouped: true,
+      lightweight: true,
+      agent: 'pi-b',
+      forkTag: '换号续跑',
+      firstMessage: '上一个没额度了，你继续主线重构任务',
+    });
+    assert.equal(crossRes.status, 201);
+    const cross = await crossRes.json();
+    assert.equal(cross.agent, 'pi-b');
+    assert.equal(cross.forkGroup, root.id);
+    assert.equal(cross.forkTag, '换号续跑');
+    assert.equal(cross.model, null);
+    await h.idle(cross.id);
+    const crossTurn = h.store.listEventsOfType(cross.id, 'turn.started').at(-1)!;
+    assert.match(String(crossTurn.data.text), /<loochat-forks>[\s\S]*主线重构[\s\S]*<\/loochat-forks>/);
+    const crossReadsRoot = (await h.manager.references.command(cross.id, { op: 'history', target: root.id, userInputs: true })) as any;
+    assert.ok(Array.isArray(crossReadsRoot.inputs) && crossReadsRoot.inputs.some((i: any) => String(i.text).includes('主线架构方案')));
   } finally {
     await h.close();
   }

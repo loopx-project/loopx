@@ -3575,3 +3575,30 @@ test('outputs diff references read each call through history detail using the ca
     assert.equal(body.output, undefined);
   }
 });
+
+test('DELETE /api/threads/:id?ifEmpty=1 deletes only truly 0-turn threads and preserves threads with completed turns', async () => {
+  const emptyRes = await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'claude', cwd: workdir }) });
+  assert.equal(emptyRes.status, 201);
+  const emptyThread = (await emptyRes.json()) as { id: string };
+
+  const delEmpty = await api(`/api/threads/${emptyThread.id}?ifEmpty=1`, { method: 'DELETE' });
+  assert.equal(delEmpty.status, 204);
+  assert.equal((await api(`/api/threads/${emptyThread.id}`)).status, 404);
+
+  const usedRes = await api('/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'claude', cwd: workdir }) });
+  assert.equal(usedRes.status, 201);
+  const usedThread = (await usedRes.json()) as { id: string };
+  const turnRes = await api(`/api/threads/${usedThread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'persist this answer' }) });
+  assert.equal(turnRes.status, 202);
+  await waitFor(async () => ((await (await api(`/api/threads/${usedThread.id}`)).json()) as { status: string }).status !== 'running' ? true : null);
+
+  const delUsed = await api(`/api/threads/${usedThread.id}?ifEmpty=1`, { method: 'DELETE' });
+  assert.equal(delUsed.status, 409);
+  const errBody = (await delUsed.json()) as { code?: string };
+  assert.equal(errBody.code, 'thread_not_empty');
+
+  const stillThere = await api(`/api/threads/${usedThread.id}`);
+  assert.equal(stillThere.status, 200);
+  const log = await events(usedThread.id);
+  assert.ok(log.some(e => e.type === 'turn.done'), 'completed turn remains durable in SQLite');
+});
