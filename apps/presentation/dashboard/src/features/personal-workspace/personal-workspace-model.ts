@@ -543,7 +543,7 @@ export type WorkspaceAgentOption = {
 
 export type WorkspaceDrawerSelection =
   | { item: WorkspaceAttention; kind: "attention" }
-  | { item: WorkspaceGoal; kind: "goal" }
+  | { item: WorkspaceGoal; kind: "goal"; openingControl?: HTMLButtonElement }
   | { item: WorkspaceTodo; kind: "todo" }
   | { item: WorkspaceRun; kind: "run" }
   | { item: WorkspaceOutput; kind: "output" }
