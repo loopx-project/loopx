@@ -12,7 +12,7 @@ import json
 import threading
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import pytest
 
@@ -66,6 +66,7 @@ class SandboxInstanceState:
     env: dict[str, str]
     processes: dict[int, str]
     memory_pages: dict[str, str]
+    daemon_health: dict[str, bool] = field(default_factory=dict)
     egress_policy_id: str = "isolated-offline"
 
 
@@ -78,7 +79,7 @@ class SandboxPauseReceipt:
 
 
 def _freeze_snapshot_fields(instance: object) -> None:
-    for attr in ("rootfs", "symlinks", "env", "processes", "memory_pages"):
+    for attr in ("rootfs", "symlinks", "env", "processes", "daemon_health", "memory_pages"):
         object.__setattr__(
             instance,
             attr,
@@ -104,6 +105,8 @@ class _SealedSnapshot:
     memory_digest: str | None
     digest: str
     refcount: int = 1
+    daemon_health: Mapping[str, bool] = field(default_factory=dict)
+    daemon_health_digest: str | None = None
 
     def __post_init__(self) -> None:
         _freeze_snapshot_fields(self)
@@ -125,6 +128,8 @@ class SandboxSnapshotDescriptor:
     rootfs_digest: str = ""
     env_manifest_digest: str = ""
     memory_digest: str | None = None
+    daemon_health: Mapping[str, bool] = field(default_factory=dict)
+    daemon_health_digest: str | None = None
 
     def __post_init__(self) -> None:
         _freeze_snapshot_fields(self)
@@ -183,6 +188,30 @@ def _digest_memory(
     )
 
 
+def _digest_daemon_health(
+    processes: Mapping[int, str],
+    daemon_health: Mapping[str, bool],
+) -> str:
+    return _json_sha256(
+        {
+            "processes": {str(k): v for k, v in sorted(processes.items())},
+            "daemon_health": dict(sorted(daemon_health.items())),
+        }
+    )
+
+
+def _daemon_health_verified(
+    processes: Mapping[int, str],
+    daemon_health: Mapping[str, bool],
+) -> bool:
+    if not processes or not daemon_health or not all(daemon_health.values()):
+        return False
+    return all(
+        daemon_health.get(str(pid)) is True or daemon_health.get(proc_name) is True
+        for pid, proc_name in processes.items()
+    )
+
+
 def _digest_state(
     *,
     rootfs: Mapping[str, str],
@@ -190,7 +219,9 @@ def _digest_state(
     env: Mapping[str, str],
     processes: Mapping[int, str],
     memory_pages: Mapping[str, str],
+    daemon_health: Mapping[str, bool] = MappingProxyType({}),
     include_env: bool = True,
+    include_daemons: bool = False,
     include_memory: bool,
 ) -> str:
     payload: dict[str, Any] = {
@@ -199,9 +230,14 @@ def _digest_state(
     }
     if include_env:
         payload["env"] = dict(sorted(env.items()))
+    if include_daemons:
+        payload["processes"] = {str(k): v for k, v in sorted(processes.items())}
+        payload["daemon_health"] = dict(sorted(daemon_health.items()))
     if include_memory:
         payload["processes"] = {str(k): v for k, v in sorted(processes.items())}
         payload["memory_pages"] = dict(sorted(memory_pages.items()))
+        if daemon_health:
+            payload["daemon_health"] = dict(sorted(daemon_health.items()))
     return _json_sha256(payload)
 
 
@@ -212,19 +248,27 @@ def _observe_sandbox_digest(
 ) -> str | None:
     if sb.status == "destroyed":
         return None
+    if fidelity_tier == "process_tree_quiesced" and not _daemon_health_verified(
+        sb.processes,
+        sb.daemon_health,
+    ):
+        return None
     if fidelity_tier == "microvm_memory_exact" and not (
         sb.processes or sb.memory_pages
     ):
         return None
     include_env = fidelity_tier != "filesystem_only"
+    include_daemons = fidelity_tier == "process_tree_quiesced"
     include_mem = fidelity_tier == "microvm_memory_exact"
     return _digest_state(
         rootfs=sb.rootfs,
         symlinks=sb.symlinks,
         env=sb.env if include_env else {},
-        processes=sb.processes if include_mem else {},
+        processes=sb.processes if (include_daemons or include_mem) else {},
         memory_pages=sb.memory_pages if include_mem else {},
+        daemon_health=sb.daemon_health if (include_daemons or include_mem) else {},
         include_env=include_env,
+        include_daemons=include_daemons,
         include_memory=include_mem,
     )
 
@@ -239,11 +283,13 @@ def _descriptor_from_sealed(sealed: _SealedSnapshot) -> SandboxSnapshotDescripto
         env=sealed.env,
         processes=sealed.processes,
         memory_pages=sealed.memory_pages,
+        daemon_health=sealed.daemon_health,
         scrubbed_keys=sealed.scrubbed_keys,
         digest=sealed.digest,
         refcount=sealed.refcount,
         rootfs_digest=sealed.rootfs_digest,
         env_manifest_digest=sealed.env_manifest_digest,
+        daemon_health_digest=sealed.daemon_health_digest,
         memory_digest=sealed.memory_digest,
     )
 
@@ -274,6 +320,7 @@ class InMemorySandboxSpiProvider:
         symlinks: Mapping[str, str] | None = None,
         env: Mapping[str, str] | None = None,
         processes: Mapping[int, str] | None = None,
+        daemon_health: Mapping[str, bool] | None = None,
         memory_pages: Mapping[str, str] | None = None,
     ) -> SandboxInstanceState:
         instance = SandboxInstanceState(
@@ -285,6 +332,7 @@ class InMemorySandboxSpiProvider:
             env=dict(env or {}),
             processes=dict(processes or {}),
             memory_pages=dict(memory_pages or {}),
+            daemon_health=dict(daemon_health or {}),
         )
         self.sandboxes[sandbox_id] = instance
         return instance
@@ -337,6 +385,7 @@ class InMemorySandboxSpiProvider:
                 f"{target_tier} snapshot requires paused sandbox",
             )
         include_env = target_tier != "filesystem_only"
+        include_daemons = target_tier == "process_tree_quiesced"
         include_mem = target_tier == "microvm_memory_exact"
         scrubbed_env = (
             {k: v for k, v in sb.env.items() if k not in scrub_keys}
@@ -349,11 +398,28 @@ class InMemorySandboxSpiProvider:
             if not k.startswith(".loopx/") and k != "loopx.lease.json"
         }
         symlinks_copy = dict(sb.symlinks)
-        processes_copy = dict(sb.processes) if include_mem else {}
+        processes_copy = (
+            dict(sb.processes) if (include_daemons or include_mem) else {}
+        )
+        daemon_health_copy = (
+            dict(sb.daemon_health) if (include_daemons or include_mem) else {}
+        )
+        if include_daemons and not _daemon_health_verified(
+            processes_copy, daemon_health_copy
+        ):
+            raise SandboxSpiError(
+                "daemon_health_required",
+                "process_tree_quiesced snapshot requires verified live daemon health",
+            )
         memory_copy = dict(sb.memory_pages) if include_mem else {}
         removed_keys = tuple(sorted(k for k in sb.env if k in scrub_keys))
         rootfs_digest = _digest_rootfs(scrubbed_rootfs, symlinks_copy)
         env_manifest_digest = _digest_env(scrubbed_env)
+        daemon_health_digest = (
+            _digest_daemon_health(processes_copy, daemon_health_copy)
+            if include_daemons
+            else None
+        )
         memory_digest = (
             _digest_memory(processes_copy, memory_copy)
             if include_mem and (processes_copy or memory_copy)
@@ -365,7 +431,9 @@ class InMemorySandboxSpiProvider:
             env=scrubbed_env,
             processes=processes_copy,
             memory_pages=memory_copy,
+            daemon_health=daemon_health_copy,
             include_env=include_env,
+            include_daemons=include_daemons,
             include_memory=include_mem,
         )
         self._seq += 1
@@ -379,9 +447,11 @@ class InMemorySandboxSpiProvider:
             env=scrubbed_env,
             processes=processes_copy,
             memory_pages=memory_copy,
+            daemon_health=daemon_health_copy,
             scrubbed_keys=removed_keys,
             rootfs_digest=rootfs_digest,
             env_manifest_digest=env_manifest_digest,
+            daemon_health_digest=daemon_health_digest,
             memory_digest=memory_digest,
             digest=digest,
             refcount=1,
@@ -401,9 +471,11 @@ class InMemorySandboxSpiProvider:
             env=sealed.env,
             processes=sealed.processes,
             memory_pages=sealed.memory_pages,
+            daemon_health=sealed.daemon_health,
             scrubbed_keys=sealed.scrubbed_keys,
             rootfs_digest=sealed.rootfs_digest,
             env_manifest_digest=sealed.env_manifest_digest,
+            daemon_health_digest=sealed.daemon_health_digest,
             memory_digest=sealed.memory_digest,
             digest=sealed.digest,
             refcount=refcount,
@@ -433,6 +505,7 @@ class InMemorySandboxSpiProvider:
             env=dict(sealed.env),
             processes=dict(sealed.processes),
             memory_pages=dict(sealed.memory_pages),
+            daemon_health=dict(sealed.daemon_health),
             egress_policy_id=egress_policy_id,
         )
         self.sandboxes[fork_id] = child
@@ -456,6 +529,7 @@ class InMemorySandboxSpiProvider:
         sb.symlinks = dict(sealed.symlinks)
         sb.env = dict(sealed.env)
         sb.processes = dict(sealed.processes)
+        sb.daemon_health = dict(sealed.daemon_health)
         sb.memory_pages = dict(sealed.memory_pages)
         sb.status = "running"
         return sb
@@ -545,11 +619,25 @@ class SpiReplayAdapter:
             checks: tuple[EquivalenceCheck, ...] = (
                 EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
             )
-        elif sealed.fidelity_tier in {"filesystem_and_env", "process_tree_quiesced"}:
+        elif sealed.fidelity_tier == "filesystem_and_env":
             env_ok = live_alive and _digest_env(sb.env) == sealed.env_manifest_digest
             checks = (
                 EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
                 EquivalenceCheck(f"{check_prefix}-env-only", env_ok),
+            )
+        elif sealed.fidelity_tier == "process_tree_quiesced":
+            env_ok = live_alive and _digest_env(sb.env) == sealed.env_manifest_digest
+            daemon_ok = (
+                live_alive
+                and _daemon_health_verified(sb.processes, sb.daemon_health)
+                and sealed.daemon_health_digest is not None
+                and _digest_daemon_health(sb.processes, sb.daemon_health)
+                == sealed.daemon_health_digest
+            )
+            checks = (
+                EquivalenceCheck(f"{check_prefix}-rootfs-symlinks", fs_ok),
+                EquivalenceCheck(f"{check_prefix}-env-manifest", env_ok),
+                EquivalenceCheck(f"{check_prefix}-daemon-liveness", daemon_ok),
             )
         else:
             has_mem_evidence = bool(sb.processes or sb.memory_pages)
@@ -1312,3 +1400,292 @@ def test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_f
         _observe_sandbox_digest(child, fidelity_tier="microvm_memory_exact")
         == desc.digest
     )
+
+
+def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemon() -> (
+    None
+):
+    # 1) Snapshotting process_tree_quiesced without live healthy daemon fails closed.
+    no_health_provider = InMemorySandboxSpiProvider()
+    no_health_provider.create_sandbox(
+        sandbox_id="sb-no-health",
+        rootfs={"src/app.py": "v1"},
+        env={"MODE": "quiesced"},
+        processes={501: "lsp-daemon"},
+        daemon_health={"lsp-daemon": False},
+    )
+    no_health_provider.pause("sb-no-health")
+    with pytest.raises(SandboxSpiError, match="daemon_health_required"):
+        no_health_provider.snapshot("sb-no-health", target_tier="process_tree_quiesced")
+
+    def _setup_quiesced_drift(
+        provider: InMemorySandboxSpiProvider,
+        trace_id: str,
+    ) -> tuple[TraceLog, Any, SpiReplayAdapter, ReplayPointRegistry]:
+        sb = provider.create_sandbox(
+            sandbox_id="sb-quiesced",
+            rootfs={"src/app.py": "v1-quiesced"},
+            env={"MODE": "v1"},
+            processes={501: "lsp-daemon"},
+            daemon_health={"lsp-daemon": True},
+            memory_pages={"ephemeral_ram": "not-captured"},
+        )
+        provider.pause("sb-quiesced")
+        adapter = SpiReplayAdapter(
+            provider,
+            source_sandbox_id="sb-quiesced",
+            target_tier="process_tree_quiesced",
+        )
+        registry = ReplayPointRegistry()
+        store = SpiAgentStateStore()
+        trace, point = _prepare_trace_point(
+            trace_id, registry=registry, store=store, adapter=adapter
+        )
+        # Advance workspace, env, and stop daemon after capture.
+        provider.resume("sb-quiesced")
+        sb.rootfs["src/app.py"] = "v2-post"
+        sb.processes = {}
+        sb.daemon_health = {}
+        return trace, point, adapter, registry
+
+    def _sem_hyp(trace_id: str) -> CounterfactualHypothesis:
+        return CounterfactualHypothesis(
+            hypothesis_id=f"hyp-{trace_id}",
+            first_affected_event_id=f"{trace_id}-evt-2-fail",
+            first_affected_sequence=2,
+            fix_set=(ValidationTarget("fix", baseline_passed=False),),
+            guard_set=(ValidationTarget("guard", baseline_passed=True),),
+            minimum_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+        )
+
+    # 2) Valid process_tree_quiesced capture preserves daemon/health (not memory pages),
+    # seals immutable daemon_health, and promotes single-branch + child-fork replay.
+    ok_provider = InMemorySandboxSpiProvider()
+    trace_ok, point_ok, adapter_ok, reg_ok = _setup_quiesced_drift(
+        ok_provider, "trace-quiesced-ok"
+    )
+    snap_desc = next(iter(ok_provider.snapshots.values()))
+    assert snap_desc.memory_pages == {}
+    assert snap_desc.processes == {501: "lsp-daemon"}
+    assert snap_desc.daemon_health == {"lsp-daemon": True}
+    with pytest.raises(TypeError):
+        cast("dict[str, bool]", snap_desc.daemon_health)["lsp-daemon"] = False
+
+    promoted = run_counterfactual_suffix_replay(
+        reg_ok,
+        trace=trace_ok,
+        hypothesis=_sem_hyp("trace-quiesced-ok"),
+        candidate=CounterfactualCandidate("quiesced-ok", {"op": "restart-daemon"}),
+        execute_suffix=lambda _req: {
+            "fix": ok_provider.sandboxes["sb-quiesced"].rootfs["src/app.py"]
+            == "v1-quiesced",
+            "guard": ok_provider.sandboxes["sb-quiesced"].processes == {501: "lsp-daemon"}
+            and ok_provider.sandboxes["sb-quiesced"].daemon_health.get("lsp-daemon")
+            is True,
+        },
+    )
+    assert promoted.decision == CounterfactualDecision.PROMOTED
+
+    child_group = run_counterfactual_child_group(
+        reg_ok,
+        trace=trace_ok,
+        hypothesis=_sem_hyp("trace-quiesced-ok"),
+        candidates=(
+            CounterfactualChildCandidate(
+                candidate=CounterfactualCandidate("child-quiesced", {"op": "fork"}),
+                target_branch_id="branch-quiesced",
+                execute_suffix=lambda ctx, _req: {
+                    "fix": True,
+                    "guard": (
+                        isinstance(ctx.adapter_child_key, _BranchRef)
+                        and ok_provider.sandboxes[
+                            ctx.adapter_child_key.branch_sandbox_id
+                        ].daemon_health.get("lsp-daemon")
+                        is True
+                    ),
+                },
+            ),
+        ),
+    )
+    assert child_group.candidates[0].replay_result is not None
+    assert (
+        child_group.candidates[0].replay_result.decision
+        == CounterfactualDecision.PROMOTED
+    )
+
+    # 3) Lost daemon with identical rootfs + env fails closed and refuses promotion.
+    class _DaemonDroppingSpiProvider(InMemorySandboxSpiProvider):
+        def restore_snapshot(
+            self, sandbox_id: str, snapshot_id: str
+        ) -> SandboxInstanceState:
+            sb = super().restore_snapshot(sandbox_id, snapshot_id)
+            sb.processes = {}
+            sb.daemon_health = {}
+            return sb
+
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            child, isolation_id = super().fork(
+                snapshot_id, child_id=child_id, egress_policy_id=egress_policy_id
+            )
+            child.processes = {}
+            child.daemon_health = {}
+            return child, isolation_id
+
+    drop_provider = _DaemonDroppingSpiProvider()
+    trace_drop, _, adapter_drop, reg_drop = _setup_quiesced_drift(
+        drop_provider, "trace-quiesced-drop"
+    )
+    drop_suffix_called = False
+
+    def _never_promote(_req: Any) -> Mapping[str, bool]:
+        nonlocal drop_suffix_called
+        drop_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(
+        ValueError, match="exact or semantic replay requires verified state equivalence"
+    ):
+        run_counterfactual_suffix_replay(
+            reg_drop,
+            trace=trace_drop,
+            hypothesis=_sem_hyp("trace-quiesced-drop"),
+            candidate=CounterfactualCandidate("lost-daemon", {"op": "noop"}),
+            execute_suffix=_never_promote,
+        )
+    assert drop_suffix_called is False
+    lost_report = adapter_drop.validate_replay_equivalence(
+        _SnapshotRef(snapshot_id=next(iter(drop_provider.snapshots))),
+        RestoreReceipt(
+            achieved_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+            restored_projection_digest=None,
+        ),
+    )
+    assert not lost_report.equivalent
+    checks_by_id = {c.check_id: c.passed for c in lost_report.checks}
+    assert checks_by_id == {
+        "sandbox-rootfs-symlinks": True,
+        "sandbox-env-manifest": True,
+        "sandbox-daemon-liveness": False,
+    }
+
+    child_drop_called = False
+
+    def _never_child_drop(_ctx: Any, _req: Any) -> Mapping[str, bool]:
+        nonlocal child_drop_called
+        child_drop_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(
+        ValueError, match="exact or semantic replay requires verified state equivalence"
+    ):
+        run_counterfactual_child_group(
+            reg_drop,
+            trace=trace_drop,
+            hypothesis=_sem_hyp("trace-quiesced-drop"),
+            candidates=(
+                CounterfactualChildCandidate(
+                    candidate=CounterfactualCandidate("child-lost-daemon", {"op": "fork"}),
+                    target_branch_id="branch-lost-daemon",
+                    execute_suffix=_never_child_drop,
+                ),
+            ),
+        )
+    assert child_drop_called is False
+
+    # 4) Unhealthy daemon (processes present, health probe False) also refuses promotion.
+    class _UnhealthyDaemonSpiProvider(InMemorySandboxSpiProvider):
+        def restore_snapshot(
+            self, sandbox_id: str, snapshot_id: str
+        ) -> SandboxInstanceState:
+            sb = super().restore_snapshot(sandbox_id, snapshot_id)
+            sb.daemon_health = {"lsp-daemon": False}
+            return sb
+
+    unhealthy_provider = _UnhealthyDaemonSpiProvider()
+    trace_unhealthy, _, adapter_unhealthy, reg_unhealthy = _setup_quiesced_drift(
+        unhealthy_provider, "trace-quiesced-unhealthy"
+    )
+    unhealthy_suffix_called = False
+
+    def _never_unhealthy(_req: Any) -> Mapping[str, bool]:
+        nonlocal unhealthy_suffix_called
+        unhealthy_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(
+        ValueError, match="exact or semantic replay requires verified state equivalence"
+    ):
+        run_counterfactual_suffix_replay(
+            reg_unhealthy,
+            trace=trace_unhealthy,
+            hypothesis=_sem_hyp("trace-quiesced-unhealthy"),
+            candidate=CounterfactualCandidate("unhealthy-daemon", {"op": "noop"}),
+            execute_suffix=_never_unhealthy,
+        )
+    assert unhealthy_suffix_called is False
+    unhealthy_report = adapter_unhealthy.validate_replay_equivalence(
+        _SnapshotRef(snapshot_id=next(iter(unhealthy_provider.snapshots))),
+        RestoreReceipt(
+            achieved_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+            restored_projection_digest=None,
+        ),
+    )
+    assert not unhealthy_report.equivalent
+    assert any(
+        c.check_id == "sandbox-daemon-liveness" and not c.passed
+        for c in unhealthy_report.checks
+    )
+
+    # 5) Honest downgrade to BEST_EFFORT when daemon cannot restart avoids PROMOTED.
+    @dataclass
+    class _DowngradingDaemonAdapter(SpiReplayAdapter):
+        def restore_replay_state(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+        ) -> RestoreReceipt:
+            receipt = super().restore_replay_state(binding_key, request)
+            sb = self.provider.sandboxes[self.source_sandbox_id]
+            if not _daemon_health_verified(sb.processes, sb.daemon_health):
+                return RestoreReceipt(
+                    achieved_fidelity=ReplayFidelity.BEST_EFFORT,
+                    restored_projection_digest=receipt.restored_projection_digest,
+                    prefix_reused=receipt.prefix_reused,
+                )
+            return receipt
+
+    dg_provider = _DaemonDroppingSpiProvider()
+    sb_dg = dg_provider.create_sandbox(
+        sandbox_id="sb-dg",
+        rootfs={"src/app.py": "v1"},
+        env={"MODE": "v1"},
+        processes={501: "lsp-daemon"},
+        daemon_health={"lsp-daemon": True},
+    )
+    dg_provider.pause("sb-dg")
+    dg_adapter = _DowngradingDaemonAdapter(
+        dg_provider, source_sandbox_id="sb-dg", target_tier="process_tree_quiesced"
+    )
+    dg_reg = ReplayPointRegistry()
+    dg_store = SpiAgentStateStore()
+    trace_dg, _ = _prepare_trace_point(
+        "trace-quiesced-dg", registry=dg_reg, store=dg_store, adapter=dg_adapter
+    )
+    dg_provider.resume("sb-dg")
+    sb_dg.processes = {}
+    sb_dg.daemon_health = {}
+    res_dg = run_counterfactual_suffix_replay(
+        dg_reg,
+        trace=trace_dg,
+        hypothesis=_sem_hyp("trace-quiesced-dg"),
+        candidate=CounterfactualCandidate("downgraded-daemon", {"op": "cold"}),
+        execute_suffix=lambda _req: {"fix": True, "guard": True},
+    )
+    assert res_dg.decision == CounterfactualDecision.OBSERVED_ONLY
+    _ = point_ok

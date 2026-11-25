@@ -8,13 +8,14 @@
 - **Last normative revision:** 2026-11-22
 - **Implementation baseline:** `dc79482c88dd75ea59785d165fd3050d9d5508c3`
 - **Language mirror:** [English](provider-neutral-sandbox-snapshot-fork-spi-v0.md)
-- **Related contracts:** [研究状态分叉](hierarchical-agent-stride-control-v0.zh-CN.md#77-研究状态分支与匹配接续)、[预算内研究规划](../../research/budgeted-research-planning.zh-CN.md)、[基准度量模型](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#6-度量模型)、[LayerFS 探索评测](layerfs-engineering-exploration-evaluation-v0.zh-CN.md)、[小内核分发拆分](monorepo-distribution-split-v0.zh-CN.md)、[完整状态恢复](complete-state-recovery-v0.zh-CN.md)、[扩展放置规则](../../reference/extensions.md#placement-decision-for-agents)。
+- **Related contracts:** [研究状态分叉](hierarchical-agent-stride-control-v0.zh-CN.md#77-研究状态分支与匹配接续)、[预算内研究规划](../../research/budgeted-research-planning.zh-CN.md)、[基准漏斗验证与测量模型](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#55-四层漏斗验证协议)、[LayerFS 探索评测](layerfs-engineering-exploration-evaluation-v0.zh-CN.md)、[小内核分发拆分](monorepo-distribution-split-v0.zh-CN.md)、[完整状态恢复](complete-state-recovery-v0.zh-CN.md)、[扩展放置规则](../../reference/extensions.md#placement-decision-for-agents)。
 
 ## 文档地图与维护契约
 
 第 1–3 节与第 5–11 节定义拟议的双中立沙箱快照与分叉 SPI 契约及权威边界；
-第 4 节记录基于 `dc79482c88dd75ea59785d165fd3050d9d5508c3` 及在途 `#8516`
-反事实评估提案的盘点事实；第 12 节列出待定决策。中文文件是英文文件的语义镜像，
+第 4 节记录基于 `dc79482c88dd75ea59785d165fd3050d9d5508c3` 及已合入主干的
+研究/评测权威契约（`#8461`、`#9209`、`#9211`；早先未合入提案 `#8516` 已拆解由
+上述主干契约承接）的盘点事实；第 12 节列出待定决策。中文文件是英文文件的语义镜像，
 规范性章节必须保持同步。后续带日期的执行记录统一放入
 [RFC ledger](ledger/README.zh-CN.md)，不得在附录 A 之前添加日期标题。
 合入本 RFC 表示接受设计基础并交付确定性契约测试，不构成默认开启、正式支持某
@@ -90,7 +91,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 ### 范围内
 
-- 盘点五元组 Checkpoint 契约（`#8461`/`#8516`）与 E2B 兼容微虚拟机 `pause` / `resume` / `snapshot` / `fork` / `destroy` 语义之间的接口缺口。
+- 盘点五元组 Checkpoint 契约（[`#8461`](https://github.com/loopx-project/loopx/pull/8461) / [`#9209`](https://github.com/loopx-project/loopx/pull/9209) / [`#9211`](https://github.com/loopx-project/loopx/pull/9211) 与 [`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py)）与 E2B 兼容微虚拟机 `pause` / `resume` / `snapshot` / `fork` / `destroy` 语义之间的接口缺口。
 - 定义双中立 SPI 记录结构、生命周期状态机、`ReplayFidelity` 映射表及 `RiskAwareReplayChildAdapter` 桥接契约。
 - 提供基于 `ReplayPointRegistry` 与 `run_counterfactual_child_group` 的 M0 确定性 pytest 契约测试切片。
 
@@ -106,7 +107,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 ## 4. 基线系统盘点与五元组接口缺口矩阵
 
-基于基线 `dc79482c88`（及在途 `#8516` 反事实评估提案），五元组 Checkpoint
+基于基线 `dc79482c88` 与已合入主干的 Explore/Benchmark 契约（[`#8461`](https://github.com/loopx-project/loopx/pull/8461)、[`#9209`](https://github.com/loopx-project/loopx/pull/9209)、[`#9211`](https://github.com/loopx-project/loopx/pull/9211)；早先未合入提案 `#8516` 已拆解由上述权威 owner 承接），五元组 Checkpoint
 $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, b_{\text{eval}})$
 与微虚拟机沙箱语义的现状及缺口如下：
 
@@ -116,7 +117,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 | $\sigma_{\text{loopx}}$ 控制面权威状态 | `authority_store` SQLite、[`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py) | `ReplayPointRegistry` 原子绑定 Trace 游标与不透明 `AdapterStateLease` | 已清晰外置，但缺少防止调用方将 `.loopx/` 挂入快照及自动擦除的标准门禁 |
 | $w_{\text{ws}}$ 工作区文件系统 | [`checkpoint_artifacts.ts`](../../../loopx/control_plane/runtime/checkpoint_artifacts.ts)、[LayerFS RFC](layerfs-engineering-exploration-evaluation-v0.zh-CN.md) | 字节校验目录归档（64 MiB 上限；拒绝 symlink） | 无法容纳 `.pnpm`/`.venv` 等 symlink 密集环境；LayerFS 仅覆盖文件系统 |
 | $\phi_{\text{env}}$ 进程、内存与网络信封 | [`checkpoint.py`](../../../benchmark/runtime/checkpoint.py)、[`counterfactual_runtime.py`](../../../loopx/capabilities/explore/counterfactual_runtime.py) | `IsolatedReplayChildAdapter` 已定义 `PROCESS_ISOLATED`、`worker_identity` 与风控钩子 | 缺乏串联 CoW rootfs、VM 内存页与网络隔离的 `pause`/`resume`/`snapshot`/`fork` SPI |
-| $b_{\text{eval}}$ 预算与评测谱系 | [预算内规划](../../research/budgeted-research-planning.zh-CN.md)（`#8461`）、`#8516` `counterfactual_continuation.ts` | 5 维 `CounterfactualCostVector` 与 `workspace_isolation_id` 污染守卫 | 缺乏挂起/快照/恢复的资源开销拆分及分支隔离 ID 来源映射 |
+| $b_{\text{eval}}$ 预算与评测谱系 | [预算内规划](../../research/budgeted-research-planning.zh-CN.md)（`#8461`）、[基准计划 §5.5 与 §6.2](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#62-效率)（`#9211`） | Tier-2 静止检查点校准、完整成本核算（`ReplayPointMetricsSnapshot`）与隔离 `worker_identity` 守卫 | 缺乏挂起/快照/恢复的资源开销拆分及分支隔离 ID 来源映射 |
 
 ---
 
@@ -151,7 +152,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 | --- | --- | --- | --- |
 | `filesystem_only` | 纯净源码/CoW 目录树，无进程现场 | `BEST_EFFORT`（若校验锁定依赖可为 `SEMANTIC_EQUIVALENT`） | rootfs 摘要 + symlink 保留校验 |
 | `filesystem_and_env` | CoW rootfs（`.pnpm`/`.venv`、构建缓存）与固定环境清单 | `SEMANTIC_EQUIVALENT` | rootfs/symlink 摘要 + 工具链 ABI 校验 |
-| `process_tree_quiesced` | CoW rootfs + 优雅停止并按需冷重启的确定性守护进程 | `SEMANTIC_EQUIVALENT` | rootfs 摘要 + 守护进程就绪探测 |
+| `process_tree_quiesced` | CoW rootfs + 环境清单 + 优雅停止并按需冷重启的确定性守护进程 | `SEMANTIC_EQUIVALENT` | rootfs 与环境摘要 + 守护进程存活/端口就绪证明（缺证 fail-closed 拒绝提升） |
 | `microvm_memory_exact` | 暂停态微虚拟机 vCPU/内存页 + 块设备 CoW + 打开的 FD/LSP | `EXACT` | rootfs 与内存状态 `expected_digest == observed_digest` |
 
 ### 生命周期、幂等性与 Provider 能力矩阵
@@ -159,7 +160,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 - **`pause(sandbox_id, quiesce=True)`：** 状态从 `running -> paused`，执行 guest 刷盘并返回 `SandboxPauseReceipt`；同一 `operation_id` 对已暂停实例幂等。
 - **`resume(sandbox_id)`：** 在**同一** `sandbox_id` 上从 `paused -> running`；对已在运行或已销毁实例调用 `resume` 必须 fail-closed 报错。
 - **`snapshot(sandbox_id, *, target_tier, scrub_keys)`：** 当 `target_tier` 为 `process_tree_quiesced` 或 `microvm_memory_exact` 时强制要求处于 `paused` 屏障（**I1**）；擦除租约/密钥后封存不可变 `SandboxSnapshotDescriptor` 并保持引用计数 > 0。
-- **`fork(snapshot_id, *, child_id, target_branch_id, egress_policy_id)`：** 基于不可变快照克隆写时复制存储（及 `microvm_memory_exact` 下的内存页），生成独立 `branch_isolation_id` 对接 `#8516` `workspace_isolation_id` 与 `ReplayChildLease(concurrency=PROCESS_ISOLATED, worker_identity=...)`。
+- **`fork(snapshot_id, *, child_id, target_branch_id, egress_policy_id)`：** 基于不可变快照克隆写时复制存储（`process_tree_quiesced` / `microvm_memory_exact` 下分别保留守护进程就绪清单或内存页），生成独立 `branch_isolation_id` 映射到 [`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py) 的 `ReplayChildLease(concurrency=PROCESS_ISOLATED, worker_identity=...)`。
 - **`destroy(sandbox_or_snapshot_id)`：** 回收子分支句柄或递减快照引用计数；子分支释放不影响仍被 pin 住的母快照，直至显式销毁母快照。
 
 | Provider profile | 支持原语 | 最高保真等级 | 限制与约束说明 |
@@ -204,13 +205,13 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 | V1：精确内存快照前置静止屏障 | `test_exact_memory_snapshot_requires_paused_quiescence_barrier` | `running` 态精确快照 fail-closed 拒绝；`paused` 后成功生成 `EXACT` 点 | 基于内存级参考 SPI 模型，尚未在真实 Firecracker/KVM 上实测 |
 | V2：1:1 挂起与 1:N 分叉非干扰、快照不可变性及 symlink 保留 | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`、`test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks`、`test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks` | 同 `sandbox_id`/PID 无损恢复；并行分叉保留 `.pnpm`/`.venv` 且内存与文件互不污染；对外描述符与封存快照严格隔离 | 不代表生产级冷/热延迟与内存去重实测数据 |
 | V3：控制面租约/密钥擦除与公开载荷防泄 | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | 擦除母快照敏感键；子分支复用父租约或 `shared_prod` 出网被风控拒绝；公开记录无运行时句柄 | 真机部署前需对特定云镜像做实测擦除审计 |
-| V4：保真度过滤降级、单分支恢复等价校验与快照引用寿命 | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`、`test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`、`test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | 非 EXACT、未恢复或缺失内存证据时拒绝 `PROMOTED`，真实恢复保留 `EXACT` 资格；释放子分支不影响母快照至显式销毁 | 真实 E2B/Firecracker 接入与 UI 回读属 M1–M3 范围 |
+| V4：保真度过滤降级、单分支恢复等价校验与快照引用寿命 | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`、`test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`、`test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemon`、`test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | 非 EXACT、未恢复或缺失内存证据时拒绝 `PROMOTED`，真实恢复保留 `EXACT` 资格；`process_tree_quiesced` 强制验证存活守护进程健康并在丢失/不健康时拒绝提升；释放子分支不影响母快照至显式销毁 | 真实 E2B/Firecracker 接入与 UI 回读属 M1–M3 范围 |
 
 ---
 
 ## 10. 运行与运维契约
 
-实现本 SPI 的扩展必须回吐与 `#8516` 对齐的 5 维成本指标（`wall_seconds`、`total_tokens`、`evaluator_runs`、`control_plane_requests`、`recovery_events`）与类型化失败码（`quiescence_required`、`snapshot_missing`、`egress_violation`、`scrub_incomplete`、`capacity_exceeded`），受快照引用计数与 TTL 约束，并通过既有 Explore/Benchmark 历史面展示只读状态。
+实现本 SPI 的扩展必须回吐与[基准计划 §6.2](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#62-效率)及 [`ReplayPointMetricsSnapshot`](../../../loopx/capabilities/explore/replay_runtime.py) 对齐的 5 维成本指标（`wall_seconds`、`total_tokens`、`evaluator_runs`、`control_plane_requests`、`recovery_events`）与类型化失败码（`quiescence_required`、`daemon_health_required`、`snapshot_missing`、`egress_violation`、`scrub_incomplete`、`capacity_exceeded`），受快照引用计数与 TTL 约束，并通过既有 Explore/Benchmark 历史面展示只读状态。
 
 ---
 
@@ -218,9 +219,9 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 | 里程碑 | 交付行为 | 进入门禁 | 退出证据 | 回退方式 |
 | --- | --- | --- | --- | --- |
-| M0 | 双语 SPI RFC + 8 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461`/`#8516` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
+| M0 | 双语 SPI RFC + 9 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461` / `#9209` / `#9211` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
 | M1 | 首个可选扩展实现（`firecracker_local` 或 `e2b_microvm`） | M0 合入；固定 Linux/E2B 验证镜像 | 真机 `pause`/`resume`/`snapshot`/`fork`、密钥擦除、symlink 与关闭态等价性 | 停用扩展 profile |
-| M2 | 与热 `git worktree` / `layerfs_cow` 的配对反事实对比 | M1 通过；冻结题目、预算与评估器 | 基于 `#8516` 输出完整 5 维成本向量与 $\tau_B(s; a, a_0, \pi)$ 对照结论 | 终止试验，如实保留负结果/平手数据 |
+| M2 | 与热 `git worktree` / `layerfs_cow` 的配对反事实对比 | M1 通过；冻结题目、预算与评估器 | 基于 `counterfactual_runtime.py` 与 `#9211` §§5.5/6.2 输出完整 5 维成本与 Tier-2 $\tau_B(s; a, a_0, \pi)$ 对照结论 | 终止试验，如实保留负结果/平手数据 |
 | M3 | 可选产品/评测推广评审 | M2 复现净收益（$\Delta J(B \mid s_0) > 0$）且 UI 回读齐备 | 维护者批准与打包态不可用/恢复闭环验收 | 维持默认关闭或退役扩展 |
 
 ---
@@ -229,7 +230,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 1. **OD1（M1 首选 Provider 顺序 — Benchmark / 运行时维护者）：** 依据 KVM 宿主可用性与离线 CI 复现成本，决定 M1 先验证 `firecracker_local` 还是 `e2b_microvm`；默认持续关闭。
 2. **OD2（进程内存等价摘要粒度 — Explore / Replay 维护者）：** 在 M1 退出前明确 `microvm_memory_exact` 的 `observed_digest` 采用工作区与进程表摘要还是全页块摘要。
-3. **OD3（多臂母快照成本分摊口径 — Benchmark 度量维护者）：** 确认父母快照成本按 $K$ 条并行分叉均摊还是在 `CounterfactualCostVector` 中同时保留未分摊原值。
+3. **OD3（多臂母快照成本分摊口径 — Benchmark 度量维护者）：** 确认父母快照成本按 $K$ 条并行分叉均摊还是按[基准计划 §6.2](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#62-效率)对每个对照分支单独保留未分摊原值。
 
 ---
 
@@ -247,8 +248,8 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 | 证据 ID | 声明 | 基线 / 环境 | 产物或命令 | 结果 | 隐私 / 有效性边界 |
 | --- | --- | --- | --- | --- | --- |
-| E1 | 五元组 Checkpoint 与 `checkpoint_artifacts.ts` / `replay_runtime.py` 盘点 | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | 源码审计与 [#8516](https://github.com/loopx-project/loopx/pull/8516) | 基线核实 | 只读盘点；`#8516` 仍为开放提案 |
-| E2 | M0 V1–V4 SPI 一致性测试（基于真实 `ReplayPointRegistry` 与 `run_counterfactual_child_group`） | 独立 worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | PR 门禁通过 | 使用参考 SPI 模型 fixture，未连接真实 hypervisor |
+| E1 | 五元组 Checkpoint 与 `checkpoint_artifacts.ts` / `replay_runtime.py` 盘点 | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | 源码审计与 [#8461](https://github.com/loopx-project/loopx/pull/8461)、[#9209](https://github.com/loopx-project/loopx/pull/9209)、[#9211](https://github.com/loopx-project/loopx/pull/9211) | 已在主干权威 owner 核实 | 只读盘点；早先原型 `#8516` 已关闭未合并 |
+| E2 | M0 V1–V4 SPI 一致性测试（基于真实 `ReplayPointRegistry` 与 `run_counterfactual_child_group`） | 独立 worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | PR 门禁通过（9/9 M0 测试） | 使用参考 SPI 模型 fixture，未连接真实 hypervisor |
 
 ## 附录 D：已否决替代方案
 

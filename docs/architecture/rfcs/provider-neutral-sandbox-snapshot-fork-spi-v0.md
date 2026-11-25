@@ -8,16 +8,17 @@
 - **Last normative revision:** 2026-11-22
 - **Implementation baseline:** `dc79482c88dd75ea59785d165fd3050d9d5508c3`
 - **Language mirror:** [中文版](provider-neutral-sandbox-snapshot-fork-spi-v0.zh-CN.md)
-- **Related contracts:** [research-state branching](hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation), [budgeted research planning](../../research/budgeted-research-planning.md), [benchmark measurement](long-horizon-harness-benchmark-research-program-v0.md#6-measurement-model), [LayerFS exploration](layerfs-engineering-exploration-evaluation-v0.md), [small-kernel composition](monorepo-distribution-split-v0.md), [complete state recovery](complete-state-recovery-v0.md), [extension placement](../../reference/extensions.md#placement-decision-for-agents).
+- **Related contracts:** [research-state branching](hierarchical-agent-stride-control-v0.md#77-research-state-branching-and-matched-continuation), [budgeted research planning](../../research/budgeted-research-planning.md), [benchmark verification funnel & measurement](long-horizon-harness-benchmark-research-program-v0.md#55-four-tier-verification-funnel), [LayerFS exploration](layerfs-engineering-exploration-evaluation-v0.md), [small-kernel composition](monorepo-distribution-split-v0.md), [complete state recovery](complete-state-recovery-v0.md), [extension placement](../../reference/extensions.md#placement-decision-for-agents).
 
 ## Document map and maintenance contract
 
 Sections 1–3 and 5–11 define the proposed Provider-Neutral Sandbox Snapshot and
 Fork SPI contract and authority boundaries. Section 4 records audited baseline
-facts against `dc79482c88dd75ea59785d165fd3050d9d5508c3` and the open
-counterfactual evaluator proposal in `#8516`; Section 12 lists unresolved
-decisions. The Chinese file is a semantic mirror; keep normative sections
-synchronized. Dated progress entries belong in the [RFC ledger](ledger/README.md),
+facts against `dc79482c88dd75ea59785d165fd3050d9d5508c3` and the canonical
+merged research/eval contracts (`#8461`, `#9209`, `#9211`; closed unmerged
+prototype `#8516` was superseded by focused `main` slices); Section 12 lists
+unresolved decisions. The Chinese file is a semantic mirror; keep normative
+sections synchronized. Dated progress entries belong in the [RFC ledger](ledger/README.md),
 not as dated headings above Appendix A. Merging this RFC establishes a design
 basis and deterministic conformance oracle; it grants no runtime default,
 provider support claim, or benchmark gain.
@@ -111,7 +112,7 @@ Today's shipped file-only capture path reveals four structural blockers:
 
 ### In scope
 
-- Gap inventory across the five-tuple checkpoint contract (`#8461`/`#8516`) and
+- Gap inventory across the five-tuple checkpoint contract ([`#8461`](https://github.com/loopx-project/loopx/pull/8461) / [`#9209`](https://github.com/loopx-project/loopx/pull/9209) / [`#9211`](https://github.com/loopx-project/loopx/pull/9211) & [`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py)) and
   E2B-compatible sandbox semantics (`pause`, `resume`, `snapshot`, `fork`, `destroy`).
 - Provider-neutral SPI data records, lifecycle state machine, `ReplayFidelity`
   mapping, and `RiskAwareReplayChildAdapter` bridge contract.
@@ -138,8 +139,12 @@ vocabulary entry is introduced by this RFC.
 
 ## 4. Audited current-system contract and 5-tuple gap inventory
 
-On baseline `dc79482c88` (plus open counterfactual evaluator proposal `#8516`),
-each component of LoopX's five-tuple checkpoint
+On baseline `dc79482c88` and the canonical Explore/Benchmark contracts on
+`main` ([`#8461`](https://github.com/loopx-project/loopx/pull/8461),
+[`#9209`](https://github.com/loopx-project/loopx/pull/9209),
+[`#9211`](https://github.com/loopx-project/loopx/pull/9211); closed prototype
+`#8516` was decomposed onto these owners), each component of LoopX's five-tuple
+checkpoint
 $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, b_{\text{eval}})$
 exhibits the following current boundary and gap toward E2B-style sandbox fork:
 
@@ -149,7 +154,7 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 | $\sigma_{\text{loopx}}$ Control-plane state | `authority_store` SQLite, [`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py) | `ReplayPointRegistry` binds trace cursor + opaque `AdapterStateLease` | Externalized cleanly, but no standard SPI scrubbing check prevents caller mounting `.loopx/` inside guest VM |
 | $w_{\text{ws}}$ Workspace filesystem | [`checkpoint_artifacts.ts`](../../../loopx/control_plane/runtime/checkpoint_artifacts.ts), [LayerFS RFC](layerfs-engineering-exploration-evaluation-v0.md) | Byte-verified directory archive (64 MiB limit; rejects symlinks) | Breaks symlink-heavy `.pnpm`/`.venv`, slow on large build trees; LayerFS CoW covers FS only |
 | $\phi_{\text{env}}$ Process, RAM & network envelope | [`checkpoint.py`](../../../benchmark/runtime/checkpoint.py), [`counterfactual_runtime.py`](../../../loopx/capabilities/explore/counterfactual_runtime.py) | `IsolatedReplayChildAdapter` defines `PROCESS_ISOLATED`, `worker_identity`, risk hooks | Zero standard `pause`/`resume`/`snapshot`/`fork` SPI bridging CoW rootfs + VM RAM + network fence |
-| $b_{\text{eval}}$ Budget & eval lineage | [Budgeted Planning](../../research/budgeted-research-planning.md) (`#8461`), `#8516` `counterfactual_continuation.ts` | 5D `CounterfactualCostVector` + `workspace_isolation_id` contamination guard | Lacks provider cost breakdown (`suspend_ms`, `snapshot_bytes`, `restore_ms`) and branch isolation ID provenance |
+| $b_{\text{eval}}$ Budget & eval lineage | [Budgeted Planning](../../research/budgeted-research-planning.md) (`#8461`), [Benchmark Program §5.5 & §6.2](long-horizon-harness-benchmark-research-program-v0.md#62-efficiency) (`#9211`) | Tier-2 quiescent checkpoint calibration, complete-cost accounting (`ReplayPointMetricsSnapshot`), and isolated `worker_identity` guard | Lacks provider cost breakdown (`suspend_ms`, `snapshot_bytes`, `restore_ms`) and branch isolation ID provenance |
 
 ---
 
@@ -184,7 +189,7 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 | --- | --- | --- | --- |
 | `filesystem_only` | Clean tracked checkout or CoW rootfs without env/procs | `BEST_EFFORT` (or `SEMANTIC_EQUIVALENT` when deps verified) | Rootfs digest + symlink preservation check |
 | `filesystem_and_env` | CoW rootfs (`.pnpm`/`.venv`, build cache) + clean env manifest | `SEMANTIC_EQUIVALENT` | Rootfs/symlink digest + pinned toolchain ABI check |
-| `process_tree_quiesced` | CoW rootfs + cleanly stopped & restarted deterministic daemons | `SEMANTIC_EQUIVALENT` | Rootfs digest + daemon health/port readiness check |
+| `process_tree_quiesced` | CoW rootfs + env manifest + cleanly stopped & restarted deterministic daemons | `SEMANTIC_EQUIVALENT` | Rootfs + env digests & live daemon health/port readiness proof (fail closed on missing daemon) |
 | `microvm_memory_exact` | Paused microVM vCPU/RAM pages + block CoW + open FDs/LSP | `EXACT` | `expected_digest == observed_digest` across rootfs + memory state |
 
 ### Lifecycle, idempotency, and provider profiles
@@ -199,9 +204,10 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
   Strips declared control-plane leases/credentials, seals immutable
   `SandboxSnapshotDescriptor` with content digests, and pins refcount > 0.
 - **`fork(snapshot_id, *, child_id, target_branch_id, egress_policy_id)`:**
-  Clones isolated copy-on-write storage (and memory pages when `microvm_memory_exact`)
-  under a distinct `branch_isolation_id` mapped directly to `#8516`'s
-  `workspace_isolation_id` and `ReplayChildLease(concurrency=PROCESS_ISOLATED, worker_identity=...)`.
+  Clones isolated copy-on-write storage (and daemon readiness manifests or memory pages when `process_tree_quiesced` / `microvm_memory_exact`)
+  under a distinct `branch_isolation_id` mapped directly to
+  `ReplayChildLease(concurrency=PROCESS_ISOLATED, worker_identity=...)` in
+  [`replay_runtime.py`](../../../loopx/capabilities/explore/replay_runtime.py).
 - **`destroy(sandbox_or_snapshot_id)`:** Decrements snapshot refcount or
   tears down a child VM without disturbing sibling branches or pinned snapshots
   until explicitly released.
@@ -272,18 +278,20 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 | V1: Quiescence barrier for exact memory snapshot | `test_exact_memory_snapshot_requires_paused_quiescence_barrier` | Fails closed if `running`; succeeds with `EXACT` once `paused` | Synthetic SPI fixture; does not test Linux Firecracker KVM page flush |
 | V2: 1:1 suspend/resume vs. 1:N fork isolation, immutability & symlinks | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`, `test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks`, `test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks` | Same ID + PID across `pause`/`resume`; isolated CoW/RAM + `.pnpm`/`.venv` across parallel `fork`s; sealed snapshot isolated from descriptor edits | Does not prove E2B wall-clock latency or memory overhead in production |
 | V3: Authority/secret scrub & public boundary | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | Scrubbed parent secrets; parent-lease reuse and `shared_prod` egress denied by `assess_replay_child_intent`; zero leaked keys | Requires real provider scrub audit before M1 live traffic |
-| V4: Fidelity filtering, live-restore equivalence & snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT, un-restored, or memory-missing restores refuse `PROMOTED`; real restore preserves `EXACT`; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
+| V4: Fidelity filtering, live-restore equivalence & snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`, `test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemon`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT, un-restored, or memory-missing restores refuse `PROMOTED`, real restore preserves `EXACT`; `process_tree_quiesced` requires live healthy daemons and refuses lost/unhealthy-daemon promotion; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
 
 ---
 
 ## 10. Operational contract
 
-Extensions implementing this SPI MUST emit five compact metrics aligned with `#8516`
+Extensions implementing this SPI MUST emit five compact cost metrics aligned
+with [Benchmark Program §6.2](long-horizon-harness-benchmark-research-program-v0.md#62-efficiency)
+and [`ReplayPointMetricsSnapshot`](../../../loopx/capabilities/explore/replay_runtime.py)
 (`wall_seconds`, `total_tokens`, `evaluator_runs`, `control_plane_requests`,
 `recovery_events`), plus typed failure codes (`quiescence_required`,
-`snapshot_missing`, `egress_violation`, `scrub_incomplete`, `capacity_exceeded`),
-enforced snapshot refcount TTLs, and read-only status readback via existing
-Explore/Benchmark run surfaces.
+`daemon_health_required`, `snapshot_missing`, `egress_violation`,
+`scrub_incomplete`, `capacity_exceeded`), enforced snapshot refcount TTLs, and
+read-only status readback via existing Explore/Benchmark run surfaces.
 
 ---
 
@@ -291,9 +299,9 @@ Explore/Benchmark run surfaces.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Bilingual RFC + 8-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461`/`#8516` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
+| M0 | Bilingual RFC + 9-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
 | M1 | First opt-in provider adapter (`firecracker_local` or `e2b_microvm`) behind extension package | M0 accepted; Linux/E2B test fixture pinned | Real pause/resume/snapshot/fork + scrub + symlink preservation + feature-off parity | Disable extension profile |
-| M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5D cost vector + $\tau_B(s; a, a_0, \pi)$ evaluation via `#8516` owner | Stop pilot; retain negative/null data |
+| M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5-metric cost attribution + Tier-2 $\tau_B(s; a, a_0, \pi)$ evaluation via `counterfactual_runtime.py` & `#9211` §§5.5/6.2 | Stop pilot; retain negative/null data |
 | M3 | Optional product / benchmark promotion decision | M2 replicated net gain ($\Delta J(B \mid s_0) > 0$) + UI readback | Maintainer sign-off + packaged unavailability/recovery UX | Keep optional / retire adapter |
 
 ---
@@ -308,7 +316,7 @@ Explore/Benchmark run surfaces.
    only declared workspace + process-table hashes or full VM memory chunk hashes.
 3. **OD3 (Cross-Arm Cost Amortization — Benchmark Measurement Owners):** Confirm
    how parent `snapshot()` build cost is split across $K$ forked counterfactual
-   arms vs. reported unamortized per-pair in `CounterfactualCostVector`.
+   arms vs. reported unamortized per-pair under [Benchmark Program §6.2](long-horizon-harness-benchmark-research-program-v0.md#62-efficiency).
 
 ---
 
@@ -327,8 +335,8 @@ Dated execution records belong in [`ledger/README.md`](ledger/README.md) with
 
 | Evidence id | Claim | Baseline / environment | Artifact or command | Result | Privacy / validity boundary |
 | --- | --- | --- | --- | --- | --- |
-| E1 | Audited 5-tuple gap vs. `checkpoint_artifacts.ts` & `replay_runtime.py` | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | Source inspection + [#8516](https://github.com/loopx-project/loopx/pull/8516) | Verified on baseline | Read-only audit; `#8516` remains open proposal |
-| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation | Synthetic SPI provider fixture only; no live hypervisor run |
+| E1 | Audited 5-tuple gap vs. `checkpoint_artifacts.ts` & `replay_runtime.py` | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | Source inspection + [#8461](https://github.com/loopx-project/loopx/pull/8461), [#9209](https://github.com/loopx-project/loopx/pull/9209), [#9211](https://github.com/loopx-project/loopx/pull/9211) | Verified on canonical `main` owners | Read-only audit; superseded prototype `#8516` closed unmerged |
+| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation (9/9 M0 tests) | Synthetic SPI provider fixture only; no live hypervisor run |
 
 ## Appendix D: Rejected alternatives
 
