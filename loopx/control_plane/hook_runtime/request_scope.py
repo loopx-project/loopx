@@ -7,7 +7,68 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Protocol, TypeVar, cast, overload
+
+
+_DefaultT = TypeVar("_DefaultT")
+
+
+class _ObservedSnapshotDict(dict[Path, bytes | None]):
+    """`dict` view that tracks snapshot keys accessed during one loader call."""
+
+    def __init__(self, backing: dict[Path, bytes | None]) -> None:
+        super().__init__(backing)
+        self._backing = backing
+        self.observed_keys: set[Path] = set()
+
+    def _mark(self, key: object) -> None:
+        if isinstance(key, Path):
+            self.observed_keys.add(key)
+
+    def __contains__(self, key: object) -> bool:
+        self._mark(key)
+        return super().__contains__(key)
+
+    def __getitem__(self, key: Path) -> bytes | None:
+        self._mark(key)
+        return super().__getitem__(key)
+
+    def __setitem__(self, key: Path, value: bytes | None) -> None:
+        self._mark(key)
+        self._backing[key] = value
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: Path) -> None:
+        self._backing.pop(key, None)
+        super().__delitem__(key)
+
+    @overload
+    def get(self, key: Path, default: None = None, /) -> bytes | None: ...
+
+    @overload
+    def get(self, key: Path, default: _DefaultT, /) -> bytes | None | _DefaultT: ...
+
+    def get(
+        self, key: Path, default: _DefaultT | None = None, /
+    ) -> bytes | None | _DefaultT:
+        self._mark(key)
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        return default
+
+    def setdefault(
+        self, key: Path, default: bytes | None = None, /
+    ) -> bytes | None:
+        self._mark(key)
+        if super().__contains__(key):
+            return super().__getitem__(key)
+        self._backing[key] = default
+        super().__setitem__(key, default)
+        return default
+
+    def clear(self) -> None:
+        self._backing.clear()
+        super().clear()
 
 
 class RegistryLoader(Protocol):
@@ -109,14 +170,18 @@ class CapabilityHookRequestScope:
             return copy.deepcopy(self._decoded_registries[cache_key])
         resolved_before = _safe_resolve(expanded)
         before_keys = set(self.registry_snapshots)
+        observed = _ObservedSnapshotDict(self.registry_snapshots)
         payload = _invoke_registry_loader(
             loader,
             path,
-            source_snapshots=self.registry_snapshots,
+            source_snapshots=observed,
         )
+        if len(observed) != len(self.registry_snapshots) or observed != self.registry_snapshots:
+            self.registry_snapshots.clear()
+            self.registry_snapshots.update(observed)
         resolved_after = _safe_resolve(expanded)
-        new_keys = set(self.registry_snapshots) - before_keys - {route}
-        self._record_targets(route, resolved_before, resolved_after, *new_keys)
+        touched_keys = (observed.observed_keys | (set(observed) - before_keys)) - {route}
+        self._record_targets(route, resolved_before, resolved_after, *touched_keys)
         self._decoded_registries[cache_key] = copy.deepcopy(payload)
         self._goals_by_path[cache_key] = _extract_goals_by_id(payload)
         return payload
