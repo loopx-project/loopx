@@ -368,6 +368,20 @@ PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
     r"\bpypi-[a-z0-9_-]{20,}|"
     r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"
 )
+# Raw credential values whose *value*, not a key name the presentation table
+# already labels (`api_key`, `auth_token`, `access_token`), carries the secret.
+# The classifier composite and the presentation boundary table both consume this
+# one source, so a new value shape cannot be recognized by only one of them. The
+# three labeled keys stay out on purpose: repeating them here would make one
+# value produce two presentation warnings for the same bytes.
+CREDENTIAL_VALUE_PATTERN_SOURCE = (
+    r"\bbearer\s+[a-z0-9._~+/=-]{16,}|"
+    r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
+    r"\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\bpassword[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\bsecret[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\b(?:refresh[_-]?token|token)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}"
+)
 PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     tuple[str, re.Pattern[str]], ...
 ] = (
@@ -399,10 +413,50 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     # An issuer prefix is its own label: a token carried in tool output or a
     # pasted log rarely arrives as an assignment, so the assignment arm never
     # sees it. Composed from the shared source the sibling scanners consume
-    # (#7636), case-folded like the presentation local-path arms.
+    # (#7636), case-folded like the presentation local-path arms. It stays ahead
+    # of the value arm so an issuer-prefixed token keeps its specific warning.
     (
         "provider token",
         re.compile(r"(?i)(?:" + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE + r")"),
+    ),
+    # A value-bearing credential is its own label. The assignment arm above only
+    # sees three key names; a dash page, a manager detail return or a peer
+    # conclusion can carry an Authorization Bearer/Basic header, a
+    # password/secret assignment, a URL with embedded userinfo, or a
+    # refresh/bare token instead.
+    # Those shapes were already known to the owning classifier
+    # (`SECRET_LIKE_SURFACE_PATTERN`); the presentation policy simply never
+    # consulted them, so it certified the raw values as public-safe.
+    (
+        "credential value",
+        re.compile(r"(?i)(?:" + CREDENTIAL_VALUE_PATTERN_SOURCE + r")"),
+    ),
+    # The owner also treats a credential word followed by ':'/'=' as an
+    # assignment regardless of value length, including the quoted JSON-key form.
+    # Consult that shape so `password=hunter2` cannot be released by the shared
+    # assignment arm's {12,} floor.
+    (
+        "credential value",
+        LABELED_CREDENTIAL_ASSIGNMENT_PATTERN,
+    ),
+    # Connector and quoted spellings are already owned by the text classifier;
+    # the presentation policy now consults those same shapes instead of releasing
+    # "password is hunter2hunter2" or `client secret is "abcd1234"` as prose. They
+    # share the "credential value" label; the scanner collapses duplicate labels.
+    (
+        "credential value",
+        CONNECTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
+    ),
+    (
+        "credential value",
+        QUOTED_CREDENTIAL_VALUE_SHAPE_PATTERN,
+    ),
+    # The authorization header has a second standard scheme. `_BASIC_CREDENTIAL_VALUE`
+    # already owns that shape for the text classifier, so the presentation policy
+    # consults the same owner instead of restating a base64 shape here.
+    (
+        "basic-auth credential value",
+        _BASIC_CREDENTIAL_VALUE,
     ),
 )
 # Refs #5136: one definition for "this string carries a raw remote location".
@@ -410,18 +464,15 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
 # public-safety owner had no counterpart, so a fourth caller had to invent one.
 REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
-    r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
-    r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
-    r"\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
-    r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"(?i)(?:" + CREDENTIAL_VALUE_PATTERN_SOURCE
+    + r"|\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
     + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
     + r"|"
-    r"\b(?:access|refresh)[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
-    r"\b(?:password|secret)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\baccess[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\bapi[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\s\S]*?"
-    r"(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|"
-    r"\btoken[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,})"
+    r"(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$))"
 )
 
 # Shared identifier shapes stay here with the sibling public-safe text shapes.

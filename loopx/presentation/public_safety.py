@@ -47,11 +47,15 @@ def scan_public_boundary_text(text: str) -> dict[str, object]:
     Returns ``{"ok": bool, "warnings": [label, ...]}``. The scanner is the
     canonical public/private boundary check for generated presentation text;
     the static-site exporter and the session dash generator share it.
+    Duplicate labels are collapsed because one value can satisfy overlapping
+    credential shapes.
     """
 
-    warnings = [
-        label
-        for label, pattern in PUBLIC_BOUNDARY_PATTERNS
-        if pattern.search(text)
-    ]
+    warnings = list(
+        dict.fromkeys(
+            label
+            for label, pattern in PUBLIC_BOUNDARY_PATTERNS
+            if pattern.search(text)
+        )
+    )
     return {"ok": not warnings, "warnings": warnings}
