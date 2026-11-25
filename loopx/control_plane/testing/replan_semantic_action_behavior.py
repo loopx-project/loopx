@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
 
+from ..goals.goal_frontier.terminal import _projection_has_empty_terminal_frontier
 from ..quota.effective_action import EffectiveAction
 from ..work_items.progress_result import ProgressResultClass
 from .model_tool_behavior import (
@@ -180,7 +181,6 @@ def _semantic_reentry_observation(
     )
     monitor_open = _exact_nonbool_int(normalized_progress, "agent_monitor_open_count")
     monitor_due = _exact_nonbool_int(normalized_progress, "agent_monitor_due_count")
-    agent_open = _exact_nonbool_int(normalized_progress, "agent_open_count")
     future_monitor_wait = bool(
         quiet_skip
         and monitor_lanes.get("present") is True
@@ -194,8 +194,7 @@ def _semantic_reentry_observation(
             ProgressResultClass.EXPLORATION_EXHAUSTED.value,
             ProgressResultClass.NO_FOLLOWUP.value,
         }
-        and monitor_lanes.get("present") is False
-        and agent_open == 0
+        and _projection_has_empty_terminal_frontier(dict(frontier))
     )
     if not future_monitor_wait and not terminal_coverage_exit:
         raise ValueError("semantic_reentry_not_future_monitor_wait")

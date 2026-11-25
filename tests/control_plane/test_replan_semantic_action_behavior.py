@@ -1684,6 +1684,8 @@ def test_semantic_reentry_accepts_complete_projection_with_explicit_zero(
         progress = frontier.get("normalized_progress")
         assert isinstance(progress, dict)
         assert progress.get("agent_open_count") == 0
+        assert progress.get("agent_monitor_open_count") == 0
+        assert progress.get("agent_monitor_due_count") == 0
         observed_progress.append(dict(progress))
 
     receipt = _qualify_exhausted_with_readback_override(
@@ -1825,3 +1827,66 @@ def test_semantic_reentry_rejects_missing_none_or_invalid_normalized_progress(
         )
         assert receipt["qualification_passed"] is False
         assert receipt["failure_code"] == "semantic_reentry_not_future_monitor_wait"
+
+
+@requires_draft_shell
+@pytest.mark.parametrize(
+    "case_kind",
+    [
+        "missing_monitor_due",
+        "missing_monitor_open",
+        "present_false_nonzero_monitor_due",
+        "present_false_nonzero_monitor_open",
+        "lanes_absent_nonzero_monitor_due",
+        "quiet_transition_true_with_present_false",
+    ],
+)
+def test_semantic_reentry_rejects_missing_or_contradictory_monitor_counts_on_terminal_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case_kind: str,
+) -> None:
+    def mutate_monitor_readback(frontier: dict[str, Any]) -> None:
+        progress = dict(frontier["normalized_progress"])
+        if case_kind == "missing_monitor_due":
+            frontier["monitor_only_lanes"] = {
+                "present": False,
+                "quiet_until_material_transition": False,
+            }
+            progress.pop("agent_monitor_due_count", None)
+        elif case_kind == "missing_monitor_open":
+            frontier["monitor_only_lanes"] = {
+                "present": False,
+                "quiet_until_material_transition": False,
+            }
+            progress.pop("agent_monitor_open_count", None)
+        elif case_kind == "present_false_nonzero_monitor_due":
+            frontier["monitor_only_lanes"] = {
+                "present": False,
+                "quiet_until_material_transition": False,
+            }
+            progress["agent_monitor_due_count"] = 1
+        elif case_kind == "present_false_nonzero_monitor_open":
+            frontier["monitor_only_lanes"] = {
+                "present": False,
+                "quiet_until_material_transition": False,
+            }
+            progress["agent_monitor_open_count"] = 1
+        elif case_kind == "lanes_absent_nonzero_monitor_due":
+            frontier.pop("monitor_only_lanes", None)
+            progress["agent_monitor_due_count"] = 1
+        else:
+            frontier["monitor_only_lanes"] = {
+                "present": False,
+                "quiet_until_material_transition": True,
+            }
+        frontier["normalized_progress"] = progress
+
+    receipt = _qualify_exhausted_with_readback_override(
+        tmp_path / case_kind,
+        monkeypatch,
+        qualification_id=f"replan-monitor-contrast-{case_kind}",
+        mutate_frontier=mutate_monitor_readback,
+    )
+    assert receipt["qualification_passed"] is False, receipt
+    assert receipt["failure_code"] == "semantic_reentry_not_future_monitor_wait"
