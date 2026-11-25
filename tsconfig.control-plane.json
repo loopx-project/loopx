@@ -60,6 +60,8 @@
     "tests/control_plane_ts/sqlite_authority_concurrent_writer.ts",
     "tests/control_plane_ts/sqlite_authority_disk_full.test.ts",
     "tests/control_plane_ts/sqlite_authority_disk_full_process.ts",
+    "tests/control_plane_ts/sqlite_authority_runtime_matrix.test.ts",
+    "tests/control_plane_ts/sqlite_authority_runtime_matrix_process.ts",
     "tests/control_plane_ts/sqlite_runtime_admission.test.ts",
     "tests/control_plane_ts/local_authority_provider.test.ts",
     "tests/control_plane_ts/sqlite_authority_process.ts",
