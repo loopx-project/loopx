@@ -123,7 +123,9 @@
 
 | 路径 | 属主 (`chown`) | 权限 (`chmod`) | 注入 / 读取方式 | 访问边界与隔离说明 |
 |---|---|---|---|---|
-| `/opt/loopx/` | `root:root` | 目录 `0755` / 文件 `0644` | Node `ExecStart` 只读运行 | 含 `examples/coordination/` 与 `node_modules`；`ProtectSystem=strict` 下只读 |
+| `/opt/loopx/` | `root:root` | 目录 `0755` / 文件 `0644` | Node `ExecStart` 只读运行 | 含 `examples/coordination/`、`loopx/control_plane/` 与生产依赖 `node_modules`；`ProtectSystem=strict` 下只读 |
+| `/etc/systemd/system/remote-authority-systemd.service` | `root:root` | `0644` | systemd unit 安装路径 | 由 `/opt/loopx/examples/coordination/volcengine/remote-authority-systemd.service` 复制安装；须早于 `daemon-reload` 与按名启用 |
+| `/etc/caddy/Caddyfile` | `root:root` | `0644` | Caddy 主配置安装路径 | 由 `/opt/loopx/examples/coordination/volcengine/gateway-caddy-tls.Caddyfile` 复制安装；与 `caddy.service` 及 `/etc/ssl/loopx/{cert,key}.pem` 配套 |
 | `/etc/loopx/` | `root:root` | `0700` | 仅 systemd PID 1 遍历 | 禁止非 root 用户（含 `caddy` 与临时服务用户）列出或直接访问 |
 | `/etc/loopx/authority.env` | `root:root` | `0600` | `EnvironmentFile=/etc/loopx/authority.env` | 仅存 `LOOPX_AUTHORITY_DATABASE_URL`（`loopx_app` 串）；不进入 `%d/`，`caddy` 不可读 |
 | `/etc/loopx/remote-policy.json` | `root:root` | `0600` | `LoadCredential=remote-policy.json:...` -> `%d/remote-policy.json` (`0400`) | 仅 Node 临时身份只读；`caddy` 不可读；原子更新文件后需 `systemctl restart remote-authority-systemd.service` 刷新 |
@@ -237,11 +239,12 @@
      }
    '
    ```
-   在网关 ECS 上按 4.1 节属主与最小权限就位后，启动托管单元并验证**以非 root 临时服务身份监听**以及端到端 `snapshot` 回读：
+   在网关 ECS 上完成前置软件安装（`Node.js >= 22.6` 位于 `/usr/bin/node`、已带 `caddy` 系统账号与 `caddy.service` 的 Caddy 2，以及已部署并装好生产依赖的 `/opt/loopx`）并按 4.1 节收敛属主与最小权限后，先安装 unit 与 Caddy 配置，再按名启用托管服务并验证**以非 root 临时服务身份监听**与 `snapshot` 回读：
    ```bash
-   # 1. 收敛属主与最小读取权限（先创建凭据文件再启用服务）
+   # 1. 收敛属主与最小读取权限（先创建凭据文件、日志目录与证书，再安装配置并启用服务）
    sudo install -d -o root -g root -m 0700 /etc/loopx
    sudo install -d -o root -g caddy -m 0750 /etc/ssl/loopx
+   sudo install -d -o caddy -g caddy -m 0750 /var/log/caddy
    sudo chown root:root /etc/loopx/authority.env /etc/loopx/remote-policy.json \
      /etc/ssl/loopx/internal-cert.pem /etc/ssl/loopx/internal-key.pem /etc/ssl/loopx/cert.pem
    sudo chmod 0600 /etc/loopx/authority.env /etc/loopx/remote-policy.json /etc/ssl/loopx/internal-key.pem
@@ -249,17 +252,27 @@
    sudo chown root:caddy /etc/ssl/loopx/key.pem
    sudo chmod 0640 /etc/ssl/loopx/key.pem
 
-   # 2. 启动 systemd 服务（LoadCredential 将策略与回环证书/私钥只读移交 %d/）
+   # 2. 安装 systemd unit 与 Caddy 配置（必须在 daemon-reload 与按名 enable 之前就位）
+   sudo install -o root -g root -m 0644 \
+     /opt/loopx/examples/coordination/volcengine/remote-authority-systemd.service \
+     /etc/systemd/system/remote-authority-systemd.service
+   sudo install -o root -g root -m 0644 \
+     /opt/loopx/examples/coordination/volcengine/gateway-caddy-tls.Caddyfile \
+     /etc/caddy/Caddyfile
+   sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+   # 3. 加载并按名启用 systemd 服务（LoadCredential 将策略与回环证书/私钥只读移交 %d/）
    sudo systemctl daemon-reload
    sudo systemctl enable --now remote-authority-systemd.service
+   sudo systemctl enable --now caddy
    sudo systemctl restart caddy
 
-   # 3. 确认服务进程以非 root 临时用户运行且成功监听 127.0.0.1:8443
+   # 4. 确认服务进程以非 root 临时用户运行且成功监听 127.0.0.1:8443
    systemctl show -p ActiveState,UID,GID,ExecMainPID remote-authority-systemd.service
    ps -o uid=,user=,gid=,group=,pid=,args= -p "$(systemctl show -p ExecMainPID --value remote-authority-systemd.service)"
    sudo ss -tlnp | grep -E ':443|:8443'
 
-   # 4. 导出公钥 CA 副本并以普通客户端身份完成一次合法 snapshot 回读（先直连回环端口，再经 Caddy 对外入口复验）
+   # 5. 导出公钥 CA 副本并以普通客户端身份完成一次合法 snapshot 回读（先直连回环端口，再经 Caddy 对外入口复验）
    sudo install -m 0644 /etc/ssl/loopx/internal-cert.pem /etc/loopx-public-internal-ca.pem
    LOOPX_AUTHORITY_CREDENTIAL="<operator-bearer-secret>" \
    node --no-warnings --experimental-strip-types \

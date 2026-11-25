@@ -10,6 +10,8 @@ import os
 import socket
 import struct
 import subprocess
+import tarfile
+import tempfile
 import threading
 import time
 import uuid
@@ -468,15 +470,22 @@ def test_volcengine_deployment_artifacts() -> None:
     assert "/etc/loopx/" not in exec_cmd
     assert "/etc/ssl/loopx/" not in exec_cmd
 
-    # Runbook permission & isolation contract
+    # Runbook permission, unit/Caddy installation, and isolation contract
     assert "LoadCredential=" in doc_content
     assert "%d/remote-policy.json" in doc_content
     assert "/etc/ssl/loopx/internal-key.pem" in doc_content
     assert "/etc/ssl/loopx/key.pem" in doc_content
+    assert "/etc/systemd/system/remote-authority-systemd.service" in doc_content
+    assert "/etc/caddy/Caddyfile" in doc_content
+    assert "caddy validate" in doc_content
     assert "root:caddy" in doc_content
     assert "0640" in doc_content
     assert "0600" in doc_content
     assert "EACCES" in doc_content
+    unit_install_idx = doc_content.index("/etc/systemd/system/remote-authority-systemd.service")
+    reload_idx = doc_content.index("systemctl daemon-reload")
+    enable_idx = doc_content.index("systemctl enable --now remote-authority-systemd.service")
+    assert unit_install_idx < reload_idx < enable_idx
 
     # Least privilege IAM policy
     iam_path = volc_dir / "least-privilege-iam-policy.json"
@@ -587,6 +596,103 @@ def _docker_images_ready() -> tuple[bool, str]:
     return True, ""
 
 
+def _resolve_host_node_modules_root(repo_root: Path) -> Path | None:
+    if (repo_root / "node_modules" / "pg" / "package.json").is_file():
+        return repo_root
+    common = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if common.returncode == 0 and common.stdout.strip():
+        raw_dir = Path(common.stdout.strip())
+        resolved = raw_dir if raw_dir.is_absolute() else (repo_root / raw_dir).resolve()
+        if (resolved.parent / "node_modules" / "pg" / "package.json").is_file():
+            return resolved.parent
+    return None
+
+
+def _run_node_container_with_opt_loopx(
+    docker_env: dict[str, str],
+    net_name: str,
+    repo_root: Path,
+    container_script: str,
+    env_vars: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    env_args = [item for k, v in env_vars.items() for item in ("-e", f"{k}={v}")]
+    probe = subprocess.run(
+        [
+            "docker", "run", "--rm", "-v", f"{repo_root}:/opt/loopx:ro", "node:22-bookworm",
+            "test", "-f", "/opt/loopx/node_modules/pg/package.json",
+            "-a", "-f", "/opt/loopx/examples/coordination/remote-authority-service.ts",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env=docker_env,
+    )
+    if probe.returncode == 0:
+        return subprocess.run(
+            [
+                "docker", "run", "--rm", "-i", "--network", net_name,
+                "-v", f"{repo_root}:/opt/loopx:ro", "-w", "/opt/loopx",
+                *env_args, "node:22-bookworm", "bash", "-s",
+            ],
+            input=container_script,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=docker_env,
+        )
+
+    nm_root = _resolve_host_node_modules_root(repo_root)
+    assert nm_root is not None, "Host node_modules/pg is required for container check"
+    cid = subprocess.run(
+        [
+            "docker", "create", "-i", "--network", net_name, "-w", "/opt/loopx",
+            *env_args, "node:22-bookworm", "bash", "-s",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=docker_env,
+    ).stdout.strip()
+    try:
+        def _normalize(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
+            parts = ti.name.split("/")
+            if "__pycache__" in parts or (len(parts) >= 3 and parts[1] == "node_modules" and parts[2] == ".bin"):
+                return None
+            ti.uid = ti.gid = 0
+            ti.uname = ti.gname = "root"
+            ti.mode = 0o755 if ti.isdir() or (ti.mode & 0o111) else 0o644
+            return ti
+
+        with tempfile.TemporaryFile() as archive:
+            with tarfile.open(fileobj=archive, mode="w", dereference=True) as tf:
+                for rel in ("package.json", "loopx/control_plane", "examples/coordination"):
+                    tf.add(repo_root / rel, arcname=f"loopx/{rel}", filter=_normalize)
+                tf.add(nm_root / "node_modules", arcname="loopx/node_modules", filter=_normalize)
+            archive.seek(0)
+            subprocess.run(
+                ["docker", "cp", "-", f"{cid}:/opt"],
+                stdin=archive,
+                check=True,
+                capture_output=True,
+                env=docker_env,
+            )
+        return subprocess.run(
+            ["docker", "start", "-a", "-i", cid],
+            input=container_script,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=docker_env,
+        )
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True, text=True, env=docker_env)
+
+
 def test_systemd_load_credential_nonroot_linux_isolation_and_snapshot() -> None:
     """Verify non-root EACCES on raw 0600 root keys vs LoadCredential readback in Linux."""
     ready, reason = _docker_images_ready()
@@ -600,43 +706,15 @@ def test_systemd_load_credential_nonroot_linux_isolation_and_snapshot() -> None:
     pg_admin_pw = f"pgadm_{suffix}"
     pg_app_pw = f"pgapp_{suffix}"
 
-    subprocess.run(
-        ["docker", "network", "create", net_name],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=docker_env,
-    )
+    subprocess.run(["docker", "network", "create", net_name], check=True, capture_output=True, text=True, env=docker_env)
     try:
         subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--rm",
-                "--name",
-                pg_name,
-                "--network",
-                net_name,
-                "-e",
-                f"POSTGRES_PASSWORD={pg_admin_pw}",
-                "postgres:16-alpine",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=docker_env,
+            ["docker", "run", "-d", "--rm", "--name", pg_name, "--network", net_name, "-e", f"POSTGRES_PASSWORD={pg_admin_pw}", "postgres:16-alpine"],
+            check=True, capture_output=True, text=True, env=docker_env,
         )
-
         deadline = time.monotonic() + 25.0
         while time.monotonic() < deadline:
-            probe = subprocess.run(
-                ["docker", "exec", pg_name, "pg_isready", "-U", "postgres"],
-                capture_output=True,
-                text=True,
-                env=docker_env,
-            )
-            if probe.returncode == 0:
+            if subprocess.run(["docker", "exec", pg_name, "pg_isready", "-U", "postgres"], capture_output=True, text=True, env=docker_env).returncode == 0:
                 break
             time.sleep(0.5)
         else:
@@ -785,7 +863,14 @@ printf 'LOOPX_AUTHORITY_DATABASE_URL=%s\n' "$APP_URL" > /etc/loopx/authority.env
 chown root:root /etc/loopx/authority.env
 chmod 0600 /etc/loopx/authority.env
 
-UNIT_FILE="/opt/loopx/examples/coordination/volcengine/remote-authority-systemd.service"
+install -d -o root -g root -m 0755 /etc/systemd/system /etc/caddy
+install -d -o caddy -g caddy -m 0750 /var/log/caddy
+install -o root -g root -m 0644 /opt/loopx/examples/coordination/volcengine/remote-authority-systemd.service \
+  /etc/systemd/system/remote-authority-systemd.service
+install -o root -g root -m 0644 /opt/loopx/examples/coordination/volcengine/gateway-caddy-tls.Caddyfile \
+  /etc/caddy/Caddyfile
+
+UNIT_FILE="/etc/systemd/system/remote-authority-systemd.service"
 EXEC_TEMPLATE="$(sed -n 's/^ExecStart=//p' "$UNIT_FILE")"
 CRED_DIR="/run/credentials/remote-authority-systemd.service"
 install -d -o 1000 -g 1000 -m 0500 "$CRED_DIR"
@@ -872,33 +957,12 @@ console.log(JSON.stringify({
 ' "$LISTENING_JSON" "$SNAPSHOT_JSON" "$RAW_KEY_RC" "$SVC_UID"
 """
 
-        res = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-i",
-                "--network",
-                net_name,
-                "-v",
-                f"{REPO_ROOT}:/opt/loopx:ro",
-                "-w",
-                "/opt/loopx",
-                "-e",
-                f"PG_HOST={pg_name}",
-                "-e",
-                f"PG_ADMIN_PW={pg_admin_pw}",
-                "-e",
-                f"PG_APP_PW={pg_app_pw}",
-                "node:22-bookworm",
-                "bash",
-                "-s",
-            ],
-            input=container_script,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            env=docker_env,
+        res = _run_node_container_with_opt_loopx(
+            docker_env,
+            net_name,
+            REPO_ROOT,
+            container_script,
+            {"PG_HOST": pg_name, "PG_ADMIN_PW": pg_admin_pw, "PG_APP_PW": pg_app_pw},
         )
         assert res.returncode == 0, (
             f"Container verification failed (rc={res.returncode}):\n"
