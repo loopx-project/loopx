@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import zlib
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from time import time_ns
@@ -35,6 +35,7 @@ from .private_web_projection import _same_fields
 
 if TYPE_CHECKING:
     from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+    from ...capabilities.native_chat.external_conversations_contracts import ExternalRequestDict
 
 
 _SOURCE_URL = re.compile(r"https://[^\s<>()\[\]\"，。；！？]+")
@@ -309,12 +310,13 @@ def historical_image_reply_matches(message: Mapping | None, chat_id: str, observ
 
 
 def resumable_answer_image_session(
-    core: ChatExternalConversations, request: dict[str, Any], turn: dict[str, Any] | None
+    core: ChatExternalConversations, request: Mapping[str, Any] | ExternalRequestDict, turn: dict[str, Any] | None
 ) -> dict[str, Any] | None:
     """Apply source controls before reading the current Session."""
     store = core.controller.store
     session_id, turn_id = request["session_id"], request["turn_id"]
     if (turn is None or turn.get("status") != "completed"
+            or not isinstance(session_id, str) or not isinstance(turn_id, str)
             or core._source_stop_observed(request, turn, store.events_after(session_id, turn_id, None))):
         return None
     session = store.load_session(session_id)
@@ -353,10 +355,11 @@ def answer_media_dispatch(core: ChatExternalConversations, request: dict[str, An
 
 
 def prepared_steward_binding_waits(
-    request: dict[str, Any], bindings: list[dict[str, Any]], store: ChatSessionStore
+    request: Mapping[str, Any] | ExternalRequestDict, bindings: Sequence[Mapping[str, Any]], store: ChatSessionStore
 ) -> bool:
     """Skip provider reads while a recorded executor mismatch persists."""
-    session = store.load_session(request["session_id"])
+    session_id = request["session_id"]
+    session = store.load_session(session_id) if isinstance(session_id, str) else None
     binding = next((row for row in bindings if row["binding_id"] == request["binding_id"]), None)
     if not session or not binding or not binding.get("enabled"):
         return False
