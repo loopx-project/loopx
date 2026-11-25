@@ -95,6 +95,27 @@ def test_connector_and_quoted_credential_values_fail_the_boundary() -> None:
         assert match.category == "credential"
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        ":root { --color-token: #3b82f6; --space-md: 16px; }\n",
+        ":root{--color-token:#3b82f6;--space-md:16px}\n",
+        ":root { --color-token: var(--palette-blue-500); }\n",
+        "body { color: var(--color-token); }\n",
+        "Pass --client-secret=<value> to configure the connector.\n",
+        "Pass --access-key=EXAMPLEKEYVALUE to configure the provider.\n",
+    ],
+    ids=("css token", "minified css", "css var value", "css var use", "flag secret", "flag access key"),
+)
+def test_hyphenated_design_names_are_not_credential_assignments(value: str) -> None:
+    # A hyphen joins one identifier in a stylesheet or CLI help. The suffix
+    # (`--color-token`) is a name, not a credential label beside an operator.
+    assert public_safety.scan_public_boundary_text(value) == {
+        "ok": True,
+        "warnings": [],
+    }
+
+
 def test_basic_authorization_header_uses_the_owner_shape() -> None:
     value = "GET /v1/items\nAuthorization: Basic dXNlcjpwYXNzd29yZA==\n"
 

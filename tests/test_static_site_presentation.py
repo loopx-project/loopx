@@ -353,3 +353,68 @@ def test_cli_package_preview_is_read_only_and_exposes_publisher_as_first_class_p
     assert payload["dry_run"] is True
     assert payload["publisher"]["kind"] == "github-pages"
     assert output.exists() is False
+
+
+def _cli_package(site: Path, output: Path, state: Path) -> int:
+    return main(
+        [
+            "--format",
+            "json",
+            "presentation",
+            "package",
+            "--site-dir",
+            str(site),
+            "--output-dir",
+            str(output),
+            "--state-dir",
+            str(state),
+            "--site-id",
+            "cli-demo",
+            "--publisher",
+            "local",
+            "--desktop-visual-check",
+            "passed",
+            "--mobile-visual-check",
+            "passed",
+            "--link-check",
+            "passed",
+            "--execute",
+        ]
+    )
+
+
+def test_cli_package_keeps_a_css_design_token_public(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stylesheet = (
+        ":root { --color-token: #3b82f6; --space-md: 16px; }\n"
+        "body { color: var(--color-token); }\n"
+    )
+    site = _site(tmp_path)
+    (site / "styles.css").write_text(stylesheet, encoding="utf-8")
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_performed"] is True
+    assert (output / "styles.css").read_text(encoding="utf-8") == stylesheet
+
+
+def test_cli_package_still_rejects_a_credential_value_in_an_asset(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    site = _site(tmp_path)
+    (site / "styles.css").write_text(
+        ":root { --color-token: #3b82f6; }\n"
+        "/* token=abc123 */\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "credential value" in payload["error"]
+    assert not output.exists()

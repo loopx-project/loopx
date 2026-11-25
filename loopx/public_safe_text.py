@@ -368,19 +368,27 @@ PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE = (
     r"\bpypi-[a-z0-9_-]{20,}|"
     r"\beyj[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b"
 )
-# Raw credential values whose *value*, not a key name the presentation table
-# already labels (`api_key`, `auth_token`, `access_token`), carries the secret.
-# The classifier composite and the presentation boundary table both consume this
-# one source, so a new value shape cannot be recognized by only one of them. The
-# three labeled keys stay out on purpose: repeating them here would make one
-# value produce two presentation warnings for the same bytes.
-CREDENTIAL_VALUE_PATTERN_SOURCE = (
+# Presentation packages whole public assets -- stylesheets, rendered pages,
+# CLI help -- rather than one operational field. There a hyphen joins one
+# identifier, so a design token such as `--color-token`, or a flag such as
+# `--client-secret`, is a compound name and not a label beside an operator.
+# `\b` alone fires after that hyphen, so the classifier's assignment arms read
+# the suffix as a short credential and a valid site stopped packaging. The
+# presentation policy asks the same label set at a token start; the
+# free-standing `\b` form stays the classifier contract, and a field-name
+# compound remains the owner's separate opt-in arm (Refs #5136).
+_PRESENTATION_LABEL_TOKEN_START = r"(?<![A-Za-z0-9_-])"
+PRESENTATION_CREDENTIAL_VALUE_PATTERN_SOURCE = (
     r"\bbearer\s+[a-z0-9._~+/=-]{16,}|"
     r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
-    r"\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
-    r"\bpassword[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
-    r"\bsecret[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
-    r"\b(?:refresh[_-]?token|token)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + r"(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|secret[_-]?key|access[_-]?key)"
+    r"[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + CREDENTIAL_LABEL_PATTERN_SOURCE
+    + r"[\"']?\s*[:=]|"
+    + _PRESENTATION_LABEL_TOKEN_START
+    + r"refresh[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}"
 )
 PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     tuple[str, re.Pattern[str]], ...
@@ -426,18 +434,15 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
     # refresh/bare token instead.
     # Those shapes were already known to the owning classifier
     # (`SECRET_LIKE_SURFACE_PATTERN`); the presentation policy simply never
-    # consulted them, so it certified the raw values as public-safe.
+    # consulted them, so it certified the raw values as public-safe. The
+    # presentation composition keeps that owner's value arms and asks the label
+    # arms at a token start, so a hyphenated design-token name is not read as a
+    # short assignment, while `password=hunter2` still needs no length floor.
     (
         "credential value",
-        re.compile(r"(?i)(?:" + CREDENTIAL_VALUE_PATTERN_SOURCE + r")"),
-    ),
-    # The owner also treats a credential word followed by ':'/'=' as an
-    # assignment regardless of value length, including the quoted JSON-key form.
-    # Consult that shape so `password=hunter2` cannot be released by the shared
-    # assignment arm's {12,} floor.
-    (
-        "credential value",
-        LABELED_CREDENTIAL_ASSIGNMENT_PATTERN,
+        re.compile(
+            r"(?i)(?:" + PRESENTATION_CREDENTIAL_VALUE_PATTERN_SOURCE + r")"
+        ),
     ),
     # Connector and quoted spellings are already owned by the text classifier;
     # the presentation policy now consults those same shapes instead of releasing
@@ -464,15 +469,18 @@ PRESENTATION_PUBLIC_BOUNDARY_PATTERNS: tuple[
 # public-safety owner had no counterpart, so a fourth caller had to invent one.
 REMOTE_LOCATION_SURFACE_PATTERN = re.compile(r"(?i)\b(?:https?|file|s3|gs|tos|hdfs)://")
 SECRET_LIKE_SURFACE_PATTERN = re.compile(
-    r"(?i)(?:" + CREDENTIAL_VALUE_PATTERN_SOURCE
-    + r"|\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"(?i)(?:\bbearer\s+[a-z0-9._~+/=-]{16,}|"
+    r"\b[a-z][a-z0-9+.-]*://[^/\s:@`'\"<>]+:[^/\s@`'\"<>]+@[^\s`'\"<>]*|"
+    r"\b(?:(?:aws[_-]?)?secret[_-]?access[_-]?key|(?:access|api|secret)[_-]?key)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\b(?:ak|sk)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
     r"(?<![a-z0-9_])(?:ak|sk)[-_=:][a-z0-9_=-]{10,}|"
     + PROVIDER_TOKEN_SHAPE_PATTERN_SOURCE
     + r"|"
-    r"\baccess[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
-    r"\bapi[_-]?key[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]+|"
+    r"\b(?:access|refresh)[_-]?token[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
+    r"\b(?:password|secret)[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,}|"
     r"-{3,}\s*BEGIN (?:[A-Z]+ )?PRIVATE KEY[\s\S]*?"
-    r"(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$))"
+    r"(?:-{3,}\s*END (?:[A-Z]+ )?PRIVATE KEY-{3,}|$)|"
+    r"\btoken[\"']?\s*[=:]\s*[\"']?[^\s`'\"<>]{12,})"
 )
 
 # Shared identifier shapes stay here with the sibling public-safe text shapes.
