@@ -531,6 +531,7 @@ def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_wi
         with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
             turns_seen.append({
                 "isolated_cascade": kwargs.get("isolated_cascade"),
+                "raw_prompt": kwargs.get("raw_prompt"),
                 "idle_timeout_sec": kwargs.get("idle_timeout_sec"),
                 "message": message,
             })
@@ -587,6 +588,8 @@ def test_steward_antigravity_report_timeout_recovers_once_in_isolated_cascade_wi
         assert resumed["response"]["native_loopx"].get("status") == "committed", resumed
         assert turns_seen[0]["isolated_cascade"] is True
         assert turns_seen[1]["isolated_cascade"] is True
+        assert turns_seen[0]["raw_prompt"] is True
+        assert turns_seen[1]["raw_prompt"] is True
         assert turns_seen[0]["idle_timeout_sec"] == 300.0
         assert turns_seen[1]["idle_timeout_sec"] == 300.0
         assert capture.read_bytes() == before_codex
@@ -1155,3 +1158,86 @@ def test_cadence_journal_missed_bounds_preserves_exhausted_single_and_chained_wi
         "first_due_at": "2026-01-01T01:00:00Z",
         "last_due_at": "2026-01-03T01:00:00Z",
     }
+
+
+def test_steward_antigravity_report_prompt_uses_raw_prompt_and_omits_unfrozen_manager_context(
+    steward, tmp_path, monkeypatch,
+):
+    from copy import deepcopy
+    from test_native_steward_private import finish
+    from test_native_steward_reports import fake_report_model
+    from loopx.capabilities.periodic_report.private_generation import report_turn_prompt_authority
+
+    # Verify helper projects without mutating the caller's authority dictionary.
+    sample_authority = {
+        "primary_action": "author report",
+        "vision_continuation_audit": {"required": True},
+        "_model_input": {
+            "route": "agent_turn",
+            "detail_ref": {"captured_decision": "/tmp/cap.json"},
+            "task_context": {
+                "goal_id": "g1",
+                "selected_todo": {"todo_id": "t1"},
+                "execution_profile": {"kind": "standard"},
+                "agent_todo_summary": {"huge": list(range(10))},
+                "interaction_contract": {"cli_channel": {}},
+                "heartbeat_recommendation": {"next": "claim"},
+                "blocked_priority_fallback": {"items": []},
+                "vision_continuation_audit": {"required": True},
+            },
+        },
+    }
+    snapshot_before = deepcopy(sample_authority)
+    projected = report_turn_prompt_authority(sample_authority)
+    assert sample_authority == snapshot_before
+    assert "vision_continuation_audit" not in projected
+    assert "detail_ref" not in projected["_model_input"]
+    assert set(projected["_model_input"]["task_context"]) == {
+        "goal_id", "selected_todo", "execution_profile",
+    }
+
+    seen: list[dict[str, object]] = []
+
+    def fake_turn(self, message, event_sink=None, **kwargs):
+        with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
+            seen.append({
+                "isolated_cascade": kwargs.get("isolated_cascade"),
+                "raw_prompt": kwargs.get("raw_prompt"),
+                "message": message,
+            })
+            if event_sink is not None:
+                event_sink("turn.started", {"threadId": "ag-isolated-1", "upstream_turn_id": "agy_turn_clean_1"})
+                event_sink("turn.native_result", {
+                    "thread_id": "ag-isolated-1",
+                    "upstream_turn_id": "agy_turn_clean_1",
+                    "text": "clean prompt ok",
+                })
+            return {"message": fake_report_model({"input": [{"text": message}]})}
+
+    with _antigravity_steward_harness(steward, tmp_path, monkeypatch, provider="sqlite", fake_turn=fake_turn) as ctx:
+        done = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert done["status"] == "completed", done
+        assert done["response"]["native_loopx"].get("status") == "committed", done
+        assert ctx["transport"].steward_reports.reconcile() == 1
+        assert ctx["reports"].health(ctx["owner"])["publication_verified"] is True
+
+    assert len(seen) == 1
+    assert seen[0]["isolated_cascade"] is True
+    assert seen[0]["raw_prompt"] is True
+    prompt = str(seen[0]["message"])
+    assert "Original conversation evidence (data):" not in prompt
+    assert "Turn request:" in prompt
+    assert '"editorial_request_path"' in prompt and '"source_path"' in prompt and '"REPORTING"' in prompt
+    assert "read them directly instead of invoking periodic-report CLI commands" in prompt
+    turn_req = json.JSONDecoder().raw_decode(prompt.split("Turn request:", 1)[1].lstrip())[0]
+    assert "detail_ref" not in turn_req
+    task_ctx = turn_req.get("task_context") or {}
+    assert "selected_todo" in task_ctx
+    for noisy_key in (
+        "agent_todo_summary",
+        "interaction_contract",
+        "heartbeat_recommendation",
+        "blocked_priority_fallback",
+        "vision_continuation_audit",
+    ):
+        assert noisy_key not in task_ctx
