@@ -3,10 +3,23 @@ import type { UserInputAnswer, UserInputRequest } from './adapters/types.js';
 import type { EventType } from './events.js';
 import { HttpError } from './errors.js';
 
+export interface InputSubmission {
+  inputId: string;
+  threadId: string;
+  turnId: string;
+  request: UserInputRequest;
+  answer: UserInputAnswer;
+  fromUser: boolean;
+}
+
 /** Pending native questions live only as long as their owning turn. The log survives reconnects. */
 export class UserInputs {
   private pending = new Map<string, { threadId: string; turnId: string; request: UserInputRequest; promise: Promise<UserInputAnswer>; resolve: (answer: UserInputAnswer) => void }>();
-  constructor(private emit: (threadId: string, turnId: string, type: EventType, data: Record<string, unknown>) => void) {}
+  constructor(
+    private emit: (threadId: string, turnId: string, type: EventType, data: Record<string, unknown>) => void,
+    /** Validate first, persist atomically, then publish after this pending question is retired. */
+    private accept?: (submission: InputSubmission) => { answer: UserInputAnswer; publish: () => void },
+  ) {}
 
   waiting(threadId: string): boolean { return this.waitingReason(threadId) !== null; }
 
@@ -36,7 +49,7 @@ export class UserInputs {
     return promise;
   }
 
-  answer(id: string, body: unknown): boolean {
+  answer(id: string, body: unknown, fromUser = false): boolean {
     const p = this.pending.get(id);
     if (!p) return false;
     const value = body as any;
@@ -56,9 +69,12 @@ export class UserInputs {
       }
       answer = { answers };
     }
+    const accepted = this.accept?.({ inputId: id, threadId: p.threadId, turnId: p.turnId, request: p.request, answer, fromUser });
+    // A failed writer must leave the question answerable, without resolving the provider's promise.
+    if (!accepted) this.emit(p.threadId, p.turnId, 'input.resolved', { inputId: id, answer });
     this.pending.delete(id);
-    this.emit(p.threadId, p.turnId, 'input.resolved', { inputId: id, answer });
-    p.resolve(answer);
+    p.resolve(accepted?.answer ?? answer);
+    accepted?.publish();
     return true;
   }
 

@@ -231,6 +231,40 @@ def relocated_run_artifact_path(
     return _relocated_run_artifact_path(runs_dir, goal_id, stored_path, extension)
 
 
+def _regular_artifact_inside_runs_dir(runs_dir: Path, stored_path: str) -> str | None:
+    """Real path of a regular file that stays inside ``runs_dir``.
+
+    Lexical containment is not enough. ``Path.read_bytes`` follows a symlink,
+    so a runs-directory path can still name an outside quota event. Symlinks,
+    directories, and files whose real path leaves the runs directory are not
+    the stored artifact.
+    """
+
+    try:
+        runs_real = Path(runs_dir).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    expanded = _expanded_stored_path(stored_path)
+    if expanded is None:
+        return None
+    try:
+        if not stat.S_ISREG(expanded.lstat().st_mode):
+            return None
+        target = expanded.resolve(strict=True)
+    except OSError:
+        return None
+    relative = _relative_to_runs_dir(target, runs_real)
+    if not (
+        relative
+        and relative != "."
+        and relative != ".."
+        and not relative.startswith(".." + os.sep)
+        and not os.path.isabs(relative)
+    ):
+        return None
+    return str(target)
+
+
 def _quota_event_artifact_path(
     raw_json_path: str,
     *,
@@ -240,14 +274,15 @@ def _quota_event_artifact_path(
     """Path to open, or None when a known runs directory must not leave itself.
 
     Callers that do not know the current runs directory keep the stored path.
-    Callers that do keep a path already inside that directory, or the same-named
-    regular file copied into it. Every other absolute location stays unread.
+    Callers that do open a regular file already inside that directory, or the
+    same-named regular file copied into it, only when its real path stays
+    there. Every other absolute location stays unread.
     """
 
     if runs_dir is None:
         return raw_json_path
     if _stays_inside_runs_dir(runs_dir, raw_json_path):
-        return raw_json_path
+        return _regular_artifact_inside_runs_dir(runs_dir, raw_json_path)
     relocated = _relocated_run_artifact_path(runs_dir, goal_id, raw_json_path, ".json")
     if relocated is None:
         return None

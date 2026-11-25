@@ -11,8 +11,11 @@ const KEY = 'calli.host.v1';
 const PET_KEY = 'calli.pet.v1';
 const MAX_HOSTS = 8;
 
+/** Directory selection only: restoring a workspace never restores read authority. */
+export interface BesideDraft { threadId: string; cwd: string; project: string; worktree: string | null }
+
 /** The choices a new thread opens with, as the last one on this machine was left. */
-export interface DraftChoice { agent: string; cwd: string; scratch: boolean }
+export interface DraftChoice { agent: string; cwd: string; scratch: boolean; worktree?: boolean; beside?: BesideDraft }
 
 /** A model list without its live parts: load and queue readings go stale in storage. */
 type StillModel = Omit<ModelOption, 'loadPercent' | 'loadError' | 'queueSize' | 'queuePosition' | 'queueObservedAt'>;
@@ -68,7 +71,15 @@ function readModels(value: unknown): Record<string, StillModel[]> | null {
 function readDraft(value: unknown): DraftChoice | null {
   if (!value || typeof value !== 'object') return null;
   const draft = value as Partial<DraftChoice>;
-  return typeof draft.agent === 'string' ? { agent: draft.agent, cwd: typeof draft.cwd === 'string' ? draft.cwd : '', scratch: draft.scratch === true } : null;
+  if (typeof draft.agent !== 'string') return null;
+  const cwd = typeof draft.cwd === 'string' ? draft.cwd : '';
+  const beside = draft.beside;
+  const validBeside = !draft.scratch && beside && typeof beside.threadId === 'string' && beside.threadId
+    && beside.cwd === cwd && typeof beside.project === 'string' && beside.project
+    && (beside.worktree === null || typeof beside.worktree === 'string');
+  return { agent: draft.agent, cwd, scratch: draft.scratch === true,
+    ...(typeof draft.worktree === 'boolean' ? { worktree: draft.worktree } : {}),
+    ...(validBeside ? { beside: { threadId: beside.threadId, cwd, project: beside.project, worktree: beside.worktree } } : {}) };
 }
 
 function hostState(hostId: string | null): HostState | null {

@@ -107,7 +107,7 @@ test('reloaded before the daemon got the message: the words and notes are still 
 test('a send that comes back is forgotten on the device at once', async () => {
   const { page } = await boxWithNoteAndPicture('plain send');
   await page.locator('.composer .send-btn:not(.stop)').click();
-  await page.locator('.row.user').nth(1).waitFor({ timeout: 10_000 });
+  await page.locator('.row.user:not([data-optimistic])').nth(1).waitFor({ timeout: 10_000 });
   // Not after the next pause in typing: a reload right now must find nothing.
   assert.deepEqual(await box(page), { notes: 0, pictures: 0, stored: 0 });
   await page.close();

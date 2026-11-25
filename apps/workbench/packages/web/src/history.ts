@@ -1,7 +1,9 @@
-import { Api, AuthError } from './api';
+import { Api, ApiError, AuthError } from './api';
+import { cachedHistoryPage, forgetStoredHistoryPage, rememberHistoryPage } from './history-cache';
 import type { DetailRef, StoredEvent, Item } from './timeline';
 
 export interface HistoryPage { turnIds?: string[]; events: StoredEvent[]; snapshotSeq: number; nextCursor: number | null; hasOlder: boolean; hasNewer?: boolean }
+export interface CachedPageHit { page: HistoryPage; source: 'memory' | 'storage' }
 export interface HistoryDetail { version: number; text?: string; input?: unknown; output?: string; content?: unknown; nextCursor: number | null; toolId?: string | null; outputTruncated?: boolean; outputOmitted?: number; fullAvailable?: boolean }
 export type WorkFiles = NonNullable<Extract<Item, { kind: 'work' }>['files']>;
 export interface HistoryWork { files?: WorkFiles; version: number; events: StoredEvent[]; nextCursor: number | null }
@@ -55,7 +57,34 @@ function readCachedPage(api: Api, id: string, before?: number, after?: number, c
   return hit.page;
 }
 
-function rememberPage(api: Api, id: string, page: HistoryPage, before?: number, after?: number, chain = false) {
+const MILESTONE_EVENTS = new Set([
+  'turn.started',
+  'turn.done',
+  'turn.error',
+  'history.reset',
+  'approval.request',
+  'approval.resolved',
+  'input.request',
+  'input.resolved',
+  'message.replace',
+]);
+
+/** Synchronously read a cached page from tab memory first, then localStorage for first pages. */
+export function peekCachedPage(api: Api, id: string, before?: number, after?: number, chain = false): CachedPageHit | null {
+  const mem = readCachedPage(api, id, before, after, chain);
+  if (mem) return { page: mem, source: 'memory' };
+  if (!api.demo && before === undefined && after === undefined) {
+    const stored = cachedHistoryPage(api.host, id, chain);
+    if (stored) return { page: stored, source: 'storage' };
+  }
+  return null;
+}
+
+function rememberPage(api: Api, id: string, page: HistoryPage, before?: number, after?: number, chain = false, pinned = false) {
+  if (!api.demo && before === undefined && after === undefined) {
+    if (page.events.length) rememberHistoryPage(api.host, id, page, { chain, pinned });
+    else forgetStoredHistoryPage(api.host, id);
+  }
   const bytes = pageBytes(page);
   if (bytes > PAGE_CACHE_ENTRY_MAX_BYTES) return;
   const cache = pageCache(api);
@@ -67,6 +96,7 @@ function rememberPage(api: Api, id: string, page: HistoryPage, before?: number, 
 }
 
 function forgetThreadPages(api: Api, id: string) {
+  if (!api.demo) forgetStoredHistoryPage(api.host, id);
   const cache = pageCaches.get(api);
   if (!cache) return;
   for (const [key, entry] of cache.pages) {
@@ -76,7 +106,7 @@ function forgetThreadPages(api: Api, id: string) {
   }
 }
 
-function updateCachedLivePage(api: Api, id: string, batch: StoredEvent[], after?: number, chain = false) {
+function updateCachedLivePage(api: Api, id: string, batch: StoredEvent[], after?: number, chain = false, pinned = false) {
   if (!batch.length) return;
   if (batch.some(ev => ev.type === 'thread.historyChanged')) {
     forgetThreadPages(api, id);
@@ -103,6 +133,9 @@ function updateCachedLivePage(api: Api, id: string, batch: StoredEvent[], after?
   cache.pages.set(key, { page, bytes, at: Date.now() });
   cache.bytes += bytes;
   trimPageCache(cache);
+  if (!api.demo && after === undefined && batch.some(ev => MILESTONE_EVENTS.has(ev.type))) {
+    rememberHistoryPage(api.host, id, page, { chain, pinned });
+  }
 }
 
 /** Replace only the turns covered by a reconnect snapshot; keep previously paged history. */
@@ -143,29 +176,29 @@ export function prependHistory(older: StoredEvent[], loaded: StoredEvent[]): Sto
   return [...older.filter(event => !seen.has(event.seq)), ...loaded];
 }
 
-export async function historyPage(api: Api, id: string, before?: number, after?: number, chain = false): Promise<HistoryPage> {
+export async function historyPage(api: Api, id: string, before?: number, after?: number, chain = false, pinned = false): Promise<HistoryPage> {
   const cached = readCachedPage(api, id, before, after, chain);
   if (cached) return cached;
   if (api.demo) {
     const events = before ? await api.eventsBefore(id, before) : await api.eventsTail(id);
     const nextCursor = (events[0]?.seq ?? 0) > 1 ? events[0].seq : null;
     const page = { events, nextCursor, hasOlder: nextCursor !== null, snapshotSeq: events.at(-1)?.seq ?? 0 };
-    rememberPage(api, id, page, before, after, chain);
+    rememberPage(api, id, page, before, after, chain, pinned);
     return page;
   }
   const page = await api.historyPage(id, before, after, chain);
-  rememberPage(api, id, page, before, after, chain);
+  rememberPage(api, id, page, before, after, chain, pinned);
   return page;
 }
 
 /** A decision response may arrive without its SSE event. Read a fresh, bounded summary, not raw history. */
-export async function refreshHistoryPage(api: Api, id: string, chain = false): Promise<HistoryPage> {
+export async function refreshHistoryPage(api: Api, id: string, chain = false, pinned = false): Promise<HistoryPage> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const page = await api.historyPage(id, undefined, undefined, chain, controller.signal);
     forgetThreadPages(api, id);
-    rememberPage(api, id, page, undefined, undefined, chain);
+    rememberPage(api, id, page, undefined, undefined, chain, pinned);
     return page;
   } finally {
     clearTimeout(timer);
@@ -192,16 +225,18 @@ export async function watchHistory(api: Api, id: string, signal: AbortSignal, ca
   /** A historical segment ends before this sequence; it never subscribes to later events. */
   maximumSeq?: number;
   chain?: boolean;
+  pinned?: boolean;
 }) {
   let after = 0;
   let loaded = false;
+  let shownStored = false;
   let buffer: StoredEvent[] = [];
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = () => {
     clearTimeout(timer); timer = undefined;
     const batch = buffer; buffer = [];
     if (!signal.aborted && batch.length) {
-      updateCachedLivePage(api, id, batch, callbacks.minimumSeq, callbacks.chain);
+      updateCachedLivePage(api, id, batch, callbacks.minimumSeq, callbacks.chain, callbacks.pinned);
       callbacks.events(batch);
     }
   };
@@ -209,7 +244,14 @@ export async function watchHistory(api: Api, id: string, signal: AbortSignal, ca
     while (!signal.aborted) {
       try {
         if (!loaded) {
-          const page = await historyPage(api, id, callbacks.maximumSeq, callbacks.minimumSeq, callbacks.chain);
+          if (!shownStored && callbacks.maximumSeq === undefined && !readCachedPage(api, id, undefined, callbacks.minimumSeq, callbacks.chain) && !api.demo && callbacks.minimumSeq === undefined) {
+            const stored = cachedHistoryPage(api.host, id, callbacks.chain);
+            if (stored && !signal.aborted) {
+              shownStored = true;
+              callbacks.page(stored);
+            }
+          }
+          const page = await historyPage(api, id, callbacks.maximumSeq, callbacks.minimumSeq, callbacks.chain, callbacks.pinned);
           if (signal.aborted) return;
           after = page.snapshotSeq; callbacks.page(page); loaded = true;
         }
@@ -222,6 +264,7 @@ export async function watchHistory(api: Api, id: string, signal: AbortSignal, ca
         }, signal);
       } catch (error) {
         if (signal.aborted) return;
+        if (error instanceof ApiError && error.status === 404 && !api.demo) forgetStoredHistoryPage(api.host, id);
         if (!loaded || error instanceof AuthError) callbacks.error(error);
         if (error instanceof AuthError) return;
       }

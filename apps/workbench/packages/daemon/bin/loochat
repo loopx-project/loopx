@@ -8,6 +8,7 @@ const args = process.argv.slice(2);
 if (!args.length || (args[0] !== 'browser' && args.includes('--help'))) {
   console.log(`loochat agents | status | result ID | stop NAME
 loochat spawn --agent ID --name NAME [--cwd DIR] [--model ID] [--effort LEVEL] --message-file FILE [--handoff-file FILE] --request-id KEY
+loochat spawn --fork --name NAME [--worktree] --message-file FILE --request-id KEY
 loochat send NAME --message-file FILE [--handoff-file FILE] --request-id KEY
 loochat dirs MACHINE [PATH]
 loochat remote ls MEMBER [PATH]
@@ -15,13 +16,23 @@ loochat remote read MEMBER PATH [--offset N] [--limit N]
 loochat remote write MEMBER PATH --file FILE|- [--expect-hash HASH]
 loochat handover
 loochat history THREAD_ID [--before TURN_CURSOR] [--turns N]
-loochat history THREAD_ID --turn TURN_ID [--offset N --snapshot SEQ]
+loochat history THREAD_ID --turn TURN_ID [--offset N --snapshot SNAPSHOT]
+loochat history THREAD_ID --turn TURN_ID --tool TOOL_ID [--offset N --snapshot SNAPSHOT]
+loochat history THREAD_ID --tools TURN_ID [--offset N --snapshot SNAPSHOT]
+loochat history THREAD_ID --input TURN_ID | --answer INPUT_ID
+loochat history THREAD_ID --user-inputs [--cursor CURSOR] [--turns N]
 History options:
   --before TURN_CURSOR  Read older rounds using nextCursor; null means the beginning.
-  --turns N             Complete rounds per page, default 10, maximum 50.
+  --turns N             Rounds or inputs per page, default 10, maximum 50.
   --turn TURN_ID        Read one answer in full, in 16000-Unicode-character chunks.
+  --tool TOOL_ID        With --turn: one tool call's full record, same chunking.
+  --tools TURN_ID       List up to 50 tool ids of that turn; page with --offset.
+  --input TURN_ID       Read the person's input text that started that turn.
+  --answer INPUT_ID     Read one resolved person answer by input id, same chunking.
+  --user-inputs         List only what people said; page with --cursor and nextCursor.
   --offset N            Start at this Unicode character offset (default 0); continue with nextOffset.
-  --snapshot SEQ        Keep snapshotSeq fixed across chunks; required when --offset is positive.
+  --snapshot SNAPSHOT   Keep the view fixed: the snapshot id (or legacy seq) from the previous response.
+  --segment THREAD_ID   Read only one segment of a handed-over chain.
 Pages preview up to 4000 answer characters and the latest 30 tools per round; length/truncated and toolCount/toolsOmitted describe omissions.
 Run answer.fullText.command to read a truncated answer, then each response's command to continue; null means the end.
 Do not combine --turn with --before or --turns. If loochat is not on PATH, use "$LOOCHAT_BIN_DIR/loochat".
@@ -115,11 +126,12 @@ try {
     process.exit(0);
   }
   const send = (input, readonly) => {
-    const socket = readonly ? process.env.LOOCHAT_HANDOVER_SOCKET : process.env.LOOCHAT_TEAM_SOCKET;
-    const key = readonly ? process.env.LOOCHAT_HANDOVER_KEY : process.env.LOOCHAT_TEAM_KEY;
-    if (!socket || !key) throw new Error(readonly ? 'Run this command in a handover recipient session.' : 'Enable collaboration in loochat before running this command.');
+    const tools = readonly && Boolean(process.env.LOOCHAT_TOOLS_SOCKET || process.env.LOOCHAT_TOOLS_KEY);
+    const socket = readonly ? tools ? process.env.LOOCHAT_TOOLS_SOCKET : process.env.LOOCHAT_HANDOVER_SOCKET : process.env.LOOCHAT_TEAM_SOCKET;
+    const key = readonly ? tools ? process.env.LOOCHAT_TOOLS_KEY : process.env.LOOCHAT_HANDOVER_KEY : process.env.LOOCHAT_TEAM_KEY;
+    if (!socket || !key) throw new Error(readonly ? 'Run this command inside a LooChat thread with read credentials.' : 'Enable collaboration in loochat before running this command.');
     const payload = JSON.stringify(input);
-    const req = request({ socketPath: socket, path: readonly ? '/handover' : '/command', method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => {
+    const req = request({ socketPath: socket, path: readonly && !tools ? '/handover' : '/command', method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } }, res => {
       let text = ''; res.setEncoding('utf8'); res.on('data', chunk => { text += chunk; });
       res.on('end', () => { console.log(text); if (res.statusCode >= 400) process.exitCode = 1; });
     });
@@ -156,10 +168,19 @@ try {
     if (rest[0] && !rest[0].startsWith('--')) input.target = rest.shift();
     const readonly = op === 'handover' || op === 'history';
     if (op === 'dirs' && rest[0] && !rest[0].startsWith('--')) input.path = rest.shift();
-    const names = readonly ? { '--before': 'before', '--turns': 'turns', '--turn': 'turn', '--offset': 'offset', '--snapshot': 'snapshot' } : { '--agent': 'agent', '--name': 'name', '--cwd': 'cwd', '--model': 'model', '--effort': 'effort', '--request-id': 'requestId', '--message-file': 'file', '--handoff-file': 'handoffFile' };
+    const names = readonly ? { '--before': 'before', '--turns': 'turns', '--turn': 'turn', '--offset': 'offset', '--snapshot': 'snapshot', '--tool': 'tool', '--tools': 'tools', '--input': 'input', '--answer': 'answer', '--cursor': 'cursor', '--segment': 'segment' } : { '--agent': 'agent', '--name': 'name', '--cwd': 'cwd', '--model': 'model', '--effort': 'effort', '--request-id': 'requestId', '--message-file': 'file', '--handoff-file': 'handoffFile' };
     while (rest.length) {
-      const flag = rest.shift(); const key = names[flag]; const value = rest.shift();
-      if (!key || value === undefined) throw new Error(`Invalid argument: ${flag}`);
+      const flag = rest.shift();
+      if (op === 'spawn' && (flag === '--fork' || flag === '--worktree')) {
+        if (input[flag.slice(2)]) throw new Error(`Duplicate argument: ${flag}`);
+        input[flag.slice(2)] = true; continue;
+      }
+      if (readonly && flag === '--user-inputs') {
+        if (input.userInputs) throw new Error(`Duplicate argument: ${flag}`);
+        input.userInputs = true; continue;
+      }
+      const key = names[flag]; const value = rest.shift();
+      if (!key || value === undefined || input[key] !== undefined) throw new Error(`Invalid argument: ${flag}`);
       input[key] = value;
     }
     if (input.file === '-' && input.handoffFile === '-') throw new Error('Only one file can come from stdin.');

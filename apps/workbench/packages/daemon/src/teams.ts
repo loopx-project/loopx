@@ -103,13 +103,15 @@ export class TeamsManager {
       if (m.cwd) this.cwd(m.cwd);
     }
   }
-  async dispatch(input: { teamId: string; text?: unknown; images?: unknown; cwd: string; source: TeamSource }): Promise<{ taskId: string; threadId: string }> {
+  async dispatch(input: { teamId: string; text?: unknown; images?: unknown; references?: unknown; cwd: string; source: TeamSource }, authenticatedHuman = false): Promise<{ taskId: string; threadId: string }> {
     const snapshot = this.get(input.teamId);
     const cwd = this.cwd(input.cwd);
     const { text, images } = teamMessage(input);
+    // The source label is informational. Only the authenticated HTTP entry supplies this evidence.
+    const prepared = this.manager.references.prepare('', text, authenticatedHuman, undefined, input.references);
     await this.available(snapshot);
     const entry = snapshot.members.find(m => m.name === snapshot.entry)!;
     await this.manager.checkImages(entry.agent, entry.model ?? null, images);
-    return this.coordination.startTeam(snapshot, text, cwd, input.source, images);
+    return this.coordination.startTeam(snapshot, prepared.displayText, cwd, input.source, images, authenticatedHuman, prepared.references.map(reference => reference.id));
   }
 }
