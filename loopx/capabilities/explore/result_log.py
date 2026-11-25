@@ -835,7 +835,62 @@ def explore_history_rows(events: Sequence[Mapping[str, Any]], *, goal_id: str | 
     from ...control_plane.work_items.yardstick_decision import project_work_yardstick_presentations
 
     return project_work_yardstick_presentations(
-        [{key: event[key] for key in fields if key in event} for event in events], goal_id=goal_id)
+        [{key: event[key] for key in fields if key in event} for event in events],
+        goal_id=goal_id, history_sources=_history_verification_sources(events),
+    )
+
+
+def _history_verification_sources(events: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """Replay the Explore finding fold at each recorded comparison prefix."""
+    candidates: dict[str, dict[str, Any]] = {}
+    questions_by_count: dict[int, set[str]] = {}
+    seen: set[str] = set()
+    for order, event in enumerate(events):
+        capture = event.get("work_yardstick") or {}
+        snapshot = capture.get("source_snapshot")
+        verification = (event.get("execution_observation") or {}).get("verification_evidence") or {}
+        if not snapshot or not verification.get("baseline") or event["event_id"] in seen:
+            continue
+        seen.add(event["event_id"])
+        count = snapshot["event_count"]
+        if count > order:
+            continue
+        candidates[event["event_id"]] = _finding_view({**event, "_recorded_order": order})
+        questions_by_count.setdefault(count, set()).add(event["node_id"])
+    if not candidates:
+        return None
+    prefixes: dict[str, list[dict[str, Any]]] = {}
+    folded: dict[str, dict[str, Any]] = {}
+    previous = 0
+    for count, questions in sorted(questions_by_count.items()):
+        for order in range(previous, count):
+            event = events[order]
+            if event["event_kind"] == EVENT_KIND_FINDING:
+                _record_result_revision(folded, event, order)
+        prefixes[str(count)] = [
+            _finding_view(event) for event in folded.values()
+            if event.get("node_id") in questions and "measurements" in event
+        ]
+        previous = count
+    return {
+        "candidates": candidates, "findings_by_prefix": prefixes,
+        "source_events": [{"goal_id": event["goal_id"], "event_id": event["event_id"]} for event in events],
+    }
+
+
+def _record_result_revision(
+    folded: dict[str, dict[str, Any]], event: Mapping[str, Any], recorded_order: int,
+) -> None:
+    result_id = str(event.get("result_id") or "")
+    if not result_id:
+        return
+    prior = folded.get(result_id)
+    view = dict(event)
+    view["_recorded_order"] = recorded_order
+    view["first_recorded_at"] = prior["first_recorded_at"] if prior else str(event.get("recorded_at") or "")
+    view["last_updated_at"] = str(event.get("recorded_at") or "")
+    view["update_count"] = (prior["update_count"] + 1) if prior else 1
+    folded[result_id] = view
 
 
 def _fold_by_result_id(
@@ -843,20 +898,8 @@ def _fold_by_result_id(
 ) -> list[dict[str, Any]]:
     folded: dict[str, dict[str, Any]] = {}
     for recorded_order, event in enumerate(events):
-        if event.get("event_kind") != event_kind:
-            continue
-        result_id = str(event.get("result_id") or "")
-        if not result_id:
-            continue
-        prior = folded.get(result_id)
-        view = dict(event)
-        view["_recorded_order"] = recorded_order
-        view["first_recorded_at"] = (
-            prior["first_recorded_at"] if prior else str(event.get("recorded_at") or "")
-        )
-        view["last_updated_at"] = str(event.get("recorded_at") or "")
-        view["update_count"] = (prior["update_count"] + 1) if prior else 1
-        folded[result_id] = view
+        if event.get("event_kind") == event_kind:
+            _record_result_revision(folded, event, recorded_order)
     return list(folded.values())
 
 

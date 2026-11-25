@@ -13,6 +13,7 @@ export type ExploreHistoryEvent = {
   agent_id: string; run_id: string; evidence_refs: string[]; supersedes: string; confidence: number | null;
   execution_observation?: ExploreExecutionObservation;
   measurements?: ExploreMeasurement[];
+  yardstick_measurements?: ExploreMeasurement[];
   work_yardstick?: WorkYardstickCapture;
 };
 export type ExploreHistoryPage = {goal_id: string; items: ExploreHistoryEvent[]; total: number; next_cursor: string | null};
@@ -71,6 +72,9 @@ export function parseExploreHistoryPage(input: unknown, goalId: string): Explore
         capture: raw.work_yardstick, goal_id: goalId, agent_id: raw.agent_id ?? "", evidence_refs: raw.evidence_refs ?? [],
       })}),
       ...(raw.measurements === undefined ? {} : {measurements: normalizeExploreMeasurements(raw.measurements)}),
+      ...(raw.yardstick_measurements === undefined ? {} : {
+        yardstick_measurements: normalizeExploreMeasurements(raw.yardstick_measurements),
+      }),
     } as ExploreHistoryEvent;
   });
   return {goal_id: goalId, items, total: page.total as number, next_cursor: page.next_cursor as string | null};

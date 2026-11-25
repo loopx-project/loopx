@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import {readFile} from "node:fs/promises";
+import {execFileSync} from "node:child_process";
+import {fileURLToPath} from "node:url";
+import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 
 const goalId = "research-verification-fixture";
 const result = {ref: "artifact:result", sha256: "b".repeat(64)};
@@ -26,8 +28,26 @@ const saved = {
   goal_acceptance_contract: contract,
 };
 export async function verifyResearchAcceptanceReadback(browser, start) {
-  const fixture = JSON.parse(await readFile(new URL("../src/data/fixtures/research-verification-readback.json", import.meta.url), "utf8"));
+  const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
+  const builder = fileURLToPath(new URL("./research-verification-fixture.py", import.meta.url));
+  const fixture = JSON.parse(execFileSync(resolveTestPython({repoRoot}), [builder], {cwd: repoRoot, encoding: "utf8",
+    env: {...process.env, PYTHONPATH: repoRoot}}));
   const url = await start("verification", fixture);
+  const historyUrl = new URL("/api/chat/explore-results", url);
+  historyUrl.search = new URLSearchParams({goal_id: goalId, view: "history"});
+  const historyResponse = await fetch(historyUrl);
+  assert.equal(historyResponse.status, 200);
+  const history = (await historyResponse.json()).items;
+  const matched = history.find(row => row.result_id === "matched-candidate");
+  assert.deepEqual(matched.yardstick_measurements.map(row => row.value), [9, 5, 4, 8]);
+  assert.equal(matched.work_yardstick.source_snapshot, undefined);
+  const revision = history.filter(row => row.result_id === "matched-baseline").at(-1);
+  assert.deepEqual(revision.measurements.map(row => row.value), [2, 10], "The later measurement exists in history");
+  for (const id of ["foreign-candidate", "late-candidate"]) {
+    const record = history.find(row => row.result_id === id);
+    assert.equal(record.yardstick_measurements, undefined);
+    assert.equal(record.work_yardstick.decision.authoritative.metric, "loss");
+  }
   const page = await browser.newPage({locale: "en-US", viewport: {width: 1200, height: 900}});
   let mode = "unavailable";
   let mutations = 0;
@@ -95,8 +115,21 @@ export async function verifyResearchAcceptanceReadback(browser, start) {
     await read(() => retry.press("Enter"));
     await verified.waitFor();
     assert.equal(await tier.textContent(), "L0");
+    const selected = panel.getByRole("combobox", {name: "Research record"});
+    const fidelity = panel.locator("dl > div").filter({has: page.getByText("Proxy fidelity", {exact: true})}).locator("dd");
+    await selected.selectOption({label: "Original matched measurements"});
+    assert.equal(await fidelity.textContent(), "Different ordering on the matched pair");
+    assert.equal(await panel.getByText("9 → 5 points", {exact: false}).count(), 1);
+    assert.equal(await panel.getByText("4 → 8 points", {exact: false}).count(), 1);
 
     await page.setViewportSize({width: 390, height: 900});
+    for (const label of ["Reference from another worker", "Reference received later"]) {
+      await selected.selectOption({label});
+      assert.equal(await fidelity.textContent(), "Unknown");
+      assert.equal(await panel.getByText("9 → 5 points", {exact: false}).count(), 0);
+      assert.equal(await verified.count(), 1, "The separate authoritative proof remains available");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    }
     mode = "unrelated-result";
     await page.goto(url);
     await entry.waitFor();
@@ -109,7 +142,7 @@ export async function verifyResearchAcceptanceReadback(browser, start) {
     assert.equal(mutations, 0);
     const backend = await (await fetch(new URL("/fixture/readback", url))).json();
     assert(backend.history_reads > 0 && backend.source_unchanged && backend.mutation_attempts === 0);
-    console.log("research verification: failed and mismatched reads remain unknown; a same-instance retry restores the proof");
+    console.log("research verification: original pair survives revision; foreign and delayed measurements stay unknown; verifier retry restores proof");
   } finally {
     await page.close();
   }

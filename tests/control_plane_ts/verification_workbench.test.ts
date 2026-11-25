@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import {createHash} from "node:crypto";
 import test from "node:test";
 import {normalizeExploreExecutionObservation} from "../../loopx/control_plane/capabilities/explore_execution_observation.ts";
 import {verifiedHostDepth} from "../../loopx/control_plane/capabilities/explore_verification_evidence.ts";
 import {parseExploreHistoryPage} from "../../loopx/control_plane/presentation/explore_history.ts";
 import {projectVerificationWorkbench} from "../../loopx/control_plane/presentation/verification_workbench.ts";
+import {projectWorkYardstickPresentations} from "../../loopx/control_plane/work_items/yardstick_source.ts";
 
 const baseline = {ref: "fixtures:baseline", sha256: "a".repeat(64)};
 const candidate = "b".repeat(64);
@@ -69,26 +71,53 @@ test("each tier requires a distinct verified receipt for the added capability", 
     receipts), 1);
 });
 
-test("fidelity uses the exact bounded pair and explicit negative or comparison evidence", () => {
+test("Yardstick history pins its paired observations to the original work and event prefix", () => {
   const selected = finding("selected", {evidence_refs: evidenceRefs, work_yardstick: {
     binding: {goal_id: "goal", agent_id: "worker", todo_id: "todo_case", turn_instance_id: "turn-1"},
     decision: {schema_version: "work_yardstick_decision_v0",
       target: {summary: "Reduce errors", scope: "Frozen input", acceptance_ref: "check:exact"},
-      authoritative: exact, proxy, counterevidence_refs: [], prior_finding_id: null,
+      authoritative: exact, proxy, counterevidence_refs: [baseline.ref], prior_finding_id: null,
       next_action: {method_id: "screen", reason: "Compare on fixed inputs", cost_bound: "One evaluation"}},
     }, execution_observation: {...execution, verification_evidence: {baseline}},
     measurements: [measure(exact, candidate, 5, external.ref), measure(proxy, candidate, 8, warm.ref)]});
-  const control = finding("control", {measurements: [
+  const control = finding("control", {evidence_refs: [baseline.ref], measurements: [
     measure(exact, baseline.sha256, 9, baseline.ref), measure(proxy, baseline.sha256, 4, baseline.ref),
   ]});
   const negative = finding("negative", {status: "refuted", evidence_refs: [hooks.ref]});
   const foreign = {...control, goal_id: "other"};
   const nearby = {...negative, node_id: "nearby"};
-  const projection = projectVerificationWorkbench(selected, [selected, control, negative, foreign, nearby])!;
+  const binding = selected.work_yardstick!.binding;
+  const history = (rows: Record<string, unknown>[], {count = 1, broken = false, legacy = false} = {}) => {
+    const digest = createHash("sha256").update(JSON.stringify(count ? ["control"] : [])).digest("hex");
+    const capture = {...selected.work_yardstick, ...(legacy ? {} : {source_snapshot: {
+      event_count: count, event_ids_sha256: broken ? "0".repeat(64) : digest,
+    }})};
+    const result = projectWorkYardstickPresentations({
+      captures: [{capture, goal_id: "goal", agent_id: "worker", event_id: "selected", evidence_refs: evidenceRefs}],
+      history_sources: {
+        candidates: {selected: {...selected, recorded_order: 1}},
+        findings_by_prefix: {[count]: rows},
+        source_events: [{goal_id: "goal", event_id: "control"}, {goal_id: "goal", event_id: "selected"}],
+      },
+    });
+    assert.deepEqual(result.captures, [selected.work_yardstick], "The original prefix stays on the server");
+    return (result.comparisons as Record<string, unknown>).selected;
+  };
+  const earlier = {...control, recorded_order: 0};
+  const projected = finding("selected", {...selected, yardstick_measurements: history([earlier])});
+  const projection = projectVerificationWorkbench(projected, [projected, negative, nearby])!;
   assert.equal(projection.fidelity, "different_order");
   assert.deepEqual([projection.authoritative?.delta, projection.proxy?.delta], [4, -4]);
   assert.deepEqual(projection.alternatives.map(item => item.event_id), ["negative"]);
-  assert.equal(projectVerificationWorkbench(selected, [selected, foreign])?.fidelity, "unknown");
-  assert.equal(projectVerificationWorkbench(selected, [selected, control, {...control, event_id: "duplicate"}])?.fidelity, "unknown");
-  assert.equal(projectVerificationWorkbench(selected, [selected, {...control, measurements: control.measurements?.map(row => ({...row, evidence_ref: "uncited"}))}])?.fidelity, "unknown");
+  assert.equal(projectVerificationWorkbench(selected, [selected, control, foreign])?.fidelity, "unknown",
+    "Unqualified measurements in browser history cannot repair a missing pair");
+  assert.deepEqual(history([{...earlier, work_binding: binding}]), projected.yardstick_measurements);
+  assert.equal(history([{...earlier, agent_id: "another-worker"}]), undefined);
+  assert.equal(history([{...earlier, work_binding: {...binding, todo_id: "todo_other"}}]), undefined);
+  assert.equal(history([{...earlier, recorded_order: 2}]), undefined);
+  assert.equal(history([earlier], {count: 0}), undefined);
+  assert.equal(history([earlier], {broken: true}), undefined);
+  assert.equal(history([earlier], {legacy: true}), undefined);
+  assert.equal(history([earlier, {...earlier, event_id: "duplicate"}]), undefined);
+  assert.equal(history([{...earlier, measurements: control.measurements?.map(row => ({...row, evidence_ref: "uncited"}))}]), undefined);
 });
