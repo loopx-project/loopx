@@ -55,8 +55,23 @@ def test_exact_link_to_other_work_cannot_satisfy_a_required_scope() -> None:
     assert result["ok"] is False
     assert result["errors"][0]["reason_code"] == "required_decision_scope_target_mismatch"
     hint = build_required_decision_scope_repair_hint(result)
-    assert "owner intent" in hint["repair_focus"]
-    assert "invent approval" in hint["repair_focus"]
+    assert hint == {
+        "source": "quota.should-run",
+        "trigger": "required_decision_scope_projection_drift",
+        "recommended_mode": "repair_required_decision_scope_projection",
+        "effective_action": "todo_decision_scope_projection_repair",
+        "blocked_action_scope": "todo_decision_scope_projection",
+        "allowed": True,
+        "notify": "DONT_NOTIFY",
+        "reason": "a scope-covering user gate explicitly targets a different Todo",
+        "repair_focus": (
+            "reconcile the exact target and required scope against owner intent; do not "
+            "remove the requirement, retarget the gate, or invent approval merely to clear the conflict"
+        ),
+        "spend_policy": "spend once only after the todo/gate projection repair is validated and written back",
+        "consistency": result,
+    }
+    assert hint["consistency"] is result
 
 
 def test_standing_scope_legacy_codec_is_retained() -> None:

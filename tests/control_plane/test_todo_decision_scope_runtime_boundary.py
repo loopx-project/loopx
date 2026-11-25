@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
 
 import pytest
 
@@ -34,6 +35,120 @@ def _response(value: object) -> dict[str, object]:
         "schema_version": "todo_decision_scope_result_v0",
         "result": value,
     }
+
+
+@pytest.fixture
+def runtime_operations(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    operations: list[object] = []
+
+    def record(method: str, params: Mapping[str, object]) -> object:
+        operations.append(params["operation"])
+        return effect_runtime_result(method, params)
+
+    monkeypatch.setattr(decision_scope, "effect_runtime_result", record)
+    return operations
+
+
+def test_consistency_and_repair_share_one_real_runtime_call(runtime_operations: list[object]) -> None:
+    consistency = decision_scope.build_required_decision_scope_consistency(
+        None, None, agent_id="agent-a", agent_source_items=[AGENT_ITEM],
+    )
+    hint = decision_scope.build_required_decision_scope_repair_hint(consistency)
+
+    assert hint is not None
+    assert hint["consistency"] is consistency
+    assert hint["trigger"] == "required_decision_scope_projection_drift"
+    assert runtime_operations == ["consistency"]
+    assert set(consistency) == {
+        "schema_version", "ok", "status", "agent_id", "checked_agent_todo_count",
+        "checked_required_scope_count", "terminal_outcome_count",
+        "standing_authority_match_count", "errors",
+    }
+
+
+@pytest.mark.parametrize("copy_as_dict", [False, True], ids=["edited-errors", "plain-dict"])
+def test_repair_rechecks_a_changed_or_uncached_projection(
+    runtime_operations: list[object],
+    copy_as_dict: bool,
+) -> None:
+    consistency = decision_scope.build_required_decision_scope_consistency(
+        None, None, agent_id="agent-a", agent_source_items=[AGENT_ITEM],
+    )
+    if copy_as_dict:
+        consistency = dict(consistency)
+        expected = "required_decision_scope_projection_drift"
+    else:
+        errors = consistency["errors"]
+        assert isinstance(errors, list)
+        errors[0]["reason_code"] = "multi_agent_user_gate_missing_scope"
+        expected = "user_gate_scope_projection_drift"
+
+    hint = decision_scope.build_required_decision_scope_repair_hint(consistency)
+
+    assert hint is not None
+    assert hint["trigger"] == expected
+    assert runtime_operations == ["consistency", "repair_hint"]
+
+
+def test_consistency_envelope_without_plan_uses_standalone_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    operations = []
+
+    def legacy_envelope(method: str, params: Mapping[str, object]) -> object:
+        operations.append(params["operation"])
+        response = effect_runtime_result(method, params)
+        if params["operation"] == "consistency":
+            return _response(response["result"])
+        return response
+
+    monkeypatch.setattr(decision_scope, "effect_runtime_result", legacy_envelope)
+    consistency = decision_scope.build_required_decision_scope_consistency(
+        None, None, agent_id="agent-a", agent_source_items=[AGENT_ITEM],
+    )
+    hint = decision_scope.build_required_decision_scope_repair_hint(consistency)
+
+    assert hint is not None
+    assert hint["trigger"] == "required_decision_scope_projection_drift"
+    assert operations == ["consistency", "repair_hint"]
+
+
+@pytest.mark.parametrize("consistency", [{}, {"ok": True}, {"ok": 0}, {"ok": None}])
+def test_repair_short_circuits_unless_ok_is_false(
+    runtime_operations: list[object], consistency: dict[str, object],
+) -> None:
+    assert decision_scope.build_required_decision_scope_repair_hint(consistency) is None
+    assert runtime_operations == []
+
+
+@pytest.mark.parametrize("bad_response", [
+    {},
+    _response(None),
+    {**_response(None), "repair_plan": None},
+    {**_response(None), "repair_plan": []},
+    *[{**_response(None), "repair_plan": {
+        "schema_version": "todo_decision_scope_repair_plan_v0", "trigger": "repair",
+        "recommended_mode": "repair", "blocked_action_scope": "scope",
+        "allowed": True, "notify": "DONT_NOTIFY", "reason": "repair required",
+        "repair_focus": "scope", "spend_policy": "after writeback",
+        **patch,
+    }} for patch in (
+        {"schema_version": "unknown_plan_v0"}, {"allowed": 1}, {"reason": []}, {"source": "unexpected"},
+    )],
+])
+def test_malformed_repair_runtime_response_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    bad_response: dict[str, object],
+) -> None:
+    monkeypatch.setattr(decision_scope, "effect_runtime_result", lambda *_args: bad_response)
+
+    with pytest.raises(TypeError, match="^invalid typed decision scope repair_hint projection$"):
+        decision_scope.build_required_decision_scope_repair_hint({"ok": False, "errors": []})
+
+
+def test_decision_scope_codec_has_no_any_annotations() -> None:
+    from loopx.canary.maintainability_ratchet import module_metrics
+
+    metrics = module_metrics(Path(decision_scope.__file__))
+    assert metrics["any_count"] == metrics["dict_any_count"] == 0
 
 
 @pytest.mark.parametrize(
