@@ -132,6 +132,9 @@ export function effectRuntimeErrorPayload(
   return {
     kind: "internal_failure",
     code: "unexpected_handler_error",
-    message: "Effect runtime handler failed unexpectedly",
+    message: boundedMessage(
+      `Effect runtime handler failed unexpectedly: ${(error as any)?.message || String(error)}`,
+      "Effect runtime handler failed unexpectedly",
+    ),
   };
 }
