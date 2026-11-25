@@ -8,11 +8,12 @@ counterfactual suffix owners without expanding minimal-kernel runtime state.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import threading
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Mapping, cast
+from typing import Any, Mapping, Protocol, cast, runtime_checkable
 
 import pytest
 
@@ -68,6 +69,7 @@ class SandboxInstanceState:
     memory_pages: dict[str, str]
     daemon_health: dict[str, bool] = field(default_factory=dict)
     egress_policy_id: str = "isolated-offline"
+    snapshot_holder_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,13 @@ def _freeze_snapshot_fields(instance: object) -> None:
             attr,
             MappingProxyType(dict(getattr(instance, attr))),
         )
+    for tuple_attr in ("held_refs", "active_holder_ids"):
+        if hasattr(instance, tuple_attr):
+            object.__setattr__(
+                instance,
+                tuple_attr,
+                tuple(getattr(instance, tuple_attr)),
+            )
 
 
 @dataclass(frozen=True)
@@ -107,6 +116,8 @@ class _SealedSnapshot:
     refcount: int = 1
     daemon_health: Mapping[str, bool] = field(default_factory=dict)
     daemon_health_digest: str | None = None
+    owner_holder_id: str = ""
+    held_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze_snapshot_fields(self)
@@ -130,21 +141,55 @@ class SandboxSnapshotDescriptor:
     memory_digest: str | None = None
     daemon_health: Mapping[str, bool] = field(default_factory=dict)
     daemon_health_digest: str | None = None
+    owner_holder_id: str = ""
+    active_holder_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _freeze_snapshot_fields(self)
 
 
-@dataclass
+@dataclass(frozen=True)
 class _SnapshotRef:
     snapshot_id: str
+    holder_id: str = ""
 
 
-@dataclass
+@dataclass(frozen=True)
 class _BranchRef:
     branch_sandbox_id: str
     source_snapshot_id: str
     branch_isolation_id: str
+    target_branch_id: str = ""
+    holder_id: str = ""
+
+
+@runtime_checkable
+class SandboxSpiProviderProtocol(Protocol):
+    """Minimal RFC Sandbox Snapshot & Fork SPI structural surface."""
+
+    def pause(self, sandbox_id: str) -> SandboxPauseReceipt: ...
+
+    def resume(self, sandbox_id: str) -> SandboxInstanceState: ...
+
+    def snapshot(
+        self,
+        sandbox_id: str,
+        *,
+        target_tier: str,
+        scrub_keys: tuple[str, ...] = (
+            "LOOPX_LEASE_KEY",
+            "LOOPX_CLAIM_OP_ID",
+            "CLOUD_API_TOKEN",
+        ),
+    ) -> SandboxSnapshotDescriptor: ...
+
+    def fork(
+        self,
+        snapshot_id: str,
+        *,
+        child_id: str,
+        egress_policy_id: str = "isolated-offline",
+    ) -> tuple[SandboxInstanceState, str]: ...
 
 
 _TIER_TO_REPLAY_FIDELITY: dict[str, ReplayFidelity] = {
@@ -286,6 +331,9 @@ def _observe_sandbox_digest(
 
 
 def _descriptor_from_sealed(sealed: _SealedSnapshot) -> SandboxSnapshotDescriptor:
+    effective_refcount = (
+        len(sealed.held_refs) if sealed.held_refs else sealed.refcount
+    )
     return SandboxSnapshotDescriptor(
         snapshot_id=sealed.snapshot_id,
         parent_sandbox_id=sealed.parent_sandbox_id,
@@ -298,11 +346,13 @@ def _descriptor_from_sealed(sealed: _SealedSnapshot) -> SandboxSnapshotDescripto
         daemon_health=sealed.daemon_health,
         scrubbed_keys=sealed.scrubbed_keys,
         digest=sealed.digest,
-        refcount=sealed.refcount,
+        refcount=effective_refcount,
         rootfs_digest=sealed.rootfs_digest,
         env_manifest_digest=sealed.env_manifest_digest,
         daemon_health_digest=sealed.daemon_health_digest,
         memory_digest=sealed.memory_digest,
+        owner_holder_id=sealed.owner_holder_id,
+        active_holder_ids=sealed.held_refs,
     )
 
 
@@ -314,7 +364,13 @@ class InMemorySandboxSpiProvider:
         self.sandboxes: dict[str, SandboxInstanceState] = {}
         self._sealed_snapshots: dict[str, _SealedSnapshot] = {}
         self.snapshots: dict[str, SandboxSnapshotDescriptor] = {}
+        self._branch_holders: dict[str, str] = {}
+        self._branch_source_snapshots: dict[str, str] = {}
+        self._pending_destroyed_branch_holders: dict[str, list[str]] = {}
         self._seq = 0
+
+    def branch_holder_id(self, sandbox_id: str) -> str | None:
+        return self._branch_holders.get(sandbox_id)
 
     def sealed_snapshot(self, snapshot_id: str) -> _SealedSnapshot:
         if snapshot_id not in self._sealed_snapshots:
@@ -455,6 +511,7 @@ class InMemorySandboxSpiProvider:
         )
         self._seq += 1
         snap_id = f"snap-{self._seq:04d}"
+        owner_holder_id = f"holder-{snap_id}-parent"
         sealed = _SealedSnapshot(
             snapshot_id=snap_id,
             parent_sandbox_id=sandbox_id,
@@ -472,12 +529,16 @@ class InMemorySandboxSpiProvider:
             memory_digest=memory_digest,
             digest=digest,
             refcount=1,
+            owner_holder_id=owner_holder_id,
+            held_refs=(owner_holder_id,),
         )
         self._sealed_snapshots[snap_id] = sealed
         self.snapshots[snap_id] = _descriptor_from_sealed(sealed)
         return _descriptor_from_sealed(sealed)
 
-    def _set_snapshot_refcount(self, snapshot_id: str, refcount: int) -> _SealedSnapshot:
+    def _set_snapshot_holders(
+        self, snapshot_id: str, holders: tuple[str, ...]
+    ) -> _SealedSnapshot:
         sealed = self.sealed_snapshot(snapshot_id)
         updated = _SealedSnapshot(
             snapshot_id=sealed.snapshot_id,
@@ -495,7 +556,9 @@ class InMemorySandboxSpiProvider:
             daemon_health_digest=sealed.daemon_health_digest,
             memory_digest=sealed.memory_digest,
             digest=sealed.digest,
-            refcount=refcount,
+            refcount=len(holders),
+            owner_holder_id=sealed.owner_holder_id,
+            held_refs=holders,
         )
         self._sealed_snapshots[snapshot_id] = updated
         self.snapshots[snapshot_id] = _descriptor_from_sealed(updated)
@@ -506,13 +569,18 @@ class InMemorySandboxSpiProvider:
         snapshot_id: str,
         *,
         child_id: str,
+        target_branch_id: str | None = None,
         egress_policy_id: str = "isolated-offline",
     ) -> tuple[SandboxInstanceState, str]:
         sealed = self.sealed_snapshot(snapshot_id)
-        self._set_snapshot_refcount(snapshot_id, sealed.refcount + 1)
         self._seq += 1
+        branch_tag = target_branch_id or child_id
         fork_id = f"sb-fork-{child_id}-{self._seq:04d}"
-        isolation_id = f"iso-{child_id}-{self._seq:04d}"
+        isolation_id = f"iso-{branch_tag}-{self._seq:04d}"
+        fork_holder = f"holder-{snapshot_id}-fork-{self._seq:04d}-{child_id}"
+        self._set_snapshot_holders(snapshot_id, sealed.held_refs + (fork_holder,))
+        self._branch_holders[fork_id] = fork_holder
+        self._branch_source_snapshots[fork_id] = snapshot_id
         child = SandboxInstanceState(
             sandbox_id=fork_id,
             provider_id=self.provider_id,
@@ -524,48 +592,65 @@ class InMemorySandboxSpiProvider:
             memory_pages=dict(sealed.memory_pages),
             daemon_health=dict(sealed.daemon_health),
             egress_policy_id=egress_policy_id,
+            snapshot_holder_id=fork_holder,
         )
         self.sandboxes[fork_id] = child
         return child, isolation_id
-
-    def restore_snapshot(
-        self,
-        sandbox_id: str,
-        snapshot_id: str,
-    ) -> SandboxInstanceState:
-        sealed = self.sealed_snapshot(snapshot_id)
-        if sandbox_id not in self.sandboxes:
-            raise SandboxSpiError("sandbox_missing", f"unknown sandbox {sandbox_id}")
-        sb = self.sandboxes[sandbox_id]
-        if sb.status == "destroyed":
-            raise SandboxSpiError(
-                "sandbox_destroyed",
-                "cannot restore destroyed sandbox",
-            )
-        sb.rootfs = dict(sealed.rootfs)
-        sb.symlinks = dict(sealed.symlinks)
-        sb.env = dict(sealed.env)
-        sb.processes = dict(sealed.processes)
-        sb.daemon_health = dict(sealed.daemon_health)
-        sb.memory_pages = dict(sealed.memory_pages)
-        sb.status = "running"
-        return sb
 
     def destroy_sandbox(self, sandbox_id: str) -> None:
         sb = self.sandboxes.get(sandbox_id)
         if sb is not None:
             sb.status = "destroyed"
+        holder = self._branch_holders.get(sandbox_id)
+        source_snap = self._branch_source_snapshots.get(sandbox_id)
+        if holder is not None and source_snap is not None:
+            pending = self._pending_destroyed_branch_holders.setdefault(
+                source_snap, []
+            )
+            if holder not in pending:
+                pending.append(holder)
 
-    def release_snapshot(self, snapshot_id: str) -> None:
+    def release_snapshot(
+        self,
+        snapshot_id: str,
+        *,
+        holder_id: str | None = None,
+    ) -> None:
         sealed = self._sealed_snapshots.get(snapshot_id)
         if sealed is None:
             return
-        remaining = sealed.refcount - 1
-        if remaining <= 0:
+        if holder_id is not None:
+            pending_holders = self._pending_destroyed_branch_holders.get(snapshot_id)
+            if pending_holders and holder_id in pending_holders:
+                pending_holders.remove(holder_id)
+            if holder_id not in sealed.held_refs:
+                return
+            remaining_holders = tuple(h for h in sealed.held_refs if h != holder_id)
+        elif self._pending_destroyed_branch_holders.get(snapshot_id):
+            target_holder = self._pending_destroyed_branch_holders[snapshot_id].pop(0)
+            remaining_holders = tuple(
+                h for h in sealed.held_refs if h != target_holder
+            )
+        elif sealed.held_refs:
+            remaining_holders = sealed.held_refs[1:]
+        else:
+            remaining_holders = ()
+        if not remaining_holders:
             del self._sealed_snapshots[snapshot_id]
             self.snapshots.pop(snapshot_id, None)
         else:
-            self._set_snapshot_refcount(snapshot_id, remaining)
+            self._set_snapshot_holders(snapshot_id, remaining_holders)
+
+    def destroy(
+        self,
+        sandbox_or_snapshot_id: str,
+        *,
+        holder_id: str | None = None,
+    ) -> None:
+        if sandbox_or_snapshot_id in self._sealed_snapshots:
+            self.release_snapshot(sandbox_or_snapshot_id, holder_id=holder_id)
+            return
+        self.destroy_sandbox(sandbox_or_snapshot_id)
 
 
 class SpiAgentStateStore:
@@ -605,14 +690,150 @@ def _effective_replay_fidelity(
 
 @dataclass
 class SpiReplayAdapter:
-    """Adapter bridging InMemorySandboxSpiProvider onto RiskAwareReplayChildAdapter."""
+    """Adapter bridging a Sandbox SPI provider onto RiskAwareReplayChildAdapter."""
 
-    provider: InMemorySandboxSpiProvider
+    provider: SandboxSpiProviderProtocol
     source_sandbox_id: str
     target_tier: str = "microvm_memory_exact"
     prefix_reused: bool = True
     released_children: list[str] = field(default_factory=list)
     released_snapshots: list[str] = field(default_factory=list)
+    last_target_sandboxes: list[_BranchRef] = field(default_factory=list)
+    _captured_descriptors: dict[str, SandboxSnapshotDescriptor] = field(
+        default_factory=dict, repr=False
+    )
+    _branch_instances: dict[str, SandboxInstanceState] = field(
+        default_factory=dict, repr=False
+    )
+    _active_replay_targets: dict[str, _BranchRef] = field(
+        default_factory=dict, repr=False
+    )
+    _finalized_replay_targets: dict[str, _BranchRef] = field(
+        default_factory=dict, repr=False
+    )
+    _target_bindings: dict[tuple[str, str], _BranchRef] = field(
+        default_factory=dict, repr=False
+    )
+    _committed_release_holders: set[str] = field(default_factory=set, repr=False)
+    _committed_released_children: set[str] = field(default_factory=set, repr=False)
+
+    def _try_get_snapshot_live(
+        self, snapshot_id: str
+    ) -> tuple[bool, _SealedSnapshot | SandboxSnapshotDescriptor | None]:
+        sealed_fn = getattr(self.provider, "sealed_snapshot", None)
+        if callable(sealed_fn):
+            try:
+                return True, cast(_SealedSnapshot, sealed_fn(snapshot_id))
+            except SandboxSpiError as error:
+                if error.code == "snapshot_missing":
+                    return True, None
+                raise
+        get_fn = getattr(self.provider, "get_snapshot", None)
+        if callable(get_fn):
+            try:
+                return True, cast(SandboxSnapshotDescriptor, get_fn(snapshot_id))
+            except SandboxSpiError as error:
+                if error.code == "snapshot_missing":
+                    return True, None
+                raise
+        return False, None
+
+    def _resolve_snapshot(
+        self, snapshot_id: str
+    ) -> _SealedSnapshot | SandboxSnapshotDescriptor:
+        has_lookup, live = self._try_get_snapshot_live(snapshot_id)
+        if has_lookup:
+            if live is None:
+                raise SandboxSpiError("snapshot_missing", f"unknown snapshot {snapshot_id}")
+            return live
+        if snapshot_id in self._captured_descriptors:
+            return self._captured_descriptors[snapshot_id]
+        raise SandboxSpiError("snapshot_missing", f"unknown snapshot {snapshot_id}")
+
+    def _resolve_sandbox(self, sandbox_id: str) -> SandboxInstanceState:
+        sandboxes = getattr(self.provider, "sandboxes", None)
+        if isinstance(sandboxes, Mapping) and sandbox_id in sandboxes:
+            return cast(SandboxInstanceState, sandboxes[sandbox_id])
+        if sandbox_id in self._branch_instances:
+            return self._branch_instances[sandbox_id]
+        raise SandboxSpiError("sandbox_missing", f"unknown sandbox {sandbox_id}")
+
+    def target_sandbox_id_for(
+        self, replay_point_id: str, target_branch_id: str
+    ) -> str:
+        branch_ref = self._target_bindings.get((replay_point_id, target_branch_id))
+        if branch_ref is None:
+            raise SandboxSpiError(
+                "sandbox_missing",
+                f"no active isolated target for {(replay_point_id, target_branch_id)}",
+            )
+        return branch_ref.branch_sandbox_id
+
+    def target_sandbox_for(
+        self, replay_point_id: str, target_branch_id: str
+    ) -> SandboxInstanceState:
+        return self._resolve_sandbox(
+            self.target_sandbox_id_for(replay_point_id, target_branch_id)
+        )
+
+    def target_sandbox_id_for_request(self, request: Any) -> str:
+        target_branch_id = f"counterfactual-{request.candidate_id}"
+        return self.target_sandbox_id_for(
+            request.replay_point.replay_point_id, target_branch_id
+        )
+
+    def target_sandbox_for_request(self, request: Any) -> SandboxInstanceState:
+        return self._resolve_sandbox(self.target_sandbox_id_for_request(request))
+
+    def _destroy_provider_sandbox(self, branch_sandbox_id: str) -> None:
+        inst = self._branch_instances.get(branch_sandbox_id)
+        if inst is not None:
+            inst.status = "destroyed"
+        destroy_sb = getattr(self.provider, "destroy_sandbox", None)
+        if callable(destroy_sb):
+            destroy_sb(branch_sandbox_id)
+            return
+        destroy_fn = getattr(self.provider, "destroy", None)
+        if callable(destroy_fn):
+            destroy_fn(branch_sandbox_id)
+
+    def _release_provider_snapshot(
+        self, snapshot_id: str, *, holder_id: str
+    ) -> None:
+        if holder_id and holder_id in self._committed_release_holders:
+            return
+        release_fn = getattr(self.provider, "release_snapshot", None)
+        if not callable(release_fn):
+            release_fn = getattr(self.provider, "destroy", None)
+        if not callable(release_fn):
+            return
+        sig = inspect.signature(release_fn)
+        accepts_holder = bool(holder_id) and (
+            "holder_id" in sig.parameters
+            or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+            )
+        )
+        if not accepts_holder and holder_id:
+            has_lookup, live = self._try_get_snapshot_live(snapshot_id)
+            if has_lookup:
+                if live is None:
+                    self._committed_release_holders.add(holder_id)
+                    return
+                active_holders = (
+                    live.held_refs
+                    if isinstance(live, _SealedSnapshot)
+                    else live.active_holder_ids
+                )
+                if active_holders and holder_id not in active_holders:
+                    self._committed_release_holders.add(holder_id)
+                    return
+        if accepts_holder:
+            release_fn(snapshot_id, holder_id=holder_id)
+        else:
+            release_fn(snapshot_id)
+        if holder_id:
+            self._committed_release_holders.add(holder_id)
 
     def capture_replay_state(
         self, request: CaptureReplayStateRequest
@@ -622,12 +843,17 @@ class SpiReplayAdapter:
             self.source_sandbox_id,
             target_tier=self.target_tier,
         )
+        self._captured_descriptors[desc.snapshot_id] = desc
         fidelity = _effective_replay_fidelity(
             fidelity_tier=desc.fidelity_tier,
             memory_pages=desc.memory_pages,
         )
+        holder_id = desc.owner_holder_id or f"holder-{desc.snapshot_id}-parent"
         return AdapterStateLease(
-            binding_key=_SnapshotRef(snapshot_id=desc.snapshot_id),
+            binding_key=_SnapshotRef(
+                snapshot_id=desc.snapshot_id,
+                holder_id=holder_id,
+            ),
             fidelity=fidelity,
             projection_digest=desc.digest,
         )
@@ -635,13 +861,15 @@ class SpiReplayAdapter:
     def _build_equivalence_report(
         self,
         *,
-        sealed: _SealedSnapshot,
+        sealed: _SealedSnapshot | SandboxSnapshotDescriptor,
         sb: SandboxInstanceState,
         achieved_fidelity: ReplayFidelity,
         check_prefix: str = "sandbox",
     ) -> EquivalenceReport:
         live_alive = sb.status != "destroyed"
-        fs_ok = live_alive and _digest_rootfs(sb.rootfs, sb.symlinks) == sealed.rootfs_digest
+        fs_ok = (
+            live_alive and _digest_rootfs(sb.rootfs, sb.symlinks) == sealed.rootfs_digest
+        )
         observed_digest = _observe_sandbox_digest(
             sb,
             fidelity_tier=sealed.fidelity_tier,
@@ -702,25 +930,34 @@ class SpiReplayAdapter:
         binding_key: object,
         request: RestoreReplayStateRequest,
     ) -> RestoreReceipt:
-        del request
         assert isinstance(binding_key, _SnapshotRef)
-        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
-        restored_sb = self.provider.restore_snapshot(
-            self.source_sandbox_id,
-            binding_key.snapshot_id,
+        stale_target = self._active_replay_targets.pop(binding_key.snapshot_id, None)
+        if stale_target is not None:
+            self._target_bindings.pop(
+                (request.replay_point_id, stale_target.target_branch_id), None
+            )
+            self.release_replay_child(stale_target)
+        fork_min_fidelity = (
+            ReplayFidelity.BEST_EFFORT
+            if request.minimum_fidelity == ReplayFidelity.NON_REPLAYABLE
+            else request.minimum_fidelity
         )
-        observed_digest = _observe_sandbox_digest(
-            restored_sb,
-            fidelity_tier=sealed.fidelity_tier,
-        )
-        return RestoreReceipt(
-            achieved_fidelity=_effective_replay_fidelity(
-                fidelity_tier=sealed.fidelity_tier,
-                memory_pages=sealed.memory_pages,
+        child_lease = self.fork_replay_child(
+            binding_key,
+            ForkReplayChildRequest(
+                replay_point_id=request.replay_point_id,
+                child_id=request.target_branch_id,
+                target_branch_id=request.target_branch_id,
+                minimum_fidelity=fork_min_fidelity,
             ),
-            restored_projection_digest=observed_digest,
-            prefix_reused=self.prefix_reused,
         )
+        branch_ref = cast(_BranchRef, child_lease.child_key)
+        self._active_replay_targets[binding_key.snapshot_id] = branch_ref
+        self._target_bindings[(request.replay_point_id, request.target_branch_id)] = (
+            branch_ref
+        )
+        self.last_target_sandboxes.append(branch_ref)
+        return child_lease.receipt
 
     def validate_replay_equivalence(
         self,
@@ -728,18 +965,65 @@ class SpiReplayAdapter:
         receipt: RestoreReceipt,
     ) -> EquivalenceReport:
         assert isinstance(binding_key, _SnapshotRef)
-        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
-        sb = self.provider.sandboxes[self.source_sandbox_id]
+        sealed = self._resolve_snapshot(binding_key.snapshot_id)
+        target_ref = self._active_replay_targets.get(
+            binding_key.snapshot_id
+        ) or self._finalized_replay_targets.get(binding_key.snapshot_id)
+        if target_ref is None:
+            return EquivalenceReport(
+                achieved_fidelity=receipt.achieved_fidelity,
+                equivalent=False,
+                expected_digest=sealed.digest,
+                observed_digest=None,
+                checks=(EquivalenceCheck("sandbox-isolated-target", False),),
+            )
+        sb = self._resolve_sandbox(target_ref.branch_sandbox_id)
         return self._build_equivalence_report(
             sealed=sealed,
             sb=sb,
             achieved_fidelity=receipt.achieved_fidelity,
+            check_prefix="sandbox",
         )
+
+    def finalize_replay_suffix(
+        self,
+        binding_key: object,
+        request: RestoreReplayStateRequest,
+        *,
+        suffix_succeeded: bool,
+    ) -> None:
+        del suffix_succeeded
+        assert isinstance(binding_key, _SnapshotRef)
+        target_ref = self._active_replay_targets.pop(binding_key.snapshot_id, None)
+        self._target_bindings.pop(
+            (request.replay_point_id, request.target_branch_id), None
+        )
+        if target_ref is not None:
+            self._finalized_replay_targets[binding_key.snapshot_id] = target_ref
+            self.release_replay_child(target_ref)
 
     def release_replay_state(self, binding_key: object) -> None:
         assert isinstance(binding_key, _SnapshotRef)
-        self.released_snapshots.append(binding_key.snapshot_id)
-        self.provider.release_snapshot(binding_key.snapshot_id)
+        stale_target = self._active_replay_targets.get(binding_key.snapshot_id)
+        if stale_target is not None:
+            self.release_replay_child(stale_target)
+            self._active_replay_targets.pop(binding_key.snapshot_id, None)
+            self._finalized_replay_targets[binding_key.snapshot_id] = stale_target
+        effective_holder = binding_key.holder_id
+        if not effective_holder:
+            has_lookup, live = self._try_get_snapshot_live(binding_key.snapshot_id)
+            if has_lookup and live is not None:
+                effective_holder = live.owner_holder_id
+            elif binding_key.snapshot_id in self._captured_descriptors:
+                effective_holder = self._captured_descriptors[
+                    binding_key.snapshot_id
+                ].owner_holder_id
+        self._release_provider_snapshot(
+            binding_key.snapshot_id,
+            holder_id=effective_holder,
+        )
+        if binding_key.snapshot_id not in self.released_snapshots:
+            self.released_snapshots.append(binding_key.snapshot_id)
 
     def fork_replay_child(
         self,
@@ -747,15 +1031,32 @@ class SpiReplayAdapter:
         request: ForkReplayChildRequest,
     ) -> ReplayChildLease:
         assert isinstance(binding_key, _SnapshotRef)
-        child_sb, isolation_id = self.provider.fork(
-            binding_key.snapshot_id,
-            child_id=request.child_id,
-        )
-        sealed = self.provider.sealed_snapshot(binding_key.snapshot_id)
+        fork_fn = getattr(self.provider, "fork", None)
+        if not callable(fork_fn):
+            raise SandboxSpiError(
+                "fork_unsupported",
+                "sandbox provider does not implement RFC SPI fork",
+            )
+        sig = inspect.signature(fork_fn)
+        fork_kwargs: dict[str, Any] = {"child_id": request.child_id}
+        if "target_branch_id" in sig.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        ):
+            fork_kwargs["target_branch_id"] = request.target_branch_id
+        child_sb, isolation_id = fork_fn(binding_key.snapshot_id, **fork_kwargs)
+        self._branch_instances[child_sb.sandbox_id] = child_sb
+        sealed = self._resolve_snapshot(binding_key.snapshot_id)
+        holder_id = child_sb.snapshot_holder_id or ""
+        if not holder_id:
+            holder_lookup = getattr(self.provider, "branch_holder_id", None)
+            if callable(holder_lookup):
+                holder_id = str(holder_lookup(child_sb.sandbox_id) or "")
         branch_ref = _BranchRef(
             branch_sandbox_id=child_sb.sandbox_id,
             source_snapshot_id=sealed.snapshot_id,
             branch_isolation_id=isolation_id,
+            target_branch_id=request.target_branch_id,
+            holder_id=holder_id,
         )
         observed_digest = _observe_sandbox_digest(
             child_sb,
@@ -781,8 +1082,8 @@ class SpiReplayAdapter:
         receipt: RestoreReceipt,
     ) -> EquivalenceReport:
         assert isinstance(child_key, _BranchRef)
-        sealed = self.provider.sealed_snapshot(child_key.source_snapshot_id)
-        sb = self.provider.sandboxes[child_key.branch_sandbox_id]
+        sealed = self._resolve_snapshot(child_key.source_snapshot_id)
+        sb = self._resolve_sandbox(child_key.branch_sandbox_id)
         return self._build_equivalence_report(
             sealed=sealed,
             sb=sb,
@@ -792,9 +1093,16 @@ class SpiReplayAdapter:
 
     def release_replay_child(self, child_key: object) -> None:
         assert isinstance(child_key, _BranchRef)
-        self.released_children.append(child_key.branch_sandbox_id)
-        self.provider.destroy_sandbox(child_key.branch_sandbox_id)
-        self.provider.release_snapshot(child_key.source_snapshot_id)
+        if child_key.branch_sandbox_id in self._committed_released_children:
+            return
+        self._destroy_provider_sandbox(child_key.branch_sandbox_id)
+        self._release_provider_snapshot(
+            child_key.source_snapshot_id,
+            holder_id=child_key.holder_id,
+        )
+        self._committed_released_children.add(child_key.branch_sandbox_id)
+        if child_key.branch_sandbox_id not in self.released_children:
+            self.released_children.append(child_key.branch_sandbox_id)
 
     def assess_replay_child_intent(
         self,
@@ -1206,21 +1514,46 @@ def test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy()
 def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence() -> (
     None
 ):
-    class _NonRestoringSpiProvider(InMemorySandboxSpiProvider):
-        def restore_snapshot(
-            self, sandbox_id: str, snapshot_id: str
-        ) -> SandboxInstanceState:
-            self.sealed_snapshot(snapshot_id)
-            return self.sandboxes[sandbox_id]
+    class _StaleForkSpiProvider(InMemorySandboxSpiProvider):
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            target_branch_id: str | None = None,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            child, isolation_id = super().fork(
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
+            )
+            sealed = self.sealed_snapshot(snapshot_id)
+            live_parent = self.sandboxes[sealed.parent_sandbox_id]
+            child.rootfs = dict(live_parent.rootfs)
+            child.symlinks = dict(live_parent.symlinks)
+            child.memory_pages = dict(live_parent.memory_pages)
+            return child, isolation_id
 
     class _MemoryDroppingSpiProvider(InMemorySandboxSpiProvider):
-        def restore_snapshot(
-            self, sandbox_id: str, snapshot_id: str
-        ) -> SandboxInstanceState:
-            sb = super().restore_snapshot(sandbox_id, snapshot_id)
-            sb.processes = {}
-            sb.memory_pages = {}
-            return sb
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            target_branch_id: str | None = None,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            child, isolation_id = super().fork(
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
+            )
+            child.processes = {}
+            child.memory_pages = {}
+            return child, isolation_id
 
     def _setup_resumed_drift(
         provider: InMemorySandboxSpiProvider,
@@ -1263,15 +1596,15 @@ def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_inc
             minimum_fidelity=ReplayFidelity.EXACT,
         )
 
-    # 1) Genuine reference provider restores sb-single before equivalence check & suffix.
+    # 1) Genuine reference provider isolates a forked target without mutating live sb-single.
     real_provider = InMemorySandboxSpiProvider()
     trace_ok, point_ok, adapter_ok, reg_ok = _setup_resumed_drift(
         real_provider, "trace-real-restore"
     )
     observed_in_suffix: list[tuple[str, str, str]] = []
 
-    def read_restored(_req: Any) -> Mapping[str, bool]:
-        sb = real_provider.sandboxes["sb-single"]
+    def read_restored(req: Any) -> Mapping[str, bool]:
+        sb = adapter_ok.target_sandbox_for_request(req)
         observed_in_suffix.append(
             (
                 sb.rootfs["src/app.py"],
@@ -1279,6 +1612,9 @@ def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_inc
                 sb.memory_pages["lsp_cache"],
             )
         )
+        live_source = real_provider.sandboxes["sb-single"]
+        assert live_source.rootfs["src/app.py"] == "v2-post-capture"
+        assert live_source.memory_pages["lsp_cache"] == "v2-post-capture-mem"
         return {
             "fix": sb.rootfs["src/app.py"] == "v1-captured",
             "guard": sb.memory_pages["lsp_cache"] == "v1-mem"
@@ -1294,29 +1630,45 @@ def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_inc
     )
     assert promoted.decision == CounterfactualDecision.PROMOTED
     assert observed_in_suffix == [("v1-captured", "v1-target", "v1-mem")]
+    assert real_provider.sandboxes["sb-single"].rootfs["src/app.py"] == "v2-post-capture"
 
-    # A candidate checking for post-capture state cannot pass after real restore.
+    # A candidate checking for post-capture state on the isolated target rejects cleanly.
     post_capture_check = run_counterfactual_suffix_replay(
         reg_ok,
         trace=trace_ok,
         hypothesis=_hyp("trace-real-restore"),
         candidate=CounterfactualCandidate("check-post-capture", {"op": "probe"}),
-        execute_suffix=lambda _req: {
-            "fix": real_provider.sandboxes["sb-single"].rootfs["src/app.py"]
+        execute_suffix=lambda req: {
+            "fix": adapter_ok.target_sandbox_for_request(req).rootfs["src/app.py"]
             == "v2-post-capture",
             "guard": True,
         },
     )
     assert post_capture_check.decision == CounterfactualDecision.REJECTED
 
-    # Independent post-restore drift before equivalence verification is rejected.
-    real_provider.sandboxes["sb-single"].memory_pages["lsp_cache"] = "drifted-after-restore"
+    # Independent post-fork target drift before equivalence verification is rejected.
+    snap_id = next(iter(real_provider.snapshots))
+    drift_req = RestoreReplayStateRequest(
+        replay_point_id=point_ok.replay_point_id,
+        target_branch_id="manual-drift-probe",
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+    adapter_ok.restore_replay_state(_SnapshotRef(snapshot_id=snap_id), drift_req)
+    drift_target = adapter_ok.target_sandbox_for(
+        point_ok.replay_point_id, "manual-drift-probe"
+    )
+    drift_target.memory_pages["lsp_cache"] = "drifted-after-restore"
     drifted_report = adapter_ok.validate_replay_equivalence(
-        _SnapshotRef(snapshot_id=next(iter(real_provider.snapshots))),
+        _SnapshotRef(snapshot_id=snap_id),
         RestoreReceipt(
             achieved_fidelity=ReplayFidelity.EXACT,
             restored_projection_digest=point_ok.captured_projection_digest,
         ),
+    )
+    adapter_ok.finalize_replay_suffix(
+        _SnapshotRef(snapshot_id=snap_id),
+        drift_req,
+        suffix_succeeded=False,
     )
     assert not drifted_report.equivalent
     assert drifted_report.observed_digest != drifted_report.expected_digest
@@ -1325,8 +1677,8 @@ def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_inc
         for c in drifted_report.checks
     )
 
-    # 2) Non-restoring provider leaves post-capture state; promotion must be refused.
-    stale_provider = _NonRestoringSpiProvider()
+    # 2) Stale-fork provider leaves post-capture state on target; promotion must be refused.
+    stale_provider = _StaleForkSpiProvider()
     trace_stale, _, _, reg_stale = _setup_resumed_drift(
         stale_provider, "trace-stale-restore"
     )
@@ -1347,7 +1699,7 @@ def test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_inc
         )
     assert stale_suffix_called is False
 
-    # 3) Missing exact memory/process evidence on restore must refuse promotion.
+    # 3) Missing exact memory/process evidence on isolated target fork refuses promotion.
     mem_drop_provider = _MemoryDroppingSpiProvider()
     trace_drop, _, _, reg_drop = _setup_resumed_drift(
         mem_drop_provider, "trace-drop-mem"
@@ -1513,15 +1865,19 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
         trace=trace_ok,
         hypothesis=_sem_hyp("trace-quiesced-ok"),
         candidate=CounterfactualCandidate("quiesced-ok", {"op": "restart-daemon"}),
-        execute_suffix=lambda _req: {
-            "fix": ok_provider.sandboxes["sb-quiesced"].rootfs["src/app.py"]
+        execute_suffix=lambda req: {
+            "fix": adapter_ok.target_sandbox_for_request(req).rootfs["src/app.py"]
             == "v1-quiesced",
-            "guard": ok_provider.sandboxes["sb-quiesced"].processes == {501: "lsp-daemon"}
-            and ok_provider.sandboxes["sb-quiesced"].daemon_health.get("lsp-daemon")
+            "guard": adapter_ok.target_sandbox_for_request(req).processes
+            == {501: "lsp-daemon"}
+            and adapter_ok.target_sandbox_for_request(req).daemon_health.get(
+                "lsp-daemon"
+            )
             is True,
         },
     )
     assert promoted.decision == CounterfactualDecision.PROMOTED
+    assert ok_provider.sandboxes["sb-quiesced"].rootfs["src/app.py"] == "v2-post"
 
     child_group = run_counterfactual_child_group(
         reg_ok,
@@ -1552,23 +1908,19 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
 
     # 3) Lost daemon with identical rootfs + env fails closed and refuses promotion.
     class _DaemonDroppingSpiProvider(InMemorySandboxSpiProvider):
-        def restore_snapshot(
-            self, sandbox_id: str, snapshot_id: str
-        ) -> SandboxInstanceState:
-            sb = super().restore_snapshot(sandbox_id, snapshot_id)
-            sb.processes = {}
-            sb.daemon_health = {}
-            return sb
-
         def fork(
             self,
             snapshot_id: str,
             *,
             child_id: str,
+            target_branch_id: str | None = None,
             egress_policy_id: str = "isolated-offline",
         ) -> tuple[SandboxInstanceState, str]:
             child, isolation_id = super().fork(
-                snapshot_id, child_id=child_id, egress_policy_id=egress_policy_id
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
             )
             child.processes = {}
             child.daemon_health = {}
@@ -1637,12 +1989,22 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
 
     # 4) Unhealthy daemon (processes present, health probe False) also refuses promotion.
     class _UnhealthyDaemonSpiProvider(InMemorySandboxSpiProvider):
-        def restore_snapshot(
-            self, sandbox_id: str, snapshot_id: str
-        ) -> SandboxInstanceState:
-            sb = super().restore_snapshot(sandbox_id, snapshot_id)
-            sb.daemon_health = {"lsp-daemon": False}
-            return sb
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            target_branch_id: str | None = None,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            child, isolation_id = super().fork(
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
+            )
+            child.daemon_health = {"lsp-daemon": False}
+            return child, isolation_id
 
     unhealthy_provider = _UnhealthyDaemonSpiProvider()
     trace_unhealthy, _, adapter_unhealthy, reg_unhealthy = _setup_quiesced_drift(
@@ -1688,7 +2050,9 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
             request: RestoreReplayStateRequest,
         ) -> RestoreReceipt:
             receipt = super().restore_replay_state(binding_key, request)
-            sb = self.provider.sandboxes[self.source_sandbox_id]
+            sb = self.target_sandbox_for(
+                request.replay_point_id, request.target_branch_id
+            )
             if not _daemon_health_verified(sb.processes, sb.daemon_health):
                 return RestoreReceipt(
                     achieved_fidelity=ReplayFidelity.BEST_EFFORT,
@@ -1734,23 +2098,19 @@ def test_process_tree_quiesced_promotes_healthy_cold_restart_with_changed_pid() 
     """Healthy cold daemon restart (PID 42 -> 77, same service/health) must promote under SEMANTIC_EQUIVALENT while EXACT stays strict."""
 
     class _ColdRestartDaemonSpiProvider(InMemorySandboxSpiProvider):
-        def restore_snapshot(
-            self, sandbox_id: str, snapshot_id: str
-        ) -> SandboxInstanceState:
-            sb = super().restore_snapshot(sandbox_id, snapshot_id)
-            sb.processes = {77: "lsp-daemon"}
-            sb.daemon_health = {"lsp-daemon": True, "port:8443": True}
-            return sb
-
         def fork(
             self,
             snapshot_id: str,
             *,
             child_id: str,
+            target_branch_id: str | None = None,
             egress_policy_id: str = "isolated-offline",
         ) -> tuple[SandboxInstanceState, str]:
             child, isolation_id = super().fork(
-                snapshot_id, child_id=child_id, egress_policy_id=egress_policy_id
+                snapshot_id,
+                child_id=child_id,
+                target_branch_id=target_branch_id,
+                egress_policy_id=egress_policy_id,
             )
             child.processes = {77: "lsp-daemon"}
             child.daemon_health = {"lsp-daemon": True, "port:8443": True}
@@ -1791,9 +2151,10 @@ def test_process_tree_quiesced_promotes_healthy_cold_restart_with_changed_pid() 
     )
     observed_pids: list[dict[int, str]] = []
 
-    def _check_cold(_req: Any) -> Mapping[str, bool]:
-        cur = cold_provider.sandboxes["sb-cold"]
+    def _check_cold(req: Any) -> Mapping[str, bool]:
+        cur = adapter.target_sandbox_for_request(req)
         observed_pids.append(dict(cur.processes))
+        assert cold_provider.sandboxes["sb-cold"].rootfs["src/app.py"] == "v2-drifted"
         return {
             "fix": cur.rootfs["src/app.py"] == "v1-cold",
             "guard": cur.processes == {77: "lsp-daemon"}
@@ -1936,6 +2297,7 @@ def test_microvm_memory_exact_requires_independent_memory_pages_capture() -> Non
                     include_daemons=False,
                     include_memory=True,
                 )
+                owner_holder = f"holder-{snap_id}-parent"
                 sealed = _SealedSnapshot(
                     snapshot_id=snap_id,
                     parent_sandbox_id=sandbox_id,
@@ -1953,6 +2315,8 @@ def test_microvm_memory_exact_requires_independent_memory_pages_capture() -> Non
                     memory_digest=None,
                     digest=digest,
                     refcount=1,
+                    owner_holder_id=owner_holder,
+                    held_refs=(owner_holder,),
                 )
                 self._sealed_snapshots[snap_id] = sealed
                 desc = _descriptor_from_sealed(sealed)
@@ -2072,3 +2436,375 @@ def test_microvm_memory_exact_requires_independent_memory_pages_capture() -> Non
             execute_suffix=_never_forced,
         )
     assert forced_called is False
+
+
+def test_single_branch_replay_forks_isolated_target_without_overwriting_live_source() -> (
+    None
+):
+    """Single-branch suffix replay isolates onto an SPI fork while keeping live source progress untouched."""
+
+    # 1) Live source advances 1 -> 2; single-branch replay observes 1 in target and preserves 2 in source.
+    provider = InMemorySandboxSpiProvider()
+    live_sb = provider.create_sandbox(
+        sandbox_id="sb-live-progress",
+        rootfs={"src/state.txt": "1"},
+        symlinks={"bin/cur": "v1"},
+        env={"REV": "1"},
+        processes={42: "worker-v1"},
+        daemon_health={"worker-v1": True},
+        memory_pages={"state_mem": "1"},
+    )
+    provider.pause("sb-live-progress")
+    adapter = SpiReplayAdapter(
+        provider,
+        source_sandbox_id="sb-live-progress",
+        target_tier="microvm_memory_exact",
+    )
+    registry = ReplayPointRegistry()
+    store = SpiAgentStateStore()
+    trace, point = _prepare_trace_point(
+        "trace-single-iso", registry=registry, store=store, adapter=adapter
+    )
+    provider.resume("sb-live-progress")
+    live_sb.rootfs["src/state.txt"] = "2"
+    live_sb.symlinks["bin/cur"] = "v2"
+    live_sb.env["REV"] = "2"
+    live_sb.memory_pages["state_mem"] = "2"
+
+    hyp = CounterfactualHypothesis(
+        hypothesis_id="hyp-single-iso",
+        first_affected_event_id="trace-single-iso-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+    observed: list[tuple[str, str, str, str, str]] = []
+
+    def check_isolated(req: Any) -> Mapping[str, bool]:
+        target_sb = adapter.target_sandbox_for_request(req)
+        observed.append(
+            (
+                target_sb.sandbox_id,
+                target_sb.rootfs["src/state.txt"],
+                target_sb.memory_pages["state_mem"],
+                live_sb.rootfs["src/state.txt"],
+                live_sb.memory_pages["state_mem"],
+            )
+        )
+        assert target_sb.sandbox_id != "sb-live-progress"
+        return {
+            "fix": target_sb.rootfs["src/state.txt"] == "1",
+            "guard": target_sb.memory_pages["state_mem"] == "1"
+            and live_sb.rootfs["src/state.txt"] == "2"
+            and live_sb.memory_pages["state_mem"] == "2",
+        }
+
+    result = run_counterfactual_suffix_replay(
+        registry,
+        trace=trace,
+        hypothesis=hyp,
+        candidate=CounterfactualCandidate("iso-branch-1", {"branch": "single"}),
+        execute_suffix=check_isolated,
+    )
+    assert result.decision == CounterfactualDecision.PROMOTED
+    assert len(observed) == 1
+    assert observed[0][1:] == ("1", "1", "2", "2")
+    assert live_sb.rootfs["src/state.txt"] == "2"
+    assert live_sb.memory_pages["state_mem"] == "2"
+    assert len(adapter.last_target_sandboxes) == 1
+    target_ref = adapter.last_target_sandboxes[0]
+    assert provider.sandboxes[target_ref.branch_sandbox_id].status == "destroyed"
+    assert provider.snapshots[next(iter(provider.snapshots))].refcount == 1
+    public_blob = json.dumps(registry.records()) + json.dumps(result.to_record())
+    assert "sb-fork-" not in public_blob
+    assert "sb-live-progress" not in public_blob
+    assert "holder-" not in public_blob
+
+    # 2) Pure RFC SPI-only wrapper exposing strictly pause/resume/snapshot/fork/destroy (1-arg, no holder_id/restore_snapshot) succeeds.
+    inner = InMemorySandboxSpiProvider()
+    inner_sb = inner.create_sandbox(
+        sandbox_id="sb-spi-only",
+        rootfs={"src/state.txt": "1"},
+        env={"REV": "1"},
+        processes={91: "worker-spi"},
+        daemon_health={"worker-spi": True},
+        memory_pages={"state_mem": "1"},
+    )
+    inner.pause("sb-spi-only")
+
+    class _SpiOnlyProviderWrapper:
+        """Exposes strictly the 5 documented RFC SPI primitives and nothing else."""
+
+        def pause(self, sandbox_id: str) -> SandboxPauseReceipt:
+            return inner.pause(sandbox_id)
+
+        def resume(self, sandbox_id: str) -> SandboxInstanceState:
+            return inner.resume(sandbox_id)
+
+        def snapshot(
+            self,
+            sandbox_id: str,
+            *,
+            target_tier: str,
+            scrub_keys: tuple[str, ...] = (
+                "LOOPX_LEASE_KEY",
+                "LOOPX_CLAIM_OP_ID",
+                "CLOUD_API_TOKEN",
+            ),
+        ) -> SandboxSnapshotDescriptor:
+            return inner.snapshot(
+                sandbox_id, target_tier=target_tier, scrub_keys=scrub_keys
+            )
+
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            return inner.fork(
+                snapshot_id,
+                child_id=child_id,
+                egress_policy_id=egress_policy_id,
+            )
+
+        def destroy(self, sandbox_or_snapshot_id: str) -> None:
+            inner.destroy(sandbox_or_snapshot_id)
+
+    wrapper = _SpiOnlyProviderWrapper()
+    assert not hasattr(wrapper, "restore_snapshot")
+    assert not hasattr(wrapper, "sealed_snapshot")
+    assert not hasattr(wrapper, "sandboxes")
+    spi_adapter = SpiReplayAdapter(
+        wrapper,
+        source_sandbox_id="sb-spi-only",
+        target_tier="microvm_memory_exact",
+    )
+    spi_reg = ReplayPointRegistry()
+    spi_store = SpiAgentStateStore()
+    spi_trace, spi_point = _prepare_trace_point(
+        "trace-spi-only", registry=spi_reg, store=spi_store, adapter=spi_adapter
+    )
+    wrapper.resume("sb-spi-only")
+    inner_sb.rootfs["src/state.txt"] = "2"
+    inner_sb.memory_pages["state_mem"] = "2"
+
+    spi_res = run_counterfactual_suffix_replay(
+        spi_reg,
+        trace=spi_trace,
+        hypothesis=CounterfactualHypothesis(
+            hypothesis_id="hyp-spi-only",
+            first_affected_event_id="trace-spi-only-evt-2-fail",
+            first_affected_sequence=2,
+            fix_set=(ValidationTarget("fix", baseline_passed=False),),
+            guard_set=(ValidationTarget("guard", baseline_passed=True),),
+            minimum_fidelity=ReplayFidelity.EXACT,
+        ),
+        candidate=CounterfactualCandidate("spi-only-target", {"op": "fork"}),
+        execute_suffix=lambda req: {
+            "fix": spi_adapter.target_sandbox_for_request(req).rootfs["src/state.txt"]
+            == "1",
+            "guard": spi_adapter.target_sandbox_for_request(req).memory_pages[
+                "state_mem"
+            ]
+            == "1"
+            and inner_sb.rootfs["src/state.txt"] == "2",
+        },
+    )
+    assert spi_res.decision == CounterfactualDecision.PROMOTED
+    assert inner_sb.rootfs["src/state.txt"] == "2"
+    spi_reg.release(spi_point.replay_point_id)
+    assert not inner.snapshots
+
+    # 3) A provider missing SPI `fork` fails with typed SandboxSpiError (never raw AttributeError).
+    class _NoForkProvider:
+        def pause(self, sandbox_id: str) -> SandboxPauseReceipt:
+            return inner.pause(sandbox_id)
+
+        def resume(self, sandbox_id: str) -> SandboxInstanceState:
+            return inner.resume(sandbox_id)
+
+        def snapshot(
+            self,
+            sandbox_id: str,
+            *,
+            target_tier: str,
+            scrub_keys: tuple[str, ...] = (
+                "LOOPX_LEASE_KEY",
+                "LOOPX_CLAIM_OP_ID",
+                "CLOUD_API_TOKEN",
+            ),
+        ) -> SandboxSnapshotDescriptor:
+            return inner.snapshot(
+                sandbox_id, target_tier=target_tier, scrub_keys=scrub_keys
+            )
+
+        def destroy(self, target_id: str) -> None:
+            inner.destroy(target_id)
+
+    no_fork_inner = InMemorySandboxSpiProvider()
+    no_fork_inner.create_sandbox(
+        sandbox_id="sb-nofork",
+        rootfs={"a": "1"},
+        memory_pages={"m": "1"},
+    )
+    no_fork_inner.pause("sb-nofork")
+
+    class _WrappedNoFork(_NoForkProvider):
+        def snapshot(
+            self,
+            sandbox_id: str,
+            *,
+            target_tier: str,
+            scrub_keys: tuple[str, ...] = (
+                "LOOPX_LEASE_KEY",
+                "LOOPX_CLAIM_OP_ID",
+                "CLOUD_API_TOKEN",
+            ),
+        ) -> SandboxSnapshotDescriptor:
+            return no_fork_inner.snapshot(
+                sandbox_id, target_tier=target_tier, scrub_keys=scrub_keys
+            )
+
+        def destroy(self, target_id: str) -> None:
+            no_fork_inner.destroy(target_id)
+
+    no_fork_adapter = SpiReplayAdapter(
+        cast(SandboxSpiProviderProtocol, _WrappedNoFork()),
+        source_sandbox_id="sb-nofork",
+        target_tier="microvm_memory_exact",
+    )
+    no_fork_reg = ReplayPointRegistry()
+    no_fork_trace, _ = _prepare_trace_point(
+        "trace-no-fork",
+        registry=no_fork_reg,
+        store=SpiAgentStateStore(),
+        adapter=no_fork_adapter,
+    )
+    with pytest.raises(SandboxSpiError, match="fork_unsupported"):
+        run_counterfactual_suffix_replay(
+            no_fork_reg,
+            trace=no_fork_trace,
+            hypothesis=CounterfactualHypothesis(
+                hypothesis_id="hyp-no-fork",
+                first_affected_event_id="trace-no-fork-evt-2-fail",
+                first_affected_sequence=2,
+                fix_set=(ValidationTarget("fix", baseline_passed=False),),
+                guard_set=(ValidationTarget("guard", baseline_passed=True),),
+                minimum_fidelity=ReplayFidelity.EXACT,
+            ),
+            candidate=CounterfactualCandidate("missing-fork", {"op": "none"}),
+            execute_suffix=lambda _req: {"fix": True, "guard": True},
+        )
+    assert point.replay_point_id != spi_point.replay_point_id
+
+
+def test_parent_release_retry_after_lost_ack_preserves_live_child_holder_reference() -> (
+    None
+):
+    """Retrying ReplayPointRegistry.release after a lost ack must be idempotent and preserve running child holder refs."""
+
+    def _run_lost_ack_probe(*, drop_holder_kwarg: bool) -> None:
+        provider = InMemorySandboxSpiProvider()
+        provider.create_sandbox(
+            sandbox_id="sb-ack-parent",
+            rootfs={"src/app.py": "v1"},
+            env={"MODE": "exact"},
+            processes={42: "lsp-v1"},
+            daemon_health={"lsp-v1": True},
+            memory_pages={"heap": "v1-heap"},
+        )
+        provider.pause("sb-ack-parent")
+        adapter = SpiReplayAdapter(
+            provider,
+            source_sandbox_id="sb-ack-parent",
+            target_tier="microvm_memory_exact",
+        )
+        registry = ReplayPointRegistry()
+        store = SpiAgentStateStore()
+        _, point = _prepare_trace_point(
+            f"trace-ack-{int(drop_holder_kwarg)}",
+            registry=registry,
+            store=store,
+            adapter=adapter,
+        )
+        snap_id = next(iter(provider.snapshots))
+        assert provider.snapshots[snap_id].refcount == 1
+        assert len(provider.snapshots[snap_id].active_holder_ids) == 1
+
+        # Fork a live running child branch before parent releases.
+        child_lease = adapter.fork_replay_child(
+            _SnapshotRef(snapshot_id=snap_id),
+            ForkReplayChildRequest(
+                replay_point_id=point.replay_point_id,
+                child_id="live-child",
+                target_branch_id="branch-live-child",
+                minimum_fidelity=ReplayFidelity.EXACT,
+            ),
+        )
+        child_ref = cast(_BranchRef, child_lease.child_key)
+        child_sb = provider.sandboxes[child_ref.branch_sandbox_id]
+        assert child_sb.status == "running"
+        snap_desc = provider.snapshots[snap_id]
+        assert snap_desc.refcount == 2
+        assert len(snap_desc.active_holder_ids) == 2
+
+        orig_release = provider.release_snapshot
+        lost_ack_injected = False
+
+        if drop_holder_kwarg:
+
+            def flaky_release_1arg(target_snap_id: str) -> None:
+                nonlocal lost_ack_injected
+                orig_release(target_snap_id)
+                if not lost_ack_injected:
+                    lost_ack_injected = True
+                    raise TimeoutError("lost release ack after commit")
+
+            setattr(provider, "release_snapshot", flaky_release_1arg)
+        else:
+
+            def flaky_release_holder(
+                target_snap_id: str, *, holder_id: str | None = None
+            ) -> None:
+                nonlocal lost_ack_injected
+                orig_release(target_snap_id, holder_id=holder_id)
+                if not lost_ack_injected:
+                    lost_ack_injected = True
+                    raise TimeoutError("lost release ack after commit")
+
+            setattr(provider, "release_snapshot", flaky_release_holder)
+
+        # First parent release commits (2 -> 1) and loses ack before returning to ReplayPointRegistry.release.
+        with pytest.raises(TimeoutError, match="lost release ack"):
+            registry.release(point.replay_point_id)
+        assert lost_ack_injected is True
+        assert snap_id in provider.snapshots
+        assert provider.snapshots[snap_id].refcount == 1
+        assert provider.snapshots[snap_id].active_holder_ids == (child_ref.holder_id,)
+        assert child_sb.status == "running"
+
+        # Retry parent release on ReplayPointRegistry: must be idempotent and preserve child's holder reference.
+        released_pt = registry.release(point.replay_point_id)
+        assert released_pt.lifecycle.value == "released"
+        assert snap_id in provider.snapshots
+        assert provider.snapshots[snap_id].refcount == 1
+        assert provider.snapshots[snap_id].active_holder_ids == (child_ref.holder_id,)
+        assert child_sb.status == "running"
+        assert provider.get_snapshot(snap_id).rootfs["src/app.py"] == "v1"
+        assert (
+            adapter.validate_replay_child_equivalence(
+                child_lease.child_key, child_lease.receipt
+            ).equivalent
+            is True
+        )
+
+        # Only after the child branch terminates and releases its own holder reference is the snapshot reclaimed.
+        adapter.release_replay_child(child_lease.child_key)
+        assert child_sb.status == "destroyed"
+        assert snap_id not in provider.snapshots
+
+    _run_lost_ack_probe(drop_holder_kwarg=False)
+    _run_lost_ack_probe(drop_holder_kwarg=True)
