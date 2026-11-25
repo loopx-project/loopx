@@ -206,3 +206,48 @@ def test_tracked_local_metadata_is_still_scanned(tmp_path: Path) -> None:
     assert payload["ok"] is False
     assert payload["scanned_files"] == 2
     assert payload["unreadable_files"] == [".DS_Store: invalid UTF-8"]
+
+
+def _utf16le(text: str) -> bytes:
+    return b"\xff\xfe" + text.encode("utf-16-le")
+
+
+def test_bom_marked_utf16_desktop_ini_stays_clean(tmp_path: Path) -> None:
+    """Windows Explorer writes desktop.ini as BOM-marked UTF-16LE text."""
+
+    (tmp_path / "README.md").write_text("# clean\n", encoding="utf-8")
+    (tmp_path / "desktop.ini").write_bytes(
+        _utf16le("[.ShellClassInfo]\r\nInfoTip=Synthetic folder\r\n")
+    )
+
+    payload = scan_public_boundary([tmp_path])
+
+    assert payload["ok"] is True
+    assert payload["scanned_files"] == 2
+    assert payload["unreadable_files"] == []
+
+
+def test_utf16_text_reaches_content_rules_for_directory_and_direct_input(
+    tmp_path: Path,
+) -> None:
+    token = _synthetic_token()
+    (tmp_path / "README.md").write_text("# clean\n", encoding="utf-8")
+    (tmp_path / "desktop.ini").write_bytes(_utf16le(f"token: {token}\r\n"))
+
+    direct = scan_public_boundary([tmp_path / "desktop.ini"])
+    directory = scan_public_boundary([tmp_path])
+
+    assert direct["blocking_hits"] == ["desktop.ini:1: credential"]
+    assert directory["blocking_hits"] == direct["blocking_hits"]
+
+
+def test_malformed_utf16_with_a_bom_stays_unreadable(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("# clean\n", encoding="utf-8")
+    (tmp_path / "desktop.ini").write_bytes(b"\xff\xfeA")
+
+    payload = scan_public_boundary([tmp_path])
+
+    assert payload["ok"] is False
+    assert [item.split(": ", 1)[0] for item in payload["unreadable_files"]] == [
+        "desktop.ini"
+    ]
