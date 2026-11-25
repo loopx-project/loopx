@@ -1,35 +1,3 @@
-from __future__ import annotations
-
-import json
-import threading
-import time
-from enum import Enum
-from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
-
-from .episode_runtime import (
-    RECORD_KIND_STANDALONE,
-    build_episode_execution_units,
-    build_router_probes,
-    combine_execution_metrics,
-    execute_episode_group,
-    item_concurrency_keys,
-    recoverable_episode_mode,
-    summarize_execution_records,
-)
-from .harness_checkpoint import (
-    HARNESS_CHECKPOINT_SCHEMA_VERSION,
-    build_arm_checkpoint,
-    load_arm_checkpoint,
-    write_arm_checkpoint,
-)
-from .router_state import (
-    advance_epoch,
-    initial_router_state,
-    observe_epoch,
-)
-from .worker_branch_plan import build_explore_worker_branch_plan
-
 """Software-agnostic exploration harness runtime.
 
 This module is the generic half of a two-layer design:
@@ -55,603 +23,359 @@ Hard rules, in the spirit of the wider LoopX design:
   planner uses;
 - novelty is only ever credited from observation keys and weighted flags the
   adapter reports; specs carry intent, not novelty.
-
-Adapter protocol (duck-typed; see the experiment layer for a reference
-implementation):
-
-- ``list_seed_items() -> list[dict]``: fresh seed work items each epoch,
-  each with ``item_id``, ``text``, ``family``; optional ``payload``.
-- ``execute(item, *, run_root, arm, epoch, branch_id) -> dict``: run one work
-  item and return an observation record with ``item_id``, ``family``,
-  ``observation_keys`` (list[str]), ``weighted_flags`` ({name: weight} for
-  true flags), ``accepted`` (bool), ``duration_minutes`` (float),
-  ``retryable_infra_error`` (bool), plus any adapter-private fields.
-- ``compile_variant(spec, seed_item) -> dict``: turn an agent-authored
-  variant spec into an executable work item (``is_variant`` True,
-  ``variant_spec`` attached, own ``concurrency_key``).
-- ``flag_weights`` is implicit: the adapter reports weights per record, so
-  the harness never holds a domain weight table.
-- ``item_failure_policy`` may be set to ``"fatal"`` on the adapter to make
-  execution exceptions propagate; the default ``"record"`` policy emits a
-  zero-value structured observation and keeps independent lanes running.
-- Adapters that can checkpoint an expensive shared execution prefix may
-  optionally implement all three recoverable-episode methods:
-  ``prepare_episode_group(seed_item, episode_items, **context)`` returns
-  ``{handle, prefix_record, checkpoint_ref?}``, ``execute_episode(handle,
-  item, **context)`` returns a suffix-only observation, and
-  ``release_episode_group(handle, **context)`` releases adapter-owned state.
-  Returning ``None`` from prepare is an explicit, side-effect-free fallback
-  to legacy ``execute`` for that group (the only case where an episode
-  adapter needs ``execute`` at all). The adapter owns all restore mechanics.
-  Distinct groups run concurrently on separate workers, so the three methods
-  must be thread-safe across groups; concurrently active handles must not alias
-  mutable state, while safe sequential or immutable reuse remains valid.
-  Malformed grouping inputs (empty or duplicate seed/variant ids, id
-  collisions, or variants naming an unknown seed) degrade through the item
-  failure policy like any execution error: structured records under ``record``,
-  or a pre-dispatch raised error under ``fatal``.
 """
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+import time
+from typing import cast
+
+from .episode_runtime import (
+    RECORD_KIND_STANDALONE,
+    build_episode_execution_units,
+    combine_execution_metrics,
+    execute_episode_group,
+    recoverable_episode_mode,
+    summarize_execution_records,
+)
+from .harness_checkpoint import (
+    HARNESS_CHECKPOINT_SCHEMA_VERSION,
+    build_arm_checkpoint,
+    load_arm_checkpoint,
+    write_arm_checkpoint,
+)
+from .harness_frontier import (
+    FRONTIER_REQUESTS_SCHEMA_VERSION as FRONTIER_REQUESTS_SCHEMA_VERSION,
+    VARIANT_CATALOG_SCHEMA_VERSION as VARIANT_CATALOG_SCHEMA_VERSION,
+    NoveltyLedger as NoveltyLedger,
+    VariantCatalog as VariantCatalog,
+    _frontier_gain as _frontier_gain,
+    emit_frontier_requests as emit_frontier_requests,
+    initial_arm_router_state,
+    plan_round_robin as plan_round_robin,
+    plan_router_no_prune as plan_router_no_prune,
+    select_frontier_work as select_frontier_work,
+    update_router_epoch_feedback,
+)
+from .harness_queue import (
+    DEFAULT_OBSERVATION_WEIGHT as DEFAULT_OBSERVATION_WEIGHT,
+    HARNESS_ARM_SCHEMA_VERSION as HARNESS_ARM_SCHEMA_VERSION,
+    HARNESS_RUNTIME_POLICY_SCHEMA_VERSION as HARNESS_RUNTIME_POLICY_SCHEMA_VERSION,
+    ITEM_FAILURE_POLICIES as ITEM_FAILURE_POLICIES,
+    ITEM_FAILURE_POLICY_FATAL as ITEM_FAILURE_POLICY_FATAL,
+    ITEM_FAILURE_POLICY_RECORD as ITEM_FAILURE_POLICY_RECORD,
+    _MIN_DURATION_MINUTES as _MIN_DURATION_MINUTES,
+    HarnessArmResult as HarnessArmResult,
+    HarnessArmSummary as HarnessArmSummary,
+    HarnessCheckpointPoint as HarnessCheckpointPoint,
+    HarnessEpochRecord as HarnessEpochRecord,
+    HarnessEpisodePolicy as HarnessEpisodePolicy,
+    HarnessLaneRecord as HarnessLaneRecord,
+    HarnessResumeSummary as HarnessResumeSummary,
+    HarnessRuntimePolicy as HarnessRuntimePolicy,
+    HarnessScoreSummary as HarnessScoreSummary,
+    ItemFailurePolicy as ItemFailurePolicy,
+    SeedAdapter as SeedAdapter,
+    _adapter_error_record as _adapter_error_record,
+    _as_float,
+    _as_int,
+    _now_perf_minutes as _now_perf_minutes,
+    _normalize_item_failure_policy as _normalize_item_failure_policy,
+    _read_json as _read_json,
+    _write_json as _write_json,
+    aggregate_arms as aggregate_arms,
+    arm_runtime_signature as _arm_runtime_signature,
+    build_arm_runtime_policy,
+    run_queue_epoch as run_queue_epoch,
+    step_auc as step_auc,
+)
+
+__all__ = [
+    "DEFAULT_OBSERVATION_WEIGHT",
+    "FRONTIER_REQUESTS_SCHEMA_VERSION",
+    "HARNESS_ARM_SCHEMA_VERSION",
+    "HARNESS_RUNTIME_POLICY_SCHEMA_VERSION",
+    "ITEM_FAILURE_POLICIES",
+    "ITEM_FAILURE_POLICY_FATAL",
+    "ITEM_FAILURE_POLICY_RECORD",
+    "VARIANT_CATALOG_SCHEMA_VERSION",
+    "HarnessArmResult",
+    "HarnessArmSummary",
+    "HarnessCheckpointPoint",
+    "HarnessEpochRecord",
+    "HarnessEpisodePolicy",
+    "HarnessLaneRecord",
+    "HarnessResumeSummary",
+    "HarnessRuntimePolicy",
+    "HarnessScoreSummary",
+    "ItemFailurePolicy",
+    "NoveltyLedger",
+    "SeedAdapter",
+    "VariantCatalog",
+    "aggregate_arms",
+    "emit_frontier_requests",
+    "plan_round_robin",
+    "plan_router_no_prune",
+    "run_budget_arm",
+    "run_queue_epoch",
+    "select_frontier_work",
+    "step_auc",
+]
 
 
-HARNESS_ARM_SCHEMA_VERSION = "loopx_explore_harness_arm_v0"
-VARIANT_CATALOG_SCHEMA_VERSION = "loopx_explore_variant_catalog_v0"
-FRONTIER_REQUESTS_SCHEMA_VERSION = "loopx_explore_frontier_requests_v0"
-HARNESS_RUNTIME_POLICY_SCHEMA_VERSION = "loopx_explore_harness_runtime_policy_v0"
-
-class ItemFailurePolicy(str, Enum):
-    RECORD = "record"
-    FATAL = "fatal"
-
-
-ITEM_FAILURE_POLICY_RECORD = ItemFailurePolicy.RECORD.value
-ITEM_FAILURE_POLICY_FATAL = ItemFailurePolicy.FATAL.value
-ITEM_FAILURE_POLICIES = {policy.value for policy in ItemFailurePolicy}
-
-DEFAULT_OBSERVATION_WEIGHT = 1.0
-_MIN_DURATION_MINUTES = 0.05
+@dataclass
+class _ArmExecutionState:
+    epochs: list[HarnessEpochRecord]
+    checkpoints: list[HarnessCheckpointPoint]
+    coverage_first_seen: dict[str, float]
+    router_state: dict[str, object] | None
+    load_profile: dict[str, object] | None
+    raw_cum: float
+    novel_cum: float
+    variant_records_cum: int
+    next_epoch: int
+    elapsed_offset: float
+    execution_metrics_cum: dict[str, object]
 
 
-def _now_perf_minutes(start: float) -> float:
-    return (time.perf_counter() - start) / 60.0
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def _read_json(path: Path) -> Any:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError:
-        return None
-
-
-def _normalize_item_failure_policy(value: Any) -> str:
-    if isinstance(value, ItemFailurePolicy):
-        return value.value
-    policy = str(value or ITEM_FAILURE_POLICY_RECORD).strip().lower().replace("_", "-")
-    if policy not in ITEM_FAILURE_POLICIES:
-        raise ValueError(
-            "item_failure_policy must be one of: "
-            + ", ".join(sorted(ITEM_FAILURE_POLICIES))
-        )
-    return policy
-
-
-def _adapter_error_record(
-    item: Mapping[str, Any],
-    error: Exception,
+def _seed_historical_execution_metrics(
+    epochs: Sequence[HarnessEpochRecord],
     *,
-    duration_minutes: float,
-) -> dict[str, Any]:
-    message = " ".join(str(error).split())
-    spec = item.get("variant_spec")
-    return {
-        "item_id": item.get("item_id"),
-        "family": item.get("family"),
-        "is_variant": bool(item.get("is_variant")),
-        # The error factory must never raise itself: a malformed variant_spec
-        # would otherwise escalate one recordable failure into a lost lane.
-        "variant_spec_id": (
-            spec.get("spec_id")
-            if item.get("is_variant") and isinstance(spec, Mapping)
-            else None
-        ),
-        "execution_status": "adapter_error",
-        "item_failure_policy": ITEM_FAILURE_POLICY_RECORD,
-        "accepted": False,
-        "observation_keys": [],
-        "weighted_flags": {},
-        "duration_minutes": max(_MIN_DURATION_MINUTES, float(duration_minutes)),
-        "retryable_infra_error": bool(
-            getattr(error, "retryable_infra_error", False)
-        ),
-        "adapter_error": {
-            "schema_version": "loopx_explore_adapter_error_v0",
-            "type": type(error).__name__,
-            "message": message[:240],
-        },
-    }
-
-
-class NoveltyLedger:
-    """First-seen ledger: raw observation keys global, flags family-scoped.
-
-    Raw keys are ledgered globally so relabeling an item under a different
-    family can never re-mint an already-seen key; weighted flags are
-    family-scoped facts. Weights come from the record itself (adapter-owned).
-    """
-
-    def __init__(self) -> None:
-        self.seen: set[str] = set()
-
-    def raw_value(self, record: Mapping[str, Any]) -> float:
-        keys = record.get("observation_keys") or []
-        flags = record.get("weighted_flags") or {}
-        return DEFAULT_OBSERVATION_WEIGHT * len(keys) + sum(
-            float(weight) for weight in flags.values()
-        )
-
-    def credit(self, record: Mapping[str, Any]) -> dict[str, float]:
-        family = str(record.get("family") or "general")
-        novel_value = 0.0
-        novel_keys = 0
-        for key in record.get("observation_keys") or []:
-            key = str(key)
-            if key not in self.seen:
-                self.seen.add(key)
-                novel_value += DEFAULT_OBSERVATION_WEIGHT
-                novel_keys += 1
-        for flag, weight in (record.get("weighted_flags") or {}).items():
-            pseudo = f"flag:{family}:{flag}"
-            if pseudo not in self.seen:
-                self.seen.add(pseudo)
-                novel_value += float(weight)
-        return {"novel_value": novel_value, "novel_observation_keys": novel_keys}
-
-
-def run_queue_epoch(
-    items: Sequence[Mapping[str, Any]],
-    *,
-    execute: Callable[..., dict[str, Any] | Sequence[dict[str, Any]]],
-    worker_count: int,
-    run_root: Path,
-    arm: str,
-    epoch: int,
-    stagger_seconds: float = 0.0,
-    item_failure_policy: str = ITEM_FAILURE_POLICY_RECORD,
-) -> list[dict[str, Any]]:
-    """Drain one epoch's work items through a shared pull queue.
-
-    Items may declare one ``concurrency_key`` or several ``concurrency_keys``.
-    Any overlap with an in-flight item waits until all keys free up (the generic
-    form of "same write scope must serialize"); disjoint items run concurrently
-    up to ``worker_count`` pullers. Returns per-worker lane records.
-    """
-
-    failure_policy = _normalize_item_failure_policy(item_failure_policy)
-    lock = threading.Lock()
-    pending: list[dict[str, Any]] = [dict(item) for item in items]
-    in_flight: set[str] = set()
-
-    def pull_next() -> dict[str, Any] | None:
-        with lock:
-            for index, item in enumerate(pending):
-                keys = item_concurrency_keys(item)
-                if any(key in in_flight for key in keys):
-                    continue
-                pending.pop(index)
-                in_flight.update(keys)
-                return item
-            return None
-
-    def worker(worker_index: int) -> dict[str, Any]:
-        branch_id = f"queue_worker_{worker_index + 1:02d}"
-        started_at = time.perf_counter()
-        if worker_index and stagger_seconds > 0:
-            time.sleep(min(30.0, worker_index * stagger_seconds))
-        results: list[dict[str, Any]] = []
-        while True:
-            item = pull_next()
-            if item is None:
-                with lock:
-                    if not pending:
-                        break
-                time.sleep(0.5)
-                continue
-            keys = item_concurrency_keys(item)
-            item_started = time.perf_counter()
-            try:
-                outcome = execute(
-                    item, run_root=run_root, arm=arm, epoch=epoch, branch_id=branch_id
-                )
-                if isinstance(outcome, Mapping):
-                    batch = [dict(outcome)]
-                elif isinstance(outcome, Sequence) and not isinstance(
-                    outcome, (str, bytes)
-                ):
-                    batch = []
-                    for candidate in outcome:
-                        if not isinstance(candidate, Mapping):
-                            raise TypeError(
-                                "queue execute sequences must contain dict observation records"
-                            )
-                        batch.append(dict(candidate))
-                else:
-                    raise TypeError(
-                        "queue execute must return a dict or sequence of dict observations"
-                    )
-                if not batch:
-                    raise TypeError("queue execute must return at least one observation")
-                for record in batch:
-                    record.setdefault("item_id", item.get("item_id"))
-                    record.setdefault("family", item.get("family"))
-                    record.setdefault("is_variant", bool(item.get("is_variant")))
-                    if item.get("is_variant"):
-                        record.setdefault(
-                            "variant_spec_id",
-                            (item.get("variant_spec") or {}).get("spec_id"),
-                        )
-            except Exception as error:
-                if failure_policy == ITEM_FAILURE_POLICY_FATAL:
-                    raise
-                batch = [
-                    _adapter_error_record(
-                        item,
-                        error,
-                        duration_minutes=_now_perf_minutes(item_started),
-                    )
-                ]
-            finally:
-                if keys:
-                    with lock:
-                        in_flight.difference_update(keys)
-            results.extend(batch)
-        return {
-            "branch_id": branch_id,
-            "launch_index": worker_index,
-            "wall_minutes": round(_now_perf_minutes(started_at), 3),
-            "item_ids": [r.get("item_id") for r in results],
-            "families": [r.get("family") for r in results],
-            "results": results,
-        }
-
-    thread_count = max(1, min(int(worker_count), len(pending) or 1))
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as pool:
-        futures = [pool.submit(worker, index) for index in range(thread_count)]
-        lanes = [future.result() for future in concurrent.futures.as_completed(futures)]
-    lanes.sort(key=lambda lane: str(lane.get("branch_id")))
-    return lanes
-
-
-def _frontier_gain(router_state: Mapping[str, Any] | None, family: str, *, epoch: int) -> float:
-    """Expected value of spending a speculative slot near this family.
-
-    Generic signals only: whether the base loop has probed the family yet,
-    its residual novelty pressure, and a small age bonus. Field names track
-    the router_state family schema; the lookup accepts both the raw family
-    id and adapter-prefixed forms (e.g. 'scope:artifacts/<family>').
-    """
-
-    stats: Mapping[str, Any] = {}
-    families = (router_state or {}).get("families") if isinstance(router_state, Mapping) else None
-    if isinstance(families, Mapping):
-        exact = families.get(family)
-        if isinstance(exact, Mapping):
-            stats = exact
-        else:
-            suffix = "/" + str(family)
-            for key, value in families.items():
-                if isinstance(value, Mapping) and str(key).endswith(suffix):
-                    stats = value
-                    break
-    score = 1.0
-    runs = float(stats.get("runs") or 0.0)
-    if runs <= 0:
-        score += 1.25
-    else:
-        novelty_rate = stats.get("novelty_rate")
-        if novelty_rate is not None:
-            score += min(1.25, max(0.0, float(novelty_rate)) * 1.25)
-        accept_rate = stats.get("accept_rate_ema")
-        if accept_rate is not None and float(accept_rate) <= 0.5:
-            score += 0.25
-    score += min(0.5, max(0, int(epoch) - 1) * 0.03)
-    return round(score, 4)
-
-
-class VariantCatalog:
-    """Agent-authored variant specs + per-arm consumption bookkeeping.
-
-    Catalog file schema (written by the experiment agent, never by code):
-    ``{"schema_version": ..., "specs": [{"spec_id", "seed_family",
-    "intent", "ops": [...adapter-defined...], "key_prefix",
-    "seed_item_id"?, "priority"?}]}``. The harness treats ``ops`` as opaque.
-    """
-
-    def __init__(self, catalog_path: Path, consumption_path: Path) -> None:
-        self.catalog_path = Path(catalog_path)
-        self.consumption_path = Path(consumption_path)
-        consumed = _read_json(self.consumption_path)
-        self.consumed: set[str] = set(consumed or [])
-
-    def _specs(self) -> list[dict[str, Any]]:
-        payload = _read_json(self.catalog_path)
-        specs = (payload or {}).get("specs") if isinstance(payload, Mapping) else None
-        return [dict(spec) for spec in specs or [] if spec.get("spec_id")]
-
-    def pending_for(self, family: str) -> list[dict[str, Any]]:
-        return [
-            spec
-            for spec in self._specs()
-            if str(spec.get("seed_family") or "") == str(family)
-            and str(spec.get("spec_id")) not in self.consumed
+    episode_mode: str | None,
+) -> dict[str, object]:
+    execution_metric_fields = set(combine_execution_metrics([]))
+    historical_execution_metrics: list[dict[str, object]] = []
+    for completed_epoch in epochs:
+        stored_metrics = completed_epoch.get("execution_metrics")
+        if (
+            isinstance(stored_metrics, Mapping)
+            and execution_metric_fields.issubset(stored_metrics)
+        ):
+            historical_execution_metrics.append(dict(stored_metrics))
+            continue
+        historical_records: list[Mapping[str, object]] = [
+            record
+            for lane in completed_epoch.get("lanes") or ()
+            for record in lane.get("results") or ()
         ]
+        if episode_mode is None:
+            historical_records = [
+                {
+                    **record,
+                    "execution_group_id": None,
+                    "record_kind": RECORD_KIND_STANDALONE,
+                }
+                for record in historical_records
+            ]
+        historical_execution_metrics.append(
+            dict(summarize_execution_records(historical_records))
+        )
+    return dict(combine_execution_metrics(historical_execution_metrics))
 
-    def pending_count(self) -> int:
-        return len([s for s in self._specs() if str(s.get("spec_id")) not in self.consumed])
 
-    def consume(self, spec_id: str) -> None:
-        self.consumed.add(str(spec_id))
-        _write_json(self.consumption_path, sorted(self.consumed))
-
-    def restore_consumed(self, spec_ids: Sequence[Any]) -> None:
-        self.consumed = {str(spec_id) for spec_id in spec_ids if str(spec_id).strip()}
-        _write_json(self.consumption_path, sorted(self.consumed))
-
-
-def select_frontier_work(
-    seed_items: Sequence[Mapping[str, Any]],
+def _restore_arm_state(
     *,
-    catalog: VariantCatalog,
-    adapter: Any,
-    router_state: Mapping[str, Any] | None,
-    epoch: int,
-    max_lanes: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Pick up to ``max_lanes`` agent-authored variant specs to execute.
-
-    Seeds are ranked by the generic frontier gain with an epoch-rotating
-    tie-break (multiplicative permutation over a prime modulus) so equal
-    gains spread across families over epochs instead of freezing on an
-    alphabetical prefix. Spec choice within a family follows the agent's
-    ``priority`` then catalog order. The harness only ever schedules specs;
-    it cannot invent them.
-    """
-
-    import hashlib
-
-    def _hash(value: str) -> int:
-        return int(hashlib.sha1(value.encode("utf-8")).hexdigest()[:8], 16)
-
-    by_family: dict[str, Mapping[str, Any]] = {}
-    for item in seed_items:
-        family = str(item.get("family") or "")
-        if family and family not in by_family:
-            by_family[family] = item
-    ranked = sorted(
-        by_family.items(),
-        key=lambda pair: (
-            -_frontier_gain(router_state, pair[0], epoch=epoch),
-            (_hash(pair[0]) * (2 * int(epoch) + 1)) % 1_000_003,
-            pair[0],
-        ),
-    )
-    selected: list[dict[str, Any]] = []
-    audit_specs: list[dict[str, Any]] = []
-    for family, seed in ranked:
-        if len(selected) >= max(0, int(max_lanes)):
-            break
-        pending = sorted(
-            catalog.pending_for(family),
-            key=lambda spec: (-float(spec.get("priority") or 0.0), str(spec.get("spec_id"))),
-        )
-        if not pending:
-            continue
-        spec = pending[0]
-        item = adapter.compile_variant(spec, dict(seed))
-        item.setdefault("is_variant", True)
-        item.setdefault("variant_spec", spec)
-        item.setdefault("family", family)
-        item.setdefault("seed_item_id", seed.get("item_id"))
-        item.setdefault(
-            "concurrency_key", f"{family}:variant:{spec.get('spec_id')}"
-        )
-        catalog.consume(str(spec.get("spec_id")))
-        selected.append(item)
-        audit_specs.append(
-            {
-                "spec_id": spec.get("spec_id"),
-                "seed_family": family,
-                "intent": spec.get("intent"),
-                "gain": _frontier_gain(router_state, family, epoch=epoch),
-            }
-        )
-    audit = {
-        "requested_lanes": int(max_lanes),
-        "admitted": len(selected),
-        "catalog_pending_after": catalog.pending_count(),
-        "specs": audit_specs,
-    }
-    return selected, audit
-
-
-def emit_frontier_requests(
-    path: Path,
-    *,
-    arm_key: str,
-    epoch: int,
-    seed_items: Sequence[Mapping[str, Any]],
+    checkpoint_file: Path,
+    checkpoint_enabled: bool,
+    resume: bool,
+    use_router: bool,
+    runtime_signature: Mapping[str, object],
     ledger: NoveltyLedger,
-    catalog: VariantCatalog,
-    router_state: Mapping[str, Any] | None,
-    per_family_key_cap: int = 24,
-) -> None:
-    """Publish what the harness NEEDS from the experiment agent.
-
-    The agent (a Claude/Codex session driving the experiment) reads this
-    packet -- seed text plus a digest of already-seen observation keys and
-    exhausted specs -- and appends new specs to the variant catalog. This is
-    the LoopX interaction pattern: packet out, decision in, no LLM calls
-    from code.
-    """
-
-    families: dict[str, dict[str, Any]] = {}
-    for item in seed_items:
-        family = str(item.get("family") or "")
-        if not family or family in families:
-            continue
-        seen_for_family = sorted(
-            key
-            for key in ledger.seen
-            if not key.startswith("flag:") or key.startswith(f"flag:{family}:")
-        )[: max(1, per_family_key_cap)]
-        families[family] = {
-            "family": family,
-            "seed_item_id": item.get("item_id"),
-            "seed_text": item.get("text"),
-            "pending_spec_count": len(catalog.pending_for(family)),
-            "frontier_gain": _frontier_gain(router_state, family, epoch=epoch),
-            "seen_keys_sample": seen_for_family,
+    catalog: VariantCatalog | None,
+    episode_mode: str | None,
+) -> _ArmExecutionState:
+    epochs: list[HarnessEpochRecord] = []
+    checkpoints: list[HarnessCheckpointPoint] = []
+    coverage_first_seen: dict[str, float] = {}
+    router_state = initial_arm_router_state() if use_router else None
+    load_profile: dict[str, object] | None = None
+    raw_cum = 0.0
+    novel_cum = 0.0
+    variant_records_cum = 0
+    next_epoch = 1
+    elapsed_offset = 0.0
+    if resume:
+        state = load_arm_checkpoint(
+            checkpoint_file,
+            expected_signature=runtime_signature,
+        )
+        epochs = [cast(HarnessEpochRecord, dict(epoch)) for epoch in state["epochs"]]
+        checkpoints = [
+            cast(HarnessCheckpointPoint, dict(point)) for point in state["checkpoints"]
+        ]
+        ledger.seen = {str(key) for key in state["novelty_seen"]}
+        router_state = (
+            dict(state["router_state"])
+            if isinstance(state.get("router_state"), Mapping)
+            else None
+        )
+        load_profile = (
+            dict(state["load_profile"])
+            if isinstance(state.get("load_profile"), Mapping)
+            else None
+        )
+        coverage_first_seen = {
+            str(family): _as_float(minutes)
+            for family, minutes in state["coverage_first_seen"].items()
         }
-    _write_json(
-        path,
-        {
-            "schema_version": FRONTIER_REQUESTS_SCHEMA_VERSION,
-            "arm": arm_key,
-            "epoch": int(epoch),
-            "total_seen_keys": len(ledger.seen),
-            "catalog_pending_total": catalog.pending_count(),
-            "families": sorted(families.values(), key=lambda f: -float(f["frontier_gain"])),
-            "how_to_respond": (
-                "Append specs to the variant catalog file: {spec_id, seed_family, "
-                "intent, ops (adapter-defined), key_prefix, priority}. The harness "
-                "schedules them by frontier gain; it never invents specs."
-            ),
-        },
-    )
-
-
-def plan_round_robin(seed_items: Sequence[Mapping[str, Any]], **_: Any) -> list[dict[str, Any]]:
-    """Baseline planner: every seed, catalog untouched, no ordering signal."""
-
-    return [dict(item) for item in seed_items]
-
-
-def plan_router_no_prune(
-    seed_items: Sequence[Mapping[str, Any]],
-    *,
-    goal_id: str,
-    agent_id: str,
-    worker_count: int,
-    router_state: Mapping[str, Any] | None,
-    load_profile: Mapping[str, Any] | None,
-    harness_profile: str = "moe-router",
-    branch_fill_policy: str = "confident-prefix",
-) -> list[dict[str, Any]]:
-    """Router-ordered no-prune planner over generic seed items.
-
-    Uses the LoopX worker-branch planner for VALUE ORDERING only, then
-    appends every unselected seed as a ranked tail -- sorting without
-    pruning: an executable seed never loses its slot to low confidence.
-    """
-
-    by_id: dict[str, dict[str, Any]] = {}
-    duplicate_items: list[dict[str, Any]] = []
-    for item in seed_items:
-        item_id = str(item.get("item_id"))
-        if item_id in by_id:
-            duplicate_items.append(dict(item))
-        else:
-            by_id[item_id] = dict(item)
-    todos = [
-        {
-            "todo_id": item_id,
-            "text": str(item.get("text") or item.get("item_id")),
-            "status": "open",
-            "task_class": "advancement_task",
-            "required_write_scopes": [f"artifacts/{item.get('family')}/**"],
-            "index": index,
-        }
-        for index, (item_id, item) in enumerate(by_id.items())
-    ]
-    plan = build_explore_worker_branch_plan(
-        goal_id=goal_id,
-        todos=todos,
-        agent_id=agent_id,
-        # This standalone benchmark arm opts in explicitly and consumes value
-        # ordering only; spawn stays disallowed, so the plan carries no
-        # suggested claim/lease commands.
-        orchestration={"explore_harness": {"enabled": True}},
-        worker_width=worker_count,
-        harness_profile=harness_profile,
-        branch_fill_policy=branch_fill_policy,
+        raw_cum = _as_float(state.get("raw_value_total") or 0.0)
+        novel_cum = _as_float(state.get("novel_value_total") or 0.0)
+        variant_records_cum = _as_int(state.get("variant_records_total") or 0)
+        next_epoch = _as_int(state["next_epoch"])
+        elapsed_offset = _as_float(state.get("elapsed_minutes") or 0.0)
+        if catalog is not None:
+            catalog.restore_consumed(state["catalog_consumed"])
+    elif checkpoint_enabled and catalog is not None:
+        # Reusing a run_root is not an implicit restart contract. A fresh arm
+        # starts with fresh consumption; only resume restores prior attempts.
+        catalog.restore_consumed([])
+    if not resume:
+        checkpoint_file.unlink(missing_ok=True)
+    return _ArmExecutionState(
+        epochs=epochs,
+        checkpoints=checkpoints,
+        coverage_first_seen=coverage_first_seen,
         router_state=router_state,
         load_profile=load_profile,
+        raw_cum=raw_cum,
+        novel_cum=novel_cum,
+        variant_records_cum=variant_records_cum,
+        next_epoch=next_epoch,
+        elapsed_offset=elapsed_offset,
+        execution_metrics_cum=_seed_historical_execution_metrics(
+            epochs, episode_mode=episode_mode
+        ),
     )
-    ordered: list[dict[str, Any]] = []
-    used: set[str] = set()
-    for branch in plan.get("selected_worker_branches") or []:
-        for todo_id in branch.get("todo_ids") or []:
-            todo_id = str(todo_id)
-            if todo_id in by_id and todo_id not in used:
-                ordered.append(by_id[todo_id])
-                used.add(todo_id)
-    for branch in plan.get("rejected_worker_branches") or []:
-        for todo_id in branch.get("todo_ids") or []:
-            todo_id = str(todo_id)
-            if todo_id in by_id and todo_id not in used:
-                ordered.append(by_id[todo_id])
-                used.add(todo_id)
-    for item_id, item in by_id.items():
-        if item_id not in used:
-            ordered.append(item)
-            used.add(item_id)
-    # Preserve malformed duplicates for the episode grouping boundary. The
-    # planner still reasons over unique ids, but no-prune means it must not
-    # silently erase an input that record/fatal policy needs to classify.
-    ordered.extend(duplicate_items)
-    return ordered
 
 
-def _arm_runtime_signature(
-    adapter: Any,
+def _epoch_executor(
+    adapter: object,
     *,
-    arm_key: str,
-    worker_count: int,
-    use_router: bool,
-    frontier_max_lanes: int,
-    variant_catalog_enabled: bool,
-    goal_id: str,
-    agent_id: str,
-    item_failure_policy: str,
     episode_mode: str | None,
-) -> dict[str, Any]:
-    adapter_type = f"{type(adapter).__module__}.{type(adapter).__qualname__}"
-    signature = {
-        "arm_key": str(arm_key),
-        "adapter_type": adapter_type,
-        "worker_count": max(1, int(worker_count)),
-        "use_router": bool(use_router),
-        "frontier_max_lanes": max(0, int(frontier_max_lanes)),
-        "variant_catalog_enabled": bool(variant_catalog_enabled),
-        "goal_id": str(goal_id),
-        "agent_id": str(agent_id),
-        "item_failure_policy": item_failure_policy,
-    }
-    # Missing keys in legacy manifests read as None, so old standalone arms
-    # remain compatible while a recoverable arm cannot resume as standalone.
-    signature["episode_mode"] = episode_mode
-    return signature
+    failure_policy: str,
+) -> Callable[..., object]:
+    if episode_mode is not None:
+
+        def _run_episode(item: Mapping[str, object], **context: object) -> list[dict[str, object]]:
+            return list(
+                execute_episode_group(
+                    item,
+                    adapter=adapter,
+                    failure_policy=failure_policy,
+                    fatal_failure_policy=ITEM_FAILURE_POLICY_FATAL,
+                    error_record_factory=_adapter_error_record,
+                    run_root=cast(Path, context["run_root"]),
+                    arm=str(context["arm"]),
+                    epoch=cast(int, context["epoch"]),
+                    branch_id=str(context["branch_id"]),
+                )
+            )
+
+        return _run_episode
+    # Accessed lazily so an episode-only adapter (no legacy execute) is valid
+    # as long as prepare_episode_group never returns None.
+    execute_fn = getattr(adapter, "execute", None)
+    if not callable(execute_fn):
+        raise AttributeError(f"{type(adapter).__name__!r} object has no attribute 'execute'")
+    return cast(Callable[..., object], execute_fn)
+
+
+def _record_epoch_outcomes(
+    *,
+    state: _ArmExecutionState,
+    lanes: list[HarnessLaneRecord],
+    seed_items: Sequence[Mapping[str, object]],
+    queue_size: int,
+    execution_unit_count: int,
+    frontier_audit: dict[str, object] | None,
+    ledger: NoveltyLedger,
+    episode_mode: str | None,
+    use_router: bool,
+    worker_count: int,
+    epoch: int,
+    epoch_wall: float,
+    started: float,
+    run_root: Path,
+    arm_key: str,
+) -> None:
+    epoch_raw = 0.0
+    epoch_novel = 0.0
+    records: list[dict[str, object]] = []
+    for lane in lanes:
+        for record in lane.get("results") or ():
+            credit = ledger.credit(record)
+            record["novel_value"] = credit["novel_value"]
+            record["raw_value"] = ledger.raw_value(record)
+            epoch_raw += _as_float(record["raw_value"])
+            epoch_novel += credit["novel_value"]
+            if record.get("is_variant"):
+                state.variant_records_cum += 1
+            records.append(record)
+    state.raw_cum += epoch_raw
+    state.novel_cum += epoch_novel
+    metric_records: list[Mapping[str, object]] = (
+        list(records)
+        if episode_mode is not None
+        else [
+            {
+                **record,
+                "execution_group_id": None,
+                "record_kind": RECORD_KIND_STANDALONE,
+            }
+            for record in records
+        ]
+    )
+    epoch_execution_metrics = dict(summarize_execution_records(metric_records))
+    state.execution_metrics_cum = dict(
+        combine_execution_metrics([state.execution_metrics_cum, epoch_execution_metrics])
+    )
+    elapsed_after = state.elapsed_offset + _now_perf_minutes(started)
+    for record in records:
+        family = str(record.get("family") or "")
+        if family:
+            state.coverage_first_seen.setdefault(family, round(elapsed_after, 3))
+    if use_router:
+        state.router_state, state.load_profile = update_router_epoch_feedback(
+            current_router_state=state.router_state,
+            records=records,
+            seed_items=seed_items,
+            lanes=lanes,
+            episode_mode=episode_mode,
+            epoch=epoch,
+            epoch_wall=epoch_wall,
+            run_root=run_root,
+            arm_key=arm_key,
+        )
+    state.checkpoints.append(
+        {
+            "epoch": epoch,
+            "elapsed_minutes": round(elapsed_after, 3),
+            "raw_value_cum": round(state.raw_cum, 3),
+            "novel_value_cum": round(state.novel_cum, 3),
+            "coverage_count_cum": len(state.coverage_first_seen),
+            "variant_records_cum": state.variant_records_cum,
+            "requested_worker_minutes_cum": round(elapsed_after * worker_count, 3),
+            "execution_metrics_cum": dict(state.execution_metrics_cum),
+        }
+    )
+    state.epochs.append(
+        {
+            "schema_version": HARNESS_ARM_SCHEMA_VERSION,
+            "epoch": epoch,
+            "epoch_wall_minutes": round(epoch_wall, 3),
+            "queue_size": queue_size,
+            "execution_unit_count": execution_unit_count,
+            "execution_metrics": epoch_execution_metrics,
+            "frontier": frontier_audit,
+            "lanes": lanes,
+        }
+    )
 
 
 def run_budget_arm(
-    adapter: Any,
+    adapter: object,
     *,
     arm_key: str,
     run_root: Path,
@@ -670,7 +394,7 @@ def run_budget_arm(
     resume: bool = False,
     checkpoint_path: Path | None = None,
     item_failure_policy: str | None = None,
-) -> dict[str, Any]:
+) -> HarnessArmResult:
     """Run ONE arm alone against its wall-clock budget; return arm payload.
 
     ``use_router=False`` is the blind baseline (round-robin sweep, no
@@ -707,8 +431,6 @@ def run_budget_arm(
         episode_mode=episode_mode,
     )
     ledger = NoveltyLedger()
-    router_state = initial_router_state() if use_router else None
-    load_profile: Mapping[str, Any] | None = None
     catalog = (
         VariantCatalog(
             Path(variant_catalog_path),
@@ -717,96 +439,33 @@ def run_budget_arm(
         if variant_catalog_path
         else None
     )
-    epochs: list[dict[str, Any]] = []
-    checkpoints: list[dict[str, Any]] = []
-    coverage_first_seen: dict[str, float] = {}
-    raw_cum = 0.0
-    novel_cum = 0.0
-    variant_records_cum = 0
-    next_epoch = 1
-    elapsed_offset = 0.0
-    if resume:
-        state = load_arm_checkpoint(
-            checkpoint_file,
-            expected_signature=runtime_signature,
-        )
-        epochs = [dict(epoch) for epoch in state["epochs"]]
-        checkpoints = [dict(checkpoint) for checkpoint in state["checkpoints"]]
-        ledger.seen = {str(key) for key in state["novelty_seen"]}
-        router_state = (
-            dict(state["router_state"])
-            if isinstance(state.get("router_state"), Mapping)
-            else None
-        )
-        load_profile = (
-            dict(state["load_profile"])
-            if isinstance(state.get("load_profile"), Mapping)
-            else None
-        )
-        coverage_first_seen = {
-            str(family): float(minutes)
-            for family, minutes in state["coverage_first_seen"].items()
-        }
-        raw_cum = float(state.get("raw_value_total") or 0.0)
-        novel_cum = float(state.get("novel_value_total") or 0.0)
-        variant_records_cum = int(state.get("variant_records_total") or 0)
-        next_epoch = int(state["next_epoch"])
-        elapsed_offset = float(state.get("elapsed_minutes") or 0.0)
-        if catalog is not None:
-            catalog.restore_consumed(state["catalog_consumed"])
-    elif checkpoint_enabled and catalog is not None:
-        # Reusing a run_root is not an implicit restart contract. A fresh arm
-        # starts with fresh consumption; only resume restores prior attempts.
-        catalog.restore_consumed([])
-    if not resume:
-        checkpoint_file.unlink(missing_ok=True)
-    execution_metric_fields = set(combine_execution_metrics([]))
-    historical_execution_metrics: list[dict[str, Any]] = []
-    for completed_epoch in epochs:
-        stored_metrics = completed_epoch.get("execution_metrics")
-        if (
-            isinstance(stored_metrics, Mapping)
-            and execution_metric_fields.issubset(stored_metrics)
-        ):
-            historical_execution_metrics.append(dict(stored_metrics))
-            continue
-        historical_records = [
-            record
-            for lane in completed_epoch.get("lanes") or []
-            for record in lane.get("results") or []
-        ]
-        if episode_mode is None:
-            historical_records = [
-                {
-                    **record,
-                    "execution_group_id": None,
-                    "record_kind": RECORD_KIND_STANDALONE,
-                }
-                for record in historical_records
-            ]
-        historical_execution_metrics.append(
-            summarize_execution_records(historical_records)
-        )
-    execution_metrics_cum = combine_execution_metrics(
-        historical_execution_metrics
+    state = _restore_arm_state(
+        checkpoint_file=checkpoint_file,
+        checkpoint_enabled=checkpoint_enabled,
+        resume=resume,
+        use_router=use_router,
+        runtime_signature=runtime_signature,
+        ledger=ledger,
+        catalog=catalog,
+        episode_mode=episode_mode,
     )
     stop_reason = "max_epochs"
     started = time.perf_counter()
-    for epoch in range(next_epoch, int(max_epochs) + 1):
-        elapsed = elapsed_offset + _now_perf_minutes(started)
+    for epoch in range(state.next_epoch, int(max_epochs) + 1):
+        elapsed = state.elapsed_offset + _now_perf_minutes(started)
         remaining = float(budget_minutes) - elapsed
-        if epochs and remaining <= 0:
+        if state.epochs and remaining <= 0:
             stop_reason = "budget_exhausted"
             break
-        if epochs and duration_guard_factor > 0:
-            recent = epochs[-max(1, int(duration_guard_recent)) :]
+        if state.epochs and duration_guard_factor > 0:
+            recent = state.epochs[-max(1, int(duration_guard_recent)) :]
             estimated = max(
                 float(entry.get("epoch_wall_minutes") or 0.0) for entry in recent
             ) * float(duration_guard_factor)
             if remaining < estimated:
                 stop_reason = "duration_guard"
                 break
-        seed_items = [dict(item) for item in adapter.list_seed_items()]
+        seed_items = [dict(item) for item in cast(SeedAdapter, adapter).list_seed_items()]
         if not seed_items:
             stop_reason = "seed_queue_empty"
             break
@@ -815,29 +474,27 @@ def run_budget_arm(
             # adapter code, so fatal structural validation must see the raw
             # seeds before either operation can collapse ids or cause effects.
             build_episode_execution_units(
-                seed_items,
-                arm=arm_key,
-                epoch=epoch,
-                fatal_preflight=True,
+                seed_items, arm=arm_key, epoch=epoch, fatal_preflight=True
             )
-        if use_router:
-            queue_items = plan_router_no_prune(
+        queue_items = (
+            plan_router_no_prune(
                 seed_items,
                 goal_id=goal_id,
                 agent_id=agent_id,
                 worker_count=worker_count,
-                router_state=router_state,
-                load_profile=load_profile,
+                router_state=state.router_state,
+                load_profile=state.load_profile,
             )
-        else:
-            queue_items = plan_round_robin(seed_items)
-        frontier_audit: dict[str, Any] | None = None
+            if use_router
+            else plan_round_robin(seed_items)
+        )
+        frontier_audit: dict[str, object] | None = None
         if use_router and catalog is not None and int(frontier_max_lanes) > 0:
             variant_items, frontier_audit = select_frontier_work(
                 seed_items,
                 catalog=catalog,
                 adapter=adapter,
-                router_state=router_state,
+                router_state=state.router_state,
                 epoch=epoch,
                 max_lanes=frontier_max_lanes,
             )
@@ -849,36 +506,27 @@ def run_budget_arm(
                 seed_items=seed_items,
                 ledger=ledger,
                 catalog=catalog,
-                router_state=router_state,
+                router_state=state.router_state,
             )
         epoch_start = time.perf_counter()
-        execution_items = queue_items
-        if episode_mode is not None:
-            execution_items = build_episode_execution_units(
-                queue_items,
-                arm=arm_key,
-                epoch=epoch,
-                fatal_preflight=failure_policy == ITEM_FAILURE_POLICY_FATAL,
-            )
-
-            def execute_epoch(item: Mapping[str, Any], **context: Any) -> list[dict[str, Any]]:
-                return execute_episode_group(
-                    item,
-                    adapter=adapter,
-                    failure_policy=failure_policy,
-                    fatal_failure_policy=ITEM_FAILURE_POLICY_FATAL,
-                    error_record_factory=_adapter_error_record,
-                    **context,
+        execution_items: list[dict[str, object]] = (
+            [
+                dict(unit)
+                for unit in build_episode_execution_units(
+                    queue_items,
+                    arm=arm_key,
+                    epoch=epoch,
+                    fatal_preflight=failure_policy == ITEM_FAILURE_POLICY_FATAL,
                 )
-
-        else:
-            # Accessed lazily so an episode-only adapter (no legacy execute)
-            # is valid as long as prepare_episode_group never returns None.
-            execute_epoch: Callable[..., Any] = adapter.execute
-
+            ]
+            if episode_mode is not None
+            else queue_items
+        )
         lanes = run_queue_epoch(
             execution_items,
-            execute=execute_epoch,
+            execute=_epoch_executor(
+                adapter, episode_mode=episode_mode, failure_policy=failure_policy
+            ),
             worker_count=worker_count,
             run_root=run_root,
             arm=arm_key,
@@ -886,99 +534,22 @@ def run_budget_arm(
             stagger_seconds=stagger_seconds,
             item_failure_policy=failure_policy,
         )
-        epoch_wall = _now_perf_minutes(epoch_start)
-        epoch_raw = 0.0
-        epoch_novel = 0.0
-        records: list[dict[str, Any]] = []
-        for lane in lanes:
-            for record in lane.get("results") or []:
-                credit = ledger.credit(record)
-                record["novel_value"] = credit["novel_value"]
-                record["raw_value"] = ledger.raw_value(record)
-                epoch_raw += record["raw_value"]
-                epoch_novel += credit["novel_value"]
-                if record.get("is_variant"):
-                    variant_records_cum += 1
-                records.append(record)
-        raw_cum += epoch_raw
-        novel_cum += epoch_novel
-        metric_records = records
-        if episode_mode is None:
-            metric_records = [
-                {
-                    **record,
-                    "execution_group_id": None,
-                    "record_kind": RECORD_KIND_STANDALONE,
-                }
-                for record in records
-            ]
-        epoch_execution_metrics = summarize_execution_records(metric_records)
-        execution_metrics_cum = combine_execution_metrics(
-            [execution_metrics_cum, epoch_execution_metrics]
-        )
-        elapsed_after = elapsed_offset + _now_perf_minutes(started)
-        for record in records:
-            family = str(record.get("family") or "")
-            if family:
-                coverage_first_seen.setdefault(family, round(elapsed_after, 3))
-        if use_router:
-            if episode_mode is not None:
-                probes = build_router_probes(records)
-            else:
-                probes = [
-                    {
-                        "family": str(record.get("family") or "general"),
-                        "duration_minutes": record.get("duration_minutes"),
-                        "observation_keys": record.get("observation_keys") or [],
-                        "weighted_flags": record.get("weighted_flags") or {},
-                        "accepted": bool(record.get("accepted")),
-                        "retryable_infra_error": bool(
-                            record.get("retryable_infra_error")
-                        ),
-                    }
-                    for record in records
-                ]
-            router_state = observe_epoch(router_state, epoch=epoch, probes=probes)
-            router_state = advance_epoch(
-                router_state,
-                epoch=epoch,
-                eligible_families=sorted(
-                    {str(item.get("family")) for item in seed_items if item.get("family")}
-                ),
-            )
-            _write_json(run_root / f"router_state_{arm_key}.json", router_state)
-            max_lane_wall = max(
-                (float(lane.get("wall_minutes") or 0.0) for lane in lanes), default=0.0
-            )
-            load_profile = {
-                "source": f"observed_epoch_{epoch:02d}_{arm_key}",
-                "parallel_wall_minutes": epoch_wall,
-                "max_branch_minutes": max_lane_wall,
-                "branch_count": len(lanes),
-            }
-        checkpoints.append(
-            {
-                "epoch": epoch,
-                "elapsed_minutes": round(elapsed_after, 3),
-                "raw_value_cum": round(raw_cum, 3),
-                "novel_value_cum": round(novel_cum, 3),
-                "coverage_count_cum": len(coverage_first_seen),
-                "variant_records_cum": variant_records_cum,
-                "requested_worker_minutes_cum": round(elapsed_after * worker_count, 3),
-                "execution_metrics_cum": dict(execution_metrics_cum),
-            }
-        )
-        epochs.append(
-            {
-                "schema_version": HARNESS_ARM_SCHEMA_VERSION,
-                "epoch": epoch,
-                "epoch_wall_minutes": round(epoch_wall, 3),
-                "queue_size": len(queue_items),
-                "execution_unit_count": len(execution_items),
-                "execution_metrics": epoch_execution_metrics,
-                "frontier": frontier_audit,
-                "lanes": lanes,
-            }
+        _record_epoch_outcomes(
+            state=state,
+            lanes=lanes,
+            seed_items=seed_items,
+            queue_size=len(queue_items),
+            execution_unit_count=len(execution_items),
+            frontier_audit=frontier_audit,
+            ledger=ledger,
+            episode_mode=episode_mode,
+            use_router=use_router,
+            worker_count=worker_count,
+            epoch=epoch,
+            epoch_wall=_now_perf_minutes(epoch_start),
+            started=started,
+            run_root=run_root,
+            arm_key=arm_key,
         )
         if checkpoint_enabled:
             write_arm_checkpoint(
@@ -987,137 +558,51 @@ def run_budget_arm(
                     arm_key=arm_key,
                     runtime_signature=runtime_signature,
                     next_epoch=epoch + 1,
-                    elapsed_minutes=elapsed_after,
-                    epochs=epochs,
-                    checkpoints=checkpoints,
+                    elapsed_minutes=state.checkpoints[-1]["elapsed_minutes"],
+                    epochs=state.epochs,
+                    checkpoints=state.checkpoints,
                     novelty_seen=sorted(ledger.seen),
-                    router_state=router_state,
-                    load_profile=load_profile,
+                    router_state=state.router_state,
+                    load_profile=state.load_profile,
                     catalog_consumed=sorted(catalog.consumed) if catalog else [],
-                    coverage_first_seen=coverage_first_seen,
-                    raw_value_total=raw_cum,
-                    novel_value_total=novel_cum,
-                    variant_records_total=variant_records_cum,
+                    coverage_first_seen=state.coverage_first_seen,
+                    raw_value_total=state.raw_cum,
+                    novel_value_total=state.novel_cum,
+                    variant_records_total=state.variant_records_cum,
                 ),
             )
         _write_json(
             run_root / f"rolling_progress_{arm_key}.json",
-            {"arm": arm_key, "completed_epochs": len(epochs), "last_checkpoint": checkpoints[-1]},
+            {
+                "arm": arm_key,
+                "completed_epochs": len(state.epochs),
+                "last_checkpoint": state.checkpoints[-1],
+            },
         )
     return {
         "schema_version": HARNESS_ARM_SCHEMA_VERSION,
         "arm_key": arm_key,
         "budget_minutes": float(budget_minutes),
-        "elapsed_minutes": round(elapsed_offset + _now_perf_minutes(started), 3),
+        "elapsed_minutes": round(state.elapsed_offset + _now_perf_minutes(started), 3),
         "stop_reason": stop_reason,
-        "epoch_count": len(epochs),
-        "raw_value_total": round(raw_cum, 3),
-        "novel_value_total": round(novel_cum, 3),
-        "variant_records_total": variant_records_cum,
-        "execution_metrics": execution_metrics_cum,
-        "coverage_count": len(coverage_first_seen),
-        "coverage_first_seen_minutes": coverage_first_seen,
-        "checkpoints": checkpoints,
-        "epochs": epochs,
+        "epoch_count": len(state.epochs),
+        "raw_value_total": round(state.raw_cum, 3),
+        "novel_value_total": round(state.novel_cum, 3),
+        "variant_records_total": state.variant_records_cum,
+        "execution_metrics": state.execution_metrics_cum,
+        "coverage_count": len(state.coverage_first_seen),
+        "coverage_first_seen_minutes": state.coverage_first_seen,
+        "checkpoints": state.checkpoints,
+        "epochs": state.epochs,
         "resume": {
             "schema_version": "loopx_explore_harness_resume_v0",
             "enabled": checkpoint_enabled,
             "resumed": bool(resume),
             "checkpoint_schema_version": HARNESS_CHECKPOINT_SCHEMA_VERSION,
             "checkpoint_path": str(checkpoint_file) if checkpoint_enabled else None,
-            "restored_epoch_count": next_epoch - 1 if resume else 0,
+            "restored_epoch_count": state.next_epoch - 1 if resume else 0,
         },
-        "runtime_policy": {
-            "schema_version": HARNESS_RUNTIME_POLICY_SCHEMA_VERSION,
-            "item_failure_policy": failure_policy,
-            "item_exception_isolation": failure_policy == ITEM_FAILURE_POLICY_RECORD,
-            "episode_execution": {
-                "mode": episode_mode or "standalone",
-                "adapter_owned_restore": episode_mode is not None,
-            },
-            "planner_guidance": {
-                "retry_backoff": {
-                    "enforced": False,
-                    "owner": "external_runner",
-                },
-                "infra_cooldown": {
-                    "enforced": False,
-                    "owner": "external_runner",
-                },
-            },
-        },
+        "runtime_policy": build_arm_runtime_policy(
+            failure_policy=failure_policy, episode_mode=episode_mode
+        ),
     }
-
-
-def step_auc(checkpoints: Sequence[Mapping[str, Any]], *, value_key: str, horizon_minutes: float) -> float:
-    """Step-integrate a cumulative anytime curve to the budget horizon."""
-
-    auc = 0.0
-    prev_t = 0.0
-    prev_v = 0.0
-    for checkpoint in checkpoints:
-        t = min(float(checkpoint.get("elapsed_minutes") or 0.0), float(horizon_minutes))
-        if t > prev_t:
-            auc += prev_v * (t - prev_t)
-            prev_t = t
-        prev_v = float(checkpoint.get(value_key) or 0.0)
-    if float(horizon_minutes) > prev_t:
-        auc += prev_v * (float(horizon_minutes) - prev_t)
-    return round(auc, 3)
-
-
-def aggregate_arms(
-    arms: Mapping[str, Mapping[str, Any]],
-    *,
-    budget_minutes: float,
-    worker_count: int,
-    coverage_denominator: int | None = None,
-) -> dict[str, Any]:
-    """Generic two-arm (or N-arm) comparison on novelty-first metrics."""
-
-    summary: dict[str, Any] = {
-        "schema_version": "loopx_explore_harness_score_v0",
-        "budget_minutes_per_arm": float(budget_minutes),
-        "worker_count": int(worker_count),
-        "coverage_denominator": coverage_denominator,
-        "arms": {},
-    }
-    for arm_key, arm in arms.items():
-        checkpoints = arm.get("checkpoints") or []
-        execution_metrics = (
-            dict(arm.get("execution_metrics") or {})
-            if isinstance(arm.get("execution_metrics"), Mapping)
-            else {}
-        )
-        effective_compute = float(
-            execution_metrics.get("effective_compute_minutes") or 0.0
-        )
-        summary["arms"][arm_key] = {
-            "novel_value_endpoint": arm.get("novel_value_total"),
-            "novel_value_auc": step_auc(
-                checkpoints, value_key="novel_value_cum", horizon_minutes=budget_minutes
-            ),
-            "raw_value_total": arm.get("raw_value_total"),
-            "coverage_count": arm.get("coverage_count"),
-            "variant_records_total": arm.get("variant_records_total"),
-            "epoch_count": arm.get("epoch_count"),
-            "elapsed_minutes": arm.get("elapsed_minutes"),
-            "stop_reason": arm.get("stop_reason"),
-            "execution_metrics": execution_metrics,
-            "novel_value_per_requested_worker_minute": round(
-                float(arm.get("novel_value_total") or 0.0)
-                / max(0.001, float(budget_minutes) * worker_count),
-                4,
-            ),
-            "novel_value_per_effective_compute_minute": (
-                round(
-                    float(arm.get("novel_value_total") or 0.0)
-                    / effective_compute,
-                    4,
-                )
-                if effective_compute > 0
-                else None
-            ),
-            "anytime_curve": checkpoints,
-        }
-    return summary
