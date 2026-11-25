@@ -393,15 +393,16 @@ _PRESENTATION_KEY_LABELS_SOURCE = (
 # Account help often states a rule as `Password: 12 characters` or
 # `Token: 24 hours`. A bare number after a label is not by itself a secret;
 # when it is a quantity with a length or time unit it is a public rule. The
-# negative lookahead also covers word ranges (`8 to 64 characters`) and
-# qualified units (`2 business days`) while a bare number (`Password:
-# 12345678`) and a mixed value (`token: abc123`) still fail closed.
+# negative lookahead also covers word ranges (`8 to 64 characters`),
+# qualified units (`2 business days`) and character classes (`12 alphanumeric
+# characters`) while a bare number (`Password: 12345678`) and a mixed value
+# (`token: abc123`) still fail closed.
 _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?![\"']?\d+(?:\.\d+)?"
-    r"(?:\s*[-\u2013]\s*\d+|\s+(?:to|through|and)\s+\d+|\+)?"
+    r"(?:\s*[-\u2013\u2014]\s*\d+|\s+(?:to|through|and)\s+\d+|\+)?"
     r"(?:\s+or\s+(?:more|fewer|less))?"
-    r"\s*[-\u2013]?\s*"
-    r"(?:(?:business|working|calendar|full|consecutive)[-\s]+)?"
+    r"\s*[-\u2013\u2014]?\s*"
+    r"(?:[A-Za-z][A-Za-z-]*[-\s]+){0,2}"
     r"(?:characters?|chars?|letters?|digits?|symbols?"
     r"|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s"
     r"|days?|workdays?|d|weeks?|months?|years?)\b)"

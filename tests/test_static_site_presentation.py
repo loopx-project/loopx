@@ -467,6 +467,32 @@ def test_cli_package_keeps_numeric_account_rules_public(
     assert (output / "token-business-days.html").read_text(encoding="utf-8") == token_business_days
 
 
+def test_cli_package_keeps_character_class_rules_public(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    site = _site(tmp_path)
+    alphanumeric_page = (
+        "<html><body><h1>Password requirements</h1>\n"
+        "<p>Password: 12 alphanumeric characters.</p>\n"
+        "</body></html>\n"
+    )
+    ascii_page = (
+        "<html><body><h1>Password requirements</h1>\n"
+        "<p>Password: 8 to 64 ASCII characters.</p>\n"
+        "</body></html>\n"
+    )
+    (site / "password-alphanumeric.html").write_text(alphanumeric_page, encoding="utf-8")
+    (site / "password-ascii.html").write_text(ascii_page, encoding="utf-8")
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_performed"] is True
+    assert (output / "password-alphanumeric.html").read_text(encoding="utf-8") == alphanumeric_page
+    assert (output / "password-ascii.html").read_text(encoding="utf-8") == ascii_page
+
+
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
