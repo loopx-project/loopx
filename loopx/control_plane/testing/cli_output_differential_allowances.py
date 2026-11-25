@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 import math
 from typing import Literal, TypedDict
@@ -312,14 +312,19 @@ def surface_from_row_id(row_id: str) -> str:
     return row_id.partition("/")[2].partition("/")[0]
 
 
-def tuple_field(row: JsonObject, field: str) -> tuple[object, ...]:
-    """Read an optional sequence field as a tuple without masking non-iterable bugs."""
+def tuple_field(row: JsonObject, field: str) -> tuple[str, ...]:
+    """Read an optional string-sequence version field, rejecting mappings and strings."""
     raw = row.get(field)
-    if not raw:
+    if raw is None:
         return ()
-    if isinstance(raw, Iterable):
-        return tuple(raw)
-    raise TypeError(f"{field} must be iterable")
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        raise TypeError(f"{field} must be a sequence of strings")
+    versions: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise TypeError(f"{field} entries must be strings")
+        versions.append(item)
+    return tuple(versions)
 
 
 def mapping_field(row: JsonObject, field: str) -> Mapping[object, object]:
@@ -335,9 +340,11 @@ def mapping_field(row: JsonObject, field: str) -> Mapping[object, object]:
 def shape_paths(row: JsonObject) -> set[str]:
     """Return json_shape_paths as a verified set of strings."""
     raw = row.get("json_shape_paths")
-    if not raw:
+    if raw is None:
         return set()
-    if not isinstance(raw, Iterable):
+    if isinstance(raw, (str, bytes, bytearray, Mapping)) or not isinstance(
+        raw, Iterable
+    ):
         raise TypeError("json_shape_paths must be iterable")
     paths: set[str] = set()
     for item in raw:
@@ -474,9 +481,13 @@ def _growth_limit(*, policy: str, output_format: str, metric: Metric, base: int)
 def _removed(base: JsonObject, candidate: JsonObject, field: str) -> list[str]:
     base_raw = base.get(field, [])
     candidate_raw = candidate.get(field, [])
-    if not isinstance(base_raw, Iterable):
+    if isinstance(base_raw, (str, bytes, bytearray, Mapping)) or not isinstance(
+        base_raw, Iterable
+    ):
         raise TypeError(f"{field} must be iterable")
-    if not isinstance(candidate_raw, Iterable):
+    if isinstance(candidate_raw, (str, bytes, bytearray, Mapping)) or not isinstance(
+        candidate_raw, Iterable
+    ):
         raise TypeError(f"{field} must be iterable")
     base_values = {str(value) for value in base_raw}
     candidate_values = {str(value) for value in candidate_raw}

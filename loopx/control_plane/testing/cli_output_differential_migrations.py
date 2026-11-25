@@ -113,16 +113,9 @@ def _action_portfolio_schema_migration(
 ) -> str | None:
     before = tuple_field(base, "action_portfolio_schema_versions")
     after = tuple_field(candidate, "action_portfolio_schema_versions")
-    if not (
-        all(isinstance(item, str) for item in before)
-        and all(isinstance(item, str) for item in after)
-    ):
-        return None
-    typed_before = tuple(str(item) for item in before)
-    typed_after = tuple(str(item) for item in after)
-    if (typed_before, typed_after) in _ALLOWED_PORTFOLIO_MIGRATIONS:
-        before_label = typed_before[0] if typed_before else "none"
-        after_label = typed_after[0] if typed_after else "none"
+    if (before, after) in _ALLOWED_PORTFOLIO_MIGRATIONS:
+        before_label = before[0] if before else "none"
+        after_label = after[0] if after else "none"
         return f"{before_label} -> {after_label}"
     return None
 
@@ -219,6 +212,13 @@ def _schema_migration_state(
     signature_migration = (
         _action_signature_migration(base, candidate) if signature_changed else None
     )
+    for field in (
+        "action_portfolio_schema_versions",
+        "planning_horizon_schema_versions",
+        "planning_inventory_detail_schema_versions",
+    ):
+        tuple_field(base, field)
+        tuple_field(candidate, field)
     portfolio_schema_changed = base.get("action_portfolio_schema_versions") != candidate.get(
         "action_portfolio_schema_versions"
     )

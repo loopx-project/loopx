@@ -12,6 +12,7 @@ from loopx.control_plane.testing import (
     cli_output_differential_migrations,
 )
 from loopx.control_plane.testing.cli_output_differential import (
+    ACTION_PORTFOLIO_SCHEMA_VERSION_V0,
     CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION,
     CLI_OUTPUT_FIXTURE_CONTRACT_VERSION,
     CLI_OUTPUT_PROBE_SCHEMA_VERSION,
@@ -182,3 +183,65 @@ def test_compare_cli_output_receipts_handles_candidate_only_and_retired_rows() -
     by_id = {row["row_id"]: row for row in summary["rows"]}
     assert by_id["surface/evidence_log_thin/small/json"]["status"] == "passed"
     assert by_id["surface/quota_should_run/small/json"]["status"] == "candidate_only"
+
+
+def test_action_portfolio_schema_migration_rejects_malformed_dict_and_enforces_list_allowance() -> None:
+    base = {
+        **_sample_row(),
+        "chars": 40_000,
+        "action_portfolio_schema_versions": [],
+    }
+    candidate_grown = {
+        **base,
+        "chars": 41_000,
+    }
+
+    empty_list_result = compare_cli_output_receipts(
+        _sample_receipt(base),
+        _sample_receipt({**candidate_grown, "action_portfolio_schema_versions": []}),
+    )
+    assert empty_list_result["ok"] is False
+    assert empty_list_result["rows"][0]["allowances"]["chars"] == 200
+    assert "chars grew by 1000; allowance is 200" in empty_list_result["rows"][0]["failures"]
+
+    valid_list_result = compare_cli_output_receipts(
+        _sample_receipt(base),
+        _sample_receipt(
+            {
+                **candidate_grown,
+                "action_portfolio_schema_versions": [ACTION_PORTFOLIO_SCHEMA_VERSION_V0],
+            }
+        ),
+    )
+    assert valid_list_result["ok"] is True
+    assert valid_list_result["rows"][0]["allowances"]["chars"] == 1600
+
+    for malformed in (
+        {ACTION_PORTFOLIO_SCHEMA_VERSION_V0: True},
+        {"unexpected": True},
+        {},
+        ACTION_PORTFOLIO_SCHEMA_VERSION_V0,
+        [123],
+    ):
+        with pytest.raises(TypeError, match="action_portfolio_schema_versions"):
+            compare_cli_output_receipts(
+                _sample_receipt(base),
+                _sample_receipt(
+                    {
+                        **candidate_grown,
+                        "action_portfolio_schema_versions": malformed,
+                    }
+                ),
+            )
+
+    for bad_field, bad_value in (
+        ("planning_horizon_schema_versions", {"quota_planning_horizon_v0": True}),
+        ("projection_envelope_schema_versions", {"loopx_projection_envelope_v0": True}),
+        ("json_shape_paths", {"$.ok": True}),
+        ("semantic_json_keys", {"ok": True}),
+    ):
+        with pytest.raises(TypeError, match=bad_field):
+            compare_cli_output_receipts(
+                _sample_receipt(base),
+                _sample_receipt({**base, bad_field: bad_value}),
+            )
