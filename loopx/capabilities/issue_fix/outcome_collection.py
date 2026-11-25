@@ -209,7 +209,6 @@ def _collect_feasibility_outcomes(
         candidates = lifecycle_by_issue.get((repo, issue_ref), [])
         if candidates:
             lifecycle_packet = max(candidates, key=_lifecycle_recency)
-            linked_lifecycle_ids.update(id(item) for item in candidates)
         try:
             projection = project_outcome(
                 goal_id=goal_id,
@@ -232,9 +231,14 @@ def _collect_feasibility_outcomes(
             warnings.append(f"skipped {safe_identity}: {safe_error}")
             continue
         if projection.get("ok") is True:
-            for item in _object_list(projection.get("issue_fix_outcomes")):
-                if isinstance(item, dict):
-                    outcomes.append(item)
+            projected_items = [
+                item
+                for item in _object_list(projection.get("issue_fix_outcomes"))
+                if isinstance(item, dict)
+            ]
+            if projected_items:
+                linked_lifecycle_ids.update(id(item) for item in candidates)
+                outcomes.extend(projected_items)
     return outcomes, linked_lifecycle_ids
 
 

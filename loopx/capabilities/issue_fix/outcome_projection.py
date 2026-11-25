@@ -268,6 +268,13 @@ def _reusable_knowledge(value: object) -> dict[str, object] | None:
     return compact
 
 
+def _optional_legacy_sequence(value: object) -> object:
+    # Preserve v0 compatibility where empty-string fields stood in for absent lists.
+    if value is None or (isinstance(value, str) and value == ""):
+        return []
+    return value
+
+
 def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
     if value is None:
         return {
@@ -304,19 +311,18 @@ def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
     if commit_ref and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{3,79}", commit_ref):
         raise ValueError("commit_ref must be a compact public-safe git reference")
     outputs: list[dict[str, str]] = []
-    raw_outputs = value.get("outputs")
-    if raw_outputs is not None:
-        if not isinstance(raw_outputs, Sequence) or isinstance(raw_outputs, (str, bytes)):
-            raise ValueError("delivery evidence outputs must be a list")
-        for index, item in enumerate(raw_outputs[:10]):
-            if not isinstance(item, Mapping):
-                raise ValueError(f"delivery evidence outputs[{index}] must be an object")
-            kind = _safe_text(item.get("kind"), field=f"outputs[{index}].kind", limit=60)
-            url = _safe_text(item.get("url"), field=f"outputs[{index}].url", limit=320)
-            if url and not url.startswith("https://"):
-                raise ValueError("delivery evidence output URLs must use https")
-            if kind or url:
-                outputs.append({"kind": kind or "artifact", "url": url})
+    raw_outputs = _optional_legacy_sequence(value.get("outputs"))
+    if not isinstance(raw_outputs, Sequence) or isinstance(raw_outputs, (str, bytes)):
+        raise ValueError("delivery evidence outputs must be a list")
+    for index, item in enumerate(raw_outputs[:10]):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"delivery evidence outputs[{index}] must be an object")
+        kind = _safe_text(item.get("kind"), field=f"outputs[{index}].kind", limit=60)
+        url = _safe_text(item.get("url"), field=f"outputs[{index}].url", limit=320)
+        if url and not url.startswith("https://"):
+            raise ValueError("delivery evidence output URLs must use https")
+        if kind or url:
+            outputs.append({"kind": kind or "artifact", "url": url})
     return {
         "provided": True,
         "outcome_status": outcome_status,
@@ -324,14 +330,19 @@ def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
         "validation_label": _safe_text(
             value.get("validation_label"), field="validation_label", limit=260
         ),
-        "changed_files": _repo_relative_files(value.get("changed_files")),
+        "changed_files": _repo_relative_files(
+            _optional_legacy_sequence(value.get("changed_files"))
+        ),
         "commit_ref": commit_ref or None,
         "repository_commit_evidence": _repository_commit_evidence(
             value.get("repository_commit_evidence")
         ),
         "outputs": outputs,
         "risks": _safe_text_list(
-            value.get("risks"), field="risks", limit=260, count_limit=10
+            _optional_legacy_sequence(value.get("risks")),
+            field="risks",
+            limit=260,
+            count_limit=10,
         ),
         "recorded_at": _safe_text(
             value.get("recorded_at"), field="recorded_at", limit=80
