@@ -14,7 +14,7 @@ from typing import Any
 
 # Keep the historical exports and caller patch points, but select the OS
 # transport only when used. Decisions and deadlines remain with the caller.
-_PROCESS_RUNTIME_EXPORTS = ("terminate_process_tree",)
+_PROCESS_RUNTIME_EXPORTS = ("no_console_creationflags", "terminate_process_tree")
 
 
 def __getattr__(name: str) -> Any:
@@ -195,6 +195,7 @@ def _direct_validation(argv: list[str], workspace: Path, timeout_seconds: int) -
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=os.name == "posix",
+        creationflags=_export("no_console_creationflags")(),
     ) as process:
         try:
             # Output is transient and never part of the public receipt.

@@ -127,6 +127,8 @@ def build_loopx_turn_command_validator(
         _plan: Mapping[str, Any],
         result: Mapping[str, Any],
     ) -> Mapping[str, Any]:
+        from ...extensions.process_runtime import no_console_creationflags
+
         try:
             completed = subprocess.run(
                 normalized,
@@ -137,6 +139,7 @@ def build_loopx_turn_command_validator(
                 stderr=subprocess.DEVNULL,
                 timeout=max(1.0, timeout_seconds),
                 check=False,
+                creationflags=no_console_creationflags(),
             )
         except (OSError, subprocess.TimeoutExpired):
             return {

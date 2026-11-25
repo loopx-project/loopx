@@ -701,6 +701,8 @@ class CliPlanningBatchBackend:
         }
 
     def _call(self, *args: str) -> dict[str, object]:
+        from ...extensions.process_runtime import no_console_creationflags
+
         process = subprocess.run(
             [*self.cli, *args],
             cwd=self.cwd,
@@ -708,6 +710,7 @@ class CliPlanningBatchBackend:
             text=True,
             capture_output=True,
             timeout=120,
+            creationflags=no_console_creationflags(),
         )
         try:
             result = json.loads(process.stdout)

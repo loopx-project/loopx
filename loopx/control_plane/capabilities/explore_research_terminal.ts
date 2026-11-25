@@ -56,6 +56,7 @@ export class ResearchTerminalEvidenceHost {
     }
     this.child = spawn(python, ["-m", "loopx.capabilities.explore.research_snapshot_host"], {
       stdio: ["pipe", "pipe", "pipe"], env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
+      windowsHide: true,
     });
     this.exited = new Promise(resolve => this.child!.once("close", () => resolve()));
     this.child.on("error", () => {}); this.child.stdin.on("error", () => {}); this.child.stderr.resume();

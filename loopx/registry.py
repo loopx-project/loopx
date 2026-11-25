@@ -144,6 +144,9 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
         }
 
     def run_git(*args: str, cwd: Path = probe_dir) -> subprocess.CompletedProcess[str] | None:
+        # Select the OS transport only when a probe actually launches a child.
+        from .extensions.process_runtime import no_console_creationflags
+
         # A probe that times out must retire everything it started. `run` kills
         # only the leader, so a Git that fanned out into a helper, a hook or a
         # remote would outlive the deadline on every later status read.
@@ -159,6 +162,7 @@ def _registry_git_probe(path: Path) -> dict[str, Any]:
                 start_new_session=os.name == "posix",
                 creationflags=(
                     int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
+                    | no_console_creationflags()
                     if os.name == "nt" else 0
                 ),
             )

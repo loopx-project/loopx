@@ -65,6 +65,7 @@ async function runLoopxCli(args: string[], directory: string): Promise<string> {
     cwd: directory,
     timeout: LOOPX_CLI_TIMEOUT_MS,
     maxBuffer: 8 * 1024 * 1024,
+    windowsHide: true,
   });
   return stdout;
 }
@@ -208,6 +209,7 @@ async function runLoopxTaskLeaseCli(
       cwd: directory,
       timeout: LOOPX_CLI_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
     });
     return { stdout, returncode: 0 };
   } catch (error) {

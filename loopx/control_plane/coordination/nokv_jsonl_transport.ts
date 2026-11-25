@@ -144,7 +144,7 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
     positiveSafeInteger(this.requestTimeoutMs, "NoKV helper request timeout");
     positiveSafeInteger(this.maxResponseBytes, "NoKV helper max response bytes");
     const factory = options.process_factory ?? ((command, args, spawnOptions) =>
-      spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
+      spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"], windowsHide: true }));
     const [command, ...args] = options.argv;
     try {
       this.child = factory(command!, args, {

@@ -19,6 +19,21 @@ _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 _PROCESS_GROUP_STOP_TIMEOUT_SECONDS = 1.0
 
 
+def no_console_creationflags() -> int:
+    """Creation flags that stop a console-subsystem child from opening a console.
+
+    Windows allocates a visible console host window for every console-subsystem
+    child of a parent that has no console, so short-lived helpers such as node,
+    python or git flash a black window on console-less hosts. CREATE_NO_WINDOW
+    suppresses that allocation without touching handle inheritance or stdio.
+    The constant only exists on Windows; every other platform reports 0, which
+    is subprocess's default and leaves behavior unchanged.
+    """
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def write_process_stdin_before_deadline(
     process: subprocess.Popen[str], text: str, *, deadline: float,
     cancel_and_reap: Callable[[], None],

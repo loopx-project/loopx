@@ -132,9 +132,12 @@ def _command() -> list[str]:
 
 
 def control(action: str, path: Path | None = None, **fields: Any) -> dict[str, Any]:
+    from .extensions.process_runtime import no_console_creationflags
+
     try:
         result = subprocess.run(_command(), input=json.dumps(_request(action, path or state_path(), **fields)),
-                                capture_output=True, text=True, encoding="utf-8", timeout=4, check=False)
+                                capture_output=True, text=True, encoding="utf-8", timeout=4, check=False,
+                                creationflags=no_console_creationflags())
     except (OSError, subprocess.TimeoutExpired, UnicodeError):
         raise UsageSettingsUnavailable() from None
     try:
@@ -278,5 +281,17 @@ def _detach(request: dict[str, Any], *, command: list[str] | None = None) -> Non
         kwargs["start_new_session"] = True
     child = subprocess.Popen(command or _command(), **kwargs)
     assert child.stdin is not None
-    child.stdin.write(json.dumps(request).encode())
-    child.stdin.close()
+    try:
+        child.stdin.write(json.dumps(request).encode())
+        child.stdin.close()
+    except OSError:
+        # A detached child that exits before reading (for example a suppressed
+        # or busy observer) closes its stdin pipe first; Windows then fails the
+        # parent's write with ERROR_NO_DATA ("The pipe is being closed", the
+        # 0x800700E8 detach failure in issue #9430). The observation is already
+        # best-effort, so the race must stay non-fatal instead of surfacing as
+        # a launch error. Closing the write end is idempotent enough for GC.
+        try:
+            child.stdin.close()
+        except OSError:
+            pass

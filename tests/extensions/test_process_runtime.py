@@ -879,3 +879,27 @@ def test_run_capped_process_retains_stderr_backwards_compatibly() -> None:
     assert result.returncode == 1
     assert result.stdout == b"ok"
     assert b"boom trace" in result.stderr
+
+
+def test_no_console_creationflags_is_zero_off_windows() -> None:
+    if os.name == "nt":
+        pytest.skip("host is Windows; covered by the emulated-non-Windows case")
+    assert process_runtime.no_console_creationflags() == 0
+
+
+def test_no_console_creationflags_reports_create_no_window_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", "nt")
+        patched.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        assert process_runtime.no_console_creationflags() == 0x08000000
+
+
+def test_no_console_creationflags_stays_zero_without_the_constant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", "nt")
+        patched.delattr(subprocess, "CREATE_NO_WINDOW", raising=False)
+        assert process_runtime.no_console_creationflags() == 0

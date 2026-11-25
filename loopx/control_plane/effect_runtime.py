@@ -1209,6 +1209,9 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> _RuntimeInfo:
         # is an unlinked temporary file, so it cannot deadlock the child on a
         # full pipe and it leaves no stale path behind.
         with tempfile.TemporaryFile() as startup_stderr:
+            # Keep cold import paths (loopx.contract) free of the process transport.
+            from ..extensions.process_runtime import no_console_creationflags
+
             try:
                 process = subprocess.Popen(
                     _runtime_command(
@@ -1218,6 +1221,7 @@ def _start_runtime(*, fingerprint: str, info_path: Path) -> _RuntimeInfo:
                     ),
                     env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=startup_stderr, start_new_session=os.name != "nt", close_fds=True,
+                    creationflags=no_console_creationflags(),
                     # The host outlives the command that started it. On Windows
                     # a live child whose working directory is the caller's
                     # directory keeps that directory (and its ancestors) from
