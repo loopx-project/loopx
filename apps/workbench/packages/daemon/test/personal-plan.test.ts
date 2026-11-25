@@ -64,7 +64,7 @@ test('calendar reads Lark RSVP and links and tolerates individual malformed even
     h.manager.lark.save({ enabled: true });
     const meeting = { ...event(), start_time: { datetime: '2026-11-13T20:20:00+08:00', timezone: 'Asia/Shanghai' },
       end_time: { datetime: '2026-11-13T21:20:00+08:00', timezone: 'Asia/Shanghai' }, self_rsvp_status: 'accept',
-      app_link: 'https://applink.larkoffice.com/calendar/event', vchat: { meeting_url: 'https://example.com/meeting' } };
+      app_link: 'https://applink.example.com/calendar/event', vchat: { meeting_url: 'https://example.com/meeting' } };
     const read = async (events: unknown[]) => new PersonalPlanService(h.manager, async () => JSON.stringify({ data: { events } })).calendar('hour', now);
     const result = await read([meeting, { ...meeting, event_id: 'declined', self_rsvp_status: 'decline' }, { event_id: 'bad' }]);
     assert.equal(result.state, 'ok'); assert.equal(result.items.length, 1);
