@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import IO
 
 import pytest
 
@@ -507,56 +508,25 @@ def test_rehearsal_symlink_directory_invocation(tmp_path: Path) -> None:
     linked_sh = linked_root / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.sh"
     linked_ts = linked_root / "examples" / "coordination" / "colima-pg16-e2e-rehearsal.ts"
 
-    sh_sim = subprocess.run(
-        [str(linked_sh), "--simulate"],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=linked_root,
-    )
+    sh_sim = subprocess.run([str(linked_sh), "--simulate"], capture_output=True, text=True, check=True, cwd=linked_root)
     sh_data = json.loads(sh_sim.stdout)
     assert sh_data["ok"] is True
     assert len(sh_data["steps"]) == 8
 
-    sh_bad_url = subprocess.run(
-        [str(linked_sh), "--database-url", "postgresql://invalid"],
-        capture_output=True,
-        text=True,
-        cwd=linked_root,
-    )
+    sh_bad_url = subprocess.run([str(linked_sh), "--database-url", "postgresql://invalid"], capture_output=True, text=True, cwd=linked_root)
     assert sh_bad_url.returncode != 0
 
     ts_sim = subprocess.run(
-        [
-            "node",
-            "--no-warnings",
-            "--experimental-sqlite",
-            "--experimental-strip-types",
-            str(linked_ts),
-            "--simulate",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=linked_root,
+        ["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types", str(linked_ts), "--simulate"],
+        capture_output=True, text=True, check=True, cwd=linked_root,
     )
     ts_data = json.loads(ts_sim.stdout)
     assert ts_data["ok"] is True
     assert len(ts_data["steps"]) == 8
 
     ts_bad_url = subprocess.run(
-        [
-            "node",
-            "--no-warnings",
-            "--experimental-sqlite",
-            "--experimental-strip-types",
-            str(linked_ts),
-            "--database-url",
-            "postgresql://invalid",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=linked_root,
+        ["node", "--no-warnings", "--experimental-sqlite", "--experimental-strip-types", str(linked_ts), "--database-url", "postgresql://invalid"],
+        capture_output=True, text=True, cwd=linked_root,
     )
     assert ts_bad_url.returncode != 0
 
@@ -574,24 +544,11 @@ def _docker_env() -> dict[str, str]:
 
 def _docker_images_ready() -> tuple[bool, str]:
     env = _docker_env()
-    info = subprocess.run(
-        ["docker", "info", "--format", "{{.OSType}}"],
-        capture_output=True,
-        text=True,
-        timeout=5,
-        env=env,
-    )
+    info = subprocess.run(["docker", "info", "--format", "{{.OSType}}"], capture_output=True, text=True, timeout=5, env=env)
     if info.returncode != 0 or info.stdout.strip() != "linux":
         return False, "Linux Docker daemon unavailable"
     for image in ("node:22-bookworm", "postgres:16-alpine"):
-        check = subprocess.run(
-            ["docker", "image", "inspect", image],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=env,
-        )
-        if check.returncode != 0:
+        if subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=5, env=env).returncode != 0:
             return False, f"Required cached Docker image missing: {image}"
     return True, ""
 
@@ -599,12 +556,7 @@ def _docker_images_ready() -> tuple[bool, str]:
 def _resolve_host_node_modules_root(repo_root: Path) -> Path | None:
     if (repo_root / "node_modules" / "pg" / "package.json").is_file():
         return repo_root
-    common = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"],
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    common = subprocess.run(["git", "-C", str(repo_root), "rev-parse", "--git-common-dir"], capture_output=True, text=True, timeout=5)
     if common.returncode == 0 and common.stdout.strip():
         raw_dir = Path(common.stdout.strip())
         resolved = raw_dir if raw_dir.is_absolute() else (repo_root / raw_dir).resolve()
@@ -613,12 +565,66 @@ def _resolve_host_node_modules_root(repo_root: Path) -> Path | None:
     return None
 
 
+def _resolve_node_pkg(nm_dir: Path, pkg_name: str, parent_dir: Path | None, parent_arc: str) -> tuple[str, Path] | None:
+    candidates: list[tuple[str, Path]] = []
+    if parent_dir is not None:
+        candidates.append((f"{parent_arc}/node_modules/{pkg_name}", parent_dir / "node_modules" / pkg_name))
+    candidates.append((pkg_name, nm_dir / pkg_name))
+    for arc_rel, candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if (resolved / "package.json").is_file():
+            return arc_rel, resolved
+    return None
+
+
+def _collect_runtime_node_packages(nm_dir: Path, root_pkg: str = "pg") -> dict[str, Path]:
+    pending: list[tuple[str, bool, Path | None, str]] = [(root_pkg, True, None, "")]
+    staged: dict[str, Path] = {}
+    seen_targets: set[tuple[str, bool]] = set()
+    while pending:
+        pkg_name, required, parent_dir, parent_arc = pending.pop(0)
+        found = _resolve_node_pkg(nm_dir, pkg_name, parent_dir, parent_arc)
+        if found is None:
+            if required:
+                raise AssertionError(f"Required npm package {pkg_name!r} missing or dangling under {nm_dir}")
+            continue
+        arc_rel, resolved = found
+        if (arc_rel, required) in seen_targets:
+            continue
+        seen_targets.add((arc_rel, required))
+        staged[arc_rel] = resolved
+        meta = json.loads((resolved / "package.json").read_text(encoding="utf-8"))
+        for dep in meta.get("dependencies") or {}:
+            pending.append((dep, True, resolved, arc_rel))
+        for dep in meta.get("optionalDependencies") or {}:
+            pending.append((dep, False, resolved, arc_rel))
+    return staged
+
+
+def _build_opt_loopx_tar(repo_root: Path, nm_root: Path, archive: IO[bytes]) -> None:
+    def _normalize(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
+        if "__pycache__" in ti.name.split("/") or ti.issym() or ti.islnk():
+            return None
+        ti.uid = ti.gid = 0
+        ti.uname = ti.gname = "root"
+        ti.mode = 0o755 if ti.isdir() or (ti.mode & 0o111) else 0o644
+        return ti
+
+    nm_dir = (nm_root / "node_modules").resolve(strict=True)
+    runtime_pkgs = _collect_runtime_node_packages(nm_dir, "pg")
+    with tarfile.open(fileobj=archive, mode="w", dereference=False) as tf:
+        for rel in ("package.json", "loopx/control_plane", "examples/coordination"):
+            tf.add((repo_root / rel).resolve(strict=True), arcname=f"loopx/{rel}", filter=_normalize)
+        tf.add(nm_dir, arcname="loopx/node_modules", recursive=False, filter=_normalize)
+        for arc_rel, resolved in runtime_pkgs.items():
+            tf.add(resolved, arcname=f"loopx/node_modules/{arc_rel}", filter=_normalize)
+
+
 def _run_node_container_with_opt_loopx(
-    docker_env: dict[str, str],
-    net_name: str,
-    repo_root: Path,
-    container_script: str,
-    env_vars: dict[str, str],
+    docker_env: dict[str, str], net_name: str, repo_root: Path, container_script: str, env_vars: dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
     env_args = [item for k, v in env_vars.items() for item in ("-e", f"{k}={v}")]
     probe = subprocess.run(
@@ -627,77 +633,33 @@ def _run_node_container_with_opt_loopx(
             "test", "-f", "/opt/loopx/node_modules/pg/package.json",
             "-a", "-f", "/opt/loopx/examples/coordination/remote-authority-service.ts",
         ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        env=docker_env,
+        capture_output=True, text=True, timeout=15, env=docker_env,
     )
     if probe.returncode == 0:
         return subprocess.run(
-            [
-                "docker", "run", "--rm", "-i", "--network", net_name,
-                "-v", f"{repo_root}:/opt/loopx:ro", "-w", "/opt/loopx",
-                *env_args, "node:22-bookworm", "bash", "-s",
-            ],
-            input=container_script,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            env=docker_env,
+            ["docker", "run", "--rm", "-i", "--network", net_name, "-v", f"{repo_root}:/opt/loopx:ro", "-w", "/opt/loopx", *env_args, "node:22-bookworm", "bash", "-s"],
+            input=container_script, capture_output=True, text=True, timeout=90, env=docker_env,
         )
 
     nm_root = _resolve_host_node_modules_root(repo_root)
     assert nm_root is not None, "Host node_modules/pg is required for container check"
     cid = subprocess.run(
-        [
-            "docker", "create", "-i", "--network", net_name, "-w", "/opt/loopx",
-            *env_args, "node:22-bookworm", "bash", "-s",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=docker_env,
+        ["docker", "create", "-i", "--network", net_name, "-w", "/opt/loopx", *env_args, "node:22-bookworm", "bash", "-s"],
+        check=True, capture_output=True, text=True, env=docker_env,
     ).stdout.strip()
     try:
-        def _normalize(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
-            if "__pycache__" in ti.name.split("/") or ti.issym() or ti.islnk():
-                return None
-            ti.uid = ti.gid = 0
-            ti.uname = ti.gname = "root"
-            ti.mode = 0o755 if ti.isdir() or (ti.mode & 0o111) else 0o644
-            return ti
-
         with tempfile.TemporaryFile() as archive:
-            with tarfile.open(fileobj=archive, mode="w", dereference=False) as tf:
-                for rel in ("package.json", "loopx/control_plane", "examples/coordination"):
-                    tf.add((repo_root / rel).resolve(), arcname=f"loopx/{rel}", filter=_normalize)
-                nm_dir = (nm_root / "node_modules").resolve()
-                tf.add(nm_dir, arcname="loopx/node_modules", recursive=False, filter=_normalize)
-                for entry in nm_dir.iterdir():
-                    if not entry.name.startswith("."):
-                        tf.add(entry.resolve(), arcname=f"loopx/node_modules/{entry.name}", filter=_normalize)
+            _build_opt_loopx_tar(repo_root, nm_root, archive)
             archive.seek(0)
-            subprocess.run(
-                ["docker", "cp", "-", f"{cid}:/opt"],
-                stdin=archive,
-                check=True,
-                capture_output=True,
-                env=docker_env,
-            )
+            subprocess.run(["docker", "cp", "-", f"{cid}:/opt"], stdin=archive, check=True, capture_output=True, env=docker_env)
         return subprocess.run(
-            ["docker", "start", "-a", "-i", cid],
-            input=container_script,
-            capture_output=True,
-            text=True,
-            timeout=90,
-            env=docker_env,
+            ["docker", "start", "-a", "-i", cid], input=container_script, capture_output=True, text=True, timeout=90, env=docker_env,
         )
     finally:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True, text=True, env=docker_env)
 
 
-def test_systemd_load_credential_nonroot_linux_isolation_and_snapshot() -> None:
-    """Verify non-root EACCES on raw 0600 root keys vs LoadCredential readback in Linux."""
+def _assert_nonroot_load_credential_snapshot(repo_root: Path) -> None:
     ready, reason = _docker_images_ready()
     if not ready:
         pytest.skip(reason)
@@ -769,73 +731,26 @@ import {PostgreSqlAuthorityStore} from "./loopx/control_plane/coordination/postg
 import {REMOTE_AUTHORITY_POLICY} from "./loopx/control_plane/coordination/remote_authority_policy.ts";
 import {materializeTodoRecordForSchema} from "./loopx/control_plane/coordination/todo_presentation.ts";
 
-const makeDb = (pool) => ({
-  connect: async () => {
-    const conn = await pool.connect();
-    return {
-      query: (sql, args) => conn.query(sql, args ? [...args] : undefined),
-      release: (err) => conn.release(err),
-    };
-  },
-});
-
+const makeDb = (pool) => ({connect: async () => {const c = await pool.connect(); return {query: (s, a) => c.query(s, a ? [...a] : undefined), release: (e) => c.release(e)};}});
 const adminPool = new Pool({connectionString: process.env.ADMIN_URL});
 try {
-  await setupPostgreSqlAuthoritySchemaAndRole({
-    database: makeDb(adminPool),
-    storeIdentity: process.env.STORE_ID,
-    runtimeRole: "loopx_app",
-  });
-  await adminPool.query(
-    `ALTER ROLE loopx_app LOGIN PASSWORD '${process.env.PG_APP_PW}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`,
-  );
+  await setupPostgreSqlAuthoritySchemaAndRole({database: makeDb(adminPool), storeIdentity: process.env.STORE_ID, runtimeRole: "loopx_app"});
+  await adminPool.query(`ALTER ROLE loopx_app LOGIN PASSWORD '${process.env.PG_APP_PW}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT`);
   await adminPool.query("GRANT CONNECT ON DATABASE postgres TO loopx_app");
-} finally {
-  await adminPool.end();
-}
-
+} finally {await adminPool.end();}
 const appPool = new Pool({connectionString: process.env.APP_URL});
 try {
-  const store = new PostgreSqlAuthorityStore(makeDb(appPool), {
-    tenant_id: "tenant-cred",
-    goal_id: "goal-cred",
-    expected_store_identity: process.env.STORE_ID,
-  });
-  const todo = materializeTodoRecordForSchema(
-    canonicalTodoDomainRecord({
-      schema_version: TODO_DOMAIN_ITEM_SCHEMA,
-      todo_id: "todo_cred_verify",
-      role: "agent",
-      status: "open",
-      done: false,
-      archive_state: "active",
-      text: "Verify systemd LoadCredential non-root readback",
-      priority: "P1",
-      task_class: "advancement_task",
-      required_write_scopes: ["todo_cred_verify/**"],
-    }, "cred verify todo domain"),
-    TODO_DOMAIN_READ_RECORD_SCHEMA,
-    "cred verify todo",
-  );
+  const store = new PostgreSqlAuthorityStore(makeDb(appPool), {tenant_id: "tenant-cred", goal_id: "goal-cred", expected_store_identity: process.env.STORE_ID});
+  const todo = materializeTodoRecordForSchema(canonicalTodoDomainRecord({
+    schema_version: TODO_DOMAIN_ITEM_SCHEMA, todo_id: "todo_cred_verify", role: "agent", status: "open", done: false, archive_state: "active",
+    text: "Verify systemd LoadCredential non-root readback", priority: "P1", task_class: "advancement_task", required_write_scopes: ["todo_cred_verify/**"],
+  }, "cred verify todo domain"), TODO_DOMAIN_READ_RECORD_SCHEMA, "cred verify todo");
   const res = await store.commitAuthority({
-    operation_id: "seed-systemd-cred-test",
-    expected_provider_revision: null,
-    next_projection: {
-      goal_id: "goal-cred",
-      handoff_mode: "hard_lease",
-      todos: [todo],
-      leases: [],
-      todo_read_model: coordinationTodoReadModel([todo], TODO_DOMAIN_READ_RECORD_SCHEMA),
-    },
-    events: [],
-    receipts: [],
+    operation_id: "seed-systemd-cred-test", expected_provider_revision: null, events: [], receipts: [],
+    next_projection: {goal_id: "goal-cred", handoff_mode: "hard_lease", todos: [todo], leases: [], todo_read_model: coordinationTodoReadModel([todo], TODO_DOMAIN_READ_RECORD_SCHEMA)},
   });
-  if (res.status !== "applied") {
-    throw new Error(`Seed failed: ${JSON.stringify(res)}`);
-  }
-} finally {
-  await appPool.end();
-}
+  if (res.status !== "applied") throw new Error(`Seed failed: ${JSON.stringify(res)}`);
+} finally {await appPool.end();}
 
 const policy = {
   schema_version: REMOTE_AUTHORITY_POLICY,
@@ -961,16 +876,10 @@ console.log(JSON.stringify({
 """
 
         res = _run_node_container_with_opt_loopx(
-            docker_env,
-            net_name,
-            REPO_ROOT,
-            container_script,
+            docker_env, net_name, repo_root, container_script,
             {"PG_HOST": pg_name, "PG_ADMIN_PW": pg_admin_pw, "PG_APP_PW": pg_app_pw},
         )
-        assert res.returncode == 0, (
-            f"Container verification failed (rc={res.returncode}):\n"
-            f"STDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
-        )
+        assert res.returncode == 0, f"Container verification failed (rc={res.returncode}):\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
         report = json.loads(res.stdout.strip().splitlines()[-1])
         assert report["raw_key_eacces_exit"] == 1
         assert report["service_uid"] == 1000
@@ -982,3 +891,35 @@ console.log(JSON.stringify({
     finally:
         subprocess.run(["docker", "rm", "-f", pg_name], capture_output=True, text=True, env=docker_env)
         subprocess.run(["docker", "network", "rm", net_name], capture_output=True, text=True, env=docker_env)
+
+
+def test_systemd_load_credential_nonroot_linux_isolation_and_snapshot() -> None:
+    """Verify non-root EACCES on raw 0600 root keys vs LoadCredential readback in Linux."""
+    _assert_nonroot_load_credential_snapshot(REPO_ROOT)
+
+
+def test_detached_worktree_staging_ignores_dangling_unrelated_link(tmp_path: Path) -> None:
+    """Verify detached worktree staging tolerates dangling/looping unrelated links and fails cleanly on missing pg deps."""
+    nm_root = _resolve_host_node_modules_root(REPO_ROOT)
+    assert nm_root is not None
+    wt = tmp_path / "detached-wt"
+    (wt / "loopx").mkdir(parents=True)
+    (wt / "examples").mkdir(parents=True)
+    (wt / "node_modules").mkdir()
+    (wt / "package.json").symlink_to(REPO_ROOT / "package.json")
+    (wt / "loopx" / "control_plane").symlink_to(REPO_ROOT / "loopx" / "control_plane")
+    (wt / "examples" / "coordination").symlink_to(REPO_ROOT / "examples" / "coordination")
+    for entry in (nm_root / "node_modules").iterdir():
+        if not entry.name.startswith("."):
+            (wt / "node_modules" / entry.name).symlink_to(entry.resolve())
+    (wt / "node_modules" / f"unused-local-link-{uuid.uuid4().hex[:6]}").symlink_to(tmp_path / "deleted-target")
+    (wt / "node_modules" / ".node_modules-loop").symlink_to(wt / "node_modules")
+    # Missing required transitive dependency must fail with explicit package name.
+    broken_nm = tmp_path / "broken_nm" / "node_modules"
+    broken_nm.mkdir(parents=True)
+    for entry in (nm_root / "node_modules").iterdir():
+        if not entry.name.startswith(".") and entry.name != "postgres-array":
+            (broken_nm / entry.name).symlink_to(entry.resolve())
+    with pytest.raises(AssertionError, match="postgres-array"):
+        _collect_runtime_node_packages(broken_nm, "pg")
+    _assert_nonroot_load_credential_snapshot(wt)
