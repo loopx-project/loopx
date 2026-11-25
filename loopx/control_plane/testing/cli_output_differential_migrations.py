@@ -412,28 +412,31 @@ def _complete_quota_source_migration(base: JsonObject, candidate: JsonObject) ->
         if variant
         else f"surface/quota_should_run/{scenario}/{output_format}"
     )
-    if not (
-        base.get("row_id") == candidate.get("row_id") == row
-        and base.get("surface_id") == candidate.get("surface_id") == "quota_should_run"
-        and base.get("variant_id") == candidate.get("variant_id")
-        and scenario == candidate.get("scenario")
-        and scenario in {"small", "crowded", "multi_agent"}
-        and (scenario == "small" if variant else True)
-        and output_format == candidate.get("format")
-        and output_format in formats
-        and (not variant or allowed_variant)
-        and base.get("qualification_policy") == candidate.get("qualification_policy") == policy
-        and base.get("output_contract_version") is None
-        and candidate.get("output_contract_version") == "loopx_turn_envelope_v1"
-        and tuple_field(base, "projection_envelope_schema_versions")
-        == (() if legacy else ("loopx_projection_envelope_v0",))
-        and tuple_field(candidate, "projection_envelope_schema_versions")
-        == ("loopx_projection_envelope_v0",)
-        and base.get("markdown_anchor")
-        == ("# LoopX Turn Envelope" if legacy else "# LoopX Quota Should Run")
-        and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
-        and isinstance(candidate_controls, dict)
-        and _matching_quota_controls(base, candidate)
+    if (
+        "source_schema" not in base_controls
+        or not (
+            base.get("row_id") == candidate.get("row_id") == row
+            and base.get("surface_id") == candidate.get("surface_id") == "quota_should_run"
+            and base.get("variant_id") == candidate.get("variant_id")
+            and scenario == candidate.get("scenario")
+            and scenario in {"small", "crowded", "multi_agent"}
+            and (scenario == "small" if variant else True)
+            and output_format == candidate.get("format")
+            and output_format in formats
+            and (not variant or allowed_variant)
+            and base.get("qualification_policy") == candidate.get("qualification_policy") == policy
+            and base.get("output_contract_version") is None
+            and candidate.get("output_contract_version") == "loopx_turn_envelope_v1"
+            and tuple_field(base, "projection_envelope_schema_versions")
+            == (() if legacy else ("loopx_projection_envelope_v0",))
+            and tuple_field(candidate, "projection_envelope_schema_versions")
+            == ("loopx_projection_envelope_v0",)
+            and base.get("markdown_anchor")
+            == ("# LoopX Turn Envelope" if legacy else "# LoopX Quota Should Run")
+            and candidate.get("markdown_anchor") == "# LoopX Turn Envelope"
+            and isinstance(candidate_controls, dict)
+            and _matching_quota_controls(base, candidate)
+        )
     ):
         return False
     return (
@@ -451,7 +454,7 @@ def _complete_quota_source_allowance(
     # Markdown carries every field. Absolute ceilings still apply. A v1 -> v1
     # change, altered control/material witness or unrelated row gets no waiver.
     base_controls = mapping_field(base, "quota_controls")
-    legacy = base_controls.get("source_schema") == "loopx_turn_envelope_v0"
+    legacy = base_controls["source_schema"] == "loopx_turn_envelope_v0"
     output_format = str(base.get("format") or "")
     scenario = str(base.get("scenario") or "")
     if legacy:

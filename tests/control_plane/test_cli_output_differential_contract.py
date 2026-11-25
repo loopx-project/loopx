@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import ast
+import copy
+import json
+import runpy
 from pathlib import Path
+from typing import Callable, cast
 
 import pytest
 
@@ -245,3 +249,94 @@ def test_action_portfolio_schema_migration_rejects_malformed_dict_and_enforces_l
                 _sample_receipt(base),
                 _sample_receipt({**base, bad_field: bad_value}),
             )
+
+
+def test_complete_quota_source_migration_requires_explicit_source_schema_key(
+    tmp_path: Path,
+) -> None:
+    from loopx.control_plane.testing.canary_harness import import_fixture_authority
+    from tests.control_plane import test_cli_output_budget as probe
+
+    runner = runpy.run_path(
+        str(REPO_ROOT / "examples/control_plane/cli-output-probe-runner.py")
+    )
+    project, runtime, registry, state = probe._write_fixture(tmp_path, probe.SCENARIOS[0])
+    import_fixture_authority(registry, probe.GOAL_ID)
+    command = probe._surface_commands(
+        project=project,
+        runtime=runtime,
+        registry_path=registry,
+        state_file=state,
+        output_format="json",
+    )["quota_should_run"]
+    code, text = probe._invoke_cli(command)
+    assert code == 0, text
+    source = json.loads(text)
+    assert isinstance(source, dict)
+    raw = {
+        key: value
+        for key, value in source.items()
+        if key not in {"schema_version", "contract_binding"}
+    }
+    goal_material_fn = cast(
+        Callable[[dict[str, object]], dict[str, object]],
+        runner["_quota_goal_material"],
+    )
+    observe_fn = cast(
+        Callable[..., dict[str, object]],
+        runner["_quota_control_observation"],
+    )
+    material = goal_material_fn(source)
+    before = observe_fn(raw, goal_state=material)
+    after = observe_fn(source, goal_state=material)
+    before_fields = before.get("field_sha256")
+    assert isinstance(before_fields, dict)
+    assert len(before_fields) == 19
+    assert before.get("controls_sha256") == after.get("controls_sha256")
+    assert "source_schema" in before and before["source_schema"] is None
+    assert after.get("source_schema") == "loopx_turn_envelope_v1"
+
+    base_row: dict[str, object] = {
+        **_sample_row(row_id="surface/quota_should_run/small/json"),
+        "surface_id": "quota_should_run",
+        "variant_id": None,
+        "scenario": "small",
+        "qualification_policy": "absolute_hot_path",
+        "chars": 1000,
+        "utf8_bytes": 1000,
+        "compact_payload_chars": 1000,
+        "lines": 1,
+        "semantic_json_keys": ["interaction_contract"],
+        "markdown_anchor": "# LoopX Quota Should Run",
+        "projection_envelope_schema_versions": ["loopx_projection_envelope_v0"],
+        "quota_controls": copy.deepcopy(before),
+    }
+    candidate_row: dict[str, object] = {
+        **copy.deepcopy(base_row),
+        "chars": 2500,
+        "utf8_bytes": 2500,
+        "compact_payload_chars": 2500,
+        "output_contract_version": "loopx_turn_envelope_v1",
+        "markdown_anchor": "# LoopX Turn Envelope",
+        "quota_controls": after,
+    }
+
+    explicit_null = compare_cli_output_receipts(
+        _sample_receipt(base_row),
+        _sample_receipt(candidate_row),
+    )
+    assert explicit_null["ok"] is True, explicit_null
+    assert explicit_null["rows"][0]["allowances"]["chars"] == 2048
+
+    missing_controls = copy.deepcopy(before)
+    del missing_controls["source_schema"]
+    missing_schema = compare_cli_output_receipts(
+        _sample_receipt({**base_row, "quota_controls": missing_controls}),
+        _sample_receipt(candidate_row),
+    )
+    assert missing_schema["ok"] is False, missing_schema
+    missing_row = missing_schema["rows"][0]
+    assert missing_row["allowances"]["chars"] == 64
+    assert "chars grew by 1500; allowance is 64" in missing_row["failures"]
+    assert "output_contract_version changed" in missing_row["failures"]
+    assert "markdown_anchor changed" in missing_row["failures"]
