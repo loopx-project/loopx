@@ -68,6 +68,8 @@ from .kanban_config import (
     _SHARED_REDACTION_PATTERNS as _SHARED_REDACTION_PATTERNS,
     _STRUCTURAL_ID_KEYS as _STRUCTURAL_ID_KEYS,
     _STRUCTURAL_RECORD_ID_PATTERN as _STRUCTURAL_RECORD_ID_PATTERN,
+    _coerce_mapping_tree as _coerce_mapping_tree,
+    _coerce_mapping_value as _coerce_mapping_value,
     _compact_text as _compact_text,
     _credential_safe_lark_values as _credential_safe_lark_values,
     _credential_safe_text as _credential_safe_text,
@@ -293,7 +295,7 @@ def lark_kanban_heartbeat(
 ) -> dict[str, object]:
     public_safe = _validate_sink_visibility(sink_visibility)
     commands: list[dict[str, object]] = []
-    parsed: object
+    parsed_mapping: dict[str, object] = {}
     if fixture is None:
         list_result = dict(
             cli_transport.run_command(
@@ -309,10 +311,12 @@ def lark_kanban_heartbeat(
                 commands=commands,
                 records=[],
             )
-        parsed = list_result.get("json") if execute_lark else {"data": {"fields": [], "data": []}}
-    else:
-        parsed = fixture
-    records = lark_record_rows(parsed if isinstance(parsed, dict) else {})
+        raw_parsed = list_result.get("json") if execute_lark else {"data": {"fields": [], "data": []}}
+        if isinstance(raw_parsed, Mapping):
+            parsed_mapping = _coerce_mapping_tree(raw_parsed)
+    elif isinstance(fixture, Mapping):
+        parsed_mapping = _coerce_mapping_tree(fixture)
+    records = lark_record_rows(parsed_mapping)
     task = choose_heartbeat_task(records, agent_id=agent_id)
     if task is None:
         return _heartbeat_payload(

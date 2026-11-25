@@ -260,6 +260,20 @@ _STRUCTURAL_ID_KEYS = frozenset({"id", "record_id", "record_ids"})
 _STRUCTURAL_RECORD_ID_PATTERN = re.compile(r"^rec[A-Za-z0-9_-]{6,}$")
 
 
+def _coerce_mapping_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _coerce_mapping_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coerce_mapping_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_coerce_mapping_value(item) for item in value)
+    return value
+
+
+def _coerce_mapping_tree(mapping: Mapping[str, object]) -> dict[str, object]:
+    return {str(key): _coerce_mapping_value(item) for key, item in mapping.items()}
+
+
 def _transform_lark_value(
     value: object,
     *,
@@ -272,7 +286,7 @@ def _transform_lark_value(
         if check_structural_id and preserve_external_id and _STRUCTURAL_RECORD_ID_PATTERN.fullmatch(value):
             return value
         return text_fn(value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {
             key_fn(key): _transform_lark_value(
                 item,
@@ -435,7 +449,7 @@ def read_lark_kanban_local_config(path: Path) -> dict[str, object]:
 def write_lark_kanban_local_config(path: Path, payload: Mapping[str, object]) -> None:
     config_path = path.expanduser()
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    to_write: dict[str, object] = dict(payload)
+    to_write: dict[str, object] = _coerce_mapping_tree(payload)
     to_write.pop("ok", None)
     to_write.pop("exists", None)
     to_write["schema_version"] = LARK_KANBAN_LOCAL_CONFIG_VERSION
@@ -489,16 +503,16 @@ def save_lark_kanban_board_config(
     payload: Mapping[str, object] = existing if existing.get("ok") else {}
     raw_board = payload.get("board")
     board: dict[str, object] = (
-        {str(key): value for key, value in raw_board.items()} if isinstance(raw_board, dict) else {}
+        _coerce_mapping_tree(raw_board) if isinstance(raw_board, Mapping) else {}
     )
     existing_views = board.get("view_ids")
     merged_views: dict[str, object] = (
-        {str(key): value for key, value in existing_views.items()}
-        if isinstance(existing_views, dict)
+        _coerce_mapping_tree(existing_views)
+        if isinstance(existing_views, Mapping)
         else {}
     )
     if view_ids:
-        merged_views.update(view_ids)
+        merged_views.update(_coerce_mapping_tree(view_ids))
     board.update(
         {
             "base_token": base_token,
@@ -518,7 +532,7 @@ def save_lark_kanban_board_config(
         {
             "schema_version": LARK_KANBAN_LOCAL_CONFIG_VERSION,
             "board": board,
-            "todo_records": raw_records if isinstance(raw_records, dict) else {},
+            "todo_records": _coerce_mapping_tree(raw_records) if isinstance(raw_records, Mapping) else {},
         },
     )
     return {
@@ -532,7 +546,7 @@ def save_lark_kanban_board_config(
 
 def lark_kanban_config_from_payload(payload: Mapping[str, object]) -> LarkKanbanConfig | None:
     board = payload.get("board")
-    if not isinstance(board, dict):
+    if not isinstance(board, Mapping):
         return None
     base_token = str(board.get("base_token") or "").strip()
     table_id = str(board.get("table_id") or "").strip()

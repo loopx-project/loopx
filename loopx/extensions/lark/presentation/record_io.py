@@ -39,7 +39,7 @@ def lark_record_rows(payload: Mapping[str, object]) -> list[dict[str, object]]:
 
 def todo_record_entries(parsed: object) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
-    payload: Mapping[str, object] = parsed if isinstance(parsed, dict) else {}
+    payload: Mapping[str, object] = parsed if isinstance(parsed, Mapping) else {}
     for record in lark_record_rows(payload):
         todo_id = str(record.get("LoopX Todo ID") or "").strip()
         goal_id = str(record.get("LoopX Goal ID") or "").strip()
@@ -50,11 +50,11 @@ def todo_record_entries(parsed: object) -> list[dict[str, str]]:
 
 
 def record_list_is_complete(parsed: object) -> bool:
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed, Mapping):
         return False
     raw_data = parsed.get("data")
-    data: object = raw_data if isinstance(raw_data, dict) else parsed
-    if not isinstance(data, dict):
+    data: object = raw_data if isinstance(raw_data, Mapping) else parsed
+    if not isinstance(data, Mapping):
         return False
     return (
         data.get("has_more") is False
@@ -63,11 +63,11 @@ def record_list_is_complete(parsed: object) -> bool:
 
 
 def todo_record_list_is_authoritative(parsed: object) -> bool:
-    if not record_list_is_complete(parsed) or not isinstance(parsed, dict):
+    if not record_list_is_complete(parsed) or not isinstance(parsed, Mapping):
         return False
     raw_data = parsed.get("data")
-    data: object = raw_data if isinstance(raw_data, dict) else parsed
-    if not isinstance(data, dict):
+    data: object = raw_data if isinstance(raw_data, Mapping) else parsed
+    if not isinstance(data, Mapping):
         return False
     fields = data.get("fields")
     rows = data.get("data")

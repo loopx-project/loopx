@@ -16,6 +16,7 @@ from .kanban_board import _extract_created_record_id, _schema_check_error
 from .kanban_config import (
     LARK_KANBAN_SYNC_PROJECTION_VERSION,
     LarkKanbanConfig,
+    _coerce_mapping_tree,
     _validate_sink_visibility,
     build_record_upsert_command,
 )
@@ -131,13 +132,14 @@ def sync_loopx_projection_to_lark_kanban(
     execute: bool = False,
     runner: cli_transport.CommandRunner = cli_transport.default_subprocess_runner,
 ) -> dict[str, object]:
-    if not isinstance(projection, dict):
+    if not isinstance(projection, Mapping):
         raise ValueError("projection must be a JSON object")
+    projection_dict = _coerce_mapping_tree(projection)
     rows_api = _projection_rows_api()
     public_safe = _validate_sink_visibility(sink_visibility)
-    resolved_source_id, namespace_warnings = rows_api.projection_namespace(projection, source_id)
+    resolved_source_id, namespace_warnings = rows_api.projection_namespace(projection_dict, source_id)
     resolved_goal_id, rows, warnings = rows_api.projection_rows_from_payload(
-        projection,
+        projection_dict,
         goal_id=goal_id,
         agent_id=agent_id,
         source_id=resolved_source_id,
@@ -150,7 +152,7 @@ def sync_loopx_projection_to_lark_kanban(
     complete_warnings: list[str] = []
     if reconcile_source:
         _, complete_rows, complete_warnings = rows_api.projection_rows_from_payload(
-            projection,
+            projection_dict,
             goal_id=goal_id,
             agent_id=None,
             source_id=resolved_source_id,

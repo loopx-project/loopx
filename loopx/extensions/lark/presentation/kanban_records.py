@@ -33,6 +33,7 @@ from .kanban_board import (
 from .kanban_config import (
     LARK_KANBAN_LOCAL_CONFIG_VERSION,
     LarkKanbanConfig,
+    _coerce_mapping_tree,
     _compact_text,
     _credential_safe_lark_values,
     _public_safe_lark_values,
@@ -91,28 +92,29 @@ def _lark_record_from_projection_block(
     public_safe: bool = False,
 ) -> dict[str, object]:
     rows_api = _projection_rows_api()
+    block_dict = block if isinstance(block, dict) else _coerce_mapping_tree(block)
     values = _lark_record_from_todo_block(
-        block,
+        block_dict,
         goal_id=goal_id,
         state_file=Path(f"{source_id}.projection"),
-        priority=str(block.get("priority") or "P2"),
+        priority=str(block_dict.get("priority") or "P2"),
     )
-    original_id = str(block.get("original_todo_id") or "")
+    original_id = str(block_dict.get("original_todo_id") or "")
     evidence_parts = [
-        str(block.get("evidence") or block.get("reason") or block.get("note") or "").strip(),
+        str(block_dict.get("evidence") or block_dict.get("reason") or block_dict.get("note") or "").strip(),
         f"source_id={source_id}",
     ]
     if original_id:
         evidence_parts.append(f"original_todo_id={original_id}")
-    evidence_parts.extend(rows_api.projection_lifecycle_parts(block, source_id=source_id))
+    evidence_parts.extend(rows_api.projection_lifecycle_parts(block_dict, source_id=source_id))
     evidence_parts = list(dict.fromkeys(part for part in evidence_parts if part))
-    lifecycle_state = rows_api.projection_lifecycle_state(block)
+    lifecycle_state = rows_api.projection_lifecycle_state(block_dict)
     default_handoff = f"Synced from LoopX projection source={source_id}"
     if lifecycle_state in {"superseded", "migrated", "retired"}:
         superseded_by = (
             ", ".join(
                 rows_api.projection_text_list(
-                    rows_api.projection_lifecycle_value(block, "superseded_by")
+                    rows_api.projection_lifecycle_value(block_dict, "superseded_by")
                 )
             )
             or "current projection row"
@@ -121,17 +123,17 @@ def _lark_record_from_projection_block(
     values.update(
         {
             "LoopX Goal ID": goal_id,
-            "LoopX Todo ID": str(block.get("todo_id") or ""),
+            "LoopX Todo ID": str(block_dict.get("todo_id") or ""),
             "Scope": _compact_text(
-                block.get("scope") or block.get("source_section") or f"projection_source={source_id}"
+                block_dict.get("scope") or block_dict.get("source_section") or f"projection_source={source_id}"
             ),
-            "Handoff": _compact_text(block.get("handoff") or default_handoff),
+            "Handoff": _compact_text(block_dict.get("handoff") or default_handoff),
             "Evidence": _compact_text("; ".join(evidence_parts)),
             "Run History": _compact_text(
                 "; ".join(
                     part
                     for part in (
-                        f"synced from LoopX projection source={source_id} status={block.get('status') or 'open'}",
+                        f"synced from LoopX projection source={source_id} status={block_dict.get('status') or 'open'}",
                         f"row_lifecycle={lifecycle_state}" if lifecycle_state else "",
                     )
                     if part
@@ -139,7 +141,7 @@ def _lark_record_from_projection_block(
             ),
         }
     )
-    values.update(issue_fix_surface.issue_fix_record_values(block, compact_text=_compact_text))
+    values.update(issue_fix_surface.issue_fix_record_values(block_dict, compact_text=_compact_text))
     return _sink_safe_lark_values(values, public_safe=public_safe)
 
 
@@ -260,7 +262,7 @@ def _load_lark_todo_record_map(
 
 def _todo_record_map_from_local_config(local: Mapping[str, object]) -> dict[str, str]:
     records = local.get("todo_records") if isinstance(local, Mapping) else None
-    if not isinstance(records, dict):
+    if not isinstance(records, Mapping):
         return {}
     return {
         str(key): str(value)
@@ -279,9 +281,9 @@ def _persist_lark_todo_record_map(
     if not config_path:
         return
     raw_board = local.get("board")
-    board: Mapping[str, object] = (
-        raw_board
-        if isinstance(raw_board, dict) and raw_board
+    board: dict[str, object] = (
+        _coerce_mapping_tree(raw_board)
+        if isinstance(raw_board, Mapping) and raw_board
         else {
             "base_token": config.base_token,
             "table_id": config.table_id,
