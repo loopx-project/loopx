@@ -602,14 +602,22 @@ Self-service:
      mkdir "$backup" &&
      mv ~/.local/bin/node "$backup/node" &&
      if ln -s "$node" ~/.local/bin/node &&
+        installed_ino="$(stat -f %i ~/.local/bin/node)" &&
         installed_raw="$("$HOME/.local/bin/node" --version)" &&
         installed_ver="$(node_trim "$installed_raw")" &&
         node_qualifies "$installed_ver"; then
        echo "Node launcher updated to $node (previous entry kept in $backup)"
      else
-       mv "$backup/node" ~/.local/bin/node &&
-       rmdir "$backup" &&
-       echo "The candidate failed the final check; the original launcher was restored." &&
+       # restore only when nothing else owns the entry: absent, or still
+       # this operation's own link; a later window's swap stays in place
+       if { [ ! -e ~/.local/bin/node ] && [ ! -L ~/.local/bin/node ]; } ||
+          [ "$(stat -f %i ~/.local/bin/node 2>/dev/null)" = "$installed_ino" ]; then
+         mv "$backup/node" ~/.local/bin/node &&
+         rmdir "$backup" &&
+         echo "The candidate failed the final check; the original launcher was restored."
+       else
+         echo "The candidate failed the final check; a newer launcher from another repair was kept, and the previous launcher is still in $backup."
+       fi &&
        exit 1
      fi
    else
@@ -656,11 +664,15 @@ Self-service:
    branch creates the link; its `ln` failure means another window's repair
    already created and qualified one, and that entry is left in place.
 
-   The backup is a directory created atomically: a second repair in the same
-   second (from this window or another one) fails its `mkdir` and stops with
-   the original launcher untouched, so concurrent attempts cannot overwrite
-   each other's only copy of the original. Each attempt owns one directory
-   holding the launcher it replaced.
+  The backup is a directory created atomically: a second repair in the same
+  second (from this window or another one) fails its `mkdir` and stops with
+  the original launcher untouched, so concurrent attempts cannot overwrite
+  each other's only copy of the original. Each attempt owns one directory
+  holding the launcher it replaced. The failure rollback respects the same
+  ownership: the original is moved back only while the entry is still absent
+  or still the failed attempt's own link — a later window's verified launcher
+  has a different inode and stays in place, and the failed attempt keeps its
+  backup for the manual restore below.
 
    To restore a backup, replace the launcher directory entry in the way that
    preserves the backup's own entry type, and never copy through the current
@@ -716,7 +728,8 @@ Self-service:
    prerelease above the floor all qualify — and Core's `probe_node()` then
    reads the same binary as `ready`. A blank `node_version` in Diagnostics
    is the App's numeric display gap, not a qualification failure: when the
-   repair printed its success line, press **Repair this version**; when it
+   repair printed its success line, or the message that a newer launcher
+   from another repair was kept, press **Repair this version**; when it
    printed the restore message, follow the earlier replace-or-restore steps
    instead. The environment reading refreshes every 30 seconds, or reopen
    the App. `node --version` in a terminal only verifies the interactive
