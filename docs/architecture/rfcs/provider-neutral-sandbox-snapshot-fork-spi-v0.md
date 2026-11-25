@@ -278,7 +278,7 @@ exhibits the following current boundary and gap toward E2B-style sandbox fork:
 | V1: Quiescence barrier for exact memory snapshot | `test_exact_memory_snapshot_requires_paused_quiescence_barrier` | Fails closed if `running`; succeeds with `EXACT` once `paused` | Synthetic SPI fixture; does not test Linux Firecracker KVM page flush |
 | V2: 1:1 suspend/resume vs. 1:N fork isolation, immutability & symlinks | `test_pause_resume_preserves_single_sandbox_identity_and_live_process_table`, `test_snapshot_fork_isolates_concurrent_counterfactual_branches_and_symlinks`, `test_sealed_snapshot_rejects_descriptor_mutation_and_isolates_readback_and_forks` | Same ID + PID across `pause`/`resume`; isolated CoW/RAM + `.pnpm`/`.venv` across parallel `fork`s; sealed snapshot isolated from descriptor edits | Does not prove E2B wall-clock latency or memory overhead in production |
 | V3: Authority/secret scrub & public boundary | `test_authority_and_secret_scrubbing_blocks_guest_lease_cloning_and_public_key_leak` | Scrubbed parent secrets; parent-lease reuse and `shared_prod` egress denied by `assess_replay_child_intent`; zero leaked keys | Requires real provider scrub audit before M1 live traffic |
-| V4: Fidelity filtering, live-restore equivalence & snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`, `test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemon`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT, un-restored, or memory-missing restores refuse `PROMOTED`, real restore preserves `EXACT`; `process_tree_quiesced` requires live healthy daemons and refuses lost/unhealthy-daemon promotion; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
+| V4: Fidelity filtering, live-restore equivalence & snapshot lifetime | `test_fidelity_degradation_filters_filesystem_only_provider_when_exact_process_state_required`, `test_single_branch_restore_verifies_live_state_and_rejects_unrestored_or_incomplete_exact_evidence`, `test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemon`, `test_process_tree_quiesced_promotes_healthy_cold_restart_with_changed_pid`, `test_microvm_memory_exact_requires_independent_memory_pages_capture`, `test_child_branch_release_preserves_pinned_snapshot_until_explicit_destroy` | Non-EXACT, un-restored, or `memory_pages`-missing states refuse/downgrade `EXACT` `PROMOTED`, real restore preserves `EXACT`; `process_tree_quiesced` requires live healthy daemons, allows healthy cold-restart PID changes under `SEMANTIC_EQUIVALENT`, and refuses lost/unhealthy daemons; released children leave snapshot pinned until explicit destroy | Live E2B/Firecracker qualification and packaged UI remain M1–M3 |
 
 ---
 
@@ -289,9 +289,10 @@ with [Benchmark Program §6.2](long-horizon-harness-benchmark-research-program-v
 and [`ReplayPointMetricsSnapshot`](../../../loopx/capabilities/explore/replay_runtime.py)
 (`wall_seconds`, `total_tokens`, `evaluator_runs`, `control_plane_requests`,
 `recovery_events`), plus typed failure codes (`quiescence_required`,
-`daemon_health_required`, `snapshot_missing`, `egress_violation`,
-`scrub_incomplete`, `capacity_exceeded`), enforced snapshot refcount TTLs, and
-read-only status readback via existing Explore/Benchmark run surfaces.
+`daemon_health_required`, `memory_capture_required`, `snapshot_missing`,
+`egress_violation`, `scrub_incomplete`, `capacity_exceeded`), enforced snapshot
+refcount TTLs, and read-only status readback via existing Explore/Benchmark run
+surfaces.
 
 ---
 
@@ -299,7 +300,7 @@ read-only status readback via existing Explore/Benchmark run surfaces.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Bilingual RFC + 9-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
+| M0 | Bilingual RFC + 11-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
 | M1 | First opt-in provider adapter (`firecracker_local` or `e2b_microvm`) behind extension package | M0 accepted; Linux/E2B test fixture pinned | Real pause/resume/snapshot/fork + scrub + symlink preservation + feature-off parity | Disable extension profile |
 | M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5-metric cost attribution + Tier-2 $\tau_B(s; a, a_0, \pi)$ evaluation via `counterfactual_runtime.py` & `#9211` §§5.5/6.2 | Stop pilot; retain negative/null data |
 | M3 | Optional product / benchmark promotion decision | M2 replicated net gain ($\Delta J(B \mid s_0) > 0$) + UI readback | Maintainer sign-off + packaged unavailability/recovery UX | Keep optional / retire adapter |
@@ -336,7 +337,7 @@ Dated execution records belong in [`ledger/README.md`](ledger/README.md) with
 | Evidence id | Claim | Baseline / environment | Artifact or command | Result | Privacy / validity boundary |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Audited 5-tuple gap vs. `checkpoint_artifacts.ts` & `replay_runtime.py` | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | Source inspection + [#8461](https://github.com/loopx-project/loopx/pull/8461), [#9209](https://github.com/loopx-project/loopx/pull/9209), [#9211](https://github.com/loopx-project/loopx/pull/9211) | Verified on canonical `main` owners | Read-only audit; superseded prototype `#8516` closed unmerged |
-| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation (9/9 M0 tests) | Synthetic SPI provider fixture only; no live hypervisor run |
+| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation (11/11 M0 tests) | Synthetic SPI provider fixture only; no live hypervisor run |
 
 ## Appendix D: Rejected alternatives
 

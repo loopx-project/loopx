@@ -188,16 +188,31 @@ def _digest_memory(
     )
 
 
+def _quiesced_services_summary(
+    processes: Mapping[int, str],
+    daemon_health: Mapping[str, bool],
+) -> dict[str, object]:
+    service_counts: dict[str, int] = {}
+    for proc_name in sorted(processes.values()):
+        service_counts[proc_name] = service_counts.get(proc_name, 0) + 1
+    ignored_keys = {str(pid) for pid in processes} | set(service_counts)
+    stable_probes = {
+        k: v for k, v in sorted(daemon_health.items()) if k not in ignored_keys
+    }
+    verified = _daemon_health_verified(processes, daemon_health)
+    return {
+        "services": service_counts,
+        "service_health": {name: True for name in service_counts} if verified else {},
+        "stable_probes": stable_probes,
+        "verified": verified,
+    }
+
+
 def _digest_daemon_health(
     processes: Mapping[int, str],
     daemon_health: Mapping[str, bool],
 ) -> str:
-    return _json_sha256(
-        {
-            "processes": {str(k): v for k, v in sorted(processes.items())},
-            "daemon_health": dict(sorted(daemon_health.items())),
-        }
-    )
+    return _json_sha256(_quiesced_services_summary(processes, daemon_health))
 
 
 def _daemon_health_verified(
@@ -231,8 +246,7 @@ def _digest_state(
     if include_env:
         payload["env"] = dict(sorted(env.items()))
     if include_daemons:
-        payload["processes"] = {str(k): v for k, v in sorted(processes.items())}
-        payload["daemon_health"] = dict(sorted(daemon_health.items()))
+        payload["daemons"] = _quiesced_services_summary(processes, daemon_health)
     if include_memory:
         payload["processes"] = {str(k): v for k, v in sorted(processes.items())}
         payload["memory_pages"] = dict(sorted(memory_pages.items()))
@@ -253,9 +267,7 @@ def _observe_sandbox_digest(
         sb.daemon_health,
     ):
         return None
-    if fidelity_tier == "microvm_memory_exact" and not (
-        sb.processes or sb.memory_pages
-    ):
+    if fidelity_tier == "microvm_memory_exact" and not sb.memory_pages:
         return None
     include_env = fidelity_tier != "filesystem_only"
     include_daemons = fidelity_tier == "process_tree_quiesced"
@@ -412,6 +424,11 @@ class InMemorySandboxSpiProvider:
                 "process_tree_quiesced snapshot requires verified live daemon health",
             )
         memory_copy = dict(sb.memory_pages) if include_mem else {}
+        if include_mem and not memory_copy:
+            raise SandboxSpiError(
+                "memory_capture_required",
+                "microvm_memory_exact snapshot requires readable memory_pages capture evidence",
+            )
         removed_keys = tuple(sorted(k for k in sb.env if k in scrub_keys))
         rootfs_digest = _digest_rootfs(scrubbed_rootfs, symlinks_copy)
         env_manifest_digest = _digest_env(scrubbed_env)
@@ -422,7 +439,7 @@ class InMemorySandboxSpiProvider:
         )
         memory_digest = (
             _digest_memory(processes_copy, memory_copy)
-            if include_mem and (processes_copy or memory_copy)
+            if include_mem and memory_copy
             else None
         )
         digest = _digest_state(
@@ -575,6 +592,17 @@ class SpiAgentStateStore:
         return child_key
 
 
+def _effective_replay_fidelity(
+    *,
+    fidelity_tier: str,
+    memory_pages: Mapping[str, str],
+) -> ReplayFidelity:
+    fidelity = _TIER_TO_REPLAY_FIDELITY[fidelity_tier]
+    if fidelity_tier == "microvm_memory_exact" and not memory_pages:
+        return ReplayFidelity.BEST_EFFORT
+    return fidelity
+
+
 @dataclass
 class SpiReplayAdapter:
     """Adapter bridging InMemorySandboxSpiProvider onto RiskAwareReplayChildAdapter."""
@@ -594,7 +622,10 @@ class SpiReplayAdapter:
             self.source_sandbox_id,
             target_tier=self.target_tier,
         )
-        fidelity = _TIER_TO_REPLAY_FIDELITY[desc.fidelity_tier]
+        fidelity = _effective_replay_fidelity(
+            fidelity_tier=desc.fidelity_tier,
+            memory_pages=desc.memory_pages,
+        )
         return AdapterStateLease(
             binding_key=_SnapshotRef(snapshot_id=desc.snapshot_id),
             fidelity=fidelity,
@@ -640,7 +671,7 @@ class SpiReplayAdapter:
                 EquivalenceCheck(f"{check_prefix}-daemon-liveness", daemon_ok),
             )
         else:
-            has_mem_evidence = bool(sb.processes or sb.memory_pages)
+            has_mem_evidence = bool(sealed.memory_pages and sb.memory_pages)
             mem_ok = (
                 live_alive
                 and has_mem_evidence
@@ -683,7 +714,10 @@ class SpiReplayAdapter:
             fidelity_tier=sealed.fidelity_tier,
         )
         return RestoreReceipt(
-            achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[sealed.fidelity_tier],
+            achieved_fidelity=_effective_replay_fidelity(
+                fidelity_tier=sealed.fidelity_tier,
+                memory_pages=sealed.memory_pages,
+            ),
             restored_projection_digest=observed_digest,
             prefix_reused=self.prefix_reused,
         )
@@ -732,7 +766,10 @@ class SpiReplayAdapter:
             concurrency=ReplayChildConcurrency.PROCESS_ISOLATED,
             worker_identity=isolation_id,
             receipt=RestoreReceipt(
-                achieved_fidelity=_TIER_TO_REPLAY_FIDELITY[sealed.fidelity_tier],
+                achieved_fidelity=_effective_replay_fidelity(
+                    fidelity_tier=sealed.fidelity_tier,
+                    memory_pages=sealed.memory_pages,
+                ),
                 restored_projection_digest=observed_digest,
                 prefix_reused=self.prefix_reused,
             ),
@@ -1689,3 +1726,349 @@ def test_process_tree_quiesced_requires_live_daemon_proof_and_refuses_lost_daemo
     )
     assert res_dg.decision == CounterfactualDecision.OBSERVED_ONLY
     _ = point_ok
+
+
+def test_process_tree_quiesced_promotes_healthy_cold_restart_with_changed_pid() -> (
+    None
+):
+    """Healthy cold daemon restart (PID 42 -> 77, same service/health) must promote under SEMANTIC_EQUIVALENT while EXACT stays strict."""
+
+    class _ColdRestartDaemonSpiProvider(InMemorySandboxSpiProvider):
+        def restore_snapshot(
+            self, sandbox_id: str, snapshot_id: str
+        ) -> SandboxInstanceState:
+            sb = super().restore_snapshot(sandbox_id, snapshot_id)
+            sb.processes = {77: "lsp-daemon"}
+            sb.daemon_health = {"lsp-daemon": True, "port:8443": True}
+            return sb
+
+        def fork(
+            self,
+            snapshot_id: str,
+            *,
+            child_id: str,
+            egress_policy_id: str = "isolated-offline",
+        ) -> tuple[SandboxInstanceState, str]:
+            child, isolation_id = super().fork(
+                snapshot_id, child_id=child_id, egress_policy_id=egress_policy_id
+            )
+            child.processes = {77: "lsp-daemon"}
+            child.daemon_health = {"lsp-daemon": True, "port:8443": True}
+            return child, isolation_id
+
+    cold_provider = _ColdRestartDaemonSpiProvider()
+    sb = cold_provider.create_sandbox(
+        sandbox_id="sb-cold",
+        rootfs={"src/app.py": "v1-cold"},
+        env={"MODE": "quiesced"},
+        processes={42: "lsp-daemon"},
+        daemon_health={"lsp-daemon": True, "port:8443": True},
+        memory_pages={"ephemeral_ram": "ignored-by-quiesced"},
+    )
+    cold_provider.pause("sb-cold")
+    adapter = SpiReplayAdapter(
+        cold_provider,
+        source_sandbox_id="sb-cold",
+        target_tier="process_tree_quiesced",
+    )
+    reg = ReplayPointRegistry()
+    store = SpiAgentStateStore()
+    trace, _ = _prepare_trace_point(
+        "trace-quiesced-cold", registry=reg, store=store, adapter=adapter
+    )
+    cold_provider.resume("sb-cold")
+    sb.rootfs["src/app.py"] = "v2-drifted"
+    sb.processes = {}
+    sb.daemon_health = {}
+
+    hyp = CounterfactualHypothesis(
+        hypothesis_id="hyp-cold-restart",
+        first_affected_event_id="trace-quiesced-cold-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.SEMANTIC_EQUIVALENT,
+    )
+    observed_pids: list[dict[int, str]] = []
+
+    def _check_cold(_req: Any) -> Mapping[str, bool]:
+        cur = cold_provider.sandboxes["sb-cold"]
+        observed_pids.append(dict(cur.processes))
+        return {
+            "fix": cur.rootfs["src/app.py"] == "v1-cold",
+            "guard": cur.processes == {77: "lsp-daemon"}
+            and cur.daemon_health.get("port:8443") is True,
+        }
+
+    promoted = run_counterfactual_suffix_replay(
+        reg,
+        trace=trace,
+        hypothesis=hyp,
+        candidate=CounterfactualCandidate("cold-pid-77", {"op": "restart"}),
+        execute_suffix=_check_cold,
+    )
+    assert promoted.decision == CounterfactualDecision.PROMOTED
+    assert observed_pids == [{77: "lsp-daemon"}]
+
+    child_group = run_counterfactual_child_group(
+        reg,
+        trace=trace,
+        hypothesis=hyp,
+        candidates=(
+            CounterfactualChildCandidate(
+                candidate=CounterfactualCandidate("child-cold-pid-77", {"op": "fork"}),
+                target_branch_id="branch-cold-pid-77",
+                execute_suffix=lambda ctx, _req: {
+                    "fix": True,
+                    "guard": (
+                        isinstance(ctx.adapter_child_key, _BranchRef)
+                        and cold_provider.sandboxes[
+                            ctx.adapter_child_key.branch_sandbox_id
+                        ].processes
+                        == {77: "lsp-daemon"}
+                    ),
+                },
+            ),
+        ),
+    )
+    assert child_group.candidates[0].replay_result is not None
+    assert (
+        child_group.candidates[0].replay_result.decision
+        == CounterfactualDecision.PROMOTED
+    )
+
+    # Exact memory tier still refuses changed PID identity (42 -> 77).
+    exact_provider = _ColdRestartDaemonSpiProvider()
+    sb_exact = exact_provider.create_sandbox(
+        sandbox_id="sb-exact-pid",
+        rootfs={"src/app.py": "v1"},
+        env={"MODE": "exact"},
+        processes={42: "lsp-daemon"},
+        daemon_health={"lsp-daemon": True, "port:8443": True},
+        memory_pages={"heap": "warm-pages"},
+    )
+    exact_provider.pause("sb-exact-pid")
+    exact_reg = ReplayPointRegistry()
+    exact_store = SpiAgentStateStore()
+    trace_exact, _ = _prepare_trace_point(
+        "trace-exact-pid",
+        registry=exact_reg,
+        store=exact_store,
+        adapter=SpiReplayAdapter(
+            exact_provider,
+            source_sandbox_id="sb-exact-pid",
+            target_tier="microvm_memory_exact",
+        ),
+    )
+    exact_provider.resume("sb-exact-pid")
+    sb_exact.processes = {42: "lsp-daemon"}
+    exact_suffix_called = False
+
+    def _never_exact(_req: Any) -> Mapping[str, bool]:
+        nonlocal exact_suffix_called
+        exact_suffix_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(ValueError, match="exact replay requires equal"):
+        run_counterfactual_suffix_replay(
+            exact_reg,
+            trace=trace_exact,
+            hypothesis=CounterfactualHypothesis(
+                hypothesis_id="hyp-exact-pid",
+                first_affected_event_id="trace-exact-pid-evt-2-fail",
+                first_affected_sequence=2,
+                fix_set=(ValidationTarget("fix", baseline_passed=False),),
+                guard_set=(ValidationTarget("guard", baseline_passed=True),),
+                minimum_fidelity=ReplayFidelity.EXACT,
+            ),
+            candidate=CounterfactualCandidate("exact-pid-change", {"op": "restart"}),
+            execute_suffix=_never_exact,
+        )
+    assert exact_suffix_called is False
+
+
+def test_microvm_memory_exact_requires_independent_memory_pages_capture() -> None:
+    """Capturing or validating EXACT with workspace+processes but zero memory_pages must fail or downgrade."""
+    # 1) Reference provider refuses microvm_memory_exact snapshot with empty memory_pages.
+    strict_provider = InMemorySandboxSpiProvider()
+    strict_provider.create_sandbox(
+        sandbox_id="sb-no-pages",
+        rootfs={"src/app.py": "v1"},
+        env={"MODE": "exact"},
+        processes={42: "lsp-daemon"},
+        memory_pages={},
+    )
+    strict_provider.pause("sb-no-pages")
+    with pytest.raises(SandboxSpiError, match="memory_capture_required"):
+        strict_provider.snapshot("sb-no-pages", target_tier="microvm_memory_exact")
+
+    # 2) Even if a provider returns an empty-memory descriptor claiming microvm_memory_exact,
+    # adapter capture truthfully downgrades below EXACT and equivalence refuses EXACT promotion.
+    class _ZeroPageExactProvider(InMemorySandboxSpiProvider):
+        def snapshot(
+            self,
+            sandbox_id: str,
+            *,
+            target_tier: str,
+            scrub_keys: tuple[str, ...] = (
+                "LOOPX_LEASE_KEY",
+                "LOOPX_CLAIM_OP_ID",
+                "CLOUD_API_TOKEN",
+            ),
+        ) -> SandboxSnapshotDescriptor:
+            sb = self.sandboxes[sandbox_id]
+            if target_tier == "microvm_memory_exact" and not sb.memory_pages:
+                self._seq += 1
+                snap_id = f"snap-{self._seq:04d}"
+                processes_copy = dict(sb.processes)
+                daemon_health_copy = dict(sb.daemon_health)
+                scrubbed_env = {k: v for k, v in sb.env.items() if k not in scrub_keys}
+                scrubbed_rootfs = dict(sb.rootfs)
+                symlinks_copy = dict(sb.symlinks)
+                digest = _digest_state(
+                    rootfs=scrubbed_rootfs,
+                    symlinks=symlinks_copy,
+                    env=scrubbed_env,
+                    processes=processes_copy,
+                    memory_pages={},
+                    daemon_health=daemon_health_copy,
+                    include_env=True,
+                    include_daemons=False,
+                    include_memory=True,
+                )
+                sealed = _SealedSnapshot(
+                    snapshot_id=snap_id,
+                    parent_sandbox_id=sandbox_id,
+                    fidelity_tier=target_tier,
+                    rootfs=scrubbed_rootfs,
+                    symlinks=symlinks_copy,
+                    env=scrubbed_env,
+                    processes=processes_copy,
+                    memory_pages={},
+                    daemon_health=daemon_health_copy,
+                    scrubbed_keys=(),
+                    rootfs_digest=_digest_rootfs(scrubbed_rootfs, symlinks_copy),
+                    env_manifest_digest=_digest_env(scrubbed_env),
+                    daemon_health_digest=None,
+                    memory_digest=None,
+                    digest=digest,
+                    refcount=1,
+                )
+                self._sealed_snapshots[snap_id] = sealed
+                desc = _descriptor_from_sealed(sealed)
+                self.snapshots[snap_id] = desc
+                return desc
+            return super().snapshot(
+                sandbox_id, target_tier=target_tier, scrub_keys=scrub_keys
+            )
+
+    zero_provider = _ZeroPageExactProvider()
+    zero_provider.create_sandbox(
+        sandbox_id="sb-zero-page",
+        rootfs={"src/app.py": "v1"},
+        env={"MODE": "exact"},
+        processes={42: "lsp-daemon"},
+        daemon_health={"lsp-daemon": True},
+        memory_pages={},
+    )
+    zero_provider.pause("sb-zero-page")
+    zero_adapter = SpiReplayAdapter(
+        zero_provider,
+        source_sandbox_id="sb-zero-page",
+        target_tier="microvm_memory_exact",
+    )
+    zero_reg = ReplayPointRegistry()
+    zero_store = SpiAgentStateStore()
+    trace_zero, pt_zero = _prepare_trace_point(
+        "trace-zero-pages",
+        registry=zero_reg,
+        store=zero_store,
+        adapter=zero_adapter,
+    )
+    assert pt_zero.fidelity != ReplayFidelity.EXACT
+    res_downgraded = run_counterfactual_suffix_replay(
+        zero_reg,
+        trace=trace_zero,
+        hypothesis=CounterfactualHypothesis(
+            hypothesis_id="hyp-zero-pages",
+            first_affected_event_id="trace-zero-pages-evt-2-fail",
+            first_affected_sequence=2,
+            fix_set=(ValidationTarget("fix", baseline_passed=False),),
+            guard_set=(ValidationTarget("guard", baseline_passed=True),),
+            minimum_fidelity=ReplayFidelity.EXACT,
+        ),
+        candidate=CounterfactualCandidate("zero-pages", {"op": "noop"}),
+        execute_suffix=lambda _req: {"fix": True, "guard": True},
+    )
+    assert res_downgraded.decision == CounterfactualDecision.OBSERVED_ONLY
+
+    # Direct equivalence verification against a zero-page sealed snapshot also fails closed.
+    eq_report = zero_adapter.validate_replay_equivalence(
+        _SnapshotRef(snapshot_id=next(iter(zero_provider.snapshots))),
+        RestoreReceipt(
+            achieved_fidelity=ReplayFidelity.EXACT,
+            restored_projection_digest=None,
+        ),
+    )
+    assert eq_report.equivalent is False
+    assert any(
+        c.check_id == "sandbox-process-memory" and not c.passed
+        for c in eq_report.checks
+    )
+    # And forcing an EXACT lease onto a zero-page snapshot still refuses promotion.
+    forced_reg = ReplayPointRegistry()
+
+    class _ForcedExactAdapter(SpiReplayAdapter):
+        def capture_replay_state(
+            self, request: CaptureReplayStateRequest
+        ) -> AdapterStateLease:
+            lease = super().capture_replay_state(request)
+            return AdapterStateLease(
+                binding_key=lease.binding_key,
+                fidelity=ReplayFidelity.EXACT,
+                projection_digest=lease.projection_digest,
+            )
+
+        def restore_replay_state(
+            self, binding_key: object, request: RestoreReplayStateRequest
+        ) -> RestoreReceipt:
+            receipt = super().restore_replay_state(binding_key, request)
+            return RestoreReceipt(
+                achieved_fidelity=ReplayFidelity.EXACT,
+                restored_projection_digest=receipt.restored_projection_digest,
+                prefix_reused=receipt.prefix_reused,
+            )
+
+    forced_trace, _ = _prepare_trace_point(
+        "trace-forced-zero",
+        registry=forced_reg,
+        store=zero_store,
+        adapter=_ForcedExactAdapter(
+            zero_provider,
+            source_sandbox_id="sb-zero-page",
+            target_tier="microvm_memory_exact",
+        ),
+    )
+    forced_called = False
+
+    def _never_forced(_req: Any) -> Mapping[str, bool]:
+        nonlocal forced_called
+        forced_called = True
+        return {"fix": True, "guard": True}
+
+    with pytest.raises(ValueError, match="exact replay requires equal"):
+        run_counterfactual_suffix_replay(
+            forced_reg,
+            trace=forced_trace,
+            hypothesis=CounterfactualHypothesis(
+                hypothesis_id="hyp-forced-zero",
+                first_affected_event_id="trace-forced-zero-evt-2-fail",
+                first_affected_sequence=2,
+                fix_set=(ValidationTarget("fix", baseline_passed=False),),
+                guard_set=(ValidationTarget("guard", baseline_passed=True),),
+                minimum_fidelity=ReplayFidelity.EXACT,
+            ),
+            candidate=CounterfactualCandidate("forced-zero", {"op": "noop"}),
+            execute_suffix=_never_forced,
+        )
+    assert forced_called is False
