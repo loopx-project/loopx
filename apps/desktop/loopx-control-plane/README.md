@@ -706,10 +706,25 @@ Self-service:
    To restore a backup, replace the launcher directory entry in the way that
    preserves the backup's own entry type, and never copy through the current
    link — `cp` would follow it and rewrite the supported Node binary that
-   other tools share. A missing launcher is a recoverable state too: an
-   interrupted repair leaves only the backup, and `rm -f` accepts that.
+   other tools share. The restore takes the same lock as the repair below,
+   so it stops while a repair is running and cannot replace a launcher that
+   another window is still checking; the same ps-confirmed manual removal
+   applies if a lock was left by an interrupted repair. A missing launcher
+   is a recoverable state too: an interrupted repair leaves only the
+   backup, and `rm -f` accepts that.
 
    ```bash
+   (
+   mkdir -p ~/.local/bin &&
+   lock=~/.local/bin/.node-loopx-repair &&
+   if mkdir "$lock" 2>/dev/null; then
+     lock_ino="$(stat -f %i "$lock")" &&
+     trap 'if [ "$(stat -f %i "$lock" 2>/dev/null)" = "$lock_ino" ]; then rm -rf "$lock"; fi' EXIT
+   else
+     echo "Another repair is in progress; nothing was changed." &&
+     echo "If no repair is actually running, remove $lock by hand and run this again." &&
+     exit 1
+   fi &&
    newest=$(ls -td ~/.local/bin/node.before-loopx.* 2>/dev/null | head -1) &&
    [ -n "$newest" ] &&
    staged=~/.local/bin/node.restored."$(date +%Y%m%d-%H%M%S)" &&
@@ -723,6 +738,7 @@ Self-service:
    rm -f ~/.local/bin/node &&
    mv "$staged" ~/.local/bin/node &&
    shasum ~/.local/bin/node
+   )
    ```
 
    The restore builds the restored entry beside the launcher first, so a
