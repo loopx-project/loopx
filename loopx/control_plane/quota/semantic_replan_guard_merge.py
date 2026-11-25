@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
+import json
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from pathlib import Path
 
 from ...file_lock import exclusive_cross_runtime_file_lock
@@ -14,10 +14,9 @@ from ...rollout_event_log import (
     load_rollout_events,
     rollout_event_log_path,
 )
+from ..effect_runtime import effect_runtime_result
 from ..todos.contract import normalize_todo_id, normalize_todo_replan_obligation_id
 from ..work_items.autonomous_replan_obligation import (
-    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION,
-    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID,
     AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION,
 )
 from .error_codes import (
@@ -39,97 +38,50 @@ SEMANTIC_REPLAN_CAPABILITY_FIELDS = (
 SEMANTIC_REPLAN_COMPANION_FIELDS = (
     SEMANTIC_REPLAN_REVIEW_FIELDS + SEMANTIC_REPLAN_CAPABILITY_FIELDS
 )
-
-_BARE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_CAPABILITY_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
-_CAPABILITY_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
-_DEFAULT_STOP_CONDITION_SHA256 = hashlib.sha256(
-    AUTONOMOUS_REPLAN_DEFAULT_STOP_CONDITION.encode("utf-8")
-).hexdigest()
+_SEMANTIC_REPLAN_GUARD_FIELDS = (
+    "semantic_replan_obligation_id",
+    *SEMANTIC_REPLAN_COMPANION_FIELDS,
+)
 
 
 def _non_empty_str(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def _is_valid_capability_guard_details(details: Mapping[str, object]) -> bool:
-    cap_id = details.get("semantic_replan_capability_id")
-    gap_id = details.get("semantic_replan_gap_id")
-    frontier = details.get("semantic_replan_frontier_revision")
-    return (
-        isinstance(cap_id, str)
-        and bool(_CAPABILITY_ID_RE.match(cap_id))
-        and isinstance(gap_id, str)
-        and bool(_CAPABILITY_REF_RE.match(gap_id))
-        and isinstance(frontier, str)
-        and bool(_CAPABILITY_REF_RE.match(frontier))
+@lru_cache(maxsize=512)
+def _ts_semantic_replan_guard_valid(guard_json: str) -> bool:
+    """Validate guard fields through the single authoritative TypeScript owner."""
+
+    result = effect_runtime_result(
+        "quota.semantic_replan_guard.validate",
+        {"details": json.loads(guard_json)},
     )
+    valid = result.get("valid") if isinstance(result, Mapping) else None
+    if not isinstance(valid, bool):
+        raise TypeError("TypeScript semantic replan guard validation shape mismatch")
+    return valid
 
 
 def is_valid_semantic_replan_guard_details(
     details: Mapping[str, object],
 ) -> bool:
-    """Mirror TS ``projectSemanticReplanGuard`` validation without changing owner authority."""
+    """Delegate semantic replan guard validation to TS ``projectSemanticReplanGuard``."""
 
-    has_cap = any(field in details for field in SEMANTIC_REPLAN_CAPABILITY_FIELDS)
-    has_review = any(field in details for field in SEMANTIC_REPLAN_REVIEW_FIELDS)
-    if has_cap and has_review:
+    guard_fields = {
+        field: details[field]
+        for field in _SEMANTIC_REPLAN_GUARD_FIELDS
+        if field in details
+    }
+    if not guard_fields or (
+        len(guard_fields) == 1
+        and guard_fields.get("semantic_replan_obligation_id") in ("", None)
+    ):
+        return True
+    try:
+        guard_json = json.dumps(guard_fields, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError):
         return False
-    if "semantic_replan_obligation_id" not in details:
-        return not has_cap and not has_review
-    raw_obligation = details.get("semantic_replan_obligation_id")
-    if raw_obligation in ("", None):
-        return not has_cap and not has_review
-    if normalize_todo_replan_obligation_id(raw_obligation) is None:
-        return False
-    if has_review:
-        if _non_empty_str(details.get("semantic_replan_review_kind")) is None:
-            return False
-        has_stop = "semantic_replan_review_stop_condition" in details
-        has_digest = "semantic_replan_review_stop_condition_sha256" in details
-        has_contract = "semantic_replan_review_stop_contract_id" in details
-        stop = (
-            _non_empty_str(details.get("semantic_replan_review_stop_condition"))
-            if has_stop
-            else None
-        )
-        if has_stop and stop is None:
-            return False
-        stop_digest = (
-            _non_empty_str(details.get("semantic_replan_review_stop_condition_sha256"))
-            if has_digest
-            else None
-        )
-        if has_digest and stop_digest is None:
-            return False
-        stop_contract_id = (
-            _non_empty_str(details.get("semantic_replan_review_stop_contract_id"))
-            if has_contract
-            else None
-        )
-        if has_contract and stop_contract_id is None:
-            return False
-        if stop is None and stop_digest is None:
-            return False
-        if stop is not None and len(stop) > 240:
-            return False
-        if stop_digest is not None and not _BARE_SHA256_RE.match(stop_digest):
-            return False
-        if stop_contract_id is not None and (
-            stop_contract_id != AUTONOMOUS_REPLAN_DEFAULT_STOP_CONTRACT_ID
-            or stop_digest != _DEFAULT_STOP_CONDITION_SHA256
-        ):
-            return False
-        if (
-            stop is not None
-            and stop_digest is not None
-            and stop != AUTONOMOUS_REPLAN_DIGEST_COMPATIBILITY_STOP_CONDITION
-            and hashlib.sha256(stop.encode("utf-8")).hexdigest() != stop_digest
-        ):
-            return False
-    if has_cap and not _is_valid_capability_guard_details(details):
-        return False
-    return True
+    return _ts_semantic_replan_guard_valid(guard_json)
 
 
 def strip_semantic_replan_companions(

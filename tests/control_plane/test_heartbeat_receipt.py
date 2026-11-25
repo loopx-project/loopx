@@ -1820,4 +1820,126 @@ def test_rotated_identity_upgrade_with_insufficient_proof_fails_closed(
     assert rc == 1
     assert failed["state"] == "blocked_health"
     assert log_path.read_bytes() == before
-    assert log_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize(
+    ("astral_chars", "expect_recoverable"),
+    [(120, True), (121, False)],
+    ids=["utf16-240", "utf16-242"],
+)
+def test_cli_rotated_stop_condition_utf16_boundary_matches_ts_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+    astral_chars: int,
+    expect_recoverable: bool,
+) -> None:
+    from loopx.control_plane.quota.heartbeat_receipt import (
+        repair_orphaned_identity_upgrade_heartbeat_receipt,
+    )
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID as actor,
+        GOAL_ID as goal,
+        TODO_ID as work,
+        _initialize_fixture_authority,
+        _run_cli,
+        _write_fixture,
+    )
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    turn = f"rotated-utf16-{provider}-{astral_chars * 2}"
+    rotated_obligation = "replan-2222222222222222"
+    stop_clause = "\U00020000" * astral_chars
+    assert len(stop_clause) == astral_chars
+    assert len(stop_clause.encode("utf-16-le")) // 2 == astral_chars * 2
+
+    _, bad_upgrade, expected_effect_id = (
+        _append_legacy_main_orphaned_identity_upgrade_receipt(
+            runtime,
+            goal_id=goal,
+            agent_id=actor,
+            todo_id=work,
+            turn_instance_id=turn,
+            companion_details=_digest_review_details("replan-1111111111111111"),
+            upgrade_overlay={
+                "semantic_replan_obligation_id": rotated_obligation,
+                "semantic_replan_review_kind": "goal_outcome_uncovered",
+                "semantic_replan_review_stop_condition": stop_clause,
+            },
+        )
+    )
+    log_path = rollout_event_log_path(runtime, goal)
+    before = log_path.read_bytes()
+    assert len(load_rollout_events(log_path)) == 2
+
+    guard_args = (
+        "quota",
+        "should-run",
+        "--codex-app",
+        "--goal-id",
+        goal,
+        "--agent-id",
+        actor,
+        "--todo-id",
+        work,
+        "--turn-instance-id",
+        turn,
+    )
+
+    if expect_recoverable:
+        rc1, retry1 = _run_cli(registry, runtime, *guard_args)
+        assert rc1 == 0, retry1
+        assert retry1["state"] == "eligible"
+        assert retry1["heartbeat_receipt"]["status"] == "upgraded"
+        assert (
+            retry1["heartbeat_receipt"]["settlement_identity"]["effect_id"]
+            == expected_effect_id
+        )
+        assert len(load_rollout_events(log_path)) == 3
+        readback = read_heartbeat_settlement(
+            runtime,
+            goal_id=goal,
+            agent_id=actor,
+            todo_id=work,
+            turn_instance_id=turn,
+            registry_path=registry,
+        )
+        assert readback is not None
+        assert readback.identity.failure is None
+        assert readback.admission_event_id == bad_upgrade["event_id"]
+        assert readback.semantic_replan_guard == {
+            "schema_version": "semantic_replan_guard_v0",
+            "scope": "turn_guard",
+            "selected_obligation_id": rotated_obligation,
+            "selected_review_source": {
+                "kind": "goal_outcome_uncovered",
+                "stop_condition": stop_clause,
+            },
+        }
+        bytes_after_r1 = log_path.read_bytes()
+        rc2, retry2 = _run_cli(registry, runtime, *guard_args)
+        assert rc2 == 0, retry2
+        assert retry2["heartbeat_receipt"]["status"] == "replayed"
+        assert log_path.read_bytes() == bytes_after_r1
+    else:
+        effective, repaired = repair_orphaned_identity_upgrade_heartbeat_receipt(
+            runtime,
+            goal_id=goal,
+            agent_id=actor,
+            turn_instance_id=turn,
+        )
+        assert repaired is False
+        assert effective == bad_upgrade
+        assert log_path.read_bytes() == before
+
+        for _ in range(2):
+            rc_fail, failed_cli = _run_cli(registry, runtime, *guard_args)
+            assert rc_fail == 1
+            assert failed_cli["state"] == "blocked_health"
+            assert log_path.read_bytes() == before
+            assert len(load_rollout_events(log_path)) == 2
