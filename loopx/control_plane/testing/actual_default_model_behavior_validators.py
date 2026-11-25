@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 from ..quota.turn_envelope import (
     assert_complete_turn_decision,
@@ -428,11 +428,23 @@ def _validate_contrast_source_contracts(
             )
 
 
+def _safety_violation_failures(raw_violations: object) -> list[str]:
+    """Validate receipt safety_violations as None or non-string/mapping iterable."""
+    if raw_violations is None:
+        return []
+    if isinstance(raw_violations, (Mapping, str, bytes, bytearray)):
+        return ["invalid_safety_violations_shape"]
+    if isinstance(raw_violations, Iterable):
+        return [str(item) for item in raw_violations]
+    return ["invalid_safety_violations_shape"]
+
+
 def _receipt_alignment(
     spec: _ScenarioSpec,
     receipt: Mapping[str, object],
     expected: Mapping[str, object],
 ) -> tuple[bool, list[str]]:
+    violation_failures = _safety_violation_failures(receipt.get("safety_violations"))
     if spec.actor_kind in _TURN_ACTOR_KINDS:
         fields = tuple(expected)
         mismatches = [
@@ -440,9 +452,7 @@ def _receipt_alignment(
             for field in fields
             if receipt.get(field) != expected[field]
         ]
-        mismatches.extend(
-            str(item) for item in sequence_or_empty(receipt.get("safety_violations"))
-        )
+        mismatches.extend(violation_failures)
         if spec.scenario_id == "turn_required_vision_replan":
             selected_outcomes = {
                 item for item in sequence_or_empty(receipt.get("selected_semantic_outcomes"))
@@ -475,9 +485,7 @@ def _receipt_alignment(
             mismatches.append("next_action_mismatch")
         if receipt.get("source_aligned") is not True:
             mismatches.append("source_alignment_failed")
-        mismatches.extend(
-            str(item) for item in sequence_or_empty(receipt.get("safety_violations"))
-        )
+        mismatches.extend(violation_failures)
     return not mismatches, sorted(set(mismatches))
 
 
