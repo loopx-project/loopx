@@ -893,3 +893,101 @@ def test_replay_runtime_and_counterfactual_metrics_are_public_and_recomputable()
     assert runtime_after_release["release_success_count"] == 1
     assert runtime_after_release["active_replay_point_count"] == 0
     assert runtime_after_release["active_adapter_binding_count"] == 0
+
+
+def test_base_exception_during_restore_or_suffix_finalizes_with_failed_flag() -> None:
+    class _FinalizerSpyAdapter(SyntheticReplayAdapter):
+        def __init__(self) -> None:
+            super().__init__(prefix_reused=True)
+            self.finalizer_flags: list[bool] = []
+
+        def finalize_replay_suffix(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+            *,
+            suffix_succeeded: bool,
+        ) -> None:
+            assert binding_key in self.active_bindings
+            assert request.replay_point_id == "replay-before-change"
+            self.finalizer_flags.append(suffix_succeeded)
+
+    # 1) KeyboardInterrupt inside restore_agent_state must pass suffix_succeeded=False and propagate.
+    adapter_restore = _FinalizerSpyAdapter()
+    trace_restore, store_restore, _, reg_restore = _capture_point(
+        adapter=adapter_restore
+    )
+    orig_restore = store_restore.restore_agent_state
+    interrupt_restore = True
+
+    def _interrupting_agent_restore(state_key: object) -> None:
+        if interrupt_restore:
+            raise KeyboardInterrupt("aborted agent state restore")
+        orig_restore(state_key)
+
+    setattr(store_restore, "restore_agent_state", _interrupting_agent_restore)
+    suffix_calls = 0
+
+    def _count_suffix(_: object) -> dict[str, bool]:
+        nonlocal suffix_calls
+        suffix_calls += 1
+        return {
+            "target-created": True,
+            "dependent-update": True,
+            "constraint-health": True,
+            "resource-cleanup": True,
+        }
+
+    with pytest.raises(KeyboardInterrupt, match="aborted agent state restore"):
+        run_counterfactual_suffix_replay(
+            reg_restore,
+            trace=trace_restore,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id="interrupt-agent-restore",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_count_suffix,
+        )
+
+    assert suffix_calls == 0
+    assert adapter_restore.finalizer_flags == [False]
+    assert reg_restore.get("replay-before-change").lifecycle == ReplayPointLifecycle.READY
+
+    # 2) KeyboardInterrupt inside suffix execution must also pass suffix_succeeded=False and propagate.
+    def _interrupting_suffix(_: object) -> dict[str, bool]:
+        nonlocal suffix_calls
+        suffix_calls += 1
+        raise KeyboardInterrupt("aborted suffix execution")
+
+    with pytest.raises(KeyboardInterrupt, match="aborted suffix execution"):
+        interrupt_restore = False
+        run_counterfactual_suffix_replay(
+            reg_restore,
+            trace=trace_restore,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id="interrupt-suffix",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_interrupting_suffix,
+        )
+
+    assert suffix_calls == 1
+    assert adapter_restore.finalizer_flags == [False, False]
+    assert reg_restore.get("replay-before-change").lifecycle == ReplayPointLifecycle.READY
+
+    # Point remains healthy and succeeds once no longer interrupted.
+    promoted = run_counterfactual_suffix_replay(
+        reg_restore,
+        trace=trace_restore,
+        hypothesis=_hypothesis(),
+        candidate=CounterfactualCandidate(
+            candidate_id="retry-after-interrupt",
+            public_change_set={"optional_argument": "none"},
+        ),
+        execute_suffix=_count_suffix,
+    )
+    assert promoted.decision == CounterfactualDecision.PROMOTED
+    assert suffix_calls == 2
+    assert adapter_restore.finalizer_flags == [False, False, True]

@@ -1005,6 +1005,7 @@ class ReplayPointRegistry:
                 )
                 restore_attempted = False
                 suffix_attempted = False
+                suffix_succeeded = False
                 stage_error: Exception | None = None
                 finalization_error: Exception | None = None
                 restored_state: ReplayRestoreResult | None = None
@@ -1113,6 +1114,7 @@ class ReplayPointRegistry:
                     suffix_attempted = True
                     try:
                         outcomes.append(execute(restored_state))
+                        suffix_succeeded = True
                     finally:
                         suffix_minutes = (time.perf_counter() - suffix_started) / 60.0
                         self._metrics.add_seconds(
@@ -1134,7 +1136,7 @@ class ReplayPointRegistry:
                                 finalizer(
                                     entry.adapter_binding_key,
                                     request,
-                                    suffix_succeeded=stage_error is None,
+                                    suffix_succeeded=suffix_succeeded,
                                 )
                             except Exception as error:
                                 finalization_error = error
