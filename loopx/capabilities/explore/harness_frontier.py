@@ -138,17 +138,20 @@ class VariantCatalog:
             if isinstance(spec, Mapping) and spec.get("spec_id")
         ]
 
+    def pending_rows_snapshot(self) -> list[dict[str, object]]:
+        """Read ``catalog_path`` once and return all unconsumed specs."""
+
+        return [
+            spec
+            for spec in self._specs()
+            if str(spec.get("spec_id")) not in self.consumed
+        ]
+
     def pending_snapshot(self) -> tuple[dict[str, list[dict[str, object]]], int]:
         """Read ``catalog_path`` once and index pending specs by ``seed_family``."""
 
-        by_family: dict[str, list[dict[str, object]]] = {}
-        total_pending = 0
-        for spec in self._specs():
-            if str(spec.get("spec_id")) in self.consumed:
-                continue
-            total_pending += 1
-            by_family.setdefault(str(spec.get("seed_family") or ""), []).append(spec)
-        return by_family, total_pending
+        rows = self.pending_rows_snapshot()
+        return _index_specs_by_family(rows), len(rows)
 
     def pending_for(self, family: str) -> list[dict[str, object]]:
         return [
@@ -159,9 +162,7 @@ class VariantCatalog:
         ]
 
     def pending_count(self) -> int:
-        return len(
-            [s for s in self._specs() if str(s.get("spec_id")) not in self.consumed]
-        )
+        return len(self.pending_rows_snapshot())
 
     def consume(self, spec_id: str) -> None:
         self.consumed.add(str(spec_id))
@@ -172,21 +173,42 @@ class VariantCatalog:
         _write_json(self.consumption_path, sorted(self.consumed))
 
 
+def _index_specs_by_family(
+    specs: Sequence[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    by_family: dict[str, list[dict[str, object]]] = {}
+    for spec in specs:
+        by_family.setdefault(str(spec.get("seed_family") or ""), []).append(spec)
+    return by_family
+
+
+def _consumed_spec_ids(catalog: object) -> set[str]:
+    raw = getattr(catalog, "consumed", ())
+    if isinstance(raw, (set, frozenset, list, tuple)):
+        return {str(spec_id) for spec_id in raw}
+    return set()
+
+
 def _catalog_pending_index(
     catalog: VariantCatalog,
     families: Sequence[str],
-) -> tuple[dict[str, list[dict[str, object]]], int]:
-    """Use single-read ``pending_snapshot`` when available; fall back for mocks."""
+) -> tuple[dict[str, list[dict[str, object]]], list[dict[str, object]] | None, int]:
+    """Read catalog state once when snapshot helpers exist; fall back for mocks."""
 
+    rows_fn = getattr(catalog, "pending_rows_snapshot", None)
+    if callable(rows_fn):
+        rows = cast(Callable[[], list[dict[str, object]]], rows_fn)()
+        return _index_specs_by_family(rows), rows, len(rows)
     snapshot_fn = getattr(catalog, "pending_snapshot", None)
     if callable(snapshot_fn):
         typed_snapshot = cast(
             Callable[[], tuple[dict[str, list[dict[str, object]]], int]],
             snapshot_fn,
         )
-        return typed_snapshot()
+        by_family, total_pending = typed_snapshot()
+        return by_family, None, total_pending
     by_family = {family: catalog.pending_for(family) for family in families}
-    return by_family, catalog.pending_count()
+    return by_family, None, catalog.pending_count()
 
 
 def select_frontier_work(
@@ -228,9 +250,11 @@ def select_frontier_work(
             pair[0],
         ),
     )
-    pending_by_family, catalog_pending_total = _catalog_pending_index(
+    pending_by_family, snapshot_rows, catalog_pending_total = _catalog_pending_index(
         catalog, [family for family, _ in ranked]
     )
+    consumed_ids = _consumed_spec_ids(catalog)
+    newly_consumed: set[str] = set()
     selected: list[dict[str, object]] = []
     audit_specs: list[dict[str, object]] = []
     compile_variant_raw = getattr(adapter, "compile_variant", None)
@@ -238,7 +262,11 @@ def select_frontier_work(
         if len(selected) >= max(0, int(max_lanes)):
             break
         pending = sorted(
-            pending_by_family.get(family, ()),
+            (
+                spec
+                for spec in pending_by_family.get(family, ())
+                if str(spec.get("spec_id")) not in consumed_ids
+            ),
             key=lambda spec: (
                 -_as_float(spec.get("priority") or 0.0),
                 str(spec.get("spec_id")),
@@ -263,7 +291,10 @@ def select_frontier_work(
         compiled.setdefault(
             "concurrency_key", f"{family}:variant:{spec.get('spec_id')}"
         )
-        catalog.consume(str(spec.get("spec_id")))
+        spec_id = str(spec.get("spec_id"))
+        catalog.consume(spec_id)
+        consumed_ids.add(spec_id)
+        newly_consumed.add(spec_id)
         selected.append(compiled)
         audit_specs.append(
             {
@@ -273,11 +304,20 @@ def select_frontier_work(
                 "gain": gain_by_family[family],
             }
         )
-    pending_after = (
-        max(0, catalog_pending_total - len(selected))
-        if callable(getattr(catalog, "pending_snapshot", None))
-        else catalog.pending_count()
-    )
+    if snapshot_rows is not None:
+        pending_after = sum(
+            1 for row in snapshot_rows if str(row.get("spec_id")) not in consumed_ids
+        )
+    elif callable(getattr(catalog, "pending_snapshot", None)):
+        dropped_rows = sum(
+            1
+            for fam_specs in pending_by_family.values()
+            for row in fam_specs
+            if str(row.get("spec_id")) in newly_consumed
+        )
+        pending_after = max(0, catalog_pending_total - dropped_rows)
+    else:
+        pending_after = catalog.pending_count()
     audit: dict[str, object] = {
         "requested_lanes": int(max_lanes),
         "admitted": len(selected),
@@ -312,7 +352,7 @@ def emit_frontier_requests(
         family = str(item.get("family") or "")
         if family and family not in first_seed_by_family:
             first_seed_by_family[family] = item
-    pending_by_family, catalog_pending_total = _catalog_pending_index(
+    pending_by_family, _, catalog_pending_total = _catalog_pending_index(
         catalog, list(first_seed_by_family)
     )
     families: list[dict[str, object]] = []

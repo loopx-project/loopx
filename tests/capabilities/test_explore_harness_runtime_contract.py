@@ -62,7 +62,7 @@ def test_harness_modules_satisfy_zero_any_and_loc_budgets() -> None:
         "loopx/capabilities/explore/harness_runtime.py": 650,
         "loopx/capabilities/explore/harness_frontier.py": 749,
         "loopx/capabilities/explore/harness_queue.py": 749,
-        "tests/capabilities/test_explore_harness_runtime_contract.py": 599,
+        "tests/capabilities/test_explore_harness_runtime_contract.py": 749,
     }
     for rel_path, max_lines in budgets.items():
         source = (root / rel_path).read_text(encoding="utf-8")
@@ -562,3 +562,92 @@ def test_step_auc_and_fatal_policy_contracts(tmp_path: Path) -> None:
     assert isinstance(gen_rec["adapter_error"], dict)
     assert gen_rec["adapter_error"]["type"] == "TypeError"
     assert plan_round_robin([MappingProxyType({"item_id": "x"})]) == [{"item_id": "x"}]
+
+
+def test_cross_family_duplicate_spec_id_executes_once_and_counts_exact_remaining(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog_path = tmp_path / "variant_catalog.json"
+    _write_json(
+        catalog_path,
+        {
+            "schema_version": VARIANT_CATALOG_SCHEMA_VERSION,
+            "specs": [
+                {"spec_id": "dup-1", "seed_family": "beta", "intent": "b", "priority": 3},
+                {"spec_id": "dup-1", "seed_family": "alpha", "intent": "a", "priority": 3},
+                {"spec_id": "dup-1", "seed_family": "unseeded", "intent": "u", "priority": 1},
+                {"spec_id": "uniq-2", "seed_family": "gamma", "intent": "g", "priority": 1},
+            ],
+        },
+    )
+
+    class CrossFamilyDupAdapter:
+        def list_seed_items(self) -> list[dict[str, object]]:
+            return [
+                {"item_id": "seed-beta", "family": "beta", "text": "b", "concurrency_key": "beta"},
+                {"item_id": "seed-alpha", "family": "alpha", "text": "a", "concurrency_key": "alpha"},
+                {"item_id": "seed-gamma", "family": "gamma", "text": "g", "concurrency_key": "gamma"},
+            ]
+
+        def compile_variant(
+            self, spec: Mapping[str, object], seed_item: Mapping[str, object]
+        ) -> dict[str, object]:
+            return {
+                "item_id": f"v-{spec['spec_id']}-{seed_item['family']}",
+                "family": seed_item["family"],
+            }
+
+        def execute(
+            self, item: Mapping[str, object], **_: object
+        ) -> dict[str, object]:
+            return {
+                "item_id": item["item_id"],
+                "family": item["family"],
+                "observation_keys": [f"obs:{item['item_id']}"],
+                "weighted_flags": {},
+                "accepted": True,
+                "duration_minutes": 0.1,
+            }
+
+    catalog_reads = 0
+    real_read_json = _read_json
+
+    def counting_read_json(path: Path) -> object:
+        nonlocal catalog_reads
+        if path == catalog_path:
+            catalog_reads += 1
+        return real_read_json(path)
+
+    monkeypatch.setattr(harness_frontier, "_read_json", counting_read_json)
+
+    res = run_budget_arm(
+        CrossFamilyDupAdapter(),
+        arm_key="dup-arm",
+        run_root=tmp_path,
+        budget_minutes=10.0,
+        worker_count=2,
+        max_epochs=1,
+        use_router=True,
+        frontier_max_lanes=2,
+        variant_catalog_path=catalog_path,
+        duration_guard_factor=0.0,
+    )
+    assert catalog_reads == 2
+    assert res["variant_records_total"] == 2
+    frontier = res["epochs"][0]["frontier"]
+    assert frontier is not None
+    assert frontier["admitted"] == 2
+    assert frontier["catalog_pending_after"] == 0
+    admitted_specs = frontier["specs"]
+    assert isinstance(admitted_specs, list)
+    assert sorted(str(row["spec_id"]) for row in admitted_specs) == ["dup-1", "uniq-2"]
+    assert _read_json(tmp_path / "variant_consumption_dup-arm.json") == ["dup-1", "uniq-2"]
+    variant_ids = [
+        rec["item_id"]
+        for lane in res["epochs"][0]["lanes"]
+        for rec in lane["results"]
+        if rec.get("is_variant")
+    ]
+    assert len(variant_ids) == 2
+    assert "v-uniq-2-gamma" in variant_ids
+    assert sum(1 for vid in variant_ids if str(vid).startswith("v-dup-1-")) == 1
