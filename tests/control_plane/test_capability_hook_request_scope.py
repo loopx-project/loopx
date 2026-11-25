@@ -355,3 +355,80 @@ def test_list_goal_todos_scoped_routing_captures_aba_source_invalidation(
     )
     assert non_scoped["todo_count"] == 1
     assert [item["todo_id"] for item in non_scoped["todos"]] == scoped_todo_ids
+
+
+def test_failed_global_decode_alias_does_not_leave_untracked_snapshot_poisoning(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    real_global = root / "real-global.json"
+    real_global.write_text(
+        json.dumps({"schema_version": 1, "goals": [{"id": "g1", "title": "A-original"}]}),
+        encoding="utf-8",
+    )
+    project_reg = root / "project-reg.json"
+    project_reg.write_bytes(
+        registry_codec._encode_document(
+            {"schema_version": 1, "goals": [{"id": "g1", "title": "B-before"}]},
+            format=registry_codec._ProjectRegistryFormat.STRICT_ENVELOPE_V1,
+            minimum_writer_protocol=registry_codec.CURRENT_WRITER_PROTOCOL,
+        )
+    )
+    assert project_reg.read_text(encoding="utf-8").lstrip().startswith("[")
+
+    global_alias = root / "registry.global.json"
+    global_alias.symlink_to(project_reg)
+
+    # Baseline (unscoped): first read raises, restoring alias recovers A-original cleanly.
+    with pytest.raises(
+        registry_codec.ProjectRegistryError,
+        match="global registry root must be a JSON object",
+    ):
+        agent_registry.load_goal_from_registry(global_alias, "g1")
+
+    with capability_hook_request_scope() as scope:
+        warm_project = agent_registry.load_goal_from_registry(project_reg, "g1")
+        assert warm_project is not None and warm_project["title"] == "B-before"
+
+        with pytest.raises(
+            registry_codec.ProjectRegistryError,
+            match="global registry root must be a JSON object",
+        ):
+            agent_registry.load_goal_from_registry(global_alias, "g1")
+
+        # Failed decode must not leave untracked raw alias bytes in scope.registry_snapshots.
+        assert global_alias.absolute() not in scope.registry_snapshots
+        assert project_reg.absolute() in scope.registry_snapshots
+
+        global_alias.unlink()
+        global_alias.symlink_to(real_global)
+        with registry_codec.project_registry_transaction(
+            project_reg, operation="test_commit_project_after_failed_global_decode"
+        ) as tx:
+            payload = tx.payload_copy()
+            payload["goals"][0]["title"] = "B-after"
+            assert tx.commit(payload) is True
+
+        recovered_global = agent_registry.load_goal_from_registry(global_alias, "g1")
+        refreshed_project = agent_registry.load_goal_from_registry(project_reg, "g1")
+        assert recovered_global is not None and recovered_global["title"] == "A-original"
+        assert refreshed_project is not None and refreshed_project["title"] == "B-after"
+
+    # Cold project registry + failed global decode also recovers after restore without a commit.
+    global_alias.unlink()
+    global_alias.symlink_to(project_reg)
+    with capability_hook_request_scope() as scope:
+        with pytest.raises(
+            registry_codec.ProjectRegistryError,
+            match="global registry root must be a JSON object",
+        ):
+            agent_registry.load_goal_from_registry(global_alias, "g1")
+        assert global_alias.absolute() not in scope.registry_snapshots
+        assert project_reg.absolute() not in scope.registry_snapshots
+        global_alias.unlink()
+        global_alias.symlink_to(real_global)
+        recovered_cold = agent_registry.load_goal_from_registry(global_alias, "g1")
+        assert recovered_cold is not None and recovered_cold["title"] == "A-original"
+
+    unscoped_recovered = agent_registry.load_goal_from_registry(global_alias, "g1")
+    assert unscoped_recovered is not None and unscoped_recovered["title"] == "A-original"

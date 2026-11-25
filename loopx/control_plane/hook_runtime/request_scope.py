@@ -14,11 +14,10 @@ _DefaultT = TypeVar("_DefaultT")
 
 
 class _ObservedSnapshotDict(dict[Path, bytes | None]):
-    """`dict` view that tracks snapshot keys accessed during one loader call."""
+    """`dict` view that stages snapshot writes and tracks accessed keys."""
 
-    def __init__(self, backing: dict[Path, bytes | None]) -> None:
-        super().__init__(backing)
-        self._backing = backing
+    def __init__(self, initial: dict[Path, bytes | None]) -> None:
+        super().__init__(initial)
         self.observed_keys: set[Path] = set()
 
     def _mark(self, key: object) -> None:
@@ -35,12 +34,7 @@ class _ObservedSnapshotDict(dict[Path, bytes | None]):
 
     def __setitem__(self, key: Path, value: bytes | None) -> None:
         self._mark(key)
-        self._backing[key] = value
         super().__setitem__(key, value)
-
-    def __delitem__(self, key: Path) -> None:
-        self._backing.pop(key, None)
-        super().__delitem__(key)
 
     @overload
     def get(self, key: Path, default: None = None, /) -> bytes | None: ...
@@ -62,13 +56,8 @@ class _ObservedSnapshotDict(dict[Path, bytes | None]):
         self._mark(key)
         if super().__contains__(key):
             return super().__getitem__(key)
-        self._backing[key] = default
         super().__setitem__(key, default)
         return default
-
-    def clear(self) -> None:
-        self._backing.clear()
-        super().clear()
 
 
 class RegistryLoader(Protocol):
