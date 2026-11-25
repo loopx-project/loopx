@@ -89,10 +89,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          extra=()
-          if [[ "$FORCE_FULL" == true ]]; then extra+=(--force-full); fi
+          set --
+          if [[ "$FORCE_FULL" == true ]]; then set -- --force-full; fi
           if [[ "$EVENT_NAME" == pull_request ]]; then
-            python scripts/ci/review_gate.py classify --base "$BASE_SHA" --head "$HEAD_SHA" --verify-pr-diff --plan impact-plan.json "${extra[@]}" >> "$GITHUB_OUTPUT"
+            python scripts/ci/review_gate.py classify --base "$BASE_SHA" --head "$HEAD_SHA" --verify-pr-diff --plan impact-plan.json "$@" >> "$GITHUB_OUTPUT"
           else
             python scripts/ci/review_gate.py classify --base "$CHECKOUT_SHA" --head "$CHECKOUT_SHA" --non-pr --plan impact-plan.json >> "$GITHUB_OUTPUT"
           fi
