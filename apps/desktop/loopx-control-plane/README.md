@@ -598,8 +598,8 @@ Self-service:
    node_ver="$(node_trim "$raw_ver")" &&
    node_qualifies "$node_ver" &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
-   mkdir -p "$backup" &&
    if [ -e ~/.local/bin/node ] || [ -L ~/.local/bin/node ]; then
+     mkdir "$backup" &&
      mv ~/.local/bin/node "$backup/node" &&
      if ln -s "$node" ~/.local/bin/node &&
         installed_raw="$("$HOME/.local/bin/node" --version)" &&
@@ -613,6 +613,7 @@ Self-service:
        exit 1
      fi
    else
+     mkdir -p ~/.local/bin &&
      if ln -s "$node" ~/.local/bin/node &&
         installed_raw="$("$HOME/.local/bin/node" --version)" &&
         installed_ver="$(node_trim "$installed_raw")" &&
@@ -702,13 +703,14 @@ Self-service:
 4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
    environment reading refreshes every 30 seconds, or reopen the App.
    `node --version` in a terminal only verifies the interactive shell, which
-   can select a Node the App does not. When Diagnostics reports
-   `node_found: true` with a blank `node_version` — the App's numeric parser
-   cannot read a version carrying build metadata, while Core already
-   qualified the same binary — the repair block above has validated that
-   exact binary against the floor; press **Repair this version** and treat
-   the blank field as the build-metadata display case rather than a
-   blocker.
+   can select a Node the App does not. A blank `node_version` with
+   `node_found: true` covers several states: the build-metadata display gap,
+   a launcher that failed during the probe, or output the parser could not
+   read. Only continue to **Repair this version** when the repair block
+   itself succeeded — it verified the actual hit entry with an exiting
+   `--version`, confirmed the raw version carries build metadata, and
+   qualified it against the floor. Any other blank version follows the
+   earlier replace-or-restore steps instead.
 5. Press **Repair this version** (or reopen the App); the environment probe
    refreshes and the live supervisor reconnects the same window without a
    second App restart.
