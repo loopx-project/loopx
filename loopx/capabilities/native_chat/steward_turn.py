@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from ...chat_runtime import ChatRuntimeAdapter
     from ...chat_store import ChatSessionStore
 
 from ...control_plane.goals.activation import goal_is_stopped
@@ -35,6 +36,7 @@ from .steward_monitor import (
 )
 from .steward_turn_common import (
     MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS as MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS,
+    MonitorRestartCarrier,
     StewardBindingsProtocol,
     StewardControllerProtocol,
     StewardManagedProtocol,
@@ -136,10 +138,10 @@ class StewardTurnHost:
             session=session,
             include_observation=True,
             origin="web",
-            source_ref=saved["source_ref"],
-            sender_ref=saved["operator_ref"],
+            source_ref=str(saved["source_ref"]),
+            sender_ref=str(saved["operator_ref"]),
             private_human_message=False,
-            session_context=saved,
+            session_context=dict(saved),
         )
 
     def _admit(
@@ -189,7 +191,7 @@ class StewardTurnHost:
             **self.bindings._resolve_observed(
                 current,
                 binding or {},
-                observed.get("observation"),
+                as_dict(observed.get("observation")),
                 {
                     "source_ref": saved["source_ref"],
                     "sender_ref": saved["operator_ref"],
@@ -205,7 +207,7 @@ class StewardTurnHost:
         from .steward_monitor import StewardMonitor
 
         goal_id = str(actor["goal_id"])
-        goal = as_optional_dict(load_goal_from_registry(self.controller.registry_path, goal_id))
+        goal = as_optional_dict(load_goal_from_registry(cast(Path, self.controller.registry_path), goal_id))
         canonical_actor = as_optional_dict(as_mapping(selected.get("binding")).get("managed_actor"))
         monitor = (
             next(
@@ -254,7 +256,7 @@ class StewardTurnHost:
             def scope_id(ids: list[str], *, channel_id: object = default_channel_id) -> str:
                 return str(
                     manager_authorization_scope_id_for_registry(
-                        self.controller.registry_path,
+                        cast(Path, self.controller.registry_path),
                         ids,
                         runtime_root=self.controller.coordination_runtime_root,
                         channel_id=channel_id,
@@ -322,7 +324,7 @@ class StewardTurnHost:
 
     def monitor_restart_carrier(
         self, original: Mapping[str, object], client_id: str
-    ) -> dict[str, object] | None:
+    ) -> MonitorRestartCarrier | None:
         """Find the latest carrier for the same observation; typed admission proves a safe restart."""
         return monitor_restart_carrier(self, original, client_id)
 
@@ -434,7 +436,7 @@ class StewardTurnHost:
 
             return managed_session_goal_commit(
                 store=cast("ChatSessionStore", self.store),
-                registry_path=self.controller.registry_path,
+                registry_path=cast(Path, self.controller.registry_path),
                 session_id=str(actor["session_id"]),
             )()
         if self.bindings is None:
@@ -718,7 +720,7 @@ class StewardTurnHost:
             )
             if recovery is not None:
                 if "turn" in recovery:
-                    return recovery
+                    return {"turn": recovery["turn"]}
                 request = as_dict(recovery["request"])
                 client_id = str(recovery["client_id"])
                 existing = None
@@ -900,7 +902,7 @@ class StewardTurnHost:
                     turn_id=str(accepted.turn["turn_id"]),
                     message=str(accepted.turn["message"]),
                     attachments=[],
-                    adapter=adapter,
+                    adapter=cast("ChatRuntimeAdapter", adapter),
                     loopx_execution=True,
                 )
             except Exception as exc:

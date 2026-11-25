@@ -16,6 +16,7 @@ from .steward_monitor import (
 )
 from .steward_turn_common import (
     MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS,
+    MonitorRestartCarrier,
     StewardStoreProtocol,
     StewardTurnHostProtocol,
     _FILE_LOCK_TIMEOUT_ERROR_RE,
@@ -210,7 +211,7 @@ def monitor_restart_carrier(
     host: StewardTurnHostProtocol,
     original: Mapping[str, object],
     client_id: str,
-) -> dict[str, object] | None:
+) -> MonitorRestartCarrier | None:
     """Find the latest carrier for the same observation; typed admission proves a safe restart."""
     request = monitor_restart_request(original)
     if request is None:
@@ -720,7 +721,7 @@ def settle_stopped_report_candidate(
     with host._task_execution_lease(request, str(original["turn_id"]), recovery=True) as lease:
         handle_turn_command(
             args,
-            registry_path=host.controller.registry_path,
+            registry_path=cast(Path, host.controller.registry_path),
             runtime_root_arg=str(typed_reports.root),
             output_format=lambda *_a, **_kw: "json",
             print_payload=lambda value, *_a: result.update(as_mapping(value)),
@@ -876,7 +877,7 @@ def recover_report_settlement(
         ) as lease:
             handle_turn_command(
                 args,
-                registry_path=host.controller.registry_path,
+                registry_path=cast(Path, host.controller.registry_path),
                 runtime_root_arg=str(reports.root),
                 output_format=lambda *_a, **_kw: "json",
                 print_payload=lambda value, *_a: result.update(as_mapping(value)),

@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 import re
 import shlex
 from typing import Protocol, cast
@@ -80,7 +81,7 @@ def steward_followup_context(
     agent_todos = as_dict_list(
         as_mapping(
             list_goal_todos(
-                registry_path=host.controller.registry_path,
+                registry_path=cast(Path, host.controller.registry_path),
                 runtime_root_arg=str(host.controller.coordination_runtime_root),
                 goal_id=goal_id,
                 agent_id=agent_id,
@@ -103,7 +104,7 @@ def steward_followup_context(
     user_todos = as_dict_list(
         as_mapping(
             list_goal_todos(
-                registry_path=host.controller.registry_path,
+                registry_path=cast(Path, host.controller.registry_path),
                 runtime_root_arg=str(host.controller.coordination_runtime_root),
                 goal_id=goal_id,
                 role="user",
@@ -214,7 +215,7 @@ def governance_replan_context(
         agent_todos = as_dict_list(
             as_mapping(
                 list_goal_todos(
-                    registry_path=host.controller.registry_path,
+                    registry_path=cast(Path, host.controller.registry_path),
                     runtime_root_arg=str(host.controller.coordination_runtime_root),
                     goal_id=goal_id,
                     role="agent",
@@ -323,7 +324,7 @@ def apply_steward_user_actions(
     existing = as_dict_list(
         as_mapping(
             list_goal_todos(
-                registry_path=host.controller.registry_path,
+                registry_path=cast(Path, host.controller.registry_path),
                 runtime_root_arg=str(host.controller.coordination_runtime_root),
                 goal_id=goal_id,
                 role="user",

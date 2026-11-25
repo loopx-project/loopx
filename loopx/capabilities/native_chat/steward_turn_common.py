@@ -8,7 +8,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, TypedDict, cast
+
+if TYPE_CHECKING:
+    from ...chat_runtime import ChatRuntimeAdapter
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
 _WORKER_EXITED_ERROR = (
@@ -47,18 +50,36 @@ class AcceptedTurnProtocol(Protocol):
     def created(self) -> bool: ...
 
 
+class MonitorRestartCarrier(TypedDict, total=False):
+    """Typed carrier returned by monitor_restart_carrier while preserving dict keys."""
+
+    turn: dict[str, object]
+    request: dict[str, object]
+    client_id: str
+
+
 class StewardStoreProtocol(Protocol):
     """Chat turn/session persistence surface consumed by StewardTurnHost."""
 
     def load_session(self, session_id: str) -> dict[str, object] | None: ...
 
-    def update_session(self, session_id: str, **kwargs: object) -> object: ...
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        expected_statuses: set[str] | None = None,
+        expected_upstream_thread_id: str | None = None,
+        metadata_review: bool = False,
+        quota_recovery: bool = False,
+        answer_review_admission: bool = False,
+        **changes: object,
+    ) -> object: ...
 
     def load_turn(self, session_id: str, turn_id: str) -> dict[str, object] | None: ...
 
     def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, object] | None: ...
 
-    def events_after(self, session_id: str, turn_id: str, after: object) -> list[dict[str, object]]: ...
+    def events_after(self, session_id: str, turn_id: str, event_id: str | None) -> list[dict[str, object]]: ...
 
     def messages(self, session_id: str) -> list[dict[str, object]]: ...
 
@@ -70,10 +91,10 @@ class StewardStoreProtocol(Protocol):
         *,
         client_turn_id: str,
         message: str,
-        display_message: str,
-        origin: str,
-        loopx_execution: bool,
-        loopx_request: dict[str, object],
+        display_message: str | None = None,
+        origin: str = "web",
+        loopx_execution: bool = False,
+        loopx_request: dict[str, object] | None = None,
     ) -> AcceptedTurnProtocol: ...
 
     def append_event(
@@ -82,7 +103,7 @@ class StewardStoreProtocol(Protocol):
         turn_id: str,
         *,
         kind: str,
-        payload: Mapping[str, object],
+        payload: dict[str, object],
     ) -> object: ...
 
     def turn_execution_lock_path(self, session_id: str, turn_id: str) -> Path: ...
@@ -102,28 +123,28 @@ class StewardBindingsProtocol(Protocol):
         self,
         *,
         binding_id: str,
-        session: Mapping[str, object],
-        include_observation: bool,
-        origin: str,
-        source_ref: object,
-        sender_ref: object,
+        source_ref: str,
+        sender_ref: str,
         private_human_message: bool,
-        session_context: Mapping[str, object],
+        session_context: dict[str, object] | None = None,
+        include_observation: bool = False,
+        origin: str | None = None,
+        session: dict[str, object] | None = None,
     ) -> dict[str, object]: ...
 
     def _resolve_observed(
         self,
-        current: Mapping[str, object],
-        binding: Mapping[str, object],
-        observation: object,
-        context: Mapping[str, object],
+        current: dict[str, object],
+        row: dict[str, object],
+        observation: dict[str, object],
+        source: dict[str, object],
     ) -> dict[str, object]: ...
 
-    def _session_observation(self, session: Mapping[str, object]) -> object: ...
+    def _session_observation(self, session: dict[str, object]) -> object: ...
 
-    def steward_scope(self, session: Mapping[str, object]) -> list[str] | None: ...
+    def steward_scope(self, session: dict[str, object]) -> list[str] | None: ...
 
-    def _core(self, operation: str, payload: Mapping[str, object]) -> dict[str, object]: ...
+    def _core(self, operation: str, payload: dict[str, object]) -> dict[str, object]: ...
 
 
 class StewardProjectContextsProtocol(Protocol):
@@ -145,7 +166,7 @@ class StewardControllerProtocol(Protocol):
     """Outer Chat controller surface consumed by StewardTurnHost."""
 
     @property
-    def registry_path(self) -> Path: ...
+    def registry_path(self) -> Path | None: ...
 
     @property
     def coordination_runtime_root(self) -> Path: ...
@@ -164,11 +185,11 @@ class StewardControllerProtocol(Protocol):
 
     def _ensure_adapter_locked(
         self,
-        session: Mapping[str, object],
+        session: dict[str, object],
         *,
         work_dir: Path,
         objective: str,
-        accepted_turn_id: str,
+        accepted_turn_id: str | None = None,
     ) -> object: ...
 
     def _start_accepted_turn_worker(
@@ -177,12 +198,12 @@ class StewardControllerProtocol(Protocol):
         session_id: str,
         turn_id: str,
         message: str,
-        attachments: list[object],
-        adapter: object,
+        attachments: list[dict[str, object]],
+        adapter: ChatRuntimeAdapter,
         loopx_execution: bool,
-    ) -> None: ...
+    ) -> object: ...
 
-    def _fail_queue_preparation(self, session_id: str, turn_id: str, exc: BaseException) -> None: ...
+    def _fail_queue_preparation(self, session_id: str, turn_id: str, error: Exception) -> None: ...
 
 
 class StewardTurnHostProtocol(Protocol):

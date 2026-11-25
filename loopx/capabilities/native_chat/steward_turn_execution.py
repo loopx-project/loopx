@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 import json
+from pathlib import Path
 from typing import Protocol, cast
 
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
@@ -161,7 +162,7 @@ def _append_native_result_with_readback(
     result: Mapping[str, object],
 ) -> None:
     try:
-        host.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=result)
+        host.store.append_event(session_id, turn_id, kind="native_loopx.result", payload=dict(result))
     except OSError:
         # The native transaction already owns execution and settlement.
         # A lost Chat append acknowledgment must not discard its answer
@@ -228,7 +229,7 @@ def execute_steward_turn(
     original_thread = getattr(adapter, "upstream_thread_id", None)
     reports_pair = report_service(host.controller, dict(actor)) if report_work else (None, None)
     reports = cast(ExecutionReportServiceProtocol | None, reports_pair[0])
-    report_owner_key = cast(str | None, reports_pair[1])
+    report_owner_key: str | None = reports_pair[1]
     report_context = ""
     governance_work = False
     report_launch_rejected = False
@@ -531,7 +532,7 @@ def execute_steward_turn(
                 observed_gov: dict[str, object] = {}
                 handle_turn_command(
                     governance_args,
-                    registry_path=host.controller.registry_path,
+                    registry_path=cast(Path, host.controller.registry_path),
                     runtime_root_arg=str(host.controller.coordination_runtime_root),
                     output_format=lambda *_a, **_kw: "json",
                     print_payload=lambda value, *_a: observed_gov.update(as_mapping(value)),
@@ -611,7 +612,7 @@ def execute_steward_turn(
             result.clear()
             handle_turn_command(
                 args,
-                registry_path=host.controller.registry_path,
+                registry_path=cast(Path, host.controller.registry_path),
                 runtime_root_arg=str(host.controller.coordination_runtime_root),
                 output_format=lambda *_a, **_kw: "json",
                 print_payload=lambda value, *_a: result.update(as_mapping(value)),
@@ -637,7 +638,7 @@ def execute_steward_turn(
             try:
                 handle_turn_command(
                     governance_args,
-                    registry_path=host.controller.registry_path,
+                    registry_path=cast(Path, host.controller.registry_path),
                     runtime_root_arg=str(host.controller.coordination_runtime_root),
                     output_format=lambda *_a, **_kw: "json",
                     print_payload=lambda value, *_a: adv_governance.update(as_mapping(value)),
