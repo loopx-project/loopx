@@ -660,8 +660,7 @@ def _run_node_container_with_opt_loopx(
     ).stdout.strip()
     try:
         def _normalize(ti: tarfile.TarInfo) -> tarfile.TarInfo | None:
-            parts = ti.name.split("/")
-            if "__pycache__" in parts or (len(parts) >= 3 and parts[1] == "node_modules" and parts[2] == ".bin"):
+            if "__pycache__" in ti.name.split("/") or ti.issym() or ti.islnk():
                 return None
             ti.uid = ti.gid = 0
             ti.uname = ti.gname = "root"
@@ -669,10 +668,14 @@ def _run_node_container_with_opt_loopx(
             return ti
 
         with tempfile.TemporaryFile() as archive:
-            with tarfile.open(fileobj=archive, mode="w", dereference=True) as tf:
+            with tarfile.open(fileobj=archive, mode="w", dereference=False) as tf:
                 for rel in ("package.json", "loopx/control_plane", "examples/coordination"):
-                    tf.add(repo_root / rel, arcname=f"loopx/{rel}", filter=_normalize)
-                tf.add(nm_root / "node_modules", arcname="loopx/node_modules", filter=_normalize)
+                    tf.add((repo_root / rel).resolve(), arcname=f"loopx/{rel}", filter=_normalize)
+                nm_dir = (nm_root / "node_modules").resolve()
+                tf.add(nm_dir, arcname="loopx/node_modules", recursive=False, filter=_normalize)
+                for entry in nm_dir.iterdir():
+                    if not entry.name.startswith("."):
+                        tf.add(entry.resolve(), arcname=f"loopx/node_modules/{entry.name}", filter=_normalize)
             archive.seek(0)
             subprocess.run(
                 ["docker", "cp", "-", f"{cid}:/opt"],
