@@ -60,6 +60,8 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "Password: 8 to 64 characters.\n",
         "Password: 12 alphanumeric characters.\n",
         "Password: 8 to 64 ASCII characters.\n",
+        "Password: \"Forgot password?\" is the link to use.\n",
+        "Token: \"Copy token\" is the button to use.\n",
         "Token: 24 hours.\n",
         "Token: 24-hour expiry\n",
         "Token: 2 business days.\n",
@@ -78,6 +80,8 @@ def test_a_raw_credential_value_fails_the_presentation_boundary(value: str) -> N
         "password length range",
         "password alphanumeric rule",
         "password ascii range rule",
+        "forgot password button",
+        "copy token button",
         "token expiry rule",
         "token expiry hyphen",
         "token business days",
@@ -99,6 +103,7 @@ SHORT_ASSIGNMENT_VALUES = [
     '{"password": "hunter2"}',
     '{"token": "abc123"}',
     '{"secret": "abcd1234"}',
+    'Password: "hunter2"',
     "refresh_token: abcdefghijklmnop",
 ]
 

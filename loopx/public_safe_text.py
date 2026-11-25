@@ -410,7 +410,12 @@ _PRESENTATION_RULE_QUANTITY_SOURCE = (
 _PRESENTATION_COLON_VALUE_SOURCE = (
     _PRESENTATION_RULE_QUANTITY_SOURCE
     + r"(?:"
-    r"[\"'][^\"'\n]+[\"']|"
+    # A quoted value needs a single credential-shaped token: a digit or
+    # base64/symbol character, or a long opaque letters-only run. A quoted
+    # interface label (`"Forgot password?"`, `"Copy token"`) has spaces or
+    # ordinary Title Case words and stays public help.
+    r"[\"'](?=[^\s\"'`<>]*[0-9+/=@#$%^&*_!])[^\s\"'`<>]+[\"']|"
+    r"[\"'][A-Za-z]{16,}[\"']|"
     + _SHAPE_VALUE_TOKEN_SOURCE
     + r"|"
     + _OPAQUE_VALUE_RUN_SOURCE

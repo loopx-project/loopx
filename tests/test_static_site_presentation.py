@@ -493,6 +493,32 @@ def test_cli_package_keeps_character_class_rules_public(
     assert (output / "password-ascii.html").read_text(encoding="utf-8") == ascii_page
 
 
+def test_cli_package_keeps_quoted_button_labels_public(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    site = _site(tmp_path)
+    forgot_page = (
+        "<html><body><h1>Sign in help</h1>\n"
+        '<p>Password: "Forgot password?" is the link to use.</p>\n'
+        "</body></html>\n"
+    )
+    copy_page = (
+        "<html><body><h1>Device setup</h1>\n"
+        '<p>Token: "Copy token" is the button to use.</p>\n'
+        "</body></html>\n"
+    )
+    (site / "forgot-password.html").write_text(forgot_page, encoding="utf-8")
+    (site / "copy-token.html").write_text(copy_page, encoding="utf-8")
+    output = tmp_path / "publish"
+
+    assert _cli_package(site, output, tmp_path / "state") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["write_performed"] is True
+    assert (output / "forgot-password.html").read_text(encoding="utf-8") == forgot_page
+    assert (output / "copy-token.html").read_text(encoding="utf-8") == copy_page
+
+
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
