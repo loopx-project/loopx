@@ -597,6 +597,20 @@ Self-service:
    raw_ver="$("$node" --version)" &&
    node_ver="$(node_trim "$raw_ver")" &&
    node_qualifies "$node_ver" &&
+   mkdir -p ~/.local/bin &&
+   lock=~/.local/bin/.node-loopx-repair &&
+   if mkdir "$lock" 2>/dev/null; then
+     trap 'rm -rf "$lock"' EXIT
+   else
+     if [ "$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || date +%s) ))" -gt 900 ] &&
+        rm -rf "$lock" &&
+        mkdir "$lock" 2>/dev/null; then
+       trap 'rm -rf "$lock"' EXIT
+     else
+       echo "Another repair is in progress; nothing was changed." &&
+       exit 1
+     fi
+   fi &&
    backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
    if [ -e ~/.local/bin/node ] || [ -L ~/.local/bin/node ]; then
      mkdir "$backup" &&
@@ -621,7 +635,6 @@ Self-service:
        exit 1
      fi
    else
-     mkdir -p ~/.local/bin &&
      if ln -s "$node" ~/.local/bin/node; then
        created_ino="$(stat -f %i ~/.local/bin/node)" &&
        if installed_raw="$("$HOME/.local/bin/node" --version)" &&
@@ -664,8 +677,20 @@ Self-service:
    branch creates the link; its `ln` failure means another window's repair
    already created and qualified one, and that entry is left in place.
 
-  The backup is a directory created atomically: a second repair in the same
-  second (from this window or another one) fails its `mkdir` and stops with
+   The whole repair runs inside one lock: the block takes
+   `~/.local/bin/.node-loopx-repair` with an exclusive `mkdir` before either
+   branch and releases it on exit, so a second window stops with
+   "Another repair is in progress; nothing was changed." instead of
+   interleaving its move, install, final check or rollback between this
+   window's steps. Rerun the block after the other window finishes. A repair
+   killed outright can leave the lock behind; after 15 minutes an attempt
+   removes and retakes it, and if the message persists while no repair is
+   running, remove that directory by hand. The inode checks inside the two
+   branches then guard the only overlap the lock cannot close — a suspended
+   window whose stale lock was retaken by another one.
+
+   The backup is a directory created atomically: a second repair in the same
+   second (from this window or another one) fails its `mkdir` and stops with
   the original launcher untouched, so concurrent attempts cannot overwrite
   each other's only copy of the original. Each attempt owns one directory
   holding the launcher it replaced. The failure rollback respects the same
