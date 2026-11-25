@@ -700,17 +700,17 @@ Self-service:
    `node_found` of `true` with no `node_version` means the App found a `node`
    it could not read a version from: inspect that entry with `ls -l` and the
    same `--version` call before replacing it the same way.
-4. Confirm Diagnostics reports a `node_version` of 22.22.3 or newer. The
-   environment reading refreshes every 30 seconds, or reopen the App.
-   `node --version` in a terminal only verifies the interactive shell, which
-   can select a Node the App does not. A blank `node_version` with
-   `node_found: true` covers several states: the build-metadata display gap,
-   a launcher that failed during the probe, or output the parser could not
-   read. Only continue to **Repair this version** when the repair block
-   itself succeeded — it verified the actual hit entry with an exiting
-   `--version`, confirmed the raw version carries build metadata, and
-   qualified it against the floor. Any other blank version follows the
-   earlier replace-or-restore steps instead.
+4. Confirm the result through the repair block's own readback. The repair
+   qualifies the actual hit entry: its `--version` must exit 0, the raw
+   version must satisfy the floor — a plain 22.22.3, build metadata, or a
+   prerelease above the floor all qualify — and Core's `probe_node()` then
+   reads the same binary as `ready`. A blank `node_version` in Diagnostics
+   is the App's numeric display gap, not a qualification failure: when the
+   repair printed its success line, press **Repair this version**; when it
+   printed the restore message, follow the earlier replace-or-restore steps
+   instead. The environment reading refreshes every 30 seconds, or reopen
+   the App. `node --version` in a terminal only verifies the interactive
+   shell, which can select a Node the App does not.
 5. Press **Repair this version** (or reopen the App); the environment probe
    refreshes and the live supervisor reconnects the same window without a
    second App restart.
