@@ -86,8 +86,36 @@ reference interpretation for displayed topics, exact filters and text search.
 Registration retains only a source-reference kind and digest, not its original
 URL/path. Use the original DOC_REGISTRY or authorized connector to locate and
 check the document, then reuse its listed source ID with
-`register-authority-source` to update the recorded metadata. An inventory match
+`update-authority-source` to update the recorded metadata. An inventory match
 is not evidence that the document was read or is still accessible.
+
+## Maintain Existing Material Metadata
+
+After checking a material, preview a change to its recorded lifecycle metadata:
+
+```bash
+loopx --registry .loopx/registry.json update-authority-source \
+  --goal-id example-goal --source-id design-note \
+  --freshness stale --gate-status needs_access --dry-run
+```
+
+Remove `--dry-run` to apply and refresh the shared registry summary; use
+`--no-global-sync` to update only the project registry. Read back with
+`authority-sources --goal-id example-goal --topic design` (using the registered
+topic), or search for the source ID. Optional update fields are `--freshness`,
+`--owner-status`, `--gate-status`, `--revision` and `--conflict-rule`. At least one
+nonempty field is required. Omitted fields, original registration time, reference
+kind/digest, imported summary metadata and topic mappings remain unchanged.
+The source must already exist in the selected project registry. A shared summary
+is insufficient; select the authoritative project registry explicitly.
+
+This records observations, not proof of reading, current access or permission to
+access a source. No source is opened. Registration keeps its existing full-entry
+replacement semantics; use it for deliberate replacement, supplying the complete
+contract. Project writes use the existing registry transaction; shared-summary
+sync follows separately. If sync fails after the project update, the failure
+reports `written: true`; inspect the project readback and retry the same update
+once shared registry access is restored.
 
 ## Stop Conditions
 
