@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {spawn, spawnSync} from "node:child_process";
 import {mkdtemp, rm} from "node:fs/promises";
-import {readdirSync, realpathSync} from "node:fs";
+import {readdirSync, symlinkSync} from "node:fs";
 import {homedir, tmpdir} from "node:os";
 import {basename, join} from "node:path";
 import test from "node:test";
@@ -31,8 +31,10 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
  *   with SQLite 3.51.3." The full store contract (commits across the
  *   64-commit checkpoint window, byte-identical retry replay, head/receipt/
  *   paged-scan readback, archive audit, per-goal databases, WAL journal,
- *   `user_version=2`) must hold under the qualified runtime serving the
- *   suite.
+ *   `user_version=2`) must hold under a qualified runtime. The precise
+ *   reference environment is distinguished from a generic qualified runner:
+ *   the row records which serving pair actually exercised it, and
+ *   LOOPX_TEST_SQLITE_FLOOR_NODE can pin the reference binary explicitly.
  * - Newer runtimes inside the documented envelope: "SQLite 3.51.3 and later
  *   3.x releases contain the WAL-reset concurrency fix" — a newer Node major
  *   whose embedded driver satisfies the documented admission lines must hold
@@ -46,6 +48,15 @@ import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
  *   sqlite_source_id(); the Node version alone is insufficient") must report
  *   the actually serving pair. The read-only identity probe "opens no
  *   database file and creates no authority state".
+ *
+ * Runtime selection is identity-based, never path-based: a second runtime
+ * only counts for "newer runtime" or cross-runtime rows when the spawned
+ * child's actually reported serving pair (node_version plus the raw-driver
+ * sqlite_version, cross-checked against the launcher's own `--version`)
+ * differs from the runner's reported pair. Two launchers of one executable —
+ * direct call, symlink chains, hardlinks — report the same pair and can
+ * never fabricate distinct coverage; the rows skip with the reason ("no
+ * distinct qualifying second runtime available...") instead of passing.
  *
  * OS axis: this suite runs where it runs; every row pins the observed
  * `platform`/`arch` through the raw oracle. macOS (arm64) is the only local
@@ -62,6 +73,9 @@ const MATRIX_SCHEMA = "loopx_sqlite_runtime_matrix_v0";
 const AUDIT_SCHEMA = "loopx_sqlite_authority_history_audit_v0";
 const PROCESS_PATH = new URL("./sqlite_authority_runtime_matrix_process.ts", import.meta.url);
 const NODE_FLOOR = [22, 22, 3];
+// The documented qualification reference pair.
+const REFERENCE_NODE = "v22.22.3";
+const REFERENCE_SQLITE = "3.51.3";
 const LEDGER_COUNT = 65;
 const LEDGER_PADDING_BYTES = 512;
 const CHILD_DEADLINE_MS = 30000;
@@ -211,8 +225,6 @@ function docAdmittedSqlite(version: string): boolean {
     (minor === 50 && patch >= 7) || (minor === 44 && patch >= 6);
 }
 
-interface ResolvedBinary {path: string; version: string;}
-
 function probeBinaryVersion(path: string): string | null {
   const probe = spawnSync(path, ["--version"], {encoding: "utf8", timeout: 10000});
   if (probe.error || probe.status !== 0) return null;
@@ -229,27 +241,75 @@ function binaryAcceptsRuntimeFlags(path: string): boolean {
   return probe.status === 0;
 }
 
-/** A locally available Node below the documented 22.22.3 floor (stock older
- * Node 22 releases are exactly the "vulnerable drivers shipped with older
- * Node 22 releases" the reference calls out). Overridable via
- * LOOPX_TEST_SQLITE_BELOW_FLOOR_NODE; absent candidates are a disclosed gap,
- * never an invented row. */
-function resolveBelowFloorBinary(): ResolvedBinary | null {
-  const override = process.env.LOOPX_TEST_SQLITE_BELOW_FLOOR_NODE;
-  const candidates = override ? [override] : ["/usr/local/bin/node", "/opt/homebrew/bin/node"];
-  for (const path of candidates) {
-    const version = probeBinaryVersion(path);
-    if (version !== null && !nodeAtLeast(version, NODE_FLOOR) && binaryAcceptsRuntimeFlags(path)) {
-      return {path, version};
-    }
-  }
-  return null;
+/** What a runtime actually reports when it serves the suite: the spawned
+ * child's own node_version and raw-driver SQLite observation, together with
+ * the launcher's `--version` output. This — not any launcher path — is the
+ * identity matrix rows are selected and attributed by. */
+interface RuntimeProbe {
+  path: string;
+  binaryVersion: string;
+  nodeVersion: string;
+  sqliteVersion: string | null;
+  sqliteSourceId: string | null;
+  finalization: boolean | null;
+  driverAvailable: boolean;
+  platform: string;
+  arch: string;
 }
 
-/** A locally available Node inside the documented envelope but newer than
- * the floor runtime (a newer major whose embedded driver the doc admits).
- * Overridable via LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE. */
-function resolveNewerMajorBinary(): ResolvedBinary | null {
+const runtimeProbeCache = new Map<string, Promise<RuntimeProbe>>();
+
+async function probeRuntime(t: test.TestContext, path: string): Promise<RuntimeProbe> {
+  const cached = runtimeProbeCache.get(path);
+  if (cached) return cached;
+  const probed = (async () => {
+    const binaryVersion = probeBinaryVersion(path);
+    if (binaryVersion === null) throw new Error(`cannot probe a Node version from ${path}`);
+    const directory = await mkdtemp(join(tmpdir(), "sqlite-runtime-matrix-probe-"));
+    try {
+      const session = await spawnMatrixChild(t, path, directory);
+      const reply = (await session.next({kind: "identity"})) as unknown as IdentityReply;
+      await session.next({kind: "exit"});
+      const closed = await session.finish();
+      assert.equal(closed.code, 0, `identity probe of ${path} exited cleanly; stderr: ${closed.stderr}`);
+      return {path, binaryVersion,
+        nodeVersion: reply.oracle.node_version, sqliteVersion: reply.oracle.sqlite_version,
+        sqliteSourceId: reply.oracle.sqlite_source_id, finalization: reply.oracle.synchronous_statement_finalization,
+        driverAvailable: reply.oracle.driver_available, platform: reply.oracle.platform,
+        arch: reply.oracle.arch};
+    } finally { await rm(directory, {recursive: true, force: true}); }
+  })();
+  runtimeProbeCache.set(path, probed);
+  return probed;
+}
+
+function probeIsQualified(probe: RuntimeProbe): boolean {
+  return probe.driverAvailable && probe.finalization === true && docAdmittedSqlite(String(probe.sqliteVersion));
+}
+
+/** Two runtimes form a distinct pair exactly when their reported serving
+ * pairs differ: node_version or the embedded sqlite_version. Launchers of
+ * one executable (direct call, symlinks, hardlinks) report the same pair and
+ * are never distinct, whatever their paths claim. */
+function isDistinctPair(a: RuntimeProbe, b: RuntimeProbe): boolean {
+  return a.nodeVersion !== b.nodeVersion || a.sqliteVersion !== b.sqliteVersion;
+}
+
+function pairsLabel(runner: RuntimeProbe, second: RuntimeProbe): string {
+  return `${second.nodeVersion}/${String(second.sqliteVersion)} vs runner ` +
+    `${runner.nodeVersion}/${String(runner.sqliteVersion)}`;
+}
+
+type SecondRuntimeSelection = {status: "selected"; probe: RuntimeProbe} | {status: "unavailable"; reason: string};
+
+/** Select a second runtime for the newer-major and handoff rows by the
+ * candidates' actually reported identities, never by launcher path: the
+ * runner's probe is compared with each candidate's probe, and only a
+ * distinct, consistent, (optionally) qualified serving pair may form the
+ * row. When nothing distinct is available the selection returns the precise
+ * reason so the row can skip honestly instead of fabricating coverage. */
+async function selectSecondRuntime(t: test.TestContext, runner: RuntimeProbe,
+  options: {newerMajorOnly: boolean; requireQualified: boolean}): Promise<SecondRuntimeSelection> {
   const override = process.env.LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE;
   const candidates: string[] = override ? [override] : [];
   if (!override) {
@@ -258,15 +318,48 @@ function resolveNewerMajorBinary(): ResolvedBinary | null {
     catch { /* nvm is not installed; the row skips with a disclosed reason */ }
     candidates.push("/opt/homebrew/bin/node", "/usr/local/bin/node");
   }
-  const execReal = realpathSync(process.execPath);
+  const rejections: string[] = [];
+  for (const path of candidates) {
+    const binaryVersion = probeBinaryVersion(path);
+    if (binaryVersion === null) { rejections.push(`${path}: not a usable Node binary`); continue; }
+    if (options.newerMajorOnly && (nodeVersionNumbers(binaryVersion)[0] ?? 0) <= NODE_FLOOR[0]!) {
+      rejections.push(`${path}: ${binaryVersion} is not newer than the floor major`);
+      continue;
+    }
+    if (!binaryAcceptsRuntimeFlags(path)) { rejections.push(`${path}: rejects the repository runtime flags`); continue; }
+    const probe = await probeRuntime(t, path);
+    if (probe.binaryVersion !== probe.nodeVersion) {
+      rejections.push(`${path}: --version reports ${probe.binaryVersion} but the child reports ${probe.nodeVersion}`);
+      continue;
+    }
+    if (!isDistinctPair(probe, runner)) {
+      rejections.push(`${path}: reports the same serving pair as the runner ` +
+        `(${probe.nodeVersion}/${String(probe.sqliteVersion)})`);
+      continue;
+    }
+    if (options.requireQualified && !probeIsQualified(probe)) {
+      rejections.push(`${path}: serving pair ${probe.nodeVersion}/${String(probe.sqliteVersion)} is not qualified`);
+      continue;
+    }
+    return {status: "selected", probe};
+  }
+  return {status: "unavailable", reason: "no distinct qualifying second runtime available (runner reports " +
+    `${runner.nodeVersion}/${String(runner.sqliteVersion)}${rejections.length > 0 ? `; ${rejections.join("; ")}` : ""})`};
+}
+
+/** A locally available Node below the documented 22.22.3 floor (stock older
+ * Node 22 releases are exactly the "vulnerable drivers shipped with older
+ * Node 22 releases" the reference calls out). Overridable via
+ * LOOPX_TEST_SQLITE_BELOW_FLOOR_NODE; absent candidates are a disclosed gap,
+ * never an invented row. */
+function resolveBelowFloorBinary(): {path: string; version: string} | null {
+  const override = process.env.LOOPX_TEST_SQLITE_BELOW_FLOOR_NODE;
+  const candidates = override ? [override] : ["/usr/local/bin/node", "/opt/homebrew/bin/node"];
   for (const path of candidates) {
     const version = probeBinaryVersion(path);
-    if (version === null || (nodeVersionNumbers(version)[0] ?? 0) <= NODE_FLOOR[0]!) continue;
-    if (!binaryAcceptsRuntimeFlags(path)) continue;
-    let real: string;
-    try { real = realpathSync(path); } catch { continue; }
-    if (real === execReal) continue;
-    return {path, version};
+    if (version !== null && !nodeAtLeast(version, NODE_FLOOR) && binaryAcceptsRuntimeFlags(path)) {
+      return {path, version};
+    }
   }
   return null;
 }
@@ -295,8 +388,11 @@ interface IdentityReply {
  * same process, and `sqlite_authority_qualified` equals the qualification
  * the doc derives from that observed driver (admitted release line plus
  * synchronous statement finalization) — the Node version alone never decides
- * it. */
-function assertIdentityRow(reply: Record<string, unknown>, binaryVersion: string, label: string): IdentityReply {
+ * it. When `expected` is given (the identity this row was selected by), the
+ * session must report exactly that pair, so coverage is attributed to the
+ * runtime that actually served it. */
+function assertIdentityRow(reply: Record<string, unknown>, binaryVersion: string, label: string,
+  expected?: RuntimeProbe): IdentityReply {
   const shaped = reply as unknown as IdentityReply;
   const {identity, oracle} = shaped;
   assert.equal(oracle.node_version, binaryVersion.trim(), `${label}: raw oracle node version`);
@@ -306,6 +402,12 @@ function assertIdentityRow(reply: Record<string, unknown>, binaryVersion: string
   assert.equal(identity.sqlite_source_id, oracle.sqlite_source_id, `${label}: sqlite_source_id reports the embedded driver`);
   assert.equal(identity.synchronous_statement_finalization, oracle.synchronous_statement_finalization,
     `${label}: finalization observation`);
+  if (expected) {
+    assert.equal(identity.node_version, expected.nodeVersion,
+      `${label}: session reports the selected runtime's node version`);
+    assert.equal(identity.sqlite_version, expected.sqliteVersion,
+      `${label}: session reports the selected runtime's sqlite version`);
+  }
   if (oracle.driver_available) {
     assert.match(String(oracle.sqlite_version), /^\d+\.\d+\.\d+$/, `${label}: observed driver version shape`);
     assert.ok(typeof oracle.sqlite_source_id === "string" && oracle.sqlite_source_id.length > 0,
@@ -373,8 +475,8 @@ async function assertFailClosedRow(session: ChildSession, oracle: RawDriverOracl
  * audit, per-goal databases, WAL journal and `user_version=2` through a raw
  * engine oracle. */
 async function exerciseQualifiedContract(t: test.TestContext, session: ChildSession,
-  binaryVersion: string, label: string): Promise<IdentityReply> {
-  const identityReply = assertIdentityRow(await session.next({kind: "identity"}), binaryVersion, label);
+  binaryVersion: string, label: string, selected?: RuntimeProbe): Promise<IdentityReply> {
+  const identityReply = assertIdentityRow(await session.next({kind: "identity"}), binaryVersion, label, selected);
   assert.equal(identityReply.identity.sqlite_authority_qualified, true,
     `${label}: the contract row requires a qualified runtime`);
 
@@ -505,26 +607,36 @@ async function exerciseQualifiedContract(t: test.TestContext, session: ChildSess
   return identityReply;
 }
 
-test("OS/runtime matrix: the qualified floor runtime holds the full SQLite authority-store contract",
+test("OS/runtime matrix: a qualified runtime holds the full SQLite authority-store contract, with the reference floor distinguished from a generic runner",
   {timeout: 120000}, async t => {
     const directory = await mkdtemp(join(tmpdir(), "sqlite-runtime-matrix-floor-"));
     t.after(() => rm(directory, {recursive: true, force: true}));
-    const version = probeBinaryVersion(process.execPath) ?? process.version;
-    // The suite's own runner is the floor evidence: the documented public
-    // minimum is Node 22.22.3, and this row must run on a runtime that meets
-    // it (CI pins 22.22.3 for the qualified lane; the local evidence run uses
-    // the soak-pinned 22.22.3 binary as the runner).
-    const session = await spawnMatrixChild(t, process.execPath, directory);
-    const identityReply = await session.next({kind: "identity"});
-    const oracle = (identityReply as unknown as IdentityReply).oracle;
-    if (oracle.driver_available !== true || oracle.synchronous_statement_finalization !== true ||
-      !docAdmittedSqlite(String(oracle.sqlite_version))) {
-      const shapes = assertIdentityRow(identityReply, version, "runner");
+    // The precise reference environment (the documented Node 22.22.3 floor
+    // with an admitted driver) can be pinned explicitly; unpinned, the
+    // suite's own runner serves the row and is attributed by what it
+    // actually reports — never assumed to be the floor just because the
+    // lane is qualified.
+    const pinned = process.env.LOOPX_TEST_SQLITE_FLOOR_NODE;
+    const target = pinned ?? process.execPath;
+    const probe = await probeRuntime(t, target);
+    if (pinned) {
+      if (probe.nodeVersion !== REFERENCE_NODE || !probeIsQualified(probe)) {
+        t.skip(`pinned floor binary did not report the documented reference identity (observed ` +
+          `${probe.nodeVersion} / ${String(probe.sqliteVersion)} on ${probe.platform}/${probe.arch})`);
+        return;
+      }
+    } else if (!probeIsQualified(probe)) {
       assert.fail(`this suite must run under the documented qualified runtime (Node >=22.22.3 with an ` +
-        `admitted embedded SQLite driver); observed ${shapes.oracle.node_version} / ` +
-        `${String(shapes.oracle.sqlite_version)} on ${process.platform}/${process.arch}`);
+        `admitted embedded SQLite driver) or pin LOOPX_TEST_SQLITE_FLOOR_NODE; observed ` +
+        `${probe.nodeVersion} / ${String(probe.sqliteVersion)} on ${probe.platform}/${probe.arch}`);
     }
-    await exerciseQualifiedContract(t, session, version, "runner");
+    const isReferencePair = probe.nodeVersion === REFERENCE_NODE && probe.sqliteVersion === REFERENCE_SQLITE;
+    const label = isReferencePair
+      ? `runner(reference floor ${probe.nodeVersion} / ${String(probe.sqliteVersion)})`
+      : `runner(generic qualified ${probe.nodeVersion} / ${String(probe.sqliteVersion)}; the documented ` +
+        `reference floor is Node ${REFERENCE_NODE} / SQLite ${REFERENCE_SQLITE})`;
+    const session = await spawnMatrixChild(t, target, directory);
+    await exerciseQualifiedContract(t, session, probe.binaryVersion, label, probe);
   });
 
 test("OS/runtime matrix: a below-floor Node runtime fails closed through the embedded-driver probe",
@@ -558,112 +670,188 @@ test("OS/runtime matrix: a below-floor Node runtime fails closed through the emb
     assert.equal(closed.code, 0, closed.stderr);
   });
 
-test("OS/runtime matrix: a newer-major Node runtime inside the documented envelope holds the same contract",
+test("OS/runtime matrix: a distinct newer-major Node runtime inside the documented envelope holds the same contract",
   {timeout: 120000}, async t => {
-    const newer = resolveNewerMajorBinary();
-    if (newer === null) {
-      t.skip("no locally available Node newer than the floor major (set LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE)");
+    const runner = await probeRuntime(t, process.execPath);
+    const selection = await selectSecondRuntime(t, runner, {newerMajorOnly: true, requireQualified: false});
+    if (selection.status === "unavailable") {
+      t.skip(selection.reason);
       return;
     }
+    // Prove distinctness from the actually reported serving pairs before any
+    // coverage may be asserted; an alias of the runner skips honestly here.
+    if (!isDistinctPair(runner, selection.probe)) {
+      t.skip(`both entrypoints report the same serving pair ${selection.probe.nodeVersion}/` +
+        `${String(selection.probe.sqliteVersion)}; no distinct newer-major coverage formed`);
+      return;
+    }
+    const label = `newer-major(${pairsLabel(runner, selection.probe)})`;
     const directory = await mkdtemp(join(tmpdir(), "sqlite-runtime-matrix-newer-"));
     t.after(() => rm(directory, {recursive: true, force: true}));
-    const session = await spawnMatrixChild(t, newer.path, directory);
-    const identityReply = assertIdentityRow(await session.next({kind: "identity"}), newer.version, "newer-major");
+    const session = await spawnMatrixChild(t, selection.probe.path, directory);
+    const identityReply = assertIdentityRow(await session.next({kind: "identity"}),
+      selection.probe.binaryVersion, label, selection.probe);
     const oracle = identityReply.oracle;
     if (oracle.driver_available && oracle.synchronous_statement_finalization === true &&
       docAdmittedSqlite(String(oracle.sqlite_version))) {
       // Inside the documented envelope ("SQLite 3.51.3 and later 3.x"):
       // the full contract must hold on the newer runtime.
-      await exerciseQualifiedContract(t, session, newer.version, "newer-major");
+      await exerciseQualifiedContract(t, session, selection.probe.binaryVersion, label, selection.probe);
       return;
     }
     // Outside the admitted lines, the documented envelope is fail-closed
     // ("Unknown version strings or unverified vendor backports fail
     // closed") — also a contract-conformant row, asserted as such.
-    await assertFailClosedRow(session, oracle, "newer-major");
+    await assertFailClosedRow(session, oracle, label);
     const exited = await session.next({kind: "exit"});
     assert.equal(exited.kind, "exited");
     const closed = await session.finish();
     assert.equal(closed.code, 0, closed.stderr);
   });
 
-test("OS/runtime matrix: one authority database serves across two qualified runtimes on this host",
+test("OS/runtime matrix: one authority database serves across two distinct qualified runtimes on this host",
   {timeout: 120000}, async t => {
-    const newer = resolveNewerMajorBinary();
-    if (newer === null) {
-      t.skip("cross-runtime handoff needs a second qualified runtime (set LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE)");
+    const runner = await probeRuntime(t, process.execPath);
+    if (!probeIsQualified(runner)) {
+      assert.fail(`the handoff row needs a qualified suite runner; observed ${runner.nodeVersion} / ` +
+        `${String(runner.sqliteVersion)} on ${runner.platform}/${runner.arch}`);
+    }
+    const selection = await selectSecondRuntime(t, runner, {newerMajorOnly: false, requireQualified: true});
+    if (selection.status === "unavailable") {
+      t.skip(selection.reason);
       return;
     }
+    const second = selection.probe;
+    // Prove the two sides are distinct from their reported serving pairs
+    // before the takeover flow may assert cross-runtime coverage.
+    if (!isDistinctPair(runner, second)) {
+      t.skip(`both entrypoints report the same serving pair ${second.nodeVersion}/` +
+        `${String(second.sqliteVersion)}; no distinct cross-runtime coverage formed`);
+      return;
+    }
+    const pairLabel = `handoff(${pairsLabel(runner, second)})`;
     const directory = await mkdtemp(join(tmpdir(), "sqlite-runtime-matrix-handoff-"));
     t.after(() => rm(directory, {recursive: true, force: true}));
-    const floorVersion = probeBinaryVersion(process.execPath) ?? process.version;
     const ledger = Array.from({length: 33}, (_unused, index) => matrixEntry(index + 1));
 
-    // The floor runtime authors the first 33 commits.
+    // The runner-side runtime authors the first 33 commits.
     const first = await spawnMatrixChild(t, process.execPath, directory);
-    const firstIdentity = (await first.next({kind: "identity"})) as unknown as IdentityReply;
-    const firstOracle = firstIdentity.oracle;
+    const firstIdentity = assertIdentityRow(await first.next({kind: "identity"}), runner.binaryVersion,
+      `${pairLabel} first`, runner);
     assert.equal(firstIdentity.identity.sqlite_authority_qualified, true,
-      "handoff starts from a qualified floor runtime");
+      `${pairLabel}: handoff starts from a qualified runtime`);
     const run = (await first.next({kind: "run-ledger", first: 1, count: 33,
       padding_bytes: LEDGER_PADDING_BYTES, padding_char: "m"})).results as
       {sequence: number; status: string; provider_revision: string | null; cursor: string | null}[];
     for (const [index, result] of run.entries()) {
-      assert.equal(result.status, "applied", `handoff floor commit ${index + 1}`);
+      assert.equal(result.status, "applied", `${pairLabel} first-side commit ${index + 1}`);
       assert.equal(result.cursor, String(index + 1));
     }
     await first.next({kind: "exit"});
     const firstClosed = await first.finish();
     assert.equal(firstClosed.code, 0, firstClosed.stderr);
 
-    // The newer runtime takes over the same database and continues it.
-    const second = await spawnMatrixChild(t, newer.path, directory);
-    const secondIdentity = (await second.next({kind: "identity"})) as unknown as IdentityReply;
+    // The distinct second runtime takes over the same database and continues it.
+    const secondSession = await spawnMatrixChild(t, second.path, directory);
+    const secondIdentity = assertIdentityRow(await secondSession.next({kind: "identity"}), second.binaryVersion,
+      `${pairLabel} second`, second);
     assert.equal(secondIdentity.identity.sqlite_authority_qualified, true,
-      "handoff continues on a qualified newer runtime");
-    const loadOnTakeover = (await second.next({kind: "load"})).result as {status: string; cursor?: string;
+      `${pairLabel}: handoff continues on a qualified runtime`);
+    const loadOnTakeover = (await secondSession.next({kind: "load"})).result as {status: string; cursor?: string;
       head?: JsonObject};
-    assert.equal(loadOnTakeover.status, "loaded", "newer runtime loads the floor-authored head");
-    assert.equal(loadOnTakeover.cursor, "33");
+    assert.equal(loadOnTakeover.status, "loaded", `${pairLabel}: second runtime loads the first runtime's head`);
+    assert.equal(loadOnTakeover.cursor, "33", `${pairLabel}: takeover cursor`);
     assert.equal(canonicalAuthorityBytes(loadOnTakeover.head!).toString("utf8"),
-      canonicalAuthorityBytes(ledger[32]!.projection).toString("utf8"), "takeover head bytes");
-    const continuation = (await second.next({kind: "run-ledger", first: 34, count: 3,
+      canonicalAuthorityBytes(ledger[32]!.projection).toString("utf8"), `${pairLabel}: takeover head bytes`);
+    const continuation = (await secondSession.next({kind: "run-ledger", first: 34, count: 3,
       padding_bytes: LEDGER_PADDING_BYTES, padding_char: "m"})).results as
       {sequence: number; status: string; cursor: string | null; provider_revision: string | null}[];
     for (const [offset, result] of continuation.entries()) {
-      assert.equal(result.status, "applied", `newer runtime commit ${34 + offset}`);
+      assert.equal(result.status, "applied", `${pairLabel} second-side commit ${34 + offset}`);
       assert.equal(result.cursor, String(34 + offset));
     }
-    const newerAudit = (await second.next({kind: "audit"})).result as {schema_version: string; status: string;
+    const newerAudit = (await secondSession.next({kind: "audit"})).result as {schema_version: string; status: string;
       commits: number; checkpoints: number};
     assert.deepEqual(newerAudit, {schema_version: AUDIT_SCHEMA, status: "verified", commits: 36, checkpoints: 1},
-      "newer runtime audits the combined history");
-    await second.next({kind: "exit"});
-    const secondClosed = await second.finish();
+      `${pairLabel}: second runtime audits the combined history`);
+    await secondSession.next({kind: "exit"});
+    const secondClosed = await secondSession.finish();
     assert.equal(secondClosed.code, 0, secondClosed.stderr);
 
-    // The floor runtime reads back what the newer runtime committed. This is
-    // same-host runtime-axis evidence only: the separate "supported
+    // The runner-side runtime reads back what the second runtime committed.
+    // This is same-host runtime-axis evidence only: the separate "supported
     // upgrades/rollback" qualification hold stays missing.
     const third = await spawnMatrixChild(t, process.execPath, directory);
     const finalLoad = (await third.next({kind: "load"})).result as {status: string; cursor?: string;
       head?: JsonObject; provider_revision?: string};
-    assert.equal(finalLoad.status, "loaded", "floor runtime reloads after the newer runtime's commits");
-    assert.equal(finalLoad.cursor, "36");
+    assert.equal(finalLoad.status, "loaded", `${pairLabel}: first runtime reloads after the second runtime's commits`);
+    assert.equal(finalLoad.cursor, "36", `${pairLabel}: final cursor`);
     assert.equal(canonicalAuthorityBytes(finalLoad.head!).toString("utf8"),
-      canonicalAuthorityBytes(matrixEntry(36).projection).toString("utf8"), "final head bytes");
+      canonicalAuthorityBytes(matrixEntry(36).projection).toString("utf8"), `${pairLabel}: final head bytes`);
     const floorAudit = (await third.next({kind: "audit"})).result as {status: string; commits: number};
-    assert.equal(floorAudit.status, "verified");
-    assert.equal(floorAudit.commits, 36);
+    assert.equal(floorAudit.status, "verified", `${pairLabel}: final audit`);
+    assert.equal(floorAudit.commits, 36, `${pairLabel}: final audit commits`);
     const floorReceipt = (await third.next({kind: "receipt", operation_id: "matrix-035"})).result as
       {status: string; receipts?: JsonObject[]};
-    assert.equal(floorReceipt.status, "found");
+    assert.equal(floorReceipt.status, "found", `${pairLabel}: cross-runtime receipt`);
     assert.equal(canonicalAuthorityBytes(floorReceipt.receipts!).toString("utf8"),
-      canonicalAuthorityBytes(matrixEntry(35).receipts).toString("utf8"), "cross-runtime receipt bytes");
+      canonicalAuthorityBytes(matrixEntry(35).receipts).toString("utf8"), `${pairLabel}: cross-runtime receipt bytes`);
     await third.next({kind: "exit"});
     const thirdClosed = await third.finish();
     assert.equal(thirdClosed.code, 0, thirdClosed.stderr);
     // Platform pin: both runtimes served on this host's OS/arch.
-    assert.equal(secondIdentity.oracle.platform, firstOracle.platform);
-    assert.equal(secondIdentity.oracle.arch, firstOracle.arch);
+    assert.equal(secondIdentity.oracle.platform, firstIdentity.oracle.platform, `${pairLabel}: platform`);
+    assert.equal(secondIdentity.oracle.arch, firstIdentity.oracle.arch, `${pairLabel}: arch`);
+  });
+
+test("OS/runtime matrix: launcher aliasing of one executable cannot fabricate distinct runtime coverage",
+  {timeout: 120000}, async t => {
+    const runner = await probeRuntime(t, process.execPath);
+    // The reviewed counterexample: one Node reachable through several
+    // entrypoints — a direct call and launcher symlinks (hardlinks behave
+    // identically because no path heuristic is consulted) — must never be
+    // selectable as a "distinct" second runtime. Only the child-reported
+    // serving pair decides, and it is identical for every entrypoint of one
+    // executable.
+    const workspace = await mkdtemp(join(tmpdir(), "sqlite-runtime-matrix-alias-"));
+    t.after(() => rm(workspace, {recursive: true, force: true}));
+    const alias = join(workspace, "launcher-node");
+    symlinkSync(process.execPath, alias);
+    const chain = join(workspace, "chained-launcher-node");
+    symlinkSync(alias, chain);
+    const previousOverride = process.env.LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE;
+    process.env.LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE = chain;
+    try {
+      const aliased = await selectSecondRuntime(t, runner, {newerMajorOnly: false, requireQualified: false});
+      assert.equal(aliased.status, "unavailable",
+        "a launcher alias of the runner must never form a distinct runtime row");
+      if (aliased.status === "unavailable") {
+        assert.match(aliased.reason, /no distinct qualifying second runtime available/,
+          "the skip reason names the missing distinct runtime");
+        assert.match(aliased.reason, /same serving pair/,
+          "the skip reason names the identical serving pair, not a path heuristic");
+        assert.ok(aliased.reason.includes(runner.nodeVersion) &&
+          aliased.reason.includes(String(runner.sqliteVersion)),
+          "the skip reason records the identical reported pair");
+      }
+    } finally {
+      if (previousOverride === undefined) delete process.env.LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE;
+      else process.env.LOOPX_TEST_SQLITE_NEWER_MAJOR_NODE = previousOverride;
+    }
+
+    // Positive control on the same host: when a genuinely distinct second
+    // runtime exists, the selection must return it with a reported pair that
+    // differs from the runner's — the invariant the distinct rows assert
+    // coverage by. Without one, the control skips with the same disclosed
+    // reason (an unavailable environment is a gap, never a pass).
+    const genuine = await selectSecondRuntime(t, runner, {newerMajorOnly: true, requireQualified: false});
+    if (genuine.status === "unavailable") {
+      t.skip(`aliasing guard passed; no genuinely distinct newer-major runtime for the positive control ` +
+        `(${genuine.reason})`);
+      return;
+    }
+    assert.ok(isDistinctPair(runner, genuine.probe),
+      `selected second runtime must report a distinct pair (${pairsLabel(runner, genuine.probe)})`);
+    assert.equal(genuine.probe.binaryVersion, genuine.probe.nodeVersion,
+      "the selected launcher's --version matches the child's reported node version");
   });
