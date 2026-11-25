@@ -28,8 +28,10 @@ Omit an unmeasured field. A measured zero is a value.
 
 The **Verification evidence packet** on **Research** reads these records and
 the Goal's existing acceptance and lifecycle projections. A current owner-pinned
-check must attest the same candidate and receipt versions as outputs of the
-named criterion to show a verified tier.
+check must attest the candidate's recorded result reference and SHA-256
+alongside the named criterion's receipt versions. Each proof role needs a
+distinct receipt. If the current check cannot be read, the current tier is
+unknown. Read-only snapshots label saved verification as archived.
 L0 covers independent evaluation, L1 also covers the warm session, and L2 adds
 tool hooks and receipt compaction. The reader works with opaque host names and
 uses existing acceptance reads for local version freshness. Opening the packet

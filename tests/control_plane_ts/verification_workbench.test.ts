@@ -57,6 +57,18 @@ test("the same exact checked receipts qualify every host name; absent or changed
     /nonnegative/);
 });
 
+test("each tier requires a distinct verified receipt for the added capability", () => {
+  const claims = {external_verifier: external, warm_session_cache: warm,
+    white_box_hooks: hooks, receipt_compaction: compaction};
+  const alias = {...warm, sha256: external.sha256};
+  assert.equal(verifiedHostDepth({host: "generic-cli", proofs: {...claims, warm_session_cache: external}},
+    receipts), 0);
+  assert.equal(verifiedHostDepth({host: "generic-cli", proofs: {...claims, warm_session_cache: alias}},
+    [...receipts, alias]), 0);
+  assert.equal(verifiedHostDepth({host: "generic-cli", proofs: {...claims, receipt_compaction: warm}},
+    receipts), 1);
+});
+
 test("fidelity uses the exact bounded pair and explicit negative or comparison evidence", () => {
   const selected = finding("selected", {evidence_refs: evidenceRefs, work_yardstick: {
     binding: {goal_id: "goal", agent_id: "worker", todo_id: "todo_case", turn_instance_id: "turn-1"},

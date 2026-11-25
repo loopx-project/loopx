@@ -83,9 +83,15 @@ export function normalizeCandidateVerificationEvidence(value: unknown, evidenceR
 export function verifiedHostDepth(evidence: CandidateVerificationEvidence | undefined, checked: readonly VerificationProof[]) {
   const proofs = evidence?.proofs;
   if (!evidence?.host || !proofs) return null;
-  const has = (proof?: VerificationProof) =>
-    !!proof && checked.some(ref => ref.ref === proof.ref && ref.sha256 === proof.sha256 && ref.criterion_id === proof.criterion_id);
-  if (!has(proofs.external_verifier)) return null;
-  if (!has(proofs.warm_session_cache)) return 0;
-  return has(proofs.white_box_hooks) && has(proofs.receipt_compaction) ? 2 : 1;
+  const used: VerificationProof[] = [];
+  const hasDistinctProof = (proof?: VerificationProof) => {
+    if (!proof || used.some(item => item.ref === proof.ref || item.sha256 === proof.sha256)) return false;
+    if (!checked.some(item => item.ref === proof.ref && item.sha256 === proof.sha256
+        && item.criterion_id === proof.criterion_id)) return false;
+    used.push(proof);
+    return true;
+  };
+  if (!hasDistinctProof(proofs.external_verifier)) return null;
+  if (!hasDistinctProof(proofs.warm_session_cache)) return 0;
+  return hasDistinctProof(proofs.white_box_hooks) && hasDistinctProof(proofs.receipt_compaction) ? 2 : 1;
 }
