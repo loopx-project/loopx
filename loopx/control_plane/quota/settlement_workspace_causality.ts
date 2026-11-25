@@ -216,8 +216,8 @@ function result(values: JsonObject): JsonObject {
 export function classifyDeliveryWorkspaceCausality(
   value: unknown,
 ): DeliveryWorkspaceCausality | null {
-  // Missing write metadata stays unknown. Only an explicit non-delivery
-  // contract with no repository-write evidence can omit workspace validation.
+  // Missing metadata is not a read-only declaration. Explicit verification
+  // still needs a workspace receipt, with checkout isolation chosen separately.
   const contract = requiredObject(value, "normalized_todo_contract");
   const todoId = optionalString(contract.todo_id, "todo_id");
   if (!todoId) return null;
@@ -233,6 +233,7 @@ export function classifyDeliveryWorkspaceCausality(
     contract.required_capabilities,
     "required_capabilities",
   );
+  const actionKind = optionalString(contract.action_kind, "action_kind");
   const continuationPolicy = optionalString(
     contract.continuation_policy,
     "continuation_policy",
@@ -250,6 +251,13 @@ export function classifyDeliveryWorkspaceCausality(
   } else if (continuationPolicy === "same_agent_non_delivery") {
     requirement = "not_required";
     reason = "explicit_non_delivery_without_repository_writes";
+  } else if (
+    actionKind === "verify" && contract.write_scope_declared === false &&
+    capabilities.includes("filesystem_read") &&
+    capabilities.every((capability) => capability === "filesystem_read" || capability === "shell")
+  ) {
+    requirement = "required";
+    reason = "declared_read_only_verification";
   } else {
     requirement = "unknown";
     reason = "todo_write_contract_not_explicit";
