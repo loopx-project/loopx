@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from loopx.control_plane.testing import (
+    cli_output_differential,
+    cli_output_differential_allowances,
+    cli_output_differential_carriers,
+    cli_output_differential_migrations,
+)
+from loopx.control_plane.testing.cli_output_differential import (
+    CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION,
+    CLI_OUTPUT_FIXTURE_CONTRACT_VERSION,
+    CLI_OUTPUT_PROBE_SCHEMA_VERSION,
+    compare_cli_output_receipts,
+    select_cli_output_base_ref,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_IGNORE_MARKER = "type" + ": ignore"
+
+
+def _any_ast_refs(path: Path) -> int:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "Any":
+            count += 1
+        elif isinstance(node, ast.Attribute) and node.attr == "Any":
+            count += 1
+        elif isinstance(node, ast.alias) and node.name == "Any":
+            count += 1
+    return count
+
+
+def _sample_row(*, row_id: str = "surface/status/small/json") -> dict[str, object]:
+    return {
+        "row_id": row_id,
+        "surface_id": "status",
+        "format": "json",
+        "qualification_policy": "baseline_and_growth",
+        "chars": 100,
+        "utf8_bytes": 100,
+        "lines": 5,
+        "compact_payload_chars": 80,
+        "semantic_json_keys": ["ok", "status"],
+        "json_shape_paths": ["$", "$.ok"],
+        "markdown_headings": [],
+    }
+
+
+def _sample_receipt(*rows: dict[str, object]) -> dict[str, object]:
+    return {
+        "schema_version": CLI_OUTPUT_PROBE_SCHEMA_VERSION,
+        "fixture_contract_version": CLI_OUTPUT_FIXTURE_CONTRACT_VERSION,
+        "rows": list(rows),
+    }
+
+
+def test_cli_output_differential_modules_zero_any_and_under_700_loc() -> None:
+    testing_dir = REPO_ROOT / "loopx" / "control_plane" / "testing"
+    for filename in (
+        "cli_output_differential.py",
+        "cli_output_differential_allowances.py",
+        "cli_output_differential_migrations.py",
+        "cli_output_differential_carriers.py",
+    ):
+        path = testing_dir / filename
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        assert len(lines) < 700, f"{filename} exceeded 700 LOC ({len(lines)})"
+        assert _any_ast_refs(path) == 0, f"{filename} contains Any"
+        assert _IGNORE_MARKER not in text, f"{filename} contains {_IGNORE_MARKER}"
+
+
+def test_cli_output_differential_preserves_owner_symbol_reexports() -> None:
+    for symbol in (
+        "CLI_OUTPUT_PROBE_SCHEMA_VERSION",
+        "CLI_OUTPUT_FIXTURE_CONTRACT_VERSION",
+        "CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION",
+        "GrowthAllowance",
+        "Metric",
+        "_TURN_HOST_AND_MANAGED_EXECUTOR_BINDING_V0_GROWTH_ALLOWANCE",
+        "_rows_by_id",
+        "_removed",
+    ):
+        assert getattr(cli_output_differential, symbol) is getattr(
+            cli_output_differential_allowances, symbol
+        )
+    for symbol in (
+        "_action_portfolio_schema_migration",
+        "_complete_turn_plan_migration",
+        "_complete_quota_source_migration",
+        "_projection_envelope_migration",
+    ):
+        assert getattr(cli_output_differential, symbol) is getattr(
+            cli_output_differential_migrations, symbol
+        )
+    for symbol in (
+        "_task_step_read_fence_migration",
+        "_authoring_input_migration",
+        "_continuation_instruction_migration",
+        "_turn_projection_migration",
+    ):
+        assert getattr(cli_output_differential, symbol) is getattr(
+            cli_output_differential_carriers, symbol
+        )
+
+
+def test_select_cli_output_base_ref_sync_branch_logic() -> None:
+    assert (
+        select_cli_output_base_ref(
+            "origin/main", main_ref="origin/main", is_ancestor=lambda _a, _b: False
+        )
+        == "origin/main"
+    )
+    assert (
+        select_cli_output_base_ref(
+            "stale-base",
+            main_ref="origin/main",
+            is_ancestor=lambda _ancestor, desc: desc == "HEAD",
+        )
+        == "origin/main"
+    )
+    assert (
+        select_cli_output_base_ref(
+            "fresh-base",
+            main_ref="origin/main",
+            is_ancestor=lambda _ancestor, _desc: True,
+        )
+        == "fresh-base"
+    )
+
+
+def test_fail_closed_validation_rejects_malformed_receipts_and_fields() -> None:
+    with pytest.raises(ValueError, match="schema_version"):
+        compare_cli_output_receipts({"schema_version": "bad"}, _sample_receipt())
+
+    with pytest.raises(ValueError, match="fixture_contract_version"):
+        compare_cli_output_receipts(
+            {"schema_version": CLI_OUTPUT_PROBE_SCHEMA_VERSION, "fixture_contract_version": "bad"},
+            _sample_receipt(),
+        )
+
+    dup = _sample_row()
+    with pytest.raises(ValueError, match="duplicate CLI output probe row_id"):
+        compare_cli_output_receipts(_sample_receipt(dup, dict(dup)), _sample_receipt())
+
+    bad_keys_candidate = {**_sample_row(), "semantic_json_keys": 42}
+    with pytest.raises(TypeError, match="semantic_json_keys must be iterable"):
+        compare_cli_output_receipts(
+            _sample_receipt(_sample_row()), _sample_receipt(bad_keys_candidate)
+        )
+
+    bad_paths_candidate = {**_sample_row(), "json_shape_paths": 42}
+    with pytest.raises(TypeError, match="json_shape_paths must be iterable"):
+        compare_cli_output_receipts(
+            _sample_receipt(_sample_row()), _sample_receipt(bad_paths_candidate)
+        )
+
+
+def test_compare_cli_output_receipts_handles_candidate_only_and_retired_rows() -> None:
+    base = _sample_row(row_id="surface/evidence_log_thin/small/json")
+    replacement: dict[str, object] = {
+        **_sample_row(row_id="surface/quota_should_run/small/json"),
+        "json_shape_paths": [
+            "$.replan_context.core_goal",
+            "$.replan_context.evidence",
+            "$.replan_context.coverage_ledger",
+        ],
+    }
+    summary = compare_cli_output_receipts(
+        _sample_receipt(base), _sample_receipt(replacement)
+    )
+    assert summary["schema_version"] == CLI_OUTPUT_DIFFERENTIAL_SCHEMA_VERSION
+    assert summary["ok"] is True
+    assert summary["candidate_only_row_count"] == 1
+    assert summary["review_required"] is True
+    by_id = {row["row_id"]: row for row in summary["rows"]}
+    assert by_id["surface/evidence_log_thin/small/json"]["status"] == "passed"
+    assert by_id["surface/quota_should_run/small/json"]["status"] == "candidate_only"
