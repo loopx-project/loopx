@@ -165,3 +165,36 @@ test('agy fork: clones SQLite DB (WAL + protobuf BLOB UUIDs), brain and annotati
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('agy models() deduplicates concurrent calls and serves expired cache immediately (stale-while-revalidate)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agy-swr-'));
+  const script = join(dir, 'slow-agy.mjs');
+  const countFile = join(dir, 'calls.txt');
+  writeFileSync(script, [
+    "import { appendFileSync } from 'node:fs';",
+    `appendFileSync(${JSON.stringify(countFile)}, 'x\\n');`,
+    "setTimeout(() => { process.stdout.write('gemini-2.5-pro\\tGemini 2.5 Pro\\n'); }, 150);",
+  ].join('\n'));
+  try {
+    const adapter = new AgyAdapter([process.execPath, script]);
+    // Concurrent cold calls share a single subprocess.
+    const [a, b] = await Promise.all([adapter.models(), adapter.models()]);
+    assert.equal(a.length, 1);
+    assert.equal(b.length, 1);
+    assert.equal(readFileSync(countFile, 'utf8').trim().split('\n').length, 1);
+
+    // Expire the cache timestamp and verify the next call returns immediately without waiting 150ms.
+    (adapter as unknown as { modelCache: { at: number; models: unknown[] } }).modelCache.at = 0;
+    const t0 = Date.now();
+    const stale = await adapter.models();
+    const elapsed = Date.now() - t0;
+    assert.equal(stale.length, 1);
+    assert.ok(elapsed < 80, `expired cache should return immediately, took ${elapsed}ms`);
+
+    // Background refresh eventually invokes the CLI a second time.
+    await new Promise(r => setTimeout(r, 260));
+    assert.equal(readFileSync(countFile, 'utf8').trim().split('\n').length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

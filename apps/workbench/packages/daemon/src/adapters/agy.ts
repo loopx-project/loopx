@@ -337,6 +337,8 @@ export class AgyAdapter extends AcpAdapter {
     quota: true,
   };
   private modelCache: { at: number; models: ModelOption[] } | null = null;
+  private modelLoad: Promise<ModelOption[]> | null = null;
+  private modelRetryAt = 0;
   private modelGeneration = 0;
   onModelsChanged?: (models: ModelOption[]) => void;
   private readonly commandCache = new Map<string, { at: number; value: Promise<{ cli: AgyCliCommand[]; list: SlashCommand[] }> }>();
@@ -377,6 +379,8 @@ export class AgyAdapter extends AcpAdapter {
   startLogin(onSuccess: (account?: string) => Promise<void>) {
     return startAgyLogin(this.cliCommand, this.env, async account => {
       this.modelCache = null;
+      this.modelLoad = null;
+      this.modelRetryAt = 0;
       this.modelGeneration++;
       this.commandCache.clear();
       this.commandsByCwd.clear();
@@ -405,11 +409,26 @@ export class AgyAdapter extends AcpAdapter {
   }
 
   async models(refresh = false): Promise<ModelOption[]> {
-    if (refresh) { this.modelCache = null; this.modelGeneration++; }
-    if (this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) return this.modelCache.models;
+    if (refresh) {
+      this.modelCache = null;
+      this.modelLoad = null;
+      this.modelRetryAt = 0;
+      this.modelGeneration++;
+    }
+    if (!refresh && this.modelCache) {
+      if (Date.now() - this.modelCache.at >= MODELS_TTL_MS && !this.modelLoad && Date.now() >= this.modelRetryAt) {
+        void this.loadModels(false).catch(() => undefined);
+      }
+      return this.modelCache.models;
+    }
+    return this.loadModels(refresh);
+  }
+
+  private loadModels(notify: boolean): Promise<ModelOption[]> {
+    if (this.modelLoad) return this.modelLoad;
     const generation = this.modelGeneration;
     const [bin, ...base] = this.cliCommand;
-    const stdout = await new Promise<string>((resolve, reject) => {
+    const pending = new Promise<string>((resolve, reject) => {
       execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out, stderr) => {
         if (!err) { resolve(out); return; }
         // Native signed-out diagnostic only; network, quota and process errors retain their meaning.
@@ -417,13 +436,25 @@ export class AgyAdapter extends AcpAdapter {
           reject(new HttpError(409, 'Antigravity is not signed in', { code: 'agent_login_required' }));
         } else reject(err);
       });
+    }).then((stdout) => {
+      const models = parseAgyModels(stdout);
+      if (generation === this.modelGeneration) {
+        const previous = this.modelCache?.models ?? null;
+        if (models.length > 0) this.modelCache = { at: Date.now(), models };
+        this.modelRetryAt = 0;
+        if (notify || (previous && models.length > 0 && JSON.stringify(previous) !== JSON.stringify(models))) {
+          this.onModelsChanged?.(models);
+        }
+      }
+      return models;
+    }).catch((err) => {
+      if (generation === this.modelGeneration) this.modelRetryAt = Date.now() + 60_000;
+      throw err;
+    }).finally(() => {
+      if (this.modelLoad === pending) this.modelLoad = null;
     });
-    const models = parseAgyModels(stdout);
-    if (generation === this.modelGeneration) {
-      if (models.length > 0) this.modelCache = { at: Date.now(), models };
-      if (refresh) this.onModelsChanged?.(models);
-    }
-    return models;
+    this.modelLoad = pending;
+    return pending;
   }
 
   /** One `agy -p <text>` run, for the commands agy answers itself. Resolves to what it printed. */

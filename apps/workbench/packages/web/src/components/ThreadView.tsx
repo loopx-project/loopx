@@ -355,7 +355,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
           const draft = parseReferenceDraft(item.text);
           const { quote, body } = draft.notes.length ? { quote: null, body: draft.text } : splitUserQuote(draft.text);
           return (
-            <div key={item.key} className={`row user${item.voice ? ' voice' : ''}${item.streaming ? ' draft' : ''}`} data-turn={item.turnId} data-message-key={item.key}>
+            <div key={item.key} className={`row user${item.voice ? ' voice' : ''}${item.streaming ? ' draft' : ''}`} data-turn={item.turnId} data-message-key={item.key} {...(item.optimistic ? { 'data-optimistic': 'true' } : {})}>
               {item.images.length > 0 && (
                 <div className="sent-images">
                   {item.images.map((img) => (
@@ -386,7 +386,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
                 </div>
               )}
               <div className="user-message-actions">
-              {onEdit && (body || item.images.length > 0 || draft.references.length > 0 || draft.notes.length > 0) && !item.voice && !item.fromTerminal && !item.scheduled && !item.coordination && (
+              {onEdit && (body || item.images.length > 0 || draft.references.length > 0 || draft.notes.length > 0) && !item.optimistic && !item.voice && !item.fromTerminal && !item.scheduled && !item.coordination && (
                 <EditMessage
                   text={item.text}
                   imageIds={item.images.map((img) => img.id)}

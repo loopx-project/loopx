@@ -1,4 +1,5 @@
 import { historyPage, mergeHistory, prependHistory, watchHistory } from '../history';
+import { createOptimisticTurn, maxEventSeq, mergeOptimisticEvents, useOptimisticTurns } from '../optimistic';
 import { useReadingPosition } from '../use-reading-position';
 import { waitingLabel } from '../notices';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -90,6 +91,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const resultFileOf = (deliveryId: string, file?: { name: string; size: number; truncated?: boolean }): ResultFile | undefined =>
     file ? { ...file, onOpen: () => { void api.coordinationResult(team.rootId, deliveryId).then(blob => downloadBlob(blob, file.name)).catch(onError); } } : undefined;
   const [events, setEvents] = useState<StoredEvent[]>([]);
+  const optimistic = useOptimisticTurns();
   /** Messages that were waiting when a member was stopped, handed back to that member's box once. */
   const [restore, setRestore] = useState<{ thread: string; text: string; nonce: number } | null>(null);
   // A box opened again later reads its saved draft, which already holds them.
@@ -110,7 +112,8 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   // A member on another machine is read from that machine; it cannot be opened here as a conversation of this one.
   const remote = member?.host;
   const threadApi = useMemo(() => (remote && memberApi ? memberApi(remote) : api), [api, remote]);
-  const timeline = useMemo(() => buildTimeline(events), [events]);
+  const displayEvents = useMemo(() => mergeOptimisticEvents(events, optimistic.turns, memberId), [events, optimistic.turns, memberId]);
+  const timeline = useMemo(() => buildTimeline(displayEvents), [displayEvents]);
   useEffect(() => {
     if (thread?.unread) void threadApi.updateThread(thread.id, { unread: false }).then(onRefresh).catch(() => undefined);
   }, [threadApi, thread?.id, thread?.unread]);
@@ -139,14 +142,18 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
     if (!memberId) { requestAnimationFrame(() => { if (body.current) body.current.scrollTop = listScroll.current; }); return; }
     const ctrl = new AbortController();
     void watchHistory(threadApi, memberId, ctrl.signal, {
-      page: page => { setEvents(page.events); historyCursor.current = page.nextCursor; setOlder(page.hasOlder); },
-      events: batch => setEvents(previous => mergeHistory(previous, batch)),
+      page: page => { setEvents(page.events); optimistic.reconcile(memberId, page.events); historyCursor.current = page.nextCursor; setOlder(page.hasOlder); },
+      events: batch => setEvents(previous => {
+        const next = mergeHistory(previous, batch);
+        optimistic.reconcile(memberId, next);
+        return next;
+      }),
       error: onError,
       connection: setConnected,
     });
     return () => ctrl.abort();
   }, [threadApi, memberId]);
-  useEffect(() => { if (memberId && stick.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [events, memberId]);
+  useEffect(() => { if (memberId && stick.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [displayEvents, memberId]);
   const loadOlder = async () => {
     if (!memberId || loadingOlder || olderRequest.current || !historyCursor.current) return;
     const id = memberId;
@@ -220,7 +227,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
           <p>{m.latest?.result?.split(/<(?:loochat|limi)-(?:coordination|team)>/)[0].slice(-160) || m.latest?.text.slice(0, 160) || t('team.waitingTask')}</p>
           {m.thread?.unread && <span className="coord-unread">{t('team.newOutput')}</span>}
         </button>)}
-      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} historyTitle={thread.title} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
+      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} historyTitle={thread.title} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => optimistic.imageBlob(id) ? Promise.resolve(optimistic.imageBlob(id)!) : threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
     </div>
     {memberId && !atBottom && <button className="agent-panel-latest" onClick={() => { stick.current = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>{t('team.latest')}</button>}
     {/* A member is written to directly, in a box like the lead's; going through the lead instead is
@@ -233,12 +240,28 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
         attachBlocked={agents.find(a => a.id === thread.agent)?.capabilities?.images ? null : t('app.noImages', agents.find(a => a.id === thread.agent)?.label ?? thread.agent)}
         note={noteSignal?.draftKey === memberDraftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handleMemberNotes : undefined} restore={restore?.thread === thread.id ? restore : null} onError={onError}
         onSend={async (text, images, mentions, videos = [], _onCreated, references = []) => {
+          const optTurn = thread.status !== 'running' && !timeline.running
+            ? createOptimisticTurn({ threadId: thread.id, text, workMode: thread.workMode, images, videos, afterSeq: maxEventSeq(events) })
+            : null;
+          if (optTurn) { optimistic.add(optTurn); stick.current = true; }
           try {
-            await threadApi.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
+            const result = await threadApi.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
               queue: true, mentions, references, videos: await Promise.all(videos.map(async video => (await threadApi.uploadVideo(thread.id, video.file)).id)),
             });
+            if ('turnId' in result) {
+              if (optTurn) optimistic.bindTurnId(optTurn.localId, result.turnId);
+              else {
+                const late = createOptimisticTurn({ threadId: thread.id, text, workMode: thread.workMode, images, videos, afterSeq: maxEventSeq(events) });
+                late.turnId = result.turnId;
+                optimistic.add(late);
+              }
+            } else if (optTurn) optimistic.remove(optTurn.localId);
             stick.current = true; onRefresh();
-          } catch (error) { onError(error); throw error; }
+          } catch (error) {
+            if (optTurn) optimistic.remove(optTurn.localId);
+            onError(error);
+            throw error;
+          }
         }}
         onStop={() => { void threadApi.cancel(thread.id).then(result => { if (result.dropped.length) setRestore({ thread: thread.id, text: result.dropped.join('\n\n'), nonce: Date.now() }); onRefresh(); }).catch(onError); }}
         queued={thread.queued ?? []}

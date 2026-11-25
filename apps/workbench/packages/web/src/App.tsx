@@ -15,6 +15,7 @@ import { AutoHandoverNotice, HandoverSettingsDialog } from './components/AutoHan
 import { useWorkSources, WorkSummary } from './extensions/work';
 import { HostIcon } from './extensions/ui';
 import { historyPage, mergeHistory, mergeHistoryPage, peekCachedPage, prependHistory, refreshHistoryPage, watchHistory } from './history';
+import { isOptimisticThreadId, mergeOptimisticEvents, mergeServerThreads, runOptimisticMainSend, useOptimisticTurns, type PendingThreadCreation } from './optimistic';
 import { cachedRouterThreadId, rememberRouterThreadId } from './history-cache';
 import { useReadingPosition } from './use-reading-position';
 import type { WorkMode, WritingStage } from './api';
@@ -465,8 +466,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   /** How the list stream is doing, and when the thread list was last read: how extension views tell whether what they show may be stale. */
   const [connection, setConnection] = useState<ConnectionState>('reconnecting');
   const [observedAt, setObservedAt] = useState<string | null>(null);
+  const pinnedThreadIds = useRef(new Set<string>());
+  const pendingCreations = useRef(new Map<string, PendingThreadCreation>());
+  const optimistic = useOptimisticTurns();
   const threadFeed = useMemo(() => createThreadFeed(api, (list, at) => {
-    setThreads(list);
+    for (const thread of list) pinnedThreadIds.current.delete(thread.id);
+    setThreads(prev => mergeServerThreads(list, prev, pinnedThreadIds.current));
     setObservedAt(at);
     setThreadsKnown(true);
     if (keepThreads) rememberThreads(hostId, list, at ?? new Date().toISOString());
@@ -926,10 +931,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const [pageHidden, setPageHidden] = useState(() => document.hidden);
   const baseTitle = useRef(document.title);
 
-  const voice = useVoiceSession(api, selectedId, hostId);
-  const timeline = useMemo(() => buildCachedTimeline(events,
+  const voice = useVoiceSession(api, isOptimisticThreadId(selectedId) ? null : selectedId, hostId);
+  const displayEvents = useMemo(() => mergeOptimisticEvents(events, optimistic.turns, selectedId), [events, optimistic.turns, selectedId]);
+  const timeline = useMemo(() => buildCachedTimeline(displayEvents,
     voice.state.messagesThreadId === selectedId ? voice.state.messages : []),
-  [events, selectedId, voice.state.messages, voice.state.messagesThreadId]);
+  [displayEvents, selectedId, voice.state.messages, voice.state.messagesThreadId]);
   const turnPreviewMap = useMemo(() => turnPreviews(timeline.items), [timeline.items]);
   // The newest turn's plan sits in the top bar, so the conversation does not show it twice.
   const topPlan = useMemo(() => currentPlan(timeline.items), [timeline.items]);
@@ -947,7 +953,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const lastSent = useMemo(() => {
     for (let i = timeline.items.length - 1; i >= 0; i--) {
       const item = timeline.items[i];
-      if (item.kind === 'user' && !item.coordination && !item.key.startsWith('voice:')) return { turnId: item.turnId, text: item.text };
+      if (item.kind === 'user' && !item.coordination && !item.optimistic && !item.key.startsWith('voice:')) return { turnId: item.turnId, text: item.text };
     }
     return null;
   }, [timeline.items]);
@@ -1021,7 +1027,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const onPage = viewTitle !== null;
   // What an extension view is handed: the summaries of the threads the page holds, and how fresh they are.
   const connectionShown: ConnectionState = api.demo || (host && !hostUp) ? 'offline' : connection;
-  const workSources = useWorkSources(api, extensions, Boolean(selectedId) || onExt, onExt ? extOpen?.extensionId : undefined, selectedId ?? undefined);
+  const workSources = useWorkSources(api, extensions, (Boolean(selectedId) && !isOptimisticThreadId(selectedId)) || onExt, onExt ? extOpen?.extensionId : undefined, selectedId && !isOptimisticThreadId(selectedId) ? selectedId : undefined);
   const machineSources = useMemo<HostSource[]>(() => [{
     hostId, label: host?.label ?? t('hosts.local'), threads, agents: sidebarAgents,
     state: connectionShown === 'offline' ? 'offline' : connectionShown === 'live' ? 'live' : threadsKnown ? 'cached' : 'loading',
@@ -1447,20 +1453,26 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // The card reads the goal from events once they arrive; this covers goals older than the page.
   useEffect(() => {
     setGoalFetched(null);
-    if (!api || !selectedId) return;
+    if (!api || !selectedId || isOptimisticThreadId(selectedId)) return;
     let active = true;
     api.threadGoal(selectedId).then(value => { if (active) setGoalFetched(value.goal); }).catch(() => undefined);
     return () => { active = false; };
   }, [api, selectedId, historyEpoch]);
   useEffect(() => {
+    if (isOptimisticThreadId(selectedId)) {
+      setEvents([]); setHistoryTurnIds([]); setHasOlder(false); setLoadingOlder(false);
+      setHistoryReady(true); setEventsLoading(false); historyCursor.current = null; olderRequest.current = null;
+      return;
+    }
     const cached = api && selectedId && historyCutoff === undefined ? peekCachedPage(api, selectedId, undefined, undefined, mergedHandover)?.page ?? null : null;
     if (cached) {
       setEvents(cached.events); setHistoryTurnIds(cached.turnIds ?? []); setHasOlder(cached.hasOlder);
       setLoadingOlder(false); setHistoryReady(true); setEventsLoading(false);
       setHistoryRevision(cached.snapshotSeq); historyCursor.current = cached.nextCursor; olderRequest.current = null;
     } else {
-      setEvents([]); setHistoryTurnIds([]); setHasOlder(false); setLoadingOlder(false); setHistoryReady(false);
-      setEventsLoading(Boolean(api && selectedId)); historyCursor.current = null; olderRequest.current = null;
+      const hasOpt = optimistic.hasForThread(selectedId);
+      setEvents([]); setHistoryTurnIds([]); setHasOlder(false); setLoadingOlder(false);
+      setHistoryReady(hasOpt); setEventsLoading(Boolean(api && selectedId) && !hasOpt); historyCursor.current = null; olderRequest.current = null;
     }
     if (!api || !selectedId) return;
     const ctrl = new AbortController();
@@ -1468,7 +1480,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     const callbacks: Parameters<typeof watchHistory>[3] = {
       chain: mergedHandover, maximumSeq: historyCutoff, pinned: selectedId === routerThreadId,
       page: page => {
-        setEvents(page.events); setHistoryTurnIds(page.turnIds ?? []); setEventsLoading(false); setHistoryReady(true);
+        setEvents(page.events); optimistic.reconcile(selectedId, page.events);
+        setHistoryTurnIds(page.turnIds ?? []); setEventsLoading(false); setHistoryReady(true);
         setHistoryRevision(page.snapshotSeq);
         historyCursor.current = page.nextCursor; setHasOlder(page.hasOlder);
       },
@@ -1481,7 +1494,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         }
         // Everything the page has seen is part of the history it may edit against.
         setHistoryRevision((revision) => batch.reduce((latest, ev) => Math.max(latest, ev.seq), revision));
-        setEvents(previous => mergeHistory(previous, batch));
+        setEvents(previous => { const next = mergeHistory(previous, batch); optimistic.reconcile(selectedId, next); return next; });
       },
       error: error => { setEventsLoading(false); handleError(error); },
     };
@@ -1532,7 +1545,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useEffect(() => {
     const el = scrollerRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [events, selected?.autoHandover?.state, selected?.autoHandover?.step]);
+  }, [displayEvents, selected?.autoHandover?.state, selected?.autoHandover?.step]);
 
   // Screenshots and slow-rendering blocks grow the thread after the scroll above, which used to
   // leave a reopened thread parked at the top. Watching the thread's height keeps it pinned. The
@@ -1794,10 +1807,12 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
 
   const loadImage = useCallback(
     (attachmentId: string) => {
-      if (!api || !selectedId) return Promise.reject(new Error('no thread'));
+      const local = optimistic.imageBlob(attachmentId);
+      if (local) return Promise.resolve(local);
+      if (!api || !selectedId || isOptimisticThreadId(selectedId)) return Promise.reject(new Error('no thread'));
       return api.attachment(selectedId, attachmentId);
     },
-    [api, selectedId],
+    [api, selectedId, optimistic.imageBlob],
   );
 
   const loadFile = useCallback(
@@ -1898,7 +1913,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   }, [sideKeys, dockOpen]);
   const sideOpen = sideKeys || dockOpen;
   const overviewRoom = overviewDock && activeOverviewOpen && !sideOpen && !activeOverviewDetail && (onSteward || (Boolean(selected || threadPending) && hostUp));
-  const overviewShown = overviewRoom && Boolean(selected || onSteward);
+  const overviewShown = overviewRoom && (onSteward || (Boolean(selected) && !isOptimisticThreadId(selected?.id)));
   /** Only the person turns the standing panel off; the switch above remembers it. */
   const closeOverview = useCallback(() => { if (overviewDock) setActiveOverviewOpen(false); }, [overviewDock, setActiveOverviewOpen]);
   // A page the agent wrote, rendered in a sandboxed iframe.
@@ -2065,7 +2080,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     },
   });
 
-  // A new thread is created by its first message, or by starting voice on the draft.
+  // A new thread is created by starting voice on the draft (messages go through runOptimisticMainSend).
   const createDraftThread = async (isNewThread: boolean, onCreated?: (threadId: string) => void) => {
     const t = await api.createThread({
       agent: draftAgent,
@@ -2079,12 +2094,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       ...(draftScratch ? { scratch: true } : draftWorktree && offer ? { worktree: true } : {}),
     });
     const id = t.id;
+    pinnedThreadIds.current.add(id);
     onCreated?.(id);
-    if (draftWriting) {
-      const updated = await api.setWriting(id, draftWriting);
-      setThreads(prev => [updated, ...prev.filter(v => v.id !== updated.id)]);
-      setDraftWriting(null);
-    }
+    const added = draftWriting ? await api.setWriting(id, draftWriting) : t;
+    if (draftWriting) setDraftWriting(null);
+    setThreads(prev => [added, ...prev.filter(v => v.id !== added.id)]);
     setSelectedId(id);
     setDraftSectionId(null);
     // Every worktree is a new branch; the next thread starts in place unless asked again.
@@ -2092,9 +2106,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     return id;
   };
 
-  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void, references: string[] = []) => {
+  const performSend = async (text: string, images: PreparedImage[], isNewThread: boolean, mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string | null) => void, references: string[] = []) => {
     setError(null);
-    let id = selectedId;
+    const id = selectedId;
     const created = (threadId: string) => onCreated?.(hostId ? `host:${hostId}:${threadId}` : threadId);
     try {
       // A Goal is reviewed by the LoopX core before it exists; the draft stays in the box until it is created or backed out of.
@@ -2102,26 +2116,16 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
         if (images.length || videos.length) throw new Error(t('loopx.goal.noMedia'));
         return await new Promise<void>((resolve, reject) => setPendingGoal({ text, onCreated: created, resolve, reject }));
       }
-      if (!id && draftTeam) {
-        if (videos.length) throw new Error(t('teams.attachments'));
-        const task = await api.dispatchTeam(draftTeam, text, draftCwd, images.map(({ data, mimeType }) => ({ data, mimeType })), references);
-        created(task.threadId);
-        setSelectedId(task.threadId); setDraftTeam(null); setDraftSectionId(null);
-        setView('thread'); void refreshThreads(); return;
-      }
-      if (!id) id = await createDraftThread(isNewThread, created);
-      // Bringing an agent in with @ is itself the request to collaborate; there is no switch to find first.
-      const collaboration = (draftCollaboration || mentions?.length) && !selected?.coordination
-        ? { directories: collaborationDirectories.length ? collaborationDirectories : undefined, defaults: startingDefaults, permission: memberPermission } : undefined;
-      stickToBottom.current = true;
-      // "queue" only matters while a turn is running: then the message waits instead of being refused.
-      await api.startTurn(
-        id,
-        text,
-        images.map(({ data, mimeType }) => ({ data, mimeType })),
-        { queue: true, mentions, collaboration, references, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(id!, video.file)).id)) },
-      );
-      void refreshThreads();
+      await runOptimisticMainSend({
+        api, selectedId, selected, running, events, draftTeam, draftAgent, draftCwd, draftScratch, draftPermission, draftWorkMode,
+        draftModel, draftEffort, draftSpeed, draftSectionId, draftWorktree, draftWriting, hasWorktreeOffer: Boolean(offer),
+        draftCollaboration, collaborationDirectories, startingDefaults, memberPermission,
+        text, images, isNewThread, mentions, videos, references, teamAttachmentsError: t('teams.attachments'),
+        setThreads, setSelectedId, setView, setDraftWriting, setDraftSectionId, setDraftWorktree, setDraftTeam,
+        pinnedThreadIds, shownThread, stickToBottom, optimistic, pendingCreations, refreshThreads: () => { void refreshThreads(); },
+        onCreated: created,
+        onRollback: () => onCreated?.(null),
+      });
     } catch (e) {
       // The composer keeps the draft; the dialog says it will still be there.
       if (e instanceof DemoError) {
@@ -2133,7 +2137,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     }
   };
 
-  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string) => void, references: string[] = []) => {
+  const send = async (text: string, images: PreparedImage[], mentions?: AgentMention[], videos: PreparedVideo[] = [], onCreated?: (draftKey: string | null) => void, references: string[] = []) => {
     // The terminal wrote to this session after the hub last did. Both sides writing the same session
     // interleaves turns, so ask before joining in again.
     // The composer keeps the draft and its pictures until this settles, so backing out loses nothing.
@@ -2146,6 +2150,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   // Stopping means stopping: messages that were waiting are not sent. Their text goes back in the box.
   const stop = () => {
     if (!selectedId) return;
+    if (isOptimisticThreadId(selectedId)) {
+      const pending = pendingCreations.current.get(selectedId);
+      if (pending) pending.cancelled = true;
+      return;
+    }
     api
       .cancel(selectedId)
       .then(({ dropped, mentions }) => {
@@ -2541,7 +2550,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   const speed = selected ? selected.speed ?? null : draftSpeed;
 
   const updateSelected = (patch: { speed?: string | null; permissionMode?: string; model?: string | null; effort?: string | null }) => {
-    if (!selected) return;
+    if (!selected || isOptimisticThreadId(selected.id)) return;
     // Shown at once: a control that waits for the round trip snaps back to the old value first.
     const id = selected.id;
     const before = { permissionMode: selected.permissionMode, model: selected.model, effort: selected.effort, speed: selected.speed };
@@ -2947,7 +2956,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       onOpenThread={id => { if (!persistent) close(); openThreadById(id); }}
       onBrowseFiles={threadId => { if (!persistent) close(); setFilesThreadId(threadId); setFiles({ path: null, seq: ++filesSeq.current }); }}
       onOpenAll={showcase ? undefined : () => { if (!persistent) close(); openGoalsBoard(); }} />
-  ) : selected && api && (
+  ) : selected && !isOptimisticThreadId(selected.id) && api && (
     <ThreadOverview key={`${hostId ?? ''}:${selected.id}:${detail ?? 'preview'}`}
       goalExpanded={Boolean(selected.loopxInfo && !selected.loopxInfo.missing && (goalDetailsExpanded?.threadId === selected.id ? goalDetailsExpanded.expanded : goalDetailFocus?.api === api && goalDetailFocus.threadId === selected.id))}
       chain={overviewChain} detail={detail} onLoadingChange={setOverviewLoading}
@@ -3610,7 +3619,8 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           draftGeneration={draftGeneration}
           voiceControls={voice.state.active ? <VoiceControls session={voice.state} onMute={voice.toggleMute} onStop={() => void voice.stop()} /> : undefined}
           running={voice.state.active ? false : running}
-          disabled={modeBusy || (!selected && (!draftCwd || modelPreferences.status !== 'ready'))}
+          disabled={modeBusy}
+          sendDisabled={!selected && ((!draftCwd && !draftScratch) || modelPreferences.status !== 'ready')}
           placeholder={voice.state.active ? t('app.placeholder.continue') : onRouterThread && !running ? t('pet.threadPlaceholder') : demo ? t('app.placeholder.demo') : workMode === 'plan' && !running ? t('composerMenu.planOn') : writing && !running ? t('writing.placeholder') : selected ? (running ? t('sideChat.queuePlaceholder') : t('app.placeholder.continue')) : draftScratch ? t('app.placeholder.scratch') : t('app.placeholder.startIn', folderName(draftCwd))}
           onSend={voice.state.active ? async (text, images, _mentions, videos = []) => {
             try { await voice.appendText(text, images.map(img => ({ data: img.data, mimeType: img.mimeType })), await Promise.all(videos.map(async video => (await api.uploadVideo(selectedId!, video.file)).id))); }

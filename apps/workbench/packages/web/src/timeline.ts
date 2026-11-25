@@ -247,7 +247,7 @@ export type Item =
    */
   | { kind: 'input'; key: string; turnId: string; inputId: string; title: string; inputKind?: string; plan?: string; questions: import('./api').UserQuestion[]; answer: import('./api').UserInputAnswer | { cancelled: true; ended: true } | null; auto?: boolean }
   | { kind: 'voice-recap'; key: string; turnId: null; sessionId: string; seconds: number; count: number }
-  | { kind: 'user'; voice?: boolean; background?: boolean; streaming?: boolean; handoverCollapsed?: boolean; workMode?: string; key: string; turnId: string; text: string; images: ImageRef[]; videos?: VideoRef[]; fromTerminal?: boolean; scheduled?: boolean; coordination?: CoordinationNote; channel?: TurnChannel }
+  | { kind: 'user'; voice?: boolean; background?: boolean; streaming?: boolean; optimistic?: boolean; handoverCollapsed?: boolean; workMode?: string; key: string; turnId: string; text: string; images: ImageRef[]; videos?: VideoRef[]; fromTerminal?: boolean; scheduled?: boolean; coordination?: CoordinationNote; channel?: TurnChannel }
   /** The turn's answer: the text after everything the agent did. */
   | { kind: 'assistant'; key: string; turnId: string; text: string; done: boolean }
   /**
@@ -661,6 +661,7 @@ export function buildTimeline(events: StoredEvent[], speech: readonly VoiceTrans
           ...(Array.isArray(ev.data.videos) && ev.data.videos.length ? { videos: ev.data.videos } : {}),
           ...(ev.data.fromTerminal ? { fromTerminal: true } : {}),
           ...(ev.data.scheduled ? { scheduled: true } : {}),
+          ...(ev.data.optimistic ? { optimistic: true } : {}),
           ...(ev.data.source === 'background' ? { background: true } : {}),
           ...(delivered ? { coordination: delivered.note } : {}),
           ...(turnChannel(ev.data.channel) ? { channel: turnChannel(ev.data.channel)! } : {}),
