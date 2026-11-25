@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 from typing import Protocol, TypeAlias, TypeGuard
 
-from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
+from ..public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 
 JsonPrimitive: TypeAlias = None | bool | int | float | str
 JsonValue: TypeAlias = JsonPrimitive | list["JsonValue"] | dict[str, "JsonValue"]
@@ -239,7 +239,7 @@ def parse_utc_timestamp(value: object, *, error: str) -> datetime:
 
 def current_utc_now() -> str:
     """Read `_utc_now` through `loopx.chat_action_store` so monkeypatches apply."""
-    from . import chat_action_store as facade
+    from .. import chat_action_store as facade
 
     return facade._utc_now()
 
@@ -252,7 +252,7 @@ def store_lock(
     agent_id: str | None = "loopx-chat",
 ) -> Iterator[Path]:
     """Acquire `exclusive_file_lock` through `loopx.chat_action_store`."""
-    from . import chat_action_store as facade
+    from .. import chat_action_store as facade
 
     if agent_id is None:
         with facade.exclusive_file_lock(path, operation=operation) as locked:
@@ -262,15 +262,6 @@ def store_lock(
         path, agent_id=agent_id, operation=operation
     ) as locked:
         yield locked
-
-
-def write_store_json(
-    path: Path, payload: JsonDict, *, preserve_mode: bool = False
-) -> None:
-    """Write JSON through `loopx.chat_action_store.atomic_write_json`."""
-    from . import chat_action_store as facade
-
-    facade.atomic_write_json(path, payload, preserve_mode=preserve_mode)
 
 
 def store_proposals(payload: JsonDict) -> JsonDict:

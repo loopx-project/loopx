@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from .chat_action_store_common import (
+from .action_store_common import (
     ActionConflictError,
     ActionStoreBackend,
     JsonDict,

@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 import uuid
 
-from .chat_action_store_common import (
+from .action_store_common import (
     OPERATION_ENVELOPE_SCHEMA_VERSION,
     OPERATION_LIFECYCLE_STATES,
     ActionConflictError,
@@ -325,7 +325,7 @@ def agent_operation_plan(
     proposal: Mapping[str, object], **request: object
 ) -> JsonDict:
     """One typed decision, using the existing canonical JSON byte format."""
-    from .control_plane.effect_runtime import (
+    from ..control_plane.effect_runtime import (
         EffectRuntimeRemoteError,
         effect_runtime_result,
     )

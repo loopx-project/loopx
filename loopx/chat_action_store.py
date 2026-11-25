@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 import uuid
 
-from . import chat_action_store_common as _common
-from . import chat_action_store_operations as _operations
-from . import chat_action_store_review_cards as _review_cards
-from .chat_action_store_common import (
+from .chat import action_store_common as _common
+from .chat import action_store_operations as _operations
+from .chat import action_store_review_cards as _review_cards
+from .chat.action_store_common import (
     AUTHENTICATED_LARK_CARD_CALLBACK,
     CHAT_ACTION_PROPOSAL_SCHEMA_VERSION,
     CHAT_ACTION_STORE_SCHEMA_VERSION,
