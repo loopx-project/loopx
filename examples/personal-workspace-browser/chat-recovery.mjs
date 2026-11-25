@@ -147,12 +147,13 @@ export const chatRecoveryScenario = {
       await page.screenshot({ path: resolve(outputDir, "collaboration-brief-desktop.png"), fullPage: false, animations: "disabled" });
       delegatedMessage.collaboration.goal_id = "community";
       delegatedMessage.collaboration.decision = "defer";
-      delegatedMessage.collaboration.decision_reason = "先完成正在进行的交付；问卷尚未制作。";
+      const deferredReason = "先完成正在进行的交付；问卷尚未制作。";
+      delegatedMessage.collaboration.decision_reason = deferredReason;
       delegatedMessage.collaboration.returns = [{ phase: "conclusion", status: "delivered" }];
       await collaboration.getByText("接收方判断: 已暂缓", { exact: true }).waitFor({ state: "visible", timeout: 10000 });
-      await collaboration.getByText("原因: 先完成正在进行的交付；问卷尚未制作。", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.getByText(deferredReason, { exact: true }).waitFor({ state: "visible" });
       await collaboration.getByText("回复已送达", { exact: true }).waitFor({ state: "visible" });
-      await collaboration.getByText("接收方: community / worker", { exact: true }).waitFor({ state: "visible" });
+      await collaboration.getByText("community / worker", { exact: true }).waitFor({ state: "visible" });
       if ((await collaboration.innerText()).includes("结论已回传")) throw new Error("Deferred reply was presented as a completed conclusion");
       await collaboration.evaluate((node) => node.scrollIntoView({ block: "start" }));
       await page.screenshot({ path: resolve(outputDir, "collaboration-deferred-desktop.png"), fullPage: false, animations: "disabled" });
