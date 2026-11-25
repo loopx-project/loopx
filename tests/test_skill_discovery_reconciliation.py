@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from loopx import skill_install_readback as readback
+from loopx.canary.maintainability_ratchet import module_metrics
 from loopx.slash_command_install import install_slash_commands
 from loopx.workflow_skill_install import workflow_skill_install
 
@@ -181,3 +182,99 @@ def test_retirement_updates_receipt_without_blessing_modified_survivor(tmp_path)
     assert after["materialized_skill_ids"] == ["loopx-pr-review"]
     assert after["skills"]["items"] == {"loopx-pr-review": before["skills"]["items"]["loopx-pr-review"]}
     assert after["skills"]["digest"] == readback._skills_digest(after["skills"]["items"])
+
+
+@pytest.mark.parametrize(("facade", "expected_manifest_reads"), [(False, 1), (True, 0)])
+def test_retirement_reads_target_manifest_lazily_once(
+    tmp_path, monkeypatch, facade, expected_manifest_reads
+):
+    target, alternate = tmp_path / "target", tmp_path / "alternate"
+    skill_ids = ["loopx", "loopx-a", "loopx-b", "loopx-c"]
+    contents = {
+        skill_id: MARKER if facade else f"# {skill_id} workflow\n"
+        for skill_id in skill_ids
+    }
+    for root in (target, alternate):
+        for skill_id, content in contents.items():
+            skill(root, skill_id, content)
+        readback.write_skill_install_readback(
+            skills_dir=root, skill_ids=skill_ids, source_root=tmp_path
+        )
+
+    target_manifest = target / readback.SKILL_INSTALL_READBACK_FILENAME
+    facade_files = {
+        root / skill_id / "SKILL.md"
+        for root in (target, alternate)
+        for skill_id in skill_ids
+    }
+    facade_reads = dict.fromkeys(facade_files, 0)
+    manifest_reads = 0
+    original_read_text = Path.read_text
+
+    def count_reads(path, encoding=None, errors=None):
+        nonlocal manifest_reads
+        if path == target_manifest:
+            manifest_reads += 1
+        elif path in facade_reads:
+            facade_reads[path] += 1
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", count_reads)
+    result = readback.retire_duplicate_managed_skills(
+        target, alternate_root=alternate, execute=True
+    )
+
+    assert result["retired"] == sorted(skill_ids)
+    assert manifest_reads == expected_manifest_reads
+    assert facade_reads == dict.fromkeys(facade_files, 1)
+
+
+@pytest.mark.parametrize(
+    "layout", ["skill_directory_symlink", "skill_file_symlink", "target_inside_skill"]
+)
+def test_retirement_skips_replacement_that_resolves_into_candidate(
+    tmp_path, layout
+):
+    target, alternate = tmp_path / "target", tmp_path / "alternate"
+    skill_id = "loopx"
+    candidate_file = skill(alternate, skill_id)
+    candidate = candidate_file.parent
+    if layout == "skill_directory_symlink":
+        target.mkdir()
+        (target / skill_id).symlink_to(candidate, target_is_directory=True)
+    elif layout == "skill_file_symlink":
+        replacement = target / skill_id
+        replacement.mkdir(parents=True)
+        (replacement / "SKILL.md").symlink_to(candidate_file)
+    else:
+        target = candidate / "nested-target"
+        skill(target, skill_id)
+    readback.write_skill_install_readback(
+        skills_dir=alternate, skill_ids=[skill_id], source_root=tmp_path
+    )
+    before = {
+        path.relative_to(candidate): path.read_bytes()
+        for path in candidate.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+
+    result = readback.retire_duplicate_managed_skills(
+        target, alternate_root=alternate, execute=True
+    )
+
+    after = {
+        path.relative_to(candidate): path.read_bytes()
+        for path in candidate.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+    assert result["retired"] == []
+    assert result["skipped"] == [skill_id]
+    assert candidate.is_dir()
+    assert after == before
+
+
+def test_skill_install_readback_has_no_any_annotations():
+    metrics = module_metrics(Path("loopx/skill_install_readback.py"))
+
+    assert metrics["any_count"] == 0
+    assert metrics["dict_any_count"] == 0
