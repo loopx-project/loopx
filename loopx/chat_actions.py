@@ -21,12 +21,15 @@ from .chat_action_store import (
     ACTION_KINDS as SUPPORTED_ACTION_KINDS,
     ActionConflictError,
     ChatActionStore,
+    action_checkpoint_steps,
+    is_todo_create_recovery,
 )
 from .chat.goal_lifecycle_actions import ChatGoalLifecycleActionMixin
 from .chat.monitor_actions import ChatMonitorActionMixin
 from .chat_store import ChatSessionStore, TERMINAL_TURN_STATES
 from .chat.todo_actions import ChatTodoActionMixin
-from .chat.todo_source import ChatTodoSource, resolve_chat_todo_source
+from .chat.todo_creation import ChatTodoCreationMixin
+from .chat.todo_source import resolve_chat_todo_source
 from .control_plane.goals.acceptance_actions import GoalAcceptanceActionMixin
 from .control_plane.goals.goal_objective_actions import GoalObjectiveActionMixin
 from .configure_goal import configure_goal
@@ -46,7 +49,6 @@ from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
 from .registry import registry_goals
 from .control_plane.todos.mutation_api import add_goal_todo
-from .file_lock import try_exclusive_file_lock
 
 
 CHAT_ACTION_RESPONSE_SCHEMA_VERSION = "loopx_chat_action_response_v1"
@@ -255,6 +257,7 @@ class ChatActionService(
     ChatGoalLifecycleActionMixin,
     ChatMonitorActionMixin,
     ChatTodoActionMixin,
+    ChatTodoCreationMixin,
 ):
     """Validate previews and route applies through canonical LoopX services."""
 
@@ -366,13 +369,6 @@ class ChatActionService(
         except OSError as exc:
             raise ValueError("the active LoopX registry is unavailable") from exc
         return hashlib.sha256(content).hexdigest()
-
-    @staticmethod
-    def _monitor_create_fingerprint(source: ChatTodoSource) -> str:
-        return _digest({
-            "source_identity": source.source_identity,
-            "registry_sha256": source.registry_sha256,
-        })
 
     def _creation_agent_eligibility(
         self, agent_id: str, *, project: Path | None = None, host_session: bool = False
@@ -1108,78 +1104,6 @@ class ChatActionService(
             },
         )
 
-    def _apply_monitor_create(
-        self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
-    ) -> dict[str, object]:
-        goal_id = str(parameters["goal_id"])
-        source = resolve_chat_todo_source(self, goal_id)
-        current_fingerprint = self._monitor_create_fingerprint(source)
-        if current_fingerprint != proposal.get("expected_state_fingerprint"):
-            return self._stale_proposal(proposal_id, current_fingerprint)
-        agent_id = str(parameters["agent_id"])
-        if agent_id not in registered_agent_ids_for_goal(source.goal):
-            raise ValueError("monitor Agent must be registered for the Goal")
-        authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-        revision = authority.get("provider_revision") if authority else None
-        if not isinstance(revision, str) or not revision:
-            raise ValueError("The Goal's Todo authority revision is unavailable")
-        stop_condition = str(parameters.get("stop_condition") or "").strip()
-        resume_when = (
-            stop_condition
-            if stop_condition and parse_timestamp(stop_condition) is None
-            and stop_condition.lower() not in {"watch_only", "watch-only", "watch", "continuous", "never"}
-            else None
-        )
-        metadata = _monitor_metadata(parameters, schedule=False)
-        if not (metadata.get("expires_at") or resume_when or metadata.get("watch_only")):
-            metadata["watch_only"] = "true"
-        try:
-            result = add_goal_todo(
-                **source.writer_scope(),
-                routing_registry_witness=source.routing_registry_witness,
-                expected_registry_sha256=source.registry_sha256,
-                expected_provider_revision=revision,
-                goal_id=goal_id,
-                role="agent",
-                text=_monitor_text(parameters) or str(parameters["target"]),
-                task_class="continuous_monitor",
-                action_kind="observe",
-                task_repository=(
-                    str(parameters["task_repository"])
-                    if parameters.get("task_repository")
-                    else None
-                ),
-                claimed_by=agent_id,
-                agent_id=agent_id,
-                resume_when=resume_when,
-                monitor_metadata=metadata,
-                dry_run=False,
-            )
-        except LocalCoordinationAuthorityUnavailable as error:
-            if error.code not in {"provider_revision_mismatch", "authority_source_changed"}:
-                raise
-            return self._stale_proposal(
-                proposal_id,
-                _digest({"conflict": error.code, "expected": current_fingerprint}),
-            )
-        todo_id = _opaque(result.get("todo_id"), field="todo_id")
-        signal_scope = parameters.get("signal_scope")
-        if signal_scope is not None:
-            if not isinstance(signal_scope, Mapping):
-                raise ValueError("signal_scope must be a mapping")
-            from .capabilities.native_chat.steward_monitor import write_steward_monitor_scope
-            target_key = str(parameters.get("target_key") or "").strip()
-            if not target_key:
-                raise ValueError("signal_scope requires target_key")
-            write_steward_monitor_scope(source.runtime_root, goal_id, target_key, _as_dict(signal_scope))
-        receipt: dict[str, object] = {
-            "receipt_id": _receipt_id({"proposal_id": proposal_id, "goal_id": goal_id, "todo_id": todo_id}),
-            "outcome": "monitor_already_exists" if result.get("already_exists") else "monitor_created",
-            "projection_verified": True,
-            "resource_ids": {"goal_id": goal_id, "todo_id": todo_id, "agent_id": agent_id},
-        }
-        return {"proposal": self.store.apply(proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt), "turn": None}
-
     def _apply_team_plan(
         self, proposal_id: str, proposal: dict[str, object], parameters: dict[str, object]
     ) -> dict[str, object]:
@@ -1344,9 +1268,10 @@ class ChatActionService(
             evidence = ["Canonical LoopX Todo dry-run validated the proposal."]
             permission = "durable_write"
         elif action_kind == "monitor.create":
-            source = resolve_chat_todo_source(self, normalized["goal_id"])
-            fingerprint = self._monitor_create_fingerprint(source)
-            evidence = ["Canonical LoopX contracts validated the bounded request shape."]
+            goal_id = normalized["goal_id"]
+            source = resolve_chat_todo_source(self, goal_id)
+            fingerprint = self._monitor_create_fingerprint(source, self._create_authority(source, goal_id))
+            evidence = ["The original Goal's Todo authority and current revision validated the Monitor preview."]
             permission = "durable_write"
         elif action_kind == "run.correct":
             fingerprint = self._session_fingerprint(
@@ -1494,7 +1419,14 @@ class ChatActionService(
         )
 
     def load(self, proposal_id: str) -> dict[str, object] | None:
-        return self.store.load(proposal_id)
+        proposal = self.store.load(proposal_id)
+        return self._project_creation_recovery(proposal) if proposal is not None else None
+
+    def list_proposals(
+        self, *, goal_id: str | None, context_kind: str | None, status: str | None,
+    ) -> list[dict[str, object]]:
+        proposals = self.store.list(goal_id=goal_id, context_kind=context_kind, status=status)
+        return [self._project_creation_recovery(proposal) for proposal in proposals]
 
     def cancel(self, proposal_id: str) -> dict[str, object]:
         return self.store.cancel(proposal_id)
@@ -1531,11 +1463,19 @@ class ChatActionService(
                     "next_action": "Prepare a new operation instead of regenerating this one.",
                 },
             )
-        steps = _as_dict(proposal.get("checkpoint")).get("steps")
-        action_kind = proposal.get("action_kind")
-        if (action_kind == "goal.create" and steps) or (
-            action_kind == "todo.create" and isinstance(steps, dict) and "todo_created" in steps
-        ):
+        if proposal.get("action_kind") in {"todo.create", "monitor.create"}:
+            with self._creation_lock(proposal_id) as held:
+                if held is None:
+                    raise ActionConflictError("The original confirmation is in progress.")
+                return self._regenerate_current(proposal_id)
+        return self._regenerate_current(proposal_id)
+
+    def _regenerate_current(self, proposal_id: str) -> dict[str, object]:
+        proposal = self.store.load(proposal_id)
+        if proposal is None:
+            raise KeyError("typed Chat action proposal was not found")
+        if is_todo_create_recovery(proposal) or (
+                proposal.get("action_kind") == "goal.create" and action_checkpoint_steps(proposal)):
             raise ActionConflictError("Creation already recorded effects; recover the original operation instead of regenerating")
         if proposal.get("status") not in {"stale", "failed", "gated", "rejected"}:
             raise ActionConflictError(
@@ -1605,16 +1545,12 @@ class ChatActionService(
                 },
             )
         parameters = proposal.get("normalized_parameters")
-        action = proposal.get("action_kind")
-        if isinstance(parameters, dict) and (
-            action == "todo.create" or (action == "goal.create" and parameters.get("start_execution") is True)
-        ):
-            key = _opaque(proposal_id, field="proposal_id")
-            with try_exclusive_file_lock(
-                self.store.root / "task-starts" / f"{key}.json", operation="confirm_task_start",
-            ) as held:
+        action_kind = proposal.get("action_kind")
+        if isinstance(parameters, dict) and (action_kind in {"todo.create", "monitor.create"}
+                or (action_kind == "goal.create" and parameters.get("start_execution") is True)):
+            with self._creation_lock(proposal_id) as held:
                 if held is None:
-                    raise ActionConflictError("The original Task confirmation is in progress. Retry it when it finishes.")
+                    raise ActionConflictError("The original confirmation is in progress. Retry it when it finishes.")
                 return self._apply_confirmed_action(proposal_id)
         return self._apply_confirmed_action(proposal_id)
 
