@@ -601,7 +601,8 @@ Self-service:
    mkdir -p ~/.local/bin &&
    lock=~/.local/bin/.node-loopx-repair &&
    if mkdir "$lock" 2>/dev/null; then
-     trap 'rm -rf "$lock"' EXIT
+     lock_ino="$(stat -f %i "$lock")" &&
+     trap 'if [ "$(stat -f %i "$lock" 2>/dev/null)" = "$lock_ino" ]; then rm -rf "$lock"; fi' EXIT
    else
      echo "Another repair is in progress; nothing was changed." &&
      echo "If no repair is actually running, remove $lock by hand and run this again." &&
@@ -686,9 +687,11 @@ Self-service:
   subshell killed outright — leaves the lock in place and every later
   attempt stops with the message above. When nothing is actually running
   (check with `ps` that no repair shell remains), remove that directory by
-  hand and run the block again. The inode checks inside the two branches
-  then guard the one overlap this cannot close: the lock removed by hand
-  while a suspended window still holds the entry.
+  hand and run the block again. The cleanup is instance-targeted: it
+  removes the lock only while the directory is still the instance this
+  repair created — a lock a later window acquired after your manual removal
+  has a different inode and survives this repair's exit. The launcher-entry
+  inode checks in the two branches guard the rollback the same way.
 
    The backup is a directory created atomically: a second repair in the same
    second (from this window or another one) fails its `mkdir` and stops with
