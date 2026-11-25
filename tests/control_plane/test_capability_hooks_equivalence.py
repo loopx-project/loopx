@@ -608,30 +608,19 @@ def test_request_scope_preserves_path_format_semantics_across_symlinks(
     global_alias = tmp_path / "registry.global.json"
     global_alias.symlink_to(project_reg)
 
-    with pytest.raises(
-        registry_codec.ProjectRegistryError,
-        match="global registry root must be a JSON object",
-    ):
+    with pytest.raises(registry_codec.ProjectRegistryError, match="global registry root must be a JSON object"):
         registry_codec.load_registry(global_alias)
 
     with capability_hook_request_scope():
-        project_loaded = load_scoped_registry(
-            project_reg, loader=registry_codec.load_registry
-        )
+        project_loaded = load_scoped_registry(project_reg, loader=registry_codec.load_registry)
         assert _goal_ids(project_loaded) == ["g1"]
         project_goal = agent_registry.load_goal_from_registry(project_reg, "g1")
         assert project_goal is not None and project_goal["id"] == "g1"
 
-        with pytest.raises(
-            registry_codec.ProjectRegistryError,
-            match="global registry root must be a JSON object",
-        ):
+        with pytest.raises(registry_codec.ProjectRegistryError, match="global registry root must be a JSON object"):
             load_scoped_registry(global_alias, loader=registry_codec.load_registry)
 
-        with pytest.raises(
-            registry_codec.ProjectRegistryError,
-            match="global registry root must be a JSON object",
-        ):
+        with pytest.raises(registry_codec.ProjectRegistryError, match="global registry root must be a JSON object"):
             agent_registry.load_goal_from_registry(global_alias, "g1")
 
         still_project_goal = agent_registry.load_goal_from_registry(project_reg, "g1")
@@ -682,63 +671,73 @@ def test_request_scope_atomic_write_invalidates_alias_snapshots_and_goal_index(
         assert new_real_goal is not None and new_real_goal["id"] == "g-new"
 
 
-def test_request_scope_repointed_symlink_does_not_poison_canonical_target(
-    tmp_path: Path,
-) -> None:
-    dir_t1 = tmp_path / "t1"
-    dir_t2 = tmp_path / "t2"
-    dir_t3 = tmp_path / "t3"
-    dir_alias = tmp_path / "alias_dir"
-    dir_witness = tmp_path / "witness_dir"
-    for directory in (dir_t1, dir_t2, dir_t3, dir_alias, dir_witness):
-        directory.mkdir()
-
-    t1 = dir_t1 / "registry.json"
-    t2 = dir_t2 / "registry.json"
-    t3 = dir_t3 / "registry.json"
-    t1.write_text(json.dumps({"goals": [{"id": "g-t1"}]}), encoding="utf-8")
-    t2.write_text(json.dumps({"goals": [{"id": "g-t2"}]}), encoding="utf-8")
-    t3.write_text(json.dumps({"goals": [{"id": "g-t3"}]}), encoding="utf-8")
-
-    alias = dir_alias / "registry.json"
-    witness_alias = dir_witness / "registry.json"
+def test_request_scope_repointed_symlink_does_not_poison_canonical_target(tmp_path: Path) -> None:
+    t1, t2, t3 = (tmp_path / "t1" / "registry.json", tmp_path / "t2" / "registry.json", tmp_path / "t3" / "registry.json")
+    alias, witness_alias = tmp_path / "alias_dir" / "registry.json", tmp_path / "witness_dir" / "registry.json"
+    for p, gid in ((t1, "g-t1"), (t2, "g-t2"), (t3, "g-t3")):
+        p.parent.mkdir()
+        p.write_text(json.dumps({"goals": [{"id": gid}]}), encoding="utf-8")
+    alias.parent.mkdir()
+    witness_alias.parent.mkdir()
     alias.symlink_to(t1)
     witness_alias.symlink_to(t1)
 
     with capability_hook_request_scope() as scope:
-        assert _goal_ids(
-            load_scoped_registry(alias, loader=registry_codec.load_registry)
-        ) == ["g-t1"]
-        assert _goal_ids(
-            registry_codec.load_registry(
-                witness_alias, source_snapshots=scope.registry_snapshots
-            )
-        ) == ["g-t1"]
+        assert _goal_ids(load_scoped_registry(alias, loader=registry_codec.load_registry)) == ["g-t1"]
+        assert _goal_ids(registry_codec.load_registry(witness_alias, source_snapshots=scope.registry_snapshots)) == ["g-t1"]
 
         alias.unlink()
         alias.symlink_to(t2)
         witness_alias.unlink()
         witness_alias.symlink_to(t3)
 
-        # Reading either alias keeps its original snapshot witness, never poisoning T2 or T3.
-        assert _goal_ids(
-            load_scoped_registry(alias, loader=registry_codec.load_registry)
-        ) == ["g-t1"]
-        assert _goal_ids(
-            load_scoped_registry(witness_alias, loader=registry_codec.load_registry)
-        ) == ["g-t1"]
-
-        assert _goal_ids(
-            load_scoped_registry(t2, loader=registry_codec.load_registry)
-        ) == ["g-t2"]
+        assert _goal_ids(load_scoped_registry(alias, loader=registry_codec.load_registry)) == ["g-t1"]
+        assert _goal_ids(load_scoped_registry(witness_alias, loader=registry_codec.load_registry)) == ["g-t1"]
+        assert _goal_ids(load_scoped_registry(t2, loader=registry_codec.load_registry)) == ["g-t2"]
         t2_goal = agent_registry.load_goal_from_registry(t2, "g-t2")
         assert t2_goal is not None and t2_goal["id"] == "g-t2"
-
-        assert _goal_ids(
-            load_scoped_registry(t3, loader=registry_codec.load_registry)
-        ) == ["g-t3"]
+        assert _goal_ids(load_scoped_registry(t3, loader=registry_codec.load_registry)) == ["g-t3"]
         t3_goal = agent_registry.load_goal_from_registry(t3, "g-t3")
         assert t3_goal is not None and t3_goal["id"] == "g-t3"
+
+
+def test_request_scope_aba_symlink_roundtrip_does_not_poison_canonical_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reg_a, reg_b = tmp_path / "a" / "registry.json", tmp_path / "b" / "registry.json"
+    alias = tmp_path / "alias" / "registry.json"
+    for p, title in ((reg_a, "TITLE_FROM_A"), (reg_b, "TITLE_FROM_B")):
+        p.parent.mkdir()
+        p.write_text(json.dumps({"goals": [{"id": "g1", "title": title}]}), encoding="utf-8")
+    alias.parent.mkdir()
+    alias.symlink_to(reg_a)
+
+    orig_resolve = Path.resolve
+    alias_resolve_calls = 0
+
+    def _aba_race_resolve(self: Path, strict: bool = False) -> Path:
+        nonlocal alias_resolve_calls
+        target = orig_resolve(self, strict=strict)
+        if self.parent.name == "alias" and self.name == "registry.json":
+            alias_resolve_calls += 1
+            if alias_resolve_calls == 1:
+                alias.unlink()
+                alias.symlink_to(reg_b)
+            elif alias_resolve_calls == 2:
+                alias.unlink()
+                alias.symlink_to(reg_a)
+        return target
+
+    monkeypatch.setattr(Path, "resolve", _aba_race_resolve)
+    with capability_hook_request_scope():
+        alias_goal = agent_registry.load_goal_from_registry(alias, "g1")
+        assert alias_goal is not None and alias_goal["title"] == "TITLE_FROM_B"
+        reg_a_goal = agent_registry.load_goal_from_registry(reg_a, "g1")
+        assert reg_a_goal is not None and reg_a_goal["title"] == "TITLE_FROM_A"
+        reg_a_loaded = load_scoped_registry(reg_a, loader=registry_codec.load_registry)
+        goals = reg_a_loaded["goals"]
+        assert isinstance(goals, list) and isinstance(goals[0], dict)
+        assert goals[0]["title"] == "TITLE_FROM_A"
 
 
 def test_request_scope_invalidate_ignores_unresolvable_symlink_loop_alias(
