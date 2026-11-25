@@ -259,7 +259,7 @@ def _deliver_origin_returns(
     payload: dict[str, object],
     entries: list[dict[str, object]],
     origin: Mapping[str, object],
-    identity: _OriginRequestIdentity,
+    identity: _OriginRequestIdentity | None,
     goal_ref: Mapping[str, str],
     view: Mapping[str, object] | None,
     origin_refusal: str | None,
@@ -275,11 +275,11 @@ def _deliver_origin_returns(
 
     reply_status_fn = cast(_ReplyStatusFn, _inbox.reply_status)
     report_fn = cast(_ReportFn, _roundtrip.report)
-    origin_root = Path(str(origin["runtime_root"]))
-    origin_registry = Path(str(origin["registry_path"]))
-    origin_request_id = str(origin["request_id"])
+    origin_root_raw = origin.get("runtime_root")
+    origin_registry_raw = origin.get("registry_path")
+    origin_request_raw = origin.get("request_id")
     todos: dict[str, Mapping[object, object]] = {}
-    if not origin_refusal:
+    if not origin_refusal and identity is not None:
         raw_todos = list_goal_todos(registry_path=registry_path, goal_id=goal_id).get(
             "todos"
         )
@@ -294,13 +294,23 @@ def _deliver_origin_returns(
         todo_id = entry.get("todo_id")
         if (
             origin_refusal
+            or identity is None
             or not view
+            or not isinstance(origin_root_raw, str)
+            or not origin_root_raw
+            or not isinstance(origin_registry_raw, str)
+            or not origin_registry_raw
+            or not isinstance(origin_request_raw, str)
+            or not origin_request_raw
             or entry.get("disposition") != "accepted"
             or not isinstance(todo_id, str)
             or not todo_id
             or todos.get(todo_id, {}).get("status") != "done"
         ):
             continue
+        origin_root = Path(origin_root_raw)
+        origin_registry = Path(origin_registry_raw)
+        origin_request_id = origin_request_raw
         raw_returns = entry.setdefault("returns", [])
         if not isinstance(raw_returns, list):
             raise TypeError("maintainer correction entry returns must be a list")
@@ -390,10 +400,17 @@ def _deliver_origin_returns(
                 }
             )
             upsert_issue_fix_pr_lifecycle_ledger_jsonl(ledger_path, payload)
-    statuses = {
-        str(r.get("result_key", r.get("phase"))): str(r.get("status"))
-        for r in reply_status_fn(origin_root, origin)
-    }
+    statuses = (
+        {
+            str(r.get("result_key", r.get("phase"))): str(r.get("status"))
+            for r in reply_status_fn(Path(origin_root_raw), origin)
+        }
+        if isinstance(origin_root_raw, str)
+        and origin_root_raw
+        and isinstance(origin_request_raw, str)
+        and origin_request_raw
+        else {}
+    )
     payload["return_delivery"] = [
         {
             "operation_id": e.get("operation_id"),
@@ -581,7 +598,9 @@ def _settle_maintainer_correction_entries(
         )
     entries = issue_fix_maintainer_correction_entries(row)
     payload["maintainer_corrections"] = entries
-    if origin_map is not None and identity is not None:
+    if origin_map is not None:
+        if origin_refusal is None and identity is None:
+            raise ValueError("origin request identity unavailable")
         _deliver_origin_returns(
             payload=payload,
             entries=entries,
@@ -596,8 +615,6 @@ def _settle_maintainer_correction_entries(
             goal_id=goal_id,
             project=project,
         )
-    elif origin_map is not None and origin_refusal is None:
-        raise ValueError("origin request identity unavailable")
     return {
         "schema_version": "issue_fix_maintainer_correction_settlement_v0",
         "settlements": settlements,
