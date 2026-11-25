@@ -22,6 +22,7 @@ from loopx.capabilities.explore.counterfactual_runtime import (
     CounterfactualChildCandidate,
     CounterfactualDecision,
     CounterfactualHypothesis,
+    CounterfactualReplayRequest,
     ValidationTarget,
     run_counterfactual_child_group,
     run_counterfactual_suffix_replay,
@@ -2923,7 +2924,7 @@ def test_single_branch_exact_equivalence_failure_destroys_isolated_fork_and_allo
 
     first_suffix_called = False
 
-    def _never_execute(_req: RestoreReplayStateRequest) -> Mapping[str, bool]:
+    def _never_execute(_req: CounterfactualReplayRequest) -> Mapping[str, bool]:
         nonlocal first_suffix_called
         first_suffix_called = True
         return {"fix": True, "guard": True}

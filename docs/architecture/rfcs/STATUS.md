@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (53)
+## Accepted (54)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
