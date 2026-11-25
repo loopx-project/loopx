@@ -27,6 +27,20 @@ class SnapshotRegistryLoader(Protocol):
     ) -> dict[str, object]: ...
 
 
+def _safe_absolute(path: Path) -> Path | None:
+    try:
+        return path.expanduser().absolute()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _safe_resolve(path: Path) -> Path | None:
+    try:
+        return path.expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
 def _normalized_registry_keys(path: Path) -> tuple[Path, Path, str]:
     expanded = path.expanduser()
     return expanded.absolute(), expanded.resolve(), expanded.name
@@ -166,8 +180,11 @@ class CapabilityHookRequestScope:
     def invalidate(self, path: Path) -> None:
         """Drop cached state and all alias snapshots resolving to `path`."""
 
-        route, resolved, _ = _normalized_registry_keys(path)
-        targets = {route, resolved}
+        route = _safe_absolute(path) or path
+        resolved = _safe_resolve(path)
+        targets = {route}
+        if resolved is not None:
+            targets.add(resolved)
         canonical = self._alias_to_resolved.get(route)
         if canonical is not None:
             targets.add(canonical)
@@ -180,17 +197,20 @@ class CapabilityHookRequestScope:
         for snap_key in list(self.registry_snapshots):
             if snap_key in targets:
                 continue
-            try:
-                if snap_key.resolve() in targets or snap_key.absolute() in targets:
-                    targets.add(snap_key)
-            except OSError:
-                pass
+            snap_resolved = _safe_resolve(snap_key)
+            snap_absolute = _safe_absolute(snap_key)
+            if (snap_resolved is not None and snap_resolved in targets) or (
+                snap_absolute is not None and snap_absolute in targets
+            ):
+                targets.add(snap_key)
         for key in targets:
             self.registry_snapshots.pop(key, None)
             self._alias_to_resolved.pop(key, None)
         for cache_key in list(self._decoded_registries):
             if cache_key[0] in targets:
                 self._decoded_registries.pop(cache_key, None)
+        for cache_key in list(self._goals_by_path):
+            if cache_key[0] in targets:
                 self._goals_by_path.pop(cache_key, None)
 
 

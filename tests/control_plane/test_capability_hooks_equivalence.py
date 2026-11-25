@@ -739,3 +739,50 @@ def test_request_scope_repointed_symlink_does_not_poison_canonical_target(
         ) == ["g-t3"]
         t3_goal = agent_registry.load_goal_from_registry(t3, "g-t3")
         assert t3_goal is not None and t3_goal["id"] == "g-t3"
+
+
+def test_request_scope_invalidate_ignores_unresolvable_symlink_loop_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loop_a = tmp_path / "loop_a.json"
+    loop_b = tmp_path / "loop_b.json"
+    other = tmp_path / "other.json"
+    target = tmp_path / "target.json"
+    other.write_text(json.dumps({"goals": [{"id": "g-other"}]}), encoding="utf-8")
+    target.write_text(json.dumps({"goals": [{"id": "g-target", "title": "v1"}]}), encoding="utf-8")
+    loop_a.symlink_to(other)
+
+    original_resolve = Path.resolve
+
+    def _resolve_with_312_loop(self: Path, strict: bool = False) -> Path:
+        if self.name == "loop_a.json":
+            raise RuntimeError(f"Symlink loop from {self!r}")
+        return original_resolve(self, strict=strict)
+
+    with capability_hook_request_scope():
+        assert _goal_ids(load_scoped_registry(loop_a, loader=registry_codec.load_registry)) == ["g-other"]
+        assert _goal_ids(load_scoped_registry(target, loader=registry_codec.load_registry)) == ["g-target"]
+
+        loop_a.unlink()
+        loop_a.symlink_to(loop_b)
+        loop_b.symlink_to(loop_a)
+
+        with registry_codec.project_registry_transaction(target, operation="test_loop_unwrapped") as tx:
+            payload = tx.payload_copy()
+            payload["goals"][0]["title"] = "v2"
+            assert tx.commit(payload) is True
+
+        monkeypatch.setattr(Path, "resolve", _resolve_with_312_loop)
+        with registry_codec.project_registry_transaction(target, operation="test_loop_runtime_error") as tx:
+            payload = tx.payload_copy()
+            payload["goals"][0]["title"] = "v3"
+            assert tx.commit(payload) is True
+        invalidate_hook_registry_snapshot(loop_a)
+
+        refreshed = load_scoped_registry(target, loader=registry_codec.load_registry)
+        goals = refreshed["goals"]
+        assert isinstance(goals, list) and isinstance(goals[0], dict)
+        assert goals[0]["title"] == "v3"
+        goal_obj = agent_registry.load_goal_from_registry(target, "g-target")
+        assert goal_obj is not None and goal_obj["title"] == "v3"
