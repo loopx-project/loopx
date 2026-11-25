@@ -61,8 +61,8 @@ def list_goal_todos(
     if limit is not None and limit < 1:
         raise ValueError("todo list --limit must be at least 1")
     scoped_snapshots = current_hook_registry_snapshots()
-    source_snapshots: dict[Path, bytes | None] = (
-        scoped_snapshots if scoped_snapshots is not None else {}
+    source_snapshots: dict[Path, bytes | None] | None = (
+        None if scoped_snapshots is not None else {}
     )
     registry = (
         load_scoped_registry(registry_path, loader=load_registry)

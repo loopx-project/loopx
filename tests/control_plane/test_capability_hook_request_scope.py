@@ -226,3 +226,132 @@ def test_warm_canonical_source_captures_aba_race_invalidation(
         assert alias.absolute() not in scope.registry_snapshots
         refreshed_alias = agent_registry.load_goal_from_registry(alias, "g1")
         assert refreshed_alias is not None and refreshed_alias["title"] == "a-v1"
+
+
+def test_list_goal_todos_scoped_routing_captures_aba_source_invalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.control_plane.runtime.runtime_projection_route as runtime_projection_route
+    from loopx.control_plane.todos.list_readback import list_goal_todos
+    from tests.control_plane.canonical_authority_fixture import (
+        initialize_canonical_source_fixture,
+    )
+
+    root = tmp_path.resolve()
+    project = root / "project"
+    runtime_root = root / "runtime"
+    runtime_root.mkdir()
+    state_path = project / "ACTIVE_GOAL_STATE.md"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        "---\nstatus: active\n---\n\n"
+        "# Scoped Readback Fixture\n\n"
+        "## Agent Todo\n\n"
+        "- [ ] Verify source routing\n"
+        "  <!-- loopx:todo todo_id=t1 status=open -->\n",
+        encoding="utf-8",
+    )
+    initialize_canonical_source_fixture(
+        runtime_root, "g1", state_path=state_path, provider="file"
+    )
+
+    reg_a = root / "source_a" / "registry.json"
+    reg_b = root / "source_b" / "registry.json"
+    reg_g = root / "global" / "registry.json"
+
+    def _goal_entry(title: str, *, source_registry: Path | None = None) -> dict[str, object]:
+        goal: dict[str, object] = {
+            "id": "g1",
+            "title": title,
+            "status": "active",
+            "repo": str(project),
+            "state_file": state_path.name,
+            "coordination": {"registered_agents": ["agent-a"]},
+        }
+        if source_registry is not None:
+            goal["source_registry"] = str(source_registry)
+        return goal
+
+    def _write_registry(
+        target: Path,
+        goal: dict[str, object],
+        *,
+        registry_role: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "common_runtime_root": str(runtime_root),
+            "goals": [goal],
+        }
+        if registry_role is not None:
+            payload["registry_role"] = registry_role
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload), encoding="utf-8")
+
+    _write_registry(reg_a, _goal_entry("A-original"))
+    _write_registry(reg_b, _goal_entry("B-before"))
+    _write_registry(
+        reg_g,
+        _goal_entry("Global-mirror", source_registry=reg_a),
+        registry_role="global-local",
+    )
+    reg_a_bytes = reg_a.read_bytes()
+
+    with capability_hook_request_scope() as scope:
+        warm_b = agent_registry.load_goal_from_registry(reg_b, "g1")
+        assert warm_b is not None and warm_b["title"] == "B-before"
+
+        orig_load = registry_codec.load_registry
+        swapped = False
+
+        def _aba_load(
+            path: Path,
+            *,
+            source_snapshots: dict[Path, bytes | None] | None = None,
+        ) -> dict[str, object]:
+            nonlocal swapped
+            if not swapped and path.absolute() == reg_a.absolute():
+                swapped = True
+                reg_a.unlink()
+                reg_a.symlink_to(reg_b)
+                try:
+                    return dict(orig_load(path, source_snapshots=source_snapshots))
+                finally:
+                    reg_a.unlink()
+                    reg_a.write_bytes(reg_a_bytes)
+            return dict(orig_load(path, source_snapshots=source_snapshots))
+
+        monkeypatch.setattr(runtime_projection_route, "load_registry", _aba_load)
+        scoped_todos = list_goal_todos(
+            registry_path=reg_g,
+            goal_id="g1",
+        )
+        monkeypatch.undo()
+        assert swapped is True
+        assert not reg_a.is_symlink() and reg_a.read_bytes() == reg_a_bytes
+        assert scoped_todos["todo_count"] == 1
+        scoped_todo_ids = [item["todo_id"] for item in scoped_todos["todos"]]
+        assert len(scoped_todo_ids) == 1
+        assert reg_b.absolute() in scope._alias_to_targets.get(reg_a.absolute(), set())
+
+        with registry_codec.project_registry_transaction(
+            reg_b, operation="test_commit_b_after_list_readback"
+        ) as tx:
+            payload_b = tx.payload_copy()
+            payload_b["goals"][0]["title"] = "B-after"
+            assert tx.commit(payload_b) is True
+
+        assert reg_b.absolute() not in scope.registry_snapshots
+        assert reg_a.absolute() not in scope.registry_snapshots
+        refreshed_a = agent_registry.load_goal_from_registry(reg_a, "g1")
+        refreshed_b = agent_registry.load_goal_from_registry(reg_b, "g1")
+        assert refreshed_a is not None and refreshed_a["title"] == "A-original"
+        assert refreshed_b is not None and refreshed_b["title"] == "B-after"
+
+    non_scoped = list_goal_todos(
+        registry_path=reg_g,
+        goal_id="g1",
+    )
+    assert non_scoped["todo_count"] == 1
+    assert [item["todo_id"] for item in non_scoped["todos"]] == scoped_todo_ids
