@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Mapping, Sequence
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 
 import pytest
 
@@ -394,3 +397,103 @@ def test_antigravity_adapter_surface_parity_zero_any_and_size() -> None:
     assert offered_antigravity_model_options is provider.offered_antigravity_model_options
     assert probe_antigravity_endpoint is provider.probe_antigravity_endpoint
     assert probe_cascade_idle is provider.probe_cascade_idle
+
+
+def test_idle_canceled_step_with_corrupt_payload_retires_turn_without_cancel_rpc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Settled CORTEX_STEP_STATUS_CANCELED with non-dict plannerResponse/errorMessage must retire active turn cleanly."""
+    sent_prompts: list[str] = []
+    cancel_calls = 0
+
+    class _Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+        def do_POST(self) -> None:
+            nonlocal cancel_calls
+            content_len = int(self.headers.get("Content-Length", "0"))
+            parsed = json.loads(self.rfile.read(content_len))
+            assert isinstance(parsed, dict)
+            method = self.path.rsplit("/", 1)[-1]
+            resp: dict[str, object]
+            if method == "GetCascadeModelConfigData":
+                resp = {
+                    "clientModelConfigs": [
+                        {
+                            "modelId": "gemini-4-argon-high",
+                            "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"},
+                        }
+                    ]
+                }
+            elif method == "StartCascade":
+                resp = {"cascadeId": "cascade-cancel-1"}
+            elif method == "GetCascadeTrajectory":
+                cid = str(parsed.get("cascadeId") or "")
+                resp = {
+                    "trajectory": {"cascadeId": cid},
+                    "numTotalSteps": 2 if sent_prompts else 0,
+                    "status": "CASCADE_RUN_STATUS_IDLE",
+                }
+            elif method == "SendUserCascadeMessage":
+                items = parsed.get("items")
+                assert isinstance(items, list) and items and isinstance(items[0], dict)
+                sent_prompts.append(str(items[0].get("text") or ""))
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                steps: list[dict[str, object]] = [
+                    {
+                        "type": "CORTEX_STEP_TYPE_USER_INPUT",
+                        "status": "CORTEX_STEP_STATUS_DONE",
+                        "metadata": {
+                            "createdAt": "2026-11-26T00:00:00Z",
+                            "executionId": "exec-cancel-1",
+                        },
+                        "userInput": {"items": [{"text": sent_prompts[-1]}]},
+                    },
+                    {
+                        "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+                        "status": "CORTEX_STEP_STATUS_CANCELED",
+                        "metadata": {
+                            "createdAt": "2026-11-26T00:00:01Z",
+                            "executionId": "exec-cancel-1",
+                        },
+                        "plannerResponse": "corrupt-non-dict",
+                        "errorMessage": "corrupt-non-dict",
+                    },
+                ]
+                start_idx = int(parsed.get("startIndex") or 0)
+                end_idx = int(parsed.get("endIndex") or len(steps))
+                resp = {"steps": steps[start_idx:end_idx]}
+            elif method == "CancelCascadeInvocation":
+                cancel_calls += 1
+                resp = {}
+            else:
+                raise AssertionError(f"unexpected RPC method: {method}")
+            payload = json.dumps(resp).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", "synthetic-csrf-token")
+    try:
+        adapter = AntigravityAdapter.start(
+            work_dir=tmp_path,
+            objective="Test idle canceled terminal verification.",
+        )
+        with pytest.raises(CodexChatAgentError, match="cancelled step") as exc_info:
+            adapter.start_turn("cancel probe")
+        assert exc_info.value.error_code == "upstream_transport_failure"
+        assert cancel_calls == 0
+        assert adapter._active_turn_id is None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

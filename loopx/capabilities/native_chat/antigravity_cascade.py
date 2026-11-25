@@ -741,7 +741,7 @@ def _verify_idle_terminal(
     """Evaluate terminal idle status, tolerating cleared retries until answer settles."""
     final = current_steps[-1][1] if current_steps else {}
     final_is_error = final.get("type") == "CORTEX_STEP_TYPE_ERROR_MESSAGE"
-    error_message = _subdict(final, "errorMessage")
+    error_message = _subdict(final, "errorMessage") if final_is_error else {}
     cleared_retry = (
         final_is_error
         and final.get("status") == "CORTEX_STEP_STATUS_CLEARED"
@@ -766,7 +766,6 @@ def _verify_idle_terminal(
         ):
             on_retire_active_turn()
         raise error
-    planner = _subdict(final, "plannerResponse")
     if (
         final.get("status") == "CORTEX_STEP_STATUS_CANCELED"
         and all(
@@ -780,6 +779,7 @@ def _verify_idle_terminal(
             gate=None,
             error_code="upstream_transport_failure",
         )
+    planner = _subdict(final, "plannerResponse")
     if cleared_retry or (
         planner.get("stopReason") in {None, "STOP_REASON_STOP_PATTERN"}
         and (
