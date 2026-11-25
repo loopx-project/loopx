@@ -96,6 +96,27 @@ BUILTIN_HOST_ADAPTER_MODULES: Mapping[str, str] = {
     "claude": "loopx.claude_goal_mode",
     "dsh": "loopx.dsh_goal_mode.turn_host_adapter",
 }
+_BUILTIN_DESCRIPTORS_LOCK = threading.Lock()
+_BUILTIN_DESCRIPTORS: dict[str, HostHarnessCapabilities] = {}
+
+
+def _resolve_loaded_builtin_descriptor(
+    host_id: str,
+    module: object,
+) -> HostHarnessCapabilities | None:
+    with _BUILTIN_DESCRIPTORS_LOCK:
+        cached = _BUILTIN_DESCRIPTORS.get(host_id)
+    if cached is not None:
+        return cached
+    module_dict = getattr(module, "__dict__", None)
+    if not isinstance(module_dict, Mapping):
+        return None
+    matches = [
+        value
+        for value in module_dict.values()
+        if isinstance(value, HostHarnessCapabilities) and value.host_id == host_id
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def is_host_integration_tier(value: object) -> TypeGuard[HostIntegrationTier]:
@@ -445,10 +466,27 @@ class HostCapabilitiesRegistry:
                     return
                 self._loading_threads[host_id] = current_thread_id
             try:
-                importlib.import_module(module_name)
+                module = importlib.import_module(module_name)
+                self._sync_loaded_builtin(host_id, module_name, module)
             finally:
                 with self._lock:
                     self._loading_threads.pop(host_id, None)
+
+    def _sync_loaded_builtin(
+        self,
+        host_id: str,
+        module_name: str,
+        module: object,
+    ) -> None:
+        if BUILTIN_HOST_ADAPTER_MODULES.get(host_id) != module_name:
+            return
+        descriptor = _resolve_loaded_builtin_descriptor(host_id, module)
+        if descriptor is None:
+            return
+        validated = validate_host_harness_capabilities(descriptor)
+        with self._lock:
+            if host_id not in self._entries:
+                self._entries[host_id] = validated
 
     def _write_entry_locked(
         self,
@@ -547,8 +585,19 @@ def _register_builtin_host_capabilities(
     *,
     registry: HostCapabilitiesRegistry | None = None,
 ) -> HostHarnessCapabilities:
-    target = DEFAULT_HOST_CAPABILITIES_REGISTRY if registry is None else registry
-    return target._register_builtin(descriptor)
+    validated = validate_host_harness_capabilities(descriptor)
+    if registry is None:
+        with _BUILTIN_DESCRIPTORS_LOCK:
+            existing = _BUILTIN_DESCRIPTORS.get(validated.host_id)
+            if existing is not None and existing != validated:
+                raise ValueError(
+                    f"conflicting host capabilities registration for {validated.host_id}"
+                )
+            _BUILTIN_DESCRIPTORS[validated.host_id] = validated
+        target = DEFAULT_HOST_CAPABILITIES_REGISTRY
+    else:
+        target = registry
+    return target._register_builtin(validated)
 
 
 def register_host_capabilities(

@@ -19,6 +19,7 @@ from typing import cast, get_args
 import pytest
 
 from loopx.hosts.capabilities import (
+    BUILTIN_HOST_ADAPTER_MODULES,
     HOST_HARNESS_CAPABILITIES_SCHEMA_VERSION,
     HOST_HARNESS_CAPABILITY_FLAG_VALUES,
     HOST_INTEGRATION_TIER_VALUES,
@@ -821,3 +822,140 @@ def test_flagship_wiring_preserves_default_runtime_behavior(tmp_path: Path) -> N
     )
     assert json.loads(hook_result.stdout) == {}
     assert selected_turn_host({}) == ("codex-cli", "no_operator_credential")
+
+
+def test_isolated_registry_loads_real_builtins_in_cold_and_warm_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cold_single_and_list_script = """
+import sys
+import pytest
+from loopx.hosts.capabilities import (
+    BUILTIN_HOST_ADAPTER_MODULES,
+    HostCapabilitiesRegistry,
+    HostHarnessCapabilities,
+    get_host_capabilities,
+)
+
+assert 'loopx.agy_goal_mode' not in sys.modules
+assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+
+isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
+agy = isolated.get('agy')
+assert agy is not None and agy.host_id == 'agy'
+assert 'loopx.agy_goal_mode' in sys.modules
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert get_host_capabilities('agy') == agy
+
+conflicting_claude = HostHarnessCapabilities(
+    host_id='claude',
+    integration_tier='boundary_cli',
+    adapter_module='loopx.claude_goal_mode',
+    supported_capabilities=('verifier_hook',),
+    hook_events=('PreToolUse',),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=True,
+    description='Unauthorized override on isolated registry while cold.',
+)
+with pytest.raises(ValueError, match='conflicting host capabilities registration for claude'):
+    isolated.register(conflicting_claude, replace=False)
+
+entries = isolated.list()
+assert [entry.host_id for entry in entries] == ['agy', 'claude', 'dsh']
+assert isolated.get('claude') is not None
+assert isolated.get('dsh') is not None
+assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+"""
+    warm_and_override_isolated_script = """
+import sys
+import loopx.agy_goal_mode as agy_mod
+import loopx.claude_goal_mode as claude_mod
+import loopx.dsh_goal_mode.turn_host_adapter as dsh_mod
+from loopx.hosts.capabilities import (
+    BUILTIN_HOST_ADAPTER_MODULES,
+    HostCapabilitiesRegistry,
+    HostHarnessCapabilities,
+    get_host_capabilities,
+    register_host_capabilities,
+)
+
+override_claude = HostHarnessCapabilities(
+    host_id='claude',
+    integration_tier='boundary_cli',
+    adapter_module='loopx.claude_goal_mode',
+    supported_capabilities=('verifier_hook',),
+    hook_events=('PreToolUse',),
+    requires_utf8_stdio=True,
+    native_goal_primitive=False,
+    native_scheduler_primitive=True,
+    description='Default registry override must not leak into isolated builtins.',
+)
+register_host_capabilities(override_claude, replace=True)
+assert get_host_capabilities('claude') == override_claude
+
+isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
+assert isolated.get('agy') == agy_mod.AGY_HOST_CAPABILITIES
+assert isolated.get('claude') == claude_mod.CLAUDE_HOST_CAPABILITIES
+assert isolated.get('dsh') == dsh_mod.DSH_HOST_CAPABILITIES
+assert [entry.host_id for entry in isolated.list()] == ['agy', 'claude', 'dsh']
+assert isolated.list() == (
+    agy_mod.AGY_HOST_CAPABILITIES,
+    claude_mod.CLAUDE_HOST_CAPABILITIES,
+    dsh_mod.DSH_HOST_CAPABILITIES,
+)
+"""
+    for script in (cold_single_and_list_script, warm_and_override_isolated_script):
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    # Warm in-process verification plus subset & non-matching / explicit protection.
+    warm_isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
+    assert [entry.host_id for entry in warm_isolated.list()] == ["agy", "claude", "dsh"]
+
+    partial = HostCapabilitiesRegistry(
+        builtin_modules={"claude": BUILTIN_HOST_ADAPTER_MODULES["claude"]}
+    )
+    assert [entry.host_id for entry in partial.list()] == ["claude"]
+    assert partial.get("agy") is None
+
+    non_matching = HostCapabilitiesRegistry(
+        builtin_modules={"agy": "custom.non_builtin_agy"}
+    )
+    explicit_fake = HostHarnessCapabilities(
+        host_id="claude",
+        integration_tier="boundary_cli",
+        adapter_module="loopx.claude_goal_mode",
+        supported_capabilities=("verifier_hook",),
+        hook_events=("PreToolUse",),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=True,
+        description="Explicit fake registration preserved over canonical builtin.",
+    )
+    fake_registry = HostCapabilitiesRegistry(
+        builtin_modules={"claude": BUILTIN_HOST_ADAPTER_MODULES["claude"]}
+    )
+    real_import_module = importlib.import_module
+
+    def fake_import(name: str, package: str | None = None) -> ModuleType:
+        if name == "custom.non_builtin_agy":
+            return ModuleType(name)
+        if name == BUILTIN_HOST_ADAPTER_MODULES["claude"]:
+            fake_registry.register(explicit_fake)
+            return ModuleType(name)
+        return real_import_module(name, package)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+    assert non_matching.get("agy") is None
+    assert non_matching.list() == ()
+    assert fake_registry.get("claude") == explicit_fake
