@@ -1,30 +1,53 @@
 import type { CollaborationReadback } from "../../data/chat-model";
-import {currentCollaborationConclusion} from "../../data/conversation-returns";
-import {useEffect, useState} from "react";
-import type {RequestControlView} from "../../data/request-control";
-import {RequestControl} from "./request-control";
+import { currentCollaborationConclusion } from "../../data/conversation-returns";
+import { useEffect, useState } from "react";
+import type { RequestControlView } from "../../data/request-control";
+import { RequestControl } from "./request-control";
 import { useWorkspaceI18n } from "./i18n";
 import { needsOriginalDeliveryProof } from "./return-delivery-status";
+import {
+  WORKER_ROSTER_STATES,
+  deriveCollaborationCardStatus,
+  deriveCollaborationRosterSummary,
+  workerRosterStateLabel,
+} from "./collaboration-status";
+import {
+  WorkerNowLine,
+  WorkerProgressBadge,
+  WorkerScopeTag,
+  WorkerStateBadge,
+  WorkerStateGlyph,
+} from "./worker-roster";
 import "./collaboration-card.css";
 
 const copy = {
   "zh-CN": {
-    title: "交办说明", context: "背景与补充", constraints: "约束", inputs: "输入材料",
-    acceptance: "验收要求", return: "需要回传", supplied: "已提供给接收方", pending: "等待接收方读取",
-    decision: "接收方判断", unknown: "尚未记录", unavailable: "暂时无法读取",
-    adopt: "已采纳", defer: "已暂缓", reject: "未采纳", no_change: "无需调整",
-    result: "回复等待送达", delivered: "回复已送达", unverified: "回复送达尚未核验", details: "查看交办内容",
-    owner: "接收方", reason: "原因",
+    title: "交办说明",
+    context: "背景与补充",
+    constraints: "约束",
+    inputs: "输入材料",
+    acceptance: "验收要求",
+    return: "需要回传",
+    decision: "接收方判断",
+    details: "查看交办内容",
+    owner: "接收方",
+    reason: "原因",
+    rosterSummary: "协作接收方概览",
   },
   en: {
-    title: "Delegation brief", context: "Context & corrections", constraints: "Constraints", inputs: "Inputs",
-    acceptance: "Acceptance", return: "Expected return", supplied: "Supplied to receiver", pending: "Awaiting receiver read",
-    decision: "Receiver decision", unknown: "Not recorded", unavailable: "Readback unavailable",
-    adopt: "Adopted", defer: "Deferred", reject: "Rejected", no_change: "No change needed",
-    result: "Reply awaiting delivery", delivered: "Reply delivered", unverified: "Reply delivery unverified", details: "View delegation details",
-    owner: "Recipient", reason: "Reason",
+    title: "Delegation brief",
+    context: "Context & corrections",
+    constraints: "Constraints",
+    inputs: "Inputs",
+    acceptance: "Acceptance",
+    return: "Expected return",
+    decision: "Receiver decision",
+    details: "View delegation details",
+    owner: "Recipient",
+    reason: "Reason",
+    rosterSummary: "Recipient collaboration roster",
   },
-};
+} as const;
 
 export function CollaborationCard({ request }: { request?: CollaborationReadback }) {
   const { locale, t } = useWorkspaceI18n();
@@ -32,60 +55,150 @@ export function CollaborationCard({ request }: { request?: CollaborationReadback
   const [unavailable, setUnavailable] = useState(false);
   const [editing, setEditing] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  useEffect(() => {setObserved(null); setUnavailable(false);}, [request?.request_id]);
+
+  useEffect(() => {
+    setObserved(null);
+    setUnavailable(false);
+  }, [request?.request_id]);
+
   useEffect(() => {
     if (request?.request_control && observed && request.request_control.control_version >= observed.control_version) {
-      setObserved(null); setUnavailable(false);
+      setObserved(null);
+      setUnavailable(false);
     }
-  }, [request?.request_control]);
+  }, [request?.request_control, observed]);
+
   if (!request) return null;
+
   const c = copy[locale];
   const brief = observed?.brief ?? request.brief;
   const revision = observed?.revision ?? request.request_revision;
-  const readStatus = unavailable ? "unavailable" : observed ? observed.read_readback === "recorded" ? "supplied"
-    : observed.read_readback === "unavailable" ? "unavailable" : "pending" : request.read_status;
-  const recordedDecision = unavailable ? "unavailable" : observed ? observed.assessment?.decision
-    ?? (observed.assessment_readback === "unavailable" ? "unavailable" : "pending") : request.decision;
-  const decision = (() => {
-    switch (recordedDecision) {
-      case "adopt": return c.adopt;
-      case "defer": return c.defer;
-      case "reject": return c.reject;
-      case "no_change": return c.no_change;
-      case "unavailable": return c.unavailable;
-      default: return c.unknown;
-    }
-  })();
-  const conclusion = currentCollaborationConclusion({...request, request_revision: revision});
+  const status = deriveCollaborationCardStatus({ request, observed, unavailable, locale });
+  const conclusion = currentCollaborationConclusion({ ...request, request_revision: revision });
   const decisionReason = observed ? observed.assessment?.reason : request.decision_reason;
-  return <section className="personal-collaboration" aria-label={c.title}>
-    <header><strong>{brief.purpose}</strong><span>{c.owner}: {request.goal_id ? `${request.goal_id} / ` : ""}{request.agent_id}</span></header>
-    <p className="personal-collaboration-status">
-      {revision !== undefined ? <span>{locale === "zh-CN" ? "请求版本" : "Request revision"} {revision}</span> : null}
-      <span>{readStatus === "supplied" ? c.supplied : readStatus === "unavailable" ? c.unavailable : c.pending}</span>
-      <span>{c.decision}: {decision}</span>
-      {conclusion ? <span>{needsOriginalDeliveryProof(conclusion) ? t("returnDelivery.originalHandoff")
-        : conclusion.status === "delivered" ? c.delivered
-        : conclusion.status === "queued" ? c.result : c.unverified}</span> : null}
-    </p>
-    {decisionReason && !unavailable ? <p>{c.reason}: {decisionReason}</p> : null}
-    <details onToggle={event => setDetailsOpen(event.currentTarget.open)}>
-      <summary>{c.details}</summary>
-      {request.control_route ? <RequestControl route={request.control_route} active={detailsOpen}
-        onReadback={value => {setObserved(value); setUnavailable(value === null);}} onEditing={setEditing} /> : null}
-      {!editing && <>
-      <h4>{c.context}</h4><p>{brief.context}</p>
-      {brief.constraints.length ? <><h4>{c.constraints}</h4><ul>{brief.constraints.map((item, i) => <li key={i}>{item}</li>)}</ul></> : null}
-      {brief.inputs.length ? <><h4>{c.inputs}</h4><ul>{brief.inputs.map((input, i) => <li key={i}><code>{input.ref}</code> — {input.description}{input.sha256 ? <small>sha256:{input.sha256}</small> : null}</li>)}</ul></> : null}
-      <h4>{c.acceptance}</h4><ul>{brief.acceptance.map((item, i) => <li key={i}>{item}</li>)}</ul>
-      <h4>{c.return}</h4><p>{brief.return_requirement}</p>
-      </>}
-    </details>
-  </section>;
+  const conclusionText = conclusion
+    ? (needsOriginalDeliveryProof(conclusion) ? t("returnDelivery.originalHandoff") : status.conclusionLabel)
+    : null;
+
+  return (
+    <section
+      className="personal-collaboration"
+      aria-label={c.title}
+      data-roster-state={status.state}
+    >
+      <header className="pw-collab-header">
+        <div className="pw-collab-title-group">
+          <WorkerStateBadge state={status.state} locale={locale} />
+          <strong>{brief.purpose}</strong>
+        </div>
+        <div className="pw-collab-meta-group">
+          <span className="pw-collab-owner-label">{c.owner}:</span>
+          <WorkerScopeTag scope={status.scope} />
+          <WorkerProgressBadge progress={status.progress} />
+        </div>
+      </header>
+      <WorkerNowLine now={status.now} />
+      <p className="personal-collaboration-status">
+        {status.revisionLabel ? <span>{status.revisionLabel}</span> : null}
+        <span>{status.readLabel}</span>
+        <span>{c.decision}: {status.decisionLabel}</span>
+        {conclusionText ? <span>{conclusionText}</span> : null}
+      </p>
+      {decisionReason && !unavailable && status.decisionReason !== status.now ? (
+        <p className="pw-collab-reason">{c.reason}: {decisionReason}</p>
+      ) : null}
+      <details onToggle={(event) => setDetailsOpen(event.currentTarget.open)}>
+        <summary>{c.details}</summary>
+        {request.control_route ? (
+          <RequestControl
+            route={request.control_route}
+            active={detailsOpen}
+            onReadback={(value) => {
+              setObserved(value);
+              setUnavailable(value === null);
+            }}
+            onEditing={setEditing}
+          />
+        ) : null}
+        {!editing && (
+          <>
+            <h4>{c.context}</h4>
+            <p>{brief.context}</p>
+            {brief.constraints.length ? (
+              <>
+                <h4>{c.constraints}</h4>
+                <ul>{brief.constraints.map((item, i) => <li key={i}>{item}</li>)}</ul>
+              </>
+            ) : null}
+            {brief.inputs.length ? (
+              <>
+                <h4>{c.inputs}</h4>
+                <ul>
+                  {brief.inputs.map((input, i) => (
+                    <li key={i}>
+                      <code>{input.ref}</code> — {input.description}
+                      {input.sha256 ? <small>sha256:{input.sha256}</small> : null}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+            <h4>{c.acceptance}</h4>
+            <ul>{brief.acceptance.map((item, i) => <li key={i}>{item}</li>)}</ul>
+            <h4>{c.return}</h4>
+            <p>{brief.return_requirement}</p>
+          </>
+        )}
+      </details>
+    </section>
+  );
 }
 
 /** Each recipient retains its own request controls, decision and return. */
-export function CollaborationCards({request, requests}: {request?: CollaborationReadback; requests?: CollaborationReadback[]}) {
-  return <>{(requests ?? (request ? [request] : [])).map(row =>
-    <CollaborationCard key={row.request_id} request={row} />)}</>;
+export function CollaborationCards({
+  request,
+  requests,
+}: {
+  request?: CollaborationReadback;
+  requests?: CollaborationReadback[];
+}) {
+  const { locale } = useWorkspaceI18n();
+  const rows = requests ?? (request ? [request] : []);
+  if (!rows.length) return null;
+  const summary = rows.length > 1 ? deriveCollaborationRosterSummary(rows, locale) : null;
+
+  return (
+    <>
+      {summary ? (
+        <aside className="pw-collab-roster-summary" aria-label={copy[locale].rosterSummary}>
+          <div className="pw-collab-roster-head">
+            <div className="pw-roster-counts">
+              {WORKER_ROSTER_STATES.filter((state) => summary.counts[state] > 0).map((state) => (
+                <WorkerStateBadge
+                  key={state}
+                  state={state}
+                  locale={locale}
+                  count={summary.counts[state]}
+                />
+              ))}
+            </div>
+            <WorkerProgressBadge progress={summary.progress} />
+          </div>
+          <ul className="pw-collab-roster-list">
+            {summary.workers.map((worker) => (
+              <li key={worker.requestId} data-roster-state={worker.state}>
+                <WorkerStateGlyph state={worker.state} />
+                <span className="pw-collab-roster-agent">{worker.agentId}</span>
+                <span className="pw-collab-roster-state-text">{worker.stateLabel}</span>
+                <WorkerScopeTag scope={worker.scope} />
+                <span className="pw-collab-roster-now" title={worker.now}>{worker.now}</span>
+                <WorkerProgressBadge progress={worker.progress} />
+              </li>
+            ))}
+          </ul>
+        </aside>
+      ) : null}
+      {rows.map((row) => <CollaborationCard key={row.request_id} request={row} />)}
+    </>
+  );
 }

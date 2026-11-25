@@ -5,6 +5,8 @@ import {AttachedConversation, request, retryableRead, readFailureMessage, type B
 import {fetchManagedAgentSessions, type ChatSessionSummary} from "../../data/chat";
 import {useWorkspaceI18n} from "./i18n";
 import type {WorkspaceGoal} from "./personal-workspace-model";
+import {deriveGoalWorkerRoster} from "./collaboration-status";
+import {WorkerNowLine, WorkerProgressBadge, WorkerScopeTag, WorkerStateBadge} from "./worker-roster";
 
 /** Navigation uses the Goal directory; only the native provider can authorize a conversation. */
 export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession, onRetryManagedSession, children, onSelect, onClose}: {
@@ -14,10 +16,13 @@ export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession
   onSelect: (agentId: string) => void; onClose: () => void;
 }) {
   const zh = useWorkspaceI18n().locale === "zh-CN";
+  const locale = zh ? "zh-CN" : "en";
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {heading.current?.focus({preventScroll: true});}, [agentId]);
   const ids = [...new Set(goal.registeredAgentIds ?? [])];
   const lane = goal.agentLanes?.find(item => item.agentId === agentId);
+  const roster = deriveGoalWorkerRoster({goal, locale});
+  const rosterById = new Map(roster.workers.map(worker => [worker.agentId, worker]));
   const registered = ids.includes(agentId);
   const hosts = lane?.hostSurfaces ?? [];
   const title = zh ? "工作记录" : "Work conversation";
@@ -33,18 +38,29 @@ export function GoalAgentWorkPage({goal, agentId, readOnly, sessionId, onSession
       </div>
     </header>
     {!agentId ? <div className="agent-work-directory">
-      {ids.map(id => <button type="button" key={id} onClick={() => onSelect(id)}>{goal.agentLanes?.find(item => item.agentId === id)?.label ?? id}</button>)}
+      {ids.map(id => {
+        const entry = rosterById.get(id);
+        return <div className="agent-work-directory-row" key={id} data-roster-state={entry?.state}>
+          <div className="agent-work-directory-top">
+            <button type="button" onClick={() => onSelect(id)}>{goal.agentLanes?.find(item => item.agentId === id)?.label ?? id}</button>
+            {entry ? <WorkerStateBadge state={entry.state} locale={locale} /> : null}
+            {entry ? <WorkerScopeTag scope={entry.scope} /> : null}
+            {entry ? <WorkerProgressBadge progress={entry.progress} /> : null}
+          </div>
+          {entry?.now ? <WorkerNowLine now={entry.now} /> : null}
+        </div>;
+      })}
       {!ids.length ? <p role="status">{zh ? "此 Goal 尚无已注册的 Agent。" : "This Goal has no registered Agents."}</p> : null}
     </div> : readOnly ? <ContextHelp label={zh ? "来源仅有状态快照" : "Source contains a status snapshot only"} icon={CircleHelp}><p className="agent-work-unavailable" role="status">{zh ? "此来源仅提供状态快照，无法在这里读取或回复原会话。" : "This source provides a status snapshot; original conversations cannot be read or replied to here."}</p></ContextHelp>
       : !registered ? <p className="agent-work-unavailable" role="status">{zh ? "此 Agent 不在当前 Goal 的已注册列表中，请选择列表中的 Agent。" : "This Agent is not registered in the current Goal. Choose an Agent from its directory."}</p>
-      : <AgentSessions key={`${goal.goalId}:${agentId}`} goalId={goal.goalId} agentId={agentId} hosts={hosts} attached={hosts.includes("codex-app")}
+      : <AgentSessions key={`${goal.goalId}:${agentId}`} goalId={goal.goalId} agentId={agentId} agentLabel={lane?.label} hosts={hosts} attached={hosts.includes("codex-app")}
         zh={zh} sessionId={sessionId} onSession={onSession} onRetryManagedSession={onRetryManagedSession}>{children}</AgentSessions>}
   </section>;
 }
 
 /** Both providers stay under the registered Agent; the reader retains its original owner. */
-function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSession, onRetryManagedSession, children}: {
-  goalId: string; agentId: string; hosts: string[]; attached: boolean; zh: boolean; sessionId?: string;
+function AgentSessions({goalId, agentId, agentLabel, hosts, attached, zh, sessionId, onSession, onRetryManagedSession, children}: {
+  goalId: string; agentId: string; agentLabel?: string; hosts: string[]; attached: boolean; zh: boolean; sessionId?: string;
   onSession: (sessionId: string, replace?: boolean) => void; children?: ReactNode;
   onRetryManagedSession?: () => void;
 }) {
@@ -120,6 +136,6 @@ function AgentSessions({goalId, agentId, hosts, attached, zh, sessionId, onSessi
     </ContextHelp> : null}
     {managed ? <><div className="agent-work-session-source"><span>LoopX · {managed.agent_id}</span>
       <ContextHelp label={zh ? "原会话身份" : "Original Session identity"}><p>{managed.session_id}</p><p>{managed.agent_model_id ?? (zh ? "模型未读取" : "Model not observed")} · {managed.agent_reasoning_effort ?? "—"}</p></ContextHelp>
-    </div>{children}</> : binding ? <AttachedConversation key={binding.binding_ref} goalId={goalId} binding={binding} zh={zh} reconnect={reconnect}/> : null}
+    </div>{children}</> : binding ? <AttachedConversation key={binding.binding_ref} goalId={goalId} binding={binding} agentLabel={agentLabel} hostSurfaces={hosts} zh={zh} reconnect={reconnect}/> : null}
   </>;
 }
