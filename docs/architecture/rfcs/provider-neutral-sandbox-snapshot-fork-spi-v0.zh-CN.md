@@ -219,7 +219,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 
 | 里程碑 | 交付行为 | 进入门禁 | 退出证据 | 回退方式 |
 | --- | --- | --- | --- | --- |
-| M0 | 双语 SPI RFC + 15 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461` / `#9209` / `#9211` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
+| M0 | 双语 SPI RFC + 17 项契约一致性测试（`test_sandbox_snapshot_fork_spi_conformance.py`） | 完成 `#8461` / `#9209` / `#9211` 与 `replay_runtime.py` 盘点 | V1–V4 pytest、`check_rfc_bilingual`、`docs-governance-smoke` 与 `canary premerge` 全绿 | 撤销文档与测试 PR；零运行时影响 |
 | M1 | 首个可选扩展实现（`firecracker_local` 或 `e2b_microvm`） | M0 合入；固定 Linux/E2B 验证镜像 | 真机 `pause`/`resume`/`snapshot`/`fork`、密钥擦除、symlink 与关闭态等价性 | 停用扩展 profile |
 | M2 | 与热 `git worktree` / `layerfs_cow` 的配对反事实对比 | M1 通过；冻结题目、预算与评估器 | 基于 `counterfactual_runtime.py` 与 `#9211` §§5.5/6.2 输出完整 5 维成本与 Tier-2 $\tau_B(s; a, a_0, \pi)$ 对照结论 | 终止试验，如实保留负结果/平手数据 |
 | M3 | 可选产品/评测推广评审 | M2 复现净收益（$\Delta J(B \mid s_0) > 0$）且 UI 回读齐备 | 维护者批准与打包态不可用/恢复闭环验收 | 维持默认关闭或退役扩展 |
@@ -249,7 +249,7 @@ $s = (c_{\text{host}}, \sigma_{\text{loopx}}, w_{\text{ws}}, \phi_{\text{env}}, 
 | 证据 ID | 声明 | 基线 / 环境 | 产物或命令 | 结果 | 隐私 / 有效性边界 |
 | --- | --- | --- | --- | --- | --- |
 | E1 | 五元组 Checkpoint 与 `checkpoint_artifacts.ts` / `replay_runtime.py` 盘点 | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | 源码审计与 [#8461](https://github.com/loopx-project/loopx/pull/8461)、[#9209](https://github.com/loopx-project/loopx/pull/9209)、[#9211](https://github.com/loopx-project/loopx/pull/9211) | 已在主干权威 owner 核实 | 只读盘点；早先原型 `#8516` 已关闭未合并 |
-| E2 | M0 V1–V4 SPI 一致性测试（基于真实 `ReplayPointRegistry`、`run_counterfactual_suffix_replay` 与 `run_counterfactual_child_group`） | 独立 worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | PR 门禁通过（15/15 M0 测试） | 使用参考 SPI 模型 fixture，未连接真实 hypervisor |
+| E2 | M0 V1–V4 SPI 一致性测试（基于真实 `ReplayPointRegistry`、`run_counterfactual_suffix_replay` 与 `run_counterfactual_child_group`） | 独立 worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | PR 门禁通过（17/17 M0 测试） | 使用参考 SPI 模型 fixture，未连接真实 hypervisor |
 
 ## 附录 D：已否决替代方案
 

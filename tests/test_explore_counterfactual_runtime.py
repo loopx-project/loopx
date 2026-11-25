@@ -991,3 +991,169 @@ def test_base_exception_during_restore_or_suffix_finalizes_with_failed_flag() ->
     assert promoted.decision == CounterfactualDecision.PROMOTED
     assert suffix_calls == 2
     assert adapter_restore.finalizer_flags == [False, False, True]
+
+
+@pytest.mark.parametrize("interrupt_stage", ["restore_agent_state", "execute"])
+def test_base_exception_and_failing_finalizer_quarantines_point_with_cause(
+    interrupt_stage: str,
+) -> None:
+    class _FailingFinalizerSyntheticAdapter(SyntheticReplayAdapter):
+        def finalize_replay_suffix(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+            *,
+            suffix_succeeded: bool,
+        ) -> None:
+            assert binding_key in self.active_bindings
+            assert request.replay_point_id == "replay-before-change"
+            assert suffix_succeeded is False
+            raise RuntimeError("finalizer failed during unwind")
+
+    adapter = _FailingFinalizerSyntheticAdapter(prefix_reused=True)
+    trace, store, _, registry = _capture_point(adapter=adapter)
+    if interrupt_stage == "restore_agent_state":
+
+        def _interrupt_agent_restore(_state_key: object) -> None:
+            raise KeyboardInterrupt("aborted during agent restore")
+
+        setattr(store, "restore_agent_state", _interrupt_agent_restore)
+
+    def _suffix(_: object) -> dict[str, bool]:
+        if interrupt_stage == "execute":
+            raise KeyboardInterrupt("aborted during suffix execute")
+        return {
+            "target-created": True,
+            "dependent-update": True,
+            "constraint-health": True,
+            "resource-cleanup": True,
+        }
+
+    with pytest.raises(KeyboardInterrupt, match="aborted during") as exc_info:
+        run_counterfactual_suffix_replay(
+            registry,
+            trace=trace,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id=f"interrupt-plus-finalizer-{interrupt_stage}",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_suffix,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert "finalizer failed during unwind" in str(exc_info.value.__cause__)
+    assert registry.get("replay-before-change").lifecycle == ReplayPointLifecycle.FAILED
+    metrics = registry.metrics()
+    assert metrics["replay_point_quarantine_count"] == 1
+    assert metrics["suffix_finalization_failure_count"] == 1
+    assert metrics["replay_failure_count"] == 0
+    assert metrics["suffix_failure_count"] == (1 if interrupt_stage == "execute" else 0)
+    assert len(adapter.active_bindings) == 1
+
+    released = registry.release("replay-before-change")
+    assert released.lifecycle == ReplayPointLifecycle.RELEASED
+    assert adapter.active_bindings == set()
+    after_release = registry.metrics()
+    assert after_release["release_success_count"] == 1
+    assert after_release["failed_replay_point_count"] == 0
+
+
+def test_suffix_minutes_includes_finalizer_duration_for_existing_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [time.perf_counter()]
+    monkeypatch.setattr(time, "perf_counter", lambda: clock[0])
+
+    class _TimedFinalizerAdapter(SyntheticReplayAdapter):
+        def __init__(self, *, fail_restore: bool = False) -> None:
+            super().__init__(prefix_reused=True)
+            self.fail_restore = fail_restore
+
+        def restore_replay_state(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+        ) -> RestoreReceipt:
+            if self.fail_restore:
+                raise SyntheticReplayError("restore failed before suffix")
+            return super().restore_replay_state(binding_key, request)
+
+        def finalize_replay_suffix(
+            self,
+            binding_key: object,
+            request: RestoreReplayStateRequest,
+            *,
+            suffix_succeeded: bool,
+        ) -> None:
+            assert binding_key in self.active_bindings
+            assert request.replay_point_id == "replay-before-change"
+            clock[0] += 60.0
+
+    # 1) Non-SPI adapter with finalize_replay_suffix: 10s execute + 60s finalizer = 70s.
+    finalizer_trace, _, _, finalizer_registry = _capture_point(
+        adapter=_TimedFinalizerAdapter()
+    )
+
+    def _ten_second_suffix(_: object) -> dict[str, bool]:
+        clock[0] += 10.0
+        return {
+            "target-created": True,
+            "dependent-update": True,
+            "constraint-health": True,
+            "resource-cleanup": True,
+        }
+
+    with_finalizer = run_counterfactual_suffix_replay(
+        finalizer_registry,
+        trace=finalizer_trace,
+        hypothesis=_hypothesis(),
+        candidate=CounterfactualCandidate(
+            candidate_id="timed-with-finalizer",
+            public_change_set={"optional_argument": "none"},
+        ),
+        execute_suffix=_ten_second_suffix,
+    )
+    assert with_finalizer.restore.suffix_minutes == pytest.approx(70.0 / 60.0)
+    assert finalizer_registry.metrics()["suffix_minutes"] == pytest.approx(
+        round(70.0 / 60.0, 6)
+    )
+    assert summarize_counterfactual_results([with_finalizer])[
+        "suffix_minutes"
+    ] == pytest.approx(round(70.0 / 60.0, 6))
+
+    # 2) Adapter without finalize_replay_suffix: only 10s execute is recorded.
+    plain_trace, _, _, plain_registry = _capture_point(
+        adapter=SyntheticReplayAdapter(prefix_reused=True)
+    )
+    without_finalizer = run_counterfactual_suffix_replay(
+        plain_registry,
+        trace=plain_trace,
+        hypothesis=_hypothesis(),
+        candidate=CounterfactualCandidate(
+            candidate_id="timed-without-finalizer",
+            public_change_set={"optional_argument": "none"},
+        ),
+        execute_suffix=_ten_second_suffix,
+    )
+    assert without_finalizer.restore.suffix_minutes == pytest.approx(10.0 / 60.0)
+    assert plain_registry.metrics()["suffix_minutes"] == pytest.approx(
+        round(10.0 / 60.0, 6)
+    )
+
+    # 3) Early restore failure before execute: finalizer cost stays out of suffix_minutes.
+    failed_trace, _, _, failed_registry = _capture_point(
+        adapter=_TimedFinalizerAdapter(fail_restore=True)
+    )
+    with pytest.raises(SyntheticReplayError, match="restore failed before suffix"):
+        run_counterfactual_suffix_replay(
+            failed_registry,
+            trace=failed_trace,
+            hypothesis=_hypothesis(),
+            candidate=CounterfactualCandidate(
+                candidate_id="timed-early-restore-fail",
+                public_change_set={"optional_argument": "none"},
+            ),
+            execute_suffix=_ten_second_suffix,
+        )
+    assert failed_registry.metrics()["suffix_minutes"] == 0.0

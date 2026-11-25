@@ -3185,3 +3185,129 @@ def test_finalize_child_ref_release_failure_retries_via_public_release_and_recla
     assert provider.destroy_calls == [target_ref.branch_sandbox_id]
     assert len(provider.child_release_attempts) == 2
     assert snap_id not in provider.snapshots
+
+
+@pytest.mark.parametrize("interrupt_stage", ["restore_agent_state", "execute"])
+def test_base_exception_with_child_ref_release_failure_quarantines_and_releases_holders(
+    interrupt_stage: str,
+) -> None:
+    """KeyboardInterrupt paired with failing finalizer quarantines FAILED with cause and still lets release reclaim holders."""
+
+    class _ChildReleaseFailureProvider(InMemorySandboxSpiProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.destroy_calls: list[str] = []
+            self.child_release_attempts: list[tuple[str, str | None]] = []
+
+        def destroy_sandbox(self, sandbox_id: str) -> None:
+            self.destroy_calls.append(sandbox_id)
+            super().destroy_sandbox(sandbox_id)
+
+        def release_snapshot(
+            self,
+            snapshot_id: str,
+            *,
+            holder_id: str | None = None,
+        ) -> None:
+            sealed = self._sealed_snapshots.get(snapshot_id)
+            if (
+                holder_id is not None
+                and sealed is not None
+                and holder_id != sealed.owner_holder_id
+            ):
+                self.child_release_attempts.append((snapshot_id, holder_id))
+                if len(self.child_release_attempts) == 1:
+                    raise RuntimeError("child ref release failed during unwind")
+            super().release_snapshot(snapshot_id, holder_id=holder_id)
+
+    provider = _ChildReleaseFailureProvider()
+    live_sb = provider.create_sandbox(
+        sandbox_id=f"sb-interrupt-{interrupt_stage}",
+        rootfs={"src/state.txt": "1"},
+        symlinks={"bin/cur": "v1"},
+        env={"REV": "1"},
+        processes={45: "worker-v1"},
+        daemon_health={"worker-v1": True},
+        memory_pages={"state_mem": "1"},
+    )
+    provider.pause(f"sb-interrupt-{interrupt_stage}")
+    adapter = SpiReplayAdapter(
+        provider,
+        source_sandbox_id=f"sb-interrupt-{interrupt_stage}",
+        target_tier="microvm_memory_exact",
+    )
+    registry = ReplayPointRegistry()
+    store = SpiAgentStateStore()
+    trace, point = _prepare_trace_point(
+        f"trace-interrupt-{interrupt_stage}",
+        registry=registry,
+        store=store,
+        adapter=adapter,
+    )
+    snap_id = next(iter(provider.snapshots))
+    parent_holder_id = provider.snapshots[snap_id].owner_holder_id
+    provider.resume(f"sb-interrupt-{interrupt_stage}")
+    live_sb.rootfs["src/state.txt"] = "2"
+
+    if interrupt_stage == "restore_agent_state":
+
+        def _interrupt_restore(_state_key: object) -> None:
+            raise KeyboardInterrupt("aborted SPI agent restore")
+
+        setattr(store, "restore_agent_state", _interrupt_restore)
+
+    hyp = CounterfactualHypothesis(
+        hypothesis_id=f"hyp-interrupt-{interrupt_stage}",
+        first_affected_event_id=f"trace-interrupt-{interrupt_stage}-evt-2-fail",
+        first_affected_sequence=2,
+        fix_set=(ValidationTarget("fix", baseline_passed=False),),
+        guard_set=(ValidationTarget("guard", baseline_passed=True),),
+        minimum_fidelity=ReplayFidelity.EXACT,
+    )
+
+    def _suffix(req: CounterfactualReplayRequest) -> dict[str, bool]:
+        if interrupt_stage == "execute":
+            raise KeyboardInterrupt("aborted SPI suffix execute")
+        return {
+            "fix": adapter.target_sandbox_for_request(req).rootfs["src/state.txt"] == "1",
+            "guard": True,
+        }
+
+    with pytest.raises(KeyboardInterrupt, match="aborted SPI") as exc_info:
+        run_counterfactual_suffix_replay(
+            registry,
+            trace=trace,
+            hypothesis=hyp,
+            candidate=CounterfactualCandidate(f"interrupt-{interrupt_stage}", {"op": "ok"}),
+            execute_suffix=_suffix,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert "child ref release failed during unwind" in str(exc_info.value.__cause__)
+    assert len(adapter.last_target_sandboxes) == 1
+    target_ref = adapter.last_target_sandboxes[0]
+    assert provider.sandboxes[target_ref.branch_sandbox_id].status == "destroyed"
+    assert provider.destroy_calls == [target_ref.branch_sandbox_id]
+    assert provider.child_release_attempts == [(snap_id, target_ref.holder_id)]
+    assert snap_id in provider.snapshots
+    assert provider.snapshots[snap_id].refcount == 2
+    assert set(provider.snapshots[snap_id].active_holder_ids) == {
+        parent_holder_id,
+        target_ref.holder_id,
+    }
+    assert registry.get(point.replay_point_id).lifecycle.value == "failed"
+    metrics = registry.metrics()
+    assert metrics["replay_point_quarantine_count"] == 1
+    assert metrics["suffix_finalization_failure_count"] == 1
+    assert metrics["replay_failure_count"] == 0
+    assert metrics["suffix_failure_count"] == (1 if interrupt_stage == "execute" else 0)
+
+    released = registry.release(point.replay_point_id)
+    assert released.lifecycle.value == "released"
+    assert provider.destroy_calls == [target_ref.branch_sandbox_id]
+    assert provider.child_release_attempts == [
+        (snap_id, target_ref.holder_id),
+        (snap_id, target_ref.holder_id),
+    ]
+    assert snap_id not in provider.snapshots
+    assert registry.metrics()["release_success_count"] == 1

@@ -315,7 +315,7 @@ via existing Explore/Benchmark run surfaces.
 
 | Milestone | Shipped behavior | Entry gate | Exit evidence | Rollback |
 | --- | --- | --- | --- | --- |
-| M0 | Bilingual RFC + 15-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
+| M0 | Bilingual RFC + 17-case conformance suite in pytest (`test_sandbox_snapshot_fork_spi_conformance.py`) | Audited `#8461` / `#9209` / `#9211` & `replay_runtime.py` contracts | V1–V4 pytest pass, `check_rfc_bilingual`, `docs-governance-smoke`, `canary premerge` | Revert docs/test PR; zero runtime effect |
 | M1 | First opt-in provider adapter (`firecracker_local` or `e2b_microvm`) behind extension package | M0 accepted; Linux/E2B test fixture pinned | Real pause/resume/snapshot/fork + scrub + symlink preservation + feature-off parity | Disable extension profile |
 | M2 | Paired 5-tuple counterfactual pilot against warm `git worktree` / `layerfs_cow` | M1 conformance green; frozen task/budget manifest | Complete 5-metric cost attribution + Tier-2 $\tau_B(s; a, a_0, \pi)$ evaluation via `counterfactual_runtime.py` & `#9211` §§5.5/6.2 | Stop pilot; retain negative/null data |
 | M3 | Optional product / benchmark promotion decision | M2 replicated net gain ($\Delta J(B \mid s_0) > 0$) + UI readback | Maintainer sign-off + packaged unavailability/recovery UX | Keep optional / retire adapter |
@@ -352,7 +352,7 @@ Dated execution records belong in [`ledger/README.md`](ledger/README.md) with
 | Evidence id | Claim | Baseline / environment | Artifact or command | Result | Privacy / validity boundary |
 | --- | --- | --- | --- | --- | --- |
 | E1 | Audited 5-tuple gap vs. `checkpoint_artifacts.ts` & `replay_runtime.py` | `dc79482c88dd75ea59785d165fd3050d9d5508c3` | Source inspection + [#8461](https://github.com/loopx-project/loopx/pull/8461), [#9209](https://github.com/loopx-project/loopx/pull/9209), [#9211](https://github.com/loopx-project/loopx/pull/9211) | Verified on canonical `main` owners | Read-only audit; superseded prototype `#8516` closed unmerged |
-| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry`, `run_counterfactual_suffix_replay` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation (15/15 M0 tests) | Synthetic SPI provider fixture only; no live hypervisor run |
+| E2 | M0 V1–V4 SPI conformance over shipped `ReplayPointRegistry`, `run_counterfactual_suffix_replay` & `run_counterfactual_child_group` | Isolated worktree `python -m pytest` | [`test_sandbox_snapshot_fork_spi_conformance.py`](../../../tests/test_sandbox_snapshot_fork_spi_conformance.py) | Pass in PR validation (17/17 M0 tests) | Synthetic SPI provider fixture only; no live hypervisor run |
 
 ## Appendix D: Rejected alternatives
 
