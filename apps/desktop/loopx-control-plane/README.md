@@ -614,15 +614,18 @@ Self-service:
      fi
    else
      mkdir -p ~/.local/bin &&
-     created=0
      if ln -s "$node" ~/.local/bin/node; then
-       created=1
+       created_ino="$(stat -f %i ~/.local/bin/node)" &&
        if installed_raw="$("$HOME/.local/bin/node" --version)" &&
           installed_ver="$(node_trim "$installed_raw")" &&
           node_qualifies "$installed_ver"; then
          echo "Node launcher created at ~/.local/bin/node (remove the link to undo)"
        else
-         rm -f ~/.local/bin/node &&
+         # undo only when the entry is still this operation's own link; a
+         # later window's swap has a different inode and stays in place
+         if [ "$(stat -f %i ~/.local/bin/node 2>/dev/null)" = "$created_ino" ]; then
+           rm -f ~/.local/bin/node
+         fi &&
          echo "The candidate failed the final check; nothing was changed." &&
          exit 1
        fi
