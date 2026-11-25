@@ -736,11 +736,11 @@ export function WorkspacePicker({ branch, changes, worktree, onChange }: Workspa
   return (
     <Popover
       label={t('pickers.where')}
-      triggerClassName="context-btn workspace-btn"
+      triggerClassName={`context-btn workspace-btn${worktree ? ' active' : ''}`}
       triggerTitle={worktree ? t('pickers.startWorktree') : t('pickers.startDir')}
       trigger={
         <>
-          {worktree ? <IconWorktree size={14} /> : <IconFolder size={14} />}
+          <IconWorktree size={14} />
           <span>{worktree ? t('pickers.newWorktree') : t('pickers.currentDir')}</span>
           <IconChevron size={12} open />
         </>

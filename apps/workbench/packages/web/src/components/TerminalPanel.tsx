@@ -10,7 +10,8 @@ import type { Api, TerminalFrame, TerminalInfo } from '../api';
 import { copyText } from '../clipboard';
 import { folderName } from '../paths';
 import { useIsTouch } from '../hooks';
-import { IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconClose, IconSend, IconTerminal } from './icons';
+import { IconArrowDown, IconArrowLeft, IconArrowRight, IconArrowUp, IconCheck, IconClose, IconCopy, IconSend, IconTerminal } from './icons';
+import { DockPanel } from './DockPanel';
 import { t } from '../i18n';
 
 interface Props {
@@ -19,6 +20,8 @@ interface Props {
   cwd: string;
   /** Attach to this terminal (a login just started); null attaches to the newest live one. */
   terminalId?: string | null;
+  /** Render in the right-hand side dock on desktop instead of covering the viewport. */
+  docked?: boolean;
   onClose: () => void;
   onError: (e: unknown) => void;
 }
@@ -73,13 +76,17 @@ function keys(appCursor: boolean): Array<[string, string, JSX.Element?]> {
   ];
 }
 
-export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props) {
+export function TerminalPanel({ api, cwd, terminalId, docked = false, onClose, onError }: Props) {
   // Bumped by Reopen and Retry: the whole terminal (xterm and stream) is rebuilt from scratch.
   const [nonce, setNonce] = useState(0);
   const [phase, setPhase] = useState<'connecting' | 'running' | 'ended' | 'failed'>('connecting');
   const [failure, setFailure] = useState('');
   const [info, setInfo] = useState<TerminalInfo | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
+  const [copiedOut, setCopiedOut] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   // On a touch screen typing goes through a field of our own, not xterm's hidden one: iOS keyboards
   // (Chinese input, autocorrect) lose track of a field whose value the page changes under them,
   // and xterm empties its field on every Enter. This field is only emptied once a line is sent.
@@ -109,6 +116,33 @@ export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props)
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
+    termRef.current = term;
+    const markCopied = () => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      setCopiedOut(true);
+      copyTimerRef.current = window.setTimeout(() => setCopiedOut(false), 1500);
+    };
+    const selectionSub = term.onSelectionChange(() => {
+      if (!disposed) setHasSelection(term.hasSelection());
+    });
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true;
+      const key = e.key.toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && key === 'c') {
+        if (term.hasSelection()) {
+          const selectedText = term.getSelection();
+          e.preventDefault();
+          void copyText(selectedText).then((ok) => {
+            if (ok) markCopied();
+            else onError(t('term.copyFailed'));
+          });
+          return false;
+        }
+        if (e.metaKey || e.shiftKey) return false;
+      }
+      if ((e.metaKey || (e.ctrlKey && e.shiftKey)) && key === 'v') return false;
+      return true;
+    });
     // Touching the screen selects and scrolls; it does not bring up a keyboard for xterm's field.
     if (touchRef.current) term.textarea?.setAttribute('inputmode', 'none');
     appCursorRef.current = () => term.modes.applicationCursorKeysMode;
@@ -224,10 +258,13 @@ export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props)
 
     return () => {
       disposed = true;
+      termRef.current = null;
       sendRef.current = null;
       abort.abort();
       observer.disconnect();
+      selectionSub.dispose();
       if (flushTimer !== null) window.clearTimeout(flushTimer);
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
       term.dispose();
     };
   }, [nonce, terminalId]);
@@ -250,9 +287,39 @@ export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props)
     });
   };
 
-  return (
-    <div className="dialog-scrim term-scrim">
-      <div className="panel term-panel" role="dialog" aria-modal="true" aria-label={t('term.title')}>
+  const copyOutput = () => {
+    const term = termRef.current;
+    if (!term) return;
+    let text = term.getSelection();
+    if (!text) {
+      const buf = term.buffer.active;
+      const lines: string[] = [];
+      for (let i = 0; i < buf.length; i++) {
+        const row = buf.getLine(i);
+        if (!row) continue;
+        const part = row.translateToString(true);
+        if (row.isWrapped && lines.length) lines[lines.length - 1] += part;
+        else lines.push(part);
+      }
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      text = lines.join('\n');
+    }
+    if (!text) return;
+    void copyText(text).then((ok) => {
+      if (!ok) return onError(t('term.copyFailed'));
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      setCopiedOut(true);
+      copyTimerRef.current = window.setTimeout(() => setCopiedOut(false), 1500);
+    });
+  };
+
+  const panel = (
+      <div
+        className={`panel term-panel${docked ? ' docked' : ''}`}
+        role={docked ? 'region' : 'dialog'}
+        aria-modal={docked ? undefined : true}
+        aria-label={t('term.title')}
+      >
         <header className="panel-head">
           <div className="term-head-main">
             <h2 className="panel-title">
@@ -265,9 +332,21 @@ export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props)
               </button>
             )}
           </div>
-          <button className="icon-btn" aria-label={t('common.close')} onClick={onClose}>
-            <IconClose size={18} />
-          </button>
+          <div className="term-head-actions">
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={t(copiedOut ? 'term.copied' : hasSelection ? 'term.copySelection' : 'term.copy')}
+              title={t(copiedOut ? 'term.copied' : hasSelection ? 'term.copySelection' : 'term.copy')}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={copyOutput}
+            >
+              {copiedOut ? <IconCheck size={16} /> : <IconCopy size={16} />}
+            </button>
+            <button className="icon-btn" aria-label={t('common.close')} onClick={onClose}>
+              <IconClose size={18} />
+            </button>
+          </div>
         </header>
         <div className="term-body" ref={hostRef} />
         {touch && (
@@ -336,6 +415,8 @@ export function TerminalPanel({ api, cwd, terminalId, onClose, onError }: Props)
           </div>
         )}
       </div>
-    </div>
   );
+
+  if (docked) return <DockPanel label={t('term.title')}>{panel}</DockPanel>;
+  return <div className="dialog-scrim term-scrim">{panel}</div>;
 }

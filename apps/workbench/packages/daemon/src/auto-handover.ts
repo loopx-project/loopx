@@ -266,6 +266,7 @@ export class AutoHandover {
       // From here the move is under way and the person can no longer call it off.
       attempt.view = { state: 'preparing', target, reason: attempt.view.reason, step: switchModel ? 'switch' : resume ? 'copy' : 'handover' };
       this.manager.notifyHandover(id);
+      await this.manager.stopBackgroundTurn(id);
       if (switchModel) {
         await this.manager.updateThread(id, { model: target.model });
         this.manager.recordHandoverModel(id, target.model!, model, attempt.view.reason!);
@@ -290,7 +291,7 @@ export class AutoHandover {
     }
     if (retry) {
       try { await this.manager.retryAutoHandoverTurn(id, turnId); }
-      catch (error) { this.notices.set(id, { state: 'failed', error: String(error) }); this.manager.notifyHandover(id); }
+      catch (error) { this.notices.set(id, { state: 'failed', error: error instanceof Error ? error.message : String(error) }); this.manager.notifyHandover(id); }
     }
     return 'moved';
   }

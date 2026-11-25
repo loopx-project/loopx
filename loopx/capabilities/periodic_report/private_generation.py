@@ -246,8 +246,12 @@ def _report_sources(authored: dict[str, Any], request: dict[str, Any],
         for key in ("first_due_at", "last_due_at"))
     chinese = authored["editorial"]["language"].lower().startswith("zh")
     title = "缺报区间" if chinese else "Missed report windows"
-    summary = (f"计划截止时间从 {first} 到 {last} 的报告缺报（含两端，{zone.key}）。本期仅覆盖最新完整窗口。"
-        if chinese else f"Reports due from {first} through {last} ({zone.key}) were missed. This report covers the latest complete window.")
+    if first == last:
+        summary = (f"计划截止时间为 {first} 的报告缺报（{zone.key}）。本期仅覆盖最新完整窗口。"
+            if chinese else f"The report due at {first} ({zone.key}) was missed. This report covers the latest complete window.")
+    else:
+        summary = (f"计划截止时间从 {first} 到 {last} 的报告缺报（含两端，{zone.key}）。本期仅覆盖最新完整窗口。"
+            if chinese else f"Reports due from {first} through {last} ({zone.key}) were missed. This report covers the latest complete window.")
     sources.append(build_periodic_report_source_result(source_id="calendar_gap",
         source_kind="calendar_gap", status="complete", observed_at=completed_at,
         sections=[{"section_id": "calendar_gap", "title": title, "items": [{

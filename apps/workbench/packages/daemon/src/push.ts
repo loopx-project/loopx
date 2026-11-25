@@ -16,7 +16,7 @@ export interface PushSettings {
   notice: boolean;
   scheduled: boolean;
 }
-export type PushKind = 'approval' | 'question' | 'plan' | 'failure' | 'notice' | 'scheduled' | 'confirmation' | 'test' | BriefKind;
+export type PushKind = 'approval' | 'question' | 'plan' | 'failure' | 'notice' | 'scheduled' | 'confirmation' | 'test' | 'snooze' | BriefKind;
 export interface PushRecord {
   key: string;
   at: string;
@@ -27,7 +27,7 @@ export interface PushRecord {
   reason: string | null;
 }
 const defaults: PushSettings = { enabled: false, recipient: '', baseUrl: '', waiting: true, failure: true, notice: true, scheduled: false };
-const labels: Record<PushKind, string> = { approval: '等你批准', question: '等你回答', plan: '计划待确认', failure: '一轮失败', notice: '通知你', scheduled: '定时任务完成', confirmation: '待你确认', test: '测试推送', morning: '早报', evening: '晚报' };
+const labels: Record<PushKind, string> = { approval: '等你批准', question: '等你回答', plan: '计划待确认', failure: '一轮失败', notice: '通知你', scheduled: '定时任务完成', confirmation: '待你确认', test: '测试推送', snooze: '稍后提醒到了', morning: '早报', evening: '晚报' };
 type Identity = { cli: boolean; botReady: boolean; recipient: string; reason: string | null };
 type Item = { record: PushRecord; body: string; settings: PushSettings; briefText?: string };
 
@@ -106,6 +106,12 @@ export class PushService {
   async status(summary = false) { return { ...await this.identity(), records: (summary ? this.records.slice(0, 1) : this.records).map(r => ({ ...r })), dropped: this.dropped }; }
   test(): PushRecord { return this.enqueue('test', null, randomUUID()); }
 
+  /** A snooze the person set has run out: they asked to be reminded, so the master switch is the only gate. */
+  snoozeWake(threadId: string, wokeFrom: string): PushRecord | null {
+    if (this.stopped || !this.settings().enabled) return null;
+    return this.enqueue('snooze', threadId, `${threadId}:snooze:${wokeFrom}`);
+  }
+
   /** A deterministic digest is a hub message, not an agent notice. Respect the push master switch. */
   brief(kind: BriefKind, brief: PersonalBrief, key: string): PushRecord | null {
     if (this.stopped || !this.settings().enabled) return null;
@@ -145,6 +151,11 @@ export class PushService {
     } else if (end?.outcome === 'error' && settings.failure && origin.initiator !== 'coordination') kind = 'failure';
     else if (!proactive && end?.outcome === 'ok' && started?.data.review !== true && ev.data.quiet !== true && settings.scheduled && origin.initiator === 'schedule') kind = 'scheduled';
     else if (ev.type === 'agent.notice' && settings.notice && !proactive) kind = ev.data.confirmation ? 'confirmation' : 'notice';
+    // A snoozed thread asked not to be heard from until it wakes; a failure still is worth hearing.
+    if (kind && kind !== 'failure') {
+      const snoozed = this.store.getThread(ev.threadId)?.snoozedUntil;
+      if (snoozed && Date.parse(snoozed) > this.now()) return;
+    }
     if (kind) this.enqueue(kind, ev.threadId, `${ev.threadId}:${ev.seq}`, (kind === 'notice' || kind === 'confirmation') ? String(ev.data.text ?? '') : undefined);
   }
   private enqueue(kind: PushKind, threadId: string | null, key: string, notice?: string, brief?: PersonalBrief): PushRecord {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HttpError } from './errors.js';
-import type { Store, ThreadRecord } from './store.js';
+import type { Store } from './store.js';
 import type { ThreadManager } from './threads.js';
 
 /** Separate credentials grant access only to the recipient and its handover ancestors. */
@@ -11,36 +11,17 @@ export class HandoverReader {
   constructor(private store: Store, private manager: ThreadManager, private socket: string) {}
 
   environment(id: string): Record<string, string> | undefined {
-    if (!this.store.getThread(id)?.handover) return undefined;
+    if (!this.store.getThread(id)) return undefined;
     let key = this.credentials.get(id);
     if (!key) { key = randomUUID(); this.credentials.set(id, key); }
     return { LOOCHAT_HANDOVER_SOCKET: this.socket, LOOCHAT_HANDOVER_KEY: key,
       LOOCHAT_BIN_DIR: resolve(dirname(fileURLToPath(import.meta.url)), '../bin') };
   }
 
-  private chain(id: string): ThreadRecord[] {
-    const chain: ThreadRecord[] = [];
-    const seen = new Set<string>();
-    let thread = this.store.getThread(id);
-    if (!thread?.handover) throw new HttpError(403, 'handover access unavailable');
-    while (thread && !seen.has(thread.id)) {
-      seen.add(thread.id); chain.unshift(thread);
-      thread = thread.handover ? this.store.getThread(thread.handover.sourceId) : null;
-    }
-    return chain;
-  }
-
   async command(key: string, input: Record<string, unknown>) {
     const id = [...this.credentials].find(([, value]) => value === key)?.[0];
     if (!id) throw new HttpError(401, 'invalid handover credential');
-    const chain = this.chain(id);
-    if (input.op === 'handover') {
-      return { threadId: id, scope: 'self-and-ancestors', segments: await Promise.all(chain.map(t => this.manager.handoverLocation(t.id))),
-        missingSource: chain[0]?.handover ?? null };
-    }
-    if (input.op !== 'history') throw new HttpError(403, 'handover credentials are read-only');
-    if (typeof input.target !== 'string' || !chain.some(t => t.id === input.target)) throw new HttpError(403, 'thread outside handover chain');
-    return readHistory(this.manager, input.target, input, 'loochat history');
+    return this.manager.references.command(id, input);
   }
 }
 
