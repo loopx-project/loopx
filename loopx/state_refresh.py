@@ -463,7 +463,7 @@ def refresh_state_run(
             return dict(
                 recover_refresh_todo_projection(
                     admission.recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
-                    goal_id=safe_goal_id, project=project, state_file=state_file, registry_data=registry,
+                    goal_id=safe_goal_id, project=project, state_file=state_file,
                 )
             )
         if normalized_explore_result is not None:

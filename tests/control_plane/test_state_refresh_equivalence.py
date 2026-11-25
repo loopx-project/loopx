@@ -19,7 +19,10 @@ from loopx.control_plane.goals.checkpoint_context_io import (
     CheckpointReadContextRejected,
     require_complete_checkpoint_index,
 )
-from loopx.control_plane.quota.settlement import SettlementIdentity
+from loopx.control_plane.quota.settlement import (
+    QuotaSettlementReadback,
+    SettlementIdentity,
+)
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from loopx.control_plane.work_items import recommendation_source_io
 from loopx.control_plane.work_items.refresh_recommendation import (
@@ -673,3 +676,138 @@ def test_refresh_state_run_sqlite_next_action_eliminates_redundant_rereads(
     # Only the exclusive locked validation inside recommendation_source_guard reloads via rec_io.
     assert rec_io_load_calls == [registry_path.resolve()]
     assert len(registry_reads) <= 8, f"redundant registry.json reads: {len(registry_reads)}"
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_same_turn_replay_uses_current_registry_state_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    goal_id = f"goal-replay-switch-{provider}"
+    project, state_a, registry_path, runtime_root = _setup_goal_fixture(
+        tmp_path, monkeypatch, goal_id=goal_id, provider=provider
+    )
+    identity = SettlementIdentity(
+        goal_id=goal_id,
+        agent_id="agent-a",
+        todo_id="todo_agent_a",
+        turn_instance_id=f"turn-replay-{provider}",
+    )
+    _write_turn_receipt(runtime_root, identity=identity)
+
+    first = state_refresh.refresh_state_run(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id=goal_id,
+        project=None,
+        state_file=None,
+        classification="validated_progress",
+        recommended_action=None,
+        delivery_batch_scale="single_surface",
+        delivery_outcome="outcome_progress",
+        delivery_workspace_path=project,
+        todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id,
+        agent_id=identity.agent_id,
+        dry_run=False,
+        sync_global=False,
+    )
+    assert first["ok"] is True and first["appended"] is True
+    assert first["projection_delivery"] == "delivered"
+    first_outbox = first.get("projection_outbox")
+    assert isinstance(first_outbox, Mapping)
+    first_revision = first_outbox.get("provider_revision")
+    assert isinstance(first_revision, str) and first_revision
+
+    index_path = Path(str(first["index_path"]))
+    index_before = index_path.read_text(encoding="utf-8")
+    rollout_before = rollout_event_log_path(runtime_root, goal_id).read_text(encoding="utf-8")
+
+    state_b = state_a.with_name("STATE_B.md")
+    blank_narrative = "---\nupdated_at: 2026-11-25T00:00:00+08:00\nstatus: active\n---\n\n# Active Goal State\n\n## Next Action\n\n- Keep baseline execution progressing safely.\n\n## Agent Todo\n"
+    state_a.write_text(blank_narrative, encoding="utf-8")
+    state_b.write_text(blank_narrative, encoding="utf-8")
+
+    real_read_settlement = state_refresh.read_heartbeat_settlement
+    switched: list[bool] = []
+
+    def switching_read_settlement(
+        inner_runtime_root: Path,
+        *,
+        goal_id: str,
+        agent_id: str | None,
+        todo_id: str | None,
+        turn_instance_id: str | None,
+        replan_obligation_id: str | None = None,
+        infer_turn_instance_id: bool = False,
+        allow_unbound_binding: bool = False,
+        resolve_original_binding: bool = False,
+        pending_closeout: bool = False,
+        refresh_retry: dict[str, object] | None = None,
+        registry_path: Path | None = None,
+        goal_ref: Mapping[str, object] | None = None,
+        source_admission: Mapping[str, object] | None = None,
+        borrow_source_admission: bool = False,
+        heartbeat_reentry_guard: dict[str, object] | None = None,
+        include_record_bodies: bool = True,
+        tolerate_malformed_history: bool = False,
+    ) -> QuotaSettlementReadback | None:
+        readback = real_read_settlement(
+            inner_runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            todo_id=todo_id,
+            turn_instance_id=turn_instance_id,
+            replan_obligation_id=replan_obligation_id,
+            infer_turn_instance_id=infer_turn_instance_id,
+            allow_unbound_binding=allow_unbound_binding,
+            resolve_original_binding=resolve_original_binding,
+            pending_closeout=pending_closeout,
+            refresh_retry=refresh_retry,
+            registry_path=registry_path,
+            goal_ref=goal_ref,
+            source_admission=source_admission,
+            borrow_source_admission=borrow_source_admission,
+            heartbeat_reentry_guard=heartbeat_reentry_guard,
+            include_record_bodies=include_record_bodies,
+            tolerate_malformed_history=tolerate_malformed_history,
+        )
+        if registry_path is not None and not switched:
+            switched.append(True)
+            payload = json.loads(registry_path.read_text(encoding="utf-8"))
+            payload["goals"][0]["state_file"] = str(state_b.relative_to(project))
+            registry_path.write_text(json.dumps(payload), encoding="utf-8")
+        return readback
+
+    monkeypatch.setattr(
+        state_refresh, "read_heartbeat_settlement", switching_read_settlement
+    )
+    replay = state_refresh.refresh_state_run(
+        registry_path=registry_path,
+        runtime_root_override=str(runtime_root),
+        goal_id=goal_id,
+        project=None,
+        state_file=None,
+        classification="validated_progress",
+        recommended_action=None,
+        delivery_batch_scale="single_surface",
+        delivery_outcome="outcome_progress",
+        delivery_workspace_path=project,
+        todo_id=identity.todo_id,
+        turn_instance_id=identity.turn_instance_id,
+        agent_id=identity.agent_id,
+        dry_run=False,
+        sync_global=False,
+    )
+    assert switched == [True]
+    assert replay["appended"] is False
+    assert replay["projection_delivery"] == "delivered"
+    replay_outbox = replay.get("projection_outbox")
+    assert isinstance(replay_outbox, Mapping)
+    assert replay_outbox.get("state_file") == str(state_b.resolve())
+    assert replay_outbox.get("provider_revision") == first_revision
+    assert "[P1] advance owned scheduler slice" in state_b.read_text(encoding="utf-8")
+    assert "[P1] advance owned scheduler slice" not in state_a.read_text(encoding="utf-8")
+    assert index_path.read_text(encoding="utf-8") == index_before
+    assert rollout_event_log_path(runtime_root, goal_id).read_text(encoding="utf-8") == rollout_before
