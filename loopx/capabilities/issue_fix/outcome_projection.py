@@ -268,14 +268,23 @@ def _reusable_knowledge(value: object) -> dict[str, object] | None:
     return compact
 
 
-def _optional_legacy_sequence(value: object) -> object:
-    # Preserve v0 compatibility where empty-string fields stood in for absent lists.
+def _optional_legacy_sequence(
+    value: object, *, allow_empty_mapping: bool = False
+) -> object:
+    # Preserve v0 compatibility where empty strings (and empty dicts in persisted
+    # ledger rows) stood in for absent optional lists.
     if value is None or (isinstance(value, str) and value == ""):
+        return []
+    if allow_empty_mapping and isinstance(value, Mapping) and not value:
         return []
     return value
 
 
-def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
+def _delivery_evidence(
+    value: Mapping[str, object] | None,
+    *,
+    allow_legacy_empty_containers: bool = False,
+) -> dict[str, object]:
     if value is None:
         return {
             "provided": False,
@@ -311,7 +320,9 @@ def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
     if commit_ref and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{3,79}", commit_ref):
         raise ValueError("commit_ref must be a compact public-safe git reference")
     outputs: list[dict[str, str]] = []
-    raw_outputs = _optional_legacy_sequence(value.get("outputs"))
+    raw_outputs = _optional_legacy_sequence(
+        value.get("outputs"), allow_empty_mapping=allow_legacy_empty_containers
+    )
     if not isinstance(raw_outputs, Sequence) or isinstance(raw_outputs, (str, bytes)):
         raise ValueError("delivery evidence outputs must be a list")
     for index, item in enumerate(raw_outputs[:10]):
@@ -331,7 +342,10 @@ def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
             value.get("validation_label"), field="validation_label", limit=260
         ),
         "changed_files": _repo_relative_files(
-            _optional_legacy_sequence(value.get("changed_files"))
+            _optional_legacy_sequence(
+                value.get("changed_files"),
+                allow_empty_mapping=allow_legacy_empty_containers,
+            )
         ),
         "commit_ref": commit_ref or None,
         "repository_commit_evidence": _repository_commit_evidence(
@@ -339,7 +353,9 @@ def _delivery_evidence(value: Mapping[str, object] | None) -> dict[str, object]:
         ),
         "outputs": outputs,
         "risks": _safe_text_list(
-            _optional_legacy_sequence(value.get("risks")),
+            _optional_legacy_sequence(
+                value.get("risks"), allow_empty_mapping=allow_legacy_empty_containers
+            ),
             field="risks",
             limit=260,
             count_limit=10,
@@ -356,10 +372,13 @@ def compact_issue_fix_delivery_evidence(
     value: Mapping[str, object],
     *,
     recorded_at: str | None = None,
+    allow_legacy_empty_containers: bool = False,
 ) -> dict[str, object]:
     """Validate and compact delivery evidence before domain-state writeback."""
 
-    delivery = _delivery_evidence(value)
+    delivery = _delivery_evidence(
+        value, allow_legacy_empty_containers=allow_legacy_empty_containers
+    )
     compact: dict[str, object] = {
         "schema_version": ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION,
         "outcome_status": delivery["outcome_status"],
@@ -394,6 +413,7 @@ def build_issue_fix_outcome_projection(
     delivery_evidence_input: Mapping[str, object] | None = None,
     agent_id: str | None = None,
     generated_at: str | None = None,
+    allow_legacy_empty_containers: bool = False,
 ) -> dict[str, object]:
     """Compose one public-safe issue-fix case view without writing source state."""
 
@@ -435,7 +455,10 @@ def build_issue_fix_outcome_projection(
 
     repository_context = _mapping(feasibility_observation.get("repository_context"))
     context_effect = _mapping(feasibility_packet.get("repository_context_effect"))
-    delivery = _delivery_evidence(delivery_evidence_input)
+    delivery = _delivery_evidence(
+        delivery_evidence_input,
+        allow_legacy_empty_containers=allow_legacy_empty_containers,
+    )
     repository_revision = _safe_text(
         repository_context.get("repository_revision"),
         field="repository revision",
@@ -584,6 +607,26 @@ def build_issue_fix_outcome_projection(
     return packet
 
 
+def _project_persisted_issue_fix_outcome(
+    *,
+    goal_id: str,
+    feasibility_packet: Mapping[str, object],
+    pr_lifecycle_packet: Mapping[str, object] | None = None,
+    delivery_evidence_input: Mapping[str, object] | None = None,
+    agent_id: str | None = None,
+    generated_at: str | None = None,
+) -> dict[str, object]:
+    return build_issue_fix_outcome_projection(
+        goal_id=goal_id,
+        feasibility_packet=feasibility_packet,
+        pr_lifecycle_packet=pr_lifecycle_packet,
+        delivery_evidence_input=delivery_evidence_input,
+        agent_id=agent_id,
+        generated_at=generated_at,
+        allow_legacy_empty_containers=True,
+    )
+
+
 def build_issue_fix_outcome_collection_from_domain_state(
     *,
     goal_id: str,
@@ -605,5 +648,5 @@ def build_issue_fix_outcome_collection_from_domain_state(
         project=project,
         agent_id=agent_id,
         generated_at=generated_at,
-        project_outcome=build_issue_fix_outcome_projection,
+        project_outcome=_project_persisted_issue_fix_outcome,
     )

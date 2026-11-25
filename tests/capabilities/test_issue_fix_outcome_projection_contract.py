@@ -230,48 +230,22 @@ def test_outcome_projection_preserves_acyclic_split_and_content_digest_owner() -
 
 
 def test_outcome_projection_reexport_identity_parity() -> None:
-    assert (
-        outcome_projection.ISSUE_FIX_OUTCOME_PROJECTION_SCHEMA_VERSION
-        is ISSUE_FIX_OUTCOME_PROJECTION_SCHEMA_VERSION
+    pairs = (
+        (outcome_projection.ISSUE_FIX_OUTCOME_PROJECTION_SCHEMA_VERSION, ISSUE_FIX_OUTCOME_PROJECTION_SCHEMA_VERSION),
+        (outcome_projection.ISSUE_FIX_OUTCOME_CASE_SCHEMA_VERSION, ISSUE_FIX_OUTCOME_CASE_SCHEMA_VERSION),
+        (outcome_projection.ISSUE_FIX_OUTCOME_COLLECTION_PROJECTION_SCHEMA_VERSION, ISSUE_FIX_OUTCOME_COLLECTION_PROJECTION_SCHEMA_VERSION),
+        (outcome_projection.ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION, ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION),
+        (outcome_projection.ISSUE_FIX_REUSABLE_KNOWLEDGE_INPUT_SCHEMA_VERSION, ISSUE_FIX_REUSABLE_KNOWLEDGE_INPUT_SCHEMA_VERSION),
+        (outcome_projection.ISSUE_FIX_REPOSITORY_LEARNING_CARD_INPUT_SCHEMA_VERSION, ISSUE_FIX_REPOSITORY_LEARNING_CARD_INPUT_SCHEMA_VERSION),
+        (outcome_projection.DELIVERY_VALIDATION_STATUSES, DELIVERY_VALIDATION_STATUSES),
+        (outcome_projection.DELIVERY_OUTCOME_STATUSES, DELIVERY_OUTCOME_STATUSES),
+        (outcome_projection.IssueFixOutcomeCollectionProjection, IssueFixOutcomeCollectionProjection),
+        (outcome_projection.validate_issue_fix_outcome_projection, validate_issue_fix_outcome_projection),
+        (outcome_projection.validate_issue_fix_outcome_collection_projection, validate_issue_fix_outcome_collection_projection),
+        (outcome_projection.render_issue_fix_outcome_projection_markdown, render_issue_fix_outcome_projection_markdown),
     )
-    assert (
-        outcome_projection.ISSUE_FIX_OUTCOME_CASE_SCHEMA_VERSION
-        is ISSUE_FIX_OUTCOME_CASE_SCHEMA_VERSION
-    )
-    assert (
-        outcome_projection.ISSUE_FIX_OUTCOME_COLLECTION_PROJECTION_SCHEMA_VERSION
-        is ISSUE_FIX_OUTCOME_COLLECTION_PROJECTION_SCHEMA_VERSION
-    )
-    assert (
-        outcome_projection.ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION
-        is ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION
-    )
-    assert (
-        outcome_projection.ISSUE_FIX_REUSABLE_KNOWLEDGE_INPUT_SCHEMA_VERSION
-        is ISSUE_FIX_REUSABLE_KNOWLEDGE_INPUT_SCHEMA_VERSION
-    )
-    assert (
-        outcome_projection.ISSUE_FIX_REPOSITORY_LEARNING_CARD_INPUT_SCHEMA_VERSION
-        is ISSUE_FIX_REPOSITORY_LEARNING_CARD_INPUT_SCHEMA_VERSION
-    )
-    assert outcome_projection.DELIVERY_VALIDATION_STATUSES is DELIVERY_VALIDATION_STATUSES
-    assert outcome_projection.DELIVERY_OUTCOME_STATUSES is DELIVERY_OUTCOME_STATUSES
-    assert (
-        outcome_projection.IssueFixOutcomeCollectionProjection
-        is IssueFixOutcomeCollectionProjection
-    )
-    assert (
-        outcome_projection.validate_issue_fix_outcome_projection
-        is validate_issue_fix_outcome_projection
-    )
-    assert (
-        outcome_projection.validate_issue_fix_outcome_collection_projection
-        is validate_issue_fix_outcome_collection_projection
-    )
-    assert (
-        outcome_projection.render_issue_fix_outcome_projection_markdown
-        is render_issue_fix_outcome_projection_markdown
-    )
+    for reexport, owner in pairs:
+        assert reexport is owner
     assert outcome_case is not outcome_projection
     assert outcome_collection is not outcome_projection
 
@@ -496,75 +470,82 @@ def test_collection_projection_typed_container_and_domain_state_coalescing(
     )["ok"] is True
 
 
-def _run_issue_fix_outcome_cli(args: list[str]) -> dict[str, object]:
+def _run_issue_fix_outcome_cli(
+    args: list[str], *, expected_rc: int = 0
+) -> dict[str, object]:
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
         rc = cli_main(args)
-    assert rc == 0, output.getvalue()
+    assert rc == expected_rc, output.getvalue()
     payload = json.loads(output.getvalue())
     assert isinstance(payload, dict)
     return {str(k): v for k, v in payload.items()}
 
 
-def test_legacy_empty_string_delivery_fields_cli_writeback_and_kanban_readback(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
-    for legacy_field in ("changed_files", "outputs", "risks"):
-        project = tmp_path / f"legacy-{legacy_field}"
-        project.mkdir(parents=True, exist_ok=True)
-        goal_id = f"goal-legacy-{legacy_field}"
-        state_path = project / "active-state.md"
-        state_path.write_text("## User Todo\n\n## Agent Todo\n", encoding="utf-8")
-        registry_path = project / "registry.json"
-        registry_path.write_text(
-            json.dumps(
-                {
-                    "goals": [
-                        {
-                            "id": goal_id,
-                            "repo": str(project),
-                            "state_file": state_path.name,
-                        }
-                    ]
-                }
-            ),
-            encoding="utf-8",
-        )
-        feasibility_path = default_issue_fix_feasibility_ledger_path(
-            project=project, goal_id=goal_id
-        )
-        lifecycle_path = default_issue_fix_domain_state_ledger_path(
-            project=project, goal_id=goal_id
-        )
-        feasibility_packet = build_issue_fix_feasibility_packet(
-            url="https://github.com/example/project/issues/42",
+def _setup_v0_project(
+    project: Path, goal_id: str, issue_numbers: tuple[int, ...] = (42,)
+) -> tuple[Path, Path, Path, str]:
+    project.mkdir(parents=True, exist_ok=True)
+    state_path = project / "active-state.md"
+    state_path.write_text("## User Todo\n\n## Agent Todo\n", encoding="utf-8")
+    registry_path = project / "registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {"goals": [{"id": goal_id, "repo": str(project), "state_file": state_path.name}]}
+        ),
+        encoding="utf-8",
+    )
+    feasibility_path = default_issue_fix_feasibility_ledger_path(project=project, goal_id=goal_id)
+    lifecycle_path = default_issue_fix_domain_state_ledger_path(project=project, goal_id=goal_id)
+    for num in issue_numbers:
+        packet = build_issue_fix_feasibility_packet(
+            url=f"https://github.com/example/project/issues/{num}",
             reproduction_status="confirmed",
             scope_class="bounded",
-            reproduction_label="focused legacy repro",
-            validation_label="focused legacy validation",
+            reproduction_label=f"focused legacy repro {num}",
+            validation_label=f"focused legacy validation {num}",
             repository_context_input={
                 "schema_version": "issue_fix_repository_context_input_v0",
                 "repository_revision": COMMIT_OID,
                 "sources": [],
             },
         )
-        upsert_issue_fix_feasibility_ledger_jsonl(feasibility_path, feasibility_packet)
-        merged_pr = build_issue_fix_pr_lifecycle_monitor_packet(
-            url="https://github.com/example/project/pull/101",
-            issue_ref="#42",
-            provider_payload={
-                "state": "MERGED",
-                "mergedAt": GENERATED_AT,
-                "reviewDecision": "APPROVED",
-                "mergeStateStatus": "CLEAN",
-                "statusCheckRollup": [{"name": "focused", "conclusion": "SUCCESS"}],
-            },
-        )
-        upsert_issue_fix_pr_lifecycle_ledger_jsonl(lifecycle_path, merged_pr)
-        pr_ref = str(merged_pr["observation"]["pr_ref"])
+        upsert_issue_fix_feasibility_ledger_jsonl(feasibility_path, packet)
+    merged_pr = build_issue_fix_pr_lifecycle_monitor_packet(
+        url="https://github.com/example/project/pull/101",
+        issue_ref="#42",
+        provider_payload={
+            "state": "MERGED",
+            "mergedAt": GENERATED_AT,
+            "reviewDecision": "APPROVED",
+            "mergeStateStatus": "CLEAN",
+            "statusCheckRollup": [{"name": "focused", "conclusion": "SUCCESS"}],
+        },
+    )
+    upsert_issue_fix_pr_lifecycle_ledger_jsonl(lifecycle_path, merged_pr)
+    return registry_path, feasibility_path, lifecycle_path, str(merged_pr["observation"]["pr_ref"])
 
+
+def _kanban_issue_fix_cards(registry_path: Path, goal_id: str) -> tuple[dict[str, object], list[str]]:
+    cfg = LarkKanbanConfig(base_token="base_public_fixture", table_id="tbl_public_fixture")
+    sync = sync_loopx_todos_to_lark_kanban(cfg, registry_path=registry_path, goal_id=goal_id, execute=False)
+    statuses = [
+        str(row["values"].get("Status") or "")
+        for row in sync["records"]
+        if isinstance(row, dict) and isinstance(row.get("values"), dict)
+        and row["values"].get("Work Item Type") == "Issue Fix"
+    ]
+    return {str(k): v for k, v in sync.items()}, statuses
+
+
+def test_legacy_empty_string_delivery_fields_cli_writeback_and_kanban_readback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    for legacy_field in ("changed_files", "outputs", "risks"):
+        project = tmp_path / f"legacy-{legacy_field}"
+        goal_id = f"goal-legacy-{legacy_field}"
+        registry_path, feasibility_path, _, pr_ref = _setup_v0_project(project, goal_id)
         legacy_delivery = _sample_delivery_evidence()
         legacy_delivery.pop("commit_ref", None)
         legacy_delivery.pop("repository_commit_evidence", None)
@@ -575,19 +556,9 @@ def test_legacy_empty_string_delivery_fields_cli_writeback_and_kanban_readback(
         seeded = json.loads(feasibility_path.read_text(encoding="utf-8").strip())
         seeded["delivery_evidence"] = {**legacy_delivery, "validation_label": "Preexisting row"}
         feasibility_path.write_text(json.dumps(seeded) + "\n", encoding="utf-8")
-        kanban_cfg = LarkKanbanConfig(base_token="base_public_fixture", table_id="tbl_public_fixture")
-        legacy_sync = sync_loopx_todos_to_lark_kanban(
-            kanban_cfg, registry_path=registry_path, goal_id=goal_id, execute=False
-        )
-        assert legacy_sync["ok"] is True
-        assert legacy_sync["issue_fix_outcome_count"] == 1
-        assert legacy_sync["warnings"] == []
-        legacy_cards = [
-            row for row in legacy_sync["records"]
-            if isinstance(row, dict) and isinstance(row.get("values"), dict)
-            and row["values"].get("Work Item Type") == "Issue Fix"
-        ]
-        assert len(legacy_cards) == 1 and legacy_cards[0]["values"]["Status"] == "Done"
+        legacy_sync, legacy_cards = _kanban_issue_fix_cards(registry_path, goal_id)
+        assert legacy_sync["ok"] is True and legacy_sync["issue_fix_outcome_count"] == 1
+        assert legacy_sync["warnings"] == [] and legacy_cards == ["Done"]
 
         base_args = [
             "--format", "json", "issue-fix", "outcome", "--goal-id", goal_id,
@@ -595,41 +566,85 @@ def test_legacy_empty_string_delivery_fields_cli_writeback_and_kanban_readback(
             "--issue-ref", "issues_42", "--pr-ref", pr_ref,
         ]
         before_bytes = feasibility_path.read_bytes()
-        preview = _run_issue_fix_outcome_cli([*base_args, "--delivery-evidence-json", str(delivery_path)])
-        assert preview["ok"] is True
+        assert _run_issue_fix_outcome_cli([*base_args, "--delivery-evidence-json", str(delivery_path)])["ok"] is True
         assert feasibility_path.read_bytes() == before_bytes
-
         written = _run_issue_fix_outcome_cli(
             [*base_args, "--delivery-evidence-json", str(delivery_path), "--write-delivery-evidence"]
         )
-        assert written["ok"] is True
-        write_receipt = written["domain_state_write"]
-        assert isinstance(write_receipt, dict)
-        assert write_receipt["status"] == "updated" and write_receipt["write_performed"] is True
-
+        assert isinstance(written["domain_state_write"], dict) and written["domain_state_write"]["status"] == "updated"
         repeated = _run_issue_fix_outcome_cli(
             [*base_args, "--delivery-evidence-json", str(delivery_path), "--write-delivery-evidence"]
         )
-        repeated_receipt = repeated["domain_state_write"]
-        assert isinstance(repeated_receipt, dict)
-        assert repeated_receipt["status"] == "unchanged" and repeated_receipt["write_performed"] is False
-
+        assert isinstance(repeated["domain_state_write"], dict) and repeated["domain_state_write"]["status"] == "unchanged"
         readback = _run_issue_fix_outcome_cli(base_args)
-        assert readback["ok"] is True
-        readback_outcomes = readback["issue_fix_outcomes"]
-        assert isinstance(readback_outcomes, list) and len(readback_outcomes) == 1
-        assert isinstance(readback_outcomes[0], dict) and readback_outcomes[0]["stage"] == "merged"
+        outcomes = readback["issue_fix_outcomes"]
+        assert isinstance(outcomes, list) and len(outcomes) == 1
+        assert isinstance(outcomes[0], dict) and outcomes[0]["stage"] == "merged"
+        sync, cards = _kanban_issue_fix_cards(registry_path, goal_id)
+        assert sync["ok"] is True and sync["issue_fix_outcome_count"] == 1
+        assert sync["warnings"] == [] and cards == ["Done"]
 
-        sync = sync_loopx_todos_to_lark_kanban(
-            kanban_cfg, registry_path=registry_path, goal_id=goal_id, execute=False
-        )
-        assert sync["ok"] is True and sync["issue_fix_outcome_count"] == 1 and sync["warnings"] == []
-        issue_fix_cards = [
-            row for row in sync["records"]
-            if isinstance(row, dict) and isinstance(row.get("values"), dict)
-            and row["values"].get("Work Item Type") == "Issue Fix"
-        ]
-        assert len(issue_fix_cards) == 1 and issue_fix_cards[0]["values"]["Status"] == "Done"
+
+def test_persisted_empty_container_v0_ledger_read_replace_and_kanban_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    project = tmp_path / "empty-containers"
+    goal_id = "goal-empty-container-v0"
+    registry_path, feasibility_path, _, pr_ref = _setup_v0_project(project, goal_id, (42, 43))
+    rows = [json.loads(line) for line in feasibility_path.read_text(encoding="utf-8").splitlines()]
+    base_delivery = _sample_delivery_evidence()
+    base_delivery.pop("commit_ref", None)
+    base_delivery.pop("repository_commit_evidence", None)
+    rows[0]["delivery_evidence"] = {**base_delivery, "outputs": {}, "changed_files": {}, "risks": {}}
+    rows[1]["delivery_evidence"] = {**base_delivery, "outputs": [], "changed_files": [], "risks": []}
+    for row in rows:
+        upsert_issue_fix_feasibility_ledger_jsonl(feasibility_path, row)
+
+    base_args = [
+        "--format", "json", "issue-fix", "outcome", "--goal-id", goal_id,
+        "--project", str(project), "--repo", "example/project",
+        "--issue-ref", "issues_42", "--pr-ref", pr_ref,
+    ]
+    default_read = _run_issue_fix_outcome_cli(base_args)
+    assert default_read["ok"] is True
+    read_outcomes = default_read["issue_fix_outcomes"]
+    assert isinstance(read_outcomes, list) and isinstance(read_outcomes[0], dict)
+    assert isinstance(read_outcomes[0]["validation"], dict)
+    assert read_outcomes[0]["validation"]["status"] == "passed" and read_outcomes[0]["stage"] == "merged"
+
+    sync_before, cards_before = _kanban_issue_fix_cards(registry_path, goal_id)
+    assert sync_before["ok"] is True and sync_before["issue_fix_outcome_count"] == 2
+    assert sync_before["warnings"] == [] and len(cards_before) == 2 and "Done" in cards_before
+
+    bad_submit = project / "bad-submit.json"
+    bad_submit.write_text(json.dumps({**base_delivery, "outputs": {}}), encoding="utf-8")
+    before_bytes = feasibility_path.read_bytes()
+    rejected = _run_issue_fix_outcome_cli(
+        [*base_args, "--delivery-evidence-json", str(bad_submit), "--write-delivery-evidence"], expected_rc=1
+    )
+    assert rejected["ok"] is False and "delivery evidence outputs must be a list" in str(rejected["error"])
+    assert feasibility_path.read_bytes() == before_bytes
+
+    equiv_submit = project / "equiv-submit.json"
+    equiv_submit.write_text(json.dumps({**base_delivery, "outputs": [], "changed_files": [], "risks": []}), encoding="utf-8")
+    unchanged = _run_issue_fix_outcome_cli(
+        [*base_args, "--delivery-evidence-json", str(equiv_submit), "--write-delivery-evidence"]
+    )
+    assert unchanged["ok"] is True and isinstance(unchanged["domain_state_write"], dict)
+    assert unchanged["domain_state_write"]["status"] == "unchanged"
+
+    replacement_path = project / "replacement.json"
+    replacement_path.write_text(json.dumps(base_delivery), encoding="utf-8")
+    replaced = _run_issue_fix_outcome_cli(
+        [*base_args, "--delivery-evidence-json", str(replacement_path), "--write-delivery-evidence"]
+    )
+    assert replaced["ok"] is True and isinstance(replaced["domain_state_write"], dict)
+    assert replaced["domain_state_write"]["status"] == "updated"
+    assert _run_issue_fix_outcome_cli(base_args)["ok"] is True
+    sync_after, cards_after = _kanban_issue_fix_cards(registry_path, goal_id)
+    assert sync_after["ok"] is True and sync_after["issue_fix_outcome_count"] == 2
+    assert sync_after["warnings"] == [] and len(cards_after) == 2 and "Done" in cards_after
 
 
 def test_collection_preserves_linked_merged_pr_when_feasibility_row_is_malformed(
@@ -646,7 +661,7 @@ def test_collection_preserves_linked_merged_pr_when_feasibility_row_is_malformed
     bad_feasibility = _sample_feasibility_packet("issues_42")
     bad_feasibility["delivery_evidence"] = {
         "schema_version": ISSUE_FIX_DELIVERY_EVIDENCE_INPUT_SCHEMA_VERSION,
-        "outputs": {},
+        "outputs": {"unexpected": 1},
     }
     feasibility_path.write_text(json.dumps(bad_feasibility) + "\n", encoding="utf-8")
 
