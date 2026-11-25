@@ -168,7 +168,7 @@ export type WorkspaceGoal = {
   sourceAccess?: {namespace: string; label: string; readOnly: true; original_goal_id?: string};
   sourceRunHistory?: {
     total: number | null;
-    recent: Pick<RunRecord, "generated_at" | "classification" | "turn_instance_id" | "vision_checkpoint" | "agent_vision" | "agent_id">[];
+    recent: Pick<RunRecord, "generated_at" | "classification" | "turn_instance_id" | "execution_ref" | "vision_checkpoint" | "agent_vision" | "agent_id">[];
   };
   sourceStrategy?: {recordedAt: string; summary: string; observation?: string};
   /** Registry organization in this status source; not Agent ownership or execution dependency. */
