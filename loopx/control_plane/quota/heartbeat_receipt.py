@@ -21,7 +21,7 @@ from .error_codes import HeartbeatReceiptIdentityConflictError
 from .semantic_replan_guard_merge import (
     SEMANTIC_REPLAN_REVIEW_FIELDS,
     append_repaired_identity_upgrade_receipt,
-    is_repairable_orphaned_identity_upgrade_receipt,
+    compute_repaired_identity_upgrade_replan_guard_details,
     merge_semantic_replan_guard_details,
     repair_orphaned_identity_upgrade_heartbeat_receipt as repair_orphaned_identity_upgrade_heartbeat_receipt,  # noqa: F401
     repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent as repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent,  # noqa: F401
@@ -653,15 +653,19 @@ def upgrade_identityless_heartbeat_receipt(
                 else {}
             )
             if str(existing_details.get("settlement_effect_id") or "").strip():
-                if is_repairable_orphaned_identity_upgrade_receipt(
-                    effective, matching
-                ):
+                repaired_details = (
+                    compute_repaired_identity_upgrade_replan_guard_details(
+                        effective, matching
+                    )
+                )
+                if repaired_details is not None:
                     repaired = append_repaired_identity_upgrade_receipt(
                         log_path,
                         goal_id=goal_id,
                         agent_id=agent_id,
                         turn_instance_id=turn_instance_id,
                         effective=effective,
+                        repaired_details=repaired_details,
                         goal_ref=goal_ref,
                     )
                     return repaired, True

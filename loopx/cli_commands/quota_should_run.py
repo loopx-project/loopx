@@ -24,7 +24,7 @@ from ..control_plane.quota.heartbeat_receipt import (
 )
 from ..control_plane.quota.semantic_replan_guard_merge import (
     has_orphaned_identity_upgrade_replan_guard,
-    is_orphaned_semantic_replan_guard_error,
+    is_malformed_settlement_state_error,
 )
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 from ..file_lock import LockAcquireTimeoutError
@@ -507,7 +507,7 @@ def execute_quota_should_run(
     except (ValueError, EffectRuntimeRejected) as exc:
         if (
             mutable_should_run
-            and is_orphaned_semantic_replan_guard_error(exc)
+            and is_malformed_settlement_state_error(exc)
             and repair_orphaned_identity_upgrade_heartbeat_receipts_for_agent(
                 runtime_root,
                 goal_id=args.goal_id,
