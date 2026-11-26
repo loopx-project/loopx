@@ -995,6 +995,10 @@ def run_m2_deterministic_arm(
             "telemetry": telemetry,
         },
         "semantic_unit_settlement_hook_available": _has_todo_unit_settlement(),
+        # Mechanism verification calls fold/prefetch helpers rather than executing and
+        # reading back a live production turn-driver settlement entrypoint.
+        "production_settlement_executed": False,
+        "production_settlement_readback_ok": False,
     }
 
 

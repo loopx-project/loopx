@@ -117,6 +117,12 @@ _CONTRADICTION_MARKERS = (
     "nothing failed",
     "all obligations resolved",
     "resolved all",
+    "already completed",
+    "already resolved",
+    "already fixed",
+    "already passed",
+    "no longer open",
+    "no longer needed",
 )
 
 
@@ -137,7 +143,7 @@ def _match_expected_clauses(
     raw_items: object,
     expected: Sequence[str],
 ) -> tuple[bool, bool]:
-    """Return (all_expected_matched_distinctly, contradiction_free)."""
+    """Return (strict_1to1_bijection_ok, contradiction_free)."""
     if not isinstance(raw_items, list) or any(not isinstance(item, str) for item in raw_items):
         return False, False
     normalized_items = [_normalize_clause(item) for item in raw_items]
@@ -161,6 +167,8 @@ def _match_expected_clauses(
         if matched_idx is None:
             return False, True
         used_indices.add(matched_idx)
+    if len(used_indices) != len(normalized_items):
+        return False, True
     return True, True
 
 
@@ -341,9 +349,15 @@ def _evaluate_model_pair(
     base_grader: Any,
     head_grader: Any,
     source_attribution: Mapping[str, object],
+    semantic_unit_settlement_hook_available: bool | None = None,
     per_call_timeout: float,
     deadline: float,
 ) -> dict[str, Any]:
+    diag_fields = (
+        {"semantic_unit_settlement_hook_available": semantic_unit_settlement_hook_available}
+        if semantic_unit_settlement_hook_available is not None
+        else {}
+    )
     if time.monotonic() >= deadline:
         skipped = ModelRunOutcome(
             model_id=runner.model_id,
@@ -359,6 +373,7 @@ def _evaluate_model_pair(
             "model_id": runner.model_id,
             "provider": runner.provider,
             "passed": False,
+            **diag_fields,
             "source_attribution": dict(source_attribution),
             "base": _format_arm_entry(arm=base_label, outcome=skipped, behavior=fail_b),
             "head": _format_arm_entry(arm=head_label, outcome=skipped, behavior=fail_b),
@@ -410,6 +425,7 @@ def _evaluate_model_pair(
         "model_id": runner.model_id,
         "provider": runner.provider,
         "passed": bool(base_behavior.passed and head_behavior.passed and cmp["behavior_preserved"]),
+        **diag_fields,
         "source_attribution": dict(source_attribution),
         "base": _format_arm_entry(arm=base_label, outcome=base_out, behavior=base_behavior),
         "head": _format_arm_entry(arm=head_label, outcome=head_out, behavior=head_behavior),
@@ -519,6 +535,10 @@ def run_tier1_dual_model_suite(
                 m2_base["behavior_constraint"].passed and m2_head["behavior_constraint"].passed
             )
             m2_hook_ok = bool(m2_head.get("semantic_unit_settlement_hook_available"))
+            m2_prod_ok = bool(
+                m2_head.get("production_settlement_executed")
+                and m2_head.get("production_settlement_readback_ok")
+            )
             m2_grader = lambda outcome, ef=meta["failure_facts"], eo=meta["open_obligations"], gp=gate_passed: _grade_m2(  # noqa: E731
                 outcome,
                 expected_failures=ef,
@@ -538,15 +558,17 @@ def run_tier1_dual_model_suite(
                     "project_root_head": m2_fix.project_root,
                     "base_grader": m2_grader,
                     "head_grader": m2_grader,
+                    "semantic_unit_settlement_hook_available": m2_hook_ok,
                     "source_attribution": build_scenario_source_attribution(
                         base_source="candidate_head",
                         head_source="candidate_head",
                         comparison_kind="same_commit_mechanism_verification",
-                        production_hot_path_covered=m2_hook_ok,
+                        production_hot_path_covered=m2_prod_ok,
                         note=(
-                            "Both M2 arms run on the candidate evaluator checkout; excluded from "
-                            "cross-commit claims and production settlement hot-path claims unless "
-                            "the production settlement hook is present."
+                            "Both M2 arms run same-commit mechanism helpers on the candidate "
+                            "checkout; excluded from cross-commit claims and production "
+                            "settlement hot-path claims unless an actual production settlement "
+                            "entrypoint executes and reads back turn settlement."
                         ),
                     ),
                 }
@@ -598,6 +620,7 @@ def run_tier1_dual_model_suite(
                     base_grader=spec["base_grader"],
                     head_grader=spec["head_grader"],
                     source_attribution=spec["source_attribution"],
+                    semantic_unit_settlement_hook_available=spec.get("semantic_unit_settlement_hook_available"),
                     per_call_timeout=per_call_timeout_seconds,
                     deadline=deadline,
                 )

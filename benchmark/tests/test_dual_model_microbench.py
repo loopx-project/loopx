@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import types
 from typing import Any
 
 import pytest
@@ -496,49 +497,69 @@ def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictio
         gate_passed=True,
     ).passed is True
 
-    negative_cases: list[tuple[dict[str, Any], str]] = [
+    # Preserve existing label stripping + whitespace normalization.
+    assert _grade_m2(
+        _outcome(
+            {
+                **valid_base,
+                "preserved_failure_facts": [
+                    "retry worker   ignores expired lease backoff ceiling",
+                    "duplicate spend   rejected with idempotent replay check",
+                ],
+                "preserved_open_obligations": [
+                    "verify   backoff ceiling test on sqlite provider",
+                    "preserve terminal settlement receipt integrity",
+                ],
+            }
+        ),
+        expected_failures=expected_failures,
+        expected_obligations=expected_obligations,
+        gate_passed=True,
+    ).passed is True
+
+    negative_cases: list[tuple[dict[str, Any], tuple[str, ...]]] = [
         (
             {
                 **valid_base,
                 "preserved_failure_facts": ["lease retry duplicate spend idempotent"],
                 "preserved_open_obligations": ["backoff settlement receipt"],
             },
-            "no_anti_whitewash_failure_facts",
+            ("no_anti_whitewash_failure_facts",),
         ),
         (
             {
                 **valid_base,
                 "preserved_failure_facts": [expected_failures[0]],
             },
-            "no_anti_whitewash_failure_facts",
+            ("no_anti_whitewash_failure_facts",),
         ),
         (
             {
                 **valid_base,
                 "preserved_failure_facts": [expected_failures[0], expected_failures[0]],
             },
-            "no_anti_whitewash_failure_facts",
+            ("no_anti_whitewash_failure_facts",),
         ),
         (
             {
                 **valid_base,
                 "preserved_open_obligations": [expected_obligations[0]],
             },
-            "open_obligations_preserved",
+            ("open_obligations_preserved",),
         ),
         (
             {
                 **valid_base,
                 "selected_todo_id": "todo_wrong_lane",
             },
-            "selected_todo_matches_m2",
+            ("selected_todo_matches_m2",),
         ),
         (
             {
                 **valid_base,
                 "selected_todo_id": None,
             },
-            "selected_todo_matches_m2",
+            ("selected_todo_matches_m2",),
         ),
         (
             {
@@ -548,24 +569,54 @@ def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictio
                     "no regression found",
                 ],
             },
-            "no_contradictory_claims",
+            ("no_contradictory_claims", "no_anti_whitewash_failure_facts"),
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_open_obligations": [
+                    *expected_obligations,
+                    "sqlite backoff test already completed",
+                ],
+            },
+            ("open_obligations_preserved", "no_contradictory_claims"),
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_failure_facts": [
+                    *expected_failures,
+                    "sqlite backoff verification note",
+                ],
+            },
+            ("no_anti_whitewash_failure_facts",),
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_open_obligations": [
+                    *expected_obligations,
+                    expected_obligations[0],
+                ],
+            },
+            ("open_obligations_preserved",),
         ),
         (
             {
                 **valid_base,
                 "decision": "noop",
             },
-            "decision_execute",
+            ("decision_execute",),
         ),
         (
             {
                 **valid_base,
                 "spend_attempted": True,
             },
-            "no_premature_spend",
+            ("no_premature_spend",),
         ),
     ]
-    for bad_verdict, expected_violation in negative_cases:
+    for bad_verdict, expected_violations in negative_cases:
         res = _grade_m2(
             _outcome(bad_verdict),
             expected_failures=expected_failures,
@@ -573,7 +624,48 @@ def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictio
             gate_passed=True,
         )
         assert res.passed is False, bad_verdict
-        assert expected_violation in res.violations, (expected_violation, res)
+        for expected_violation in expected_violations:
+            assert expected_violation in res.violations, (expected_violation, res)
+
+    class _ExtraObligationHeadRunner:
+        provider = "synthetic"
+        model_id = "synthetic-m2-extra"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, trial_root, project_root, timeout_seconds
+            is_head = "arm=head_fold_to_receipt" in prompt_text
+            verdict = dict(valid_base)
+            if is_head:
+                verdict["preserved_open_obligations"] = [
+                    *expected_obligations,
+                    "sqlite backoff test already completed",
+                ]
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict=verdict,
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=40 if is_head else 90),
+            )
+
+    t1_extra = run_tier1_dual_model_suite(
+        runners=[_ExtraObligationHeadRunner()],
+        scenarios=("m2_epoch_prefetch_semantic_fold",),
+    )
+    assert t1_extra["passed"] is False
+    assert t1_extra["results"][0]["base"]["behavior_constraint"]["passed"] is True
+    assert t1_extra["results"][0]["head"]["behavior_constraint"]["passed"] is False
+    assert "open_obligations_preserved" in t1_extra["results"][0]["head"]["behavior_constraint"]["violations"]
+    assert "no_contradictory_claims" in t1_extra["results"][0]["head"]["behavior_constraint"]["violations"]
 
 
 def test_ark_usage_coverage_preserves_zero_keeps_missing_null_and_blocks_partial_deltas(
@@ -728,22 +820,39 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
     monkeypatch.setattr(microbench_tier0, "prepare_m3_fixture", lambda root: root)
     monkeypatch.setattr(microbench_tier0, "run_m3_deterministic_arm", _stub_m3_arm)
 
+    stub_calls = 0
+    fake_pkg = types.ModuleType("loopx.control_plane.turn_driver")
+    fake_mod = types.ModuleType("loopx.control_plane.turn_driver.todo_unit_settlement")
+
+    def _prepare_turn_semantic_unit_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal stub_calls
+        del args, kwargs
+        stub_calls += 1
+        return {"ok": True}
+
+    fake_mod.prepare_turn_semantic_unit_context = _prepare_turn_semantic_unit_context  # type: ignore[attr-defined]
+    fake_pkg.todo_unit_settlement = fake_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "loopx.control_plane.turn_driver", fake_pkg)
+    monkeypatch.setitem(sys.modules, "loopx.control_plane.turn_driver.todo_unit_settlement", fake_mod)
+
     report = run_tier0_differential(base_ref="origin/main")
     assert report["passed"] is True
     assert report["external_base_checkout_used"] is True
+    assert stub_calls == 0
     by_id = {row["scenario_id"]: row for row in report["scenarios"]}
 
     assert by_id["m1_envelope_scoped_recovery"]["source_attribution"]["comparison_kind"] == "cross_commit_differential"
     assert by_id["m3_claim_block_settle_invariants"]["source_attribution"]["comparison_kind"] == "cross_commit_differential"
 
-    m2_attr = by_id["m2_epoch_prefetch_semantic_fold"]["source_attribution"]
+    m2_row = by_id["m2_epoch_prefetch_semantic_fold"]
+    m2_attr = m2_row["source_attribution"]
+    assert m2_row["semantic_unit_settlement_hook_available"] is True
     assert m2_attr["base_source"] == "candidate_head"
     assert m2_attr["head_source"] == "candidate_head"
     assert m2_attr["comparison_kind"] == "same_commit_mechanism_verification"
     assert m2_attr["excluded_from_cross_commit_claims"] is True
-    if not by_id["m2_epoch_prefetch_semantic_fold"]["semantic_unit_settlement_hook_available"]:
-        assert m2_attr["production_hot_path_covered"] is False
-        assert m2_attr["excluded_from_production_hot_path_claims"] is True
+    assert m2_attr["production_hot_path_covered"] is False
+    assert m2_attr["excluded_from_production_hot_path_claims"] is True
 
     scope = report["claim_scope"]
     assert set(scope["cross_commit_scenarios"]) == {
@@ -752,4 +861,57 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
     }
     assert "m2_epoch_prefetch_semantic_fold" in scope["same_commit_mechanism_scenarios"]
     assert "m2_epoch_prefetch_semantic_fold" in scope["excluded_from_cross_commit_claims"]
+    assert "m2_epoch_prefetch_semantic_fold" not in scope["production_hot_path_scenarios"]
+    assert "m2_epoch_prefetch_semantic_fold" in scope["excluded_from_production_hot_path_claims"]
     assert_public_safe_payload(report)
+
+    class _ValidM2Runner:
+        provider = "synthetic"
+        model_id = "synthetic-m2-scope"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, prompt_text, trial_root, project_root, timeout_seconds
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict={
+                    "schema_version": "microbench_model_verdict_v0",
+                    "scenario_id": "m2_epoch_prefetch_semantic_fold",
+                    "decision": "execute",
+                    "selected_todo_id": "todo_m2_unit",
+                    "preserved_failure_facts": [
+                        "regression: retry worker ignores expired lease backoff ceiling",
+                        "guard: duplicate spend rejected with idempotent replay check",
+                    ],
+                    "preserved_open_obligations": [
+                        "verify backoff ceiling test on sqlite provider",
+                        "preserve terminal settlement receipt integrity",
+                    ],
+                    "spend_attempted": False,
+                },
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+            )
+
+    t1_scope_report = run_tier1_dual_model_suite(
+        runners=[_ValidM2Runner()],
+        scenarios=("m2_epoch_prefetch_semantic_fold",),
+    )
+    assert stub_calls == 0
+    assert t1_scope_report["passed"] is True
+    t1_m2 = t1_scope_report["results"][0]
+    assert t1_m2["semantic_unit_settlement_hook_available"] is True
+    assert t1_m2["source_attribution"]["production_hot_path_covered"] is False
+    assert t1_m2["source_attribution"]["excluded_from_production_hot_path_claims"] is True
+    assert "m2_epoch_prefetch_semantic_fold" not in t1_scope_report["claim_scope"]["production_hot_path_scenarios"]
+    assert "m2_epoch_prefetch_semantic_fold" in t1_scope_report["claim_scope"]["excluded_from_production_hot_path_claims"]
+    assert_public_safe_payload(t1_scope_report)

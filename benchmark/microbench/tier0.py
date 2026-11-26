@@ -148,6 +148,10 @@ def run_tier0_differential(
             tok_delta = m2_deltas.get("prompt_tokens") if isinstance(m2_deltas, Mapping) else None
             head_ok = bool(m2_cmp["behavior_preserved"]) and isinstance(tok_delta, int) and tok_delta < 0
             hook_available = bool(m2_head.get("semantic_unit_settlement_hook_available"))
+            prod_hot_path_ok = bool(
+                m2_head.get("production_settlement_executed")
+                and m2_head.get("production_settlement_readback_ok")
+            )
             return {
                 "scenario_id": "m2_epoch_prefetch_semantic_fold",
                 "passed": head_ok,
@@ -156,11 +160,12 @@ def run_tier0_differential(
                     base_source="candidate_head",
                     head_source="candidate_head",
                     comparison_kind="same_commit_mechanism_verification",
-                    production_hot_path_covered=hook_available,
+                    production_hot_path_covered=prod_hot_path_ok,
                     note=(
-                        "Both M2 arms run on the candidate evaluator checkout; excluded from "
-                        "cross-commit claims and production settlement hot-path claims unless "
-                        "the production settlement hook is present."
+                        "Both M2 arms run same-commit mechanism helpers on the candidate checkout; "
+                        "excluded from cross-commit claims and production settlement hot-path "
+                        "claims unless an actual production settlement entrypoint executes and "
+                        "reads back turn settlement."
                     ),
                 ),
                 "base": {
