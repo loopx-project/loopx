@@ -122,11 +122,14 @@ Activity alone does not prove a scheduled prompt arrived: an empty Turn, a
 resumed Turn and a hand-written message leave the same trace. `loopx doctor`
 therefore also asks for *delivery evidence* and only reads a lane `fresh` when
 the thread's newest Turn is one the host attributes to an automation — its
-`task_started.turn_attribution.turn_trigger` is `automation_heartbeat`, with the
-`heartbeat_xml` / `user_input` / `user` transport the routing contract already
-requires — and carries a user message matching the installed prompt. Matching
-text is only a pointer: a `composer` Turn that repeats the prompt verbatim, with
-or without the host's envelope, proves nothing. When the envelope names an
+`task_started.turn_attribution.turn_trigger` is `automation_heartbeat` (the
+routing contract's name) or `automation_heartbeat_scheduled` (the value the
+current Codex App rollout writes for the same delivery), with the
+`heartbeat_xml` / `user_input` / `user` transport the contract already requires
+— and carries a user message matching the installed prompt. Matching text is
+only a pointer: a `composer` Turn that repeats the prompt verbatim, with or
+without the host's envelope, proves nothing, and a trigger this adapter has not
+seen stays unverified rather than being read as a tick. When the envelope names an
 `<automation_id>`, it must be the automation installed for this lane, so a
 sibling automation's body cannot stand in. The matching message's time is
 published as `delivery_evidence_at`. The scan reads a bounded 8 MiB tail of the

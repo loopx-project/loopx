@@ -505,12 +505,18 @@ _INSTRUCTIONS_OPEN = "<instructions>"
 _INSTRUCTIONS_CLOSE = "</instructions>"
 _AUTOMATION_ID_OPEN = "<automation_id>"
 _AUTOMATION_ID_CLOSE = "</automation_id>"
-# The host's own label for a turn it started from an installed automation. The
+# The host's own labels for a turn it started from an installed automation. The
 # canonical heartbeat transport contract
-# (``loopx_codex_provider_routing.contract.qualify_heartbeat_transport``) already
-# requires this trigger with a ``heartbeat_xml`` user message, so a turn without
-# it is a manual or resumed one whatever its text says.
-_HEARTBEAT_TURN_TRIGGER = "automation_heartbeat"
+# (``loopx_codex_provider_routing.contract.qualify_heartbeat_transport``) names
+# ``automation_heartbeat``; a current Codex App rollout records the same turn as
+# ``automation_heartbeat_scheduled``. Both describe a scheduled delivery, while
+# a ``composer`` turn, a ``guardian_review`` and a resumed turn do not. The set
+# stays closed on purpose: a value this adapter has not seen is reported
+# unverified rather than assumed to be the automation, because a wrong ``fresh``
+# hides exactly the fault this readback exists to name.
+_HEARTBEAT_TURN_TRIGGERS = frozenset(
+    {"automation_heartbeat", "automation_heartbeat_scheduled"}
+)
 _HEARTBEAT_TRANSPORT_FIELDS = {
     "payload_kind": "heartbeat_xml",
     "delivery_kind": "user_input",
@@ -591,15 +597,19 @@ def _heartbeat_turn(payload: Mapping[str, Any]) -> bool:
     A turn's own ``turn_attribution.turn_trigger`` is the host's testimony that
     an automation started it. Text that happens to equal the installed prompt
     is only a pointer: a hand-typed message in a ``composer`` turn, or a
-    guardian review, must never be read as a scheduled delivery. Transport
-    fields the rollout carries are checked against the same contract when
-    present; the rollout is not required to repeat fields it does not record.
+    guardian review, must never be read as a scheduled delivery. The two
+    triggers a release has been observed to publish for a scheduled turn are
+    both accepted, so the adapter does not read a real tick as a manual one.
+    Transport fields the rollout carries are checked against the same contract
+    when present; the rollout is not required to repeat fields it does not
+    record.
     """
 
     attribution = payload.get("turn_attribution")
     if not isinstance(attribution, Mapping):
         return False
-    if attribution.get("turn_trigger") != _HEARTBEAT_TURN_TRIGGER:
+    trigger = attribution.get("turn_trigger")
+    if not isinstance(trigger, str) or trigger not in _HEARTBEAT_TURN_TRIGGERS:
         return False
     turn_id = attribution.get("turn_id")
     if isinstance(turn_id, str) and turn_id:
@@ -623,8 +633,8 @@ def _rollout_prompt_evidence(
 
     Walks a bounded tail of the thread's own rollout backward. The newest
     ``task_started`` opens the turn under examination, and that turn must carry
-    the host's ``automation_heartbeat`` attribution before anything inside it
-    counts; a user message whose prompt (or heartbeat-envelope body) hashes to
+    one of the host's automation triggers before anything inside it counts; a
+    user message whose prompt (or heartbeat-envelope body) hashes to
     the installed prompt is then its scheduled delivery. A hand-written message
     -- even one that repeats the installed text verbatim -- a resumed turn or an
     empty turn produces no match, so none of them can make a silent lane look

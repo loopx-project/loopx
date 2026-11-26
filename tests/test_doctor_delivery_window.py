@@ -78,6 +78,33 @@ def _task_started(
     )
 
 
+def _observed_task_started(timestamp: str, trigger: str) -> dict[str, object]:
+    """A ``task_started`` with the surrounding fields a current rollout records.
+
+    Trimmed of content, but keeping the sibling fields the host writes next to
+    ``turn_attribution`` so a check that silently depends on their absence shows
+    up here.
+    """
+
+    turn = "01a21330-2287-7830-bf82-d28412f35c23"
+    return _event(
+        timestamp,
+        "task_started",
+        turn_attribution={
+            "turn_id": turn,
+            "turn_trigger": trigger,
+            "parent_turn_id": None,
+            "initiating_agent_path": None,
+            "root_turn_id": turn,
+        },
+        turn_id=turn,
+        root_turn_id=turn,
+        started_at=1795618420,
+        model_context_window=258400,
+        collaboration_mode_kind="default",
+    )
+
+
 class _CodexHome:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -462,6 +489,86 @@ def test_an_envelope_with_an_unreadable_automation_id_is_unverified(
             _event(_ts(old), "task_complete"),
             _task_started(_ts(recent)),
             _user_message(_ts(recent), envelope),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+
+
+def test_the_trigger_a_current_rollout_records_for_a_scheduled_turn_is_accepted(
+    tmp_path: Path,
+) -> None:
+    # The routing contract names ``automation_heartbeat``; the current Codex App
+    # rollout writes ``automation_heartbeat_scheduled`` for the same delivery.
+    # Reading only the contract's spelling would report every real tick as
+    # unverified.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _observed_task_started(_ts(recent), "automation_heartbeat_scheduled"),
+            _user_message(
+                _ts(recent),
+                _heartbeat_envelope(_automation_prompt("release-work", "operations")),
+            ),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    assert diagnosis["status"] == "fresh"
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "fresh"
+    assert datetime.fromisoformat(lane["delivery_evidence_at"]) == recent
+
+
+def test_a_trigger_this_adapter_has_not_seen_is_unverified(tmp_path: Path) -> None:
+    # A new host value could be a scheduled tick or could not. Reporting
+    # unverified keeps the fault visible; guessing ``fresh`` would hide it.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _observed_task_started(_ts(recent), "automation_heartbeat_manual"),
+            _user_message(
+                _ts(recent),
+                _heartbeat_envelope(_automation_prompt("release-work", "operations")),
+            ),
+            _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
+        ],
+        now=recent + timedelta(minutes=1),
+    )
+
+    [lane] = diagnosis["lanes"]
+    assert lane["window_state"] == "unknown"
+    assert lane["reason"] == "unverified_activity"
+    assert "delivery_evidence_at" not in lane
+
+
+def test_the_recorded_trigger_still_rejects_a_manual_message(
+    tmp_path: Path,
+) -> None:
+    # Resuming acceptance of the recorded trigger must not reopen the manual
+    # path: a composer turn with the same text stays unverified.
+    old = datetime(2026, 9, 25, 10, 0, tzinfo=timezone.utc)
+    recent = old + timedelta(hours=3)
+    _home, diagnosis = _proof(
+        tmp_path,
+        [
+            _event(_ts(old), "task_complete"),
+            _observed_task_started(_ts(recent), "composer"),
+            _user_message(
+                _ts(recent),
+                _heartbeat_envelope(_automation_prompt("release-work", "operations")),
+            ),
             _event(_ts(recent + timedelta(seconds=30)), "task_complete"),
         ],
         now=recent + timedelta(minutes=1),
