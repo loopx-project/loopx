@@ -537,6 +537,7 @@ export const runRecordSchema = z.object({
   generated_at: z.string(),
   goal_id: z.string(),
   turn_instance_id: z.string().nullish().catch(null),
+  execution_ref: z.string().regex(/^[a-f0-9]{64}$/).optional().catch(undefined),
   agent_vision: z.record(z.string(), z.unknown()).nullish().catch(null),
   vision_checkpoint: z.object({
     schema_version: z.literal("vision_checkpoint_v0"),

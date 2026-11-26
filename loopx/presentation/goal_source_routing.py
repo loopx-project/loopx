@@ -7,6 +7,7 @@ from ..control_plane.runtime.runtime_projection_route import resolve_goal_source
 GOAL_SOURCE_LINKS_PATH = "/api/chat/goal-sources"
 GOAL_SOURCE_STRATEGIES_PATH = "/api/chat/goal-source-strategies"
 GOAL_SOURCE_DOCUMENT_PATH = "/api/chat/goal-source-document"
+GOAL_SOURCE_EXECUTION_PATH = "/api/chat/goal-source-execution"
 
 
 def goal_source_catalog(server):
@@ -37,14 +38,21 @@ class GoalSourceRequestMixin:
     def _goal_source_document(self):
         return self._goal_source_read("document")
 
+    def _goal_source_execution(self):
+        return self._goal_source_read("execution")
+
     def _goal_source_read(self, operation):
         import subprocess
         from urllib.parse import parse_qs, urlparse
+        from ..control_plane.status.goal_source import SourceScopeError
 
         if not self._require_loopback_origin():
             return
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-        if (set(query) != {"goal_id", "source_namespace"}
+        fields = {"goal_id", "source_namespace"}
+        if operation == "execution":
+            fields.add("execution_ref")
+        if (set(query) != fields
                 or any(len(values) != 1 for values in query.values())):
             self._send_error("Choose one original Goal and source.", status=400)
             return
@@ -58,16 +66,24 @@ class GoalSourceRequestMixin:
             self._send_error("Source identity changed; refresh the Goal.", status=409)
             return
         try:
-            result = getattr(reader, operation)(reader.source.goal_id)
+            parameters = query.get("execution_ref", [])
+            result = getattr(reader, operation)(reader.source.goal_id, *parameters)
             latest = linked_goal_source(self.server, goal_id)
             if (latest is None or latest[1].source.namespace != reader.source.namespace
-                    or (operation == "document" and latest[1].source != reader.source)):
+                    or (operation != "strategies" and latest[1].source != reader.source)):
                 self._send_error("Source identity changed; refresh the Goal.", status=409)
                 return
             self._send_json(result)
-        except (ValueError, TypeError, KeyError, OSError, RuntimeError, subprocess.SubprocessError):
-            self._send_error("The original strategy history is unavailable; retry after reconnecting."
-                if operation == "strategies" else "The original task document is unavailable; check its source binding and retry.", status=503)
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            if operation == "execution" and isinstance(exc, SourceScopeError):
+                self._send_error("The selected execution or its source changed; refresh the Goal.", status=409)
+                return
+            unavailable = {
+                "strategies": "The original strategy history is unavailable; retry after reconnecting.",
+                "document": "The original task document is unavailable; check its source binding and retry.",
+                "execution": "The original execution is unavailable; check its source binding and retry.",
+            }
+            self._send_error(unavailable[operation], status=503)
 
     def _completed_todos(self):
         import subprocess

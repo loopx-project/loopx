@@ -182,6 +182,59 @@ def test_strategy_history_reads_every_original_version_without_writing(workspace
     assert not list(Path(raw['runtime_root']).rglob('research-analysis'))
 
 
+def test_execution_detail_reads_the_original_archive_only_in_its_source(workspace):
+    sources = [native_source(workspace), native_source(workspace, 'another-execution')]
+    cases = []
+    for alias, (raw, request, protected) in zip(('archive-a', 'archive-b'), sources):
+        runs = Path(raw['runtime_root']) / 'goals' / 'solver-goal' / 'runs'
+        runs.mkdir(parents=True)
+        index = runs / 'index.jsonl'
+        stored = {'goal_id': 'solver-goal', 'agent_id': 'source-worker',
+                  'generated_at': '2026-01-02T10:00:00Z', 'classification': 'state_recorded',
+                  'turn_instance_id': 'original-turn', 'json_path': '/retired/goals/solver-goal/runs/execution.json'}
+        index.write_text(json.dumps(stored) + '\n')
+        protected[index] = index.read_bytes()
+        record = {**stored, 'agent_vision': {'validation': {'decision': alias}},
+                  'vision_checkpoint': {'schema_version': 'vision_checkpoint_v0', 'decision': 'patched'},
+                  'delivery_outcome': 'outcome_progress', 'raw_tool_log': 'only in the source'}
+        artifact = runs / 'execution.json'
+        artifact.write_bytes((json.dumps(record) + '\n').encode())
+        protected[artifact] = artifact.read_bytes()
+        request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+            'workspace_goal_id': alias})
+        namespace = GoalSource.parse(raw).namespace
+        (status,) = request('/status.json?' + urlencode({'goal_id': alias}))['run_history']['goals']
+        (summary,) = status['latest_runs']
+        assert summary['goal_id'] == alias and 'agent_vision' not in summary
+        params = {'goal_id': alias, 'source_namespace': namespace, 'execution_ref': summary['execution_ref']}
+        cases.append((params, record, artifact, protected))
+
+    endpoint = '/api/chat/goal-source-execution?'
+    for (params, record, artifact, protected), (other, *_unused) in (cases, cases[::-1]):
+        url = endpoint + urlencode(params)
+        detail = request(url)
+        assert detail['goal_id'] == detail['record']['goal_id'] == 'solver-goal'
+        assert detail['execution_ref'] == params['execution_ref']
+        assert detail['record']['agent_vision'] == record['agent_vision']
+        assert detail['sha256'] == sha256(protected[artifact]).hexdigest()
+        assert 'raw_tool_log' not in detail['record'] and 'json_path' not in detail['record']
+        for field in ('source_namespace', 'execution_ref'):
+            with pytest.raises(HTTPError) as rejected:
+                request(endpoint + urlencode({**params, field: other[field]}))
+            assert rejected.value.code == 409
+        artifact.unlink()
+        with pytest.raises(HTTPError) as missing:
+            request(url)
+        assert missing.value.code == 503
+        artifact.write_text(json.dumps({**record, 'turn_instance_id': 'different-turn'}))
+        with pytest.raises(HTTPError) as wrong_run:
+            request(url)
+        assert wrong_run.value.code == 409
+        artifact.write_bytes(protected[artifact])
+        assert request(url) == detail
+        assert all(path.read_bytes() == content for path, content in protected.items())
+
+
 def test_strategy_history_rechecks_source_after_unlink_without_blocking_status(workspace, monkeypatch):
     from threading import Event
 
