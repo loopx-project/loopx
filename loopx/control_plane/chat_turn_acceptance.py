@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Sized
 from dataclasses import dataclass
 import hashlib
 import json
@@ -259,6 +259,17 @@ def plan_native_mention_ingress(**facts: object) -> dict[str, object]:
     return _as_object_dict(effect_runtime_result("chat.queue.mention", facts), label="chat mention ingress")
 
 
+def _steering_attachment_count(attachments: object) -> int:
+    """Count queued attachments for text-only steering, failing closed on unexpected shapes."""
+    if attachments is None:
+        return 0
+    if isinstance(attachments, Sequence) and not isinstance(attachments, (str, bytes, bytearray, memoryview)):
+        return len(attachments)
+    if isinstance(attachments, Sized) and len(attachments) > 0:
+        return len(attachments)
+    raise ValueError("queued turn attachments must be null or a sequence")
+
+
 def plan_queued_chat_steering(
     session: Mapping[str, object], turn: Mapping[str, object], active: Mapping[str, object] | None,
     receipt: Mapping[str, object] | None, *, ingress_id: str, operation_id: str, target: str, phase: str,
@@ -267,10 +278,7 @@ def plan_queued_chat_steering(
     session_payload = _session_projection(session) or {}
     session_payload["web_origin_only"] = web_origin_only
     turn_payload = _queued_turn_base(turn)
-    attachments = turn.get("attachments")
-    turn_payload["attachment_count"] = (
-        len(attachments) if isinstance(attachments, Sequence) and not isinstance(attachments, (str, bytes)) else 0
-    )
+    turn_payload["attachment_count"] = _steering_attachment_count(turn.get("attachments"))
     raw_result: object = effect_runtime_result("chat.queue.steer", {
         "phase": phase,
         "request": {"client_ingress_id": ingress_id, "operation_id": operation_id, "target_turn_id": target},

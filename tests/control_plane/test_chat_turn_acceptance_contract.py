@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from types import MappingProxyType
 import pytest
 
+from loopx.chat_store import ChatSessionStore
 from loopx.control_plane import chat_turn_acceptance as cta
 
 
@@ -278,3 +280,98 @@ def test_decode_rejection_errors_and_malformed_effect_results(
     )
     with pytest.raises(ValueError, match="event kind"):
         cta.plan_queued_chat_mutation({}, {"turn_id": "t1", "status": "queued"}, {})
+
+
+def test_queued_steering_preserves_nonempty_and_rejects_malformed_attachments(tmp_path: Path) -> None:
+    session_busy: dict[str, object] = {"status": "busy", "active_turn_id": "t-act"}
+    turn_active: dict[str, object] = {"turn_id": "t-act", "status": "running", "origin": "web"}
+    empty_cases: tuple[object, ...] = (None, [], ())
+    for empty in empty_cases:
+        plan = cta.plan_queued_chat_steering(
+            session_busy,
+            {"turn_id": "t-q", "status": "queued", "origin": "web", "attachments": empty},
+            turn_active,
+            None,
+            ingress_id="in-empty",
+            operation_id="op-empty",
+            target="t-act",
+            phase="prepare",
+            web_origin_only=True,
+        )
+        assert plan["action"] == "dispatch"
+
+    for nonempty in (
+        {"id": "a1"},
+        MappingProxyType({"id": "a1"}),
+        "attachment.md",
+        b"bytes",
+        {"att"},
+    ):
+        plan = cta.plan_queued_chat_steering(
+            session_busy,
+            {"turn_id": "t-q", "status": "queued", "origin": "web", "attachments": nonempty},
+            turn_active,
+            None,
+            ingress_id="in-nonempty",
+            operation_id="op-nonempty",
+            target="t-act",
+            phase="prepare",
+            web_origin_only=True,
+        )
+        assert plan == {"action": "reject", "error_code": "queue_steering_attachments_unavailable"}
+
+    malformed_cases: tuple[object, ...] = ({}, "", b"", set(), memoryview(b""), False, True, 0, 1)
+    for malformed in malformed_cases:
+        with pytest.raises(ValueError, match="queued turn attachments"):
+            cta.plan_queued_chat_steering(
+                session_busy,
+                {"turn_id": "t-q", "status": "queued", "origin": "web", "attachments": malformed},
+                turn_active,
+                None,
+                ingress_id="in-bad",
+                operation_id="op-bad",
+                target="t-act",
+                phase="prepare",
+                web_origin_only=True,
+            )
+
+    store = ChatSessionStore(tmp_path / "rt", startup_maintenance=False)
+    sess = store.create_session(
+        goal_id="g-1", agent_id="main", adapter_kind="fake", upstream_thread_id="th-1", host_surface="web"
+    )
+    sid = str(sess["session_id"])
+    active, _ = store.create_turn(sid, client_turn_id="act-1", message="active", origin="web")
+    active_path = store._turn_path(sid, str(active["turn_id"]))
+    active_raw = json.loads(active_path.read_text(encoding="utf-8"))
+    active_raw["status"] = "running"
+    active_path.write_text(json.dumps(active_raw), encoding="utf-8")
+    loaded_session = store.load_session(sid)
+    assert loaded_session is not None
+    loaded_active = store.load_turn(sid, str(active["turn_id"]))
+    assert loaded_active is not None
+
+    for idx, persisted_att in enumerate(({"id": "persisted-obj"}, "persisted.txt")):
+        queued, _ = store.create_queued_turn(
+            sid, client_turn_id=f"q-{idx}", message="queued", origin="web"
+        )
+        turn_path = store._turn_path(sid, str(queued["turn_id"]))
+        raw = json.loads(turn_path.read_text(encoding="utf-8"))
+        raw["attachments"] = persisted_att
+        turn_path.write_text(json.dumps(raw), encoding="utf-8")
+        loaded_turn = store.load_turn(sid, str(queued["turn_id"]))
+        assert loaded_turn is not None
+        decision = cta.plan_queued_chat_steering(
+            loaded_session,
+            loaded_turn,
+            loaded_active,
+            None,
+            ingress_id=f"in-fs-{idx}",
+            operation_id=f"op-fs-{idx}",
+            target=str(active["turn_id"]),
+            phase="prepare",
+            web_origin_only=True,
+        )
+        assert decision == {
+            "action": "reject",
+            "error_code": "queue_steering_attachments_unavailable",
+        }
