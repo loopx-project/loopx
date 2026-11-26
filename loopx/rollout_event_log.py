@@ -649,6 +649,33 @@ def load_rollout_events(log_path: Path, *, limit: int | None = None) -> list[dic
     return _recent_rollout_events(log_path, limit=limit)
 
 
+def iter_reverse_rollout_events_by_kind(
+    log_path: Path, *, event_kind: str
+) -> Iterator[dict[str, Any]]:
+    """Yield events matching ``event_kind`` newest-first, skipping non-matching JSON parses."""
+    marker = event_kind.encode("utf-8")
+    try:
+        handle = log_path.open("rb")
+    except OSError:
+        return
+    with handle:
+        raw_lines: Iterator[bytes] = (
+            reversed(list(handle))
+            if not handle.seekable()
+            else _reverse_rollout_lines(handle)
+        )
+        for encoded in raw_lines:
+            if marker and b"\\u" not in encoded and marker not in encoded:
+                continue
+            try:
+                line = encoded.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            event = _parse_rollout_event_line(line)
+            if event is not None and event.get("event_kind") == event_kind:
+                yield event
+
+
 class RolloutEventSnapshot:
     def __init__(self, runtime_root: Path, *, limit: int) -> None:
         if limit <= 0:

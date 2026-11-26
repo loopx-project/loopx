@@ -307,7 +307,8 @@ def project_todo_read(params: dict[str, Any]) -> dict[str, Any]:
                     raise ValueError("invalid Todo read result continuation")
                 request = {**request, "result_page": after}
     except EffectRuntimeRejected as exc:
-        raise ValueError(str(exc)) from exc
+        from .quota_selection import raise_quota_runtime_rejection
+        raise_quota_runtime_rejection(exc, cause=exc)
     if not isinstance(result, dict) or result.get("schema_version") != "todo_read_result_v0":
         raise ValueError("invalid typed Todo read result")
     if result.get("rejection"):

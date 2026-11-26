@@ -21,6 +21,17 @@ execution authority.
 
 For a new execution on an open, eligible Todo with no prior lease:
 
+Omitting `--ttl-seconds` now uses **3 hours (10800 seconds)** instead of
+45 minutes for managed `todo claim` and task-lease acquire/renew/transfer.
+Explicit values remain bounded to 1..86400 seconds. Upgrading does not extend
+existing leases or rewrite receipts. When replaying an older standalone lease
+operation, pass its recorded TTL explicitly so the changed default does not
+alter the original intent. Renew before expiry or release promptly when work ends: a longer default
+also delays recovery from an abandoned holder.
+
+未指定 `--ttl-seconds` 时，默认租约由 45 分钟改为 **3 小时**；显式时长仍为
+1..86400 秒。升级不修改已有租约或原操作回执。长任务仍须到期前续租，完成后及时释放。
+
 ```bash
 loopx --registry registry.json task-lease acquire \
   --goal-id example-goal --todo-id todo_work --owner agent-a \
@@ -34,6 +45,13 @@ physical worktree blocks acquisition. The decision scans retained records and
 ignores ineligible holders. Standalone acquisition records explicitly requested
 scopes. New managed claims keep the Todo's declared paths in the Todo detail
 and acquire without a per-path list.
+
+If the original Turn already admitted execution, expiry or release enters
+execution-loss recovery. A new claim supplies only the control-writer proof
+needed to close that original Turn without spending quota; it cannot resume
+the old execution. Re-enter the original guard, follow its closeout preview,
+and require a fresh admitted Turn before more delivery. A first claim on a
+Turn that has not admitted execution still uses ordinary preparation.
 
 ## Repository-relative scope identity
 

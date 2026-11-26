@@ -38,9 +38,7 @@ from ..agents.agent_scope_frontier import (
     build_agent_scope_frontier_payload,
     read_frontier_action,
 )
-from ..goals.goal_frontier import (
-    AUTONOMOUS_REPLAN_REQUIRED_MODE,
-)
+from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
@@ -1716,6 +1714,7 @@ def _build_quota_should_run_payload(
 
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo, project_asset=prepared.project_asset,
+            captured_local_workspace=prepared.captured_local_workspace,
         )
     apply_selected_todo_execution_preparation(
         payload,

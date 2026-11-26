@@ -74,6 +74,11 @@ def test_normalize_ttl_seconds_rejects_out_of_range(ttl: int) -> None:
     assert error.value.code == "invalid_ttl"
 
 
+def test_task_lease_default_is_three_hours_with_explicit_override() -> None:
+    assert normalize_ttl_seconds(None) == 10800
+    assert normalize_ttl_seconds(2700) == 2700
+
+
 @pytest.mark.parametrize("key", ["", "contains space", "bad$key"])
 def test_normalize_idempotency_key_rejects_non_token(key: str) -> None:
     with pytest.raises(TaskLeaseError) as error:

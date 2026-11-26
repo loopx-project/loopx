@@ -8,9 +8,7 @@ from typing import cast
 from ..coordination.coordination_state_contract import (
     TODO_CANONICAL_READ_RECORD_FIELDS,
     TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION as TODO_CANONICAL_READ_RECORD_SCHEMA_VERSION,
-    TODO_CANONICAL_REQUIRED_READ_FIELDS,
-    TODO_ITEM_SCHEMA_VERSION,
-    canonical_record_fields,
+    TODO_CANONICAL_REQUIRED_READ_FIELDS, TODO_ITEM_SCHEMA_VERSION, canonical_record_fields,
 )
 from ..goals.goal_vision_wait_projection import attach_active_vision_waits
 from ..work_items.project_asset import build_project_asset_todo_summary
@@ -19,19 +17,13 @@ from .contract import (
     TODO_TASK_CLASS_ADVANCEMENT,
     TODO_TASK_CLASS_USER_ACTION,
     build_todo_id,
-    normalize_explore_result_node_refs,
-    normalize_removed_todo_continuation_policy,
-    normalize_required_capabilities,
-    normalize_required_write_scopes,
+    normalize_explore_result_node_refs, normalize_removed_todo_continuation_policy,
+    normalize_required_capabilities, normalize_required_write_scopes,
     normalize_target_capabilities,
-    normalize_todo_action_kind,
-    normalize_todo_blocks_agent,
-    normalize_todo_bound_agent,
-    normalize_todo_capability_binding_ref,
-    normalize_todo_claimed_by,
-    normalize_todo_continuation_policy,
-    normalize_todo_decision_outcome,
-    normalize_todo_decision_scope,
+    normalize_todo_action_kind, normalize_todo_blocks_agent,
+    normalize_todo_bound_agent, normalize_todo_capability_binding_ref,
+    normalize_todo_claimed_by, normalize_todo_continuation_policy,
+    normalize_todo_decision_outcome, normalize_todo_decision_scope,
     normalize_todo_decision_scope_outcomes,
     normalize_todo_excluded_agents,
     normalize_todo_generation,
@@ -352,13 +344,16 @@ def _compact_todo_item_record(item: PayloadView) -> Payload:
     return compact
 
 
-def compact_todo_items(items: Sequence[PayloadView]) -> list[Payload]:
-    return cast(list[Payload], attach_todo_handoff_notes([_compact_todo_item_record(item) for item in items]))
+def compact_todo_items(items: Sequence[PayloadView], *, include_handoff_note: bool = True) -> list[Payload]:
+    compacts = [_compact_todo_item_record(item) for item in items]
+    if not include_handoff_note or not compacts:
+        return compacts
+    return cast(list[Payload], attach_todo_handoff_notes(compacts))
 
 
-def compact_todo_item(item: PayloadView) -> Payload:
+def compact_todo_item(item: PayloadView, *, include_handoff_note: bool = True) -> Payload:
     """Singleton adapter; whole-source consumers use the batch owner."""
-    return compact_todo_items([item])[0]
+    return compact_todo_items([item], include_handoff_note=include_handoff_note)[0]
 
 
 def canonical_todo_read_record(item: PayloadView, *, reject_unknown: bool = False) -> Payload:
@@ -440,6 +435,7 @@ def todo_item_is_deferred(item: Payload) -> bool:
 def open_todo_items(
     todos: PayloadView | None, *, limit: int = MAX_PROJECT_ASSET_TODO_ITEMS,
     text_limit: int = 220, source_keys: tuple[str, ...] = ("first_open_items", "items"),
+    include_handoff_note: bool = True,
 ) -> list[Payload]:
     if not isinstance(todos, Mapping):
         return []
@@ -464,19 +460,22 @@ def open_todo_items(
         if len(result) >= limit:
             break
     return cast(list[Payload], sorted(
-        attach_todo_handoff_notes(result), key=projection_todo_presentation_sort_key
+        attach_todo_handoff_notes(result) if include_handoff_note else result,
+        key=projection_todo_presentation_sort_key,
     ))
 
 
 def todo_lane_items(
-    todos: PayloadView | None, lane: str, *,
-    limit: int = MAX_STATUS_TODOS_PER_ROLE, text_limit: int = 220,
+    todos: PayloadView | None, lane: str, *, limit: int = MAX_STATUS_TODOS_PER_ROLE,
+    text_limit: int = 220, include_handoff_note: bool = True,
 ) -> list[Payload]:
-    return open_todo_items(todos, limit=limit, text_limit=text_limit, source_keys=(lane,))
+    return open_todo_items(
+        todos, limit=limit, text_limit=text_limit, source_keys=(lane,), include_handoff_note=include_handoff_note,
+    )
 
 
 def first_open_todo_text(todos: PayloadView | None, *, item_limit: int = 220) -> str | None:
-    items = open_todo_items(todos, limit=1, text_limit=item_limit)
+    items = open_todo_items(todos, limit=1, text_limit=item_limit, include_handoff_note=False)
     if not items:
         return None
     return str(items[0].get("text") or "") or None
@@ -502,14 +501,13 @@ def project_asset_todo_summary(
         todos, role=role, item_limit=item_limit, deferred_item_limit=deferred_item_limit,
         advancement_task_class=advancement_task_class,
         open_todo_items=lambda value, **kwargs: open_todo_items(
-            value, limit=kwargs.get("limit", item_limit),
-            text_limit=kwargs.get("text_limit", 220),
-            source_keys=kwargs.get("source_keys", ("first_open_items", "items")),
+            value, limit=kwargs.get("limit", item_limit), text_limit=kwargs.get("text_limit", 220),
+            source_keys=kwargs.get("source_keys", ("first_open_items", "items")), include_handoff_note=False,
         ),
-        compact_todo_item=compact_todo_item,
+        compact_todo_item=lambda item: compact_todo_item(item, include_handoff_note=False),
         todo_lane_items=lambda value, lane, **kwargs: todo_lane_items(
             value, lane, limit=kwargs.get("limit", MAX_STATUS_TODOS_PER_ROLE),
-            text_limit=kwargs.get("text_limit", 220),
+            text_limit=kwargs.get("text_limit", 220), include_handoff_note=False,
         ),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         todo_item_task_class=todo_item_task_class,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Literal
 
 from ..scheduler.monitor_display import (
@@ -59,7 +60,7 @@ def build_project_asset(
 def todo_summary_open_count(summary: dict[str, Any] | None) -> int:
     return _todo_summary_open_count(
         summary,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         fallback_limit=MAX_STATUS_TODOS_PER_ROLE,
     )
@@ -72,7 +73,7 @@ def todo_summary_lane_items(summary: dict[str, Any] | None, lane: str) -> list[d
 def attention_item_is_monitor_quiet_display_candidate(item: dict[str, Any]) -> bool:
     return _attention_item_is_monitor_quiet_display_candidate(
         item,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         fallback_limit=MAX_STATUS_TODOS_PER_ROLE,
     )
