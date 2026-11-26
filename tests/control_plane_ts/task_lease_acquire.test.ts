@@ -6,9 +6,17 @@ import test from "node:test";
 
 import {
   executeTaskLeaseAcquire,
+  normalizeTtl,
   TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION,
 } from "../../loopx/control_plane/work_items/task_lease_acquire.ts";
 import {TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
+
+test("omitted task lease TTL is three hours while explicit bounds remain unchanged", () => {
+  assert.equal(normalizeTtl(undefined), 10800);
+  assert.equal(normalizeTtl(null), 10800);
+  for (const seconds of [1, 600, 2700, 86400]) assert.equal(normalizeTtl(seconds), seconds);
+  for (const seconds of [0, -1, 86401]) assert.throws(() => normalizeTtl(seconds));
+});
 
 function request(runtimeRoot: string, schemaVersion: string) {
   return {

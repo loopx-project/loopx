@@ -671,7 +671,7 @@ export function reduceUnsettledHostTurnRecovery(value: unknown): JsonObject {
     if (writerRequired) obligation.reason = "the original execution lease is fenced and the current control-writer proof is unavailable";
     obligation.recommended_action = executionLoss.current_control_writer_active === true
       ? "Use the original Turn and current control-writer proof for execution-loss closeout without debit. Verify the closeout before fresh work."
-      : "The original execution lease generation was replaced. Obtain authorized control-writer proof for the same Todo before execution-loss closeout. The replacement cannot resume the original business execution.";
+      : "The original execution lease is no longer available. Obtain authorized control-writer proof for the same Todo before execution-loss closeout. The replacement cannot resume the original business execution.";
   }
   return {
     schema_version: UNSETTLED_HOST_TURN_RECOVERY_RESULT_SCHEMA,

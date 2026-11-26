@@ -23,7 +23,7 @@ from .local_lease_record import (
     read_lease as read_lease,
 )
 
-DEFAULT_TASK_LEASE_TTL_SECONDS = 45 * 60
+DEFAULT_TASK_LEASE_TTL_SECONDS = 3 * 60 * 60
 MAX_TASK_LEASE_TTL_SECONDS = 24 * 60 * 60
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:@/-]{1,160}$")
 

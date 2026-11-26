@@ -783,3 +783,31 @@ def test_original_turn_reentry_projects_execution_loss_without_repeating_work(
     assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
     assert _receipt_lines(context) == before
     _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_lease_loss_claims_only_for_closeout(tmp_path, monkeypatch, capsys, provider):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False, replace=False)
+    original = context["original_lease"]
+    code, released = context["cli"]("task-lease", "release", "--goal-id", context["goal_id"],
+        "--todo-id", context["todo"], "--owner", OWNER, "--idempotency-key", original["idempotency_key"],
+        "--expected-version", str(original["version"]))
+    assert code == 0, released
+    code, recovery = context["cli"](*_guard_args(context))
+    assert code == 0, recovery
+    assert recovery.get("unsettled_host_turn_recovery", {}).get("repair") == "execution_loss_closeout"
+    assert recovery["normal_delivery_allowed"] is False
+    channel = recovery["interaction_contract"]["cli_channel"]
+    claims = [shlex.split(command) for command in channel["next_cli_actions"] if "todo claim" in command]
+    assert len(claims) == 1
+    code, claimed = context["cli"](*claims[0][claims[0].index("todo"):])
+    assert code == 0, claimed
+    code, ready = context["cli"](*_guard_args(context))
+    assert code == 0, ready
+    assert ready["normal_delivery_allowed"] is False
+    preview = _projected_preview_args(ready["interaction_contract"]["cli_channel"], _lease(context))
+    code, result = context["cli"](*preview)
+    assert code == 0 and result["would_close_without_spend"], result
+    code, closed = context["cli"](*preview[:-1])
+    assert code == 0 and closed["settlement_progress"]["no_spend"], closed
+    _assert_no_completion_or_debit(context)
