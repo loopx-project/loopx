@@ -2,769 +2,242 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack, contextmanager
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
-from ..agent_registry import registered_agent_ids_for_goal
-from ..chat import apply_todo_review_preview, build_todo_review_preview
-from ..chat_store import ChatSessionStore, TERMINAL_TURN_STATES
-from ..file_lock import exclusive_cross_runtime_file_lock
-from ..control_plane.goals.activation import goal_is_stopped
-from ..control_plane.coordination.shadow_management import shadow_maintenance_lock_target
-from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
-from ..control_plane.todos.completion_validation import COMPLETION_VALIDATION_IN_PROGRESS
-from ..control_plane.coordination.local_authority import (
-    LocalCoordinationAuthorityUnavailable, read_canonical_todos_if_promoted,
+from .todo_action_contracts import (
+    ChatTodoActionHost,
+    TodoActionServiceSelf,
+    TodoSessionStoreProtocol,
+    decision_readback,
+    reviewed_terminal_options,
+    reviewed_update_options,
+    task_turn_dispatched,
+    todo_checkpoints,
 )
-from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
-from ..control_plane.work_items.task_lease import lease_is_active
-from .todo_source import ChatTodoSource, ChatTodoSourceChanged, resolve_chat_todo_source, task_start_claim_operation_id
+from .todo_action_create import apply_todo_create
+from .todo_action_tasks import (
+    apply_created_todo_assignment,
+    confirmed_task_commit,
+    pending_applied_task_receipt,
+    project_task_dispatch as project_task_dispatch_record,
+    read_confirmed_task,
+    read_task_start,
+    recover_applied_task,
+    start_confirmed_task,
+)
+from .todo_action_updates import (
+    apply_reviewed_todo_edit,
+    apply_todo_update,
+    canonical_update_basis,
+    run_gate_resolve,
+    run_todo_update,
+)
+from .todo_source import ChatTodoSource
 
 
-def _decision_readback(result: dict[str, Any]) -> dict[str, Any]:
+def _decision_readback(result: Mapping[str, object]) -> dict[str, object]:
     """Carry the canonical outcome and dependent effect, never a local guess."""
-    resume = result.get("unblock_resume")
-    return {
-        "decision_outcome": result.get("decision_outcome"),
-        "unblock_resume_state": resume.get("state") if isinstance(resume, dict) else None,
-    }
+    return decision_readback(result)
 
 
 class ChatTodoActionMixin:
     """Keep Todo preview/apply parity separate from general orchestration."""
 
     @staticmethod
-    def _todo_checkpoints(proposal: dict[str, Any]) -> dict[str, Any]:
-        checkpoint = proposal.get("checkpoint")
-        steps = checkpoint.get("steps") if isinstance(checkpoint, dict) else None
-        return steps if isinstance(steps, dict) else {}
+    def _todo_checkpoints(proposal: Mapping[str, object]) -> dict[str, object]:
+        return todo_checkpoints(proposal)
 
     def _apply_todo_create(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any],
-    ) -> dict[str, Any]:
-        from ..chat_actions import ProtectedActionGate, _opaque
-
-        goal_id = str(parameters["goal_id"])
-        source = resolve_chat_todo_source(self, goal_id)
-        agent_id = parameters.get("agent_id")
-        start_execution = parameters.get("start_execution") is True
-        steps = self._todo_checkpoints(proposal)
-        assignment_completed = isinstance(steps.get("todo_assigned"), dict)
-        todo_step = steps.get("todo_created")
-        if isinstance(todo_step, dict) and todo_step.get("todo_id"):
-            todo_id = _opaque(todo_step.get("todo_id"), field="todo_id")
-            canonical_receipt = todo_step.get("canonical_receipt")
-            if not isinstance(canonical_receipt, dict):
-                raise ValueError("Todo creation checkpoint is malformed")
-            binding = todo_step.get("source")
-            current_fingerprint = str(
-                proposal.get("expected_state_fingerprint") or ""
-            )
-            if "source" not in todo_step:
-                try:
-                    assignment = steps.get("todo_assigned")
-                    if isinstance(assignment, dict) and (not agent_id or assignment.get("todo_id") != todo_id
-                            or assignment.get("agent_id") != str(agent_id)):
-                        raise ChatTodoSourceChanged("The saved assignment does not identify this Task and Agent.")
-                    authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-                    if start_execution and agent_id and authority:
-                        # A committed claim can predate the corresponding Chat checkpoint.
-                        claim_completed = source.has_managed_task_claim(
-                            proposal_id, todo_id, str(agent_id), authority["source_authority"],
-                        )
-                        if assignment_completed and not claim_completed:
-                            # Older releases submitted the Turn after a plain assignment.
-                            _, turn = self._read_confirmed_task(proposal_id, parameters, todo_id, steps)
-                            if turn is None or not self._task_turn_dispatched(turn):
-                                raise ChatTodoSourceChanged("The saved Task start claim is unavailable.")
-                        assignment_completed = assignment_completed or claim_completed
-                    binding = source.recover_legacy_creation(
-                        todo_id=todo_id, preview_id=current_fingerprint, receipt=canonical_receipt, authority=authority,
-                        assignment_pending=bool(agent_id) and not assignment_completed,
-                    )
-                    if not assignment_completed and agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
-                        raise ChatTodoSourceChanged("The selected Agent is no longer registered for the Goal")
-                except (ChatTodoSourceChanged, LocalCoordinationAuthorityUnavailable) as error:
-                    summary = f"The original confirmation recorded Todo {todo_id}. Its assignment source could not be verified."
-                    next_action = "Restore the original Goal source and retry, or review the assignment from the existing Todo."
-                    current = error.verified_todo if isinstance(error, ChatTodoSourceChanged) else None
-                    if current is not None:
-                        assignee = current.get("claimed_by")
-                        assignment_state = f"Its current assignee is {assignee}." if assignee else "It is currently unassigned."
-                        summary = (
-                            f"The original confirmation created Todo {todo_id}. {assignment_state} "
-                            "The original assignment could not be verified."
-                        )
-                        next_action = "Open the existing Todo to review its current assignment."
-                    raise ProtectedActionGate("todo.create", gate={
-                        "kind": "canonical_authority_required",
-                        "summary": summary,
-                        "next_action": next_action,
-                    }) from error
-                self.store.save_checkpoint(proposal_id, step="todo_created", receipt={**todo_step, "source": binding})
-            if not isinstance(binding, dict):
-                raise ValueError("Todo creation checkpoint source is malformed")
-            source.require_review(binding)
-        else:
-            if agent_id and agent_id not in registered_agent_ids_for_goal(source.goal):
-                raise ValueError("the selected Agent is no longer registered for this Goal")
-            authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-            if not isinstance(authority.get("store_identity"), str):
-                raise ValueError("The Goal's Todo authority identity is unavailable")
-            current = build_todo_review_preview(
-                **source.writer_scope(),
-                goal_id=goal_id,
-                text=str(parameters["text"]),
-                priority=parameters.get("priority"),
-                source_identity=source.source_identity,
-            )
-            current_fingerprint = str(current["preview_id"])
-            if current_fingerprint != proposal.get("expected_state_fingerprint"):
-                stale = self.store.apply(
-                    proposal_id,
-                    current_state_fingerprint=current_fingerprint,
-                    receipt={},
-                )
-                return {"proposal": stale, "turn": None}
-            applied = apply_todo_review_preview(
-                **source.writer_scope(),
-                goal_id=goal_id,
-                text=str(parameters["text"]),
-                priority=parameters.get("priority"),
-                preview_id=current_fingerprint,
-                expected_registry_sha256=source.registry_sha256,
-                routing_registry_witness=source.routing_registry_witness,
-                source_identity=source.source_identity,
-                return_authority_write=True,
-            )
-            canonical_receipt = applied["receipt"]
-            todo_id = _opaque(canonical_receipt["todo_id"], field="todo_id")
-            binding = {
-                **applied["authority_write"],
-                "source_identity": source.source_identity,
-                "store_identity": authority["store_identity"],
-                "registry_sha256": source.registry_sha256,
-            }
-            self.store.save_checkpoint(
-                proposal_id,
-                step="todo_created",
-                receipt={
-                    "todo_id": todo_id,
-                    "canonical_receipt": canonical_receipt,
-                    "source": binding,
-                },
-            )
-        if agent_id and not start_execution and not assignment_completed:
-            def apply_assignment(current_source: ChatTodoSource, revision: str) -> dict[str, Any]:
-                return update_goal_todo(
-                    **current_source.writer_scope(),
-                    goal_id=goal_id,
-                    todo_id=todo_id,
-                    claimed_by=str(agent_id),
-                    agent_id=str(agent_id),
-                    authority_reason="owner-confirmed typed Chat action",
-                    update_operation_id=f"chat-assign:{proposal_id}",
-                    update_expected_provider_revision=revision,
-                    update_expected_registry_sha256=current_source.registry_sha256,
-                    routing_registry_witness=current_source.routing_registry_witness,
-                    dry_run=False,
-                )
-
-            self._apply_created_todo_assignment(
-                proposal_id, goal_id=goal_id, todo_id=todo_id, binding=binding, steps=steps, apply=apply_assignment,
-            )
-            self.store.save_checkpoint(
-                proposal_id,
-                step="todo_assigned",
-                receipt={"todo_id": todo_id, "agent_id": str(agent_id)},
-            )
-        receipt = {
-            "receipt_id": str(canonical_receipt["receipt_id"]),
-            "outcome": str(canonical_receipt["outcome"]),
-            "projection_verified": True,
-            "resource_ids": {
-                "goal_id": str(canonical_receipt["goal_id"]),
-                "todo_id": todo_id,
-                **({"agent_id": str(agent_id)} if agent_id else {}),
-            },
-            "canonical_receipt": canonical_receipt,
-        }
-        turn_result = None
-        if start_execution:
-            source = resolve_chat_todo_source(self, goal_id)
-            source.require_review(binding)
-            turn_result = self._start_confirmed_task(
-                proposal_id, parameters, todo_id, steps, source=source, binding=binding,
-            )
-            receipt["resource_ids"].update(
-                {"session_id": turn_result["session_id"], "turn_id": turn_result["turn_id"]}
-            )
-            receipt["outcome"] = "task_execution_started"
-        stored = self.store.apply(
-            proposal_id,
-            current_state_fingerprint=current_fingerprint,
-            receipt=receipt,
-        )
-        return {"proposal": stored, "turn": turn_result}
+        self: ChatTodoActionHost,
+        proposal_id: str,
+        proposal: Mapping[str, object],
+        parameters: Mapping[str, object],
+    ) -> dict[str, object]:
+        return apply_todo_create(self, proposal_id, proposal, parameters)
 
     def _apply_created_todo_assignment(
-        self, proposal_id: str, *, goal_id: str, todo_id: str, binding: dict[str, Any],
-        steps: dict[str, Any], apply: Callable[[ChatTodoSource, str], dict[str, Any]],
-    ) -> dict[str, Any]:
-        def observe() -> tuple[ChatTodoSource, dict[str, Any]]:
-            source = resolve_chat_todo_source(self, goal_id)
-            source.require_review(binding)
-            authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-            source.require_created_todo(binding, authority)
-            return source, authority
-
-        source, _ = observe()
-        basis = steps.get("todo_assignment_basis", binding)
-        try:
-            return apply(source, basis["provider_revision"])
-        except LocalCoordinationAuthorityUnavailable as error:
-            if error.code != "provider_revision_mismatch":
-                raise
-
-        # Only a definitive stale-revision rejection permits a new CAS basis.
-        # Preserve it before dispatch so a lost response replays the same intent.
-        source, authority = observe()
-        revision = source.current_assignment_revision(binding, authority, todo_id)
-        self.store.save_checkpoint(proposal_id, step="todo_assignment_basis", receipt={"provider_revision": revision})
-        return apply(source, revision)
+        self: ChatTodoActionHost,
+        proposal_id: str,
+        *,
+        goal_id: str,
+        todo_id: str,
+        binding: Mapping[str, object],
+        steps: Mapping[str, object],
+        apply: Callable[[ChatTodoSource, str], dict[str, object]],
+    ) -> dict[str, object]:
+        return apply_created_todo_assignment(
+            self,
+            proposal_id,
+            goal_id=goal_id,
+            todo_id=todo_id,
+            binding=binding,
+            steps=steps,
+            apply_mutation=apply,
+        )
 
     @contextmanager
     def _confirmed_task_commit(
-        self, *, goal_id: str, todo_id: str, endpoint: str, project: Path,
-        claim: dict[str, Any], source: ChatTodoSource, binding: dict[str, Any],
+        self: ChatTodoActionHost,
+        *,
+        goal_id: str,
+        todo_id: str,
+        endpoint: str,
+        project: Path,
+        claim: Mapping[str, object],
+        source: ChatTodoSource,
+        binding: Mapping[str, object],
     ) -> Iterator[None]:
         """Fence acceptance with the same registry and canonical writers as Stop and Todo edits."""
-        invoked = self.registry_path.resolve()
-        runtime = source.runtime_root
-        targets = (shadow_maintenance_lock_target(runtime, goal_id), source.registry_path)
-        if source.registry_path != invoked:
-            targets += (invoked,)
-        with ExitStack() as locks:
-            for target in targets:
-                locks.enter_context(exclusive_cross_runtime_file_lock(target, operation="confirm_task_admission"))
-            current_source = resolve_chat_todo_source(self, goal_id)
-            current_source.require_review(binding)
-            goal = current_source.goal
-            if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-                raise ValueError("The Task's Goal is no longer active")
-            if Path(str(goal.get("repo") or ".")).expanduser().resolve() != project:
-                raise ValueError("The reviewed Task's project root changed")
-            owner = claim["claimed_by"]
-            if self._resolve_goal_agent(goal_id, endpoint, goal=goal) != owner:
-                raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
-            authority = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id, include_leases=True)
-            current_source.require_created_todo(binding, authority)
-            todo = next((row for row in authority["todos"] if row["todo_id"] == todo_id), None)
-            if (todo is None or todo.get("role") != "agent" or todo.get("status") != "open"
-                    or todo.get("claimed_by") != owner or authority["handoff_mode"] != claim["handoff_mode"]):
-                raise ValueError("The reviewed Task assignment changed before launch")
-            if authority["handoff_mode"] == "hard_lease":
-                lease = next((row for row in authority["leases"] if row["todo_id"] == todo_id), None)
-                original = claim.get("lease")
-                if (not lease or not isinstance(original, dict) or not lease_is_active(lease)
-                        or any(lease.get(key) != original.get(key) for key in ("owner", "idempotency_key", "lease_epoch"))):
-                    raise ValueError("The reviewed Task execution lease changed before launch")
+        with confirmed_task_commit(
+            self,
+            goal_id=goal_id,
+            todo_id=todo_id,
+            endpoint=endpoint,
+            project=project,
+            claim=claim,
+            source=source,
+            binding=binding,
+        ):
             yield
 
     @staticmethod
     def _read_task_start(
-        chat: ChatSessionStore, *, goal_id: str, agent_id: str, channel_id: str,
-        client_turn_id: str, checkpoint: dict[str, Any] | None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        from ..chat_actions import _opaque
-
-        if checkpoint is not None:
-            sid = _opaque(checkpoint.get("session_id"), field="session_id")
-            session = chat.load_session(sid)
-            if (session is None or session.get("goal_id") != goal_id
-                    or session.get("agent_id") != agent_id or session.get("channel_id") != channel_id):
-                raise ValueError("The original Task Session is unavailable")
-            return session, chat.turn_for_client(sid, client_turn_id)
-
-        # A process may have persisted the Session before the proposal's
-        # checkpoint. Include closed Sessions so retry cannot replace one.
-        sessions = chat.session_candidates(goal_id=goal_id, agent_id=agent_id, channel_id=channel_id)
-        matches = [
-            (session, turn) for session in sessions
-            if (turn := chat.turn_for_client(session["session_id"], client_turn_id)) is not None
-        ]
-        if len(matches) == 1:
-            return matches[0]
-        if len(sessions) > 1:
-            raise ValueError("The original Task Session is ambiguous")
-        return (sessions[0] if sessions else None), None
-
-    def _pending_applied_task_receipt(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
-        """Find the exact accepted Turn whose worker has yet to start."""
-        parameters = proposal.get("normalized_parameters") or {}
-        receipt = proposal.get("receipt") or {}
-        if (proposal.get("status") != "applied" or proposal.get("action_kind") != "todo.create"
-                or parameters.get("start_execution") is not True
-                or proposal.get("permission_classification") != "durable_write"
-                or (proposal.get("context") or {}).get("binding_id")
-                or receipt.get("outcome") != "task_execution_started"
-                or receipt.get("projection_verified") is not True):
-            return None
-        resources = receipt.get("resource_ids")
-        canonical = receipt.get("canonical_receipt")
-        if not isinstance(resources, dict) or not isinstance(canonical, dict):
-            return None
-        goal_id = parameters.get("goal_id")
-        todo_id, sid, tid = (resources.get(key) for key in ("todo_id", "session_id", "turn_id"))
-        if (not all(isinstance(value, str) and value for value in (goal_id, todo_id, sid, tid))
-                or resources.get("goal_id") != goal_id or canonical.get("goal_id") != goal_id
-                or canonical.get("todo_id") != todo_id or canonical.get("status") != "applied"
-                or canonical.get("preview_id") != proposal.get("expected_state_fingerprint")):
-            return None
-        chat = getattr(self.runtime_controller, "store", None) or self.chat_store
-        if chat is None:
-            return None
-        try:
-            turn = chat.load_turn(sid, tid)
-        except (OSError, ValueError):
-            return None
-        if (turn and turn.get("session_id") == sid and turn.get("turn_id") == tid
-                and turn.get("client_turn_id") == f"task-start-{proposal['proposal_id']}"
-                and turn.get("status") == "queued" and not (turn.get("started_at") or turn.get("upstream_turn_id"))):
-            return resources
-        return None
-
-    def project_task_dispatch(self, proposal: dict[str, Any]) -> dict[str, Any]:
-        if self._pending_applied_task_receipt(proposal) is not None:
-            return {**proposal, "task_execution_dispatch_pending": True}
-        return proposal
-
-    def _recover_applied_task(self, proposal: dict[str, Any]) -> dict[str, Any] | None:
-        execution = self._pending_applied_task_receipt(proposal)
-        if execution is None:
-            return self._turn_from_receipt(proposal.get("receipt"))
-
-        parameters = proposal["normalized_parameters"]
-        goal_id, todo_id = parameters["goal_id"], execution["todo_id"]
-        source = resolve_chat_todo_source(self, goal_id)
-        steps = self._todo_checkpoints(proposal)
-        created = steps.get("todo_created", {})
-        canonical = proposal["receipt"]["canonical_receipt"]
-        if not isinstance(created, dict) or (created and (
-            created.get("todo_id") != todo_id or created.get("canonical_receipt") != canonical
-        )):
-            raise ValueError("The accepted Task's creation checkpoint changed")
-        authority = read_canonical_todos_if_promoted(runtime_root=source.runtime_root, goal_id=goal_id)
-        if "source" in created:
-            binding = created["source"]
-            if not isinstance(binding, dict):
-                raise ValueError("Todo creation checkpoint source is malformed")
-        else:
-            binding = source.recover_legacy_creation(
-                todo_id=todo_id, preview_id=proposal["expected_state_fingerprint"], receipt=canonical,
-                authority=authority, assignment_pending=False,
-            )
-        source.require_created_todo(binding, authority)
-        if not source.has_managed_task_claim(proposal["proposal_id"], todo_id, parameters["agent_id"],
-                                             authority["source_authority"]):
-            raise ChatTodoSourceChanged("The saved Task start claim is unavailable.")
-        return self._start_confirmed_task(
-            proposal["proposal_id"], parameters, todo_id, steps, source=source, binding=binding,
-            applied_execution=execution,
+        chat: TodoSessionStoreProtocol,
+        *,
+        goal_id: str,
+        agent_id: str,
+        channel_id: str,
+        client_turn_id: str,
+        checkpoint: Mapping[str, object] | None,
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        return read_task_start(
+            chat,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            channel_id=channel_id,
+            client_turn_id=client_turn_id,
+            checkpoint=checkpoint,
         )
+
+    def _pending_applied_task_receipt(
+        self: ChatTodoActionHost,
+        proposal: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        """Find the exact accepted Turn whose worker has yet to start."""
+        return pending_applied_task_receipt(self, proposal)
+
+    def project_task_dispatch(
+        self: ChatTodoActionHost,
+        proposal: Mapping[str, object],
+    ) -> dict[str, object]:
+        return project_task_dispatch_record(self, proposal)
+
+    def _recover_applied_task(
+        self: ChatTodoActionHost,
+        proposal: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        return recover_applied_task(self, proposal)
 
     def _read_confirmed_task(
-        self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
-        *, execution: dict[str, Any] | None = None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        controller = self.runtime_controller
-        chat = getattr(controller, "store", None) or self.chat_store
-        if chat is None:
-            raise ValueError("Chat Runtime Controller is unavailable")
-        if execution is None:
-            execution = steps.get("execution_started")
-        session, turn = self._read_task_start(
-            chat, goal_id=str(parameters["goal_id"]),
-            agent_id=str(parameters.get("endpoint_id") or parameters["agent_id"]), channel_id=f"task.{todo_id}",
-            client_turn_id=f"task-start-{proposal_id}",
-            checkpoint=execution if execution is not None else steps.get("task_session_opened"),
-        )
-        if execution is not None and (turn is None or turn["turn_id"] != execution.get("turn_id")):
-            raise ValueError("The original Task Turn is unavailable")
-        if turn is not None and turn.get("message") != str(parameters["text"]):
-            raise ValueError("The original Task Turn request changed")
-        return session, turn
+        self: ChatTodoActionHost,
+        proposal_id: str,
+        parameters: Mapping[str, object],
+        todo_id: str,
+        steps: Mapping[str, object],
+        *,
+        execution: Mapping[str, object] | None = None,
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None]:
+        return read_confirmed_task(self, proposal_id, parameters, todo_id, steps, execution=execution)
 
     @staticmethod
-    def _task_turn_dispatched(turn: dict[str, Any]) -> bool:
-        return turn.get("status") in TERMINAL_TURN_STATES or bool(turn.get("started_at") or turn.get("upstream_turn_id"))
+    def _task_turn_dispatched(turn: Mapping[str, object]) -> bool:
+        return task_turn_dispatched(turn)
 
     def _start_confirmed_task(
-        self, proposal_id: str, parameters: dict[str, Any], todo_id: str, steps: dict[str, Any],
-        *, source: ChatTodoSource, binding: dict[str, Any], applied_execution: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        from ..chat_actions import _opaque
-
-        controller = self.runtime_controller
-        goal_id = str(parameters["goal_id"])
-        owner = str(parameters["agent_id"])
-        endpoint = str(parameters.get("endpoint_id") or owner)
-        message = str(parameters["text"])
-        channel_id = f"task.{todo_id}"
-        client_turn_id = f"task-start-{proposal_id}"
-        opened = steps.get("task_session_opened")
-        execution = applied_execution if applied_execution is not None else steps.get("execution_started")
-        session, turn = self._read_confirmed_task(proposal_id, parameters, todo_id, steps, execution=execution)
-
-        # An already dispatched or terminal Turn is readback. Only work that
-        # still needs dispatch passes through the current Goal and claim gates.
-        created = False
-        if turn is None or not self._task_turn_dispatched(turn):
-            if controller is None:
-                raise ValueError("Chat Runtime Controller is unavailable")
-            if session is not None and session.get("status") == "closed":
-                raise ValueError("The original Task Session is closed")
-            goal = source.goal
-            if goal.get("status", "active") not in {"active", "ready"} or goal_is_stopped(goal):
-                raise ValueError("The Task's Goal is no longer active")
-            project = Path(str(goal.get("repo") or ".")).expanduser().resolve()
-            if not project.is_dir():
-                raise ValueError("the Goal project root is unavailable")
-            self._agent_eligibility(endpoint, project=project)
-            if parameters.get("endpoint_id") and self._resolve_goal_agent(goal_id, endpoint, goal=goal) != owner:
-                raise ValueError("The reviewed Agent endpoint now belongs to another Goal Agent")
-            claim_args: dict[str, Any] = {
-                "goal_id": goal_id, "todo_id": todo_id,
-                "claimed_by": owner, "agent_id": owner, "claim_only": True, "manage_execution": True,
-            }
-
-            def apply_claim(current_source: ChatTodoSource, revision: str) -> dict[str, Any]:
-                return update_goal_todo(
-                    **current_source.writer_scope(), **claim_args,
-                    claim_operation_id=task_start_claim_operation_id(proposal_id), dry_run=False,
-                    claim_expected_provider_revision=revision,
-                    claim_expected_registry_sha256=current_source.registry_sha256,
-                    routing_registry_witness=current_source.routing_registry_witness,
-                )
-
-            if applied_execution is None:
-                claim = self._apply_created_todo_assignment(
-                    proposal_id, goal_id=goal_id, todo_id=todo_id, binding=binding, steps=steps, apply=apply_claim,
-                )
-            else:
-                # Replay the accepted claim using the same intent. A stale
-                # basis cannot authorize another claim on an applied card.
-                claim = apply_claim(source, steps.get("todo_assignment_basis", binding)["provider_revision"])
-            if claim["handoff_mode"] == "soft_claim" and claim["status"] in {"recovered", "replayed"}:
-                # A past soft claim still needs a read-only current-owner check.
-                if update_goal_todo(**source.writer_scope(), **claim_args, dry_run=True)["changed"]:
-                    raise ValueError("The reviewed Task assignment changed before launch")
-            if applied_execution is None and not isinstance(steps.get("todo_assigned"), dict):
-                self.store.save_checkpoint(
-                    proposal_id, step="todo_assigned", receipt={"todo_id": todo_id, "agent_id": owner},
-                )
-            if session is None:
-                session, _ = controller.open_session(
-                    goal_id=goal_id, agent_id=endpoint, work_dir=project, objective=message,
-                    mode="resume_latest", channel_id=channel_id, agent_goal_id=goal_id,
-                )
-            sid = _opaque(session.get("session_id"), field="session_id")
-            if opened is None and execution is None:
-                self.store.save_checkpoint(proposal_id, step="task_session_opened", receipt={"session_id": sid})
-            turn, created = controller.submit_turn(
-                session_id=sid, client_turn_id=client_turn_id, message=message, work_dir=project, objective=message,
-                _goal_commit=lambda: self._confirmed_task_commit(
-                    goal_id=goal_id, todo_id=todo_id, endpoint=endpoint, project=project, claim=claim,
-                    source=source, binding=binding,
-                ),
-            )
-
-        identity = {
-            "session_id": _opaque(turn.get("session_id"), field="session_id"),
-            "turn_id": _opaque(turn.get("turn_id"), field="turn_id"),
-        }
-        if execution is None:
-            self.store.save_checkpoint(proposal_id, step="execution_started", receipt=identity)
-        return {**identity, "status": str(turn.get("status") or "accepted"), "created": created}
+        self: ChatTodoActionHost,
+        proposal_id: str,
+        parameters: Mapping[str, object],
+        todo_id: str,
+        steps: Mapping[str, object],
+        *,
+        source: ChatTodoSource,
+        binding: Mapping[str, object],
+        applied_execution: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        return start_confirmed_task(
+            self,
+            proposal_id,
+            parameters,
+            todo_id,
+            steps,
+            source=source,
+            binding=binding,
+            applied_execution=applied_execution,
+        )
 
     def _run_todo_update(
-        self, parameters: dict[str, Any], *, dry_run: bool,
-        basis: dict[str, Any] | None = None, operation_id: str | None = None,
-    ) -> dict[str, Any]:
-        goal_id = str(parameters["goal_id"])
-        operation = str(parameters.get("operation") or "edit")
-        reviewed = parameters.get("review_basis")
-        if dry_run and reviewed is not None and (
-                basis is None or any(basis.get(key) != value for key, value in reviewed.items())):
-            raise ValueError("The Task source changed. Reload its complete requirements before saving.")
-        source = resolve_chat_todo_source(self, goal_id)
-        if basis is not None:
-            source.require_review(basis)
-        # Transport only caller-supplied proof. The terminal owner revalidates
-        # the execution; a lease read or a Todo claim is never substitute proof.
-        proof = {key: parameters[key] for key in (
-            "task_lease_idempotency_key", "task_lease_expected_version",
-        ) if key in parameters} if operation == "complete" else {}
-        if operation == "complete" and (basis is None or
-                basis.get("schema_version") == "loopx_chat_canonical_terminal_basis_v0"):
-            return complete_goal_todo(
-                **source.writer_scope(),
-                routing_registry_witness=source.routing_registry_witness,
-                goal_id=goal_id,
-                todo_id=str(parameters["todo_id"]),
-                note=parameters.get("note"),
-                no_followup=bool(parameters.get("no_followup", True)),
-                successor_todo_ids=parameters.get("successor_todo_ids"),
-                agent_id=parameters.get("agent_id"),
-                authority_reason="owner-confirmed typed Chat action",
-                dry_run=dry_run,
-                **proof,
-                **self._reviewed_terminal_options(basis, operation_id),
-            )
-        status = parameters.get("status")
-        if operation == "complete":
-            status = "done"
-        elif operation == "block":
-            status = "blocked"
-        elif operation == "defer":
-            status = "deferred"
-        return update_goal_todo(
-            **source.writer_scope(),
-            routing_registry_witness=source.routing_registry_witness,
-            goal_id=goal_id,
-            todo_id=str(parameters["todo_id"]),
-            text=parameters.get("text"),
-            priority=parameters.get("priority"),
-            clear_priority=(parameters.get("clear_priority", False) or
-                            ("priority" in parameters and parameters["priority"] is None)),
-            status=status,
-            **({"role": "user", "no_followup": bool(parameters.get("no_followup", True))}
-               if operation == "complete" else {}),
-            # The established block control uses note as its pause reason;
-            # preserve the task's existing notes. Explicit ordinary note edits
-            # and lifecycle effects still share the canonical transaction.
-            note=(parameters.get("note") if operation != "block" or basis is None else None),
-            reason=(parameters.get("note") or "Owner requested deferral") if operation in {"block", "defer"} else (
-                parameters.get("note") or "Owner explicitly requested task resumption" if status == "open" else None),
-            claimed_by=(
-                parameters.get("agent_id") if operation == "reassign" else None
-            ),
-            resume_when=parameters.get("resume_when"),
-            clear_resume_when=(operation == "block" or (status == "open" and not parameters.get("resume_when"))) and basis is not None,
-            successor_todo_ids=parameters.get("successor_todo_ids"),
-            agent_id=parameters.get("agent_id"),
-            authority_reason="owner-confirmed typed Chat action",
-            dry_run=dry_run,
-            **proof,
-            **self._reviewed_update_options(basis, operation_id),
-        )
+        self: ChatTodoActionHost,
+        parameters: dict[str, object],
+        *,
+        dry_run: bool,
+        basis: dict[str, object] | None = None,
+        operation_id: str | None = None,
+    ) -> dict[str, object]:
+        return run_todo_update(self, parameters, dry_run=dry_run, basis=basis, operation_id=operation_id)
 
     def _run_gate_resolve(
-        self, parameters: dict[str, Any], *, dry_run: bool,
-        basis: dict[str, Any] | None = None, operation_id: str | None = None,
-    ) -> dict[str, Any]:
-        # The typed User completion owner decides whether this source may carry
-        # the outcome and what it does to the dependent; the App only records it.
-        goal_id = str(parameters["goal_id"])
-        source = resolve_chat_todo_source(self, goal_id)
-        if basis is not None:
-            source.require_review(basis)
-        return complete_goal_todo(
-            **source.writer_scope(),
-            routing_registry_witness=source.routing_registry_witness,
-            goal_id=goal_id,
-            todo_id=str(parameters["todo_id"]),
-            role="user",
-            decision_outcome=str(parameters["decision"]),
-            evidence=parameters.get("note"),
-            no_followup=True,
-            agent_id=parameters.get("agent_id"),
-            authority_reason="owner-confirmed typed Chat decision",
-            dry_run=dry_run,
-            **self._reviewed_terminal_options(basis, operation_id),
-        )
+        self: ChatTodoActionHost,
+        parameters: dict[str, object],
+        *,
+        dry_run: bool,
+        basis: dict[str, object] | None = None,
+        operation_id: str | None = None,
+    ) -> dict[str, object]:
+        return run_gate_resolve(self, parameters, dry_run=dry_run, basis=basis, operation_id=operation_id)
 
     @staticmethod
     def _reviewed_terminal_options(
-        basis: dict[str, Any] | None, operation_id: str | None,
-    ) -> dict[str, Any]:
-        if basis is None:
-            return {}
-        if basis.get("schema_version") != "loopx_chat_canonical_terminal_basis_v0":
-            raise ValueError("unsupported canonical terminal review basis; regenerate preview")
-        return {"completion_turn_key": operation_id, "terminal_review_basis": {
-            "provider_revision": basis["provider_revision"], "registry_sha256": basis["registry_sha256"],
-        }}
+        basis: Mapping[str, object] | None,
+        operation_id: str | None,
+    ) -> dict[str, object]:
+        return reviewed_terminal_options(basis, operation_id)
 
     @staticmethod
     def _reviewed_update_options(
-        basis: dict[str, Any] | None, operation_id: str | None,
-    ) -> dict[str, Any]:
-        if basis is None:
-            return {}
-        if basis.get("schema_version") != "loopx_chat_canonical_update_basis_v0":
-            raise ValueError("unsupported canonical update review basis; regenerate preview")
-        return {
-            "update_operation_id": operation_id,
-            "update_expected_provider_revision": basis["provider_revision"],
-            "update_expected_registry_sha256": basis["registry_sha256"],
-        }
+        basis: Mapping[str, object] | None,
+        operation_id: str | None,
+    ) -> dict[str, object]:
+        return reviewed_update_options(basis, operation_id)
 
     def _canonical_update_basis(
-        self, goal_id: str, *, completion_todo_id: str | None = None,
+        self: ChatTodoActionHost,
+        goal_id: str,
+        *,
+        completion_todo_id: str | None = None,
         decision: bool = False,
-    ) -> dict[str, Any] | None:
-        source = resolve_chat_todo_source(self, goal_id)
-        authority = read_canonical_todos_if_promoted(
-            runtime_root=source.runtime_root,
-            goal_id=goal_id,
+    ) -> dict[str, object] | None:
+        return canonical_update_basis(
+            self,
+            goal_id,
+            completion_todo_id=completion_todo_id,
+            decision=decision,
         )
-        current = resolve_chat_todo_source(self, goal_id)
-        if (current.source_identity, current.registry_sha256) != (
-                source.source_identity, source.registry_sha256):
-            raise ValueError("Todo authority registration changed while reading; retry")
-        if authority is None:
-            return None
-        # User updates retain their combined edit/completion contract. Agent
-        # completion, Monitor stop and a User decision outcome bind the
-        # dedicated terminal transaction, the only owner of decision_outcome.
-        terminal = decision or completion_todo_id is not None and not any(
-            todo.get("todo_id") == completion_todo_id and todo.get("role") == "user"
-            for todo in authority["todos"])
-        return {
-            "schema_version": ("loopx_chat_canonical_terminal_basis_v0" if terminal else
-                               "loopx_chat_canonical_update_basis_v0"),
-            "provider_revision": authority["provider_revision"],
-            "source_authority": authority["source_authority"],
-            "registry_sha256": source.registry_sha256,
-            "source_identity": source.source_identity,
-        }
 
     def _apply_reviewed_todo_edit(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Recover the canonical operation before testing present-day freshness.
-
-        CAS admits a new edit; the immutable receipt proves a previous edit.
-        Both paths drain the current projection, never an old receipt's state.
-        """
-        from ..chat_actions import _digest, _opaque
-        from ..chat_action_store import ActionConflictError
-
-        operation_id = f"chat-update:{proposal_id}"
-        basis = proposal["canonical_update_basis"]
-        action_kind = proposal["action_kind"]
-        run = {"monitor.update": self._run_monitor_update,
-               "gate.resolve": self._run_gate_resolve}.get(action_kind, self._run_todo_update)
-        terminal = action_kind == "gate.resolve" or parameters.get("operation") in {"complete", "stop"}
-        try:
-            result = run(parameters, dry_run=False, basis=basis, operation_id=operation_id)
-        except ChatTodoSourceChanged as error:
-            failed = self.store.mark_failed(
-                proposal_id, error_code="canonical_update_source_changed", message=str(error),
-                details={"operation_id": operation_id},
-            )
-            return {"proposal": failed, "turn": None}
-        except LocalCoordinationAuthorityUnavailable as error:
-            if error.code == COMPLETION_VALIDATION_IN_PROGRESS:
-                # The original caller still owns its result and proposal.
-                raise ActionConflictError(str(error)) from error
-            if (terminal and error.code == "authority_source_changed"
-                    and error.payload.get("completion_validation_executed") is True):
-                self.store.mark_failed(
-                    proposal_id, error_code="canonical_update_validation_source_changed",
-                    message="Todo authority registration changed during completion validation; retry",
-                    details={"operation_id": operation_id, "reason_code": error.code},
-                )
-                raise ValueError(
-                    "Todo authority registration changed during completion validation; retry"
-                ) from error
-            if error.code in {"provider_revision_mismatch", "authority_source_changed", "provider_revision_conflict"}:
-                # The native transaction first established that no matching
-                # historical receipt exists. This is a rejected new edit.
-                stale = self.store.apply(proposal_id, current_state_fingerprint=_digest({
-                    "expected": proposal["expected_state_fingerprint"],
-                    "conflict": error.code,
-                }), receipt={})
-                return {"proposal": stale, "turn": None}
-            failed = self.store.mark_failed(
-                proposal_id, error_code="canonical_update_retry_required",
-                message="The edit is not yet verified. Retry this proposal to recover the original operation.",
-                details={"operation_id": operation_id, "reason_code": error.code},
-            )
-            return {"proposal": failed, "turn": None}
-        if result.get("ok") is not True:
-            failed = self.store.mark_failed(proposal_id, error_code="canonical_update_validation_failed",
-                message="Completion validation did not pass. The Todo was not completed; retry after resolving the validation failure.",
-                details={"operation_id": operation_id, "reason_code": result.get("reason_code")})
-            return {"proposal": failed, "turn": None}
-        original = result.get("original_receipt") or result
-        todo_id = _opaque(result.get("todo_id"), field="todo_id")
-        self.store.save_checkpoint(proposal_id, step="canonical_update", receipt={
-            "operation_id": operation_id, "todo_id": todo_id,
-            "changed": original.get("changed") is True,
-        })
-        if not projection_delivery_requires_ack(result["projection_delivery"]):
-            failed = self.store.mark_failed(
-                proposal_id, error_code="canonical_update_projection_pending",
-                message="The edit was committed. Display delivery is pending; retry this proposal to restore the current view.",
-                details={"operation_id": operation_id, "canonical_committed": True},
-            )
-            return {"proposal": failed, "turn": None}
-        operation = parameters.get("operation", "edit")
-        outcome = ("gate_resolved" if action_kind == "gate.resolve" else
-                   {"pause": "monitor_paused", "resume": "monitor_resumed", "edit": "monitor_updated", "stop": "monitor_stopped"}[operation]
-                   if action_kind == "monitor.update" else
-                   "todo_completed" if operation == "complete" else
-                   "todo_updated" if original.get("changed") else "todo_unchanged")
-        stored = self.store.apply(proposal_id,
-            current_state_fingerprint=str(proposal["expected_state_fingerprint"]), receipt={
-                "receipt_id": _digest({"proposal_id": proposal_id, "todo_id": todo_id})[:32],
-                "outcome": outcome, "projection_verified": True,
-                "projection_delivery": result["projection_delivery"],
-                "operation_id": operation_id,
-                "canonical_status": result.get("provider_status", result["status"]),
-                "resource_ids": {"goal_id": str(parameters["goal_id"]), "todo_id": todo_id},
-                **(_decision_readback(result) if action_kind == "gate.resolve" else {}),
-            })
-        return {"proposal": stored, "turn": None}
+        self: TodoActionServiceSelf,
+        proposal_id: str,
+        proposal: Mapping[str, object],
+        parameters: dict[str, object],
+    ) -> dict[str, object]:
+        """Recover the canonical operation before testing present-day freshness."""
+        return apply_reviewed_todo_edit(self, proposal_id, proposal, parameters)
 
     def _apply_todo_update(
-        self, proposal_id: str, proposal: dict[str, Any], parameters: dict[str, Any]
-    ) -> dict[str, Any]:
-        from ..chat_actions import _digest, _opaque
-
-        if proposal.get("canonical_update_basis") is not None:
-            return self._apply_reviewed_todo_edit(proposal_id, proposal, parameters)
-        goal_id = str(parameters["goal_id"])
-        current_fingerprint = self._goal_state_fingerprint(goal_id)
-        if current_fingerprint != proposal.get("expected_state_fingerprint"):
-            stale = self.store.apply(
-                proposal_id, current_state_fingerprint=current_fingerprint, receipt={}
-            )
-            return {"proposal": stale, "turn": None}
-        operation = str(parameters.get("operation") or "edit")
-        decision = proposal.get("action_kind") == "gate.resolve"
-        result = (self._run_gate_resolve if decision else self._run_todo_update)(parameters, dry_run=False)
-        todo_id = _opaque(result.get("todo_id"), field="todo_id")
-        receipt = {
-            "receipt_id": _digest({"proposal_id": proposal_id, "todo_id": todo_id})[
-                :32
-            ],
-            "outcome": (
-                "gate_resolved"
-                if decision
-                else "todo_completed"
-                if operation == "complete"
-                else "todo_updated" if result.get("changed") else "todo_unchanged"
-            ),
-            "projection_verified": True,
-            "resource_ids": {"goal_id": goal_id, "todo_id": todo_id},
-            **(_decision_readback(result) if decision else {}),
-        }
-        stored = self.store.apply(
-            proposal_id, current_state_fingerprint=current_fingerprint, receipt=receipt
-        )
-        return {"proposal": stored, "turn": None}
+        self: TodoActionServiceSelf,
+        proposal_id: str,
+        proposal: Mapping[str, object],
+        parameters: dict[str, object],
+    ) -> dict[str, object]:
+        return apply_todo_update(self, proposal_id, proposal, parameters)
