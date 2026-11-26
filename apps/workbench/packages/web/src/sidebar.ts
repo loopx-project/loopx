@@ -80,6 +80,8 @@ export interface SidebarModel {
   projects: Array<{ key: string; cwd: string; name: string; threads: Thread[] }>;
   /** Threads in no project (each in a scratch folder of its own), together after the projects. */
   scratch: Thread[];
+  /** Threads the person marked done, together at the bottom under one fold — kept in reach, out of the way. */
+  done: Thread[];
   /** Number of threads shown after filtering. */
   count: number;
 }
@@ -136,13 +138,17 @@ export function buildSidebar(threads: Thread[], sections: Section[], search: str
   const visible = matching(threads, search);
 
   const sectionIds = new Set(sections.map((s) => s.id));
+  const done: Thread[] = [];
   const pinned: Thread[] = [];
   const bySection = new Map<string, Thread[]>();
   const byProject = new Map<string, Thread[]>();
   const scratch: Thread[] = [];
 
   for (const t of visible) {
-    if (t.pinned) {
+    // Done outranks a pin, the way finishing outranks keeping: un-done, the pin takes hold again.
+    if (t.doneAt) {
+      done.push(t);
+    } else if (t.pinned) {
       pinned.push(t);
     } else if (t.sectionId && sectionIds.has(t.sectionId)) {
       bySection.set(t.sectionId, [...(bySection.get(t.sectionId) ?? []), t]);
@@ -166,6 +172,8 @@ export function buildSidebar(threads: Thread[], sections: Section[], search: str
       .map(([key, list]) => ({ key, cwd: projectDir(list[0]).cwd, name: folderName(projectDir(list[0]).cwd), threads: list }))
       .sort((a, b) => (a.threads[0].updatedAt < b.threads[0].updatedAt ? 1 : -1)),
     scratch,
+    // Finished most recently first, as T3 Code's settled shelf does.
+    done: done.sort((a, b) => (a.doneAt! < b.doneAt! ? 1 : -1)),
     count: visible.length,
   };
 }
@@ -173,6 +181,8 @@ export function buildSidebar(threads: Thread[], sections: Section[], search: str
 export interface ActivityModel {
   /** In the order shown; a group with nothing in it is left out. */
   groups: Array<{ key: string; label: string; threads: Thread[] }>;
+  /** Threads the person marked done, together at the bottom under one fold, newest finish first. */
+  done: Thread[];
   /** Number of threads shown after filtering. */
   count: number;
 }
@@ -186,17 +196,35 @@ const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDat
  * nothing. The sidebar, its dots and the summaries extensions read all go by this, so a thread is
  * in the same state everywhere. The thread on screen is being read right now: it is never unread.
  */
-export function threadAttention(t: Pick<Thread, 'id' | 'waiting' | 'waitingReason' | 'unread' | 'status'>, selectedId: string | null): Attention | null {
+export function threadAttention(t: Pick<Thread, 'id' | 'waiting' | 'waitingReason' | 'unread' | 'status' | 'snoozedUntil'>, selectedId: string | null, now = Date.now()): Attention | null {
+  // Snoozed, the thread asked not to be heard from until its time comes — except an unread failure,
+  // which breaks through here just as PushService.maybePush lets errors bypass snooze suppression.
+  if (t.snoozedUntil && Date.parse(t.snoozedUntil) > now) {
+    return t.unread && t.status === 'error' && t.id !== selectedId ? { kind: 'error' } : null;
+  }
   // Older daemons do not say what is awaited; approvals were all there was.
   if (t.waiting) return { kind: t.waitingReason ?? 'approval' };
   if (t.unread && t.id !== selectedId) return { kind: t.status === 'error' ? 'error' : 'unread' };
   return null;
 }
 
+/** Whether a thread's snooze still stands at `now`. */
+export function snoozed(t: Pick<Thread, 'snoozedUntil'>, now = Date.now()): string | null {
+  return t.snoozedUntil && Date.parse(t.snoozedUntil) > now ? t.snoozedUntil : null;
+}
+
+/** When a snoozed thread comes back: the clock time today, the date and time on a later day. */
+export function snoozeTimeLabel(iso: string, now = new Date()): string {
+  const at = new Date(iso);
+  const clock = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  const sameDay = at.getFullYear() === now.getFullYear() && at.getMonth() === now.getMonth() && at.getDate() === now.getDate();
+  return sameDay ? clock : `${at.getMonth() + 1}/${at.getDate()} ${clock}`;
+}
+
 export type BoardStage = 'backlog' | 'doing' | 'blocked' | 'review' | 'done';
 
 /** The board column a thread sits in, judged in the board's order: done, waiting, running, then what was reported. */
-export function boardStage(t: Pick<Thread, 'id' | 'waiting' | 'waitingReason' | 'unread' | 'status' | 'doneAt' | 'report'>): BoardStage {
+export function boardStage(t: Pick<Thread, 'id' | 'waiting' | 'waitingReason' | 'unread' | 'status' | 'doneAt' | 'report' | 'snoozedUntil'>): BoardStage {
   if (t.doneAt) return 'done';
   const attention = threadAttention(t, null);
   if (attention && attention.kind !== 'unread') return 'blocked';
@@ -223,10 +251,12 @@ function urgency(t: Thread, selectedId: string | null): number | null {
  */
 export function buildActivity(threads: Thread[], search: string, now: Date, selectedId: string | null): ActivityModel {
   const visible = matching(threads, search);
+  // Finished threads leave the activity order for the bottom fold, as they left the filed order.
+  const [busy, done] = visible.reduce(([busy, done]: [Thread[], Thread[]], t) => (t.doneAt ? [busy, [...done, t]] : [[...busy, t], done]), [[], []]);
   // A handover chain is one entry, kept whole: it stands under its most pressing member, and under
   // the day any of them last moved. Split by urgency, the original and its successor would sit in
   // different groups, far apart.
-  const chains = handoverGroups(visible).map(({ members }) => ({
+  const chains = handoverGroups(busy).map(({ members }) => ({
     members,
     urgent: Math.min(...members.map((t) => urgency(t, selectedId) ?? Infinity)),
     moved: members.reduce((time, t) => (t.updatedAt > time ? t.updatedAt : time), ''),
@@ -258,6 +288,7 @@ export function buildActivity(threads: Thread[], search: string, now: Date, sele
     groups: [{ key: 'priority', label: t('sidebar.group.priority'), threads: priority }, ...ages.map((a) => ({ key: a.key, label: a.label, threads: byAge.get(a.key) ?? [] }))].filter(
       (g) => g.threads.length > 0,
     ),
+    done: done.sort((a, b) => (a.doneAt! < b.doneAt! ? 1 : -1)),
     count: visible.length,
   };
 }
@@ -291,6 +322,87 @@ export function handoverGroups(threads: Thread[], keepOrder = false): Array<{ ke
     if (keepOrder) return Math.min(...a.members.map((t) => threads.indexOf(t))) - Math.min(...b.members.map((t) => threads.indexOf(t)));
     const newest = (members: Thread[]) => members.reduce((time, t) => t.updatedAt > time ? t.updatedAt : time, '');
     return newest(b.members).localeCompare(newest(a.members));
+  });
+}
+
+export interface ForkSubchatItem {
+  thread: Thread;
+  /** True when this forked branch itself underwent handover(s) and still occupies one row. */
+  handedOver: boolean;
+}
+
+/**
+ * Grouped forks folded by their `forkGroup` root id. If a forked branch itself handed over, its
+ * handover chain collapses into a single row (`handedOver: true`) so the sidebar never nests two levels.
+ */
+export function forkGroupsByRoot(threads: Thread[]): Map<string, ForkSubchatItem[]> {
+  const byId = new Map(threads.map((t) => [t.id, t]));
+  const hasVisibleRoot = (groupId: string): boolean => {
+    if (byId.has(groupId)) return true;
+    // The original root may have handed over to a newer segment that is visible.
+    for (const t of threads) {
+      if (t.forkGroup) continue;
+      let cur: Thread | undefined = t;
+      const seen = new Set<string>();
+      while (cur?.handover && !cur.handover.detached && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        if (cur.handover.sourceId === groupId) return true;
+        cur = byId.get(cur.handover.sourceId);
+      }
+    }
+    return false;
+  };
+  const buckets = new Map<string, Thread[]>();
+  for (const t of threads) {
+    if (!t.forkGroup || t.forkGroup === t.id) continue;
+    // Skip active collaboration members here so they are not shown twice.
+    if (t.coordination && !t.coordination.retired && t.coordination.rootId !== t.id) continue;
+    if (!hasVisibleRoot(t.forkGroup)) continue;
+    buckets.set(t.forkGroup, [...(buckets.get(t.forkGroup) ?? []), t]);
+  }
+  const result = new Map<string, ForkSubchatItem[]>();
+  for (const [groupId, list] of buckets) {
+    const collapsed = handoverGroups(list).map(({ latest, members }) => ({
+      thread: latest,
+      handedOver: members.length > 1,
+    }));
+    result.set(groupId, collapsed);
+  }
+  return result;
+}
+
+export function ownRows(threads: Thread[]): Thread[] {
+  const byId = new Map(threads.map((t) => [t.id, t]));
+  const chains = new Map<string, Set<string>>();
+  const chainOf = (rootId: string): Set<string> => {
+    const cached = chains.get(rootId);
+    if (cached) return cached;
+    const chain = new Set<string>();
+    let cur = byId.get(rootId);
+    while (cur && !chain.has(cur.id)) {
+      chain.add(cur.id);
+      cur = cur.handover && !cur.handover.detached ? byId.get(cur.handover.sourceId) : undefined;
+    }
+    chains.set(rootId, chain);
+    return chain;
+  };
+  const groupedForkIds = new Set<string>();
+  const visibleRootIds = new Set<string>();
+  for (const t of threads) {
+    if (!t.forkGroup) {
+      visibleRootIds.add(t.id);
+      for (const s of chainOf(t.id)) visibleRootIds.add(s);
+    }
+  }
+  for (const t of threads) {
+    if (t.forkGroup && t.forkGroup !== t.id && visibleRootIds.has(t.forkGroup)) {
+      groupedForkIds.add(t.id);
+    }
+  }
+  return threads.filter((t) => {
+    if (groupedForkIds.has(t.id)) return false;
+    return !t.coordination || t.coordination.rootId === t.id || !byId.has(t.coordination.rootId)
+      || Boolean(t.coordination.retired) && chainOf(t.coordination.rootId).has(t.id);
   });
 }
 
@@ -343,6 +455,8 @@ export interface HostSource {
 
 export interface MergedModel {
   groups: Array<{ key: string; label: string; items: Array<{ thread: Thread; hostId: string | null }> }>;
+  /** Threads the person marked done, together at the bottom under one fold. */
+  done: Array<{ thread: Thread; hostId: string | null }>;
   count: number;
   /** Machines not read yet, unreachable or failing, in the order given: the list says so rather than leaving them out. */
   notes: HostSource[];
@@ -367,6 +481,7 @@ export function buildMerged(sources: HostSource[], search: string, now: Date, se
   const activity = buildActivity(all, search, now, selectedId);
   return {
     groups: activity.groups.map((g) => ({ key: g.key, label: g.label, items: g.threads.map((thread) => ({ thread, hostId: owner.get(thread) ?? null })) })),
+    done: activity.done.map((thread) => ({ thread, hostId: owner.get(thread) ?? null })),
     count: activity.count,
     // A remembered list being refreshed reads as it is; one that cannot be refreshed says so.
     notes: sources.filter((s) => s.state === 'loading' || s.state === 'failed' || s.state === 'offline'),

@@ -284,6 +284,35 @@ Measure outcome quality rather than message volume:
 - false acceptance or rejection of controlled transitions;
 - verified goal outcomes produced after handoff.
 
+## Current Delivery Checkpoint
+
+Task [#5198](https://github.com/loopx-project/loopx/issues/5198) tracks composition.
+A first implementation stage proposed a canonical room-work Agent CLI with
+scoped IM claim-button offers, callbacks, result recovery and a private
+reconnect composition. Following the maintainer scope review of 2026-11-20,
+that channel workflow is **deferred**: current main already owns delegation,
+candidate selection, ordinary claiming, execution preparation, result return
+and scoped Turn Recall, and no principal-limited in-room claim interaction is
+requested this round. The deferred implementation remains recoverable in the
+proposal branch history; reviving it must re-derive its deadline and
+source-witness needs onto current main's reviewed managed-claim basis rather
+than re-aliasing the v3 wire.
+
+What this proposal currently ships on the shared owner is narrower: the
+canonical Todo claim transaction rejects two previously silently-accepted
+unauthorized inputs for every caller, with the Lark room surface absent:
+
+- a Todo explicitly bound to another Agent (`bound_agent`) cannot be claimed
+  by a different Agent; the bound Agent claims normally;
+- an explicit `goal_ref` on any claim wire is a machine-checked protocol
+  failure instead of being silently dropped or implying unimplemented
+  lifetime binding.
+
+Both are disclosed shared-contract tightenings validated by owner-level
+File/SQLite regressions; ordinary unclaimed self-claims and same-key replay
+keep their existing semantics. This checkpoint does not claim any
+room-channel, multi-host, daemon or live-provider acceptance.
+
 ## Open Questions
 
 1. Which LoopX projection fields are stable enough for the first public

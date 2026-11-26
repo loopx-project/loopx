@@ -312,7 +312,7 @@ def quota_rollout_settlement_binding(
         return None, None
 
     if (
-        args.quota_command == "should-run"
+        getattr(args, "quota_command", None) == "should-run"
         and payload.get("effective_action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
         and payload.get("should_run") is False
     ):
@@ -599,10 +599,26 @@ def quota_rollout_details(
                     )
                 details.update(stop_details)
     receipt = payload.get("heartbeat_receipt")
-    capability_guard = (replan_packet.get("capability_guard") if isinstance(replan_packet, Mapping) else None) or (
-        receipt.get("semantic_replan_capability_guard") if isinstance(receipt, Mapping) else None
+    capability_guard = (
+        replan_packet.get("capability_guard")
+        if isinstance(replan_packet, Mapping)
+        else None
     )
-    if isinstance(capability_guard, Mapping):
+    if (
+        capability_guard is None
+        and semantic_replan_obligation_id
+        and isinstance(receipt, Mapping)
+        and normalize_todo_replan_obligation_id(
+            receipt.get("semantic_replan_obligation_id")
+        )
+        == semantic_replan_obligation_id
+    ):
+        capability_guard = receipt.get("semantic_replan_capability_guard")
+    if (
+        semantic_replan_obligation_id
+        and "semantic_replan_review_kind" not in details
+        and isinstance(capability_guard, Mapping)
+    ):
         details["semantic_replan_capability_id"] = capability_guard["capability_id"]
         details["semantic_replan_gap_id"] = capability_guard["gap_id"]
         details["semantic_replan_frontier_revision"] = capability_guard["frontier_revision"]

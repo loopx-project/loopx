@@ -93,13 +93,13 @@ jobs:
           set -euo pipefail
           # Validate the downloaded qualification before any remote mutation.
           # Successful installation alone does not qualify outcome/cost claims.
-          publication="$(python - <<'PY'
+          revision="$(python - <<'PY'
           import json
           from pathlib import Path
           import sys
           sys.path.insert(0, str(Path.cwd()))
           from loopx.cli_commands.update_artifact import (
-              public_channel_allows_default, validate_published_manifest, verify_runtime_installation_qualification,
+              validate_published_manifest, verify_runtime_installation_qualification,
           )
           root = Path("runtime")
           manifest_bytes = (root / "loopx-runtime.json").read_bytes()
@@ -110,12 +110,10 @@ jobs:
           verify_runtime_installation_qualification(manifest, qualification, archive, channel="main")
           if (root / f"loopx-runtime-{revision}.json").read_bytes() != manifest_bytes:
               raise SystemExit("Immutable runtime metadata differs from the channel candidate")
-          channel_action = "promote" if public_channel_allows_default(manifest["default_contract"]) else "hold"
-          print(revision, channel_action)
+          print(revision)
           PY
           )"
-          read -r revision channel_action <<< "$publication"
-          # Only main revisions may be published, even when the channel is held.
+          # Only main revisions may be published.
           relation="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${revision}...main" --jq .status)"
           if [[ "$relation" != ahead && "$relation" != identical ]]; then exit 1; fi
           # Keep each immutable snapshot below GitHub's per-release asset cap.
@@ -137,10 +135,6 @@ jobs:
               gh release upload "$tag" "$file" --repo "$GITHUB_REPOSITORY"
             fi
           done
-          if [[ "$channel_action" != promote ]]; then
-            echo "::notice title=Runtime channel retained::The candidate's default contract is pending public channel qualification."
-            exit 0
-          fi
           if ! gh release view runtime-main --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create runtime-main --repo "$GITHUB_REPOSITORY" --target "$revision" --prerelease --latest=false --title "Latest qualified main runtime" --notes "Mutable channel metadata points to immutable revision releases. Stable users continue with PyPI or the stable runtime."
           fi

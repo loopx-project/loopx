@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...chat_ingress import resolve_external_admission_source
+from ...chat.ingress import resolve_external_admission_source
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json
 from ...file_lock import exclusive_file_lock
 from .file_discovery import external_source_route_path

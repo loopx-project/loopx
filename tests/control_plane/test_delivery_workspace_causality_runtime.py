@@ -34,6 +34,7 @@ def test_python_facade_sends_one_normalized_classification_request(monkeypatch) 
     assert causality.build_delivery_workspace_causality(
         {
             "todo_id": "TODO_WRITE",
+            "action_kind": "VERIFY",
             "task_repository": "https://github.com/example/project",
             "required_write_scope": "src/**",
             "required_capabilities": ["filesystem_write", "shell"],
@@ -51,8 +52,10 @@ def test_python_facade_sends_one_normalized_classification_request(monkeypatch) 
     assert params["operation"] == "classify"
     assert params["normalized_todo_contract"] == {
         "todo_id": "todo_write",
+        "action_kind": "verify",
         "task_repository": "git:github.com/example/project",
         "required_write_scopes": ["src/**"],
+        "write_scope_declared": True,
         "required_capabilities": ["filesystem_write", "shell"],
         "continuation_policy": None,
         "source": "selected_todo_contract",

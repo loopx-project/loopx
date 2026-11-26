@@ -123,11 +123,45 @@ try {
     research_reading: "case", research_analysis_goal: child.goal_id, research_pack: studyPack.pack_id});
   address.hash = "case-section-" + studyPack.pack_id + "-" + chapter.id;
   const atChapter = () => page.waitForFunction(id => document.activeElement?.id === id, address.hash.slice(1));
-  await page.goto(address.href);
-  await atChapter();
   const views = page.getByRole("group", {name: "研究视图", exact: true});
   const historyView = views.getByRole("button", {name: "研究历程", exact: true});
   const caseView = views.getByRole("button", {name: "案例解读", exact: true});
+  const ordinary = new URL(study);
+  const fullAxis = page.locator('.research-timeline .research-axis time.is-end[datetime="PT64800S"]');
+  await page.goto(ordinary.href);
+  await fullAxis.waitFor();
+  await caseView.waitFor();
+  assert.equal(await historyView.getAttribute("aria-pressed"), "true");
+  assert.equal(await page.locator(".research-case-reader").count(), 0);
+  assert.equal(new URL(page.url()).searchParams.has("research_reading"), false);
+  await caseView.press("Enter");
+  await page.locator(".case-opening h2").waitFor();
+  await page.goBack();
+  await fullAxis.waitFor();
+
+  await page.setViewportSize({width: 390, height: 900});
+  const historyGet = url => url.pathname === "/api/chat/explore-results"
+    && url.searchParams.get("goal_id") === child.goal_id && url.searchParams.get("view") === "history";
+  await page.route(historyGet, route => route.fulfill({status: 503, json: {ok: false}}), {times: 1});
+  await page.goto(ordinary.href);
+  const historyError = page.locator(".research-history-read-error");
+  await historyError.waitFor();
+  await caseView.waitFor();
+  assert.equal(await historyView.getAttribute("aria-pressed"), "true");
+  await historyError.getByRole("button", {name: "重试", exact: true}).press("Enter");
+  await fullAxis.waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+
+  const caseOnly = await start("case-only", {...child, events: []}, parent);
+  await page.goto(caseOnly);
+  await page.locator(".case-opening h2").waitFor();
+  assert.equal(await caseView.getAttribute("aria-pressed"), "true");
+  const caseOnlyReadback = await (await fetch(new URL("/fixture/readback", caseOnly))).json();
+  assert(caseOnlyReadback.history_reads > 0 && caseOnlyReadback.source_unchanged);
+  await page.setViewportSize({width: 1200, height: 900});
+
+  await page.goto(address.href);
+  await atChapter();
   assert.equal(await caseView.getAttribute("aria-pressed"), "true");
   await historyView.press("Enter");
   await page.locator(".research-history-heading").waitFor();

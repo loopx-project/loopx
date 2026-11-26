@@ -687,7 +687,7 @@ CLI/SSH 导出使用 `goal-portfolio --manager-view todos --goal-id GOAL --todo-
 | 已检查边界 | 现有实现 | 经现有 owner 解决的缺口 |
 | --- | --- | --- |
 | App 自由文本 | `personal-workspace-page.tsx`、`workspace-action-form.tsx` | 退役浏览器对 Goal 创建、Todo 改动、分配和调度的意图分类。所有自由文本完整到达 Chat；显式控件打开 typed form 与需审阅的 preview |
-| Chat 请求与观察 | `chat_ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
+| Chat 请求与观察 | `chat/ingress.py`、`chat_store.py`、dashboard `data/chat.ts` | 现有 client ingress/Turn 身份与事件 cursor 可复用。证明响应丢失、同 key 不同 payload 和 reload 恢复后，才能宣称持久端到端入口成立 |
 | 协作 | `control_plane/collaboration/inbox.py`、typed collaboration rules 与 return-delivery owner | 虽有历史存储名称，现有语义已对 Agent 中立。保留 decision/read/return 区别，不另建 manager 专用 inbox |
 | Operator inbox | `control_plane/work_items/operator_inbox.py` | 已有 source contract 与共享 urgency projection；检查并迁移真实 pending/read/ack 生命周期，不新增泛化 wrapper |
 | Lark transport | `extensions/lark/event_inbox.py`、`routed_inbox.py`、`inbox_reply.py` 与 reaction adapter | Provider 归一化、幂等 capture、read/processed 记录、reply recovery 与 Lark id/policy 共存。只提取已有证据的可复用语义；认证、寻址、provider id、reaction 和消息限制留在 adapter |

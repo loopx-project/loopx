@@ -281,6 +281,7 @@ export function createEffectRuntimeHandlers(
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.read", lazyHandler(() => import("./todos/read_transport.ts"), ({readTodoRuntime}) => readTodoRuntime)],
+    ["todo.authority_head.verify", lazyHandler(() => import("./todos/read_transaction.ts"), ({verifyCanonicalTodoAuthorityWitness}) => verifyCanonicalTodoAuthorityWitness)],
     ["capabilities.periodic_report.progress.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportProgress}) => selectPeriodicReportProgress)],
     ["capabilities.periodic_report.approval_retry.select", lazyHandler(() => import("./capabilities/periodic_report_progress.ts"), ({selectPeriodicReportApprovalRetry}) => selectPeriodicReportApprovalRetry)],
     ["todo.succession.project", lazyHandler(() => import("./todos/succession.ts"), ({projectTodoSuccession}) => projectTodoSuccession)],
@@ -319,7 +320,13 @@ export function createEffectRuntimeHandlers(
     ["goal.fallback_disposition.project", lazyHandler(() => import("./goals/goal_frontier/fallback_disposition.ts"), ({projectFallbackDisposition}) => projectFallbackDisposition)],
     ["todo.pr_wait_observation.plan", lazyHandler(() => import("./todos/pr_wait_observation.ts"), ({planPrWaitObservationsFromSource}) => planPrWaitObservationsFromSource)],
     ["todo.resume_planning.project", lazyHandler(() => import("./todos/resume_planning.ts"), ({projectTodoResumePlanning}) => projectTodoResumePlanning)],
-    ["todo.quota_planning.project", lazyHandler(() => import("./todos/quota_selection.ts"), ({projectTodoQuotaPlanning}) => projectTodoQuotaPlanning)],
+    ["todo.quota_planning.project", lazyHandler(
+      () => Promise.all([import("./todos/quota_selection.ts"), import("./todos/read_transaction.ts")]),
+      ([{projectTodoQuotaPlanning}, {projectCanonicalQuotaBatch}]) =>
+        (params) => params?.schema_version === "todo_quota_planning_batch_v0"
+          ? projectCanonicalQuotaBatch(params)
+          : projectTodoQuotaPlanning(params),
+    )],
     ["todo.frontier_revision.project", lazyHandler(() => import("./todos/frontier_revision.ts"), ({projectAdvancementFrontier}) => projectAdvancementFrontier)],
     ["goal.long_todo_chain.evaluate", lazyHandler(() => import("./todos/frontier_revision.ts"), ({evaluateLongTodoChain}) => evaluateLongTodoChain)],
     ["scheduler.state_transition.evaluate", lazyHandler(() => import("./scheduler/state_transition_rules.ts"), ({evaluateSchedulerStateTransition}) => evaluateSchedulerStateTransition)],
@@ -392,6 +399,7 @@ export function createEffectRuntimeHandlers(
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
     ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
     ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
+    ["quota.semantic_replan_guard.validate", lazyHandler(() => import("./quota/semantic_replan_guard.ts"), ({validateSemanticReplanGuard}) => validateSemanticReplanGuard)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),
@@ -707,6 +715,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.result.attachment_refs", lazyHandler(() => import("./collaboration/result_publication.ts"), ({resultAttachmentRefs}) => resultAttachmentRefs)],
     ["collaboration.result.delivery_ready", lazyHandler(() => import("./collaboration/result_publication.ts"), ({collaborationResultDeliveryReady}) => collaborationResultDeliveryReady)],
     ["collaboration.peer_host_route.select", lazyHandler(() => import("./collaboration/peer_route_selection.ts"), ({selectObservedPeerHostRoute}) => selectObservedPeerHostRoute)],
+    ["collaboration.session_fabric.project_ssh_host_catalog", lazyHandler(() => import("./collaboration/session_quota_fabric.ts"), ({projectSshHostCatalogRequest}) => projectSshHostCatalogRequest)],
+    ["collaboration.session_fabric.evaluate_governed_session_handover", lazyHandler(() => import("./collaboration/session_quota_fabric.ts"), ({evaluateGovernedSessionHandover}) => evaluateGovernedSessionHandover)],
     ["runtime.background.project", lazyHandler(() => import("./runtime/background_services.ts"), ({projectBackgroundServices}) => projectBackgroundServices)],
     ["runtime.execution_identity.codex", lazyHandler(() => import("./runtime/execution_identity.ts"), ({readCodexExecutionIdentity}) => readCodexExecutionIdentity)],
     ["runtime.execution_identity.match", lazyHandler(() => import("./runtime/execution_identity.ts"), ({matchExecutionDeclaration}) => matchExecutionDeclaration)],

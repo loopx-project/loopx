@@ -1,8 +1,9 @@
-import { stat } from 'node:fs/promises'
-import { readdirSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { access, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join, resolve } from 'node:path'
-import { resolveLoopXCommand, runFile } from './cli.ts'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
+import { resolveLoopXCommand, runFile, shellWord } from './cli.ts'
 import type { FileRunner, LoopXCommand } from './cli.ts'
 
 export const MANAGED_LAUNCHER_NAME = 'loopx_cli.py'
@@ -70,11 +71,36 @@ export function pluginRuntimeDir(options: LoopXRuntimeOptions): string {
   )
 }
 
+async function managedExecutable(
+  runtimeDir: string,
+  python: string,
+  launcher: string,
+): Promise<string> {
+  const source = `#!/bin/sh\nexec ${shellWord(python)} ${shellWord(launcher)} "$@"\n`
+  // Keep queued commands pinned when a later resolver selects another Python.
+  const digest = createHash('sha256').update(source).digest('hex')
+  const executable = join(runtimeDir, `loopx-${digest}`)
+  const existing = await readFile(executable, 'utf8').catch(() => undefined)
+  if (existing === source && await access(executable, constants.X_OK).then(() => true, () => false)) {
+    return executable
+  }
+  const pending = join(runtimeDir, `.loopx-${randomUUID()}.tmp`)
+  try {
+    await writeFile(pending, source, { flag: 'wx', mode: 0o700 })
+    await rename(pending, executable)
+    await access(executable, constants.X_OK)
+  } finally {
+    await rm(pending, { force: true })
+  }
+  return executable
+}
+
 /** Resolve the exact CLI surface shared by bootstrap, Driver, and GoalBar. */
 export async function resolvePluginLoopXCommand(
   options: LoopXRuntimeOptions = {},
 ): Promise<LoopXCommand> {
-  const launcherPath = join(pluginRuntimeDir(options), MANAGED_LAUNCHER_NAME)
+  const runtimeDir = pluginRuntimeDir(options)
+  const launcherPath = join(runtimeDir, MANAGED_LAUNCHER_NAME)
   const env = options.pythonBin === undefined
     ? options.env
     : { ...(options.env ?? process.env), PYTHON_BIN: options.pythonBin }
@@ -82,7 +108,7 @@ export async function resolvePluginLoopXCommand(
     value => value.isFile(),
     () => false,
   )
-  return resolveLoopXCommand({
+  const command = await resolveLoopXCommand({
     ...options,
     runner: options.runner ?? runFile,
     env,
@@ -90,4 +116,13 @@ export async function resolvePluginLoopXCommand(
       ? { path: launcherPath, pythonBins: pluginPythonCandidates(options) }
       : undefined,
   })
+  if (command.candidate !== 'managed-launcher' || process.platform === 'win32'
+    || !isAbsolute(command.file)) {
+    return command
+  }
+  // The Python invocation still works on a read-only runtime. Let the
+  // existing Driver warning explain why Core could not pin its commands.
+  const cliBin = await managedExecutable(runtimeDir, command.file, launcherPath)
+    .catch(() => undefined)
+  return cliBin === undefined ? command : { ...command, cliBin }
 }

@@ -50,7 +50,7 @@ from ..capabilities.native_chat.steward_managed_mode import (
 from ..capabilities.steward_executor import allocation as alloc
 from .acp import ACPStdioAdapter
 from ..chat_agent import CodexChatAgentError, agent_endpoint_error
-from ..chat_codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
+from .codex_goal import UPSTREAM_MODE as CODEX_GOAL_CHAT_MODE
 from ..chat_manager import (
     MANAGER_AGENT_GOAL_ID,
     MANAGER_CONTEXT_VERSION,
@@ -122,7 +122,10 @@ def read_goal_creation_session(
     recorded_proposal = action_store.load(proposal_id)
     if recorded_proposal is None:
         raise ValueError("The original creation checkpoint is unavailable")
-    recorded = ((recorded_proposal.get("checkpoint") or {}).get("steps") or {}).get("first_session_opened") or {}
+    checkpoint = recorded_proposal.get("checkpoint")
+    steps = checkpoint.get("steps") if isinstance(checkpoint, Mapping) else None
+    raw_recorded = steps.get("first_session_opened") if isinstance(steps, Mapping) else None
+    recorded = raw_recorded if isinstance(raw_recorded, Mapping) else {}
     for field in ("channel_id", "managed_agent_id", "goal_instance_id"):
         if field in recorded and recorded[field] != session.get(field):
             raise ValueError("The original first Session route changed; restore its recorded identity")

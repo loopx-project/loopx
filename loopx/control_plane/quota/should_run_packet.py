@@ -38,9 +38,7 @@ from ..agents.agent_scope_frontier import (
     build_agent_scope_frontier_payload,
     read_frontier_action,
 )
-from ..goals.goal_frontier import (
-    AUTONOMOUS_REPLAN_REQUIRED_MODE,
-)
+from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
 from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
@@ -1631,11 +1629,7 @@ def _build_active_quota_payload(
         ),
         blocked_priority_fallback=prepared.blocked_priority_fallback,
     )
-    attention_queue = (
-        cast(dict[str, Any], prepared.status_payload.get("attention_queue"))
-        if isinstance(prepared.status_payload.get("attention_queue"), dict)
-        else {}
-    )
+    attention_queue = _dict_field(prepared.status_payload, "attention_queue") or {}
     _attach_truthy_fields(
         payload,
         autonomous_backlog_candidates=_compact_autonomous_candidate_context(
@@ -1660,6 +1654,7 @@ def _build_active_quota_payload(
         state_action_projection_warning=route.state_action_projection_warning,
         next_action_warning=route.next_action_warning,
         replan_obligation=prepared.replan_obligation,
+        work_lane=_dict_field(payload, "work_lane_contract"),
     )
     frontier = _dict_field(prepared.status_payload, "bounded_research_frontier")
     bounded_research_frontier = _dict_field(frontier or {}, "public_projection") or frontier
@@ -1719,6 +1714,7 @@ def _build_quota_should_run_payload(
 
         payload["delivery_workspace_isolation"] = observe_goal_delivery_workspace_isolation(
             prepared.item, selected_todo, project_asset=prepared.project_asset,
+            captured_local_workspace=prepared.captured_local_workspace,
         )
     apply_selected_todo_execution_preparation(
         payload,
@@ -1990,7 +1986,8 @@ def _build_settled_quota_payload(
         selected_recommended_action=route.selected_recommended_action, state=route.state,
         user_todo_summary=prepared.user_todo_summary, should_run=False,
         state_action_projection_warning=None, next_action_warning=None,
-        replan_obligation=None, notify_gate=False,
+        replan_obligation=None, work_lane=_dict_field(payload, "work_lane_contract"),
+        notify_gate=False,
     )
     # Work-mode diagnostics survive settlement, while execution authority comes
     # only from the settled result, never a fallback readback or the monitor

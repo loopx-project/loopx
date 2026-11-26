@@ -1,6 +1,7 @@
 /** Disposable parsing acceleration; the bytes on disk remain the authority. */
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import type { BigIntStats } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { setImmediate } from "node:timers/promises";
 
@@ -190,15 +191,165 @@ async function parseThrough(
   });
 }
 
+export type ReceiptLogStat = {
+  readonly exists: boolean;
+  readonly dev: string | null;
+  readonly ino: string | null;
+  readonly size: number;
+  readonly mtime_ns: string | null;
+  readonly ctime_ns: string | null;
+  readonly mtime_ms: string | null;
+};
+
+export interface ReceiptLogSnapshotWithStat {
+  readonly snapshot: ReceiptLogSnapshot | null;
+  readonly stat: ReceiptLogStat;
+  readonly stable: boolean;
+}
+
+export const MISSING_RECEIPT_LOG_STAT: ReceiptLogStat = Object.freeze({
+  exists: false,
+  dev: null,
+  ino: null,
+  size: 0,
+  mtime_ns: null,
+  ctime_ns: null,
+  mtime_ms: null,
+});
+
+function formatReceiptLogStat(info: BigIntStats): ReceiptLogStat {
+  if (info.size < 0n || info.size > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("receipt log size exceeds safe integer range");
+  }
+  return Object.freeze({
+    exists: true,
+    dev: String(info.dev),
+    ino: String(info.ino),
+    size: Number(info.size),
+    mtime_ns: String(info.mtimeNs),
+    ctime_ns: String(info.ctimeNs),
+    mtime_ms: String(info.mtimeMs),
+  });
+}
+
+function bigIntStatsMatch(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+async function safePathStat(path: string): Promise<BigIntStats | null> {
+  try {
+    return await stat(path, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export function isReceiptLogStat(value: unknown): value is ReceiptLogStat {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.exists !== "boolean") return false;
+  if (typeof raw.size !== "number" || !Number.isSafeInteger(raw.size) || raw.size < 0) return false;
+  const optionalString = (item: unknown) => item === null || typeof item === "string";
+  return (
+    optionalString(raw.dev) &&
+    optionalString(raw.ino) &&
+    optionalString(raw.mtime_ns) &&
+    optionalString(raw.ctime_ns) &&
+    optionalString(raw.mtime_ms)
+  );
+}
+
+export function receiptLogStatsEqual(left: ReceiptLogStat, right: ReceiptLogStat): boolean {
+  return (
+    left.exists === right.exists &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtime_ns === right.mtime_ns &&
+    left.ctime_ns === right.ctime_ns &&
+    left.mtime_ms === right.mtime_ms
+  );
+}
+
+export async function statReceiptLog(path: string): Promise<ReceiptLogStat> {
+  const info = await safePathStat(path);
+  return info === null ? MISSING_RECEIPT_LOG_STAT : formatReceiptLogStat(info);
+}
+
 /**
- * Read fresh bytes on EVERY invocation. Only reuse a parsed newline-terminated
- * prefix after hashing those exact bytes. Rewrites, rotation, truncation and
- * same-size edits all remain observable, including edits to an old
- * identity-conflicting receipt.
+ * Read fresh bytes on EVERY invocation and bind the returned stat strictly to
+ * the exact open file descriptor snapshot consumed during parsing.
+ * Only reuse a parsed newline-terminated prefix after hashing those exact bytes.
+ * Rewrites, rotation, truncation and same-size edits all remain observable,
+ * including edits to an old identity-conflicting receipt.
  * Never cache an unterminated tail: an append can finish its UTF-8 character or
  * JSON token. The tail still participates in this read, including strict errors.
  * Cache loss/eviction/restart affects cost only, never the returned facts.
  */
+export async function readReceiptLogSnapshotWithStat(
+  path: string,
+  schemaVersion?: string,
+  recoveryKeys: readonly string[] = [],
+): Promise<ReceiptLogSnapshotWithStat> {
+  const key = JSON.stringify([resolve(path), schemaVersion ?? null, recoveryKeys]);
+  const pre = await safePathStat(path);
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch (error) {
+    forget(key);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const postMissing = await safePathStat(path);
+      return {
+        snapshot: null,
+        stat: MISSING_RECEIPT_LOG_STAT,
+        stable: pre === null && postMissing === null,
+      };
+    }
+    throw error;
+  }
+  const post = await safePathStat(path);
+  const stable =
+    pre !== null &&
+    post !== null &&
+    bigIntStatsMatch(pre, post) &&
+    BigInt(bytes.length) === pre.size;
+  const consumedStat = stable ? formatReceiptLogStat(pre) : MISSING_RECEIPT_LOG_STAT;
+  const snapshot = await decodeReceiptLogBytes(bytes, key, schemaVersion, recoveryKeys, stable);
+  return { snapshot, stat: consumedStat, stable };
+}
+
+async function decodeReceiptLogBytes(
+  bytes: Buffer,
+  key: string,
+  schemaVersion: string | undefined,
+  recoveryKeys: readonly string[],
+  stable: boolean,
+): Promise<ReceiptLogSnapshot> {
+  // Each caller owns a fresh read. Only coalesce large, byte-identical reads
+  // with the same decode contract while the original parse is still running.
+  if (!stable || bytes.length < 1024 * 1024 || bytes.length > MAX_RETAINED_BYTES) {
+    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys, stable);
+  }
+  const active = decoding.get(key);
+  if (active && bytes.equals(active.bytes)) return active.result;
+  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys, true);
+  if (active || decoding.size >= MAX_RETAINED_LOGS) return result;
+  decoding.set(key, { bytes, result });
+  try {
+    return await result;
+  } finally {
+    decoding.delete(key);
+  }
+}
+
 export async function readReceiptLogSnapshot(
   path: string,
   schemaVersion?: string,
@@ -213,25 +364,12 @@ export async function readReceiptLogSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-  // Each caller owns a fresh read. Only coalesce large, byte-identical reads
-  // with the same decode contract while the original parse is still running.
-  if (bytes.length < 1024 * 1024 || bytes.length > MAX_RETAINED_BYTES) {
-    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
-  }
-  const active = decoding.get(key);
-  if (active && bytes.equals(active.bytes)) return active.result;
-  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys);
-  if (active || decoding.size >= MAX_RETAINED_LOGS) return result;
-  decoding.set(key, { bytes, result });
-  try {
-    return await result;
-  } finally {
-    decoding.delete(key);
-  }
+  return decodeReceiptLogBytes(bytes, key, schemaVersion, recoveryKeys, true);
 }
 
 async function parseSnapshot(
   bytes: Buffer, key: string, schemaVersion: string | undefined, recoveryKeys: readonly string[],
+  rememberPrefix = true,
 ): Promise<ReceiptLogSnapshot> {
   const completeBytes = bytes.lastIndexOf(10) + 1;
   const prior = prefixes.get(key);
@@ -257,7 +395,7 @@ async function parseSnapshot(
     ...await parseThrough(bytes, retainedEnd, reusable, schemaVersion, recoveryKeys),
     digest: retainedDigest ?? digest(bytes.subarray(0, retainedEnd)),
   });
-  remember(key, retained);
+  if (rememberPrefix) remember(key, retained);
   const prefix = retainedEnd === completeBytes ? retained
     : await parseThrough(bytes, completeBytes, retained, schemaVersion, recoveryKeys);
   const tail = strictUtf8(bytes.subarray(completeBytes));

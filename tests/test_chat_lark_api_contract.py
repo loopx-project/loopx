@@ -25,7 +25,7 @@ from loopx.chat_server import (
     configured_lark_cli_bin,
     resolve_lark_cli_for_runtime,
 )
-from loopx.chat_lark_api import LarkChatRequestMixin
+from loopx.chat.lark_api import LarkChatRequestMixin
 from loopx.extensions.lark.cli_resolution import LarkCliResolution
 from loopx.extensions.lark.goal_channel_contracts import write_goal_channel_binding
 from loopx.extensions.lark.goal_channel_targets import add_lark_goal_channel_target
@@ -247,7 +247,7 @@ def test_goal_repository_context_is_credential_free_and_path_free(
 def test_runtime_snapshot_reuses_private_goal_channel_bindings(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     runtime_root = tmp_path / "runtime"
     project = tmp_path / "project"
@@ -389,7 +389,7 @@ def test_lark_apps_reports_safe_missing_cli_diagnostic() -> None:
 def test_lark_chats_reports_lookup_failure_instead_of_an_empty_list(
     monkeypatch: Any,
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     responses: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -443,7 +443,7 @@ def test_lark_chats_reports_lookup_failure_instead_of_an_empty_list(
 def test_lark_connections_include_app_reply_health(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     calls: list[dict[str, Any]] = []
     responses: list[dict[str, Any]] = []
@@ -528,7 +528,7 @@ def test_lark_connections_include_app_reply_health(
 def test_connect_refreshes_the_app_level_event_consumer(
     monkeypatch: Any, tmp_path: Path, editing: bool
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     refreshed: list[bool] = []
     connect_calls: list[dict[str, Any]] = []
@@ -599,7 +599,7 @@ def test_connect_refreshes_the_app_level_event_consumer(
 def test_connect_batch_preserves_each_explicit_agent_app_pair(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     batch_calls: list[dict[str, Any]] = []
     responses: list[dict[str, Any]] = []
@@ -658,7 +658,7 @@ def test_connect_batch_preserves_each_explicit_agent_app_pair(
 def test_connect_batch_preview_and_full_failure_do_not_refresh_runtime(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     packets = [
         {"ok": True, "status": "preview_ready"},
@@ -724,7 +724,7 @@ def test_session_ingress_resolves_the_exact_goal_agent_session(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     connect_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -788,7 +788,7 @@ def test_session_ingress_resolves_the_exact_goal_agent_session(
 def test_manager_route_reconciliation_opens_before_atomic_binding_swap(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     project = tmp_path / "project"
     project.mkdir()
@@ -889,7 +889,7 @@ def test_manager_route_reconciliation_opens_before_atomic_binding_swap(
 def test_manager_connection_opens_audience_session_only_on_execute(
     monkeypatch: Any, tmp_path: Path, execute: bool, scope_failure: bool
 ) -> None:
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
     import loopx.capabilities.manager_context as manager_context
     from loopx.chat_manager import manager_channel
 
@@ -1103,9 +1103,9 @@ def test_manager_scope_reads_policy_from_coordination_root_when_chat_root_overri
     assets = tmp_path / "assets"
     assets.mkdir()
     (assets / "index.html").write_text("fixture", encoding="utf-8")
-    from loopx import chat_lark_api
+    from loopx.chat import lark_api
 
-    monkeypatch.setattr(chat_lark_api, "build_lark_goal_topic_runtime_snapshot", lambda **_: snapshot)
+    monkeypatch.setattr(lark_api, "build_lark_goal_topic_runtime_snapshot", lambda **_: snapshot)
     monkeypatch.setattr(
         chat_server,
         "resolve_lark_cli_for_runtime",

@@ -385,6 +385,40 @@ def test_planning_batch_non_bmp_utf16_boundaries_match_real_cli(tmp_path, monkey
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_planning_batch_packet_survives_gbk_parent_locale(tmp_path, monkeypatch, provider):
+    import subprocess
+    from benchmark.runtime.planning_batch import apply_initial_plan
+
+    env, _, _, _, _ = _environment(tmp_path, monkeypatch, provider, replan="empty")
+    env["LOOPX_TASK_STAGE"] = "plan"
+    objective = "中文目标：统计并交付结果。"
+    Path(env["LOOPX_TASK_DOC"]).write_text(objective + "\n", encoding="utf-8")
+    # A cp936 host decodes an unpinned text-mode child read as gbk, while the
+    # wrapped CLI always emits UTF-8 JSON (ensure_ascii=False).
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "gbk")
+
+    packet = task_plan_packet(env, loopx_command(env))
+    todo_text = "[P0] 统计中文结果。"
+    proposal = {
+        "input_digest": packet["input_digest"],
+        "expected_provider_revision": packet["goal_acceptance"]["provider_revision"],
+        "outcome": {
+            "objective": objective,
+            "requirements": [{"id": "deliver", "description": "交付并验证中文结果。"}],
+            "source": {"ref": "checkpoint:utf8", "summary": "中文规划回执。"},
+        },
+        "todos": [{"text": todo_text, "action_kind": "implement"}],
+    }
+    ready = apply_initial_plan(env, proposal)
+    assert ready["status"] == "ready"
+    after = task_plan_packet(env, loopx_command(env))
+    stored = {item["todo_id"]: item for item in after["existing_todos"]}
+    assert stored[ready["todo_ids"][0]]["text"] == todo_text
+    outcome = after["goal_acceptance"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][0]
+    assert outcome["objective"] == objective
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_planning_batch_target_key_boundary_real_cli_state(tmp_path, monkeypatch, provider):
     import os
     import subprocess

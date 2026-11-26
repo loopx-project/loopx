@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (52)
+## Accepted (53)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -69,6 +69,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Research Exploration Control Plane v0](research-exploration-control-plane-v0.md) | Accepted | none | — |
 | [Preserve the selected runtime during rollback](self-update-explicit-runtime-route-v0.md) | Accepted | none | — |
 | [RFC: Semantic Vocabulary Convergence and Commit-Time Drift Checks (v0)](semantic-vocabulary-convergence-v0.md) | Accepted | none | [7 entries](ledger/semantic-vocabulary-convergence-v0/) |
+| [RFC: Session and Quota Fabric for Single-Workbench Convergence (v0)](session-and-quota-fabric-v0.md) | Accepted | none | — |
 | [RFC: Shared Goal Alignment and Governed Amendment Protocol (v0)](shared-goal-alignment-and-governed-amendment-v0.md) | Accepted | none | [2 entries](ledger/shared-goal-alignment-and-governed-amendment-v0/) |
 | [RFC: LoopX Shared Control-Plane Authority and Pluggable State Providers (v0)](shared-goal-authority-state-provider-v0.md) | Accepted | none | [24 entries](ledger/shared-goal-authority-state-provider-v0/) |
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |

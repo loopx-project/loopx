@@ -874,16 +874,16 @@ def test_claim_ttl_seconds_bounds_visibility_and_replay_parity(claim_cli, thin):
     assert "lease_ttl_seconds: `7200`" in md.stdout
 
 
-def test_claim_omitted_ttl_preserves_2700_default_and_explicit_lease_ttl(claim_cli):
+def test_claim_omitted_ttl_uses_three_hours_and_preserves_explicit_lease_ttl(claim_cli):
     _, run, _, prefix, claim, _, _, _ = claim_cli
     default_claim = run([
         *prefix, *claim, "--claimed-by", "peer-a", "--claim-operation-id", "claim-default-ttl",
     ])
     assert default_claim["ok"] is True and default_claim["execution_managed"] is True
-    assert default_claim["lease_ttl_seconds"] == 2700
+    assert default_claim["lease_ttl_seconds"] == 10800
     assert isinstance(default_claim["lease_expires_at"], str) and default_claim["lease_expires_at"]
     inspected = run([*prefix, "task-lease", "inspect", "--goal-id", GOAL, "--todo-id", TODO])
-    assert inspected["lease"]["acquire_ttl_seconds"] == 2700
+    assert inspected["lease"]["acquire_ttl_seconds"] == 10800
 
     # Release and verify explicit --task-lease-idempotency-key honors --ttl-seconds too.
     released = run([

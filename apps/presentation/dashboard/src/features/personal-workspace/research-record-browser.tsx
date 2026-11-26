@@ -3,7 +3,7 @@ import {CircleHelp, TriangleAlert} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent, ExploreHistoryNode} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
-import {readResearchRecordsLocation, writeResearchRecordsLocation, researchRecordGroups, searchResearchRecords, type ResearchRecordDisplay, type ResearchRecordsLocation} from "./research-record-search";
+import {readResearchRecordsLocation, writeResearchRecordsLocation, researchRecordGroups, searchResearchRecords, validResearchDateRange, type ResearchRecordDisplay, type ResearchRecordsLocation} from "./research-record-search";
 import {exportResearchRecords} from "./research-record-export";
 import {exportResearchReport} from "./research-record-report";
 import {downloadReport} from "./report-download";
@@ -58,14 +58,14 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
   reading: ReturnType<typeof useResearchRecordsLocation>;
 }) {
-  const {query, status, limit, expanded, focused} = reading.value;
+  const {query, status, limit, expanded, focused, from = "", to = ""} = reading.value;
   const {consumeFocusRestore} = reading;
   const root = useRef<HTMLDivElement>(null);
   const [downloadFailed, setDownloadFailed] = useState(false);
   const [format, setFormat] = useState("json");
   const displayed = useMemo(() => new Map(displayEvents?.map(event => [event.event_id, event])), [displayEvents]);
   const display = useMemo(() => ({events: displayed, sections: displaySections}), [displayed, displaySections]);
-  const matches = useMemo(() => searchResearchRecords(events, query, status, display), [events, query, status, display]);
+  const matches = useMemo(() => searchResearchRecords(events, query, status, display, {from, to}), [events, query, status, display, from, to]);
   const groups = useMemo(() => researchRecordGroups(matches, complete ? nodes : []), [matches, nodes, complete]);
   const allGroups = useMemo(() => researchRecordGroups(events, complete ? nodes : []), [events, nodes, complete]);
   useEffect(() => {
@@ -81,7 +81,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
   const groupCount = zh ? `${groups.length} 个条目` : `${groups.length} ${groups.length === 1 ? "entry" : "entries"}`;
   const countLabel = zh ? `匹配 ${matches.length} / ${events.length} 条已读记录 · ${groupCount}` : `${matches.length} matches in ${events.length} loaded records · ${groupCount}`;
   const readState = busy ? (zh ? "读取中" : "Reading") : stale ? (zh ? "刷新失败" : "Refresh failed") : "";
-  const updateFilters = (filters: Partial<Pick<ResearchRecordsLocation, "query" | "status">>) => {
+  const updateFilters = (filters: Partial<Pick<ResearchRecordsLocation, "query" | "status" | "from" | "to">>) => {
     reading.update({...filters, limit: 50, expanded: [], focused: undefined});
   };
   const originalContent = (event: ExploreHistoryEvent) => {
@@ -118,7 +118,9 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
         <option value="">{zh ? "所有状态" : "All statuses"}</option>
         {[...new Set([...statuses, ...(status ? [status] : [])])].map(item => <option key={item} value={item}>{stateLabel(item)}</option>)}
       </select>
-      {query || status ? <button type="button" onClick={() => updateFilters({query: "", status: ""})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
+      <label>{zh ? "起始记录日期（UTC）" : "Recorded from (UTC)"}<input type="date" value={from} onChange={event => updateFilters({from: event.target.value})}/></label>
+      <label>{zh ? "结束记录日期（UTC）" : "Recorded through (UTC)"}<input type="date" value={to} onChange={event => updateFilters({to: event.target.value})}/></label>
+      {query || status || from || to ? <button type="button" onClick={() => updateFilters({query: "", status: "", from: "", to: ""})}>{zh ? "清除筛选" : "Clear filters"}</button> : null}
       <select aria-label={zh ? "下载格式" : "Download format"} value={format} onChange={event => setFormat(event.target.value)}>
         <option value="json">JSON</option>
         <option value="md">{zh ? "阅读报告（Markdown）" : "Reading report (Markdown)"}</option>
@@ -126,12 +128,13 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
       <button type="button" disabled={busy || !matches.length} onClick={() => {
         setDownloadFailed(false);
         try {
-          const input = {goalId, events, query, status, complete, stale, display, exportedAt: new Date().toISOString()};
+          const input = {goalId, events, query, status, from, to, complete, stale, display, exportedAt: new Date().toISOString()};
           const text = format === "md" ? exportResearchReport(input, zh) : exportResearchRecords(input);
           downloadReport(`research-${goalId}.${format}`, "", text);
         } catch {setDownloadFailed(true);}
       }}>{format === "md" ? (zh ? "下载阅读报告" : "Download reading report") : (zh ? "下载匹配记录（JSON）" : "Download matches (JSON)")}</button>
     </div>
+    {!validResearchDateRange({from, to}) ? <p role="alert">{zh ? "起始日期不能晚于结束日期。" : "The start date must not be after the end date."}</p> : null}
     {downloadFailed ? <p role="alert">{zh ? "无法开始下载，记录未改变。请重试下载。" : "Could not start the download. Records are unchanged; try downloading again."}</p> : null}
     <div className="research-record-count">
       <span role="status" aria-label={`${countLabel}${readState ? ` · ${readState}` : ""}`}>
@@ -142,6 +145,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
           : !complete ? (zh ? "历史不完整；搜索范围" : "Incomplete history; search scope") : (zh ? "搜索范围" : "Search scope")}
         icon={!complete || stale ? TriangleAlert : CircleHelp}>
         <p>{countLabel}{zh ? "。" : "."}</p>
+        {from || to ? <p>{zh ? "按 UTC 记录日期筛选，包含起止日；没有明确时区的时间不匹配。记录日期不代表执行日期。" : "Filters use UTC recorded dates, including both bounds. Records without an explicit timezone do not match. Recorded dates are not execution dates."}</p> : null}
         <p>{zh ? "明确关联的记录可在同一条目内展开。筛选和下载按原始记录匹配。" : "Open an entry to read its linked records. Filters and downloads match the original records."}</p>
         <p>{complete ? (zh ? "已搜索完整载入的历史。" : "Search covers the complete loaded history.") : (zh ? "历史不完整；其余记录尚未核验。" : "History is incomplete; remaining records have not been verified.")}</p>
         {stale ? <p>{zh ? "刷新失败，显示上次读取的记录。" : "Refresh failed; showing previously read records."}</p> : null}

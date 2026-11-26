@@ -9,6 +9,33 @@ let loading: Promise<typeof import('mermaid').default> | null = null;
 // initialize changes global configuration; keep it paired with its render.
 let rendering: Promise<unknown> = Promise.resolve();
 
+/** The colour forms mermaid's parser already reads; anything else goes through the painter below. */
+const PLAIN_COLOR = /^#[0-9a-f]{3,8}$|^rgba?\(/i;
+const readColors = new Map<string, string>();
+let painter: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * A colour mermaid can parse. Every palette but paper builds its surfaces with color-mix(), and a
+ * current browser hands that back as color(srgb …); mermaid knows only hex and rgb(), throws, and
+ * the diagram quietly stays code. Painting the value and reading the pixel lets the browser do the
+ * conversion, whatever syntax the palette used. Values are fully resolved already, so a cached
+ * answer cannot outlive the look it was read under.
+ */
+function readableColor(value: string): string {
+  if (!value || PLAIN_COLOR.test(value)) return value;
+  const known = readColors.get(value);
+  if (known !== undefined) return known;
+  painter ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  if (!painter) return value;
+  painter.clearRect(0, 0, 1, 1);
+  painter.fillStyle = value;
+  painter.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = painter.getImageData(0, 0, 1, 1).data;
+  const color = a === 255 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
+  readColors.set(value, color);
+  return color;
+}
+
 /**
  * The theme's own colours, read from the page's variables so a diagram follows the look — light,
  * dark, whatever palette — instead of mermaid's purple defaults. Read at render time, since the
@@ -16,66 +43,57 @@ let rendering: Promise<unknown> = Promise.resolve();
  */
 function themeVariables(): Record<string, string> {
   const styles = getComputedStyle(document.documentElement);
-  const raw = (name: string): string => styles.getPropertyValue(name).trim();
-  // Mermaid's color parser cannot read CSS color-mix; let the browser resolve the theme first.
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 1;
-  const context = canvas.getContext('2d', { willReadFrequently: true })!;
-  const v = (name: string): string => {
-    context.clearRect(0, 0, 1, 1);
-    context.fillStyle = raw(name);
-    context.fillRect(0, 0, 1, 1);
-    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
-    return `rgba(${r}, ${g}, ${b}, ${a / 255})`;
-  };
+  const v = (name: string): string => styles.getPropertyValue(name).trim();
+  /** A colour variable, in a syntax mermaid reads. */
+  const c = (name: string): string => readableColor(v(name));
   return {
-    background: v('--bg'),
-    fontFamily: raw('--font'),
+    background: c('--bg'),
+    fontFamily: v('--font'),
     fontSize: '14px',
     // Nodes: the page's quiet surfaces, its borders, its text. Nothing purple, nothing loud.
-    primaryColor: v('--surface-2'),
-    primaryBorderColor: v('--border-strong'),
-    primaryTextColor: v('--text'),
-    secondaryColor: v('--surface'),
-    secondaryBorderColor: v('--border-strong'),
-    secondaryTextColor: v('--text'),
-    tertiaryColor: v('--surface-2'),
-    tertiaryBorderColor: v('--border'),
-    tertiaryTextColor: v('--text'),
-    mainBkg: v('--surface-2'),
-    nodeBorder: v('--border-strong'),
-    nodeTextColor: v('--text'),
-    classText: v('--text'),
-    textColor: v('--text'),
-    titleColor: v('--text'),
-    lineColor: v('--muted'),
-    arrowheadColor: v('--muted'),
-    edgeLabelBackground: v('--bg'),
-    clusterBkg: v('--surface-2'),
-    clusterBorder: v('--border-strong'),
+    primaryColor: c('--surface-2'),
+    primaryBorderColor: c('--border-strong'),
+    primaryTextColor: c('--text'),
+    secondaryColor: c('--surface'),
+    secondaryBorderColor: c('--border-strong'),
+    secondaryTextColor: c('--text'),
+    tertiaryColor: c('--surface-2'),
+    tertiaryBorderColor: c('--border'),
+    tertiaryTextColor: c('--text'),
+    mainBkg: c('--surface-2'),
+    nodeBorder: c('--border-strong'),
+    nodeTextColor: c('--text'),
+    classText: c('--text'),
+    textColor: c('--text'),
+    titleColor: c('--text'),
+    lineColor: c('--muted'),
+    arrowheadColor: c('--muted'),
+    edgeLabelBackground: c('--bg'),
+    clusterBkg: c('--surface-2'),
+    clusterBorder: c('--border-strong'),
     // Sequence diagrams: the same few colours in the roles they ask for.
-    actorBkg: v('--surface-2'),
-    actorBorder: v('--border-strong'),
-    actorTextColor: v('--text'),
-    actorLineColor: v('--border-strong'),
-    signalColor: v('--muted'),
-    signalTextColor: v('--text'),
-    labelBoxBkgColor: v('--surface'),
-    labelBoxBorderColor: v('--border-strong'),
-    labelTextColor: v('--text'),
-    loopTextColor: v('--text'),
-    noteBkgColor: v('--surface-2'),
-    noteBorderColor: v('--border-strong'),
-    noteTextColor: v('--text'),
-    activationBkgColor: v('--surface'),
-    activationBorderColor: v('--border-strong'),
-    sequenceNumberColor: v('--text'),
+    actorBkg: c('--surface-2'),
+    actorBorder: c('--border-strong'),
+    actorTextColor: c('--text'),
+    actorLineColor: c('--border-strong'),
+    signalColor: c('--muted'),
+    signalTextColor: c('--text'),
+    labelBoxBkgColor: c('--surface'),
+    labelBoxBorderColor: c('--border-strong'),
+    labelTextColor: c('--text'),
+    loopTextColor: c('--text'),
+    noteBkgColor: c('--surface-2'),
+    noteBorderColor: c('--border-strong'),
+    noteTextColor: c('--text'),
+    activationBkgColor: c('--surface'),
+    activationBorderColor: c('--border-strong'),
+    sequenceNumberColor: c('--text'),
     // Class diagrams' striped rows, and state diagrams' second band.
-    attributeBackgroundColorOdd: v('--surface-2'),
-    attributeBackgroundColorEven: v('--surface'),
-    altBackground: v('--surface-2'),
+    attributeBackgroundColorOdd: c('--surface-2'),
+    attributeBackgroundColorEven: c('--surface'),
+    altBackground: c('--surface-2'),
     // Where mermaid wants emphasis, it gets the app's accent, not a hue of its own.
-    accentColor: v('--accent'),
+    accentColor: c('--accent'),
   };
 }
 
