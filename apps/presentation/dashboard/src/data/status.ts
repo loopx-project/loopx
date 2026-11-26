@@ -617,7 +617,7 @@ export const runGoalSchema = z.object({
       delivery_window: z.object({
         schema_version: z.string().optional(),
         state: z.enum(["fresh", "stale", "missing", "unknown"]).catch("unknown"),
-        reason: z.enum(["no_expectation", "no_observation", "unparseable_observation"]).optional().nullable(),
+        reason: z.enum(["no_expectation", "no_observation", "unparseable_observation", "unverified_activity"]).optional().nullable(),
         last_observed_at: z.string().optional().nullable(),
         age_seconds: z.number().optional().nullable(),
         age_hours: z.number().optional().nullable(),

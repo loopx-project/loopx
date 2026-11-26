@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
 
 from ..control_plane.goals.botmux_runtime import (
     BOTMUX_DEFAULT_ENDPOINT,
@@ -20,7 +19,7 @@ from ..control_plane.goals.botmux_runtime import (
 
 
 def register_goal_channel_runtime_commands(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
 ) -> None:
     runtime = subparsers.add_parser(
@@ -95,7 +94,7 @@ def _add_runtime_common_args(parser: argparse.ArgumentParser) -> None:
 def run_goal_channel_runtime(
     args: argparse.Namespace,
     *,
-    registry: dict[str, Any],
+    registry: Mapping[str, object],
     registry_path: Path,
 ) -> dict[str, object]:
     goal_id = str(args.goal_id)
