@@ -606,7 +606,9 @@ class ManagedSessionTurn:
                 goal_id=actor["goal_id"]),
             scheduler_execution_context=scheduler_execution_context_for_turn(
                 host="codex-app-server", execution_mode="isolated-headless"))
-        agent = (decision.get("interaction_contract") or {}).get("agent_channel") or {}
+        interaction = decision.get("interaction_contract")
+        raw_agent = interaction.get("agent_channel") if isinstance(interaction, dict) else None
+        agent = raw_agent if isinstance(raw_agent, dict) else {}
         _, admitted = current_action_selection_admission(decision,
             requested_todo_id=request["todo_id"], agent_must_attempt=agent.get("must_attempt") is True,
             agent_delivery_allowed=agent.get("delivery_allowed"))
