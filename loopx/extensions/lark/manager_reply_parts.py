@@ -24,246 +24,132 @@ locator the same way, so a reader is never told the same thing twice.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import cast
 
-from .inbox_reply import (
-    MESSAGE_ID_PATTERN,
-    reply_lark_event_inbox,
-    verify_lark_inbox_reply,
+from .inbox_reply import reply_lark_event_inbox, verify_lark_inbox_reply
+from .manager_reply_parts_state import (
+    MANAGER_REPLY_STALL_NOTICE as MANAGER_REPLY_STALL_NOTICE,
+    MESSAGE_ID_PATTERN as MESSAGE_ID_PATTERN,
+    PART_ATTEMPT_KEY as PART_ATTEMPT_KEY,
+    PART_DELIVERY_COMPLETE_KEY as PART_DELIVERY_COMPLETE_KEY,
+    PART_DELIVERY_COMPLETION_UNVERIFIED as PART_DELIVERY_COMPLETION_UNVERIFIED,
+    PART_DELIVERY_INCOMPLETE as PART_DELIVERY_INCOMPLETE,
+    PART_DELIVERY_VERIFIED_KEY as PART_DELIVERY_VERIFIED_KEY,
+    PART_STALL_COUNT_KEY as PART_STALL_COUNT_KEY,
+    PART_STALL_NOTICE_ATTEMPT_KEY as PART_STALL_NOTICE_ATTEMPT_KEY,
+    PART_STALL_NOTICE_KEY as PART_STALL_NOTICE_KEY,
+    PART_STALL_NOTICE_MIN_STALLS as PART_STALL_NOTICE_MIN_STALLS,
+    CommandRunnerLike,
+    CompletedPartDeliveryReceipt,
+    ManagerPartDeliveryPendingResult as ManagerPartDeliveryPendingResult,
+    PartReplyOptionsFactory,
+    PartSendInboxOptions,
+    SendInboxOptions,
+    VerifyInboxOptions,
+    WriteDelivery,
+    _accepted_reply_facts,
+    _locator_unavailable_result,
+    _part_accepted,
+    _recorded_attempt as _recorded_attempt,
+    _reply_on_channel,
+    _reply_verified as _reply_verified,
+    _strict_int,
+    attempt_provider_locator as attempt_provider_locator,
+    coerce_int_default_zero,
+    completed_part_delivery_receipt as completed_part_delivery_receipt,
+    manager_part_delivery_pending_result as manager_part_delivery_pending_result,
+    manager_part_delivery_readback as manager_part_delivery_readback,
+    part_delivery_incomplete_reason as part_delivery_incomplete_reason,
+    plan_stalled_part_notice as plan_stalled_part_notice,
+    recorded_part_attempt as recorded_part_attempt,
+    recorded_stall_notice_attempt as recorded_stall_notice_attempt,
+    strip_before_send_option,
+    utc_now_iso,
 )
 from .presentation.markdown_parts import split_lark_markdown_posts
-
-PART_DELIVERY_COMPLETE_KEY = "delivery_parts_complete"
-PART_DELIVERY_VERIFIED_KEY = "delivery_parts_verified"
-PART_ATTEMPT_KEY = "delivery_part_attempt"
-PART_STALL_NOTICE_KEY = "delivery_part_stall_notice"
-PART_STALL_COUNT_KEY = "delivery_part_stall_count"
-PART_STALL_NOTICE_ATTEMPT_KEY = "delivery_part_stall_notice_attempt"
-PART_DELIVERY_INCOMPLETE = "reply_part_delivery_incomplete"
-PART_DELIVERY_COMPLETION_UNVERIFIED = "reply_part_delivery_completion_unverified"
-# The notice is a last resort, not the outcome: the sequence counts the attempts
-# that stopped the answer mid-sequence (progress does not reset that count, only
-# a different split does) and only speaks after three of them, so a transient
-# provider hiccup never turns into a message the reader did not need.
-PART_STALL_NOTICE_MIN_STALLS = 3
-MANAGER_REPLY_STALL_NOTICE = (
-    "本条答复已拆分，目前已核验前面的 {sent}/{count} 段；"
-    "完整答复保存在 LoopX 管家会话中，剩余分段会继续重试。"
-)
 
 
 def plan_manager_reply_parts(reply_text: str) -> tuple[list[str], bool]:
     """Return complete rich parts; the legacy truncation flag is always false."""
 
-    return split_lark_markdown_posts(reply_text, {"msg_type": "post", "uuid": "loopx-" + "0" * 32}), False
-
-
-def _reply_verified(reply: Mapping[str, Any]) -> bool:
-    """Whether the provider reported this reply present on the channel.
-
-    A reply can be confirmed either by the readback that follows its own send or
-    by the reconciliation of an earlier send the provider accepted but did not
-    read back. Both mean the reader has that text, which is the fact the record
-    keeps; a reconciled send has no new write of its own.
-    """
-
-    return bool(
-        reply.get("verification_performed") is True
-        and reply.get("reply_verified") is True
+    return (
+        split_lark_markdown_posts(reply_text, {"msg_type": "post", "uuid": "loopx-" + "0" * 32}),
+        False,
     )
 
 
-def _reply_on_channel(reply: Mapping[str, Any]) -> bool:
-    """Whether the reader may already have this reply's text.
-
-    ``ok`` also requires the source reaction cleanup to have finished, so a
-    reply the provider already accepted can come back not-ok with a cleanup
-    still pending. Treating that as delivered is what keeps a retry from sending
-    the reader the same text twice, and the pending cleanup stays the
-    transport's own business.
-    """
-
-    return reply.get("ok") is True or _reply_verified(reply)
-
-
-def _part_accepted(reply: Mapping[str, Any]) -> bool:
-    """Whether this part may be counted as delivered."""
-
-    return _reply_on_channel(reply)
-
-
-def _accepted_reply_facts(reply: Mapping[str, Any]) -> dict[str, Any]:
-    """The durable facts of one part the provider confirmed."""
-
-    return {
-        "reply_idempotency_key": reply.get("idempotency_key"),
-        PART_DELIVERY_VERIFIED_KEY: _reply_verified(reply),
-    }
-
-
-def completed_part_delivery_receipt(
-    delivery_state: Mapping[str, Any],
-) -> dict[str, Any] | None:
-    """The verified receipt for a sequence whose every part was accepted.
-
-    Returns ``None`` unless the durable record proves both that the sequence
-    finished and that the provider verified the last part, so a caller never
-    marks a delivery verified on the strength of an unfinished or unverified
-    record.
-    """
-
-    if delivery_state.get(PART_DELIVERY_COMPLETE_KEY) is not True:
+def _reconcile_recorded_attempt(
+    *,
+    attempt: Mapping[str, object] | None,
+    reconciled_key: str,
+    text: str,
+    reply_runner: object,
+    root: Path,
+    config_path: Path,
+    message_id: str,
+    verify_options: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    if attempt is None:
         return None
-    if delivery_state.get(PART_DELIVERY_VERIFIED_KEY) is not True:
-        return None
-    key = delivery_state.get("reply_idempotency_key")
-    if not isinstance(key, str) or not key.startswith("sha256:"):
-        return None
-    return {
-        "ok": True,
-        "status": "sent_verified",
-        "idempotency_key": key,
-        "content_format": delivery_state.get("content_format", "text"),
-        "external_write_performed": True,
-        "verification_performed": True,
-        "reply_verified": True,
-        "part_delivery_reused": True,
-    }
-
-
-def part_delivery_incomplete_reason(delivery_state: Mapping[str, Any]) -> str:
-    """Name why a sequence stopped, when the record already says all parts went.
-
-    A recorded counter that reached the part count without a verified
-    completion cannot be re-sent (the parts are already on the channel) and
-    cannot be settled either, so it gets its own reason instead of the generic
-    incomplete one.
-    """
-
-    recorded = delivery_state.get("delivery_part_count")
-    sent = delivery_state.get("delivery_parts_sent")
-    if (
-        isinstance(recorded, int)
-        and not isinstance(recorded, bool)
-        and isinstance(sent, int)
-        and not isinstance(sent, bool)
-        and recorded > 0
-        and sent == recorded
-    ):
-        return PART_DELIVERY_COMPLETION_UNVERIFIED
-    return PART_DELIVERY_INCOMPLETE
-
-
-def _recorded_attempt(recorded: Any) -> Mapping[str, Any] | None:
-    """The provider locator inside one recorded attempt, when it is well formed."""
-
-    if not isinstance(recorded, Mapping):
-        return None
-    attempt = recorded.get("attempt")
-    return attempt if isinstance(attempt, Mapping) else None
-
-
-def recorded_part_attempt(
-    delivery_state: Mapping[str, Any], index: int
-) -> Mapping[str, Any] | None:
-    """The provider locator of the part that was attempted but not confirmed."""
-
-    recorded = delivery_state.get(PART_ATTEMPT_KEY)
-    if not isinstance(recorded, Mapping) or recorded.get("index") != index:
-        return None
-    return _recorded_attempt(recorded)
-
-
-def attempt_provider_locator(attempt: Mapping[str, Any]) -> str | None:
-    """The message id a recorded attempt can be verified against, when it has one.
-
-    A send the provider accepted without reporting a message id records its
-    intent instead of a locator. That record still proves a write happened, and
-    ``None`` here is what tells the sequence to stop instead of posting the same
-    text a second time.
-    """
-
-    message_ref = str(attempt.get("message_ref") or "").strip()
-    return message_ref if MESSAGE_ID_PATTERN.fullmatch(message_ref) else None
-
-
-def _locator_unavailable_result(*, reconciled_key: str) -> dict[str, Any]:
-    """The typed outcome for an attempt no readback can key on."""
-
-    return {
-        "ok": False,
-        "status": "sent_unverified",
-        "idempotency_key": None,
-        "external_write_performed": True,
-        "verification_performed": False,
-        "reply_verified": False,
-        "blocker": "lark_inbox_reply_not_verified",
-        reconciled_key: False,
-        "part_locator_unavailable": True,
-    }
-
-
-def recorded_stall_notice_attempt(
-    delivery_state: Mapping[str, Any],
-) -> Mapping[str, Any] | None:
-    """The provider locator of a stall notice that was sent but not confirmed."""
-
-    return _recorded_attempt(delivery_state.get(PART_STALL_NOTICE_ATTEMPT_KEY))
+    if attempt_provider_locator(attempt) is None:
+        return _locator_unavailable_result(reconciled_key=reconciled_key)
+    verified = verify_lark_inbox_reply(
+        project=root,
+        config_path=config_path,
+        message_id=message_id,
+        text=text,
+        attempt=attempt,
+        runner=cast(CommandRunnerLike, reply_runner),
+        **cast(VerifyInboxOptions, dict(verify_options)),
+    )
+    if verified.get("reply_verified") is not True:
+        # A known write with unavailable/mismatched readback is never unsent.
+        return verified
+    return {**dict(verified), reconciled_key: True}
 
 
 def reconciled_part_reply(
     *,
     parts: list[str],
     index: int,
-    delivery_state: Mapping[str, Any],
-    reply_runner: Any,
+    delivery_state: Mapping[str, object],
+    reply_runner: object,
     root: Path,
     config_path: Path,
     message_id: str,
-    reply_options: Mapping[str, Any] | None = None,
-) -> Mapping[str, Any] | None:
+    reply_options: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
     """Confirm a previously attempted part instead of sending it twice.
 
     Return ``None`` only when no write was recorded. A known write stays pending
     until readback confirms it; verification performs no write of its own.
     """
 
-    attempt = recorded_part_attempt(delivery_state, index)
-    if attempt is None:
-        return None
-    if attempt_provider_locator(attempt) is None:
-        # The provider took the write and gave no message id, so this part cannot
-        # be read back. Sending it again risks delivering the same text twice,
-        # which is worse than reporting the sequence as unverified: the record
-        # keeps the part where it stopped until the caller decides.
-        return _locator_unavailable_result(reconciled_key="part_reconciled")
-    verified = verify_lark_inbox_reply(
-        project=root,
+    # Preserve exact reconciliation guard for locator-less parts and pass options verbatim.
+    return _reconcile_recorded_attempt(
+        attempt=recorded_part_attempt(delivery_state, index),
+        reconciled_key="part_reconciled",
+        text=parts[index],
+        reply_runner=reply_runner,
+        root=root,
         config_path=config_path,
         message_id=message_id,
-        text=parts[index],
-        attempt=attempt,
-        runner=reply_runner,
-        **dict(reply_options or {}),
+        verify_options=dict(reply_options or {}),
     )
-    if verified.get("reply_verified") is not True:
-        # A known write with unavailable/mismatched readback is never unsent.
-        return verified
-    return {**dict(verified), "part_reconciled": True}
 
 
 def reconciled_stall_notice(
     *,
     notice: str,
-    delivery_state: Mapping[str, Any],
-    reply_runner: Any,
+    delivery_state: Mapping[str, object],
+    reply_runner: object,
     root: Path,
     config_path: Path,
     message_id: str,
-    reply_options: Mapping[str, Any] | None = None,
-) -> Mapping[str, Any] | None:
+    reply_options: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
     """Confirm a previously sent stall notice instead of posting it twice.
 
     The provider can accept the notice and still fail the readback that proves
@@ -272,63 +158,29 @@ def reconciled_stall_notice(
     every later attempt, exactly as a part is reconciled before it is re-sent.
     """
 
-    attempt = recorded_stall_notice_attempt(delivery_state)
-    if attempt is None:
-        return None
-    if attempt_provider_locator(attempt) is None:
-        return _locator_unavailable_result(reconciled_key="notice_reconciled")
-    verified = verify_lark_inbox_reply(
-        project=root,
+    return _reconcile_recorded_attempt(
+        attempt=recorded_stall_notice_attempt(delivery_state),
+        reconciled_key="notice_reconciled",
+        text=notice,
+        reply_runner=reply_runner,
+        root=root,
         config_path=config_path,
         message_id=message_id,
-        text=notice,
-        attempt=attempt,
-        runner=reply_runner,
-        **{key: value for key, value in (reply_options or {}).items() if key != "before_send"},
+        verify_options=strip_before_send_option(reply_options),
     )
-    if verified.get("reply_verified") is not True:
-        return verified
-    return {**dict(verified), "notice_reconciled": True}
-
-
-def plan_stalled_part_notice(delivery_state: Mapping[str, Any]) -> str | None:
-    """The bounded notice a stalled sequence posts once, after real retries.
-
-    A reader who received only the first parts needs to know the answer is
-    incomplete. This notice states what was delivered and where the rest is, and
-    it waits for three stalled attempts so an ordinary hiccup stays quiet.
-    """
-
-    if delivery_state.get(PART_STALL_NOTICE_KEY) is True:
-        return None
-    stalls = delivery_state.get(PART_STALL_COUNT_KEY)
-    if (
-        not isinstance(stalls, int)
-        or isinstance(stalls, bool)
-        or stalls < PART_STALL_NOTICE_MIN_STALLS
-    ):
-        return None
-    sent = delivery_state.get("delivery_parts_sent")
-    count = delivery_state.get("delivery_part_count")
-    for value in (sent, count):
-        if not isinstance(value, int) or isinstance(value, bool):
-            return None
-    if not 0 < sent < count:
-        return None
-    return MANAGER_REPLY_STALL_NOTICE.format(sent=sent, count=count)
 
 
 def deliver_stall_notice(
     *,
-    delivery_state: dict[str, Any],
+    delivery_state: dict[str, object],
     delivery_path: Path,
-    write_delivery,
-    reply_runner: Any,
+    write_delivery: WriteDelivery,
+    reply_runner: object,
     root: Path,
     config_path: Path,
     message_id: str,
-    reply_options: Mapping[str, Any] | None = None,
-) -> Mapping[str, Any] | None:
+    reply_options: Mapping[str, object] | None = None,
+) -> Mapping[str, object] | None:
     """Post the once-per-sequence stall notice, confirming a prior send first.
 
     Returns the transport result of the send or reconciliation, and ``None``
@@ -366,11 +218,11 @@ def deliver_stall_notice(
     # genuinely superseded.
     delivery_state.pop(PART_STALL_NOTICE_ATTEMPT_KEY, None)
 
-    def record_attempt(attempt: Mapping[str, Any]) -> None:
+    def record_attempt(attempt: Mapping[str, object]) -> None:
         # The locator has to survive the attempt that produced it: a retry
         # reloads the record and verifies it instead of posting the notice again.
         delivery_state[PART_STALL_NOTICE_ATTEMPT_KEY] = {"attempt": dict(attempt)}
-        delivery_state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        delivery_state["updated_at"] = utc_now_iso()
         write_delivery(delivery_path, delivery_state)
 
     delivery_state["delivery_part_stall_notice_started"] = True
@@ -382,47 +234,111 @@ def deliver_stall_notice(
         text=notice,
         content_format="markdown",
         execute=True,
-        runner=reply_runner,
+        runner=cast(CommandRunnerLike, reply_runner),
         delivery_attempt_recorder=record_attempt,
-        **dict(reply_options or {}),
+        **cast(SendInboxOptions, dict(reply_options or {})),
     )
-    if (result.get("external_write_performed") is not True
-            and result.get("provider_write_attempted") is not True):
+    if (
+        result.get("external_write_performed") is not True
+        and result.get("provider_write_attempted") is not True
+    ):
         delivery_state.pop("delivery_part_stall_notice_started", None)
     write_delivery(delivery_path, delivery_state)
     return result
 
 
-def deliver_manager_reply_parts(
+def _deliver_single_part(
     *,
     parts: list[str],
-    delivery_state: dict[str, Any],
+    index: int,
+    delivery_state: dict[str, object],
     delivery_path: Path,
-    write_delivery,
-    reply_runner: Any,
+    write_delivery: WriteDelivery,
+    reply_runner: object,
     root: Path,
     config_path: Path,
     message_id: str,
     content_format: str,
-    reply_options=None,
-) -> Mapping[str, Any] | None:
+    options: Mapping[str, object],
+) -> Mapping[str, object] | None:
+    reconciled = reconciled_part_reply(
+        parts=parts,
+        index=index,
+        delivery_state=delivery_state,
+        reply_runner=reply_runner,
+        root=root,
+        config_path=config_path,
+        message_id=message_id,
+        reply_options=strip_before_send_option(options),
+    )
+    if reconciled is not None:
+        return reconciled
+    if delivery_state.get("delivery_part_started") == index:
+        # A crash between a provider write and its locator is ambiguous.
+        # The original intent stays recoverable; do not post it again.
+        return None
+    # The locator of the part being sent now replaces any older one, so
+    # the record always points at the most recent unconfirmed attempt.
+    delivery_state.pop(PART_ATTEMPT_KEY, None)
+
+    def record_attempt(attempt: Mapping[str, object]) -> None:
+        delivery_state[PART_ATTEMPT_KEY] = {"index": index, "attempt": dict(attempt)}
+        attempts_raw = delivery_state.get("delivery_part_attempts")
+        attempts = attempts_raw if isinstance(attempts_raw, dict) else {}
+        delivery_state["delivery_part_attempts"] = attempts
+        attempts[str(index)] = dict(attempt)
+        delivery_state["updated_at"] = utc_now_iso()
+        write_delivery(delivery_path, delivery_state)
+
+    delivery_state["delivery_part_started"] = index
+    write_delivery(delivery_path, delivery_state)
+    sent = reply_lark_event_inbox(
+        project=root,
+        config_path=config_path,
+        message_id=message_id,
+        text=parts[index],
+        content_format=content_format,
+        execute=True,
+        runner=cast(CommandRunnerLike, reply_runner),
+        delivery_attempt_recorder=record_attempt,
+        # Part delivery is the fallback for a body the provider itself
+        # cannot take; a part is never cut by the notification length.
+        short_message_limit=None,
+        **cast(PartSendInboxOptions, dict(options)),
+    )
+    if (
+        sent.get("external_write_performed") is not True
+        and sent.get("provider_write_attempted") is not True
+    ):
+        delivery_state.pop("delivery_part_started", None)
+    elif sent.get("provider_write_attempted") is True:
+        delivery_state["delivery_write_attempted"] = True
+    return sent
+
+
+def deliver_manager_reply_parts(
+    *,
+    parts: list[str],
+    delivery_state: dict[str, object],
+    delivery_path: Path,
+    write_delivery: WriteDelivery,
+    reply_runner: object,
+    root: Path,
+    config_path: Path,
+    message_id: str,
+    content_format: str,
+    reply_options: PartReplyOptionsFactory | None = None,
+) -> Mapping[str, object] | CompletedPartDeliveryReceipt | None:
     """Send the remaining parts in order, resuming from the recorded count.
 
     The durable state, not the return value, is the record of what the provider
-    accepted: each accepted part advances `delivery_parts_sent` before the next
+    accepted: each accepted part advances ``delivery_parts_sent`` before the next
     send, and a rejected part stops the sequence there.
     """
 
-    recorded_count = delivery_state.get("delivery_part_count")
-    sent = delivery_state.get("delivery_parts_sent")
-    if (
-        not isinstance(recorded_count, int)
-        or isinstance(recorded_count, bool)
-        or recorded_count != len(parts)
-        or not isinstance(sent, int)
-        or isinstance(sent, bool)
-        or not 0 <= sent <= len(parts)
-    ):
+    recorded_count = _strict_int(delivery_state.get("delivery_part_count"))
+    sent = _strict_int(delivery_state.get("delivery_parts_sent"))
+    if recorded_count != len(parts) or sent is None or not 0 <= sent <= len(parts):
         # A different split than the one on record cannot be resumed safely.
         sent = 0
         # The stall count describes this sequence's retries, so it goes with the
@@ -438,70 +354,35 @@ def deliver_manager_reply_parts(
         delivery_parts_sent=sent,
         format_degraded=content_format != "markdown",
         content_format=content_format,
-        updated_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=utc_now_iso(),
     )
     # A sequence that is still being sent is not a complete one, even when a
     # previous attempt recorded a verified completion for a different split.
     delivery_state[PART_DELIVERY_COMPLETE_KEY] = False
     write_delivery(delivery_path, delivery_state)
-    last: Mapping[str, Any] | None = None
+    last: Mapping[str, object] | None = None
     for index in range(sent, len(parts)):
         options = dict(reply_options(index) if reply_options is not None else {})
-        last = reconciled_part_reply(
+        last = _deliver_single_part(
             parts=parts,
             index=index,
             delivery_state=delivery_state,
+            delivery_path=delivery_path,
+            write_delivery=write_delivery,
             reply_runner=reply_runner,
             root=root,
             config_path=config_path,
             message_id=message_id,
-            reply_options={key: value for key, value in options.items() if key != "before_send"},
+            content_format=content_format,
+            options=options,
         )
         if last is None:
-            if delivery_state.get("delivery_part_started") == index:
-                # A crash between a provider write and its locator is ambiguous.
-                # The original intent stays recoverable; do not post it again.
-                return None
-            # The locator of the part being sent now replaces any older one, so
-            # the record always points at the most recent unconfirmed attempt.
-            delivery_state.pop(PART_ATTEMPT_KEY, None)
-
-            def record_attempt(attempt: Mapping[str, Any], *, index=index) -> None:
-                delivery_state[PART_ATTEMPT_KEY] = {
-                    "index": index,
-                    "attempt": dict(attempt),
-                }
-                delivery_state.setdefault("delivery_part_attempts", {})[str(index)] = dict(attempt)
-                delivery_state["updated_at"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                write_delivery(delivery_path, delivery_state)
-
-            delivery_state["delivery_part_started"] = index
-            write_delivery(delivery_path, delivery_state)
-            last = reply_lark_event_inbox(
-                project=root,
-                config_path=config_path,
-                message_id=message_id,
-                text=parts[index],
-                content_format=content_format,
-                execute=True,
-                runner=reply_runner,
-                delivery_attempt_recorder=record_attempt,
-                # Part delivery is the fallback for a body the provider itself
-                # cannot take; a part is never cut by the notification length.
-                short_message_limit=None,
-                **options,
-            )
-            if last.get("external_write_performed") is not True and last.get("provider_write_attempted") is not True:
-                delivery_state.pop("delivery_part_started", None)
-            elif last.get("provider_write_attempted") is True:
-                delivery_state["delivery_write_attempted"] = True
+            return None
         if not _part_accepted(last):
             delivery_state.update(
                 delivery_parts_sent=index,
                 last_delivery_status=str(last.get("status") or "reply_failed"),
-                updated_at=datetime.now(timezone.utc).isoformat(),
+                updated_at=utc_now_iso(),
             )
             write_delivery(delivery_path, delivery_state)
             return None
@@ -514,7 +395,7 @@ def deliver_manager_reply_parts(
                 if index + 1 == len(parts)
                 else _accepted_reply_facts(last)
             ),
-            updated_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=utc_now_iso(),
         )
         write_delivery(delivery_path, delivery_state)
     return last
@@ -523,14 +404,14 @@ def deliver_manager_reply_parts(
 def deliver_manager_reply_after_length_failure(
     *,
     reply_text: str,
-    delivery_state: dict[str, Any],
+    delivery_state: dict[str, object],
     delivery_path: Path,
-    write_delivery,
-    reply_runner: Any,
+    write_delivery: WriteDelivery,
+    reply_runner: object,
     root: Path,
     config_path: Path,
     message_id: str,
-) -> tuple[Mapping[str, Any] | None, str | None]:
+) -> tuple[Mapping[str, object] | None, str | None]:
     """Deliver the complete answer as ordered rich posts, with recovery."""
 
     parts, _ = plan_manager_reply_parts(reply_text)
@@ -551,7 +432,7 @@ def deliver_manager_reply_after_length_failure(
     # sequence has already failed more than one attempt, instead of leaving the
     # delivered parts looking like the whole answer.
     delivery_state[PART_STALL_COUNT_KEY] = (
-        int(delivery_state.get(PART_STALL_COUNT_KEY) or 0) + 1
+        coerce_int_default_zero(delivery_state.get(PART_STALL_COUNT_KEY)) + 1
     )
     spoken = deliver_stall_notice(
         delivery_state=delivery_state,
@@ -571,44 +452,6 @@ def deliver_manager_reply_after_length_failure(
     # The stall count has to survive this attempt either way. A retry reloads the
     # record from disk, so an unwritten increment would restart at zero and the
     # notice would never be reached no matter how often the sequence stalled.
-    delivery_state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    delivery_state["updated_at"] = utc_now_iso()
     write_delivery(delivery_path, delivery_state)
     return None, part_delivery_incomplete_reason(delivery_state)
-
-
-def manager_part_delivery_pending_result(
-    *,
-    reason: str,
-    delivery_state: Mapping[str, Any],
-    goal_id: str,
-    inbox_config_ref: str,
-) -> dict[str, Any]:
-    """The typed pending result for a part sequence the provider interrupted."""
-
-    return {
-        "ok": False,
-        "status": "reply_delivery_pending",
-        "reason": reason,
-        "delivery_part_count": delivery_state.get("delivery_part_count"),
-        "delivery_parts_sent": delivery_state.get("delivery_parts_sent"),
-        "delivery_notice_sent": delivery_state.get(PART_STALL_NOTICE_KEY) is True,
-        "format_degraded": delivery_state.get("content_format") != "markdown",
-        "goal_id": goal_id,
-        "inbox_config_ref": inbox_config_ref,
-        "source_acknowledged": False,
-    }
-
-
-def manager_part_delivery_readback(delivery_state: Mapping[str, Any]) -> dict[str, Any]:
-    """Part accounting for a delivered answer, empty when it was one message."""
-
-    if not (
-        isinstance(delivery_state.get("delivery_part_count"), int)
-        and isinstance(delivery_state.get("delivery_parts_sent"), int)
-    ):
-        return {}
-    return {
-        "delivery_part_count": delivery_state["delivery_part_count"],
-        "delivery_parts_sent": delivery_state["delivery_parts_sent"],
-        "delivery_truncated": bool(delivery_state.get("delivery_truncated")),
-    }
