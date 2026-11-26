@@ -1241,3 +1241,278 @@ def test_steward_antigravity_report_prompt_uses_raw_prompt_and_omits_unfrozen_ma
         "vision_continuation_audit",
     ):
         assert noisy_key not in task_ctx
+
+
+def test_governance_turn_prompt_authority_compacts_without_mutating_and_keeps_replan_packet(
+    steward, tmp_path, monkeypatch,
+):
+    from copy import deepcopy
+    from loopx.capabilities.native_chat.steward_monitor import governance_turn_prompt_authority
+    from loopx.configure_goal import configure_goal
+    from test_native_steward_private import finish
+    from test_native_steward_reports import fake_report_model
+
+    sample_authority = {
+        "primary_action": "settle autonomous replan",
+        "vision_continuation_audit": {"required": True},
+        "_model_input": {
+            "route": "agent_turn",
+            "detail_ref": {
+                "captured_decision": "/tmp/cap.json",
+                "replan_action_packet": {"obligation_id": "replan-1", "required": True},
+            },
+            "task_context": {
+                "goal_id": "g1",
+                "agent_identity": {"agent_id": "a1"},
+                "execution_profile": {"kind": "standard"},
+                "task_scope": "execution",
+                "mode": "autonomous",
+                "state": "active",
+                "selected_todo": {"todo_id": "t1"},
+                "agent_todo_summary": {"huge": list(range(10))},
+                "interaction_contract": {"cli_channel": {}},
+                "collaboration_inbox": {"messages": []},
+                "vision_continuation_audit": {"required": True},
+            },
+        },
+    }
+    snapshot_before = deepcopy(sample_authority)
+    projected = governance_turn_prompt_authority(sample_authority)
+    assert sample_authority == snapshot_before
+    assert "vision_continuation_audit" not in projected
+    assert projected["_model_input"]["detail_ref"]["replan_action_packet"] == {"obligation_id": "replan-1", "required": True}
+    assert set(projected["_model_input"]["task_context"]) == {
+        "goal_id", "agent_identity", "execution_profile", "task_scope", "mode", "state",
+    }
+
+    seen_prompts: list[str] = []
+
+    def fake_turn(self, message, event_sink=None, **kwargs):
+        with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
+            prompt = str(message)
+            seen_prompts.append(prompt)
+            if event_sink is not None:
+                idx = len(seen_prompts)
+                event_sink("turn.started", {"threadId": f"ag-gov-{idx}", "upstream_turn_id": f"agy_turn_gov_{idx}"})
+                event_sink("turn.native_result", {
+                    "thread_id": f"ag-gov-{idx}",
+                    "upstream_turn_id": f"agy_turn_gov_{idx}",
+                    "text": "ok",
+                })
+            turn_req = json.JSONDecoder().raw_decode(prompt.split("Turn request:", 1)[1].lstrip())[0]
+            if turn_req.get("detail_ref", {}).get("replan_action_packet"):
+                gov_ctx = json.JSONDecoder().raw_decode(
+                    prompt.split("Steward governance replan context (data):", 1)[1].lstrip()
+                )[0]
+                stride = gov_ctx["writeback"]["stride_control"]
+                vision = {
+                    "schema_version": "goal_vision_replan_contract_v0",
+                    "state": "active",
+                    "vision_patch": {
+                        "vision_summary": "Maintain the original monitoring and reporting work.",
+                        "acceptance_summary": "Validate each report and private delivery cleanly.",
+                    },
+                    "path_delta": {
+                        "outcome": "replan",
+                        "prior_assumption": "Initial baseline absent.",
+                        "observed_reality": "First report completed; record baseline.",
+                        "retained": ["Same subscriptions and report window."],
+                        "changed": ["Persisted evidence-linked vision baseline."],
+                        "evidence_refs": ["fixture:validated-first-report"],
+                    },
+                    **(
+                        {"stride_decision": stride["minimal_example"]}
+                        if stride.get("required_on_periodic_review")
+                        else {}
+                    ),
+                }
+                return {"message": json.dumps({
+                    "result_kind": "replan_required",
+                    "classification": "original_report_native_replan",
+                    "summary": "Recorded evidence-linked baseline for reporting.",
+                    "next_action": "Resume retained daily report window.",
+                    "delivery_batch_scale": "implementation",
+                    "delivery_outcome": "outcome_progress",
+                    "work_evidence": ["Recorded validated baseline."],
+                    "validation_evidence": ["Checked semantic replan writeback preview."],
+                    "path_delta_mode": "material_replan",
+                    "agent_vision_json": json.dumps(vision),
+                })}
+            return {"message": fake_report_model({"input": [{"text": prompt}]})}
+
+    with _antigravity_steward_harness(steward, tmp_path, monkeypatch, provider="sqlite", fake_turn=fake_turn) as ctx:
+        assert configure_goal(
+            registry_path=ctx["runtime"].registry_path,
+            goal_id=ctx["actor"]["goal_id"],
+            execution_replan_after_turns=1,
+            execute=True,
+        )["ok"]
+        first = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert first["response"]["native_loopx"]["status"] == "committed", first
+        assert ctx["transport"].steward_reports.reconcile() == 1
+        assert ctx["reports"].health(ctx["owner"])["publication_verified"] is True
+        ctx["clock"]["now"] += timedelta(days=1)
+        rejected = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred", rejected
+        resumed = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert resumed["response"]["native_loopx"]["status"] == "committed", resumed
+
+    assert len(seen_prompts) == 3
+    gov_prompt = seen_prompts[1]
+    assert "Original conversation evidence (data):" not in gov_prompt
+    assert "Steward governance replan context (data):" in gov_prompt
+    assert "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts are already provided" in gov_prompt
+    gov_turn_req = json.JSONDecoder().raw_decode(gov_prompt.split("Turn request:", 1)[1].lstrip())[0]
+    assert gov_turn_req.get("detail_ref", {}).get("replan_action_packet")
+    gov_task_ctx = gov_turn_req.get("task_context") or {}
+    for noisy_key in ("agent_todo_summary", "interaction_contract", "selected_todo", "vision_continuation_audit"):
+        assert noisy_key not in gov_task_ctx
+
+
+def test_validate_replan_surfaces_replan_writeback_rejected_reason_code(
+    steward, tmp_path, monkeypatch,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    from test_native_steward_monitor import edit_local_watch, local_watch_row
+    from test_native_steward_private import finish
+    from test_native_steward_reports import fake_report_model
+
+    holder: dict[str, object] = {}
+
+    def fake_turn(self, message, event_sink=None, **kwargs):
+        with (self._launch_guard() if self._launch_guard is not None else contextlib.nullcontext()):
+            prompt = str(message)
+            if event_sink is not None:
+                event_sink("turn.started", {"threadId": "ag-gov-bad", "upstream_turn_id": "agy_turn_gov_bad"})
+                event_sink("turn.native_result", {
+                    "thread_id": "ag-gov-bad",
+                    "upstream_turn_id": "agy_turn_gov_bad",
+                    "text": "ok",
+                })
+            turn_req = json.JSONDecoder().raw_decode(prompt.split("Turn request:", 1)[1].lstrip())[0]
+            if turn_req.get("detail_ref", {}).get("replan_action_packet"):
+                gov_ctx = json.JSONDecoder().raw_decode(
+                    prompt.split("Steward governance replan context (data):", 1)[1].lstrip()
+                )[0]
+                stride = dict(gov_ctx["writeback"]["stride_control"]["minimal_example"])
+                # Submit the valid delivered stride_decision, while mutating runs/ mid-flight
+                # via a concurrent material monitor poll so dry-run validation hits
+                # ReplanWritebackRejected(reason_code="stride_review_basis_mismatch").
+                ctx_obj = holder["ctx"]
+                mon_todo_id = holder["mon_todo_id"]
+                mon = StewardMonitor(ctx_obj["runtime"])
+                edit_local_watch(
+                    ctx_obj["runtime"],
+                    ctx_obj["actor"],
+                    mon_todo_id,
+                    "--next-due-at",
+                    (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat(),
+                )
+                cur = local_watch_row(ctx_obj["runtime"], ctx_obj["actor"], mon_todo_id)
+                lease = mon._acquire(ctx_obj["actor"], cur, "concurrent-poll-1")["lease"]
+                try:
+                    mon._native_poll([
+                        "quota",
+                        "monitor-poll",
+                        "--goal-id",
+                        ctx_obj["actor"]["goal_id"],
+                        "--agent-id",
+                        ctx_obj["actor"]["agent_id"],
+                        "--todo-id",
+                        cur["todo_id"],
+                        "--turn-instance-id",
+                        "concurrent-poll-1",
+                        "--available-capability",
+                        "filesystem",
+                        "--available-capability",
+                        "external_evidence_poll",
+                        "--runtime-profile",
+                        "codex_app_server",
+                        "--target-key",
+                        cur["target_key"],
+                        "--result-hash",
+                        "sha256:" + "9" * 64,
+                        "--task-lease-idempotency-key",
+                        "concurrent-poll-1",
+                        "--task-lease-expected-version",
+                        str(lease["version"]),
+                        "--execute",
+                        "--material-change",
+                    ])
+                finally:
+                    mon._release(ctx_obj["actor"], cur, lease)
+                vision = {
+                    "schema_version": "goal_vision_replan_contract_v0",
+                    "state": "active",
+                    "vision_patch": {
+                        "vision_summary": "Maintain reporting.",
+                        "acceptance_summary": "Validate each report.",
+                    },
+                    "path_delta": {
+                        "outcome": "replan",
+                        "prior_assumption": "Initial baseline absent.",
+                        "observed_reality": "First report completed.",
+                        "retained": ["Same report window."],
+                        "changed": ["Persisted baseline."],
+                        "evidence_refs": ["fixture:validated-first-report"],
+                    },
+                    "stride_decision": stride,
+                }
+                return {"message": json.dumps({
+                    "result_kind": "replan_required",
+                    "classification": "original_report_native_replan",
+                    "summary": "Attempted replan after concurrent monitor poll shifted runs basis.",
+                    "next_action": "Retry with fresh context.",
+                    "delivery_batch_scale": "implementation",
+                    "delivery_outcome": "outcome_progress",
+                    "work_evidence": ["Recorded baseline candidate."],
+                    "validation_evidence": ["Dry-run checks basis match."],
+                    "path_delta_mode": "material_replan",
+                    "agent_vision_json": json.dumps(vision),
+                })}
+            return {"message": fake_report_model({"input": [{"text": prompt}]})}
+
+    with _antigravity_steward_harness(steward, tmp_path, monkeypatch, provider="sqlite", fake_turn=fake_turn) as ctx:
+        holder["ctx"] = ctx
+        monitor = StewardMonitor(ctx["runtime"])
+        enable_plan = monitor.configure(ctx["owner"], operation="enable")["plan"]
+        mon_todo = monitor.configure(
+            ctx["owner"],
+            operation="enable",
+            expected_plan_id=enable_plan["plan_id"],
+            execute=True,
+        )["monitor"]
+        holder["mon_todo_id"] = mon_todo["todo_id"]
+        edit_local_watch(
+            ctx["runtime"],
+            ctx["actor"],
+            mon_todo["todo_id"],
+            "--next-due-at",
+            (datetime.now(timezone.utc) + timedelta(days=5)).isoformat(),
+        )
+        assert configure_goal(
+            registry_path=ctx["runtime"].registry_path,
+            goal_id=ctx["actor"]["goal_id"],
+            execution_replan_after_turns=1,
+            execute=True,
+        )["ok"]
+        first = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert first["response"]["native_loopx"]["status"] == "committed", first
+        assert ctx["transport"].steward_reports.reconcile() == 1
+        assert ctx["reports"].health(ctx["owner"])["publication_verified"] is True
+        ctx["clock"]["now"] += timedelta(days=1)
+        rejected = finish(ctx["runtime"], ctx["wake"]()[0])
+        assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred", rejected
+        failed_replan = finish(ctx["runtime"], ctx["wake"]()[0])
+        replans = [
+            row["payload"]
+            for row in ctx["store"].events_after(ctx["sid"], failed_replan["turn_id"], None)
+            if row["kind"] == "native_loopx.replan_result"
+        ]
+        assert len(replans) == 1
+        validation = replans[0]["validation"]
+        assert validation is not None, replans[0]
+        assert validation["status"] == "failed"
+        assert validation["recovery_kind"] == "replan_required"
+        assert "stride_review_basis_mismatch" in validation["summary"]
