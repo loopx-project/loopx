@@ -16,14 +16,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from loopx.control_plane.projects.registry_codec import (
+PLUGIN_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from loopx.control_plane.projects.registry_codec import (  # noqa: E402
     ProjectRegistryProtocolError,
     add_project_registry_backend,
     load_project_registry,
     require_runtime_compatible_project_registry,
 )
-
-PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _gh_prefix():

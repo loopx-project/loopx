@@ -1,4 +1,4 @@
-import { ZCODE_GOAL_ACTIONS, ZCODE_NATIVE_GOAL_STATUSES, ZCODE_IDENTITY_SCOPES, type ZCodeGoalAction, type ZCodeGoalReadback, type ZCodeModelSelection } from "../../../../../loopx/zcode_goal_mode/contract.js";
+import { ZCODE_GOAL_ACTIONS, ZCODE_NATIVE_GOAL_STATUSES, ZCODE_IDENTITY_SCOPES, type ZCodeGoalAction, type ZCodeGoalReadback, type ZCodeModelSelection } from "../../../../../loopx/hosts/zcode/contract.js";
 import {z} from "zod";
 import {requestJson} from "./chat.js";
 

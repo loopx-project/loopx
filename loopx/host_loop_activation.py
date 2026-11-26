@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 import shlex
 
-from .zcode_goal_mode import native_goal_activation
+from .hosts.zcode import native_goal_activation
 from .agent_registry import normalize_registered_agents
 from .hosts.codex_capabilities import (
     CODEX_APP_HOST_CAPABILITIES as CODEX_APP_HOST_CAPABILITIES,

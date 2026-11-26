@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.claude_goal_mode.scripts import install as claude_install
+from loopx.hosts.claude.scripts import install as claude_install
 
 # Each entry is an ordinary on-disk state of a user-owned settings file that
 # `json.loads` rejects. The last one is what an interrupted write leaves behind.

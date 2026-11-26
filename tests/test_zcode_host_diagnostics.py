@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.zcode_goal_mode import diagnostics
+from loopx.hosts.zcode import diagnostics
 
 
 # Independent syntax examples, not a snapshot of one installed release.

@@ -113,7 +113,7 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     from loopx.capabilities.native_chat.codex_adapter import (
         CODEX_APP_SERVER_HOST_CAPABILITIES as CHAT_ADAPTER_CODEX_APP_SERVER_CAPABILITIES,
     )
-    from loopx.claude_goal_mode import CLAUDE_HOST_CAPABILITIES
+    from loopx.hosts.claude import CLAUDE_HOST_CAPABILITIES
     from loopx.codex_app_thread_activity import (
         CODEX_APP_HOST_CAPABILITIES as THREAD_ACTIVITY_CODEX_APP_CAPABILITIES,
     )
@@ -286,7 +286,7 @@ from loopx.hosts.capabilities import get_host_capabilities
 assert 'loopx.hosts.agy' not in sys.modules
 assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
-assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.claude' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
 agy = get_host_capabilities('agy')
 assert agy is not None and agy.integration_tier == 'orchestrated_app'
@@ -342,7 +342,7 @@ assert 'loopx.hosts.codex_capabilities' in sys.modules
 for mod in heavy_modules[1:]:
     assert mod not in sys.modules, f"codex descriptor lookup pulled heavy module {mod}"
 assert 'loopx.hosts.agy' not in sys.modules
-assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.claude' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 """
     completed = subprocess.run(
@@ -409,7 +409,7 @@ from loopx.hosts.capabilities import (
 conflicting_claude = HostHarnessCapabilities(
     host_id='claude',
     integration_tier='boundary_cli',
-    adapter_module='loopx.claude_goal_mode',
+    adapter_module='loopx.hosts.claude',
     supported_capabilities=('verifier_hook',),
     hook_events=('PreToolUse',),
     requires_utf8_stdio=True,
@@ -420,12 +420,12 @@ conflicting_claude = HostHarnessCapabilities(
 with pytest.raises(ValueError, match='conflicting host capabilities registration for claude'):
     register_host_capabilities(conflicting_claude)
 
-assert 'loopx.claude_goal_mode' in sys.modules
+assert 'loopx.hosts.claude' in sys.modules
 assert 'loopx.hosts.agy' not in sys.modules
 assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
-import loopx.claude_goal_mode as claude_mod
+import loopx.hosts.claude as claude_mod
 assert get_host_capabilities('claude') == claude_mod.CLAUDE_HOST_CAPABILITIES
 assert register_host_capabilities(claude_mod.CLAUDE_HOST_CAPABILITIES) == claude_mod.CLAUDE_HOST_CAPABILITIES
 """
@@ -440,7 +440,7 @@ from loopx.hosts.capabilities import (
 override_claude = HostHarnessCapabilities(
     host_id='claude',
     integration_tier='boundary_cli',
-    adapter_module='loopx.claude_goal_mode',
+    adapter_module='loopx.hosts.claude',
     supported_capabilities=('verifier_hook',),
     hook_events=('PreToolUse',),
     requires_utf8_stdio=True,
@@ -454,7 +454,7 @@ assert 'loopx.hosts.agy' not in sys.modules
 assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
-import loopx.claude_goal_mode as claude_mod
+import loopx.hosts.claude as claude_mod
 assert claude_mod.CLAUDE_HOST_CAPABILITIES != override_claude
 assert get_host_capabilities('claude') == override_claude
 """
@@ -472,7 +472,7 @@ assert authoritative is not None
 conflicting_claude = HostHarnessCapabilities(
     host_id='claude',
     integration_tier='boundary_cli',
-    adapter_module='loopx.claude_goal_mode',
+    adapter_module='loopx.hosts.claude',
     supported_capabilities=('verifier_hook',),
     hook_events=('PreToolUse',),
     requires_utf8_stdio=True,
@@ -511,7 +511,7 @@ def test_concurrent_first_builtin_load_blocks_conflict_without_blocking_other_bu
     builtin_claude = HostHarnessCapabilities(
         host_id="claude",
         integration_tier="boundary_cli",
-        adapter_module="loopx.claude_goal_mode",
+        adapter_module="loopx.hosts.claude",
         supported_capabilities=("verifier_hook",),
         hook_events=("PreToolUse",),
         requires_utf8_stdio=True,
@@ -533,7 +533,7 @@ def test_concurrent_first_builtin_load_blocks_conflict_without_blocking_other_bu
     conflicting_claude = HostHarnessCapabilities(
         host_id="claude",
         integration_tier="boundary_cli",
-        adapter_module="loopx.claude_goal_mode",
+        adapter_module="loopx.hosts.claude",
         supported_capabilities=("verifier_hook",),
         hook_events=("PreToolUse",),
         requires_utf8_stdio=True,
@@ -707,7 +707,7 @@ assert isinstance(t3_error, ValueError), repr(t3_error)
 assert "conflicting host capabilities registration for dsh" in str(t3_error)
 assert "loopx.hosts.agy" not in sys.modules
 assert "loopx.hosts.agy.host_runtime" not in sys.modules
-assert "loopx.claude_goal_mode" not in sys.modules
+assert "loopx.hosts.claude" not in sys.modules
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -1005,7 +1005,7 @@ def test_flagship_wiring_preserves_default_runtime_behavior(tmp_path: Path) -> N
         )
         == {}
     )
-    hook_path = REPO_ROOT / "loopx" / "claude_goal_mode" / "hooks" / "goal_policy.py"
+    hook_path = REPO_ROOT / "loopx" / "hosts" / "claude" / "hooks" / "goal_policy.py"
     hook_result = subprocess.run(
         [sys.executable, str(hook_path)],
         cwd=tmp_path,
@@ -1032,7 +1032,7 @@ from loopx.hosts.capabilities import (
 )
 
 assert 'loopx.hosts.agy' not in sys.modules
-assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.claude' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
@@ -1041,7 +1041,7 @@ agy = isolated.get('agy')
 assert agy is not None and agy.host_id == 'agy'
 assert 'loopx.hosts.agy' in sys.modules
 assert 'loopx.hosts.agy.host_runtime' not in sys.modules
-assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.claude' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
 assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 assert get_host_capabilities('agy') == agy
@@ -1049,7 +1049,7 @@ assert get_host_capabilities('agy') == agy
 conflicting_claude = HostHarnessCapabilities(
     host_id='claude',
     integration_tier='boundary_cli',
-    adapter_module='loopx.claude_goal_mode',
+    adapter_module='loopx.hosts.claude',
     supported_capabilities=('verifier_hook',),
     hook_events=('PreToolUse',),
     requires_utf8_stdio=True,
@@ -1079,7 +1079,7 @@ assert 'loopx.hosts.agy.host_runtime' not in sys.modules
     warm_and_override_isolated_script = """
 import sys
 import loopx.hosts.agy as agy_mod
-import loopx.claude_goal_mode as claude_mod
+import loopx.hosts.claude as claude_mod
 import loopx.hosts.codex_capabilities as codex_mod
 import loopx.hosts.dsh.turn_host_adapter as dsh_mod
 from loopx.hosts.capabilities import (
@@ -1093,7 +1093,7 @@ from loopx.hosts.capabilities import (
 override_claude = HostHarnessCapabilities(
     host_id='claude',
     integration_tier='boundary_cli',
-    adapter_module='loopx.claude_goal_mode',
+    adapter_module='loopx.hosts.claude',
     supported_capabilities=('verifier_hook',),
     hook_events=('PreToolUse',),
     requires_utf8_stdio=True,
@@ -1165,7 +1165,7 @@ assert isolated.list() == (
     explicit_fake = HostHarnessCapabilities(
         host_id="claude",
         integration_tier="boundary_cli",
-        adapter_module="loopx.claude_goal_mode",
+        adapter_module="loopx.hosts.claude",
         supported_capabilities=("verifier_hook",),
         hook_events=("PreToolUse",),
         requires_utf8_stdio=True,

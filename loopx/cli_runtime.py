@@ -284,7 +284,7 @@ def resolve_cli_registry(
 def enforce_native_controller_guard(args: argparse.Namespace) -> int | None:
 	if os.environ.get("LOOPX_KUNLUNCODE_OUTER_CONTROLLER") != "1":
 		return None
-	from .kunluncode_goal_mode.guards import native_controller_cli_write_block
+	from .hosts.kunluncode.guards import native_controller_cli_write_block
 
 	native_write_block = native_controller_cli_write_block(args)
 	if native_write_block is None:

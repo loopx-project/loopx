@@ -33,13 +33,13 @@ Without `LOOPX_INSTALL_CLAUDE=1` the installer skips the adapter entirely.
 
 ```bash
 # this project only (recommended)
-python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project
+python3 loopx/hosts/claude/scripts/install.py --scope project --project /path/to/project
 
 # all your Claude Code projects (announced at install time)
-python3 loopx/claude_goal_mode/scripts/install.py --scope user
+python3 loopx/hosts/claude/scripts/install.py --scope user
 
 # preview without writing anything
-python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --dry-run
+python3 loopx/hosts/claude/scripts/install.py --scope project --project /path/to/project --dry-run
 ```
 
 ### Optional hardening (`--harden`)
@@ -103,7 +103,7 @@ hook, statusline and `/loopx` commands through the selected shell for a plain
 path, an ordinary spaced path and literal `$`/quote paths.
 
 ```bash
-python3 loopx/claude_goal_mode/scripts/install.py --scope project --project /path/to/project --harden
+python3 loopx/hosts/claude/scripts/install.py --scope project --project /path/to/project --harden
 ```
 
 The installer **never** deletes existing permission rules: a legacy LoopX
@@ -113,7 +113,7 @@ manual-cleanup suggestion instead of being removed.
 ### One-shot connect (set up a goal + project-scoped install)
 
 ```bash
-python3 loopx/claude_goal_mode/scripts/connect.py \
+python3 loopx/hosts/claude/scripts/connect.py \
     --project /path/to/project --goal-id GOAL [--objective "..."] [--harden]
 ```
 

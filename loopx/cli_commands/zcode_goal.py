@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Any, Callable
 
-from ..zcode_goal_mode.bridge import ZCODE_GOAL_ACTIONS, zcode_goal_operation
+from ..hosts.zcode.bridge import ZCODE_GOAL_ACTIONS, zcode_goal_operation
 
 
 AddFormat = Callable[[argparse.ArgumentParser], None]

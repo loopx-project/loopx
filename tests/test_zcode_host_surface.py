@@ -28,7 +28,7 @@ from loopx.host_loop_activation import (
     scheduler_command_binding_for_agent_type,
 )
 from loopx.slash_command_install import install_slash_commands
-from loopx.zcode_goal_mode import ZCODE_HOME_ENV, zcode_home
+from loopx.hosts.zcode import ZCODE_HOME_ENV, zcode_home
 
 HOST_SURFACE = "zcode"
 

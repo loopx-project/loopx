@@ -1015,8 +1015,8 @@ fi
 # LOOPX_INSTALL_CLAUDE=1 (installs at USER scope: MCP + /loopx command). Add
 # the optional should_run gate later with `install.py --scope <user|project>
 # --harden`. Prefer PROJECT scope:
-# `python <release>/loopx/claude_goal_mode/scripts/install.py --scope project`.
-claude_installer="$release_dir/loopx/claude_goal_mode/scripts/install.py"
+# `python <release>/loopx/hosts/claude/scripts/install.py --scope project`.
+claude_installer="$release_dir/loopx/hosts/claude/scripts/install.py"
 install_claude="${LOOPX_INSTALL_CLAUDE:-0}"
 claude_line="- loopx Claude adapter: skipped (opt-in; LOOPX_INSTALL_CLAUDE=1, or run install.py --scope project|user)"
 if [[ "$install_claude" != "0" && -f "$claude_installer" ]]; then

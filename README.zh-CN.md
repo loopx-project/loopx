@@ -270,7 +270,7 @@ LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并
 [Getting Started](docs/guides/getting-started.md)。Host 集成还可以查看
 [Codex App host command registry](docs/reference/protocols/codex-app-host-command-registry-v0.md)、
 [Codex CLI packaged install](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md)和
-[Claude Code adapter](loopx/claude_goal_mode/README.md)、
+[Claude Code adapter](loopx/hosts/claude/README.md)、
 [KunlunCode 原生 Goal adapter](docs/guides/kunluncode-adapter.zh-CN.md)、
 [Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md)，以及
 [DeepSeek Harness turn adapter](loopx/hosts/dsh/README.md)。

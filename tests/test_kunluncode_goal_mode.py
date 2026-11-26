@@ -11,7 +11,7 @@ import pytest
 
 from loopx import goal_mode_mcp
 from loopx import cli as loopx_cli
-from loopx.claude_goal_mode.hooks.goal_state import goal_context as claude_context
+from loopx.hosts.claude.hooks.goal_state import goal_context as claude_context
 from loopx.goal_mode_mcp import (
     GoalModeMCPConfig,
     GoalModeMCPControlPlane,
@@ -26,26 +26,26 @@ from loopx.control_plane.projects.registry_codec import (
     source_session_registry_transaction,
 )
 from loopx.file_lock import exclusive_cross_runtime_file_lock
-from loopx.kunluncode_goal_mode import cli
-from loopx.kunluncode_goal_mode.app_server import (
+from loopx.hosts.kunluncode import cli
+from loopx.hosts.kunluncode.app_server import (
     NATIVE_GOAL_MODES,
     KunlunAppServerError,
     native_goal_success,
     stable_text_digest,
 )
-from loopx.kunluncode_goal_mode.context import (
+from loopx.hosts.kunluncode.context import (
     goal_context as kunluncode_context,
     write_binding,
 )
-from loopx.kunluncode_goal_mode.control_plane import LoopXControlPlane
-from loopx.kunluncode_goal_mode.guards import (
+from loopx.hosts.kunluncode.control_plane import LoopXControlPlane
+from loopx.hosts.kunluncode.guards import (
     NATIVE_CONTROLLER_AGENT_ENV,
     NATIVE_CONTROLLER_ENV,
     NATIVE_CONTROLLER_GOAL_ENV,
     guard_native_controller_writeback,
     native_controller_cli_write_block,
 )
-from loopx.kunluncode_goal_mode.runtime import (
+from loopx.hosts.kunluncode.runtime import (
     RUNTIME_STATE_SCHEMA_VERSION,
     KunlunNativeGoalRuntimeError,
     build_native_goal_objective,
@@ -1178,7 +1178,7 @@ def _native_todo(*, claimed: bool = False) -> dict[str, object]:
         "todo_id": "todo-native-1",
         "text": "Implement and verify the native Goal Pro adapter.",
         "claimed_by": "kunlun" if claimed else "",
-        "required_write_scopes": ["loopx/kunluncode_goal_mode/**"],
+        "required_write_scopes": ["loopx/hosts/kunluncode/**"],
     }
 
 

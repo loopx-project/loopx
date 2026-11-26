@@ -322,7 +322,7 @@ def test_checkpoint_recovery_missing_baseline_conflict_and_lost_response(tmp_pat
 
 
 def test_native_outer_controller_owns_new_vision_tool(monkeypatch):
-    from loopx.kunluncode_goal_mode.guards import guard_native_controller_writeback
+    from loopx.hosts.kunluncode.guards import guard_native_controller_writeback
     from types import SimpleNamespace
 
     monkeypatch.setenv("LOOPX_KUNLUNCODE_OUTER_CONTROLLER", "1")

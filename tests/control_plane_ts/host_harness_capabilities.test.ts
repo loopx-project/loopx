@@ -428,7 +428,7 @@ test("registry rejects conflicting registrations unless replace=true and stays i
   const conflicting = defineHostHarnessCapabilities({
     host_id: "claude",
     integration_tier: "boundary_cli",
-    adapter_module: "loopx.claude_goal_mode",
+    adapter_module: "loopx.hosts.claude",
     supported_capabilities: ["verifier_hook", "compact_hook"],
     hook_events: ["PreToolUse", "PreCompact"],
     requires_utf8_stdio: true,

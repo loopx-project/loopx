@@ -4,8 +4,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from ..chat import redact_local_paths
-from ..status_server import is_loopback_host
+from ...chat import redact_local_paths
+from ...status_server import is_loopback_host
 from .bridge import ZCodeGoalBridgeError, zcode_goal_operation
 
 

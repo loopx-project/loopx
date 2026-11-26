@@ -31,8 +31,8 @@ from types import SimpleNamespace
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-INSTALLER = REPO_ROOT / "loopx" / "claude_goal_mode" / "scripts" / "install.py"
-CONNECTOR = REPO_ROOT / "loopx" / "claude_goal_mode" / "scripts" / "connect.py"
+INSTALLER = REPO_ROOT / "loopx" / "hosts" / "claude" / "scripts" / "install.py"
+CONNECTOR = REPO_ROOT / "loopx" / "hosts" / "claude" / "scripts" / "connect.py"
 
 
 def load_install():

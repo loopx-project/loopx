@@ -93,7 +93,7 @@ _DESCRIPTOR_KEYS: frozenset[str] = frozenset(
 
 BUILTIN_HOST_ADAPTER_MODULES: Mapping[str, str] = {
     "agy": "loopx.hosts.agy",
-    "claude": "loopx.claude_goal_mode",
+    "claude": "loopx.hosts.claude",
     "codex-app": "loopx.hosts.codex_capabilities",
     "codex-app-server": "loopx.hosts.codex_capabilities",
     "codex-cli": "loopx.hosts.codex_capabilities",

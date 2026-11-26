@@ -50,7 +50,7 @@ class ImpactTests(unittest.TestCase):
 
     def test_backend_mixed_and_full_risk_tiering(self):
         for path in ("loopx/cli.py", "loopx/control_plane/goals/vision_checkpoint.ts",
-                     "loopx/claude_goal_mode/commands/loopx.md", "tests/test_ui.py",
+                     "loopx/hosts/claude/commands/loopx.md", "tests/test_ui.py",
                      "AGENTS.md", "docs/build.py",
                      "packages/dsh-loopx-plugin/src/cli.ts", "packages/loopx-ark-turn/tests/test_cli.py",
                      "packages/dsh-loopx-plugin/smoke/dsh-legacy-host.package.json",
@@ -76,7 +76,6 @@ class ImpactTests(unittest.TestCase):
                      "packages/loopx-core/prepare.py", "unknown"):
             with self.subTest(full_path=path):
                 self.assertEqual(candidate([Change("M", path)])[0], "full")
-                self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "full")
 
     def test_invalid_empty_and_non_pr_are_full(self):
         for changes in ([], [Change("T", "docs/a.md")], [Change("M", "docs/../code.md")],

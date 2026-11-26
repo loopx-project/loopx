@@ -68,7 +68,7 @@ test = [
 
 [project.scripts]
 loopx = "loopx.entrypoint:main"
-loopx-kunluncode = "loopx.kunluncode_goal_mode.cli:main"
+loopx-kunluncode = "loopx.hosts.kunluncode.cli:main"
 loopx-lark-provider = "loopx.extensions.lark.provider:main"
 loopx-openviking-history-export = "loopx.extensions.openviking_semantic_preference.history_export:main"
 loopx-openviking-semantic-preference = "loopx.extensions.openviking_semantic_preference.provider:main"
@@ -104,13 +104,14 @@ include = ["loopx*"]
 "loopx.extensions.openviking_periodic_report" = ["extension.toml"]
 "loopx.extensions.openviking_semantic_preference" = ["extension.toml"]
 "loopx.hosts.agy" = ["README.md"]
+"loopx.hosts.claude" = ["README.md", ".claude-plugin/*.json", "commands/*.md", "hooks/*.json", "settings.example.json"]
 "loopx.hosts.dsh" = ["README.md"]
 "loopx.hosts.kiro_cli" = ["README.md"]
+"loopx.hosts.kunluncode" = ["README.md"]
 "loopx.hosts.opencode" = ["*.js", "*.mjs", "README.md"]
 "loopx.hosts.opencode2" = ["*.mjs", "README.md"]
 "loopx.hosts.pi" = ["*.ts", "*.mjs", "README.md"]
-"loopx.kunluncode_goal_mode" = ["README.md"]
-"loopx.zcode_goal_mode" = ["README.md", "*.ts", "contract.json", "images/*.png"]
+"loopx.hosts.zcode" = ["README.md", "*.ts", "contract.json", "images/*.png"]
 
 [tool.setuptools.data-files]
 "share/loopx/skills/loopx-material" = [

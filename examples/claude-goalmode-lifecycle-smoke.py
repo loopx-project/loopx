@@ -22,7 +22,7 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "loopx" / "claude_goal_mode" / "hooks"))
+sys.path.insert(0, str(REPO_ROOT / "loopx" / "hosts" / "claude" / "hooks"))
 import goal_state  # noqa: E402
 from loopx import goal_mode_mcp  # noqa: E402
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane  # noqa: E402

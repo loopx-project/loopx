@@ -33,9 +33,9 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 MCP_VENV = Path.home() / ".local" / "share" / "loopx" / "mcp-venv"
 
-# This script is run by path (`python <release>/loopx/claude_goal_mode/scripts/
+# This script is run by path (`python <release>/loopx/hosts/claude/scripts/
 # install.py`), so the package root is not on `sys.path` by default.
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

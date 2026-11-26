@@ -16,7 +16,7 @@ from loopx.control_plane.goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     capture_first_party_host_goal_ref,
 )
-from loopx.kunluncode_goal_mode.app_server import (
+from loopx.hosts.kunluncode.app_server import (
     NATIVE_GOAL_MODES,
     KunlunAppServerClient,
     KunlunAppServerError,
@@ -25,12 +25,12 @@ from loopx.kunluncode_goal_mode.app_server import (
     native_goal_success,
     stable_text_digest,
 )
-from loopx.kunluncode_goal_mode.control_plane import (
+from loopx.hosts.kunluncode.control_plane import (
     VERIFIED_CLASSIFICATIONS,
     KunlunNativeGoalRuntimeError,
     LoopXControlPlane,
 )
-from loopx.kunluncode_goal_mode.guards import (
+from loopx.hosts.kunluncode.guards import (
     NATIVE_CONTROLLER_AGENT_ENV,
     NATIVE_CONTROLLER_ENV,
     NATIVE_CONTROLLER_GOAL_ENV,

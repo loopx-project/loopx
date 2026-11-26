@@ -24,8 +24,8 @@ SOURCE_FILES = (
     "apps/presentation/dashboard/package-lock.json",
     "apps/presentation/dashboard/vite.chat.config.ts",
     "apps/presentation/dashboard/tsconfig.json",
-    "loopx/zcode_goal_mode/contract.ts",
-    "loopx/zcode_goal_mode/contract.json",
+    "loopx/hosts/zcode/contract.ts",
+    "loopx/hosts/zcode/contract.json",
 )
 BUILD_HELP = "Run npm ci and npm run build:chat in apps/presentation/dashboard (or reinstall a complete LoopX package)."
 

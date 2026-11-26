@@ -50,7 +50,7 @@ from .slash_command_files import (
     target_status as _target_status,
 )
 from .slash_commands import build_slash_command_catalog
-from .zcode_goal_mode import zcode_home as _zcode_home
+from .hosts.zcode import zcode_home as _zcode_home
 
 SCHEMA_VERSION = "loopx_slash_command_install_v0"
 OPENCODE_GOAL_DEPENDENCIES = {
@@ -609,7 +609,7 @@ def _provisioned_mcp_interpreter() -> str | None:
     dedicated venv and one `mcp` dependency.
     """
     try:
-        from loopx.claude_goal_mode.scripts import install as claude_install
+        from loopx.hosts.claude.scripts import install as claude_install
     except ImportError:
         return None
     try:
@@ -644,7 +644,7 @@ def _mcp_command_for_script(script: Path) -> tuple[str, str] | None:
 def _loopx_mcp_command() -> tuple[str, str] | None:
     """The shared Claude-profile server Cursor registers."""
     try:
-        from loopx.claude_goal_mode.scripts import install as claude_install
+        from loopx.hosts.claude.scripts import install as claude_install
     except ImportError:
         return None
     return _mcp_command_for_script(Path(claude_install._p("mcp", "loopx_mcp.py")))

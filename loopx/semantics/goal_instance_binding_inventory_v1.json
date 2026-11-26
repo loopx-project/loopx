@@ -67,7 +67,7 @@
         "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.hold_tail",
         "loopx/control_plane/turn_driver/settlement.py::TurnSettlementJournalAdapter.release_tail",
         "loopx/hosts/dsh/turn_host_adapter.py::run_dsh_host",
-        "loopx/kunluncode_goal_mode/runtime.py::run_native_goal"
+        "loopx/hosts/kunluncode/runtime.py::run_native_goal"
       ],
       "effect_boundary": "loopx/control_plane/goals/source_session_turn_effects.py::prepare_source_turn_effect",
       "authority_role": "host_execution_binding",

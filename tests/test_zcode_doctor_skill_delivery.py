@@ -47,7 +47,7 @@ def doctor_context(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         lambda _: {"apps": [], "status": "not_installed"},
     )
     monkeypatch.setattr(
-        "loopx.zcode_goal_mode.diagnostics.collect_zcode_host_diagnostics",
+        "loopx.hosts.zcode.diagnostics.collect_zcode_host_diagnostics",
         lambda **kwargs: {
             "cli": {"status": "not_discovered"},
             "desktop": {"status": "not_discovered"},
@@ -230,7 +230,7 @@ def test_selected_host_paths_reach_only_the_zcode_diagnostic_owner(
     def collect(**kwargs):
         captured.update(kwargs)
         return {"synthetic_host_probe": True}
-    monkeypatch.setattr("loopx.zcode_goal_mode.diagnostics.collect_zcode_host_diagnostics", collect)
+    monkeypatch.setattr("loopx.hosts.zcode.diagnostics.collect_zcode_host_diagnostics", collect)
     payload = doctor.collect_doctor(
         agent_type="z-code", zcode_cli="fixture-cli", zcode_desktop="fixture-desktop", zcode_source="fixture-source",
     )

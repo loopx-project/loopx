@@ -223,7 +223,7 @@ def collect_status(
     zcode_eligibility: dict[str, list[str]] = {}
     source_goal_observer: Callable[[str, dict[str, Any] | None], None] | None = None
     if include_zcode_goal_eligibility:
-        from ...zcode_goal_mode.bridge import zcode_goal_eligible_agent_ids
+        from ...hosts.zcode.bridge import zcode_goal_eligible_agent_ids
 
         def observe_source_goal(current_goal_id: str, source_goal: dict[str, Any] | None) -> None:
             zcode_eligibility[current_goal_id] = (

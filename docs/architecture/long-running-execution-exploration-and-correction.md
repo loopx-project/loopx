@@ -216,7 +216,7 @@ bypass it, quota settlement, permission, lease or revision checks.
 
 ### LoopX: an existing native-Goal provider and its recovery boundary
 
-The [managed ZCode provider](../../loopx/zcode_goal_mode/README.md) is a concrete
+The [managed ZCode provider](../../loopx/hosts/zcode/README.md) is a concrete
 example inside LoopX, not a fifth independent upstream runtime audit. Its
 current call chain separates binding, starting and resuming:
 
@@ -233,8 +233,8 @@ CLI / Goal drawer -> bridge validates canonical Goal/Agent/project
   native completed -> observed only; no automatic Core completion or credit write
 ```
 
-[`zcode_goal_operation`](../../loopx/zcode_goal_mode/bridge.py) generates a new
-canonical heartbeat task for bind/start. [`NativeGoalController`](../../loopx/zcode_goal_mode/runtime.ts)
+[`zcode_goal_operation`](../../loopx/hosts/zcode/bridge.py) generates a new
+canonical heartbeat task for bind/start. [`NativeGoalController`](../../loopx/hosts/zcode/runtime.ts)
 serializes operations and preserves the native session/target on resume. Its
 admission is validation → quota → validation. A lost `setGoal` reply is
 recoverable only when a durable admitted start intent and objective hash match;
@@ -254,7 +254,7 @@ then observes the first new protected action. It must use current owning
 revisions, or remain pending/paused at an unsupported refresh boundary. Do not
 replace that evidence with a hash of the entire prompt or rewrite the old receipt.
 
-The [broker](../../loopx/zcode_goal_mode/cli.ts) schedules another monitor about
+The [broker](../../loopx/hosts/zcode/cli.ts) schedules another monitor about
 two seconds after a serialized check completes; its admission subprocesses each
 have a ten-second timeout. Online status can recheck quota and pause a target,
 so it is not a purely observational operation. Pause/stop also contend with the
@@ -760,7 +760,7 @@ operation and current source revisions to join observations, not a new ledger.
 | Commit a result between final drain and idle; deliver duplicates and old wakes after stop, then a newly authorized input | Durable work remains discoverable; prior wakes cannot revive stopped execution; new input re-enters current admission through the same continuation owner | Existing [accepted-result wake](../../loopx/chat_loopx_mode.py) and Host continuation paths; qualify both no duplicate start and no lost work, not just a lock |
 | Deliver/retry an exact-Turn steer during tools, context preparation or finalization | Preserve text, ingress and target; show the actual pending/consumed/refused fact and permitted fallback; steering does not imply tool cancellation | [Steering tests](../../tests/test_chat_turn_steering.py) plus each Host's declared consumption boundary; no all-Host inference |
 | Lose the reply after native set; replay an old operation, then admit new recovery work | Recover only the target matching durable start intent; cold recovery pauses; old replay is idempotent while a new accountable Turn retains its settlement obligation | Native controller and [Turn recovery](../../loopx/control_plane/turn_driver/turn_journal.ts) are reused; inspect original-operation and new-Turn receipts separately |
-| Delay validation/quota while requesting stop; reach the execution deadline and explicitly resume repeatedly | Measure request queueing, native cancellation and confirmed drain; preserve configured cumulative budgets and unknown usage across per-execution timers | [ZCode runtime/broker](../../loopx/zcode_goal_mode/cli.ts) supplies a measurement candidate, not a proved stop SLO or token-usage bound |
+| Delay validation/quota while requesting stop; reach the execution deadline and explicitly resume repeatedly | Measure request queueing, native cancellation and confirmed drain; preserve configured cumulative budgets and unknown usage across per-execution timers | [ZCode runtime/broker](../../loopx/hosts/zcode/cli.ts) supplies a measurement candidate, not a proved stop SLO or token-usage bound |
 | Cite an omitted result via valid, forged, stale or foreign pages; add a positive finding under different conditions from an old refutation | Replay current source; keep counterevidence scoped and reachable; distinguish bad descriptors from unavailable source. Same-basis pages preserve admission identity; source drift can refresh basis within the original Turn | [Pagination tests](../../tests/control_plane_ts/stride_explore_pagination.test.ts) and Stride §7.6 own these rules; qualify actual omitted-evidence use |
 | Commit primary work, then lose Explore attachment/link confirmation | Preserve successful primary work; retry the attachment under the original operation without repeating work or declaring adoption | [Explore writeback tests](../../tests/control_plane/test_explore_result_writeback.py) supply the recovery seam; verify product retry/readback |
 | Exercise every enabled periodic-review exit, then disable strategy or omit direction declarations | Progress/successor/blocker/terminal exits retain their current duty; disabling preserves ordinary behavior/history; absent Direction M1 adds no projection or permission | [Stride tests](../../tests/control_plane_ts/stride_policy.test.ts) and [direction tests](../../tests/control_plane_ts/direction_baseline.test.ts); compaction, polling and UI refresh cannot discharge work obligations |

@@ -120,8 +120,8 @@ Concrete failures audited on the baseline:
 - Conflicting definitions with the same name: `DECISION_CONTEXT_CAPABILITY_ID`
   is `decision_context` in `capabilities/decision_context/packets.py:18` and
   `decision-context` in `extension_provider.py:24`; `MCP_REQUIREMENT` is
-  `mcp==1.28.1` in `kunluncode_goal_mode/cli.py:28` and `mcp<2` in
-  `claude_goal_mode/scripts/install.py:83`. Sixteen further names are generic
+  `mcp==1.28.1` in `hosts/kunluncode/cli.py:41` and `mcp<2` in
+  `hosts/claude/scripts/install.py:215`. Sixteen further names are generic
   module-local constants (`SCHEMA_VERSION`, `COMMAND`, `CAPABILITY_ID`) whose
   collision is harmless today and invisible tomorrow.
 - The Turn result kinds exist twice by hand: `LoopXTurnResultKind` in

@@ -47,12 +47,16 @@ def _load_baseline_module(
     module.__file__ = str(REPOSITORY_ROOT / relpath)
     module.__package__ = "loopx"
     # Historical commit e5d5945f6 imported kiro_cli_goal_mode, opencode_goal_mode,
-    # and pi_goal_mode before those packages moved under loopx/hosts/; agy_goal_mode
-    # continues resolving via its compatibility shim.
+    # pi_goal_mode, zcode_goal_mode, and claude_goal_mode before those packages
+    # moved under loopx/hosts/; agy_goal_mode continues resolving via its
+    # compatibility shim.
     compiled_source = (
         source.replace("from .kiro_cli_goal_mode", "from .hosts.kiro_cli")
         .replace("from .opencode_goal_mode", "from .hosts.opencode")
         .replace("from .pi_goal_mode", "from .hosts.pi")
+        .replace("from .zcode_goal_mode", "from .hosts.zcode")
+        .replace("from loopx.claude_goal_mode", "from loopx.hosts.claude")
+        .replace("from .claude_goal_mode", "from .hosts.claude")
         if source_override is None
         else source
     )

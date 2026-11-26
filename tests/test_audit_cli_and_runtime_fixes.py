@@ -211,7 +211,7 @@ def test_agy_native_input_returns_no_anchor_when_rpc_fails(monkeypatch) -> None:
 def test_claude_goal_policy_fail_closed_empty_path_and_resolves_relative_cwd(
     tmp_path: Path, monkeypatch
 ) -> None:
-    hooks_dir = str(REPO_ROOT / "loopx" / "claude_goal_mode" / "hooks")
+    hooks_dir = str(REPO_ROOT / "loopx" / "hosts" / "claude" / "hooks")
     if hooks_dir not in sys.path:
         sys.path.insert(0, hooks_dir)
     import goal_policy

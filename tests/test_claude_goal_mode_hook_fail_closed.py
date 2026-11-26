@@ -42,7 +42,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HOOK = REPO_ROOT / "loopx/claude_goal_mode/hooks/goal_policy.py"
+HOOK = REPO_ROOT / "loopx/hosts/claude/hooks/goal_policy.py"
 
 GOAL_ID = "hook-fail-closed-goal"
 
@@ -310,7 +310,7 @@ def test_unreadable_event_value_is_refused_with_an_explicit_deny(
 def hook_policy():
     """The shipped hook module, imported in-process for ``decide`` cases."""
 
-    hooks_dir = REPO_ROOT / "loopx" / "claude_goal_mode" / "hooks"
+    hooks_dir = REPO_ROOT / "loopx" / "hosts" / "claude" / "hooks"
     if str(hooks_dir) not in sys.path:
         sys.path.insert(0, str(hooks_dir))
     import goal_policy

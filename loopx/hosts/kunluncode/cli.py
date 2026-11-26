@@ -18,10 +18,10 @@ from loopx.control_plane.projects.registry_codec import (
     require_runtime_compatible_project_registry,
 )
 from loopx.goal_mode_context import registered_agent_ids
-from loopx.kunluncode_goal_mode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
-from loopx.kunluncode_goal_mode.app_server import build_app_server_command
-from loopx.kunluncode_goal_mode.context import goal_context, write_binding
-from loopx.kunluncode_goal_mode.runtime import (
+from loopx.hosts.kunluncode import DEFAULT_AGENT_ID, MCP_SERVER_NAME
+from loopx.hosts.kunluncode.app_server import build_app_server_command
+from loopx.hosts.kunluncode.context import goal_context, write_binding
+from loopx.hosts.kunluncode.runtime import (
     compact_runtime_state,
     read_runtime_state,
     run_native_goal,
@@ -32,7 +32,7 @@ from loopx.kunluncode_goal_mode.runtime import (
 # loopx/goal_mode_mcp.py imports `mcp.server.fastmcp`, which the MCP SDK 2.x
 # line no longer ships, and the pin is a deliberate security pin (892faa2c9
 # "fix(security): upgrade the MCP SDK pin"). It belongs to the KunlunCode
-# adapter venv only; loopx/claude_goal_mode/scripts/install.py provisions its
+# adapter venv only; loopx/hosts/claude/scripts/install.py provisions its
 # own venv and spells the same dependency as a range ("mcp<2"). The two are
 # separate packaging boundaries, so they are not required to agree on a
 # spelling. Bump MCP_SDK_VERSION alone; the probe and the user-facing message
@@ -77,7 +77,7 @@ def _compatible_python(value: str | Path) -> bool:
             (
                 "from importlib.metadata import version; "
                 "from mcp.server.fastmcp import FastMCP; "
-                "import loopx.kunluncode_goal_mode.server; "
+                "import loopx.hosts.kunluncode.server; "
                 f"assert version('mcp') == '{MCP_SDK_VERSION}'"
             ),
         ],
@@ -87,7 +87,7 @@ def _compatible_python(value: str | Path) -> bool:
 
 
 def _source_root() -> Path | None:
-    candidate = Path(__file__).resolve().parents[2]
+    candidate = Path(__file__).resolve().parents[3]
     return candidate if (candidate / "pyproject.toml").is_file() else None
 
 
@@ -151,7 +151,7 @@ def _is_managed_server(entry: dict[str, Any]) -> bool:
         and len(args) == 1
         and str(args[0])
         .replace("\\", "/")
-        .endswith("/loopx/kunluncode_goal_mode/server.py")
+        .endswith("/loopx/hosts/kunluncode/server.py")
     )
 
 

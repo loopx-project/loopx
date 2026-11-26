@@ -23,7 +23,7 @@ no longer part of the working tree or a LoopX runtime module.
 
 from __future__ import annotations
 
-from ..hosts.capabilities import (
+from ..capabilities import (
     HostHarnessCapabilities,
     _register_builtin_host_capabilities,
 )
@@ -32,7 +32,7 @@ CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capab
     HostHarnessCapabilities(
         host_id="claude",
         integration_tier="boundary_cli",
-        adapter_module="loopx.claude_goal_mode",
+        adapter_module="loopx.hosts.claude",
         supported_capabilities=("verifier_hook",),
         hook_events=("PreToolUse",),
         requires_utf8_stdio=True,

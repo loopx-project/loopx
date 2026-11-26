@@ -27,7 +27,7 @@ from .kiro_cli import (
     SKILLS_ROOT_LABEL as KIRO_CLI_SKILLS_ROOT_LABEL,
     kiro_cli_activation_extras,
 )
-from ..zcode_goal_mode import (
+from .zcode import (
     SKILLS_ROOT_LABEL as ZCODE_SKILLS_ROOT_LABEL,
     ZCODE_INSTALL_SURFACE,
 )

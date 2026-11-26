@@ -32,9 +32,9 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HOOK = REPO_ROOT / "loopx/claude_goal_mode/hooks/goal_policy.py"
-STATUSLINE = REPO_ROOT / "loopx/claude_goal_mode/statusline/goal_status.py"
-GOALMODE = REPO_ROOT / "loopx/claude_goal_mode/scripts/goalmode_cmd.py"
+HOOK = REPO_ROOT / "loopx/hosts/claude/hooks/goal_policy.py"
+STATUSLINE = REPO_ROOT / "loopx/hosts/claude/statusline/goal_status.py"
+GOALMODE = REPO_ROOT / "loopx/hosts/claude/scripts/goalmode_cmd.py"
 
 # A codec the scripts must not fall back to. `gbk` cannot encode the statusline
 # glyphs and decodes the UTF-8 project path below into mojibake, so a missing pin

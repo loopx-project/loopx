@@ -17,7 +17,7 @@
     "tests/control_plane_ts/session_binding.test.ts",
     "tests/control_plane_ts/host_failure_policy.test.ts",
     "tests/control_plane_ts/host_harness_capabilities.test.ts",
-    "loopx/zcode_goal_mode/**/*.ts",
+    "loopx/hosts/zcode/**/*.ts",
     "tests/control_plane_ts/background_services.test.ts",
     "tests/control_plane_ts/explore_research.test.ts",
     "tests/control_plane_ts/explore_research_execution.test.ts",

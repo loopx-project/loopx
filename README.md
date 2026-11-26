@@ -322,8 +322,8 @@ The exact, copy-ready setup messages and host recovery paths live in
 [Getting Started](docs/guides/getting-started.md). Host integrations can inspect
 the [Codex App host command registry contract](docs/reference/protocols/codex-app-host-command-registry-v0.md),
 the [Codex CLI packaged install path](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md),
-the [Claude Code adapter](loopx/claude_goal_mode/README.md), the
-[KunlunCode native Goal adapter](loopx/kunluncode_goal_mode/README.md), the
+the [Claude Code adapter](loopx/hosts/claude/README.md), the
+[KunlunCode native Goal adapter](loopx/hosts/kunluncode/README.md), the
 [Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md), or the
 [DeepSeek Harness turn adapter](loopx/hosts/dsh/README.md).
 

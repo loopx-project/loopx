@@ -858,7 +858,7 @@ def collect_doctor(
     skill_roots: tuple[Path, ...]
     if canonical_agent_type == "zcode":
         from .slash_command_install import inspect_skill_facades
-        from .zcode_goal_mode import zcode_home
+        from .hosts.zcode import zcode_home
 
         selected_zcode_home = zcode_home()
         skill_roots = (selected_zcode_home / "skills",)
@@ -1376,7 +1376,7 @@ def collect_doctor(
     if companion_fix:
         payload["fix"] = f"{companion_fix}\n{payload['fix']}"
     if canonical_agent_type == "zcode":
-        from .zcode_goal_mode.diagnostics import collect_zcode_host_diagnostics
+        from .hosts.zcode.diagnostics import collect_zcode_host_diagnostics
 
         payload["zcode"] = collect_zcode_host_diagnostics(
             cli_path=zcode_cli, desktop_path=zcode_desktop, source_root=zcode_source,
@@ -1692,7 +1692,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
             ])
         zcode = payload.get("zcode")
         if isinstance(zcode, dict):
-            from .zcode_goal_mode.diagnostics import render_zcode_diagnostics_markdown
+            from .hosts.zcode.diagnostics import render_zcode_diagnostics_markdown
 
             lines.extend(render_zcode_diagnostics_markdown(zcode))
     restart = payload.get("effect_runtime_restart")
