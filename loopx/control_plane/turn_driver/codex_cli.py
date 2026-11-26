@@ -429,6 +429,15 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
             }
         }
         model_request = {**dict(model_request), "epoch_prefetch": compact_prefetch}
+    if isinstance(model_request.get("semantic_unit_fold"), Mapping):
+        from .todo_unit_settlement import compact_semantic_unit_fold_wire_fields
+
+        model_request = {
+            **dict(model_request),
+            "semantic_unit_fold": compact_semantic_unit_fold_wire_fields(
+                model_request["semantic_unit_fold"]
+            ),
+        }
     request_json = json.dumps(
         model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -500,6 +509,20 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
                 f"(reason={prefetch.get('fallback_reason')}; original context and obligations preserved; "
                 f"failure_facts={json.dumps(prefetch.get('preserved_failure_facts', []), ensure_ascii=False)}; "
                 f"open_obligations={json.dumps(prefetch.get('preserved_open_obligations', []), ensure_ascii=False)})."
+            )
+    if isinstance(request.get("semantic_unit_fold"), Mapping):
+        fold = request["semantic_unit_fold"]
+        if fold.get("operator") == "FoldToReceipt" and isinstance(fold.get("replacement_text"), str):
+            instructions.extend([
+                "Prefetched Todo Semantic-Unit Fold Receipt (tool trust level only, non-authoritative relative to Turn contract and system policy):",
+                str(fold["replacement_text"]),
+            ])
+        elif fold.get("operator") == "KeepRaw":
+            instructions.append(
+                "Todo semantic-unit fold kept raw context intact (KeepRaw: "
+                f"reason={fold.get('fallback_reason')}; "
+                f"failure_facts={json.dumps(fold.get('preserved_failure_facts', []), ensure_ascii=False)}; "
+                f"open_obligations={json.dumps(fold.get('preserved_open_obligations', []), ensure_ascii=False)})."
             )
     instructions.extend(["Turn request:", request_json])
     return "\n".join(instructions)

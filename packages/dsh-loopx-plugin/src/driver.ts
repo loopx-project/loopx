@@ -6,12 +6,13 @@ import type { Agent, AgentStatus, PreStepDecision } from '@deepseek-ai/dsh-agent
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   LoopXCliError,
   cliErrorFields,
   coreRouteBin,
   resolveLoopXCommand,
+  runFile,
   runJsonCommand,
   supportedLoopXVersion,
 } from './cli.ts'
@@ -30,6 +31,9 @@ import type {
 } from './goalbar/protocol.ts'
 import {
   applyTodoUnitFoldAndPrefetch,
+  createDefaultDshObsRunner,
+  decodeQuotaSettlementReadback,
+  extractTodoIdFromQuotaAndHeartbeat,
   hasValidDshToolCallPairing,
   recordDshTodoUnitAnchor,
   validateTodoUnitObsForExecution,
@@ -121,12 +125,28 @@ interface Reservation extends Binding {
   preserveAcrossPause: boolean
 }
 
+interface ActiveTodoUnitState {
+  readonly goalId: string
+  readonly agentId: string
+  readonly todoId?: string | undefined
+  readonly turnInstanceId: string
+  readonly contextEpoch: string
+  readonly startStepIndex: number
+  endStepIndex: number
+  anchor?: TodoUnitAnchor | undefined
+  admittedSeq?: SessionSeq | undefined
+  completedCleanly?: boolean | undefined
+}
+
 interface SessionDriverRetention {
   readonly agent: Agent
   paused: boolean
   goalBarPaused?: boolean
   admissionFailure?: GoalBarAdmissionFailureCategoryV1 | undefined
   reservation?: Reservation | undefined
+  todoUnitContextEpoch?: string | undefined
+  todoUnitStepCount?: number | undefined
+  activeTodoUnit?: ActiveTodoUnitState | undefined
   todoUnitAnchors?: Map<string, TodoUnitAnchor> | undefined
   todoUnitFolds?: Map<string, TodoUnitFoldOutcome> | undefined
 }
@@ -187,6 +207,7 @@ interface QueuePlan extends Binding {
   readonly turnInstanceId: string
   readonly taskBody: string
   readonly selectionRequired: boolean
+  readonly todoId?: string | undefined
 }
 
 interface WaitPlan {
@@ -635,6 +656,7 @@ async function readQuotaCapture(
   reference: string,
   options: QuotaReadOptions,
   revalidateOnly: boolean,
+  includeSelectedTodo = false,
 ): Promise<Record<string, unknown>> {
   // Entering a queued step requires the original Turn receipt. The scheduler
   // and reward memory are only used when first deciding whether to queue work.
@@ -651,7 +673,10 @@ async function readQuotaCapture(
     if (!QUOTA_REQUIRED_POINTERS.every(pointer => present.has(pointer))) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture lacks admission fields', false)
     }
-    pointers = [...QUOTA_REQUIRED_POINTERS, ...QUOTA_OPTIONAL_POINTERS.filter(pointer => present.has(pointer))]
+    const optional = includeSelectedTodo
+      ? [...QUOTA_OPTIONAL_POINTERS, '/selected_todo']
+      : QUOTA_OPTIONAL_POINTERS
+    pointers = [...QUOTA_REQUIRED_POINTERS, ...optional.filter(pointer => present.has(pointer))]
   }
   const selected = await readQuotaSelections(
     command, reference, pointers.flatMap(pointer => ['--select', pointer]), QUOTA_SELECTION_SCHEMA, options,
@@ -889,11 +914,15 @@ export class LoopXContinuationDriver {
     this.onAdmissionChange = options.onAdmissionChange
     this.todoUnitFold = options.todoUnitFold
     this.runObsCommand = options.runObsCommand
+      ?? (options.todoUnitFold?.enabled === true
+        ? createDefaultDshObsRunner(options.runner ?? runFile)
+        : undefined)
   }
 
   /** Record a Todo semantic-unit anchor pinning parent KV prefix Q before exploratory steps. */
   anchorTodoUnit(agent: Agent, input: TodoUnitAnchorInput): TodoUnitAnchor | null {
     if (this.todoUnitFold?.enabled !== true) return null
+    if (typeof agent.session.deriveMessages !== 'function') return null
     const anchor = recordDshTodoUnitAnchor(agent.session, input)
     const retained = retainedState(agent, agent.session)
     retained.todoUnitAnchors ??= new Map()
@@ -1004,8 +1033,12 @@ export class LoopXContinuationDriver {
     state.schedulerToken = ''
     state.unchangedPolls = 0
     state.commands.clear()
-    retainedState(agent, agent.session).todoUnitAnchors?.clear()
-    retainedState(agent, agent.session).todoUnitFolds?.clear()
+    const retained = retainedState(agent, agent.session)
+    retained.todoUnitAnchors?.clear()
+    retained.todoUnitFolds?.clear()
+    retained.activeTodoUnit = undefined
+    retained.todoUnitContextEpoch = undefined
+    retained.todoUnitStepCount = 0
     state.activation = foldSessionActivation(agent.session)
     this.requestEvaluation(state)
   }
@@ -1163,12 +1196,30 @@ export class LoopXContinuationDriver {
       && state.reservation !== undefined
       && event.data.id === state.reservation.messageId) {
       state.reservation.phase = 'admitted'
+      const retained = retainedState(agent, agent.session)
+      if (retained.activeTodoUnit?.turnInstanceId === state.reservation.turnInstanceId) {
+        retained.activeTodoUnit.admittedSeq = event.seq
+      }
       return
     }
-    if (event.type === 'turn/end'
-      && (event.data.reason.kind === 'max-tokens' || event.data.reason.kind === 'aborted')) {
-      this.setErrorPause(state, true)
-      this.cancelPending(state)
+    if (event.type === 'user/message' && event.data.source?.kind === 'user') {
+      retainedState(agent, agent.session).activeTodoUnit = undefined
+    }
+    if (event.type === 'step/start') {
+      const retained = retainedState(agent, agent.session)
+      retained.todoUnitStepCount = (retained.todoUnitStepCount ?? 0) + 1
+    }
+    if (event.type === 'turn/end') {
+      const retained = retainedState(agent, agent.session)
+      const active = retained.activeTodoUnit
+      if (active !== undefined && active.completedCleanly === undefined) {
+        active.endStepIndex = Math.max(active.startStepIndex, retained.todoUnitStepCount ?? active.startStepIndex)
+        active.completedCleanly = event.data.reason.kind === 'completed'
+      }
+      if (event.data.reason.kind === 'max-tokens' || event.data.reason.kind === 'aborted') {
+        this.setErrorPause(state, true)
+        this.cancelPending(state)
+      }
     }
   }
 
@@ -1462,6 +1513,30 @@ export class LoopXContinuationDriver {
     this.clearAdmissionFailure(state)
     if (!this.ready(state) || state.agent.session !== plan.session) return true
     const message = automaticMessage(plan)
+    if (this.todoUnitFold?.enabled === true) {
+      const retained = retainedState(state.agent, plan.session)
+      const contextEpoch = retained.todoUnitContextEpoch
+        ??= `dsh:${plan.session.header.id}:${randomUUID()}`
+      const startStepIndex = retained.todoUnitStepCount ?? 0
+      const anchor = plan.todoId !== undefined
+        ? this.anchorTodoUnit(state.agent, {
+          todoId: plan.todoId,
+          turnInstanceId: plan.turnInstanceId,
+          contextEpoch,
+          anchorStepIndex: startStepIndex,
+        })
+        : null
+      retained.activeTodoUnit = {
+        goalId: plan.goalId,
+        agentId: plan.agentId,
+        todoId: plan.todoId,
+        turnInstanceId: plan.turnInstanceId,
+        contextEpoch,
+        startStepIndex,
+        endStepIndex: startStepIndex,
+        anchor: anchor ?? undefined,
+      }
+    }
     const reservation: Reservation = {
       messageId: message.id,
       content: message.content,
@@ -1477,6 +1552,15 @@ export class LoopXContinuationDriver {
     try {
       state.agent.followup(message)
     } catch (error: unknown) {
+      if (this.todoUnitFold?.enabled === true) {
+        const retained = retainedState(state.agent, plan.session)
+        if (retained.activeTodoUnit?.turnInstanceId === plan.turnInstanceId) {
+          if (retained.activeTodoUnit.todoId !== undefined) {
+            retained.todoUnitAnchors?.delete(retained.activeTodoUnit.todoId)
+          }
+          retained.activeTodoUnit = undefined
+        }
+      }
       this.retireReservation(state)
       this.warn(`dsh-loopx-driver: could not queue same-session work: ${renderThrown(error)}`)
     }
@@ -1540,7 +1624,13 @@ export class LoopXContinuationDriver {
     }
     state.retrySelection = false
     turnInstanceId ??= this.makeTurnInstanceId()
-    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
+    const quota = await this.readQuota(
+      command,
+      state.agent,
+      binding,
+      turnInstanceId,
+      { signal, includeSelectedTodo: this.todoUnitFold?.enabled === true },
+    )
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
       throw new LoopXCliError(
@@ -1556,6 +1646,10 @@ export class LoopXContinuationDriver {
         'LoopX quota response did not match the bound Goal and Agent',
         false,
       )
+    }
+    if (this.todoUnitFold?.enabled === true) {
+      await this.tryFoldSettledActiveTodoUnit(command, state, binding, quota, signal)
+      this.ensureReady(state, signal, session)
     }
     if (quota.should_run !== true) {
       const wait = schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
@@ -1594,6 +1688,9 @@ export class LoopXContinuationDriver {
       )
     }
     const receipt = record(quota.heartbeat_receipt)
+    const todoId = this.todoUnitFold?.enabled === true
+      ? extractTodoIdFromQuotaAndHeartbeat(quota, heartbeat)
+      : undefined
     return {
       kind: 'queue',
       ...binding,
@@ -1602,6 +1699,7 @@ export class LoopXContinuationDriver {
       taskBody: taskBodyWithRewardMemory(taskBody, quota),
       selectionRequired: (receipt?.status === 'committed' || receipt?.status === 'replayed')
         && receipt.selection_required === true && receipt.settlement_binding_owed === true,
+      ...(todoId !== undefined ? { todoId } : {}),
     }
   }
 
@@ -1720,7 +1818,11 @@ export class LoopXContinuationDriver {
     agent: Agent,
     binding: Binding,
     turnInstanceId: string,
-    { signal, revalidateOnly = false }: { signal: AbortSignal; revalidateOnly?: boolean },
+    {
+      signal,
+      revalidateOnly = false,
+      includeSelectedTodo = false,
+    }: { signal: AbortSignal; revalidateOnly?: boolean; includeSelectedTodo?: boolean },
   ): Promise<Record<string, unknown>> {
     // The 2.3 CLI supplies immutable navigation and its bounded reader. Older
     // supported CLIs continue to answer this Host-only call with raw JSON.
@@ -1756,11 +1858,104 @@ export class LoopXContinuationDriver {
     const reference = progressive ? quotaNavigationReference(quota) : undefined
     if (reference === undefined) return quota
     // Retry the exact saved page on transport loss, outside the guard retry.
-    const decision = await readQuotaCapture(command, reference, options, revalidateOnly)
+    const decision = await readQuotaCapture(
+      command, reference, options, revalidateOnly, includeSelectedTodo,
+    )
     if (!rawAdmission(decision)) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
     }
     return decision
+  }
+
+  private async tryFoldSettledActiveTodoUnit(
+    command: LoopXCommand,
+    state: DriverState,
+    binding: Binding,
+    quota: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const policy = this.todoUnitFold
+    if (policy?.enabled !== true) return
+    const retained = retainedState(state.agent, state.activation.session)
+    const active = retained.activeTodoUnit
+    if (
+      active === undefined
+      || active.goalId !== binding.goalId
+      || active.agentId !== binding.agentId
+      || active.completedCleanly !== true
+      || state.activation.pendingSelection !== undefined
+      || state.pauseAfterTurnError
+    ) {
+      return
+    }
+    const recovery = record(quota.unsettled_host_turn_recovery)
+    if (
+      recovery?.schema_version === 'unsettled_host_turn_recovery_v0'
+      && recovery.state === 'attention_required'
+    ) {
+      retained.activeTodoUnit = undefined
+      return
+    }
+    try {
+      const readback = await runJsonCommand(command, [
+        '--registry', '.loopx/registry.json', '--format', 'json', 'quota', 'receipt',
+        '--include-settlement',
+        '--goal-id', binding.goalId, '--agent-id', binding.agentId,
+        '--turn-instance-id', active.turnInstanceId,
+      ], {
+        runner: this.runner,
+        cwd: state.agent.session.header.cwd,
+        signal,
+      })
+      this.ensureReady(state, signal, state.activation.session)
+      const decoded = decodeQuotaSettlementReadback(
+        readback,
+        binding.goalId,
+        binding.agentId,
+        active.turnInstanceId,
+        active.todoId,
+      )
+      if (!decoded.verified) {
+        retained.activeTodoUnit = undefined
+        return
+      }
+      const receipt = decoded.completionReceipt
+      if (active.anchor === undefined && active.admittedSeq !== undefined) {
+        this.anchorTodoUnit(state.agent, {
+          todoId: receipt.todoId,
+          turnInstanceId: active.turnInstanceId,
+          contextEpoch: active.contextEpoch,
+          anchorStepIndex: active.startStepIndex,
+          anchorSurfaceSeq: active.admittedSeq,
+        })
+      }
+      const nextTodoId = extractTodoIdFromQuotaAndHeartbeat(quota)
+      const obsNextCmd = policy.resolveObsNextCmd?.({
+        goalId: binding.goalId,
+        agentId: binding.agentId,
+        settledTodoId: receipt.todoId,
+        nextTodoId,
+        quota,
+      }) ?? policy.obsNextCmd
+      await this.onTodoUnitSettled(state.agent, {
+        todoId: receipt.todoId,
+        turnInstanceId: active.turnInstanceId,
+        contextEpoch: active.contextEpoch,
+        nowStepIndex: Math.max(active.startStepIndex, active.endStepIndex),
+        completionReceipt: receipt,
+        obsNextCmd,
+        failureFacts: [...receipt.failureFacts, ...(policy.defaultFailureFacts ?? [])],
+        openObligations: [...receipt.openObligations, ...(policy.defaultOpenObligations ?? [])],
+        quiescentBoundary: true,
+      })
+    } catch (error: unknown) {
+      if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+      this.warn(`dsh-loopx-driver: todo_unit_fold_kept_raw error=${renderThrown(error)}`)
+    } finally {
+      if (retained.activeTodoUnit === active) {
+        retained.activeTodoUnit = undefined
+      }
+    }
   }
 
   private async readSelectionReceipt(
@@ -1877,8 +2072,18 @@ export class LoopXContinuationDriver {
   }
 
   private retireReservation(state: DriverState): void {
-    if (state.reservation === undefined) return
-    state.reservation.phase = 'retired'
+    const reservation = state.reservation
+    if (reservation === undefined) return
+    if (reservation.phase !== 'admitted') {
+      const retained = retainedState(state.agent, state.activation.session)
+      if (retained.activeTodoUnit?.turnInstanceId === reservation.turnInstanceId) {
+        if (retained.activeTodoUnit.todoId !== undefined) {
+          retained.todoUnitAnchors?.delete(retained.activeTodoUnit.todoId)
+        }
+        retained.activeTodoUnit = undefined
+      }
+    }
+    reservation.phase = 'retired'
     state.reservation = undefined
   }
 
@@ -1963,13 +2168,17 @@ function watchReplacementUnload(ctx: Context): () => boolean {
   return () => moduleReplacement || (fiber !== undefined && fiber.uid !== null)
 }
 
-export function apply(ctx: Context): void {
+export function apply(
+  ctx: Context,
+  config?: { readonly todoUnitFold?: TodoUnitFoldPolicy | undefined },
+): void {
   const driver = new LoopXContinuationDriver({
     isLiveAgent: agent => ctx.agents.get(agent.id) === agent,
     resolveCommand: signal => resolvePluginLoopXCommand({ signal }),
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
     onAdmissionChange: session => { goalBarCoordinator.publishAdmissionChange(session) },
+    ...(config?.todoUnitFold !== undefined ? { todoUnitFold: config.todoUnitFold } : {}),
   })
   const replacementUnload = watchReplacementUnload(ctx)
 

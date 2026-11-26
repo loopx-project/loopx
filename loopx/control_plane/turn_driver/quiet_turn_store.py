@@ -1083,8 +1083,39 @@ def commit_turn_quiet_state_after_success(
     goal_id: str,
     settlement_lineage: Mapping[str, Any] | None,
     options: Mapping[str, Any],
+    result: Mapping[str, Any] | None = None,
+    journal: dict[str, Any] | None = None,
 ) -> None:
-    """Commit Quiet-Turn state_digest ONLY after the Turn has settled cleanly."""
+    """Commit Quiet-Turn state_digest and opt-in Todo semantic-unit fold after settlement."""
+    agent_id = effective_turn_agent_id(plan, settlement_lineage)
+    from .todo_unit_settlement import (
+        commit_turn_semantic_unit_fold_after_settlement,
+        extract_semantic_unit_fold_option,
+    )
+
+    if extract_semantic_unit_fold_option(
+        options,
+        options.get("decision_capture_payload")
+        if isinstance(options.get("decision_capture_payload"), Mapping)
+        else None,
+    ) is not None:
+        raw_tx_obj = plan.get("transaction")
+        raw_tx = dict(raw_tx_obj) if isinstance(raw_tx_obj, Mapping) else {}
+        fold_outcome = commit_turn_semantic_unit_fold_after_settlement(
+            settled=settled,
+            result=result,
+            journal=journal,
+            plan=plan,
+            journal_path=journal_path,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            turn_key=str(raw_tx.get("turn_key") or journal_path.stem),
+            settlement_lineage=settlement_lineage,
+            options=options,
+        )
+        if fold_outcome is not None and isinstance(settled, dict):
+            settled["semantic_unit_fold"] = fold_outcome
+
     if not epoch_metadata:
         return
     if settled.get("ok") is not True or settled.get("status") not in {
@@ -1102,7 +1133,6 @@ def commit_turn_quiet_state_after_success(
         options.get("quiet_turn", False),
         options.get("decision_capture_payload"),
     )
-    agent_id = effective_turn_agent_id(plan, settlement_lineage)
     goal_state_root = journal_path.parent.parent
     target = quiet_turn_target_params(
         plan=plan,
