@@ -4,6 +4,7 @@ if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'
 // Prompt text drives behaviour: "slow" waits until abort, "fail" ends with an error.
 import { personalFixture } from './personal.mjs';
 import { coordinationFixture } from './coordination.mjs';
+import { contextReaderFixture } from './context-reader.mjs';
 import { existsSync, appendFileSync, readFileSync, watchFile, unwatchFile } from 'node:fs';
 import { basename } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -261,6 +262,8 @@ rl.on('line', (line) => {
       return reply({ sessionId, isStreaming: running, model: currentModel });
     case 'prompt': {
       if (running) return reply(null, false, 'already streaming');
+      // Fixture commands belong to the current ask, not the interrupted request in its envelope.
+      if (cmd.message.includes('[Loochat interrupted-turn context]\n')) cmd.message = cmd.message.split('\nCurrent user message:\n').at(-1);
       if (cmd.message.startsWith('auto-compact')) {
         reply({ disposition: 'started' });
         const prefix = cmd.message.includes('legacy') ? 'auto_' : '';
@@ -292,6 +295,14 @@ rl.on('line', (line) => {
         pendingTeamReview = () => unwatchFile(file, finish);
         watchFile(file, { interval: 20 }, finish);
         finish();
+        return;
+      }
+      const contextRead = contextReaderFixture(cmd.message);
+      if (contextRead !== null) {
+        reply({ disposition: 'started' });
+        out({ type: 'agent_start' });
+        out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: contextRead } });
+        out({ type: 'agent_settled', aborted: false });
         return;
       }
       const personal = personalFixture(cmd.message);

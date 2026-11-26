@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+from time import sleep
 
 import pytest
 
@@ -1688,9 +1689,20 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
             return native(controller, argv)
 
         monkeypatch.setattr(monitor_mod, "native_command", contend)
-    try:
+    def make_next_poll_due() -> str:
+        # The fixture advances an hourly cadence immediately. Let the next
+        # distinct observation use a later clock second than the persisted one.
+        previous = datetime.fromisoformat(local_watch_row(runtime, actor, monitor_todo_id)["last_checked_at"])
+        next_second = previous + timedelta(seconds=1)
+        delay = (next_second - datetime.now(timezone.utc)).total_seconds()
+        if delay > 0:
+            sleep(delay)
         due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
         edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at", due)
+        return due
+
+    try:
+        due = make_next_poll_due()
         watched, = pump_steward_monitors(runtime)
         observed = finish(runtime, watched)
         assert observed["status"] == "completed", observed.get("error")
@@ -1713,8 +1725,7 @@ def test_exhausted_zero_write_monitor_followup_rearms_on_next_due_poll(
 
     # A committed update already enabled advancement. An uncommitted one retries at its next cadence.
     if conflict_at != "release":
-        edit_local_watch(runtime, actor, monitor_todo_id, "--next-due-at",
-                         (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat())
+        make_next_poll_due()
         next_poll, = pump_steward_monitors(runtime)
         assert next_poll["loopx_request"]["work_kind"] == "monitor"
         assert finish(runtime, next_poll)["status"] == "completed"

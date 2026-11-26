@@ -126,6 +126,9 @@ def test_runtime_fingerprint_reuses_hash_until_source_snapshot_changes(
         return original_read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    # This case measures the cache for settled metadata, separately from
+    # fresh writes in the filesystem timestamp collision window.
+    monkeypatch.setattr(effect_runtime, "_source_snapshot_is_settled", lambda _snapshot: True)
 
     original = effect_runtime._runtime_fingerprint()
     assert len(reads) == 2

@@ -10,6 +10,7 @@ directory without rewriting the index row or opening an unrelated path.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -322,6 +323,277 @@ def test_relocated_reader_rejects_paths_that_are_not_same_goal_run_files(
     stored_link = runtime_a / "goals" / GOAL_ID / "runs" / "linked.json"
     rejected(stored_link)
     assert link.is_symlink()
+
+
+def test_in_directory_symlink_cannot_zero_a_quota_debit(tmp_path: Path) -> None:
+    """A path already inside the runs directory is still not a symlink escape.
+
+    The stored path names this goal's runs file, so the lexical containment
+    check keeps it. Replacing that file with a link to an outside artifact
+    that repeats the commit identity and says the debit was zero must not
+    read as a readable zero spend. The outside bytes stay untouched.
+    """
+
+    now = datetime.now(timezone.utc)
+    spend_at = now - timedelta(minutes=5)
+    runtime = tmp_path / "runtime"
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    artifact = runs / "spend.json"
+    commit = _commit(
+        "quota_spend_commit_receipt_v0",
+        "effect-spend",
+        REQUEST_DIGEST,
+    )
+    event = {
+        "event_type": "quota_slot_spent",
+        "slots": 2,
+        "run_generated_at": spend_at.isoformat(),
+    }
+    record = {
+        "generated_at": spend_at.isoformat(),
+        "goal_id": GOAL_ID,
+        "classification": "quota_slot_spent",
+        "quota_event": event,
+        "quota_spend_commit": commit,
+    }
+    _write_record(artifact, record)
+    row = _row(
+        artifact,
+        generated_at=spend_at,
+        classification="quota_slot_spent",
+        commit_field="quota_spend_commit",
+        commit=commit,
+    )
+    goal = _goal()
+    counted, counted_reason = quota_slot_observation(
+        row,
+        runs_dir=runs,
+        goal_id=GOAL_ID,
+    )
+    assert counted_reason is None
+    assert counted == ("spent", spend_at.isoformat(), 2)
+
+    outside = tmp_path / "outside-zero.json"
+    zero_record = {
+        **record,
+        "quota_event": {**event, "slots": 0},
+    }
+    outside_bytes = json.dumps(zero_record).encode()
+    outside.write_bytes(outside_bytes)
+    artifact.unlink()
+    artifact.symlink_to(outside)
+
+    contribution, reason = quota_slot_observation(
+        row,
+        runs_dir=runs,
+        goal_id=GOAL_ID,
+    )
+    assert contribution is None
+    assert reason == QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING
+    ledger = goal_quota_with_spend_ledger(goal, [row], now=now, runs_dir=runs)
+    assert ledger["spent_slots"] == 0
+    assert ledger["unreadable_event_count"] == 1
+    assert ledger["unreadable_event_reasons"] == [QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING]
+    status = quota_status(
+        {**goal, "quota": {**goal["quota"], **ledger}},
+        waiting_on="codex",
+    )
+    assert status["state"] == "blocked_health"
+    summary = build_usage_summary(
+        {"runs": [row]},
+        parse_timestamp=_parse_timestamp,
+        runtime_root=runtime,
+    )
+    assert summary["totals"]["quota_spend_slots_24h"] == 0
+    assert summary["totals"]["unreadable_event_count_24h"] == 1
+    assert artifact.is_symlink()
+    assert outside.read_bytes() == outside_bytes
+
+
+def test_in_directory_hard_link_cannot_zero_a_quota_debit(tmp_path: Path) -> None:
+    """A path already inside the runs directory is still not a hard-link alias.
+
+    The stored path names this goal's runs file, so the lexical containment
+    check keeps it. Replacing that file with a hard link to an outside
+    artifact that repeats the commit identity and says the debit was zero
+    must not read as a readable zero spend. The outside bytes stay untouched.
+    """
+
+    now = datetime.now(timezone.utc)
+    spend_at = now - timedelta(minutes=5)
+    runtime = tmp_path / "runtime"
+    runs = runtime / "goals" / GOAL_ID / "runs"
+    artifact = runs / "spend.json"
+    commit = _commit(
+        "quota_spend_commit_receipt_v0",
+        "effect-spend",
+        REQUEST_DIGEST,
+    )
+    event = {
+        "event_type": "quota_slot_spent",
+        "slots": 2,
+        "run_generated_at": spend_at.isoformat(),
+    }
+    record = {
+        "generated_at": spend_at.isoformat(),
+        "goal_id": GOAL_ID,
+        "classification": "quota_slot_spent",
+        "quota_event": event,
+        "quota_spend_commit": commit,
+    }
+    _write_record(artifact, record)
+    row = _row(
+        artifact,
+        generated_at=spend_at,
+        classification="quota_slot_spent",
+        commit_field="quota_spend_commit",
+        commit=commit,
+    )
+    goal = _goal()
+    counted, counted_reason = quota_slot_observation(
+        row,
+        runs_dir=runs,
+        goal_id=GOAL_ID,
+    )
+    assert counted_reason is None
+    assert counted == ("spent", spend_at.isoformat(), 2)
+
+    outside = tmp_path / "outside-zero.json"
+    zero_record = {
+        **record,
+        "quota_event": {**event, "slots": 0},
+    }
+    outside_bytes = json.dumps(zero_record).encode()
+    outside.write_bytes(outside_bytes)
+    artifact.unlink()
+    os.link(outside, artifact)
+
+    contribution, reason = quota_slot_observation(
+        row,
+        runs_dir=runs,
+        goal_id=GOAL_ID,
+    )
+    assert contribution is None
+    assert reason == QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING
+    ledger = goal_quota_with_spend_ledger(goal, [row], now=now, runs_dir=runs)
+    assert ledger["spent_slots"] == 0
+    assert ledger["unreadable_event_count"] == 1
+    assert ledger["unreadable_event_reasons"] == [QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING]
+    status = quota_status(
+        {**goal, "quota": {**goal["quota"], **ledger}},
+        waiting_on="codex",
+    )
+    assert status["state"] == "blocked_health"
+    summary = build_usage_summary(
+        {"runs": [row]},
+        parse_timestamp=_parse_timestamp,
+        runtime_root=runtime,
+    )
+    assert summary["totals"]["quota_spend_slots_24h"] == 0
+    assert summary["totals"]["unreadable_event_count_24h"] == 1
+    assert not artifact.is_symlink()
+    assert artifact.stat().st_ino == outside.stat().st_ino
+    assert artifact.stat().st_nlink == 2
+    assert outside.read_bytes() == outside_bytes
+
+
+def test_relocated_hard_link_cannot_zero_a_quota_debit(tmp_path: Path) -> None:
+    """A copied runs file that shares an outside inode is not the spend artifact.
+
+    The index still names the old runtime. The same-named file in the new
+    runs directory is a hard link to an outside zero-slot artifact that
+    repeats the commit identity. That alias must not read as a zero spend,
+    and the reader must not fall back to the old tree.
+    """
+
+    now = datetime.now(timezone.utc)
+    spend_at = now - timedelta(minutes=5)
+    runtime_a = tmp_path / "runtime-a"
+    runtime_b = tmp_path / "runtime-b"
+    artifact = runtime_a / "goals" / GOAL_ID / "runs" / "spend.json"
+    commit = _commit(
+        "quota_spend_commit_receipt_v0",
+        "effect-spend",
+        REQUEST_DIGEST,
+    )
+    event = {
+        "event_type": "quota_slot_spent",
+        "slots": 2,
+        "run_generated_at": spend_at.isoformat(),
+    }
+    record = {
+        "generated_at": spend_at.isoformat(),
+        "goal_id": GOAL_ID,
+        "classification": "quota_slot_spent",
+        "quota_event": event,
+        "quota_spend_commit": commit,
+    }
+    _write_record(artifact, record)
+    row = _row(
+        artifact,
+        generated_at=spend_at,
+        classification="quota_slot_spent",
+        commit_field="quota_spend_commit",
+        commit=commit,
+    )
+    index_path = artifact.parent / "index.jsonl"
+    index_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    original_bytes = artifact.read_bytes()
+    runs_b, index_bytes = _copy_runs(runtime_a, runtime_b)
+    copied_row = json.loads((runs_b / "index.jsonl").read_text(encoding="utf-8"))
+    counted, counted_reason = quota_slot_observation(
+        copied_row,
+        runs_dir=runs_b,
+        goal_id=GOAL_ID,
+    )
+    assert counted_reason is None
+    assert counted == ("spent", spend_at.isoformat(), 2)
+
+    outside = tmp_path / "outside-zero.json"
+    zero_record = {
+        **record,
+        "quota_event": {**event, "slots": 0},
+    }
+    outside_bytes = json.dumps(zero_record).encode()
+    outside.write_bytes(outside_bytes)
+    copied = runs_b / artifact.name
+    copied.unlink()
+    os.link(outside, copied)
+
+    contribution, reason = quota_slot_observation(
+        copied_row,
+        runs_dir=runs_b,
+        goal_id=GOAL_ID,
+    )
+    assert contribution is None
+    assert reason == QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING
+    ledger = goal_quota_with_spend_ledger(
+        _goal(),
+        [copied_row],
+        now=now,
+        runs_dir=runs_b,
+    )
+    assert ledger["spent_slots"] == 0
+    assert ledger["unreadable_event_count"] == 1
+    assert ledger["unreadable_event_reasons"] == [QUOTA_EVENT_UNREADABLE_ARTIFACT_MISSING]
+    status = quota_status(
+        {**_goal(), "quota": {**_goal()["quota"], **ledger}},
+        waiting_on="codex",
+    )
+    assert status["state"] == "blocked_health"
+    summary = build_usage_summary(
+        {"runs": [copied_row]},
+        parse_timestamp=_parse_timestamp,
+        runtime_root=runtime_b,
+    )
+    assert summary["totals"]["quota_spend_slots_24h"] == 0
+    assert summary["totals"]["unreadable_event_count_24h"] == 1
+    assert not copied.is_symlink()
+    assert copied.stat().st_ino == outside.stat().st_ino
+    assert copied.stat().st_nlink == 2
+    assert outside.read_bytes() == outside_bytes
+    assert artifact.read_bytes() == original_bytes
+    assert (runs_b / "index.jsonl").read_bytes() == index_bytes
 
 
 def test_copied_commit_digest_must_match_before_the_slots_count(tmp_path: Path) -> None:

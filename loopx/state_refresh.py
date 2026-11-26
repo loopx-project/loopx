@@ -1,72 +1,61 @@
+"""Run-history ``refresh-state`` orchestration, record projection, and public exports."""
+
 from __future__ import annotations
 
-import hashlib
 import json
-import re
+from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
 
-from .capabilities.todo_replan_cadence.machine_defaults import resolve_todo_replan_cadence_goal
-from .control_plane.work_items.replan_history_codec import effective_turn_cadence_context
-from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
-from .control_plane.runtime.time import chronology_key, now_local_iso
+from .agent_registry import registered_agent_ids_for_goal
+from .control_plane.agents.workspace_guard import (
+    capture_delivery_workspace as capture_delivery_workspace,
+)
+from .control_plane.effect_runtime import effect_runtime_request_scope
+from .control_plane.goals.checkpoint_context_io import (
+    checkpoint_commit_guard,
+    require_complete_checkpoint_index as require_complete_checkpoint_index,
+)
 from .control_plane.goals.state_resolution import resolve_goal_state as resolve_goal_state
+from .control_plane.progress_scope import AGENT_LANE_PROGRESS_SCOPE
+from .control_plane.quota.accounting_admission import quota_accounting_admission
+from .control_plane.quota.codex_session_usage import (
+    book_codex_session_usage as book_codex_session_usage,
+)
+from .control_plane.quota.execution_preparation import guard_first_writeback_execution
+from .control_plane.quota.refresh_external_delivery import (
+    finish_external_delivery_refresh,
+    persist_external_delivery_pause,
+)
+from .control_plane.quota.settlement import (
+    attach_settlement_progress,
+    read_heartbeat_settlement as read_heartbeat_settlement,
+)
+from .control_plane.quota.usage_collector import (
+    ingest_usage_into_run_record as ingest_usage_into_run_record,
+)
 from .control_plane.runtime.run_artifacts import run_file_stem as run_file_stem
-from .control_plane.work_items.delivery_history import require_consistent_delivery_claim
+from .control_plane.runtime.time import now_local_iso as now_local_iso
+from .control_plane.todos.contract import normalize_todo_replan_obligation_id
+from .control_plane.todos.provider_projection import recover_refresh_todo_projection
+from .control_plane.turn_driver.delivery_continuity import normalize_delivery_boundary
 from .control_plane.work_items.delivery_batch_scale import (
     DELIVERY_BATCH_SCALE_CHOICES as DELIVERY_BATCH_SCALE_CHOICES,
     require_delivery_batch_scale,
 )
+from .control_plane.work_items.delivery_history import require_consistent_delivery_claim
 from .control_plane.work_items.delivery_outcome import (
-    ACCOUNTABLE_DELIVERY_OUTCOMES,
     DELIVERY_OUTCOME_CHOICES as DELIVERY_OUTCOME_CHOICES,
     TURN_SCOPED_SETTLEMENT_GAP_FALLBACK,
-    TURN_SCOPED_SETTLEMENT_REQUIREMENT,
     explain_turn_scoped_settlement_gap,
     qualifies_turn_scoped_settlement,
     require_delivery_outcome,
 )
-from .control_plane.agents.workspace_guard import (
-    capture_delivery_workspace,
+from .control_plane.work_items.progress_observation import normalize_progress_observation
+from .control_plane.work_items.recommendation_source_io import (
+    recommendation_source_context,
+    recommendation_source_guard,
 )
-from .control_plane.agents.delivery_workspace import qualify_delivery_workspace_isolation
-from .control_plane.quota.refresh_external_delivery import (
-    finish_external_delivery_refresh,
-    persist_external_delivery_pause,
-    refresh_recovery_payload,
-)
-from .control_plane.quota.blocked_retry import require_blocked_retry_wait
-from .control_plane.quota.accounting_admission import quota_accounting_admission
-from .control_plane.quota.execution_preparation import guard_first_writeback_execution
-from .control_plane.coordination.local_authority import local_authority_is_promoted
-from .control_plane.todos.active_state_todo_parser import parse_active_state_todos
-from .control_plane.quota.settlement import (
-    SettlementIdentity,
-    attach_settlement_progress,
-    read_heartbeat_settlement,
-    render_first_refresh_checkpoint_hint,
-    render_refresh_recovery_markdown,
-    render_settlement_progress_markdown,
-)
-from .control_plane.quota.settlement_workspace_causality import resolve_settlement_workspace_requirement
-from .control_plane.quota.codex_session_usage import (
-    book_codex_session_usage,
-    usage_booking_lock_target,
-)
-from .control_plane.quota.usage_collector import ingest_usage_into_run_record
-from .control_plane.work_items.repair_delta import (
-    REPAIR_DELTA_CONTRACT_SCHEMA_VERSION as REPAIR_DELTA_CONTRACT_SCHEMA_VERSION,
-    REPAIR_DELTA_KIND_CHOICES as REPAIR_DELTA_KIND_CHOICES,
-    normalize_repair_delta_kinds,
-)
-from .control_plane.work_items.progress_observation import (
-    normalize_progress_observation,
-)
-from .control_plane.work_items.semantic_replan_writeback import (
-    qualify_refresh_replan_writeback,
-)
-from .capabilities.progress_review.context import external_progress_review_context
 from .control_plane.work_items.refresh_recommendation import (
     DEFAULT_REFRESH_ACTION as DEFAULT_REFRESH_ACTION,
     RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION as RECOMMENDED_ACTION_SOURCE_ACTIVE_NEXT_ACTION,
@@ -77,137 +66,80 @@ from .control_plane.work_items.refresh_recommendation import (
     RECOMMENDED_ACTION_SOURCE_SETTLEMENT_BOUND_TODO as RECOMMENDED_ACTION_SOURCE_SETTLEMENT_BOUND_TODO,
     derive_recommended_action as derive_recommended_action,
     derive_recommended_action_with_source as derive_recommended_action_with_source,
-    load_refresh_planning_source,
+    load_refresh_planning_source as load_refresh_planning_source,
     resolve_refresh_recommendation,
 )
-from .control_plane.runtime.shared_runtime_refresh_projection import (
-    build_shared_runtime_projection,
-    write_shared_runtime_projection,
+from .control_plane.work_items.repair_delta import (
+    REPAIR_DELTA_CONTRACT_SCHEMA_VERSION as REPAIR_DELTA_CONTRACT_SCHEMA_VERSION,
+    REPAIR_DELTA_KIND_CHOICES as REPAIR_DELTA_KIND_CHOICES,
+    normalize_repair_delta_kinds,
 )
-from .agent_registry import registered_agent_ids_for_goal
-from .control_plane.work_items.recommendation_source_io import (
-    load_recommendation_source_goal, recommendation_source_guard, recommendation_source_context,
+from .control_plane.work_items.semantic_replan_writeback import (
+    qualify_refresh_replan_writeback as qualify_refresh_replan_writeback,
 )
-from .control_plane.runtime.runtime_projection_route import (
-    compact_runtime_projection_route,
-    resolve_runtime_projection_route,
-)
-from .feedback import validate_local_control_text, validate_public_safe_text
-from .file_lock import exclusive_file_lock
-from .global_registry import sync_project_registry_to_global
+from .feedback import validate_public_safe_text
 from .history import (
     append_run_index_record,
-    load_index_snapshot,
-    load_registry,
-    reserve_unique_run_paths,
+    load_index_snapshot as load_index_snapshot,
+    load_registry as load_registry,
+    reserve_unique_run_paths as reserve_unique_run_paths,
     unique_run_paths,
 )
-from .control_plane.runtime.local_state_write_correctness import build_local_state_write_correctness_dry_run_packet
 from .paths import resolve_runtime_root
-from .presentation.markdown import append_operator_action_markdown
-from .control_plane.goals.vision_checkpoint import (
-    build_vision_checkpoint,
-    prepare_vision_refresh,
+from .presentation.renderers.state_refresh_markdown import (
+    render_state_refresh_markdown as render_state_refresh_markdown,
 )
-from .control_plane.goals.goal_frontier import latest_agent_vision_from_runs
-from .control_plane.goals.goal_frontier.outcome_continuity import (
-    acceptance_gaps_from_outcome_checkpoint,
-    outcome_vision_checkpoint_from_run,
+from .refresh_state.admission import (
+    admit_or_recover_turn_settlement,
+    load_and_validate_goal_context,
+    normalize_explore_attachment,
+    prepare_explore_attachment,
+    resolve_registry_and_request_work_id,
 )
-from .control_plane.goals.checkpoint_context_io import (
-    checkpoint_commit_guard, commit_checkpoint_run, require_complete_checkpoint_index, inspect_checkpoint_replay,
+from .refresh_state.post_commit import (
+    REPAIR_NOOP_SCHEMA_VERSION as REPAIR_NOOP_SCHEMA_VERSION,
+    attach_post_record_qualification_metadata,
+    attach_refresh_usage_to_projections,
+    build_refresh_dry_run_packet,
+    commit_checkpoint_supplement_run,
+    sync_refresh_global_and_shared_projection,
 )
-from .registry import registry_goals as registry_goals, resolve_state_file as resolve_state_file
+from .refresh_state.qualification import (
+    qualify_vision_replan_and_completion,
+    resolve_refresh_delivery_workspace,
+)
+from .refresh_state.records import build_state_refresh_record as build_state_refresh_record
+from .refresh_state.text_parsing import (
+    BULLET_PREFIX_RE as BULLET_PREFIX_RE,
+    CHECKBOX_PREFIX_RE as CHECKBOX_PREFIX_RE,
+    clean_action_line as clean_action_line,
+    extract_section_lines as extract_section_lines,
+    first_action_item as first_action_item,
+    is_bullet_line as is_bullet_line,
+    normalize_next_action_text as normalize_next_action_text,
+    parse_frontmatter as parse_frontmatter,
+    replace_updated_at as replace_updated_at,
+    section_list_items as section_list_items,
+)
+from .registry import (
+    registry_goals as registry_goals,
+    resolve_state_file as resolve_state_file,
+)
 from .runtime import validate_goal_id_path_segment
-from .state_projection import (
-    active_state_next_action_entries,
-    state_projection_gap_warning,
-)
-from .control_plane.todos.contract import (
-    normalize_todo_replan_obligation_id,
-)
-from .control_plane.todos.completion_validation_accountability import (
-    require_accountable_completion_validation,
-)
-from .control_plane.turn_driver.delivery_continuity import (
-    normalize_delivery_boundary,
-)
 
 DEFAULT_REFRESH_CLASSIFICATION = "state_refreshed"
 GOAL_PROGRESS_SCOPE = "goal"
 PROGRESS_SCOPE_CHOICES = (GOAL_PROGRESS_SCOPE, AGENT_LANE_PROGRESS_SCOPE)
-BULLET_PREFIX_RE = re.compile(r"^(?:[-*]\s+|\d+[.)]\s+)")
-CHECKBOX_PREFIX_RE = re.compile(r"^\[(?P<mark>[ xX])\]\s+")
-REPAIR_NOOP_SCHEMA_VERSION = "repair_noop_v0"
 
 
 def now_local() -> str:
     return now_local_iso()
 
 
-def parse_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---"):
-        return {}
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return {}
-    values: dict[str, str] = {}
-    for line in parts[1].splitlines():
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        value = value.strip().strip('"')
-        values[key.strip()] = value
-    return values
-
-
-def extract_section_lines(text: str, heading: str, limit: int = 8) -> list[str]:
-    lines = text.splitlines()
-    in_section = False
-    collected: list[str] = []
-    for line in lines:
-        if line.startswith("## "):
-            if in_section:
-                break
-            in_section = line[3:].strip() == heading
-            continue
-        if in_section and line.strip():
-            collected.append(line.strip())
-            if len(collected) >= limit:
-                break
-    return collected
-
-
-def replace_updated_at(text: str, updated_at: str) -> str:
-    if not text.startswith("---"):
-        return text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return text
-    frontmatter = parts[1]
-    body = parts[2]
-    if re.search(r"(?m)^updated_at:\s*.+$", frontmatter):
-        frontmatter = re.sub(
-            r"(?m)^updated_at:\s*.+$",
-            f"updated_at: {updated_at}",
-            frontmatter,
-            count=1,
-        )
-    else:
-        frontmatter = frontmatter.rstrip("\n") + f"\nupdated_at: {updated_at}\n"
-    return "---" + frontmatter + "---" + body
-
-
-def normalize_next_action_text(value: str) -> str:
-    text = " ".join(str(value or "").strip().split())
-    if not text:
-        raise ValueError("next_action must not be empty")
-    validate_local_control_text("active_state_next_action", text)
-    return text
-
-
-def registered_agents_for_goal(registry_goal: dict[str, Any] | None) -> list[str]:
-    return registered_agent_ids_for_goal(registry_goal)
+def registered_agents_for_goal(registry_goal: Mapping[str, object] | None) -> list[str]:
+    return registered_agent_ids_for_goal(
+        dict(registry_goal) if registry_goal is not None else None
+    )
 
 
 def normalize_progress_scope(value: str | None) -> str:
@@ -222,184 +154,9 @@ def normalize_progress_scope(value: str | None) -> str:
     return normalized
 
 
-def clean_action_line(line: str) -> str:
-    text = BULLET_PREFIX_RE.sub("", line.strip()).strip()
-    return CHECKBOX_PREFIX_RE.sub("", text).strip()
-
-
-def is_bullet_line(line: str) -> bool:
-    return bool(BULLET_PREFIX_RE.match(line.strip()))
-
-
-def first_action_item(lines: list[str], start: int) -> str:
-    first_line = lines[start]
-    parts = [clean_action_line(first_line)]
-    if is_bullet_line(first_line):
-        for line in lines[start + 1 :]:
-            if is_bullet_line(line):
-                break
-            if line.strip().startswith("<!--"):
-                continue
-            cleaned = clean_action_line(line)
-            if cleaned:
-                parts.append(cleaned)
-    return " ".join(part for part in parts if part).strip()
-
-
-def section_list_items(lines: list[str]) -> list[str]:
-    items: list[str] = []
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if is_bullet_line(line):
-            item = first_action_item(lines, index)
-            if item:
-                items.append(item)
-            index += 1
-            while index < len(lines) and not is_bullet_line(lines[index]):
-                index += 1
-            continue
-        cleaned = clean_action_line(line)
-        if cleaned:
-            items.append(cleaned)
-        index += 1
-    return items
-
-
-def build_state_refresh_record(
-    *,
-    goal_id: str,
-    state_file: Path,
-    state_text: str,
-    classification: str,
-    recommended_action: str,
-    recommended_action_source: str,
-    recommended_action_resolution: dict[str, Any] | None = None,
-    generated_at: str,
-    registry_goal: dict[str, Any] | None,
-    delivery_batch_scale: str | None = None,
-    delivery_outcome: str | None = None,
-    progress_scope: str | None = None,
-    agent_id: str | None = None,
-    agent_lane: str | None = None,
-    autonomous_replan_recorded: bool = False,
-    repair_delta_contract: dict[str, Any] | None = None,
-    replan_semantic_delta: dict[str, Any] | None = None,
-    autonomous_replan_frontier_identity: str | None = None,
-    agent_vision: dict[str, Any] | None = None,
-    vision_checkpoint: dict[str, Any] | None = None,
-    progress_observation: dict[str, Any] | None = None,
-    explore_result: dict[str, Any] | None = None,
-    explore_result_recorded_at: str | None = None,
-    explore_result_source_snapshot: dict[str, Any] | None = None,
-    delivery_workspace: dict[str, Any] | None = None,
-    settlement_identity: SettlementIdentity | None = None,
-    todo_fields: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    frontmatter = parse_frontmatter(state_text)
-    next_action = active_state_next_action_entries(
-        state_text,
-        limit=8,
-        text_limit=None,
-    )
-    recent_feedback = extract_section_lines(state_text, "Recent User Feedback", limit=5)
-    progress = extract_section_lines(state_text, "Progress Ledger", limit=5)
-    digest = hashlib.sha256(state_text.encode("utf-8")).hexdigest()[:16]
-    authority_sources = []
-    if registry_goal and isinstance(registry_goal.get("authority_sources"), list):
-        authority_sources = registry_goal.get("authority_sources") or []
-    record = {
-        "generated_at": generated_at,
-        "goal_id": goal_id,
-        "classification": classification,
-        "recommended_action": recommended_action,
-        "recommended_action_source": recommended_action_source,
-        "health_check": (
-            f"state_file 1/1; registry_goal {1 if registry_goal else 0}/1; "
-            f"authority_sources {len(authority_sources)}"
-        ),
-        "state": {
-            "path": str(state_file),
-            "sha256_16": digest,
-            "frontmatter": frontmatter,
-            "next_action": next_action,
-            "recent_feedback": recent_feedback,
-            "progress": progress,
-        },
-        "registry_goal": {
-            "present": bool(registry_goal),
-            "domain": registry_goal.get("domain") if registry_goal else None,
-            "status": registry_goal.get("status") if registry_goal else None,
-            "adapter": registry_goal.get("adapter") if registry_goal else None,
-            "authority_source_count": len(authority_sources),
-        },
-    }
-    if recommended_action_resolution:
-        record["recommended_action_resolution"] = recommended_action_resolution
-    projection_gap = state_projection_gap_warning(
-        state_text,
-        # An authoritative empty group must not fall back to stale Markdown.
-        user_todos=(todo_fields.get("user_todos") or {}) if todo_fields is not None else None,
-        agent_todos=(todo_fields.get("agent_todos") or {}) if todo_fields is not None else None,
-    )
-    if projection_gap:
-        record["state_projection_gap"] = projection_gap
-    if delivery_batch_scale:
-        record["delivery_batch_scale"] = delivery_batch_scale
-    if delivery_outcome:
-        record["delivery_outcome"] = delivery_outcome
-    if delivery_workspace:
-        record["delivery_workspace"] = delivery_workspace
-    if settlement_identity:
-        record["settlement_identity"] = settlement_identity.as_dict()
-        record["turn_instance_id"] = settlement_identity.turn_instance_id
-        if settlement_identity.request_subject is not None:
-            record["request_subject"] = dict(settlement_identity.request_subject)
-        if settlement_identity.todo_id:
-            record["todo_id"] = settlement_identity.todo_id
-        if settlement_identity.replan_obligation_id:
-            record["replan_obligation_id"] = (
-                settlement_identity.replan_obligation_id
-            )
-    if autonomous_replan_recorded:
-        record["autonomous_replan_ack"] = {
-            "schema_version": "autonomous_replan_ack_v0",
-            "recorded": True,
-            "source": "refresh_state",
-        }
-        if repair_delta_contract:
-            record["autonomous_replan_ack"]["delta_contract"] = repair_delta_contract
-        if replan_semantic_delta:
-            record["autonomous_replan_ack"]["semantic_delta"] = (
-                replan_semantic_delta
-            )
-        if autonomous_replan_frontier_identity:
-            record["autonomous_replan_ack"]["frontier_identity"] = (
-                autonomous_replan_frontier_identity
-            )
-    if agent_vision:
-        record["agent_vision"] = agent_vision
-    if vision_checkpoint:
-        record["vision_checkpoint"] = vision_checkpoint
-    if explore_result is not None:
-        record["explore_result"] = explore_result
-        record["explore_result_recorded_at"] = explore_result_recorded_at or generated_at
-        if explore_result_source_snapshot is not None:
-            record["explore_result_source_snapshot"] = explore_result_source_snapshot
-    if progress_observation:
-        record["progress_observation"] = progress_observation
-    if progress_scope:
-        record["progress_scope"] = progress_scope
-    if agent_id:
-        record["agent_id"] = agent_id
-    if progress_scope == AGENT_LANE_PROGRESS_SCOPE and agent_id:
-        record["agent_lane"] = agent_lane or agent_id
-    return record
-
-
 def _build_state_refresh_output_projections(
     *,
-    record: dict[str, Any],
+    record: Mapping[str, object],
     registry_path: Path,
     runtime_root: Path,
     project: Path | None,
@@ -408,27 +165,36 @@ def _build_state_refresh_output_projections(
     index_path: Path,
     dry_run: bool,
     autonomous_replan_recorded_requested: bool,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, object], dict[str, object]]:
     """Project one refresh record into its compact index and CLI response."""
-
-    record_state = record.get("state") if isinstance(record.get("state"), dict) else {}
-    record_frontmatter = record_state.get("frontmatter") or {}
-    index_record = {
+    raw_state = record.get("state")
+    record_state = dict(raw_state) if isinstance(raw_state, Mapping) else {}
+    raw_frontmatter = record_state.get("frontmatter")
+    record_frontmatter = (
+        dict(raw_frontmatter) if isinstance(raw_frontmatter, Mapping) else {}
+    )
+    index_record: dict[str, object] = {
         field: record[field]
         for field in (
-            "generated_at", "goal_id", "classification", "recommended_action",
-            "recommended_action_source", "health_check",
+            "generated_at",
+            "goal_id",
+            "classification",
+            "recommended_action",
+            "recommended_action_source",
+            "health_check",
         )
     }
-    index_record.update({
-        "json_path": str(json_path),
-        "markdown_path": str(markdown_path),
-        "state": {
-            "sha256_16": record_state.get("sha256_16"),
-            "frontmatter": {"updated_at": record_frontmatter.get("updated_at")},
-        },
-        "runtime_projection_route": record["runtime_projection_route"],
-    })
+    index_record.update(
+        {
+            "json_path": str(json_path),
+            "markdown_path": str(markdown_path),
+            "state": {
+                "sha256_16": record_state.get("sha256_16"),
+                "frontmatter": {"updated_at": record_frontmatter.get("updated_at")},
+            },
+            "runtime_projection_route": record["runtime_projection_route"],
+        }
+    )
     for field in (
         "recommended_action_resolution",
         "delivery_batch_scale",
@@ -445,23 +211,34 @@ def _build_state_refresh_output_projections(
         if field in record:
             index_record[field] = record[field]
 
-    replan_ack = record.get("autonomous_replan_ack") or {}
+    raw_ack = record.get("autonomous_replan_ack")
+    replan_ack = dict(raw_ack) if isinstance(raw_ack, Mapping) else {}
     if autonomous_replan_recorded_requested or replan_ack.get("recorded") is True:
         index_record["autonomous_replan_ack"] = replan_ack
         if replan_ack.get("requested_classification"):
-            index_record["requested_classification"] = replan_ack["requested_classification"]
+            index_record["requested_classification"] = replan_ack[
+                "requested_classification"
+            ]
 
     agent_vision = record.get("agent_vision")
-    if isinstance(agent_vision, dict):
-        index_record["agent_vision"] = {
+    if isinstance(agent_vision, Mapping):
+        projected_vision: dict[str, object] = {
             field: agent_vision.get(field)
             for field in (
-                "schema_version", "agent_id", "state", "vision_patch",
-                "todo_delta", "fallback_declarations", "stride_decision", "vision_budget",
+                "schema_version",
+                "agent_id",
+                "state",
+                "vision_patch",
+                "todo_delta",
+                "fallback_declarations",
+                "stride_decision",
+                "vision_budget",
             )
         }
-        if isinstance(agent_vision.get("path_delta"), dict):
-            index_record["agent_vision"]["path_delta"] = agent_vision["path_delta"]
+        path_delta = agent_vision.get("path_delta")
+        if isinstance(path_delta, Mapping):
+            projected_vision["path_delta"] = dict(path_delta)
+        index_record["agent_vision"] = projected_vision
 
     for field in (
         "vision_checkpoint",
@@ -476,7 +253,7 @@ def _build_state_refresh_output_projections(
         if field in record:
             index_record[field] = record[field]
 
-    payload: dict[str, Any] = {
+    payload: dict[str, object] = {
         "ok": True,
         "dry_run": dry_run,
         "appended": not dry_run,
@@ -484,244 +261,46 @@ def _build_state_refresh_output_projections(
         "runtime_root": str(runtime_root),
         "project": str(project) if project else None,
     }
-    payload.update({
-        field: record.get(field)
-        for field in ("goal_id", "classification", "progress_scope", "agent_id", "agent_lane")
-    })
-    payload.update({
-        "autonomous_replan_recorded": bool(replan_ack.get("recorded")),
-        "autonomous_replan_recorded_requested": autonomous_replan_recorded_requested,
-        "repair_delta_contract": replan_ack.get("delta_contract"),
-        "json_path": str(json_path),
-        "markdown_path": str(markdown_path),
-        "index_path": str(index_path),
-    })
-    payload.update({
-        field: record.get(field)
-        for field in (
-            "agent_vision", "vision_checkpoint", "recommended_action",
-            "recommended_action_source",
-            "generated_at", "health_check",
-        )
-    })
+    payload.update(
+        {
+            field: record.get(field)
+            for field in (
+                "goal_id",
+                "classification",
+                "progress_scope",
+                "agent_id",
+                "agent_lane",
+            )
+        }
+    )
+    payload.update(
+        {
+            "autonomous_replan_recorded": bool(replan_ack.get("recorded")),
+            "autonomous_replan_recorded_requested": autonomous_replan_recorded_requested,
+            "repair_delta_contract": replan_ack.get("delta_contract"),
+            "json_path": str(json_path),
+            "markdown_path": str(markdown_path),
+            "index_path": str(index_path),
+        }
+    )
+    payload.update(
+        {
+            field: record.get(field)
+            for field in (
+                "agent_vision",
+                "vision_checkpoint",
+                "recommended_action",
+                "recommended_action_source",
+                "generated_at",
+                "health_check",
+            )
+        }
+    )
     payload.update(record)
     return index_record, payload
 
 
-def render_state_refresh_markdown(payload: dict[str, Any]) -> str:
-    delivery = payload.get("projection_outbox")
-    delivery_lines = []
-    if isinstance(delivery, dict):
-        delivery_lines.append(f"- Todo display: `{delivery['status']}`")
-        if delivery.get("status") == "pending":
-            delivery_lines.append("- Canonical Todo state is committed; repair the display without repeating business work or quota spend.")
-            delivery_lines.append(str(delivery.get("recommended_action") or ""))
-    recovery_markdown = render_refresh_recovery_markdown(payload)
-    if recovery_markdown is not None:
-        return "\n".join([recovery_markdown, *delivery_lines])
-    state = payload.get("state") if isinstance(payload.get("state"), dict) else {}
-    frontmatter = state.get("frontmatter") if isinstance(state.get("frontmatter"), dict) else {}
-    lines = [
-        "# LoopX State Refresh",
-        "",
-        f"- ok: `{payload.get('ok')}`",
-        f"- dry_run: `{payload.get('dry_run')}`",
-        f"- appended: `{payload.get('appended')}`",
-        f"- goal_id: `{payload.get('goal_id')}`",
-        f"- classification: `{payload.get('classification')}`",
-        f"- progress_scope: `{payload.get('progress_scope')}`",
-        f"- agent_id: `{payload.get('agent_id')}`",
-        f"- agent_lane: `{payload.get('agent_lane')}`",
-        f"- delivery_batch_scale: `{payload.get('delivery_batch_scale')}`",
-        f"- delivery_outcome: `{payload.get('delivery_outcome')}`",
-        f"- autonomous_replan_recorded: `{payload.get('autonomous_replan_recorded')}`",
-        f"- autonomous_replan_recorded_requested: `{payload.get('autonomous_replan_recorded_requested')}`",
-        f"- generated_at: `{payload.get('generated_at')}`",
-        f"- state_file: `{state.get('path')}`",
-        f"- state_updated_at: `{frontmatter.get('updated_at')}`",
-        f"- health_check: `{payload.get('health_check')}`",
-    ]
-    lines.extend(delivery_lines)
-    lines.extend(render_settlement_progress_markdown(payload))
-    if "external_sink_delivery_authorized" in payload:
-        lines.append(
-            "- external_sink_delivery_authorized: "
-            f"`{payload.get('external_sink_delivery_authorized')}`"
-        )
-    delivery_workspace = (
-        payload.get("delivery_workspace")
-        if isinstance(payload.get("delivery_workspace"), dict)
-        else {}
-    )
-    if delivery_workspace:
-        lines.append(
-            "- delivery_workspace: "
-            f"repository={delivery_workspace.get('task_repository')} "
-            f"kind={delivery_workspace.get('workspace_kind')}"
-        )
-    if payload.get("error"):
-        lines.append(f"- error: {payload.get('error')}")
-        if payload.get("error_detail"):
-            lines.append(f"- detail: {payload['error_detail']}")
-        append_operator_action_markdown(lines, payload)
-        return "\n".join(lines)
-
-    repair_delta = (
-        payload.get("repair_delta_contract")
-        if isinstance(payload.get("repair_delta_contract"), dict)
-        else {}
-    )
-    if repair_delta:
-        lines.append(
-            "- repair_delta_contract: "
-            f"delta_present={repair_delta.get('delta_present')} "
-            f"kinds={','.join(repair_delta.get('delta_kinds') or [])}"
-        )
-    agent_vision = (
-        payload.get("agent_vision")
-        if isinstance(payload.get("agent_vision"), dict)
-        else {}
-    )
-    if agent_vision:
-        budget = (
-            agent_vision.get("vision_budget")
-            if isinstance(agent_vision.get("vision_budget"), dict)
-            else {}
-        )
-        lines.append(
-            "- agent_vision: "
-            f"state={agent_vision.get('state')} "
-            f"agent_id={agent_vision.get('agent_id')} "
-            f"budget={budget.get('total_usage')}/{budget.get('total_limit')}"
-        )
-    vision_checkpoint = (
-        payload.get("vision_checkpoint")
-        if isinstance(payload.get("vision_checkpoint"), dict)
-        else {}
-    )
-    if vision_checkpoint:
-        lines.append(
-            "- vision_checkpoint: "
-            f"agent_id={vision_checkpoint.get('agent_id')} "
-            f"required={vision_checkpoint.get('required')} "
-            f"satisfied={vision_checkpoint.get('satisfied')} "
-            f"decision={vision_checkpoint.get('decision')}"
-        )
-        if vision_checkpoint.get("unchanged_reason"):
-            lines.append(
-                f"- vision_unchanged_reason: {vision_checkpoint.get('unchanged_reason')}"
-            )
-        required_resolution = vision_checkpoint.get("required_resolution")
-        if required_resolution:
-            lines.append(
-                "- vision_checkpoint_required_resolution: "
-                f"{','.join(str(item) for item in required_resolution)}"
-            )
-        for gap in vision_checkpoint.get("acceptance_gaps", []):
-            if isinstance(gap, dict):
-                failed = [name for name, passed in (gap.get("component_checks") or {}).items() if not passed]
-                lines.append(f"- outcome qualification gap: {', '.join(failed)}. {gap.get('resolution_hint', '')}")
-        lines.extend(render_first_refresh_checkpoint_hint(payload))
-
-    projection_gap = (
-        payload.get("state_projection_gap")
-        if isinstance(payload.get("state_projection_gap"), dict)
-        else {}
-    )
-    if projection_gap:
-        lines.append(
-            "- state_projection_gap: "
-            f"requires_todo_expansion={projection_gap.get('requires_todo_expansion')} "
-            f"user_open={projection_gap.get('user_open_count')} "
-            f"agent_open={projection_gap.get('agent_open_count')} "
-            f"target_roles={','.join(projection_gap.get('target_roles') or [])}"
-        )
-        if projection_gap.get("recommended_action"):
-            lines.append(f"- state_projection_gap_action: {projection_gap.get('recommended_action')}")
-
-    next_action_update = (
-        payload.get("active_state_next_action_update")
-        if isinstance(payload.get("active_state_next_action_update"), dict)
-        else {}
-    )
-    if next_action_update:
-        lines.append(
-            "- active_state_next_action_update: "
-            f"updated={next_action_update.get('updated')} "
-            f"would_update={next_action_update.get('would_update')} "
-            f"dry_run={next_action_update.get('dry_run')}"
-        )
-        if next_action_update.get("next_action"):
-            lines.append(
-                f"- active_state_next_action: {next_action_update.get('next_action')}"
-            )
-
-    write_correctness = (
-        payload.get("local_state_write_correctness")
-        if isinstance(payload.get("local_state_write_correctness"), dict)
-        else {}
-    )
-    if write_correctness:
-        intent = write_correctness.get("write_intent") if isinstance(write_correctness.get("write_intent"), dict) else {}
-        preview = write_correctness.get("preview") if isinstance(write_correctness.get("preview"), dict) else {}
-        apply_result = (
-            write_correctness.get("apply_result")
-            if isinstance(write_correctness.get("apply_result"), dict)
-            else {}
-        )
-        lines.append(
-            "- local_state_write_correctness: "
-            f"schema={write_correctness.get('schema_version')} "
-            f"write_class={intent.get('write_class')} "
-            f"status={apply_result.get('status')} "
-            f"non_destructive={preview.get('non_destructive')}"
-        )
-
-    global_sync = payload.get("global_sync") if isinstance(payload.get("global_sync"), dict) else {}
-    if global_sync:
-        lines.extend(
-            [
-                f"- global_registry: `{global_sync.get('global_registry')}`",
-                f"- global_sync_wrote: `{global_sync.get('wrote')}`",
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            "## Recommended Action",
-            f"- source: `{payload.get('recommended_action_source')}`",
-        ]
-    )
-    recommendation_resolution = (
-        payload.get("recommended_action_resolution")
-        if isinstance(payload.get("recommended_action_resolution"), dict)
-        else {}
-    )
-    if recommendation_resolution:
-        lines.append(
-            "- authority: "
-            f"`{recommendation_resolution.get('authority')}`; "
-            "settlement_alignment: "
-            f"`{recommendation_resolution.get('settlement_alignment')}`"
-        )
-        if recommendation_resolution.get("todo_id"):
-            lines.append(
-                f"- todo_id: `{recommendation_resolution.get('todo_id')}`"
-            )
-    lines.append(str(payload.get("recommended_action") or ""))
-    for heading, key in (
-        ("Next Action", "next_action"),
-        ("Recent Feedback", "recent_feedback"),
-        ("Progress", "progress"),
-    ):
-        values = state.get(key) if isinstance(state.get(key), list) else []
-        if values:
-            lines.extend(["", f"## {heading}"])
-            lines.extend(f"- {value}" for value in section_list_items(values))
-    return "\n".join(lines)
-
-
+@effect_runtime_request_scope()
 def refresh_state_run(
     *,
     registry_path: Path,
@@ -744,28 +323,27 @@ def refresh_state_run(
     agent_lane: str | None = None,
     progress_scope: str | None = None,
     autonomous_replan_recorded: bool = False,
-    repair_delta_kinds: list[str] | None = None,
-    agent_vision_packet: dict[str, Any] | None = None,
+    repair_delta_kinds: Sequence[str] | None = None,
+    agent_vision_packet: Mapping[str, object] | None = None,
     merge_agent_vision_patch: bool = False,
     vision_unchanged_reason: str | None = None,
     checkpoint_read_context_id: str | None = None,
-    progress_observation: dict[str, Any] | None = None,
-    explore_result: dict[str, Any] | None = None,
+    progress_observation: Mapping[str, object] | None = None,
+    explore_result: Mapping[str, object] | None = None,
     completion_todo_id: str | None = None,
     completion_turn_key: str | None = None,
-    usage_measurement: dict[str, Any] | None = None,
+    usage_measurement: Mapping[str, object] | None = None,
     usage_codex_session: Path | None = None,
     dry_run: bool,
     sync_global: bool = True,
-    external_delivery: dict[str, Any] | None = None,
+    external_delivery: Mapping[str, object] | None = None,
     goal_ref: dict[str, str] | None = None,
-    goal_acceptance_preview: dict[str, Any] | None = None,
-    task_lease_proof: dict[str, Any] | None = None,
+    goal_acceptance_preview: Mapping[str, object] | None = None,
+    task_lease_proof: Mapping[str, object] | None = None,
     allow_same_generation_lease_renewal: bool = False,
     validation_recovery_turn_instance_id: str | None = None,
-) -> dict[str, Any]:
-    from .control_plane.todos.provider_projection import recover_refresh_todo_projection
-
+) -> dict[str, object]:
+    """Validate, qualify, and persist (or preview) one ``refresh-state`` run."""
     safe_goal_id = validate_goal_id_path_segment(goal_id)
     if goal_acceptance_preview is not None and not dry_run:
         raise ValueError("prospective acceptance facts are valid only for dry-run planning")
@@ -799,861 +377,324 @@ def refresh_state_run(
         require_delivery_outcome(delivery_outcome).value if delivery_outcome else None
     )
     normalized_delivery_boundary = normalize_delivery_boundary(delivery_boundary)
-    normalized_repair_delta_kinds = normalize_repair_delta_kinds(repair_delta_kinds)
-    normalized_explore_result = None
-    prepared_explore_source: dict[str, Any] = {}
-    if explore_result is not None:
-        from .capabilities.explore.result_writeback import normalize_result_attachment
-        normalized_explore_result = normalize_result_attachment(explore_result)
-    request_work_id = None
-    if not todo_id and not normalized_replan_obligation_id and turn_instance_id and normalized_agent_id:
-        # Reuse only this exact committed guard. Missing input cannot select a
-        # Todo or manufacture a request; the original receipt owns restoration.
-        from .control_plane.quota.heartbeat_receipt import find_heartbeat_receipt, heartbeat_receipt_request_subject
-        request_registry = load_registry(registry_path)
-        request_runtime = resolve_runtime_root(request_registry, runtime_root_override, registry_path=registry_path)
-        request_receipt = find_heartbeat_receipt(request_runtime, goal_id=safe_goal_id,
-            agent_id=normalized_agent_id, turn_instance_id=turn_instance_id, goal_ref=goal_ref)
-        request_subject = heartbeat_receipt_request_subject(request_receipt)
-        if request_subject is not None:
-            request_work_id = SettlementIdentity(goal_id=safe_goal_id, agent_id=normalized_agent_id,
-                todo_id=None, turn_instance_id=turn_instance_id, request_subject=request_subject).binding_id
-    normalized_progress_observation = (
-        normalize_progress_observation(
-            progress_observation,
-            work_item_id=todo_id or normalized_replan_obligation_id or request_work_id,
-        )
-        if progress_observation is not None
-        else None
+    normalized_repair_delta_kinds = normalize_repair_delta_kinds(
+        list(repair_delta_kinds) if repair_delta_kinds is not None else None
     )
-    # Validate individual fields before asking the typed owner about their
-    # combination. Reuse normalized facts; malformed input must not open a
-    # registry or create a write lock in either normal or dry-run execution.
+    normalized_explore_result = (
+        normalize_explore_attachment(explore_result) if explore_result is not None else None
+    )
+    prepared_explore_source: dict[str, object] = {}
+    preloaded_registry, preloaded_runtime, request_work_id = (
+        resolve_registry_and_request_work_id(
+            registry_path=registry_path, runtime_root_override=runtime_root_override,
+            goal_id=safe_goal_id, agent_id=normalized_agent_id, todo_id=todo_id,
+            replan_obligation_id=normalized_replan_obligation_id,
+            turn_instance_id=turn_instance_id, goal_ref=goal_ref,
+            load_registry_fn=load_registry,
+        )
+    )
+    normalized_progress_observation: dict[str, object] | None = (
+        dict(
+            normalize_progress_observation(
+                dict(progress_observation),
+                work_item_id=todo_id or normalized_replan_obligation_id or request_work_id,
+            )
+        )
+        if progress_observation is not None else None
+    )
     require_consistent_delivery_claim({
         "delivery_outcome": normalized_delivery_outcome,
         "progress_observation": normalized_progress_observation,
     })
     turn_scoped_settlement_qualified = qualifies_turn_scoped_settlement(
-        normalized_delivery_outcome,
-        normalized_progress_observation,
+        normalized_delivery_outcome, normalized_progress_observation,
         work_item_id=todo_id or request_work_id,
         replan_obligation_id=normalized_replan_obligation_id,
     )
-    # A refusal has to name the typed input the writer still owes; the diagnosis
-    # is computed once and reused by both settlement guards below.
     turn_scoped_settlement_gap = (
         TURN_SCOPED_SETTLEMENT_GAP_FALLBACK
         if turn_scoped_settlement_qualified
         else explain_turn_scoped_settlement_gap(
-            normalized_delivery_outcome,
-            normalized_progress_observation,
+            normalized_delivery_outcome, normalized_progress_observation,
             work_item_id=todo_id or request_work_id,
             replan_obligation_id=normalized_replan_obligation_id,
-        )
-        or TURN_SCOPED_SETTLEMENT_GAP_FALLBACK
+        ) or TURN_SCOPED_SETTLEMENT_GAP_FALLBACK
     )
     if delivery_workspace_path is not None and not turn_scoped_settlement_qualified:
         raise ValueError(
             "--delivery-workspace-path requires a progress outcome or a typed "
             "blocked outcome_gap settlement: " + turn_scoped_settlement_gap
         )
-    registry = load_registry(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
-    # State-dependent admission through the final append remains serialized.
-    # Only pure input validation runs before this transitional persistence lock.
+    registry = preloaded_registry if preloaded_registry is not None else dict(load_registry(registry_path))
+    runtime_root = (
+        preloaded_runtime if preloaded_runtime is not None
+        else resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    )
     with quota_accounting_admission(
-        runtime_root=runtime_root,
-        registry_path=registry_path,
-        goal_id=safe_goal_id,
-        goal_ref=goal_ref,
-        operation="refresh-state",
-        lock_legacy_index=not dry_run,
-        handoff_legacy_index=not dry_run,
+        runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
+        goal_ref=goal_ref, operation="refresh-state",
+        lock_legacy_index=not dry_run, handoff_legacy_index=not dry_run,
     ) as source_admission, ExitStack() as research_write_guard:
-        settlement_identity = None
-        settlement_result = None
-        delivery_workspace_causality = None
-        settlement_workspace_requirement = None
-        settlement_readback = None
-        refresh_recovery = None
-        prior_writeback_run = None
-        checkpoint_supplement = False
-        recovering_writeback_path = None
-        if todo_id or normalized_replan_obligation_id or turn_instance_id:
-            if checkpoint_read_context_id or agent_vision_packet or vision_unchanged_reason:
-                require_complete_checkpoint_index(runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl")
-            if not turn_scoped_settlement_qualified:
-                raise ValueError(
-                    TURN_SCOPED_SETTLEMENT_REQUIREMENT + ": " + turn_scoped_settlement_gap
-                )
-            settlement_readback = read_heartbeat_settlement(
-                runtime_root,
-                goal_id=safe_goal_id,
-                agent_id=normalized_agent_id or None,
-                todo_id=todo_id,
-                turn_instance_id=turn_instance_id,
-                replan_obligation_id=normalized_replan_obligation_id,
-                registry_path=registry_path,
-                goal_ref=goal_ref,
-                source_admission=source_admission,
-                borrow_source_admission=source_admission is not None,
-                # refresh-state closes the exact admitted Turn.  A semantic
-                # replan may retain ``--todo-id`` as its planning selection
-                # while the immutable settlement identity is the replan
-                # obligation recorded by quota should-run.  Resolve that
-                # original receipt binding, while the read model still rejects
-                # a different Todo or obligation.
-                resolve_original_binding=True,
-                refresh_retry=(refresh_retry_request := {
-                    "checkpoint_read_context_id": checkpoint_read_context_id,
-                    "external_delivery": external_delivery,
-                    "vision": agent_vision_packet,
-                    "unchanged_reason": vision_unchanged_reason,
-                    "merge_patch": bool(merge_agent_vision_patch),
-                    "workspace_requested": delivery_workspace_path is not None,
-                    "mutation": {
-                        **({"explore_result": normalized_explore_result} if normalized_explore_result is not None else {}),
-                        "next_action": next_action,
-                        **({"next_action_basis": next_action_basis} if next_action_basis else {}),
-                        "autonomous_replan_recorded": autonomous_replan_recorded,
-                        "repair_delta_kinds": repair_delta_kinds,
-                        "usage_measurement": usage_measurement,
-                        "usage_codex_session": str(usage_codex_session)
-                        if usage_codex_session
-                        else None,
-                    },
-                    "delivery_outcome": normalized_delivery_outcome,
-                    "delivery_batch_scale": normalized_delivery_batch_scale,
-                    "delivery_boundary": normalized_delivery_boundary,
-                    "progress_observation": normalized_progress_observation,
-                }),
-            )
-            if settlement_readback is None:
-                raise RuntimeError("exact settlement readback unexpectedly returned not-found")
-            settlement_result = settlement_readback.identity
-            if settlement_result.failure is not None:
-                raise ValueError(settlement_result.failure.reason)
-            settlement_identity = settlement_result.value
-            if settlement_identity is None:
-                raise ValueError("turn-scoped refresh-state has no settlement identity")
-            delivery_workspace_causality = settlement_readback.workspace_causality
-            refresh_recovery = settlement_readback.refresh_recovery
-            if not refresh_recovery:
-                raise RuntimeError("settlement readback omitted refresh recovery admission")
-            prior_writeback_run = settlement_readback.writeback_run
-            checkpoint_supplement = bool(
-                refresh_recovery["decision"] == "supplement_checkpoint"
-            )
-            if (
-                checkpoint_supplement
-                and refresh_recovery["reason"] == "complete_missing_replan_qualification_on_original_turn"
-            ):
-                recovering_writeback_path = (prior_writeback_run or {}).get("json_path")
-                if not isinstance(recovering_writeback_path, str) or not recovering_writeback_path:
-                    raise ValueError("the original blocked writeback has no indexed artifact path")
-            checkpoint_replay = None
-            if refresh_recovery.get("decision") in {"replay", "repair_receipt"} and prior_writeback_run:
-                checkpoint_replay = inspect_checkpoint_replay(runtime_root, safe_goal_id, prior_writeback_run)
-            recovery_payload = refresh_recovery_payload(
-                settlement_readback, registry_path=registry_path, runtime_root=runtime_root,
-                goal_id=safe_goal_id, dry_run=dry_run, goal_ref=goal_ref,
-            )
-            if recovery_payload is not None:
-                if checkpoint_replay is not None:
-                    recovery_payload.update({key: checkpoint_replay[key] for key in ("json_path", "markdown_path")})
-                return recover_refresh_todo_projection(
-                    recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
+        admission = admit_or_recover_turn_settlement(
+            runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
+            agent_id=normalized_agent_id, todo_id=todo_id, turn_instance_id=turn_instance_id,
+            replan_obligation_id=normalized_replan_obligation_id, goal_ref=goal_ref,
+            source_admission=source_admission,
+            turn_scoped_settlement_qualified=turn_scoped_settlement_qualified,
+            turn_scoped_settlement_gap=turn_scoped_settlement_gap,
+            checkpoint_read_context_id=checkpoint_read_context_id,
+            external_delivery=external_delivery, agent_vision_packet=agent_vision_packet,
+            vision_unchanged_reason=vision_unchanged_reason,
+            merge_agent_vision_patch=merge_agent_vision_patch,
+            workspace_requested=delivery_workspace_path is not None,
+            normalized_explore_result=normalized_explore_result,
+            next_action=next_action, next_action_basis=next_action_basis,
+            autonomous_replan_recorded=autonomous_replan_recorded,
+            repair_delta_kinds=repair_delta_kinds, usage_measurement=usage_measurement,
+            usage_codex_session=usage_codex_session,
+            normalized_delivery_outcome=normalized_delivery_outcome,
+            normalized_delivery_batch_scale=normalized_delivery_batch_scale,
+            normalized_delivery_boundary=normalized_delivery_boundary,
+            normalized_progress_observation=normalized_progress_observation, dry_run=dry_run,
+            require_complete_checkpoint_index_fn=require_complete_checkpoint_index,
+            read_heartbeat_settlement_fn=read_heartbeat_settlement,
+        )
+        if admission.recovery_payload is not None:
+            return dict(
+                recover_refresh_todo_projection(
+                    admission.recovery_payload, registry_path=registry_path, runtime_root=runtime_root,
                     goal_id=safe_goal_id, project=project, state_file=state_file,
                 )
-            if checkpoint_read_context_id and not checkpoint_supplement:
-                raise ValueError("--checkpoint-read-context applies only to a missing-checkpoint supplement")
-            settlement_workspace_requirement = resolve_settlement_workspace_requirement(
-                delivery_workspace_causality, settlement_binding_kind=settlement_identity.binding_kind.value
             )
         if normalized_explore_result is not None:
-            from .capabilities.explore.result_writeback import prepare_result_attachment
-            normalized_explore_result = prepare_result_attachment(
+            normalized_explore_result = prepare_explore_attachment(
                 normalized_explore_result, registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=goal_id, agent_id=normalized_agent_id, todo_id=todo_id,
-                turn_instance_id=turn_instance_id,
-                _prepared_source=prepared_explore_source,
+                turn_instance_id=turn_instance_id, prepared_source=prepared_explore_source,
             )
-        runtime_projection_route = resolve_runtime_projection_route(
-            registry_path=registry_path,
-            goal_id=safe_goal_id,
-            source_runtime_root=runtime_root,
-        )
-        route_status = str(runtime_projection_route.get("status") or "missing")
-        route_target_text = str(
-            runtime_projection_route.get("target_runtime_root") or ""
-        ).strip()
-        route_target_root = Path(route_target_text) if route_target_text else None
-        shared_runtime_root = (
-            route_target_root if sync_global and route_status == "resolved" else None
-        )
-        global_sync_runtime_root = (
-            route_target_root
-            if sync_global and route_status in {"resolved", "single_runtime"}
-            else None
-        )
-        next_action_source_registry = registry_path.resolve()
-        state_registry = registry
-        if next_action:
-            next_action_source_registry, source_goal = load_recommendation_source_goal(registry_path, safe_goal_id)
-            state_registry = {**registry, "goals": [source_goal] if source_goal is not None else []}
-        registry_goal, resolved_project, resolved_state_file = resolve_goal_state(
-            registry=state_registry,
-            goal_id=safe_goal_id,
-            project_override=project,
-            state_file_override=state_file,
-        )
-        harness = ((registry_goal or {}).get("spawn_policy") or {}).get("explore_harness") or {}
-        capability_guard = (
-            (settlement_readback.semantic_replan_guard or {}).get("selected_capability_guard")
-            if settlement_readback is not None else None
-        )
-        if (harness.get("enabled") is True and harness.get("composition_mode") == "explicit_only") or capability_guard is not None:
-            from .capabilities.explore.result_log import explore_result_log_path
-            research_write_guard.enter_context(exclusive_file_lock(
-                explore_result_log_path(runtime_root, safe_goal_id),
-                agent_id=normalized_agent_id or None, operation="research-writeback",
-            ))
-        planning_source = load_refresh_planning_source(
-            runtime_root, safe_goal_id, resolved_state_file, require_display=False,
-            registry_path=next_action_source_registry,
-        )
-        state_text, planning_events, todo_fields = (
-            planning_source.state_text, planning_source.events, planning_source.todo_fields,
-        )
-        if goal_acceptance_preview is not None:
-            # Only the batched CLI dry-run supplies this owner-produced plan.
-            # Execution always reads committed canonical facts. In particular,
-            # do not qualify a due Stride decision against the pre-update basis.
-            if not isinstance(todo_fields, dict) or not isinstance(todo_fields.get("agent_todos"), dict):
-                raise ValueError("outcome preview requires a canonical planning snapshot")
-            todo_fields = {**todo_fields, "agent_todos": {
-                **todo_fields["agent_todos"], "goal_acceptance_contract": goal_acceptance_preview,
-            }}
-        expected_write_state_text = state_text
         normalized_next_action = normalize_next_action_text(next_action) if next_action else None
-        if normalized_next_action and registry_goal is None:
-            raise ValueError("--next-action requires a registry Goal; register its state route first")
-        registered_agents = registered_agents_for_goal(registry_goal)
-        known_agents = {agent for agent in registered_agents if agent}
-        multi_agent_goal = len(known_agents) > 1
-        workspace_guard_policy = (
-            registry_goal.get("workspace_guard_policy")
-            if isinstance(registry_goal.get("workspace_guard_policy"), dict)
-            else {}
+        goal_context = load_and_validate_goal_context(
+            registry=registry, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=safe_goal_id, project=project, state_file=state_file, sync_global=sync_global,
+            next_action=next_action, normalized_next_action=normalized_next_action,
+            normalized_agent_id=normalized_agent_id, settlement_readback=admission.settlement_readback,
+            goal_acceptance_preview=goal_acceptance_preview, research_write_guard=research_write_guard,
+            load_refresh_planning_source_fn=load_refresh_planning_source,
+            registered_agents_fn=registered_agents_for_goal,
         )
-        explicit_peer_worktree_requirement = workspace_guard_policy.get(
-            "peer_independent_worktree_required"
-        )
-        if normalized_agent_id and known_agents and normalized_agent_id not in known_agents:
-            raise ValueError(
-                f"agent_id {normalized_agent_id!r} is not registered for goal {safe_goal_id!r}"
-            )
-        if multi_agent_goal and not normalized_agent_id:
-            raise ValueError(
-                "multi-agent refresh-state requires --agent-id; text inference is disabled"
-            )
         if not normalized_progress_scope:
-            normalized_progress_scope = (
-                AGENT_LANE_PROGRESS_SCOPE if normalized_agent_id else GOAL_PROGRESS_SCOPE
-            )
-        if normalized_progress_scope == AGENT_LANE_PROGRESS_SCOPE:
-            if not normalized_agent_id:
-                raise ValueError("--progress-scope agent_lane requires --agent-id")
-        if normalized_progress_scope == GOAL_PROGRESS_SCOPE:
-            if normalized_agent_lane:
-                raise ValueError("--agent-lane requires --progress-scope agent_lane")
+            normalized_progress_scope = AGENT_LANE_PROGRESS_SCOPE if normalized_agent_id else GOAL_PROGRESS_SCOPE
+        if normalized_progress_scope == AGENT_LANE_PROGRESS_SCOPE and not normalized_agent_id:
+            raise ValueError("--progress-scope agent_lane requires --agent-id")
+        if normalized_progress_scope == GOAL_PROGRESS_SCOPE and normalized_agent_lane:
+            raise ValueError("--agent-lane requires --progress-scope agent_lane")
         if (agent_vision_packet is not None or vision_unchanged_reason) and not normalized_agent_id:
             raise ValueError("vision writeback requires --agent-id")
-        agent_vision: dict[str, Any] | None = None
-        existing_agent_vision: dict[str, Any] | None = None
-        autonomous_replan_frontier_identity: str | None = None
-        newest_first_runs: list[dict[str, Any]] = []
-        if normalized_agent_id:
-            # Vision, recommendation and replan decisions use the indexed records.
-            # Checking each historical artifact here holds up other writers.
-            existing_runs = load_index_snapshot(
-                runtime_root / "goals" / safe_goal_id / "runs" / "index.jsonl",
-                include_artifact_status=False,
-            ).records
-            newest_first_runs = [
-                run
-                for _, run in sorted(
-                    enumerate(existing_runs),
-                    key=lambda item: (
-                        *chronology_key(item[1].get("generated_at")),
-                        item[0],
-                    ),
-                    reverse=True,
-                )
-            ]
-            existing_agent_vision = latest_agent_vision_from_runs(
-                newest_first_runs,
-                goal_id=safe_goal_id,
-                agent_id=normalized_agent_id,
-            )
-        effective_replan_goal = resolve_todo_replan_cadence_goal(
-            registry_goal or {"id": safe_goal_id}, runtime_root,
-        )
-        if agent_vision_packet is not None:
-            agent_vision = prepare_vision_refresh(
-                agent_vision_packet,
-                goal_id=safe_goal_id,
-                agent_id=normalized_agent_id or None,
-                existing_agent_vision=existing_agent_vision,
-                merge_patch=merge_agent_vision_patch,
-                require_path_delta_for_durable_change=autonomous_replan_recorded,
-            )
-        generated_at = now_local()
-        # Next Action is now an actor/Todo-bound recommendation in the existing
-        # run journal. It never rewrites narrative or a Todo projection.
-        recommendation_context = recommendation_source_context(
-            registry_goal, state_text, source_registry=next_action_source_registry, todo_fields=todo_fields
-        ) if registry_goal is not None else None
-        recommendation_resolution = resolve_refresh_recommendation(
-            state_text,
-            todo_fields=todo_fields,
-            explicit_action=recommended_action,
-            next_step=normalized_next_action, next_step_basis=next_action_basis,
-            source_context=recommendation_context, runs=newest_first_runs,
-            agent_id=normalized_agent_id or None,
-            settlement_identity=(
-                settlement_identity.as_dict() if settlement_identity is not None else None
-            ),
-            registry_goal=registry_goal,
-            state_path=resolved_state_file,
-            rollout_events=(
-                planning_events if normalized_agent_id or settlement_identity is not None else None
-            ),
-        )
-        action = str(recommendation_resolution["recommended_action"])
-        recommended_action_source = str(
-            recommendation_resolution["recommended_action_source"]
-        )
-        requested_classification = classification
-        settlement_replan_guard = (
-            settlement_readback.semantic_replan_guard
-            if settlement_readback is not None
-            and settlement_readback.semantic_replan_guard is not None
-            else {}
-        )
-        from .capabilities.explore.research_frontier import prepare_research_replan_evidence
-        capability_evidence = prepare_research_replan_evidence(
-            runtime_root=runtime_root, goal_id=safe_goal_id,
-            agent_id=normalized_agent_id, registry_goal=registry_goal, state_text=state_text,
-            capability_guard=settlement_replan_guard.get("selected_capability_guard"),
-        )
-        def read_explore_context(read_goal_id: str, read_agent_id: str | None):
-            from .capabilities.explore.turn_context import read_replan_explore_context
-
-            return read_replan_explore_context(
-                source_status={"registry": str(registry_path), "runtime_root": str(runtime_root)},
-                goal_id=read_goal_id, agent_id=read_agent_id,
-                review_pages=((agent_vision or {}).get("stride_decision") or {}).get(
-                    "explore_review", {}).get("result_pages"))
-
-        replan_qualification = qualify_refresh_replan_writeback(
-            goal_ref=goal_ref,
-            replan_explore_reader=read_explore_context,
-            replan_source_route={"registry": str(registry_path), "runtime_root": str(runtime_root)},
-            capability_evidence=capability_evidence,
-            guard_capability=settlement_replan_guard.get("selected_capability_guard"),
-            todo_fields=todo_fields,
+        qualification = qualify_vision_replan_and_completion(
+            runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
+            goal_context=goal_context, settlement_identity=admission.settlement_identity,
+            settlement_readback=admission.settlement_readback,
+            checkpoint_supplement=admission.checkpoint_supplement,
+            prior_writeback_run=admission.prior_writeback_run,
+            recovering_writeback_path=admission.recovering_writeback_path,
+            source_admission=source_admission, goal_ref=goal_ref,
+            normalized_agent_id=normalized_agent_id, recommended_action=recommended_action,
+            normalized_next_action=normalized_next_action, next_action_basis=next_action_basis,
+            classification=classification, normalized_delivery_outcome=normalized_delivery_outcome,
+            normalized_delivery_boundary=normalized_delivery_boundary,
             autonomous_replan_recorded=autonomous_replan_recorded,
-            requested_delta_kinds=normalized_repair_delta_kinds,
-            active_state_next_action_update=None,
-            agent_vision=agent_vision,
-            existing_agent_vision=existing_agent_vision,
-            agent_id=normalized_agent_id,
-            dry_run=dry_run,
-            settlement_todo_id=(settlement_identity.todo_id if settlement_identity else None),
-            settlement_guard_scoped=(
-                settlement_replan_guard.get("scope") == "turn_guard"
-            ),
-            receipt_bound_guard_recorded_at=(
-                settlement_readback.admission_recorded_at
-                if settlement_readback is not None and settlement_readback.admission_recorded_at
-                else (settlement_readback.heartbeat_receipt or {}).get("recorded_at")
-                if settlement_readback else None
-            ),
-            admission_event_id=(
-                settlement_readback.admission_event_id if settlement_readback is not None else None
-            ),
-            receipt_bound_guard_turn_instance_id=(settlement_identity.turn_instance_id if settlement_identity else None),
-            receipt_bound_replan_review=settlement_replan_guard.get("selected_review_source"),
-            settlement_guard_semantic_replan_obligation_id=(
-                settlement_replan_guard.get("selected_obligation_id")
-                if isinstance(
-                    settlement_replan_guard.get("selected_obligation_id"), str
-                )
-                else None
-            ),
-            newest_first_runs=newest_first_runs,
-            state_text=state_text,
-            goal_id=safe_goal_id,
-            progress_observation=normalized_progress_observation,
-            recovering_writeback_path=recovering_writeback_path,
-            registry_goal=effective_replan_goal,
-            effective_turn_cadence=effective_turn_cadence_context(
-                effective_replan_goal, runtime_root,
-                registry_path=registry_path, goal_ref=goal_ref,
-                source_admission=source_admission,
-            ),
-            # The acknowledgement is judged against the same sentinel-derived
-            # obligation that status shows; `off` loads nothing.
-            external_progress_review=external_progress_review_context(
-                registry_goal or {"id": safe_goal_id}, runtime_root
-            ),
-            completion_todo_id=completion_todo_id,
-            completion_turn_key=completion_turn_key,
-            classification=classification,
-            delivery_outcome=normalized_delivery_outcome,
-        )
-        repair_delta_contract = replan_qualification.repair_delta_contract
-        replan_semantic_delta = replan_qualification.semantic_delta
-        autonomous_replan_frontier_identity = replan_qualification.frontier_identity
-        classification = replan_qualification.classification
-        normalized_delivery_outcome = replan_qualification.delivery_outcome
-        effective_autonomous_replan_recorded = (
-            replan_qualification.autonomous_replan_recorded
-        )
-        blocked_retry = None
-        if checkpoint_supplement and prior_writeback_run is not None:
-            blocked_retry = prior_writeback_run.get("blocked_retry")
-        elif (
-            settlement_identity is not None
-            and settlement_identity.binding_kind.value == "todo"
-            and normalized_delivery_outcome == "outcome_gap"
-            and isinstance(normalized_progress_observation, dict)
-            and normalized_progress_observation.get("result_class") == "blocked"
-        ):
-            blocked_todo_fields = todo_fields
-            if blocked_todo_fields is None:
-                blocked_todo_fields = parse_active_state_todos(
-                    state_text,
-                    goal=registry_goal,
-                    state_path=resolved_state_file,
-                    preferred_todo_ids={settlement_identity.todo_id or ""},
-                    rollout_events=planning_events,
-                    item_limit=None,
-                )
-            blocked_retry = require_blocked_retry_wait(
-                blocked_todo_fields,
-                todo_id=settlement_identity.todo_id or "",
-                observed_at=generated_at,
-                allow_turn_settlement_retry=local_authority_is_promoted(
-                    runtime_root=runtime_root, goal_id=safe_goal_id,
-                ),
-            )
-        # read_heartbeat_settlement admits checkpoint_supplement only for a
-        # checkpoint-only retry of an already committed writeback with the
-        # exact Goal/Agent/Todo/Turn and delivery identity. It rejects replayed
-        # mutations and conflicting vision decisions before this fence. The
-        # supplement repairs only the missing vision decision, so terminal
-        # validation remains attached to the original Todo completion.
-        vision_checkpoint = build_vision_checkpoint(
-            agent_id=normalized_agent_id or None,
-            agent_vision=agent_vision,
-            existing_agent_vision=existing_agent_vision,
+            normalized_repair_delta_kinds=normalized_repair_delta_kinds,
+            agent_vision_packet=agent_vision_packet, merge_agent_vision_patch=merge_agent_vision_patch,
             vision_unchanged_reason=vision_unchanged_reason,
-            delivery_outcome=normalized_delivery_outcome,
-            active_state_next_action_update=None,
-            delivery_boundary=normalized_delivery_boundary,
-            todo_id=(settlement_identity.todo_id if settlement_identity else None),
-            completion_todo_id=completion_todo_id,
-            autonomous_replan_recorded=effective_autonomous_replan_recorded,
-            blocked_retry=blocked_retry,
+            normalized_progress_observation=normalized_progress_observation,
+            completion_todo_id=completion_todo_id, completion_turn_key=completion_turn_key,
+            dry_run=dry_run, load_index_snapshot_fn=load_index_snapshot,
+            now_local_fn=now_local,
+            qualify_refresh_replan_writeback_fn=qualify_refresh_replan_writeback,
         )
-        if (
-            normalized_delivery_outcome in ACCOUNTABLE_DELIVERY_OUTCOMES
-            and not checkpoint_supplement
-        ):
-            require_accountable_completion_validation(
-                state_text,
-                todo_fields=todo_fields,
-                todo_id=(settlement_identity.todo_id if settlement_identity else None),
-                agent_id=normalized_agent_id or None,
-                delivery_boundary=normalized_delivery_boundary,
-                delivery_outcome=normalized_delivery_outcome,
-                semantic_replan_recorded=effective_autonomous_replan_recorded,
-                goal_id=safe_goal_id,
-                progress_writeback=({
-                    "goal_id": safe_goal_id,
-                    "agent_id": normalized_agent_id,
-                    "todo_id": settlement_identity.todo_id,
-                    "turn_instance_id": settlement_identity.turn_instance_id,
-                    "settlement_identity": settlement_identity.as_dict(),
-                    "delivery_outcome": normalized_delivery_outcome,
-                    "vision_checkpoint": vision_checkpoint,
-                    "agent_vision": agent_vision,
-                    "completion_todo_id": completion_todo_id,
-                } if settlement_identity is not None else None),
-            )
-        if checkpoint_supplement and not vision_checkpoint.get("satisfied"):
-            raise ValueError(
-                "checkpoint supplement did not satisfy the missing decision; "
-                "an unchanged reason requires an existing vision. Supply a valid vision "
-                "patch on the same Turn; the original writeback and quota are unchanged."
-            )
-        delivery_workspace = None
-        workspace_requirement = str(
-            (settlement_workspace_requirement or {}).get("requirement") or "unknown"
+        workspace = resolve_refresh_delivery_workspace(
+            goal_id=safe_goal_id, goal_context=goal_context,
+            settlement_identity=admission.settlement_identity,
+            settlement_workspace_requirement=admission.settlement_workspace_requirement,
+            turn_scoped_settlement_qualified=turn_scoped_settlement_qualified,
+            checkpoint_supplement=admission.checkpoint_supplement,
+            prior_writeback_run=admission.prior_writeback_run,
+            delivery_workspace_path=delivery_workspace_path, blocked_retry=qualification.blocked_retry,
+            parsed_fallback_todos=qualification.parsed_fallback_todos,
+            classification=qualification.classification,
+            normalized_delivery_outcome=qualification.normalized_delivery_outcome,
+            normalized_delivery_batch_scale=normalized_delivery_batch_scale,
+            normalized_progress_observation=normalized_progress_observation,
+            normalized_explore_result=normalized_explore_result,
+            capture_delivery_workspace_fn=capture_delivery_workspace,
         )
-        if delivery_workspace_path is not None and workspace_requirement == "not_required":
-            raise ValueError(
-                "--delivery-workspace-path conflicts with the original Todo's "
-                "explicit non-delivery settlement contract"
-            )
-        if (
-            turn_scoped_settlement_qualified
-            and workspace_requirement != "not_required"
-            and not checkpoint_supplement
-            # The TS settlement owner qualified an unavailable observation or
-            # an already blocked lifecycle, with no delivery, Todo mutation or
-            # quota debit. Recording it needs no producing git worktree.
-            and not (
-                isinstance(blocked_retry, dict)
-                and blocked_retry.get("schema_version") in {
-                    "quota_monitor_unavailable_v0", "quota_blocked_lifecycle_v0",
-                }
-            )
-        ):
-            delivery_workspace = capture_delivery_workspace(
-                current_path=delivery_workspace_path,
-                peer_independent_worktree_required=False,
-                local_goal_id=safe_goal_id,
-                local_project_root=resolved_project,
-                repository_source=(
-                    "refresh_state.delivery_workspace_path"
-                    if delivery_workspace_path is not None
-                    else None
-                ),
-            )
-            selected_contract = {}
-            if settlement_identity is not None and settlement_identity.todo_id:
-                workspace_todo_fields = todo_fields
-                if workspace_todo_fields is None:
-                    workspace_todo_fields = parse_active_state_todos(
-                        state_text, goal=registry_goal, state_path=resolved_state_file,
-                        preferred_todo_ids={settlement_identity.todo_id},
-                        rollout_events=planning_events, item_limit=None,
-                    )
-                selected_contract = next((
-                    item for item in workspace_todo_fields.get("agent_todos", {}).get("items", [])
-                    if item.get("todo_id") == settlement_identity.todo_id
-                ), {})
-            delivery_workspace, peer_independent_worktree_required = qualify_delivery_workspace_isolation(
-                delivery_workspace, multi_agent_goal=multi_agent_goal,
-                explicit_peer_worktree_requirement=explicit_peer_worktree_requirement,
-                task_repository=selected_contract.get("task_repository"),
-            )
-            if (
-                peer_independent_worktree_required
-                and (
-                    delivery_workspace is None
-                    or delivery_workspace.get("workspace_kind")
-                    != "independent_git_worktree"
-                )
-            ):
-                raise ValueError(
-                    "accountable peer delivery must be refreshed from the independent "
-                    "git worktree that produced it, or name that worktree with "
-                    "--delivery-workspace-path"
-                )
-            if delivery_workspace is None:
-                raise ValueError(
-                    "delivery workspace could not be verified; registered local Goal "
-                    f"workspace: {str(resolved_project)!r}. If this delivery belongs to "
-                    "that workspace, retry from it or pass it with --delivery-workspace-path. "
-                    "For a selected repository delivery, use the actual producing worktree; "
-                    "the registered Goal workspace does not replace that requirement."
-                )
-        explore_result_recorded_at = None
-        if checkpoint_supplement:
-            # The supplemental row must not reattribute the original delivery to
-            # the recovery caller's current directory or change its accounting.
-            assert prior_writeback_run is not None
-            delivery_workspace = prior_writeback_run.get("delivery_workspace")
-            normalized_delivery_outcome = prior_writeback_run.get("delivery_outcome")
-            normalized_delivery_batch_scale = prior_writeback_run.get(
-                "delivery_batch_scale"
-            )
-            normalized_progress_observation = prior_writeback_run.get(
-                "progress_observation"
-            )
-            normalized_explore_result = prior_writeback_run.get("explore_result")
-            explore_result_recorded_at = prior_writeback_run.get(
-                "explore_result_recorded_at", prior_writeback_run["generated_at"]
-            )
-            classification = prior_writeback_run["classification"]
-        elif normalized_explore_result is not None:
-            # Attachment recovery orders committed decisions within one wall second.
-            explore_result_recorded_at = now_local_iso(timespec="microseconds")
+        raw_snapshot = prepared_explore_source.get("source_snapshot")
+        raw_prior_snap = (
+            admission.prior_writeback_run.get("explore_result_source_snapshot")
+            if admission.checkpoint_supplement and admission.prior_writeback_run is not None
+            else None
+        )
+        explore_source_snapshot = (
+            dict(raw_snapshot)
+            if isinstance(raw_snapshot, Mapping)
+            and not (admission.checkpoint_supplement and admission.prior_writeback_run)
+            else (dict(raw_prior_snap) if isinstance(raw_prior_snap, Mapping) else None)
+        )
         record = build_state_refresh_record(
-            goal_id=safe_goal_id,
-            state_file=resolved_state_file,
-            state_text=state_text,
-            classification=classification,
-            recommended_action=action,
-            recommended_action_source=recommended_action_source,
-            recommended_action_resolution=recommendation_resolution,
-            generated_at=generated_at,
-            registry_goal=registry_goal,
-            delivery_batch_scale=normalized_delivery_batch_scale,
-            delivery_outcome=normalized_delivery_outcome,
-            progress_scope=normalized_progress_scope,
-            agent_id=normalized_agent_id or None,
-            agent_lane=normalized_agent_lane or None,
-            autonomous_replan_recorded=effective_autonomous_replan_recorded,
-            repair_delta_contract=repair_delta_contract,
-            autonomous_replan_frontier_identity=autonomous_replan_frontier_identity,
-            agent_vision=agent_vision,
-            vision_checkpoint=vision_checkpoint,
-            progress_observation=normalized_progress_observation,
-            explore_result=normalized_explore_result,
-            explore_result_recorded_at=explore_result_recorded_at,
-            explore_result_source_snapshot=(
-                prior_writeback_run.get("explore_result_source_snapshot")
-                if checkpoint_supplement and prior_writeback_run
-                else prepared_explore_source.get("source_snapshot")
-            ),
-            delivery_workspace=delivery_workspace,
-            settlement_identity=settlement_identity,
-            todo_fields=todo_fields,
+            goal_id=safe_goal_id, state_file=goal_context.resolved_state_file,
+            state_text=goal_context.state_text, classification=workspace.classification,
+            recommended_action=qualification.action,
+            recommended_action_source=qualification.recommended_action_source,
+            recommended_action_resolution=qualification.recommendation_resolution,
+            generated_at=qualification.generated_at, registry_goal=goal_context.registry_goal,
+            delivery_batch_scale=workspace.delivery_batch_scale,
+            delivery_outcome=workspace.delivery_outcome, progress_scope=normalized_progress_scope,
+            agent_id=normalized_agent_id or None, agent_lane=normalized_agent_lane or None,
+            autonomous_replan_recorded=qualification.effective_autonomous_replan_recorded,
+            repair_delta_contract=qualification.repair_delta_contract,
+            autonomous_replan_frontier_identity=qualification.autonomous_replan_frontier_identity,
+            agent_vision=qualification.agent_vision, vision_checkpoint=qualification.vision_checkpoint,
+            progress_observation=workspace.progress_observation, explore_result=workspace.explore_result,
+            explore_result_recorded_at=workspace.explore_result_recorded_at,
+            explore_result_source_snapshot=explore_source_snapshot,
+            delivery_workspace=workspace.delivery_workspace,
+            settlement_identity=admission.settlement_identity, todo_fields=goal_context.todo_fields,
         )
-        # Report qualification gaps in the write receipt, using the same owner
-        # as quota/history. A committed checkpoint is not outcome acceptance;
-        # this read-only diagnostic neither rejects nor repairs the write.
-        outcome_checkpoint = outcome_vision_checkpoint_from_run(
-            record, goal_id=safe_goal_id, agent_id=normalized_agent_id or None,
+        compact_route = attach_post_record_qualification_metadata(
+            record=record, goal_id=safe_goal_id, normalized_agent_id=normalized_agent_id,
+            agent_vision=qualification.agent_vision, existing_agent_vision=qualification.existing_agent_vision,
+            vision_checkpoint=qualification.vision_checkpoint, checkpoint_supplement=admission.checkpoint_supplement,
+            prior_writeback_run=admission.prior_writeback_run,
+            canonical_snapshot=goal_context.planning_source.canonical_snapshot,
+            blocked_retry=qualification.blocked_retry,
+            delivery_workspace_causality=admission.delivery_workspace_causality,
+            refresh_recovery=admission.refresh_recovery,
+            settlement_workspace_requirement=admission.settlement_workspace_requirement,
+            autonomous_replan_recorded=autonomous_replan_recorded,
+            repair_delta_contract=qualification.repair_delta_contract,
+            autonomous_replan_frontier_identity=qualification.autonomous_replan_frontier_identity,
+            requested_classification=qualification.requested_classification,
+            classification=workspace.classification, replan_semantic_delta=qualification.replan_semantic_delta,
+            runtime_projection_route=goal_context.runtime_projection_route, sync_global=sync_global,
         )
-        outcome_gaps = acceptance_gaps_from_outcome_checkpoint(
-            agent_vision or existing_agent_vision, outcome_checkpoint,
-        )
-        if outcome_gaps:
-            record["vision_checkpoint"] = {**vision_checkpoint, "acceptance_gaps": outcome_gaps}
-        source_snapshot = (
-            prior_writeback_run.get("todo_source")
-            if checkpoint_supplement and prior_writeback_run
-            else planning_source.canonical_snapshot
-        )
-        if isinstance(source_snapshot, dict) and all(
-            isinstance(source_snapshot.get(key), str) and source_snapshot[key]
-            for key in (
-                "source_authority", "store_identity", "provider_revision", "cursor"
-            )
-        ):
-            # Retain the source actually consumed by planning, before append.
-            # A later optional hook must never substitute the current Todo head.
-            record["todo_source"] = {
-                key: source_snapshot[key]
-                for key in (
-                    "source_authority", "store_identity", "provider_revision", "cursor"
-                )
-            }
-        if blocked_retry is not None:
-            record["blocked_retry"] = blocked_retry
-        if delivery_workspace_causality:
-            record["delivery_workspace_causality"] = delivery_workspace_causality
-        if refresh_recovery:
-            record["refresh_recovery"] = refresh_recovery
-        if settlement_workspace_requirement:
-            record["settlement_workspace_requirement"] = (
-                settlement_workspace_requirement
-            )
-        if autonomous_replan_recorded:
-            if "autonomous_replan_ack" not in record:
-                record["autonomous_replan_ack"] = {
-                    "schema_version": "autonomous_replan_ack_v0",
-                    "recorded": False,
-                    "source": "refresh_state",
-                    "delta_contract": repair_delta_contract,
-                }
-            record["autonomous_replan_ack"]["requested"] = True
-            if autonomous_replan_frontier_identity:
-                record["autonomous_replan_ack"]["frontier_identity"] = (
-                    autonomous_replan_frontier_identity
-                )
-            if requested_classification != classification:
-                record["autonomous_replan_ack"]["requested_classification"] = requested_classification
-                record["autonomous_replan_noop"] = {
-                    "schema_version": REPAIR_NOOP_SCHEMA_VERSION,
-                    "classification": classification,
-                    "requested_classification": requested_classification,
-                    "reason": "autonomous replan ACK requested without a machine-visible repair delta",
-                }
-        if replan_semantic_delta:
-            record.setdefault(
-                "autonomous_replan_ack",
-                {
-                    "schema_version": "autonomous_replan_ack_v0",
-                    "recorded": True,
-                    "source": "refresh_state_semantic_delta",
-                },
-            )
-            record["autonomous_replan_ack"]["semantic_delta"] = (
-                replan_semantic_delta
-            )
-        compact_route = compact_runtime_projection_route(runtime_projection_route)
-        compact_route["projection_enabled"] = bool(sync_global)
-        compact_route["projection_marker_field"] = "shared_runtime_projection"
-        record["runtime_projection_route"] = compact_route
-
         runs_dir = runtime_root / "goals" / safe_goal_id / "runs"
-        json_path, markdown_path = unique_run_paths(runs_dir, generated_at)
+        json_path, markdown_path = unique_run_paths(runs_dir, qualification.generated_at)
         index_path = runs_dir / "index.jsonl"
         index_record, payload = _build_state_refresh_output_projections(
-            record=record,
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            project=resolved_project,
-            json_path=json_path,
-            markdown_path=markdown_path,
-            index_path=index_path,
-            dry_run=dry_run,
+            record=record, registry_path=registry_path, runtime_root=runtime_root,
+            project=goal_context.resolved_project, json_path=json_path,
+            markdown_path=markdown_path, index_path=index_path, dry_run=dry_run,
             autonomous_replan_recorded_requested=bool(autonomous_replan_recorded),
         )
         if goal_ref is not None:
             for projection in (record, index_record, payload):
                 projection["goal_ref"] = dict(goal_ref)
-        # GH-C95 producer boundary: attach the typed run_usage_v0 row before the
-        # durable record and index rows are written, so malformed or negative usage
-        # fails the whole refresh instead of entering run history. The booking lock
-        # spans ledger-basis read + row append so concurrent refreshes cannot fund
-        # two deltas from one stale basis; the appended row advances the basis.
         with ExitStack() as usage_booking_guard:
+            current_goal: dict[str, object] | None = None
             if normalized_next_action:
                 current_goal, current_text = usage_booking_guard.enter_context(
-                    recommendation_source_guard(registry_path, resolved_state_file, safe_goal_id,
-                        source_registry=next_action_source_registry))
+                    recommendation_source_guard(
+                        registry_path, goal_context.resolved_state_file, safe_goal_id,
+                        source_registry=goal_context.next_action_source_registry,
+                    )
+                )
                 if current_goal is None:
                     raise ValueError("Next Action source Goal disappeared; reread status")
                 current_planning = load_refresh_planning_source(
-                    runtime_root, safe_goal_id, resolved_state_file, require_display=False,
-                    registry_path=next_action_source_registry)
-                resolve_refresh_recommendation(current_text,
-                    todo_fields=current_planning.todo_fields, agent_id=normalized_agent_id or None,
-                    settlement_identity=settlement_identity.as_dict() if settlement_identity else None,
-                    registry_goal=current_goal, state_path=resolved_state_file,
+                    runtime_root, safe_goal_id, goal_context.resolved_state_file,
+                    require_display=False, registry_path=goal_context.next_action_source_registry,
+                    state_text=current_text, oracle_registry_is_source=True,
+                )
+                raw_basis = qualification.recommendation_resolution.get("read_basis")
+                resolve_refresh_recommendation(
+                    current_text, todo_fields=current_planning.todo_fields,
+                    agent_id=normalized_agent_id or None,
+                    settlement_identity=(
+                        admission.settlement_identity.as_dict() if admission.settlement_identity else None
+                    ),
+                    registry_goal=current_goal, state_path=goal_context.resolved_state_file,
                     rollout_events=current_planning.events, next_step=normalized_next_action,
-                    next_step_basis=recommendation_resolution["read_basis"],
-                    source_context=recommendation_source_context(current_goal, current_text,
-                        source_registry=next_action_source_registry, todo_fields=current_planning.todo_fields),
-                    runs=newest_first_runs)
-            if checkpoint_supplement:
-                assert settlement_identity is not None
-                context = usage_booking_guard.enter_context(checkpoint_commit_guard(
-                    runtime_root=runtime_root, registry_path=registry_path,
-                    state_file=resolved_state_file, identity=settlement_identity,
-                    read_context_id=checkpoint_read_context_id,
-                    goal_ref=goal_ref,
-                ))
-                for projection in (record, index_record, payload):
-                    projection["vision_checkpoint"] = {
-                        **projection["vision_checkpoint"], "read_context": context,
-                    }
-            if usage_codex_session is not None:
-                if not dry_run:
-                    runs_dir.mkdir(parents=True, exist_ok=True)
-                    usage_booking_guard.enter_context(
-                        exclusive_file_lock(
-                            usage_booking_lock_target(runs_dir),
-                            agent_id=normalized_agent_id or None,
-                            operation="refresh-state-usage-booking",
-                        )
+                    next_step_basis=str(raw_basis) if isinstance(raw_basis, str) else None,
+                    source_context=recommendation_source_context(
+                        current_goal, current_text,
+                        source_registry=goal_context.next_action_source_registry,
+                        todo_fields=current_planning.todo_fields,
+                    ),
+                    runs=qualification.newest_first_runs,
+                )
+            if admission.checkpoint_supplement:
+                assert admission.settlement_identity is not None
+                context = usage_booking_guard.enter_context(
+                    checkpoint_commit_guard(
+                        runtime_root=runtime_root, registry_path=registry_path,
+                        state_file=goal_context.resolved_state_file,
+                        identity=admission.settlement_identity,
+                        read_context_id=checkpoint_read_context_id, goal_ref=goal_ref,
                     )
-                book_codex_session_usage(
-                    record, usage_codex_session, index_path, index_record=index_record
                 )
-            elif usage_measurement is not None:
-                ingest_usage_into_run_record(
-                    record, usage_measurement, index_record=index_record
-                )
-            if isinstance(record.get("usage"), dict):
-                payload["usage"] = dict(record["usage"])
+                for projection in (record, index_record, payload):
+                    existing_vc = projection.get("vision_checkpoint")
+                    vc_dict = dict(existing_vc) if isinstance(existing_vc, Mapping) else {}
+                    projection["vision_checkpoint"] = {**vc_dict, "read_context": context}
+            attach_refresh_usage_to_projections(
+                usage_booking_guard=usage_booking_guard,
+                record=record, index_record=index_record, payload=payload,
+                runs_dir=runs_dir, index_path=index_path,
+                normalized_agent_id=normalized_agent_id, dry_run=dry_run,
+                usage_codex_session=usage_codex_session, usage_measurement=usage_measurement,
+                book_codex_session_usage_fn=book_codex_session_usage,
+                ingest_usage_into_run_record_fn=ingest_usage_into_run_record,
+            )
             if dry_run:
-                expected_write_scopes = ["runtime_history"]
-                if sync_global and route_status in {"resolved", "single_runtime"}:
-                    expected_write_scopes.append("global_registry")
-                if shared_runtime_root:
-                    expected_write_scopes.append("shared_runtime_projection")
-                patch_parts = [f"append refresh-state run classification={classification}"]
-                if sync_global and route_status in {"resolved", "single_runtime"}:
-                    patch_parts.append("sync public-safe registry projection")
-                elif sync_global:
-                    patch_parts.append(f"block global sync on {route_status} runtime projection route")
-                if shared_runtime_root:
-                    patch_parts.append("project compact refresh to registered shared runtime")
-                payload["local_state_write_correctness"] = build_local_state_write_correctness_dry_run_packet(
-                    goal_id=safe_goal_id,
-                    writer_id=normalized_agent_id or "loopx.refresh-state",
-                    write_class="refresh_state",
-                    state_text=expected_write_state_text,
-                    target_refs={
-                        "state_file_ref": "registry.goal.state_file",
-                        "run_history_ref": "runtime.goal.runs",
-                        "index_ref": "runtime.goal.runs.index",
-                        "global_registry_ref": (
-                            "runtime.registry.global"
-                            if sync_global and route_status in {"resolved", "single_runtime"}
-                            else None
-                        ),
-                        "shared_runtime_projection_ref": (
-                            "shared_runtime.goal.runs.index" if shared_runtime_root else None
-                        ),
-                    },
-                    patch_summary="; ".join(patch_parts),
-                    expected_write_scopes=expected_write_scopes,
-                    lease_ref=None,
-                    projection_status_surface=f"refresh-state dry-run: {classification}",
+                payload["local_state_write_correctness"] = build_refresh_dry_run_packet(
+                    goal_id=safe_goal_id, writer_id=normalized_agent_id or "loopx.refresh-state",
+                    classification=workspace.classification, state_text=goal_context.state_text,
+                    sync_global=sync_global, route_status=goal_context.route_status,
+                    shared_runtime_root=goal_context.shared_runtime_root,
                 )
             if not dry_run:
                 if (
-                    settlement_identity is not None and settlement_identity.todo_id
-                    and not checkpoint_supplement
-                    # An administrative closeout can report inability to start.
-                    # A prepared Turn's blocker is still a first writeback.
+                    admission.settlement_identity is not None
+                    and admission.settlement_identity.todo_id
+                    and not admission.checkpoint_supplement
                     and (
-                        blocked_retry is None
-                        or task_lease_proof is not None
-                        or (settlement_readback is not None and settlement_readback.prepared_lease is not None)
+                        qualification.blocked_retry is None or task_lease_proof is not None
+                        or (admission.settlement_readback is not None and admission.settlement_readback.prepared_lease is not None)
                     )
                 ):
-                    usage_booking_guard.enter_context(guard_first_writeback_execution(
-                        runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
-                        todo_id=settlement_identity.todo_id, agent_id=settlement_identity.agent_id,
-                        requested_proof=task_lease_proof,
-                        settlement=settlement_readback,
-                        locked_goal=current_goal if normalized_next_action else None,
-                        allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
-                        validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
-                    ))
-                if settlement_readback is not None:
-                    persist_external_delivery_pause(
-                        settlement_readback, runtime_root, goal_ref=goal_ref,
+                    assert admission.settlement_readback is not None
+                    usage_booking_guard.enter_context(
+                        guard_first_writeback_execution(
+                            runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
+                            todo_id=admission.settlement_identity.todo_id,
+                            agent_id=admission.settlement_identity.agent_id,
+                            requested_proof=dict(task_lease_proof) if task_lease_proof is not None else None,
+                            settlement=admission.settlement_readback,
+                            locked_goal=current_goal if normalized_next_action else None,
+                            allow_same_generation_lease_renewal=allow_same_generation_lease_renewal,
+                            validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
+                        )
                     )
+                if admission.settlement_readback is not None:
+                    persist_external_delivery_pause(admission.settlement_readback, runtime_root, goal_ref=goal_ref)
+                generated_at = qualification.generated_at
                 runs_dir.mkdir(parents=True, exist_ok=True)
                 json_path, markdown_path = reserve_unique_run_paths(runs_dir, generated_at)
                 index_record["json_path"] = str(json_path)
                 index_record["markdown_path"] = str(markdown_path)
                 payload["json_path"] = str(json_path)
                 payload["markdown_path"] = str(markdown_path)
-                if checkpoint_supplement:
-                    saved = commit_checkpoint_run(runtime_root=runtime_root, registry_path=registry_path,
-                        state_file=resolved_state_file, identity=settlement_identity,
-                        refresh_retry=refresh_retry_request, record=record, index_record=index_record,
-                        markdown=render_state_refresh_markdown(payload) + "\n",
-                        goal_ref=goal_ref, source_admission=source_admission)
-                    for projection in (record, index_record, payload):
-                        projection["vision_checkpoint"]["read_context"] = saved["context"]
-                    for projection in (index_record, payload):
-                        projection.update({key: saved[key] for key in ("json_path", "markdown_path")})
-                    if saved["replayed"]:
-                        payload.update(appended=False, idempotent_replay=True)
+                if admission.checkpoint_supplement:
+                    assert admission.settlement_identity is not None
+                    assert admission.refresh_retry_request is not None
+                    commit_checkpoint_supplement_run(
+                        runtime_root=runtime_root, registry_path=registry_path,
+                        state_file=goal_context.resolved_state_file, identity=admission.settlement_identity,
+                        refresh_retry=admission.refresh_retry_request, record=record,
+                        index_record=index_record, payload=payload,
+                        render_markdown_fn=render_state_refresh_markdown,
+                        goal_ref=goal_ref, source_admission=source_admission,
+                    )
                 else:
                     json_path.write_text(
                         json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
@@ -1661,96 +702,20 @@ def refresh_state_run(
                     )
                     markdown_path.write_text(render_state_refresh_markdown(payload) + "\n", encoding="utf-8")
                     append_run_index_record(index_path, index_record, allow_nan=False)
-        if sync_global and route_status in {"missing", "ambiguous"}:
-            payload["ok"] = False
-            payload["partial_write"] = not dry_run
-            payload["global_sync"] = {
-                "ok": False,
-                "enabled": False,
-                "wrote": False,
-                "reason": f"runtime projection route is {route_status}",
-                "route_status": route_status,
-            }
-            payload["shared_runtime_projection"] = {
-                "ok": False,
-                "status": f"route_{route_status}",
-                "dry_run": dry_run,
-                "raw_artifacts_copied": False,
-                "recommended_action_copied": False,
-                "runtime_projection_route_id": compact_route.get("route_id"),
-            }
-        elif sync_global:
-            payload["global_sync"] = sync_project_registry_to_global(
-                registry_path=registry_path,
-                runtime_root_override=str(global_sync_runtime_root or runtime_root),
-                goal_id=safe_goal_id,
-                dry_run=dry_run,
-            )
-            if shared_runtime_root and payload["global_sync"].get("ok"):
-                projection_record, projection_index = build_shared_runtime_projection(
-                    record=record,
-                )
-                try:
-                    payload["shared_runtime_projection"] = write_shared_runtime_projection(
-                        shared_runtime_root=shared_runtime_root,
-                        goal_id=safe_goal_id,
-                        record=projection_record,
-                        index_record=projection_index,
-                        dry_run=dry_run,
-                    )
-                except OSError as exc:
-                    payload["ok"] = False
-                    payload["partial_write"] = not dry_run
-                    payload["shared_runtime_projection"] = {
-                        "ok": False,
-                        "status": "write_failed",
-                        "dry_run": dry_run,
-                        "shared_runtime_root": str(shared_runtime_root),
-                        "raw_artifacts_copied": False,
-                        "recommended_action_copied": False,
-                        "error": str(exc),
-                    }
-            elif shared_runtime_root:
-                payload["ok"] = False
-                payload["partial_write"] = not dry_run
-                payload["shared_runtime_projection"] = {
-                    "ok": False,
-                    "status": "blocked_by_global_sync",
-                    "dry_run": dry_run,
-                    "shared_runtime_root": str(shared_runtime_root),
-                    "raw_artifacts_copied": False,
-                    "recommended_action_copied": False,
-                }
-            else:
-                payload["shared_runtime_projection"] = {
-                    "ok": True,
-                    "status": "not_required",
-                    "dry_run": dry_run,
-                    "raw_artifacts_copied": False,
-                    "recommended_action_copied": False,
-                }
-        else:
-            payload["global_sync"] = {
-                "enabled": False,
-                "global_registry": str(runtime_root / "registry.global.json"),
-                "synced_goal_ids": [],
-                "wrote": False,
-            }
-            payload["shared_runtime_projection"] = {
-                "ok": True,
-                "status": "disabled",
-                "dry_run": dry_run,
-                "raw_artifacts_copied": False,
-                "recommended_action_copied": False,
-            }
-        if settlement_identity is not None and not dry_run:
+        sync_refresh_global_and_shared_projection(
+            payload=payload, record=record, registry_path=registry_path, runtime_root=runtime_root,
+            goal_id=safe_goal_id, dry_run=dry_run, sync_global=sync_global,
+            route_status=goal_context.route_status, shared_runtime_root=goal_context.shared_runtime_root,
+            global_sync_runtime_root=goal_context.global_sync_runtime_root, compact_route=compact_route,
+        )
+        if admission.settlement_identity is not None and not dry_run:
             committed_readback = read_heartbeat_settlement(
-                runtime_root, goal_id=safe_goal_id, agent_id=settlement_identity.agent_id,
-                todo_id=settlement_identity.todo_id, turn_instance_id=settlement_identity.turn_instance_id,
-                replan_obligation_id=settlement_identity.replan_obligation_id,
+                runtime_root, goal_id=safe_goal_id, agent_id=admission.settlement_identity.agent_id,
+                todo_id=admission.settlement_identity.todo_id,
+                turn_instance_id=admission.settlement_identity.turn_instance_id,
+                replan_obligation_id=admission.settlement_identity.replan_obligation_id,
                 registry_path=registry_path, goal_ref=goal_ref,
-                source_admission=source_admission,
-                borrow_source_admission=source_admission is not None,
+                source_admission=source_admission, borrow_source_admission=source_admission is not None,
             )
             if committed_readback is None:
                 raise RuntimeError("committed refresh settlement readback missing")
@@ -1758,15 +723,15 @@ def refresh_state_run(
                 payload, committed_readback, registry_path=registry_path,
                 runtime_root=runtime_root, goal_ref=goal_ref,
             )
-        return recover_refresh_todo_projection(
-            finish_external_delivery_refresh(
-                payload,
-                settlement_readback,
-                runtime_root,
-                dry_run=dry_run,
-                goal_ref=goal_ref,
-            ),
-            registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
-            project=resolved_project, state_file=resolved_state_file,
-            canonical_snapshot=planning_source.canonical_snapshot,
+        return dict(
+            recover_refresh_todo_projection(
+                finish_external_delivery_refresh(
+                    payload, admission.settlement_readback, runtime_root,
+                    dry_run=dry_run, goal_ref=goal_ref,
+                ),
+                registry_path=registry_path, runtime_root=runtime_root, goal_id=safe_goal_id,
+                project=goal_context.resolved_project, state_file=goal_context.resolved_state_file,
+                canonical_snapshot=goal_context.planning_source.canonical_snapshot,
+                registry_data=registry,
+            )
         )

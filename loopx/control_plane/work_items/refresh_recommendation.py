@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from ..agents.agent_lane_recommendation import build_agent_lane_next_action
 from ..coordination.local_authority import read_canonical_todos_if_promoted
@@ -29,9 +28,9 @@ RECOMMENDED_ACTION_SOURCE_DEFAULT = "default_refresh_action"
 @dataclass(frozen=True)
 class RefreshPlanningSource:
     state_text: str
-    events: list[dict[str, Any]]
-    todo_fields: dict[str, Any]
-    canonical_snapshot: dict[str, Any]
+    events: list[dict[str, object]]
+    todo_fields: dict[str, object]
+    canonical_snapshot: dict[str, object]
 
 
 def load_refresh_planning_source(
@@ -41,30 +40,57 @@ def load_refresh_planning_source(
     *,
     require_display: bool,
     registry_path: Path | None = None,
+    state_text: str | None = None,
+    oracle_registry_is_source: bool = False,
+    registry: Mapping[str, object] | None = None,
 ) -> RefreshPlanningSource:
     """Read one shared planning snapshot without repairing its display.
 
     Canonical Todos remain available without a Markdown display; steps bind to
     that task snapshot. Provider failures propagate rather than using prose.
     """
-    events = load_rollout_events(rollout_event_log_path(runtime_root, goal_id))
-    canonical = read_canonical_todos_if_promoted(runtime_root=runtime_root, goal_id=goal_id,
-        include_summary=True, rollout_events=events)
+    events = [dict(row) for row in load_rollout_events(rollout_event_log_path(runtime_root, goal_id))]
+    canonical = dict(
+        read_canonical_todos_if_promoted(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            include_summary=True,
+            rollout_events=events,
+        )
+    )
     from ..todos.goal_todo_projection import observe_todo_acceptance
     oracle_registry = registry_path
-    if canonical.get("goal_acceptance_oracle_observation_basis") is not None and oracle_registry is not None:
+    if (
+        canonical.get("goal_acceptance_oracle_observation_basis") is not None
+        and oracle_registry is not None
+        and not oracle_registry_is_source
+    ):
         from .recommendation_source_io import load_recommendation_source_goal
         # A shared roster's checkout is display data, including on refresh
         # paths without --next-action. Observe the current source workspace.
-        oracle_registry, _ = load_recommendation_source_goal(oracle_registry, goal_id)
-    fields = observe_todo_acceptance(canonical["_todo_fields"], canonical,
-        registry_path=oracle_registry, goal_id=goal_id)
-    try:
-        text = state_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        if require_display:
-            raise FileNotFoundError(f"state file does not exist: {state_path}") from None
-        text = ""
+        oracle_registry, _ = load_recommendation_source_goal(
+            oracle_registry,
+            goal_id,
+            registry=registry,
+        )
+    raw_todo_fields = canonical["_todo_fields"]
+    fields = dict(
+        observe_todo_acceptance(
+            dict(raw_todo_fields) if isinstance(raw_todo_fields, Mapping) else {},
+            canonical,
+            registry_path=oracle_registry,
+            goal_id=goal_id,
+        )
+    )
+    if state_text is not None:
+        text = state_text
+    else:
+        try:
+            text = state_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            if require_display:
+                raise FileNotFoundError(f"state file does not exist: {state_path}") from None
+            text = ""
     return RefreshPlanningSource(text, events, fields, canonical)
 
 
@@ -79,9 +105,9 @@ def _first_valid_action(values: list[str]) -> str | None:
 
 
 def _exact_todo(
-    summary: Mapping[str, Any] | None,
+    summary: Mapping[str, object] | None,
     todo_id: str | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     normalized = normalize_todo_id(todo_id)
     if not normalized or not isinstance(summary, Mapping):
         return None
@@ -98,8 +124,8 @@ def _exact_todo(
 
 
 def _first_executable_todo(
-    summary: Mapping[str, Any] | None,
-) -> dict[str, Any] | None:
+    summary: Mapping[str, object] | None,
+) -> dict[str, object] | None:
     if not isinstance(summary, Mapping):
         return None
     items = summary.get("first_executable_items")
@@ -114,28 +140,31 @@ def resolve_refresh_recommendation(
     *,
     explicit_action: str | None = None,
     agent_id: str | None = None,
-    settlement_identity: Mapping[str, Any] | None = None,
-    registry_goal: dict[str, Any] | None = None,
+    settlement_identity: Mapping[str, object] | None = None,
+    registry_goal: Mapping[str, object] | None = None,
     state_path: Path | None = None,
-    rollout_events: list[dict[str, Any]] | None = None,
-    todo_fields: dict[str, Any] | None = None,
+    rollout_events: list[dict[str, object]] | None = None,
+    todo_fields: Mapping[str, object] | None = None,
     next_step: str | None = None,
     next_step_basis: str | None = None,
-    source_context: dict[str, Any] | None = None,
-    runs: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+    source_context: Mapping[str, object] | None = None,
+    runs: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     """Adapt canonical Todo facts into the TS-owned refresh read reducer."""
 
     settlement_todo_id: str | None = None
     next_action_entries: list[str] = []
     shared_action: str | None = None
-    summary: dict[str, Any] | None = None
-    lane_candidate: dict[str, Any] | None = None
+    summary: dict[str, object] | None = None
+    lane_candidate: dict[str, object] | None = None
     if not explicit_action or next_step:
-        settlement_todo_id = normalize_todo_id(
+        raw_todo_id = (
             settlement_identity.get("todo_id")
             if isinstance(settlement_identity, Mapping)
             else None
+        )
+        settlement_todo_id = normalize_todo_id(
+            raw_todo_id if isinstance(raw_todo_id, str) else None
         )
         next_action_entries = active_state_next_action_entries(
             state_text,
@@ -144,7 +173,7 @@ def resolve_refresh_recommendation(
         )
         shared_action = _first_valid_action(next_action_entries)
         observed = todo_fields.get("agent_todos") if todo_fields is not None else None
-        summary = observed if isinstance(observed, dict) else None
+        summary = dict(observed) if isinstance(observed, Mapping) else None
         lane_candidate = build_agent_lane_next_action(
             agent_identity={"agent_id": agent_id} if agent_id else None,
             agent_todo_summary=summary,
@@ -186,21 +215,33 @@ def resolve_refresh_recommendation(
     resolved = dict(result)
     if source_context is not None and agent_id and summary is not None:
         from .recommendation_source_io import lane_recommendation_context, latest_bound_recommendation
-        task = _exact_todo(summary, resolved.get("todo_id"))
+        raw_resolved_todo = resolved.get("todo_id")
+        task = _exact_todo(
+            summary,
+            str(raw_resolved_todo) if isinstance(raw_resolved_todo, str) else None,
+        )
         selected = lane_candidate
         if resolved.get("recommended_action_source") == RECOMMENDED_ACTION_SOURCE_SETTLEMENT_BOUND_TODO:
             selected = task
-        context = lane_recommendation_context(source_context, agent_id=agent_id,
-            selected_todo=selected, task=task,
+        context = lane_recommendation_context(
+            source_context,
+            agent_id=agent_id,
+            selected_todo=selected,
+            task=task,
             prior_resolution=latest_bound_recommendation(runs or [], agent_id),
             settlement_identity=settlement_identity,
-            write={"text": next_step, "expected_basis": next_step_basis} if next_step else None)
+            write={"text": next_step, "expected_basis": next_step_basis} if next_step else None,
+        )
         if next_step:
-            resolved = context["resolution"]
-        elif isinstance(context.get("selected_todo"), dict) and context["selected_todo"].get("next_step"):
-            # A derived refresh may reuse the bound step but never mint a new
-            # step receipt or silently change its original read basis.
-            resolved = {**resolved, "recommended_action": context["selected_todo"]["next_step"]}
+            raw_resolution = context.get("resolution")
+            if isinstance(raw_resolution, Mapping):
+                resolved = dict(raw_resolution)
+        else:
+            raw_selected = context.get("selected_todo")
+            if isinstance(raw_selected, Mapping) and raw_selected.get("next_step"):
+                # A derived refresh may reuse the bound step but never mint a new
+                # step receipt or silently change its original read basis.
+                resolved = {**resolved, "recommended_action": raw_selected["next_step"]}
     validate_local_control_text(
         "recommended_action",
         str(resolved.get("recommended_action") or ""),

@@ -58,6 +58,7 @@ def task_plan_packet(env: dict[str, str], cli: list[str]) -> dict:
         cwd=env["LOOPX_PROJECT"],
         env=env,
         text=True,
+        encoding="utf-8",
         capture_output=True,
         check=True,
         timeout=120,

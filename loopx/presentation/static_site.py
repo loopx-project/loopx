@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 from urllib.request import urlopen
 
+from ..capabilities.public_safe_outbound.scan_cli import BINARY_SUFFIXES
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from .public_safety import (
     PUBLIC_BOUNDARY_PATTERNS,
@@ -33,9 +35,42 @@ RECEIPT_LOG_FILE = "receipts.jsonl"
 REVISION_DIR = "revisions"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-_TEXT_SUFFIXES = {".css", ".html", ".js", ".json", ".md", ".svg", ".txt", ".xml"}
 _PUBLIC_BOUNDARY_PATTERNS = PUBLIC_BOUNDARY_PATTERNS
 _RESERVED_TOP_LEVEL = {MANIFEST_FILE, RECEIPT_FILE, REVISION_FILE, REVISION_DIR}
+
+# Windows PowerShell 5.1 writes a `>` or `Out-File` capture as UTF-16LE with a
+# BOM; reading those bytes as UTF-8 turns every character into NUL-interleaved
+# mojibake that no boundary pattern can match. UTF-32 is checked before UTF-16
+# because BOM_UTF32_LE starts with BOM_UTF16_LE.
+_BOM_CODECS = (
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+# The outbound scanner's deny-list is conservative for a tree walk and classifies
+# these two JSON text formats as binary. A site bundle can copy them, and a
+# source map can carry local source paths, so they stay reviewable here.
+_TEXT_SUFFIXES_IN_BINARY_DENYLIST = frozenset({".map", ".tsbuildinfo"})
+
+# Containers a browser decodes that the outbound tree deny-list does not name yet.
+# That list answers "does a repository hold text a person wrote", not "can a
+# browser load these bytes", so the publisher keeps its own media boundary instead
+# of inheriting one: a suffix listed here is copied verbatim, and every asset not
+# listed must still be reviewable text. `.avif` and `.apng` are verified against
+# real encoder output; the rest are opaque audio/video/image containers of the same
+# class. Subtitle and playlist formats (`.vtt`, `.m3u8`, `.mpd`) are text and
+# deliberately stay outside, as does a further browser container until it is added
+# here rather than to the repo scan's deny-list.
+_STATIC_MEDIA_SUFFIXES = frozenset({
+    ".apng", ".avif", ".avifs", ".heic", ".heif", ".jxl",  # images
+    ".m4v", ".ogv", ".opus",  # audio and video
+})
+_BINARY_ASSET_SUFFIXES = (
+    BINARY_SUFFIXES - _TEXT_SUFFIXES_IN_BINARY_DENYLIST
+) | _STATIC_MEDIA_SUFFIXES
 
 
 class StaticSiteContractError(ValueError):
@@ -74,12 +109,33 @@ def _paths_overlap(left: Path, right: Path) -> bool:
     )
 
 
-def _scan_public_text(path: Path, relative_path: str) -> None:
-    if path.suffix.lower() not in _TEXT_SUFFIXES:
+def _scan_public_text(path: Path, relative_path: str, content: bytes) -> None:
+    # A filename allow-list certified every text asset outside it (`.env`,
+    # `Dockerfile`, `.csv` data) without reading a byte. Excluding only the
+    # true binary formats leaves every other copied asset as reviewable text.
+    if path.suffix.lower() in _BINARY_ASSET_SUFFIXES:
         return
-    # A size exemption would certify the unscanned tail as public-safe; the caller
-    # already reads the whole file for its digest, so scan every text byte copied.
-    text = path.read_text(encoding="utf-8", errors="replace")
+    for bom, encoding in _BOM_CODECS:
+        if content.startswith(bom):
+            break
+    else:
+        encoding = "utf-8"
+    # A size exemption would certify an unscanned tail as public-safe, so scan
+    # every byte of the text the caller already read for this asset's digest.
+    # Replacement decoding would review a mangled copy while certifying the
+    # original, so undecodable bytes fail publication instead.
+    try:
+        text = content.decode(encoding)
+    except UnicodeDecodeError as exc:
+        raise StaticSiteContractError(
+            f"public boundary scan failed for {relative_path}: content is not decodable as {encoding}"
+        ) from exc
+    if "\x00" in text:
+        # A BOM-less UTF-16 capture and a mislabelled binary asset both land
+        # here; neither is text this boundary can review, so neither is certified.
+        raise StaticSiteContractError(
+            f"public boundary scan failed for {relative_path}: content is not reviewable text"
+        )
     for label, pattern in _PUBLIC_BOUNDARY_PATTERNS:
         if pattern.search(text):
             raise StaticSiteContractError(
@@ -108,8 +164,8 @@ def _collect_site_files(site_dir: Path, *, entry_path: str) -> list[dict[str, ob
             raise StaticSiteContractError(
                 f"site bundle uses reserved path: {relative_path}"
             )
-        _scan_public_text(path, relative_path)
         content = path.read_bytes()
+        _scan_public_text(path, relative_path, content)
         files.append(
             {
                 "path": relative_path,

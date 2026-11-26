@@ -2,13 +2,15 @@ import type { WorkMode } from './types.js';
 import { AcpAdapter, type AcpSession } from './acp.js';
 import type { UsageSample } from '../telemetry.js';
 import { isCompaction } from './compaction.js';
-import { AGY_AUTH_ENV, copyAgyAccount, startAgyLogin } from './agy-account.js';
+import { AGY_AUTH_ENV, copyAgyAccount, startAgyLogin, withHostGitEnv } from './agy-account.js';
 import { HttpError } from '../errors.js';
 import { PlanReply } from './plan-reply.js';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { access, copyFile, cp, mkdir, readdir } from 'node:fs/promises';
+import { access, copyFile, cp, mkdir, readdir, rm } from 'node:fs/promises';
+import { DatabaseSync } from 'node:sqlite';
 import { ANTIGRAVITY_ICON } from './icons.js';
 import { configDirectory, findSessionFile, quoteArg } from './session-location.js';
 import { agyLiveUsage } from './session-usage.js';
@@ -24,12 +26,18 @@ import type {
   SkillDir,
   SlashCommand,
   StartOptions,
+  TurnHooks,
 } from './types.js';
 
-/** Antigravity uses ACP for conversations; print mode remains for account queries only. */
+/** Antigravity uses ACP for conversations; print mode remains for account queries only. Per-request usage and fallback thinking are tailed from the native transcript. */
 
 /** How long the command list is reused. Reading it takes two short agy runs. */
 const COMMANDS_TTL_MS = 10 * 60_000;
+/** Session commands agy handles inside ACP conversations even when not announced yet. */
+const AGY_SESSION_COMMANDS: SlashCommand[] = [
+  { name: 'goal', description: '设置原生目标并持续执行直到完成', hint: '<目标>', kind: 'command' },
+  { name: 'schedule', description: '定时或周期循环执行指令', hint: '[时间/cron]', kind: 'command' },
+];
 /** A command agy answers itself, as `agy -p /help` lists it: "/usage (quota)<TAB>View model quota usage". */
 export interface AgyCliCommand {
   name: string;
@@ -168,6 +176,11 @@ export function parseAgyModels(stdout: string): ModelOption[] {
   return models;
 }
 
+/**
+ * Copies a directory's files from one listing of it: a live conversation rotates its newest chunk
+ * away while it is being read, and one entry gone is no reason to lose the rest, let alone to hang
+ * a recursive copy on a folder that keeps changing under it.
+ */
 export async function copyDirectorySnapshot(from: string, to: string): Promise<void> {
   const entries = await readdir(from, { withFileTypes: true });
   await mkdir(to, { recursive: true });
@@ -176,6 +189,115 @@ export async function copyDirectorySnapshot(from: string, to: string): Promise<v
     else await copyFile(join(from, entry.name), join(to, entry.name)).catch((err) => {
       if (err?.code !== 'ENOENT') throw err; // rotated away between the listing and the read
     });
+  }
+}
+
+const AGY_SESSION_ID = /^[a-z0-9_-]{1,128}$/i;
+
+function replaceSameLengthBytes(buf: Buffer, pairs: Array<[Buffer, Buffer]>): Buffer {
+  let out = buf;
+  let copied = false;
+  for (const [from, to] of pairs) {
+    if (!from.length || from.length !== to.length) continue;
+    let pos = out.indexOf(from);
+    while (pos >= 0) {
+      if (!copied) { out = Buffer.from(out); copied = true; }
+      to.copy(out, pos);
+      pos = out.indexOf(from, pos + to.length);
+    }
+  }
+  return out;
+}
+
+/**
+ * Clones an Antigravity conversation inside `configDir` under a new conversation id: atomically
+ * snapshots its SQLite database with `VACUUM INTO`, rewrites `cascade_id` and `trajectory_id`
+ * across tables (in-place byte replacement preserves protobuf wire framing for equal-length UUIDs),
+ * and copies its brain directory and annotations. Cleans up partial files on failure.
+ */
+export async function cloneAgySession(configDir: string, sourceId: string, targetId: string): Promise<void> {
+  if (!AGY_SESSION_ID.test(sourceId) || !AGY_SESSION_ID.test(targetId)) throw new Error('invalid Antigravity conversation id');
+  const sourceDb = join(configDir, 'conversations', `${sourceId}.db`);
+  if (!(await access(sourceDb).then(() => true, () => false))) {
+    throw new Error(`Antigravity conversation ${sourceId} was not found`);
+  }
+  const targetDb = join(configDir, 'conversations', `${targetId}.db`);
+  if (await access(targetDb).then(() => true, () => false)) {
+    throw new Error(`Antigravity conversation ${targetId} already exists`);
+  }
+  const targetBrain = join(configDir, 'brain', targetId);
+  const targetAnn = join(configDir, 'annotations', `${targetId}.pbtxt`);
+  for (const dir of ['conversations', 'brain', 'annotations']) await mkdir(join(configDir, dir), { recursive: true });
+  try {
+    // Snapshot the source DB cleanly (including WAL state) without mutating the source conversation.
+    const src = new DatabaseSync(sourceDb, { readOnly: true });
+    try {
+      src.exec(`VACUUM INTO '${targetDb.replace(/'/g, "''")}'`);
+    } finally {
+      src.close();
+    }
+    const dst = new DatabaseSync(targetDb);
+    try {
+      const tables = dst.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>;
+      const hasMeta = tables.some(t => t.name === 'trajectory_meta');
+      const meta = hasMeta ? dst.prepare('SELECT trajectory_id, cascade_id FROM trajectory_meta LIMIT 1').get() as { trajectory_id?: string; cascade_id?: string } | undefined : undefined;
+      const oldCascade = typeof meta?.cascade_id === 'string' && meta.cascade_id ? meta.cascade_id : sourceId;
+      const oldTrajectory = typeof meta?.trajectory_id === 'string' && meta.trajectory_id ? meta.trajectory_id : null;
+      const newTrajectory = oldTrajectory ? randomUUID() : null;
+      const textPairs: Array<[string, string]> = [[oldCascade, targetId], ...(oldTrajectory && newTrajectory ? [[oldTrajectory, newTrajectory] as [string, string]] : [])];
+      const bytePairs: Array<[Buffer, Buffer]> = textPairs.map(([a, b]) => [Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8')]);
+      const rewriteText = (value: string) => textPairs.reduce((acc, [from, to]) => acc.replaceAll(from, to), value);
+      dst.exec('BEGIN');
+      try {
+        for (const { name } of tables) {
+          const escaped = `"${name.replace(/"/g, '""')}"`;
+          const cols = (dst.prepare(`PRAGMA table_info(${escaped})`).all() as Array<{ name: string }>).map(c => c.name);
+          if (!cols.length) continue;
+          const selectCols = cols.map(c => `"${c.replace(/"/g, '""')}"`).join(', ');
+          const setCols = cols.map(c => `"${c.replace(/"/g, '""')}" = ?`).join(', ');
+          const rows = dst.prepare(`SELECT rowid AS __rowid__, ${selectCols} FROM ${escaped}`).all() as Array<Record<string, unknown>>;
+          const update = dst.prepare(`UPDATE ${escaped} SET ${setCols} WHERE rowid = ?`);
+          for (const row of rows) {
+            let changed = false;
+            const values = cols.map(col => {
+              const v = row[col];
+              if (typeof v === 'string') {
+                const next = rewriteText(v);
+                if (next !== v) changed = true;
+                return next;
+              }
+              if (v instanceof Uint8Array) {
+                const buf = Buffer.from(v.buffer, v.byteOffset, v.byteLength);
+                const next = replaceSameLengthBytes(buf, bytePairs);
+                if (next !== buf) { changed = true; return next; }
+              }
+              return v;
+            });
+            if (changed) update.run(...(values as any[]), row.__rowid__ as number);
+          }
+        }
+        dst.exec('COMMIT');
+      } catch (err) {
+        dst.exec('ROLLBACK');
+        throw err;
+      }
+    } finally {
+      dst.close();
+    }
+    const sourceBrain = join(configDir, 'brain', sourceId);
+    if (await access(sourceBrain).then(() => true, () => false)) {
+      await copyDirectorySnapshot(sourceBrain, targetBrain);
+    }
+    await cp(join(configDir, 'annotations', `${sourceId}.pbtxt`), targetAnn, { errorOnExist: true, force: false }).catch((err) => {
+      if (err?.code !== 'ENOENT') throw err;
+    });
+  } catch (err) {
+    await Promise.all([
+      ...['', '-wal', '-shm'].map(s => rm(targetDb + s, { force: true }).catch(() => undefined)),
+      rm(targetBrain, { recursive: true, force: true }).catch(() => undefined),
+      rm(targetAnn, { force: true }).catch(() => undefined),
+    ]);
+    throw err;
   }
 }
 
@@ -194,6 +316,7 @@ export class AgyAdapter extends AcpAdapter {
   readonly icon = AGY_METADATA.icon;
   readonly capabilities = {
     workModes: ['execute', 'plan'] as const,
+    goal: { controls: [] as const, actions: ['set'] as const },
     coordination: true,
     resume: true,
     modelSwitch: true,
@@ -206,14 +329,16 @@ export class AgyAdapter extends AcpAdapter {
     images: true,
     deleteSession: false,
     history: false,
-    fork: false,
+    fork: true,
     forkAt: false,
     multiAccount: false,
     createAccount: true,
-    forkInto: false,
+    forkInto: true,
     quota: true,
   };
   private modelCache: { at: number; models: ModelOption[] } | null = null;
+  private modelLoad: Promise<ModelOption[]> | null = null;
+  private modelRetryAt = 0;
   private modelGeneration = 0;
   onModelsChanged?: (models: ModelOption[]) => void;
   private readonly commandCache = new Map<string, { at: number; value: Promise<{ cli: AgyCliCommand[]; list: SlashCommand[] }> }>();
@@ -222,15 +347,28 @@ export class AgyAdapter extends AcpAdapter {
     private readonly cliCommand: string[] = ['agy'],
     /** Extra environment for this agent instance, such as a second account's home. */
     env: Record<string, string> = {},
-  ) { super([...cliCommand, 'acp'], env); }
+  ) {
+    super([...cliCommand, 'acp'], env.HOME && env.XDG_CONFIG_HOME ? withHostGitEnv(env) : env);
+    const configuredIdle = Number(env.LOOCHAT_ACP_BACKGROUND_IDLE_MS ?? env.CALLI_ACP_BACKGROUND_IDLE_MS);
+    this.backgroundIdleMs = Number.isFinite(configuredIdle) && configuredIdle > 0 ? configuredIdle : 1500;
+  }
 
   protected readonly modeIds = { ask: ['default'], auto_edit: ['accept-edits'], full_access: ['auto'] };
   protected override resumeVia = 'session/resume' as const;
+  protected override syncThinking = true;
 
-  protected override liveUsage(id: string, cwd: string, emit: (sample: UsageSample) => void) {
-    // Per-request telemetry still comes from the transcript; ACP supplies context occupancy and
-    // a per-turn total. AcpSession's ledger subtracts the already reported requests from that total.
-    return agyLiveUsage(id, cwd, this.env, emit);
+  override async forkSession(agentSessionId: string, cwd: string, forkRef?: string): Promise<string> {
+    if (forkRef) throw new Error('this agent can only copy a whole conversation');
+    const configDir = configDirectory(this.env, 'LOOCHAT_AGY_HOME', ['.gemini', 'antigravity-cli'], cwd);
+    const copyId = randomUUID();
+    await cloneAgySession(configDir, agentSessionId, copyId);
+    return copyId;
+  }
+
+  protected override liveUsage(id: string, cwd: string, emit: (sample: UsageSample) => void, onThinking?: (text: string) => void) {
+    // Per-request telemetry and fallback thinking come from the native transcript when ACP does not
+    // stream agent_thought_chunk; ACP supplies context occupancy and a per-turn total.
+    return agyLiveUsage(id, cwd, this.env, emit, onThinking);
   }
 
   createAccount(directory: string): Promise<Record<string, string>> {
@@ -241,6 +379,8 @@ export class AgyAdapter extends AcpAdapter {
   startLogin(onSuccess: (account?: string) => Promise<void>) {
     return startAgyLogin(this.cliCommand, this.env, async account => {
       this.modelCache = null;
+      this.modelLoad = null;
+      this.modelRetryAt = 0;
       this.modelGeneration++;
       this.commandCache.clear();
       this.commandsByCwd.clear();
@@ -269,11 +409,26 @@ export class AgyAdapter extends AcpAdapter {
   }
 
   async models(refresh = false): Promise<ModelOption[]> {
-    if (refresh) { this.modelCache = null; this.modelGeneration++; }
-    if (this.modelCache && Date.now() - this.modelCache.at < MODELS_TTL_MS) return this.modelCache.models;
+    if (refresh) {
+      this.modelCache = null;
+      this.modelLoad = null;
+      this.modelRetryAt = 0;
+      this.modelGeneration++;
+    }
+    if (!refresh && this.modelCache) {
+      if (Date.now() - this.modelCache.at >= MODELS_TTL_MS && !this.modelLoad && Date.now() >= this.modelRetryAt) {
+        void this.loadModels(false).catch(() => undefined);
+      }
+      return this.modelCache.models;
+    }
+    return this.loadModels(refresh);
+  }
+
+  private loadModels(notify: boolean): Promise<ModelOption[]> {
+    if (this.modelLoad) return this.modelLoad;
     const generation = this.modelGeneration;
     const [bin, ...base] = this.cliCommand;
-    const stdout = await new Promise<string>((resolve, reject) => {
+    const pending = new Promise<string>((resolve, reject) => {
       execFile(bin, [...base, 'models'], { timeout: 30_000, env: { ...process.env, ...this.env } }, (err, out, stderr) => {
         if (!err) { resolve(out); return; }
         // Native signed-out diagnostic only; network, quota and process errors retain their meaning.
@@ -281,13 +436,25 @@ export class AgyAdapter extends AcpAdapter {
           reject(new HttpError(409, 'Antigravity is not signed in', { code: 'agent_login_required' }));
         } else reject(err);
       });
+    }).then((stdout) => {
+      const models = parseAgyModels(stdout);
+      if (generation === this.modelGeneration) {
+        const previous = this.modelCache?.models ?? null;
+        if (models.length > 0) this.modelCache = { at: Date.now(), models };
+        this.modelRetryAt = 0;
+        if (notify || (previous && models.length > 0 && JSON.stringify(previous) !== JSON.stringify(models))) {
+          this.onModelsChanged?.(models);
+        }
+      }
+      return models;
+    }).catch((err) => {
+      if (generation === this.modelGeneration) this.modelRetryAt = Date.now() + 60_000;
+      throw err;
+    }).finally(() => {
+      if (this.modelLoad === pending) this.modelLoad = null;
     });
-    const models = parseAgyModels(stdout);
-    if (generation === this.modelGeneration) {
-      if (models.length > 0) this.modelCache = { at: Date.now(), models };
-      if (refresh) this.onModelsChanged?.(models);
-    }
-    return models;
+    this.modelLoad = pending;
+    return pending;
   }
 
   /** One `agy -p <text>` run, for the commands agy answers itself. Resolves to what it printed. */
@@ -324,12 +491,14 @@ export class AgyAdapter extends AcpAdapter {
 
   async commands(cwd?: string): Promise<SlashCommand[]> {
     const native = await super.commands(cwd);
+    let queries: SlashCommand[] = [];
     try {
-      const queries = (await this.loadCommands(cwd ?? process.cwd())).list;
-      return [...native, ...queries.filter(c => !native.some(n => n.name === c.name))];
+      queries = (await this.loadCommands(cwd ?? process.cwd())).list;
     } catch {
-      return native;
+      if (!native.length) return [];
     }
+    const merged = [...native, ...queries.filter(c => !native.some(n => n.name === c.name))];
+    return [...merged, ...AGY_SESSION_COMMANDS.filter(c => !merged.some(m => m.name === c.name))];
   }
 
   /** Runs a command agy answers itself and returns its output as Markdown; null if `text` is not one. */
@@ -349,7 +518,7 @@ export class AgyAdapter extends AcpAdapter {
   }
 
   resumeCommand(agentSessionId: string): string {
-    const prefix = Object.entries(this.env).filter(([key, value]) => ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME'].includes(key) || (AGY_AUTH_ENV.includes(key) && value === ''))
+    const prefix = Object.entries(this.env).filter(([key, value]) => ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'GH_CONFIG_DIR', 'GIT_CONFIG_GLOBAL'].includes(key) || (AGY_AUTH_ENV.includes(key) && value === ''))
       .map(([key, value]) => `${key}=${quoteArg(value)}`).join(' ');
     return `${prefix ? `env ${prefix} ` : ''}${this.cliCommand.map(quoteArg).join(' ')} --conversation ${quoteArg(agentSessionId)}`;
   }
@@ -432,16 +601,28 @@ export class AgyAdapter extends AcpAdapter {
       if (u?.sessionUpdate === 'current_mode_update') mode = u.currentModeId === 'plan' ? 'plan' : 'execute';
       update(value);
     };
+    const wrapApproval = (requestApproval: TurnHooks['requestApproval']): TurnHooks['requestApproval'] => req => {
+      const allow = permission === 'full_access' && mode !== 'plan'
+        ? req.options.find(o => o.kind === 'allow_once')
+          ?? req.options.find(o => o.kind === 'allow_always')
+          ?? req.options.find(o => /^(?:allow|accept)/i.test(o.optionId))
+        : undefined;
+      return allow ? Promise.resolve({ optionId: allow.optionId }) : requestApproval(req);
+    };
+    const setSessionHooks = session.setSessionHooks.bind(session);
+    session.setSessionHooks = sessionHooks => setSessionHooks({
+      ...sessionHooks,
+      turnStarted: (id, meta) => {
+        const hooks = sessionHooks.turnStarted(id, meta);
+        return { ...hooks, requestApproval: wrapApproval(hooks.requestApproval) };
+      },
+    });
     const prompt = session.prompt.bind(session);
     session.prompt = async (input, hooks) => {
       const plan = mode === 'plan' && !isCompaction(input.text) ? new PlanReply(hooks.emit, `agy-plan-${Date.now()}`) : null;
       const result = await prompt(input, {
         ...hooks,
-        requestApproval: req => {
-          const allow = permission === 'full_access' && mode !== 'plan'
-            ? req.options.find(o => o.kind === 'allow_once') ?? req.options.find(o => o.kind === 'allow_always') : undefined;
-          return allow ? Promise.resolve({ optionId: allow.optionId }) : hooks.requestApproval(req);
-        },
+        requestApproval: wrapApproval(hooks.requestApproval),
         emit: ev => {
           if (plan && ev.type === 'message.delta') plan.add(String(ev.data.text ?? ''));
           else { if (ev.type === 'tool.start') plan?.aside(); hooks.emit(ev); }

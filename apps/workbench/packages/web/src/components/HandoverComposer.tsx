@@ -26,11 +26,12 @@ export function HandoverComposer({ api, thread, sourceId, label, hostId, attachB
       header={<button className="text-btn" onClick={onLatest}>{label}{thread.waiting ? ` · ${waitingLabel(thread)}` : ''}</button>} left={null} right={null}
       commands={[]} actions={[]} hiddenCommands={[]} onAction={() => {}} attachBlocked={attachBlocked}
       note={note} onNotesChange={onNotesChange} restore={restore} onError={onError}
-      onSend={async (text, images, mentions, videos = []) => {
+      referenceSource={{ api, cwd: thread.cwd, threadId: thread.id }}
+      onSend={async (text, images, mentions, videos = [], _onCreated, references = []) => {
         if (thread.terminalActivity) await new Promise<void>((resolve, reject) => setConfirm({ resolve, reject }));
         try {
           await api.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
-            queue: true, mentions, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(thread.id, video.file)).id)),
+            queue: true, mentions, references, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(thread.id, video.file)).id)),
           });
           onRefresh(); onLatest();
         } catch (error) { onError(error); throw error; }
