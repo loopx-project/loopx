@@ -408,13 +408,11 @@ App 与兼容状态后再替换。启动后读回版本、同一 Goal、原回�
 For a browser-fixture error discovered after an immutable tag was published,
 maintainers may dispatch the release workflow from reviewed tooling with
 `tag` set to that existing release and `browser_fixture_commit` set to a full,
-merged commit SHA. Only the personal-workspace fixture, typed-actions,
-goal-work-map, goal-workspace-m2, lark-cli-missing, pr-review-agent-order and
-workspace-locale browser-smoke files are
-extracted from that commit;
-its other changes are not applied to the product checkout. All candidate files
-must remain regular source files before any correction is copied; deletion or a
-symlink fails closed without partially applying the fixture correction.
+merged commit SHA. The workflow copies only the personal-workspace fixture,
+chat-recovery, typed-actions, goal-work-map, goal-workspace-m2, lark-cli-missing,
+pr-review-agent-order, and workspace-locale browser-smoke files from that commit.
+The workflow checks that every candidate file remains a regular source file
+before copying any correction. A deleted file or symlink rejects the entire correction.
 A non-default commit must contain at least one correction in these fixture owners. The wheel and sdist are built before
 those test corrections are applied; checksums are verified again after the
 browser and managed-runtime tests, and the fixtures are restored. An empty
