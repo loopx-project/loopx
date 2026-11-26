@@ -90,6 +90,41 @@ export interface TrajectoryPartialTurnUsage {
     uncached_input_tokens: number; output_tokens: number} | null;
 }
 
+export type ContextPolicyOperatorName = 'KeepRaw' | 'FoldToReceipt' | 'EpochReset';
+
+export interface ContextPolicyOperatorCounts {
+  KeepRaw: number;
+  FoldToReceipt: number;
+  EpochReset: number;
+}
+
+export interface PrefetchTelemetrySummary {
+  attempts: number;
+  latency_ms: number;
+  output_bytes: number;
+  bytes_saved: number;
+  round_trips_saved: number;
+}
+
+export interface PrefixKvRegimeStats {
+  requests: number;
+  uncached_prefix_kv_tokens: number;
+  cached_prefix_kv_tokens: number;
+}
+
+export interface PrefixKvRegimeBreakdown {
+  cold: PrefixKvRegimeStats;
+  warm: PrefixKvRegimeStats;
+}
+
+export interface ContextPolicyTelemetry {
+  schema_version: 'loopx_context_policy_telemetry_v0';
+  operator_counts: ContextPolicyOperatorCounts;
+  quiet_turn_skips: number;
+  prefetch: PrefetchTelemetrySummary;
+  prefix_kv?: PrefixKvRegimeBreakdown;
+}
+
 export interface TrajectorySolverUsage {
   session_id: string; method: 'codex_complete_session_counters_v1' | 'codex_observed_session_counters_v1';
   incomplete_turn?: TrajectoryPartialTurnUsage | null;
@@ -110,6 +145,8 @@ export interface TrajectorySolverUsage {
   tool_context?: TrajectoryToolContext;
   /** Whole requests issuing recognized commands, never control-text attribution. */
   loopx_requests?: TrajectoryLoopXRequests;
+  /** Optional context-policy operator, prefetch, quiet-turn, and cold/warm KV regime telemetry. */
+  context_policy_telemetry?: ContextPolicyTelemetry;
 }
 
 export type TrajectoryLoopXRequests = {method: 'codex_ordered_loopx_requests_v1'} & (

@@ -69,6 +69,7 @@ const packedStaticEntries = new Set([
   'package/lib/types/native-operation-context.d.ts',
   'package/lib/types/native-operation.d.ts',
   'package/lib/types/observer.d.ts',
+  'package/lib/types/todo-unit-fold.d.ts',
   'package/package.json',
 ])
 const packedHashedEntries = [

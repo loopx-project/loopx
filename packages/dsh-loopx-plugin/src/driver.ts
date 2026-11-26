@@ -28,6 +28,39 @@ import type {
   GoalBarAdmissionFailureCategoryV1,
   GoalBarContinuationAdmissionV1,
 } from './goalbar/protocol.ts'
+import {
+  applyTodoUnitFoldAndPrefetch,
+  hasValidDshToolCallPairing,
+  recordDshTodoUnitAnchor,
+  validateTodoUnitObsForExecution,
+} from './todo-unit-fold.ts'
+import type {
+  LoopXTodoFoldMessageSource,
+  TodoUnitAnchor,
+  TodoUnitAnchorInput,
+  TodoUnitCompletionReceipt,
+  TodoUnitFoldOutcome,
+  TodoUnitFoldPolicy,
+  TodoUnitFoldRequest,
+  TodoUnitObsNextCommand,
+  TodoUnitObsRunner,
+  TodoUnitReceiptMu,
+  TodoUnitSourceRef,
+} from './todo-unit-fold.ts'
+
+export type {
+  LoopXTodoFoldMessageSource,
+  TodoUnitAnchor,
+  TodoUnitAnchorInput,
+  TodoUnitCompletionReceipt,
+  TodoUnitFoldOutcome,
+  TodoUnitFoldPolicy,
+  TodoUnitFoldRequest,
+  TodoUnitObsNextCommand,
+  TodoUnitObsRunner,
+  TodoUnitReceiptMu,
+  TodoUnitSourceRef,
+}
 
 export const name = 'dsh-loopx-driver'
 export const inject = ['agents', 'loopxBootstrap']
@@ -94,6 +127,8 @@ interface SessionDriverRetention {
   goalBarPaused?: boolean
   admissionFailure?: GoalBarAdmissionFailureCategoryV1 | undefined
   reservation?: Reservation | undefined
+  todoUnitAnchors?: Map<string, TodoUnitAnchor> | undefined
+  todoUnitFolds?: Map<string, TodoUnitFoldOutcome> | undefined
 }
 
 // HMR can replace this module while the same Agent and Session keep running.
@@ -199,6 +234,10 @@ export interface LoopXDriverOptions {
   readonly warn?: ((message: string) => void) | undefined
   /** Notified only when the projected admission failure is set or cleared. */
   readonly onAdmissionChange?: ((session: Agent['session']) => void) | undefined
+  /** Strictly default-off Todo semantic-unit context folding & prefetch policy. */
+  readonly todoUnitFold?: TodoUnitFoldPolicy | undefined
+  /** Optional bounded reader for Todo-unit Obs(next_cmd) verification commands. */
+  readonly runObsCommand?: TodoUnitObsRunner | undefined
 }
 
 const systemClock: DriverClock = Object.freeze({
@@ -827,6 +866,8 @@ export class LoopXContinuationDriver {
   private readonly runDetached: <T>(operation: () => Promise<T>) => Promise<T>
   private readonly warn: (message: string) => void
   private readonly onAdmissionChange: ((session: Agent['session']) => void) | undefined
+  private readonly todoUnitFold: TodoUnitFoldPolicy | undefined
+  private readonly runObsCommand: TodoUnitObsRunner | undefined
   private command?: LoopXCommand | undefined
   private disposed = false
 
@@ -846,6 +887,98 @@ export class LoopXContinuationDriver {
       }
     }
     this.onAdmissionChange = options.onAdmissionChange
+    this.todoUnitFold = options.todoUnitFold
+    this.runObsCommand = options.runObsCommand
+  }
+
+  /** Record a Todo semantic-unit anchor pinning parent KV prefix Q before exploratory steps. */
+  anchorTodoUnit(agent: Agent, input: TodoUnitAnchorInput): TodoUnitAnchor | null {
+    if (this.todoUnitFold?.enabled !== true) return null
+    const anchor = recordDshTodoUnitAnchor(agent.session, input)
+    const retained = retainedState(agent, agent.session)
+    retained.todoUnitAnchors ??= new Map()
+    retained.todoUnitAnchors.set(anchor.todoId, anchor)
+    return anchor
+  }
+
+  /**
+   * Default-off FoldAndPrefetch hook executed when a Todo semantic unit settles:
+   * atomically pops contiguous suffix `[anchor..now] -> [mu + Obs(next_cmd)]` on
+   * quiescent boundaries while keeping parent prefix Q byte-identical and tool pairing valid.
+   */
+  async onTodoUnitSettled(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
+    const policy = this.todoUnitFold
+    if (policy?.enabled !== true) {
+      return applyTodoUnitFoldAndPrefetch(agent.session, policy, request)
+    }
+    const state = this.stateFor(agent)
+    const retained = retainedState(agent, agent.session)
+    const foldKey = request.completionReceipt?.completionReceiptId
+      ? `${request.todoId}:${request.turnInstanceId}:${request.completionReceipt.completionReceiptId}:${request.contextEpoch}`
+      : undefined
+    const cached = foldKey !== undefined ? retained.todoUnitFolds?.get(foldKey) : undefined
+    if (cached !== undefined) {
+      return cached
+    }
+    const quiescent = agent.status === 'idle'
+      && state.commands.size === 0
+      && !inboxHasPending(agent.inbox)
+      && state.activation.pendingModelCalls.size === 0
+      && agent.id === agent.session.id
+      && agent.id === agent.session.header.id
+      && typeof agent.session.header.cwd === 'string'
+      && agent.session.header.cwd.length > 0
+      && request.quiescentBoundary !== false
+    const sessionCwd = agent.session.header.cwd
+    const storedAnchor = retained.todoUnitAnchors?.get(request.todoId)
+    const activeAnchor = request.anchor ?? storedAnchor
+    let effectiveRequest: TodoUnitFoldRequest = {
+      ...request,
+      quiescentBoundary: quiescent,
+    }
+    if (
+      quiescent
+      && typeof sessionCwd === 'string'
+      && sessionCwd.length > 0
+      && activeAnchor !== undefined
+      && activeAnchor.todoId === request.todoId
+      && activeAnchor.turnInstanceId === request.turnInstanceId
+      && activeAnchor.contextEpoch === request.contextEpoch
+      && request.completionReceipt?.exitCode === 0
+      && request.completionReceipt.todoId.trim() === request.todoId
+      && hasValidDshToolCallPairing(agent.session, activeAnchor.prefixNodeCount)
+      && this.runObsCommand !== undefined
+    ) {
+      const safeArgv = validateTodoUnitObsForExecution(request.obsNextCmd)
+      if (safeArgv !== null && request.obsNextCmd !== undefined) {
+        const obsRes = await this.runObsCommand(safeArgv, sessionCwd)
+        effectiveRequest = {
+          ...effectiveRequest,
+          obsNextCmd: {
+            ...request.obsNextCmd,
+            command: safeArgv,
+            exitCode: obsRes.exitCode,
+            output: obsRes.output,
+            timedOut: obsRes.timedOut,
+            truncated: obsRes.truncated,
+          },
+        }
+      }
+    }
+    const outcome = applyTodoUnitFoldAndPrefetch(agent.session, policy, effectiveRequest, storedAnchor)
+    if (outcome.operator === 'FoldToReceipt') {
+      retained.todoUnitAnchors?.delete(request.todoId)
+      if (foldKey !== undefined) {
+        retained.todoUnitFolds ??= new Map()
+        retained.todoUnitFolds.set(foldKey, outcome)
+      }
+    }
+    return outcome
+  }
+
+  /** Named alias matching FoldAndPrefetch hook semantics on the real Driver. */
+  foldAndPrefetch(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
+    return this.onTodoUnitSettled(agent, request)
   }
 
   observeAgent(agent: Agent): void {
@@ -871,6 +1004,8 @@ export class LoopXContinuationDriver {
     state.schedulerToken = ''
     state.unchangedPolls = 0
     state.commands.clear()
+    retainedState(agent, agent.session).todoUnitAnchors?.clear()
+    retainedState(agent, agent.session).todoUnitFolds?.clear()
     state.activation = foldSessionActivation(agent.session)
     this.requestEvaluation(state)
   }

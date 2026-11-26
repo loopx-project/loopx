@@ -43,6 +43,7 @@ from ..control_plane.turn_driver import (
     run_codex_cli_host,
     run_loopx_turn_once,
 )
+from ..control_plane.turn_driver.quiet_turn_store import build_cli_quiet_turn_option
 from ..quota import spend_quota_slot
 from ..state_refresh import refresh_state_run
 from ..control_plane.todos.path_resolution import resolve_todo_state_path
@@ -902,7 +903,17 @@ def execute_turn_run_once(
             ) else None,
         )
 
+        quiet_turn_option: bool | dict[str, Any] = False
+        if getattr(args, "quiet_turn", False):
+            quiet_turn_option = build_cli_quiet_turn_option(
+                payload, goal_id=args.goal_id, agent_id=args.agent_id,
+            )
+
         execution_started = bool(args.execute)
+        unmeasurable_operation_host = (
+            (args.host == "codex-cli" and bool(getattr(args, "codex_operation_tools", False)))
+            or (args.host == "dsh" and bool(getattr(args, "dsh_operation_module", None)))
+        )
         result = run_loopx_turn_once(
             payload,
             decision_capture_payload=decision,
@@ -942,6 +953,9 @@ def execute_turn_run_once(
                 goal_admission.with_launch_decision(current_launch_decision).launch_lifetime,
                 operation="turn_external_host_launch",
             ) if raw_argv is not None and goal_admission is not None else None),
+            epoch_prefetch=getattr(args, "epoch_prefetch_json", None),
+            quiet_turn=quiet_turn_option,
+            **({"host_input_renderer": None} if unmeasurable_operation_host else {}),
         )
         if args.execute:
             result.update(drain_committed_turn_post_writeback_hooks(

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
+import statistics
 from typing import Any
 
 from ...domain_state import default_domain_state_file_path
@@ -38,6 +39,73 @@ _POLICY_FIELDS = {
     "evaluator_reserve_tokens_per_minute",
     "cooldown_seconds",
 }
+_CACHE_REGIMES = {"cold", "warm"}
+_CONTEXT_POLICY_OPERATORS = ("KeepRaw", "FoldToReceipt", "EpochReset")
+CONTEXT_POLICY_OPERATORS = _CONTEXT_POLICY_OPERATORS
+CONTEXT_POLICY_EFFORT_TELEMETRY_FIELDS = (
+    "cached_prefix_kv_tokens",
+    "uncached_prefix_kv_tokens",
+    "cold_uncached_prefix_kv_tokens",
+    "cold_cached_prefix_kv_tokens",
+    "warm_uncached_prefix_kv_tokens",
+    "warm_cached_prefix_kv_tokens",
+    "prefetch_latency_ms",
+    "prefetch_bytes",
+    "prefetch_bytes_saved",
+    "quiet_turn_skips",
+)
+
+
+def normalize_operator_counts(
+    value: object,
+    *,
+    field: str,
+    validate_int: Callable[[object, str], int],
+) -> dict[str, int]:
+    """Validate optional context-policy operator counts cleanly across benchmark contracts."""
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field} must be an object")
+    _reject_unknown_fields(
+        value,
+        allowed=set(_CONTEXT_POLICY_OPERATORS),
+        field=field,
+    )
+    return {
+        op: validate_int(value[op], f"{field}.{op}")
+        for op in _CONTEXT_POLICY_OPERATORS
+        if op in value
+    }
+
+
+def aggregate_context_policy_effort(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """Aggregate optional context-policy effort telemetry and operator counts when present."""
+    output: dict[str, object] = {}
+    for field in CONTEXT_POLICY_EFFORT_TELEMETRY_FIELDS:
+        values = [
+            float(val)
+            for row in rows
+            if isinstance(effort := row.get("effort"), Mapping)
+            and isinstance(val := effort.get(field), (int, float))
+            and not isinstance(val, bool)
+        ]
+        if values:
+            output[field] = {
+                "denominator": len(values),
+                "mean": statistics.fmean(values),
+                "median": statistics.median(values),
+            }
+    operator_rows = [
+        effort["operator_counts"]
+        for row in rows
+        if isinstance(effort := row.get("effort"), Mapping)
+        and isinstance(effort.get("operator_counts"), Mapping)
+    ]
+    if operator_rows:
+        output["operator_counts"] = {
+            op: sum(int(ops.get(op, 0)) for ops in operator_rows)
+            for op in _CONTEXT_POLICY_OPERATORS
+        }
+    return output
 _SAMPLE_FIELDS = {
     "schema_version",
     "sample_id",
@@ -47,6 +115,12 @@ _SAMPLE_FIELDS = {
     "uncached_input_tokens",
     "cached_input_tokens",
     "output_tokens",
+    "cache_regime",
+    "operator_counts",
+    "quiet_turn_skips",
+    "prefetch_latency_ms",
+    "prefetch_bytes",
+    "prefetch_bytes_saved",
 }
 _RESERVATION_FIELDS = {
     "run_id",
@@ -196,6 +270,27 @@ def normalize_benchmark_token_usage_sample(
             raise ValueError("unmetered samples cannot claim token counts")
     elif sample["request_count"] == 0 and token_total != 0:
         raise ValueError("token counts require at least one observed request")
+    if "cache_regime" in value and value["cache_regime"] is not None:
+        regime = _token(value.get("cache_regime"), field="cache_regime")
+        if regime not in _CACHE_REGIMES:
+            raise ValueError("cache_regime must be cold or warm")
+        sample["cache_regime"] = regime
+    if "operator_counts" in value and value["operator_counts"] is not None:
+        sample["operator_counts"] = normalize_operator_counts(
+            value["operator_counts"],
+            field="operator_counts",
+            validate_int=lambda v, f: _bounded_token_int(v, field=f),
+        )
+    for telemetry_field in (
+        "quiet_turn_skips",
+        "prefetch_latency_ms",
+        "prefetch_bytes",
+        "prefetch_bytes_saved",
+    ):
+        if telemetry_field in value and value[telemetry_field] is not None:
+            sample[telemetry_field] = _bounded_token_int(
+                value[telemetry_field], field=telemetry_field
+            )
     return sample
 
 
@@ -350,6 +445,57 @@ def _usage_projection(
         + totals["cached_input_tokens"]
         + totals["output_tokens"]
     )
+    telemetry: dict[str, Any] = {}
+    has_regime = any("cache_regime" in item for item in window)
+    if has_regime:
+        prefix_kv: dict[str, dict[str, int]] = {}
+        for regime in ("cold", "warm"):
+            subset = [item for item in window if item.get("cache_regime") == regime]
+            prefix_kv[regime] = {
+                "request_count": sum(item["request_count"] for item in subset),
+                "uncached_prefix_kv_tokens": sum(
+                    item["uncached_input_tokens"] for item in subset
+                ),
+                "cached_prefix_kv_tokens": sum(
+                    item["cached_input_tokens"] for item in subset
+                ),
+            }
+        telemetry["prefix_kv"] = prefix_kv
+    has_policy = any(
+        any(
+            key in item
+            for key in (
+                "operator_counts",
+                "quiet_turn_skips",
+                "prefetch_latency_ms",
+                "prefetch_bytes",
+                "prefetch_bytes_saved",
+            )
+        )
+        for item in window
+    )
+    if has_policy:
+        op_counts = {
+            op: sum(
+                int((item.get("operator_counts") or {}).get(op, 0)) for item in window
+            )
+            for op in _CONTEXT_POLICY_OPERATORS
+        }
+        telemetry["context_policy"] = {
+            "operator_counts": op_counts,
+            "quiet_turn_skips": sum(
+                int(item.get("quiet_turn_skips", 0)) for item in window
+            ),
+            "prefetch_latency_ms": sum(
+                int(item.get("prefetch_latency_ms", 0)) for item in window
+            ),
+            "prefetch_bytes": sum(
+                int(item.get("prefetch_bytes", 0)) for item in window
+            ),
+            "prefetch_bytes_saved": sum(
+                int(item.get("prefetch_bytes_saved", 0)) for item in window
+            ),
+        }
     return {
         "window_seconds": int(_WINDOW.total_seconds()),
         "window_started_at": (datetime.fromisoformat(observed_at) - _WINDOW)
@@ -360,6 +506,7 @@ def _usage_projection(
         "reason_codes": reason_codes,
         "sample_count": len(window),
         **totals,
+        **telemetry,
     }
 
 
