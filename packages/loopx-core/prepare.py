@@ -27,15 +27,17 @@ STANDARD_CAPABILITY_DISTRIBUTIONS = (
 PR_REVIEW_DIRECTORY = Path("loopx/capabilities/pr_review_queue")
 PR_REVIEW_CORE_FILES = {
     "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
-    "order.py", "scheduling.py", "README.md",
+    "order.py", "review_body.py", "scheduling.py", "README.md",
 }
 ISSUE_FIX_DIRECTORY = Path("loopx/capabilities/issue_fix")
 # Generic PR dependencies and existing acknowledgements retain their readback
 # and continuation even when the authoring workflow is absent.
 ISSUE_FIX_CORE_FILES = {
-    "__init__.py", "catalog_entry.py", "command_templates.py", "README.md", "README.zh-CN.md",
-    "github_public.py", "metadata_preview.py", "pr_gate_reconcile.py", "pr_lifecycle.py",
-    "pr_lifecycle_rollout.py", "pr_review_ack.py", "pr_wait_hook.py", "pr_wait_reconcile.py",
+    "__init__.py", "catalog_entry.py", "command_templates.py", "correction_settlement.py",
+    "correction_settlement_gates.py", "correction_settlement_input.py",
+    "README.md", "README.zh-CN.md", "github_public.py", "metadata_preview.py",
+    "pr_gate_reconcile.py", "pr_lifecycle.py", "pr_lifecycle_rollout.py",
+    "pr_review_ack.py", "pr_wait_hook.py", "pr_wait_reconcile.py",
 }
 CAPABILITY_ENTRY_MODULES = {
     RECALL_DISTRIBUTION: {

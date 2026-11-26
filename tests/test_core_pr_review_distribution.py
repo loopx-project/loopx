@@ -18,7 +18,7 @@ def test_review_source_stages_the_existing_execution_owners(tmp_path):
     review = source / "loopx/capabilities/pr_review_queue"
     assert {path.name for path in review.glob("*.py")}.isdisjoint({
         "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
-        "order.py", "scheduling.py",
+        "order.py", "review_body.py", "scheduling.py",
     })
     assert (review / "core.py").is_file()
     assert (review / "experiences/pr-5944-review-frame.md").is_file()
@@ -71,6 +71,9 @@ for module in ("loopx.cli_commands.pr_review", "loopx.pr_review", "loopx.capabil
     capability = json.loads(discovered.stdout)["capability"]
     assert capability["provider_state"]["ready"] is REVIEW_ENABLED
     assert capability["provider_state"]["installed"] is REVIEW_ENABLED
+    reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
+    commands = [entry["command"] for group in reference["groups"] for entry in group["commands"]]
+    assert ("loopx pr-review --help" in commands) is REVIEW_ENABLED
     if not REVIEW_ENABLED:
         result = _run(core_python, ["pr-review", "--help"], tmp_path, expected=2)
         assert DISTRIBUTION in result.stderr

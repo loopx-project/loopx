@@ -55,7 +55,7 @@ from types import ModuleType
 import pytest
 
 from loopx.capabilities.explore import todo_branch_plan, worker_branch_plan
-from loopx.capabilities.issue_fix import pr_description
+from loopx.capabilities.issue_fix import github_public, pr_description
 from loopx.capabilities.issue_fix import repository_commit_evidence as commit_evidence
 from loopx.capabilities.issue_fix import repository_snapshot
 from loopx.capabilities.issue_fix import reward_memory as issue_fix_reward_memory
@@ -102,13 +102,17 @@ PATTERN_DECISIONS: dict[str, tuple[str, str, ModuleType, list[tuple[str, ModuleT
     ),
     "_REPO_PATTERN": (
         r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
-        "loopx/capabilities/issue_fix/repository_snapshot.py",
-        repository_snapshot,
+        "loopx/capabilities/issue_fix/github_public.py",
+        github_public,
         [
+            (
+                "loopx/capabilities/issue_fix/repository_snapshot.py",
+                repository_snapshot,
+            ),
             (
                 "loopx/capabilities/issue_fix/repository_commit_evidence.py",
                 commit_evidence,
-            )
+            ),
         ],
     ),
 }
@@ -331,6 +335,7 @@ def test_repo_shape_is_checked_by_the_producer_and_the_verifier() -> None:
         repository_snapshot._repo_parts("loopx-project-loopx")
     assert str(refused.value) == "repo must use owner/name"
     assert commit_evidence._REPO_PATTERN is repository_snapshot._REPO_PATTERN
+    assert repository_snapshot._REPO_PATTERN is github_public._REPO_PATTERN
     assert not commit_evidence._REPO_PATTERN.fullmatch("loopx-project/loopx/two")
 
 

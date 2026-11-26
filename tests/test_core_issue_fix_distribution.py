@@ -22,7 +22,7 @@ def test_issue_fix_stages_the_workflow_without_wait_or_ledger_owners(tmp_path):
     owners = source / "loopx/capabilities/issue_fix"
     for name in ("cli.py", "candidate_preflight.py", "acceptance_loop.py", "workflow_plan.py"):
         assert (owners / name).read_bytes() == (REPOSITORY / owners.relative_to(source) / name).read_bytes()
-    for name in ("catalog_entry.py", "__init__.py", "pr_wait_reconcile.py", "pr_review_ack.py"):
+    for name in ("catalog_entry.py", "__init__.py", "correction_settlement.py", "pr_wait_reconcile.py", "pr_review_ack.py"):
         assert not (owners / name).exists()
     assert not (source / "loopx/domain_packs/issue_fix.py").exists()
     assert (source / "requires-core.txt").read_text().strip() == f"loopx-core=={__version__}"
@@ -70,6 +70,9 @@ for name in ("cli", "workflow_plan", "candidate_preflight", "acceptance_loop", "
     assert capability["commands"] and all(
         row["command"].startswith("loopx issue-fix ") for row in capability["commands"]
     )
+    reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
+    commands = [entry["command"] for group in reference["groups"] for entry in group["commands"]]
+    assert ("loopx issue-fix" in commands) is ISSUE_FIX_ENABLED
 
     args = _guided_args(tmp_path)
     packet = json.loads(_run(core_python, args, tmp_path).stdout)

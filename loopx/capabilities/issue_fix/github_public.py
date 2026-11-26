@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ GITHUB_PUBLIC_READ_FAILURE_CODES = (
 )
 
 ALLOWED_GITHUB_REF_TYPES = {"issue", "pull", "discussion"}
+_REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 MAINTAINER_ASSOCIATIONS = {"COLLABORATOR", "MEMBER", "OWNER"}
 GITHUB_COMMENT_BODY_KEYS = {
     "body",

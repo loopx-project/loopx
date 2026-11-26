@@ -88,3 +88,72 @@ for module in ("loopx.capabilities.agent_turn_recall.core",
     replay = json.loads(_run(core_python, [*arguments, "--resume-turn-key", turn_key], workspace).stdout)
     assert replay["replayed"] and not any(replay["effects"].values())
     assert _assert_committed(core_python, workspace, runtime, replay) == turn_key
+
+
+def _command_entries(python, workspace) -> list[str]:
+    reference = json.loads(_run(python, ["commands", "--format", "json"], workspace).stdout)
+    return [entry["command"] for group in reference["groups"] for entry in group["commands"]]
+
+
+def _installation_doctor(python, workspace, *, deep: bool = False) -> dict:
+    arguments = ["doctor", "--installation-only", *(["--deep"] if deep else []), "--format", "json"]
+    return json.loads(_run(python, arguments, workspace).stdout)
+
+
+def test_standard_installation_distinguishes_doctor_fingerprint_and_commands(
+    core_python, standard_wheelhouse, tmp_path,
+):
+    bare_doctor = _installation_doctor(core_python, tmp_path)
+    bare_fp = bare_doctor["service_runtime_identity"].get("package_fingerprint")
+    assert bare_doctor["ok"] is True
+    assert isinstance(bare_fp, str) and bare_fp.startswith("sha256:")
+    bare_commands = _command_entries(core_python, tmp_path)
+    assert "loopx agent-turn-recall" not in bare_commands
+    assert "loopx issue-fix" not in bare_commands
+    assert "loopx pr-review --help" not in bare_commands
+
+    _install(core_python, standard_wheelhouse, "loopx-capability-issue-fix")
+    issue_fix_doctor = _installation_doctor(core_python, tmp_path)
+    issue_fix_fp = issue_fix_doctor["service_runtime_identity"].get("package_fingerprint")
+    assert issue_fix_doctor["ok"] is True
+    assert isinstance(issue_fix_fp, str) and issue_fix_fp.startswith("sha256:")
+    assert issue_fix_fp != bare_fp
+    issue_fix_commands = _command_entries(core_python, tmp_path)
+    assert "loopx issue-fix" in issue_fix_commands
+    assert "loopx agent-turn-recall" not in issue_fix_commands
+    assert "loopx pr-review --help" not in issue_fix_commands
+
+    _install(core_python, standard_wheelhouse, "loopx-core[standard]", "--reinstall-package", "loopx-core")
+    standard_doctor = _installation_doctor(core_python, tmp_path)
+    standard_fp = standard_doctor["service_runtime_identity"].get("package_fingerprint")
+    assert standard_doctor["ok"] is True
+    assert isinstance(standard_fp, str) and standard_fp.startswith("sha256:")
+    assert standard_fp not in {bare_fp, issue_fix_fp}
+    deep_doctor = _installation_doctor(core_python, tmp_path, deep=True)
+    assert deep_doctor["ok"] is True
+    standard_commands = _command_entries(core_python, tmp_path)
+    assert "loopx agent-turn-recall" in standard_commands
+    assert "loopx issue-fix" in standard_commands
+    assert "loopx pr-review --help" in standard_commands
+
+    # Tampered/unowned file under loopx/ must clear package_fingerprint even with [standard] installed.
+    probe = subprocess.run(
+        [core_python, "-I", "-c", "from pathlib import Path; import loopx; print(Path(loopx.__file__).parent)"],
+        cwd=tmp_path, env=_environment(core_python), capture_output=True, text=True, check=True, timeout=30,
+    )
+    unowned = Path(probe.stdout.strip()) / "unowned_standard_probe.py"
+    unowned.write_text("# injected\n", encoding="utf-8")
+    try:
+        tampered_doctor = _installation_doctor(core_python, tmp_path)
+        assert "package_fingerprint" not in tampered_doctor["service_runtime_identity"]
+    finally:
+        unowned.unlink(missing_ok=True)
+
+    subprocess.run(["uv", "pip", "uninstall", "--python", core_python, *STANDARD_DISTRIBUTIONS],
+                   check=True, timeout=45)
+    restored_doctor = _installation_doctor(core_python, tmp_path)
+    assert restored_doctor["service_runtime_identity"].get("package_fingerprint") == bare_fp
+    restored_commands = _command_entries(core_python, tmp_path)
+    assert "loopx agent-turn-recall" not in restored_commands
+    assert "loopx issue-fix" not in restored_commands
+    assert "loopx pr-review --help" not in restored_commands

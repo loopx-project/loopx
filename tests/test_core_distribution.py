@@ -73,11 +73,94 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
     review = staged / "loopx/capabilities/pr_review_queue"
     assert {path.name for path in review.iterdir()} == {
         "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
-        "order.py", "scheduling.py", "README.md",
+        "order.py", "review_body.py", "scheduling.py", "README.md",
     }
     assert not (staged / "loopx/cli_commands/pr_review.py").exists()
     assert not (staged / "loopx/pr_review.py").exists()
     assert not (staged / "loopx/pr_review_merge_readiness.py").exists()
+
+
+def test_core_staging_has_zero_unconditional_optional_wheel_imports(tmp_path):
+    import ast
+
+    prepare = _prepare_module()
+    staged = prepare.prepare_core_source(tmp_path / "source")
+    optional_sources = set().union(*prepare._optional_capability_sources(
+        prepare._tracked_loopx_sources(REPOSITORY)
+    ).values())
+
+    def _mod_name(path: Path) -> str:
+        parts = list(path.with_suffix("").parts)
+        return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+    optional_modules = {_mod_name(p) for p in optional_sources if p.suffix == ".py"}
+
+    def _imported_targets(node: ast.AST, mod_parts: list[str]) -> list[str]:
+        if isinstance(node, ast.Import):
+            return [alias.name for alias in node.names]
+        if isinstance(node, ast.ImportFrom):
+            base = mod_parts[:-node.level] if node.level else []
+            mod = ".".join([*base, *([node.module] if node.module else [])])
+            return [mod, *(f"{mod}.{a.name}" for a in node.names if mod)]
+        return []
+
+    def _scan(stmts: list[ast.stmt], mod_parts: list[str], offenders: list[str], rel: str) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                for target in _imported_targets(stmt, mod_parts):
+                    if target in optional_modules:
+                        offenders.append(f"{rel}:{stmt.lineno}->{target}")
+            elif isinstance(stmt, ast.ClassDef):
+                _scan(stmt.body, mod_parts, offenders, rel)
+            elif isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, ast.While)):
+                if isinstance(stmt, ast.If) and ast.unparse(stmt.test) in {"TYPE_CHECKING", "typing.TYPE_CHECKING"}:
+                    continue
+                _scan(stmt.body, mod_parts, offenders, rel)
+                if not isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    _scan(stmt.orelse, mod_parts, offenders, rel)
+            elif isinstance(stmt, ast.Try):
+                handlers = [ast.unparse(h.type) if h.type else "" for h in stmt.handlers]
+                if any("ModuleNotFoundError" in h or "ImportError" in h for h in handlers):
+                    continue
+                _scan(stmt.body, mod_parts, offenders, rel)
+                _scan(stmt.orelse, mod_parts, offenders, rel)
+                _scan(stmt.finalbody, mod_parts, offenders, rel)
+
+    offenders: list[str] = []
+    for py_file in sorted((staged / "loopx").rglob("*.py")):
+        rel = py_file.relative_to(staged)
+        parts = list(rel.with_suffix("").parts)
+        mod_parts = parts[:-1] if parts[-1] == "__init__" else parts
+        _scan(ast.parse(py_file.read_text(encoding="utf-8")).body, mod_parts, offenders, rel.as_posix())
+    assert offenders == []
+
+
+def test_installed_core_retains_module_imports_without_optional_wheels(core_python, tmp_path):
+    script = '''
+import importlib, importlib.metadata as m
+try:
+    m.distribution("loopx-capability-issue-fix")
+except m.PackageNotFoundError:
+    pass
+else:
+    raise SystemExit(0)
+for name in (
+    "loopx.cli_commands.update_artifact",
+    "loopx.capabilities.reward_memory.cli",
+    "loopx.capabilities.content_ops.cli",
+    "loopx.extensions.lark.reviewer_notification",
+    "loopx.capabilities.issue_fix.pr_lifecycle",
+    "loopx.capabilities.native_chat.github_pr_evidence",
+):
+    importlib.import_module(name)
+from loopx.cli_commands.update_artifact import standalone_source
+assert "REPOSITORY_PATTERN = " in standalone_source()
+'''
+    checked = subprocess.run(
+        [core_python, "-I", "-c", script], cwd=tmp_path,
+        env=_environment(core_python), capture_output=True, text=True, timeout=45,
+    )
+    assert checked.returncode == 0, (checked.stdout, checked.stderr)
 
 
 @pytest.fixture

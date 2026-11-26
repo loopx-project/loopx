@@ -109,6 +109,10 @@ assert "loopx.capabilities.agent_turn_recall.core" not in sys.modules
     assert discovered.returncode == 0, discovered.stderr
     capability = json.loads(discovered.stdout)["capability"]
     assert capability["provider_state"]["installed"] is True and capability["default_enabled"] is False
+    reference = json.loads(_run(core_python, ["commands", "--format", "json"], workspace).stdout)
+    assert "loopx agent-turn-recall" in [
+        entry["command"] for group in reference["groups"] for entry in group["commands"]
+    ]
     assert "--quota-decision-json" in _run(core_python, ["agent-turn-recall", "--help"], workspace).stdout
     quota_path = tmp_path / "original-quota.json"
     turn_instance_id = "installed-recall"
