@@ -1126,6 +1126,7 @@ def handle_goal_channel_operation_callback(
         if current is None:
             raise ValueError("operation disappeared before result delivery")
         decided = current
+        _, decided_operation = _proposal_operation(decided)
         result_card = build_goal_channel_operation_result_card(decided)
         if _result_delivery_current(decided):
             update = {"external_write_performed": False, "readback_verified": True}
@@ -1142,7 +1143,7 @@ def handle_goal_channel_operation_callback(
             )
             if (
                 update["readback_verified"] is True
-                and decided["operation"]["lifecycle_state"] == "outcome_observed"
+                and decided_operation.get("lifecycle_state") == "outcome_observed"
             ):
                 decided = store.record_operation_result_delivery(
                     action["operation_id"],
@@ -1157,10 +1158,11 @@ def handle_goal_channel_operation_callback(
                         **_result_delivery_stage(decided),
                     },
                 )
+                _, decided_operation = _proposal_operation(decided)
     update_verified = update["readback_verified"]
     observed_outcome = (
-        decided["operation"].get("reconciliation")
-        or decided["operation"].get("outcome")
+        decided_operation.get("reconciliation")
+        or decided_operation.get("outcome")
         or {}
     )
     return {
@@ -1168,11 +1170,11 @@ def handle_goal_channel_operation_callback(
         "schema_version": OPERATION_CALLBACK_RECEIPT_SCHEMA_VERSION,
         "operation_id": action["operation_id"],
         "decision": action["decision"],
-        "lifecycle_state": decided["operation"]["lifecycle_state"],
+        "lifecycle_state": decided_operation["lifecycle_state"],
         "outcome": observed_outcome.get("outcome"),
         "claim_id": (
-            decided["operation"]["claim"]["claim_id"]
-            if isinstance(decided["operation"].get("claim"), Mapping)
+            decided_operation["claim"]["claim_id"]
+            if isinstance(decided_operation.get("claim"), Mapping)
             else None
         ),
         "callback_ack_is_execution_receipt": False,
@@ -1180,7 +1182,7 @@ def handle_goal_channel_operation_callback(
         "card_update_verified": update_verified,
         "status": (
             "authorization_pending"
-            if decided["operation"]["lifecycle_state"] == "claimed"
+            if decided_operation["lifecycle_state"] == "claimed"
             else "submission_unknown"
             if observed_outcome.get("outcome") == "submission_unknown"
             else "outcome_observed"

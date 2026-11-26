@@ -496,6 +496,17 @@ Paired diffs do not certify translation accuracy.
     the Desktop frontends RFC, local service lifecycle with the daemon RFC, and
     continuation with the manager RFC. Optional preview hosts, session
     rotation, and host promotion remain unapproved.
+- [Session and Quota Fabric for Single-Workbench Convergence v0](session-and-quota-fabric-v0.md)
+  ([中文版](session-and-quota-fabric-v0.zh-CN.md))
+  - **Delivery on `main`:** Partial; typed L0 codecs, additive
+    `ssh_host_catalog_v0` readiness projection, and Turn/lease-fenced handover
+    guards (`loopx/control_plane/collaboration/session_quota_fabric.ts`) ship on
+    this baseline while downstream UI/daemon convergence milestones remain
+    staged.
+  - **Current boundary:** Extracts SSH host observation and quota-aware handover
+    from Calli/LooChat proposals into an optional L0 contract converging into
+    the single Goal Workbench (`apps/presentation/dashboard`) instead of a second
+    frontend shell or parallel Task authority.
 - [Goal Channel Collaboration v0](goal-channel-collaboration-v0.md)
   ([中文版](goal-channel-collaboration-v0.zh-CN.md))
   - **Delivery on `main`:** Lark vertical implemented.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
@@ -15,6 +16,8 @@ from ..todos.todo_summary import (
     todo_item_is_actionable_open,
 )
 from ..work_items.attention_queue import (
+    AttentionQueueItem,
+    AttentionQueueProjection,
     build_attention_queue_projection as _build_attention_queue_projection,
 )
 from ..work_items.autonomous_candidates import (
@@ -61,11 +64,11 @@ def autonomous_monitor_candidates(
 
 def build_attention_queue_projection(
     *,
-    items: list[dict[str, Any]],
+    items: Sequence[AttentionQueueItem],
     goal_id_filter: str | None,
-    autonomous_backlog_candidates: dict[str, Any] | None,
-    autonomous_monitor_candidates: dict[str, Any] | None,
-) -> dict[str, Any]:
+    autonomous_backlog_candidates: dict[str, object] | None,
+    autonomous_monitor_candidates: dict[str, object] | None,
+) -> AttentionQueueProjection:
     return _build_attention_queue_projection(
         items=items,
         goal_id_filter=goal_id_filter,

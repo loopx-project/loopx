@@ -357,7 +357,7 @@ const runTurn = (text, turnId, done) => {
       review: { status: 'inProgress', riskLevel: null, userAuthorization: null, rationale: null }, action });
     notify('item/autoApprovalReview/completed', { turnId, reviewId, startedAtMs: 1, completedAtMs: 2,
       targetItemId: id, decisionSource: 'agent', review: { status: denied ? 'denied' : 'approved',
-        riskLevel: denied ? 'critical' : 'low', userAuthorization: 'high', rationale: denied ? 'too risky' : 'authorized' }, action });
+        riskLevel: denied ? 'critical' : 'low', userAuthorization: null, rationale: denied ? 'too risky' : 'authorized' }, action });
     notify('item/completed', { turnId, item: { type: 'commandExecution', id, command, cwd: '/tmp/one',
       status: denied ? 'failed' : 'completed', exitCode: denied ? 1 : 0, aggregatedOutput: denied ? 'auto-review denied' : 'gone', durationMs: 5 } });
     say(`auto-review:${denied ? 'denied' : 'approved'}`);

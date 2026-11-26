@@ -59,6 +59,7 @@ export class DshAcpAdapter extends AcpAdapter {
 
   protected readonly modeIds = DSH_MODE_IDS;
   protected override readonly resumeVia = 'session/resume' as const;
+  protected override backgroundIdleMs = 1500;
 
   /**
    * Asks each model for its reasoning efforts. A model that cannot be selected right now (its

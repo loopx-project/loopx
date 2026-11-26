@@ -1,11 +1,13 @@
 import { historyPage, mergeHistory, prependHistory, watchHistory } from '../history';
+import { createOptimisticTurn, maxEventSeq, mergeOptimisticEvents, useOptimisticTurns } from '../optimistic';
+import { useReadingPosition } from '../use-reading-position';
 import { waitingLabel } from '../notices';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AgentInfo, Api, Coordination, Thread } from '../api';
 import { buildTalks } from '../coordination';
 import { buildTimeline, clockLabel, deliveredPreview, type StoredEvent } from '../timeline';
 import { Prose, ThreadView } from './ThreadView';
-import { Composer } from './Composer';
+import { Composer, type DraftNote } from './Composer';
 import { restoreVideos } from '../videos';
 import { AgentMark, IconAgents, IconChevron, IconClose, IconExternal, IconFile, IconHandover } from './icons';
 import { downloadBlob } from '../images';
@@ -57,7 +59,7 @@ function Said({ who, to, at, state, text, failed, file }: { who: Speaker; to?: s
   );
 }
 
-export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberModel, start, phone, onClose, onOpen, onAdjust, onRefresh, onError }: {
+export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberModel, start, phone, onClose, onOpen, onAdjust, onRefresh, onError, noteSignal, onNoteConsumed, onNotesChange }: {
   api: Api; team: Coordination; agents: AgentInfo[]; leadAgent?: string;
   /** How to reach a member that runs on another machine. */
   memberApi?: (host: string) => Api;
@@ -68,6 +70,9 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   phone: boolean; onClose: () => void; onOpen: (thread: Thread) => void;
   /** Hands the member over to the lead, with what had been written to it so far. */
   onAdjust: (name: string, draft: string) => void; onRefresh: () => void; onError: (err: unknown) => void;
+  noteSignal?: { draftKey: string; note: DraftNote & { nonce: number } } | null;
+  onNoteConsumed?: (id: string) => void;
+  onNotesChange?: (target: string, notes: DraftNote[]) => void;
 }) {
   const [memberId, setMemberId] = useState<string | null>(start ?? null);
   const panel = useRef<HTMLElement>(null);
@@ -86,6 +91,7 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const resultFileOf = (deliveryId: string, file?: { name: string; size: number; truncated?: boolean }): ResultFile | undefined =>
     file ? { ...file, onOpen: () => { void api.coordinationResult(team.rootId, deliveryId).then(blob => downloadBlob(blob, file.name)).catch(onError); } } : undefined;
   const [events, setEvents] = useState<StoredEvent[]>([]);
+  const optimistic = useOptimisticTurns();
   /** Messages that were waiting when a member was stopped, handed back to that member's box once. */
   const [restore, setRestore] = useState<{ thread: string; text: string; nonce: number } | null>(null);
   // A box opened again later reads its saved draft, which already holds them.
@@ -93,9 +99,11 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const [connected, setConnected] = useState(true);
   const [older, setOlder] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [olderError, setOlderError] = useState('');
   const [atBottom, setAtBottom] = useState(true);
   const body = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const readingPosition = useReadingPosition(body, stick, memberId, events, '', !memberId);
   const listScroll = useRef(0);
   const focus = useRef<HTMLElement | null>(null);
   const latest = useRef({ onClose, memberId }); latest.current = { onClose, memberId };
@@ -104,7 +112,8 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   // A member on another machine is read from that machine; it cannot be opened here as a conversation of this one.
   const remote = member?.host;
   const threadApi = useMemo(() => (remote && memberApi ? memberApi(remote) : api), [api, remote]);
-  const timeline = useMemo(() => buildTimeline(events), [events]);
+  const displayEvents = useMemo(() => mergeOptimisticEvents(events, optimistic.turns, memberId), [events, optimistic.turns, memberId]);
+  const timeline = useMemo(() => buildTimeline(displayEvents), [displayEvents]);
   useEffect(() => {
     if (thread?.unread) void threadApi.updateThread(thread.id, { unread: false }).then(onRefresh).catch(() => undefined);
   }, [threadApi, thread?.id, thread?.unread]);
@@ -128,32 +137,48 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
   const historyCursor = useRef<number | null>(null);
   const olderRequest = useRef<object | null>(null);
   useEffect(() => {
-    setEvents([]); setOlder(false); setLoadingOlder(false); setConnected(true);
+    setEvents([]); setOlder(false); setLoadingOlder(false); setOlderError(''); setConnected(true);
     historyCursor.current = null; olderRequest.current = null; stick.current = true; setAtBottom(true);
     if (!memberId) { requestAnimationFrame(() => { if (body.current) body.current.scrollTop = listScroll.current; }); return; }
     const ctrl = new AbortController();
     void watchHistory(threadApi, memberId, ctrl.signal, {
-      page: page => { setEvents(page.events); historyCursor.current = page.nextCursor; setOlder(page.hasOlder); },
-      events: batch => setEvents(previous => mergeHistory(previous, batch)),
+      page: page => { setEvents(page.events); optimistic.reconcile(memberId, page.events); historyCursor.current = page.nextCursor; setOlder(page.hasOlder); },
+      events: batch => setEvents(previous => {
+        const next = mergeHistory(previous, batch);
+        optimistic.reconcile(memberId, next);
+        return next;
+      }),
       error: onError,
       connection: setConnected,
     });
     return () => ctrl.abort();
   }, [threadApi, memberId]);
-  useEffect(() => { if (memberId && stick.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [events, memberId]);
+  useEffect(() => { if (memberId && stick.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [displayEvents, memberId]);
   const loadOlder = async () => {
     if (!memberId || loadingOlder || olderRequest.current || !historyCursor.current) return;
     const id = memberId;
     const request = {}; olderRequest.current = request;
+    stick.current = false;
+    setOlderError('');
     setLoadingOlder(true);
-    const el = body.current; const height = el?.scrollHeight ?? 0;
     try {
       const page = await historyPage(threadApi, id, historyCursor.current);
       if (latest.current.memberId !== id || olderRequest.current !== request) return;
+      stick.current = false;
+      const firstTurn = page.events.find(event => event.type === 'turn.started') ?? page.events[0];
+      readingPosition.preparePrepend(firstTurn?.seq);
       setEvents(prev => prependHistory(page.events, prev)); setOlder(page.hasOlder); historyCursor.current = page.nextCursor;
-      requestAnimationFrame(() => { if (el) el.scrollTop += el.scrollHeight - height; });
-    } catch (err) { if (olderRequest.current === request) onError(err); } finally { if (olderRequest.current === request) { olderRequest.current = null; setLoadingOlder(false); } }
+    } catch (err) {
+      if (olderRequest.current === request) setOlderError(err instanceof Error ? err.message : String(err));
+    } finally { if (olderRequest.current === request) { olderRequest.current = null; setLoadingOlder(false); } }
   };
+  const memberDraftKey = thread ? (remote ? `host:${remote}:${thread.id}` : thread.id) : null;
+  const onNotesChangeRef = useRef(onNotesChange);
+  onNotesChangeRef.current = onNotesChange;
+  const handleMemberNotes = useCallback((notes: DraftNote[]) => {
+    if (memberDraftKey) onNotesChangeRef.current?.(memberDraftKey, notes);
+  }, [memberDraftKey]);
+  useEffect(() => () => { if (memberDraftKey) onNotesChangeRef.current?.(memberDraftKey, []); }, [memberDraftKey]);
   return <AgentPanelFrame panelRef={panel} detail={Boolean(memberId)} label={t('team.panel')}>
     <header className="agent-panel-head">
       {memberId && <button className="icon-btn" aria-label={t('team.back')} onClick={() => setMemberId(null)}><span className="coord-back"><IconChevron /></span></button>}
@@ -164,10 +189,15 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
     </header>
     {!memberId && <div className="auto-setting-line"><span>{t('auto.members')}</span><button aria-label={t('auto.members')} className="auto-toggle" role="switch" aria-checked={team.autoHandover !== false} onClick={() => { void api.setCollaborationHandover(team.rootId, team.autoHandover === false).then(onRefresh).catch(onError); }}>{t(team.autoHandover !== false ? 'auto.on' : 'auto.off')}</button></div>}
     {!connected && <div className="agent-panel-notice">{t('team.reconnecting')}</div>}
-    <div className="agent-panel-body" ref={body} onScroll={() => {
+    <div className="agent-panel-body" ref={body} data-note-target={memberDraftKey ?? undefined} data-note-thread={thread?.id ?? undefined} onScroll={() => {
       if (!body.current) return;
-      if (!memberId) listScroll.current = body.current.scrollTop;
+      if (!memberId) { listScroll.current = body.current.scrollTop; return; }
+      if (readingPosition.didRestore()) {
+        setAtBottom(body.current.scrollHeight - body.current.scrollTop - body.current.clientHeight < 80);
+        return;
+      }
       stick.current = body.current.scrollHeight - body.current.scrollTop - body.current.clientHeight < 80;
+      readingPosition.capture();
       setAtBottom(stick.current);
     }}>
       {!memberId && team.messages.length > 0 && <div className="agent-tabs" role="tablist" aria-label={t('team.content')}>
@@ -197,25 +227,41 @@ export function AgentPanel({ api, memberApi, team, agents, leadAgent, memberMode
           <p>{m.latest?.result?.split(/<(?:loochat|limi)-(?:coordination|team)>/)[0].slice(-160) || m.latest?.text.slice(0, 160) || t('team.waitingTask')}</p>
           {m.thread?.unread && <span className="coord-unread">{t('team.newOutput')}</span>}
         </button>)}
-      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
+      </> : thread ? <ThreadView historyApi={threadApi} historyThreadId={thread.id} historyTitle={thread.title} items={timeline.items} roots={[thread.cwd, thread.cwdReal]} loadImage={id => optimistic.imageBlob(id) ? Promise.resolve(optimistic.imageBlob(id)!) : threadApi.attachment(thread.id, id)} loadFile={path => threadApi.threadFile(thread.id, path)} hasOlder={older} loadingOlder={loadingOlder} olderError={olderError || undefined} onLoadOlder={() => void loadOlder()} /> : <div className="agent-panel-empty">{t('team.childGone')}</div>}
     </div>
     {memberId && !atBottom && <button className="agent-panel-latest" onClick={() => { stick.current = true; if (body.current) body.current.scrollTop = body.current.scrollHeight; }}>{t('team.latest')}</button>}
     {/* A member is written to directly, in a box like the lead's; going through the lead instead is
         the quiet control above it, and carries what was written along. */}
     {member && thread ? <div className="agent-panel-composer">
-      <Composer key={thread.id} draftKey={remote ? `host:${remote}:${thread.id}` : thread.id} running={thread.status === 'running'}
+      <Composer key={thread.id} draftKey={memberDraftKey!} running={thread.status === 'running'}
         placeholder={thread.status === 'running' ? t('sideChat.queuePlaceholder') : t('team.directPlaceholder', member.name)}
         banner={take => <div className="agent-panel-via"><button type="button" className="text-btn" onClick={() => onAdjust(member.name, take())}><IconAgents size={13} />{t('team.adjustViaLead')}</button></div>}
         header={null} left={remote ? null : memberModel?.(thread, 'permission') ?? null} right={remote ? null : memberModel?.(thread, 'model') ?? null} commands={[]} actions={[]} hiddenCommands={[]} onAction={() => {}}
         attachBlocked={agents.find(a => a.id === thread.agent)?.capabilities?.images ? null : t('app.noImages', agents.find(a => a.id === thread.agent)?.label ?? thread.agent)}
-        note={null} restore={restore?.thread === thread.id ? restore : null} onError={onError}
-        onSend={async (text, images, mentions, videos = []) => {
+        note={noteSignal?.draftKey === memberDraftKey ? noteSignal.note : null} onNoteConsumed={onNoteConsumed} onNotesChange={onNotesChange ? handleMemberNotes : undefined} restore={restore?.thread === thread.id ? restore : null} onError={onError}
+        onSend={async (text, images, mentions, videos = [], _onCreated, references = []) => {
+          const optTurn = thread.status !== 'running' && !timeline.running
+            ? createOptimisticTurn({ threadId: thread.id, text, workMode: thread.workMode, images, videos, afterSeq: maxEventSeq(events) })
+            : null;
+          if (optTurn) { optimistic.add(optTurn); stick.current = true; }
           try {
-            await threadApi.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
-              queue: true, mentions, videos: await Promise.all(videos.map(async video => (await threadApi.uploadVideo(thread.id, video.file)).id)),
+            const result = await threadApi.startTurn(thread.id, text, images.map(({ data, mimeType }) => ({ data, mimeType })), {
+              queue: true, mentions, references, videos: await Promise.all(videos.map(async video => (await threadApi.uploadVideo(thread.id, video.file)).id)),
             });
+            if ('turnId' in result) {
+              if (optTurn) optimistic.bindTurnId(optTurn.localId, result.turnId);
+              else {
+                const late = createOptimisticTurn({ threadId: thread.id, text, workMode: thread.workMode, images, videos, afterSeq: maxEventSeq(events) });
+                late.turnId = result.turnId;
+                optimistic.add(late);
+              }
+            } else if (optTurn) optimistic.remove(optTurn.localId);
             stick.current = true; onRefresh();
-          } catch (error) { onError(error); throw error; }
+          } catch (error) {
+            if (optTurn) optimistic.remove(optTurn.localId);
+            onError(error);
+            throw error;
+          }
         }}
         onStop={() => { void threadApi.cancel(thread.id).then(result => { if (result.dropped.length) setRestore({ thread: thread.id, text: result.dropped.join('\n\n'), nonce: Date.now() }); onRefresh(); }).catch(onError); }}
         queued={thread.queued ?? []}

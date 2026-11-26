@@ -65,11 +65,7 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
   const h = await setup();
   try {
     const source = await h.manager.createThread({ agent: 'pi', cwd: h.dir, title: 'source task' });
-    const middle = await h.manager.createHandoverThread(source.id, 'claude');
-    const last = await h.manager.createHandoverThread(middle.id, 'codex');
-    const sibling = await h.manager.createHandoverThread(source.id, 'agy');
-    const unrelated = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
-    h.store.updateThread(source.id, { agentSessionId: 'source-session', archivedAt: new Date().toISOString() });
+    // The history exists before the chain edges freeze their routes at the hand-over point.
     for (let i = 0; i < 4; i++) {
       const turn = `turn-${i}`;
       h.store.appendEvent(source.id, turn, 'turn.started', { text: `internal question ${i}`, displayText: `question ${i}`, ...(i === 1 ? { handover: 'codex' } : {}) });
@@ -81,11 +77,16 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
       h.store.appendEvent(source.id, turn, i === 3 ? 'turn.error' : 'turn.done', i === 3 ? { message: 'usage exhausted', code: 'plan_exhausted' } : {});
     }
     const before = h.store.listEvents(source.id, 0, -1);
+    const middle = await h.manager.createHandoverThread(source.id, 'claude');
+    const last = await h.manager.createHandoverThread(middle.id, 'codex');
+    const sibling = await h.manager.createHandoverThread(source.id, 'agy');
+    const unrelated = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
+    h.store.updateThread(source.id, { agentSessionId: 'source-session', archivedAt: new Date().toISOString() });
     const env = h.coordination.environment(last.id)!;
     assert.equal(env.LOOCHAT_TEAM_SOCKET, undefined);
     assert.equal(env.LOOCHAT_TEAM_KEY, undefined);
     assert.equal(h.coordination.metadata(last.id), undefined);
-    assert.equal(h.coordination.environment(unrelated.id), undefined);
+    assert.ok(h.coordination.environment(unrelated.id)?.LOOCHAT_HANDOVER_SOCKET);
     const overview = await runCli(['handover'], env);
     assert.equal(overview.code, 0);
     assert.deepEqual(overview.value.segments.map((s: any) => s.threadId), [source.id, middle.id, last.id]);
@@ -95,16 +96,18 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
     assert.equal(overview.value.segments[0].sessionPath, null);
     assert.equal(overview.value.missingSource, null);
     const all: any[] = [];
-    let cursor: number | undefined;
+    let cursor: string | undefined;
+    let snapshot: string | undefined;
     do {
-      const page = await runCli(['history', source.id, '--turns', '2', ...(cursor ? ['--before', String(cursor)] : [])], env);
+      const page = await runCli(['history', source.id, '--turns', '2', ...(cursor ? ['--snapshot', snapshot!, '--before', cursor] : [])], env);
       assert.equal(page.code, 0);
       assert.equal(page.value.turns.length, 2);
       assert.doesNotMatch(JSON.stringify(page.value), /private-large|input|output/);
+      assert.ok(page.value.turns.every((turn: any) => !all.some((seen: any) => seen.turnId === turn.turnId)), 'no round repeats across pages');
       all.unshift(...page.value.turns);
-      assert.ok(!cursor || page.value.turns.every((turn: any) => turn.startSeq < cursor!));
       assert.equal(page.value.hasOlder, page.value.nextCursor !== null);
       cursor = page.value.nextCursor ?? undefined;
+      snapshot = page.value.snapshot;
     } while (cursor);
     assert.deepEqual(all.map(turn => turn.turnId), ['turn-0', 'turn-1', 'turn-2', 'turn-3']);
     for (let i = 0; i < all.length; i++) {
@@ -112,7 +115,10 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
       assert.equal(all[i].answer.text, `answer ${i} revised`);
       assert.equal(all[i].answer.truncated, false);
       assert.equal(all[i].answer.fullText, null);
-      assert.deepEqual(all[i].tools, [{ id: `tool-${i}`, name: 'Read', kind: 'read', title: 'Read source', status: 'completed' }]);
+      assert.equal(all[i].tools.length, 1);
+      const { command, ...tool } = all[i].tools[0];
+      assert.deepEqual(tool, { id: `tool-${i}`, name: 'Read', kind: 'read', title: 'Read source', status: 'completed' });
+      assert.match(command, new RegExp(`--snapshot [0-9a-f-]+ --turn 'turn-${i}' --tool 'tool-${i}'$`));
       assert.ok(all[i].startedAt && all[i].endedAt);
     }
     assert.equal(all[0].status, 'ok');
@@ -121,7 +127,8 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
     assert.equal(all[3].status, 'error');
     const example = await runCli(['history', source.id, '--turns', '1'], env);
     t.diagnostic(`CLI history example: ${JSON.stringify(example.value)}`);
-    const empty = await runCli(['history', source.id, '--before', '1'], env);
+    const dawn = Buffer.from(JSON.stringify({ ts: '1970-01-01T00:00:00.000Z', segment: 0, seq: 1 })).toString('base64url');
+    const empty = await runCli(['history', source.id, '--snapshot', example.value.snapshot, '--before', dawn], env);
     assert.deepEqual(empty.value.turns, []);
     assert.equal(empty.value.nextCursor, null);
     assert.equal(empty.value.hasOlder, false);
@@ -150,10 +157,12 @@ test('handover CLI reads ancestors without collaboration, pages safely and rejec
     assert.match(summary.summary, /git status、git diff 对齐现状再继续/);
     assert.doesNotMatch(summary.summary, new RegExp(env.LOOCHAT_HANDOVER_KEY));
     h.store.deleteThread(source.id);
-    assert.equal((await runCli(['handover'], env)).value.missingSource.sourceId, source.id);
+    const pruned = await runCli(['handover'], env);
+    assert.equal(pruned.code, 0);
+    assert.deepEqual(pruned.value.segments.map((s: any) => s.threadId), [middle.id, last.id]);
     assert.equal((await runCli(['history', source.id], env)).code, 1);
     h.store.deleteThread(last.id);
-    assert.equal(await post(h.socket, '/handover', env.LOOCHAT_HANDOVER_KEY, { op: 'handover' }), 403);
+    assert.equal(await post(h.socket, '/handover', env.LOOCHAT_HANDOVER_KEY, { op: 'handover' }), 404);
   } finally { await h.close(); }
 });
 
@@ -161,8 +170,6 @@ test('hundreds of deltas stay in one complete round and turn cursors reach the b
   const h = await setup();
   try {
     const source = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
-    const next = await h.manager.createHandoverThread(source.id, 'pi');
-    const env = h.coordination.environment(next.id)!;
     const fragments = Array.from({ length: 600 }, (_, i) => `${i}🙂`);
     for (let i = 0; i < 12; i++) {
       const turn = `round-${i}`;
@@ -172,6 +179,8 @@ test('hundreds of deltas stay in one complete round and turn cursors reach the b
       h.store.appendEvent(source.id, turn, 'tool.end', { id: 'read', status: 'completed', output: 'not returned' });
       h.store.appendEvent(source.id, turn, 'turn.done', { stopReason: i === 10 ? 'cancelled' : 'end_turn' });
     }
+    const next = await h.manager.createHandoverThread(source.id, 'pi');
+    const env = h.coordination.environment(next.id)!;
     const recent = await runCli(['history', source.id], env);
     assert.equal(recent.value.turns.length, 10);
     assert.equal(recent.value.turns[0].turnId, 'round-2');
@@ -185,7 +194,7 @@ test('hundreds of deltas stay in one complete round and turn cursors reach the b
     assert.equal(long.tools.length, 1);
     assert.equal(long.tools[0].status, 'completed');
     assert.equal(recent.value.hasOlder, true);
-    const earlier = await runCli(['history', source.id, '--before', String(recent.value.nextCursor)], env);
+    const earlier = await runCli(['history', source.id, '--snapshot', recent.value.snapshot, '--before', recent.value.nextCursor], env);
     assert.deepEqual(earlier.value.turns.map((turn: any) => turn.turnId), ['round-0', 'round-1']);
     assert.equal(earlier.value.hasOlder, false);
     assert.equal(earlier.value.nextCursor, null);
@@ -197,14 +206,14 @@ test('truncated answers advertise their length and full text can be reconstructe
   const h = await setup();
   try {
     const source = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
-    const next = await h.manager.createHandoverThread(source.id, 'pi');
-    const env = h.coordination.environment(next.id)!;
     const turnId = "long ' $(printf wrong) `printf wrong` ; turn";
     const fragments = Array.from({ length: 400 }, (_, i) => `${'段落🙂'.repeat(30)}${i}\n`);
     h.store.appendEvent(source.id, turnId, 'turn.started', { text: 'Explain the implementation' });
     for (const text of fragments) h.store.appendEvent(source.id, turnId, 'message.delta', { text });
     h.store.appendEvent(source.id, turnId, 'message.replace', { previous: fragments.at(-1), text: '修订结尾🙂' });
     const expected = fragments.slice(0, -1).join('') + '修订结尾🙂';
+    const next = await h.manager.createHandoverThread(source.id, 'pi');
+    const env = h.coordination.environment(next.id)!;
     const page = await runCli(['history', source.id], env);
     const turn = page.value.turns[0];
     assert.equal(turn.status, 'unfinished');
@@ -214,7 +223,7 @@ test('truncated answers advertise their length and full text can be reconstructe
     assert.equal(turn.answer.fullText.turnId, turnId);
     assert.equal(turn.answer.fullText.offset, 0);
     assert.equal(turn.answer.fullText.snapshotSeq, page.value.snapshotSeq);
-    assert.match(turn.answer.fullText.command, /--snapshot \d+ --offset 0$/);
+    assert.match(turn.answer.fullText.command, /--snapshot [0-9a-f-]+ --turn '.+'$/);
     // A running answer may change between requests; the page's snapshot stays reconstructible.
     h.store.appendEvent(source.id, turnId, 'message.replace', { previous: '修订结尾🙂', text: 'a newer ending' });
     h.store.appendEvent(source.id, turnId, 'message.delta', { text: 'additional live text' });
@@ -229,20 +238,20 @@ test('truncated answers advertise their length and full text can be reconstructe
       reconstructed += full.value.text;
       pages++;
       if (full.value.nextOffset === null) { assert.equal(full.value.command, null); break; }
-      assert.match(full.value.command, /--snapshot \d+ --offset \d+$/);
+      assert.match(full.value.command, /--snapshot [0-9a-f-]+ .+ --offset \d+$/);
       command = full.value.command;
       assert.ok(full.value.nextOffset > offset);
       offset = full.value.nextOffset;
     } while (pages < 10);
     assert.ok(pages > 1 && pages < 10);
     assert.equal(reconstructed, expected);
-    const first = await runCli(['history', source.id, '--turn', turnId], env);
-    assert.equal(first.code, 0);
-    assert.ok(first.value.snapshotSeq > page.value.snapshotSeq);
-    assert.equal(first.value.nextOffset, 16000);
+    const after = await runCli(['history', source.id, '--turn', turnId], env);
+    assert.equal(after.code, 0);
+    assert.equal(after.value.snapshotSeq, page.value.snapshotSeq);
+    assert.equal(after.value.nextOffset, 16000);
     for (const flags of [
       ['--offset', String(turn.answer.length + 1), '--snapshot', String(page.value.snapshotSeq)],
-      ['--snapshot', String(first.value.snapshotSeq + 1)], ['--snapshot', '1'],
+      ['--snapshot', String(after.value.snapshotSeq + 1)], ['--snapshot', '1'],
     ]) assert.equal((await runCli(['history', source.id, '--turn', turnId, ...flags], env)).code, 1);
   } finally { await h.close(); }
 });
@@ -251,8 +260,6 @@ test('round previews cap answers at 4000 characters and list only the latest 30 
   const h = await setup();
   try {
     const source = await h.manager.createThread({ agent: 'pi', cwd: h.dir });
-    const next = await h.manager.createHandoverThread(source.id, 'pi');
-    const env = h.coordination.environment(next.id)!;
     for (const [turnId, length, toolCount] of [['at-limit', 4000, 30], ['over-limit', 4001, 130]] as const) {
       h.store.appendEvent(source.id, turnId, 'turn.started', { text: 'Inspect the changes' });
       h.store.appendEvent(source.id, turnId, 'message.delta', { text: '🙂'.repeat(length) });
@@ -262,6 +269,8 @@ test('round previews cap answers at 4000 characters and list only the latest 30 
       }
       h.store.appendEvent(source.id, turnId, 'turn.done', {});
     }
+    const next = await h.manager.createHandoverThread(source.id, 'pi');
+    const env = h.coordination.environment(next.id)!;
     const page = await runCli(['history', source.id], env);
     const [exact, over] = page.value.turns;
     assert.equal(Array.from(exact.answer.text).length, 4000);

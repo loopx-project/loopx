@@ -225,9 +225,9 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
         "LOOPX_REGISTRY": str(registry),
         "PYTHONPATH": str(REPO),
     }
-    result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
-        cwd=REPO, env=env, capture_output=True, text=True, check=True)
-    full = json.loads(result.stdout)
+    # Compare both revisions with read-only guards. The generated heartbeat
+    # records the admission after those reads.
+    full = guard()
     assert full["should_run"] is True, full.get("reason")
     channel = full["interaction_contract"]["agent_channel"]
     assert channel["required_reads"] == []
@@ -309,6 +309,15 @@ def test_current_work_requirements_reach_real_guard_and_host_without_display_los
     fresh_prompt = _prompt(build_loopx_turn_host_request(fresh_plan))
     assert replacement in fresh_prompt
     assert "unknown, not unchanged" in fresh_prompt
+    result = subprocess.run(["sh", "-c", script.replace("<current_time_iso>", "requirements-default-wake")],
+        cwd=REPO, env=env, capture_output=True, text=True, check=True)
+    admitted = json.loads(result.stdout)
+    assert admitted["heartbeat_receipt"]["closeout_required"] is True
+    assert admitted["selected_todo"]["todo_id"] == fresh["selected_todo"]["todo_id"]
+    delivered = admitted["interaction_contract"]["agent_channel"]["work_context"]
+    assert delivered["selected_todo_text_verified"] is True
+    assert delivered["sources"][-1]["content"]["todo"]["text"] == replacement
+    assert delivered == fresh["interaction_contract"]["agent_channel"]["work_context"]
     # The old observation remains an observation, not a rewritten current brief.
     assert reads[-1]["content"]["todo"]["text"] == expected
     missing_tokens = ["todo_missing" if token == "todo_cursor_work" else token for token in tokens]
@@ -442,6 +451,18 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     initialize_canonical_authority(runtime, "requirements-goal", snapshot,
         state_path=state, provider=provider)
 
+    code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
+        "--agent-id", "agent-a",
+        registry_path=registry, runtime_root=runtime)
+    assert code == 0 and turn["ok"], turn
+    turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
+    assert turn_context["complete"] is True
+    assert turn_context["selected_todo_ref"] == "selected_todo"
+    turn_source = next(source for source in turn_context["sources"] if source["source"] == "selected_todo")
+    assert turn_source["content"]["todo"]["note"] == note
+    assert turn_source["content"]["authority_read"]["provider_revision"]
+    assert json.dumps(turn_context).count(note) == 1
+
     code, generated = run_json_cli_result("heartbeat-prompt", "--goal-id", "requirements-goal",
         "--agent-id", "agent-a", "--codex-app", "--cli-bin", str(Path(sys.executable).parent / "loopx"),
         registry_path=registry, runtime_root=runtime)
@@ -467,15 +488,3 @@ def test_short_selected_todo_deduplicates_body_but_keeps_canonical_note(
     assert source_todo["note"] == note
     assert selected_source["content"]["authority_read"]["provider_revision"]
     assert json.dumps(context).count(note) == 1
-
-    code, turn = run_json_cli_result("quota", "should-run", "--goal-id", "requirements-goal",
-        "--agent-id", "agent-a",
-        registry_path=registry, runtime_root=runtime)
-    assert code == 0 and turn["ok"], turn
-    turn_context = turn["interaction_contract"]["agent_channel"]["work_context"]
-    assert turn_context["complete"] is True
-    assert turn_context["selected_todo_ref"] == "selected_todo"
-    turn_source = next(source for source in turn_context["sources"] if source["source"] == "selected_todo")
-    assert turn_source["content"]["todo"]["note"] == note
-    assert turn_source["content"]["authority_read"]["provider_revision"]
-    assert json.dumps(turn_context).count(note) == 1

@@ -116,10 +116,143 @@ equal(activeStatusSourceForUrl(added.catalog, null, added.source.statusUrl, base
 const configuredHosts = parseConfiguredSshHostCatalog({
   ok: true,
   schema_version: "ssh_host_catalog_v0",
-  hosts: [{ alias: "remote-lab" }, { alias: "*.example" }, { alias: "remote-lab" }, { alias: "jump_box" }],
+  hosts: [
+    { alias: "remote-lab" },
+    { alias: "*.example" },
+    { alias: "remote-lab" },
+    { alias: "jump_box" },
+    { alias: "desk-box" },
+    { alias: "desk..backup" },
+    { alias: "task-worker" },
+    { alias: "lab.sk-integration" },
+    { alias: "sk-integration" },
+  ],
 });
 equal(defaultConfiguredSshHostsUrl, "/ssh-hosts", "configured Host discovery stays on the active local Dashboard origin");
-deepEqual(configuredHosts.hosts, [{ alias: "remote-lab" }, { alias: "jump_box" }], "only explicit safe SSH aliases enter the browser catalog");
+deepEqual(
+  configuredHosts.hosts,
+  [
+    { alias: "remote-lab" },
+    { alias: "jump_box" },
+    { alias: "desk-box" },
+    { alias: "desk..backup" },
+    { alias: "task-worker" },
+    { alias: "lab.sk-integration" },
+    { alias: "sk-integration" },
+  ],
+  "only explicit safe SSH aliases enter the browser catalog and feature-off rows keep exact { alias } shape",
+);
+
+const observedHosts = parseConfiguredSshHostCatalog({
+  ok: true,
+  schema_version: "ssh_host_catalog_v0",
+  hosts: [
+    {
+      alias: "desk-box",
+      observation: {
+        schema_version: "session_fabric_ssh_observation_v0",
+        alias: "desk-box",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-20T00:00:00Z",
+        tunnel_latency_ms: 12,
+      },
+    },
+    { alias: "desk..backup" },
+    { alias: "lab.sk-integration" },
+    { alias: "task-worker" },
+    {
+      alias: "sk-integration",
+      observation: {
+        schema_version: "session_fabric_ssh_observation_v0",
+        alias: "sk-integration",
+        connection_state: "degraded",
+        failure_code: "unreachable",
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: null,
+      },
+    },
+  ],
+});
+deepEqual(
+  observedHosts.hosts,
+  [
+    {
+      alias: "desk-box",
+      observation: {
+        schema_version: "session_fabric_ssh_observation_v0",
+        alias: "desk-box",
+        connection_state: "connected",
+        failure_code: null,
+        checked_at: "2026-11-20T00:00:00Z",
+        tunnel_latency_ms: 12,
+      },
+    },
+    { alias: "desk..backup" },
+    { alias: "lab.sk-integration" },
+    { alias: "task-worker" },
+    {
+      alias: "sk-integration",
+      observation: {
+        schema_version: "session_fabric_ssh_observation_v0",
+        alias: "sk-integration",
+        connection_state: "degraded",
+        failure_code: "unreachable",
+        checked_at: "2026-11-22T00:00:00Z",
+        tunnel_latency_ms: null,
+      },
+    },
+  ],
+  "optional validated L0 SSH observations round-trip without altering unobserved entries",
+);
+
+let invalidObservationRejected = false;
+try {
+  parseConfiguredSshHostCatalog({
+    ok: true,
+    schema_version: "ssh_host_catalog_v0",
+    hosts: [
+      {
+        alias: "desk-box",
+        observation: {
+          schema_version: "session_fabric_ssh_observation_v0",
+          alias: "other-host",
+          connection_state: "connected",
+          failure_code: null,
+          checked_at: null,
+          tunnel_latency_ms: null,
+        },
+      },
+    ],
+  });
+} catch {
+  invalidObservationRejected = true;
+}
+assert(invalidObservationRejected, "mismatched or invalid SSH observations fail closed");
+
+let credentialObservationRejected = false;
+try {
+  parseConfiguredSshHostCatalog({
+    ok: true,
+    schema_version: "ssh_host_catalog_v0",
+    hosts: [
+      {
+        alias: "desk-box",
+        observation: {
+          schema_version: "session_fabric_ssh_observation_v0",
+          alias: "sk-" + "proj-abcdef12",
+          connection_state: "connected",
+          failure_code: null,
+          checked_at: null,
+          tunnel_latency_ms: null,
+        },
+      },
+    ],
+  });
+} catch {
+  credentialObservationRejected = true;
+}
+assert(credentialObservationRejected, "sensitive credential prefixes in SSH observations fail closed");
 const configuredDraft = configuredSshTunnelDraft("remote-lab", "8876");
 assert("command" in configuredDraft, "a configured Host and valid local port produce a tunnel draft");
 equal(configuredDraft.command, "ssh -N -L 8876:127.0.0.1:8766 remote-lab", "the UI generates one exact OpenSSH command");

@@ -91,3 +91,72 @@ test("matches the reader's translated narrative alongside original text and iden
   assert.deepEqual(searchResearchRecords(events, "负向观察"), [], "An absent/stale display never supplies cached aliases");
   assert.equal(original.title, "Negative observation");
 });
+
+test("UTC recorded-day range includes both days, intersects status/text and excludes unknown timestamps", () => {
+  const records = [
+    record({event_id: "before", recorded_at: "2026-01-01T23:59:59.999Z"}),
+    record({event_id: "start", recorded_at: "2026-01-02T00:00:00Z", summary: "target"}),
+    record({event_id: "end", recorded_at: "2026-01-03T23:59:59.999Z", summary: "target"}),
+    record({event_id: "offset", recorded_at: "2026-01-04T01:00:00+02:00", summary: "target"}),
+    record({event_id: "after", recorded_at: "2026-01-04T00:00:00Z"}),
+    record({event_id: "unknown", recorded_at: "unknown"}),
+    record({event_id: "unqualified-clock", recorded_at: "2026-01-03T12:00:00"}),
+  ];
+  const range = {from: "2026-01-02", to: "2026-01-03"};
+  assert.deepEqual(searchResearchRecords(records, "target", "tentative", undefined, range).map(row => row.event_id), ["start", "end", "offset"]);
+  assert.equal(searchResearchRecords(records, "", "", undefined, {from: "2026-01-04", to: "2026-01-02"}).length, 0);
+  assert.equal(searchResearchRecords(records, "", "", undefined, {from: "2026-02-30"}).length, 0);
+  assert.equal(searchResearchRecords(records, "").length, records.length);
+  assert.deepEqual(searchResearchRecords(records, "", "", undefined, {to: "2026-01-01"}).map(row => row.event_id), ["before"]);
+});
+
+test("date bookmarks stay scoped and preserve reversed bounds for visible correction", () => {
+  const state = {...defaultResearchRecordsLocation, open: true, from: "2026-02-02", to: "2026-02-01"};
+  const url = writeResearchRecordsLocation(new URLSearchParams(), "source-goal", state);
+  assert.deepEqual(readResearchRecordsLocation(url, "source-goal"), state);
+  assert.deepEqual(readResearchRecordsLocation(url, "other-source"), defaultResearchRecordsLocation);
+});
+
+test("recorded instants require a real source calendar and clock before UTC conversion", () => {
+  const invalid = ["1900-02-29T16:00:00Z", "2026-02-30T16:00:00Z", "2025-02-29T23:00:00-01:00", "2026-04-31T12:00:00Z",
+    "2026-03-01T24:00:00Z", "2026-03-02T12:60:00Z", "2026-03-02T12:00:60Z",
+    "2026-03-02T12:00:00+24:00", "2026-03-02T12:00:00+02:60", "March 2, 2026 12:00:00 GMTZ"];
+  const rows = invalid.map((recorded_at, index) => record({event_id: `invalid-${index}`, recorded_at}));
+  const valid = record({event_id: "offset", recorded_at: "2026-03-03T01:00:00+02:00"});
+  assert.deepEqual(searchResearchRecords([...rows, valid], "", "", undefined, {from: "1900-01-01", to: "2026-12-31"}), [valid]);
+  assert.deepEqual(searchResearchRecords([...rows, valid], ""), [...rows, valid], "Unfiltered reading retains original malformed records");
+  const centuryLeap = record({recorded_at: "2000-02-29T12:00:00Z"});
+  assert.deepEqual(searchResearchRecords([centuryLeap], "", "", undefined, {from: "2000-02-29", to: "2000-02-29"}), [centuryLeap]);
+  const leap = record({recorded_at: "2024-02-29T23:30:00-01:00"});
+  assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {from: "2024-03-01", to: "2024-03-01"}), [leap]);
+  assert.deepEqual(searchResearchRecords([leap], "", "", undefined, {to: "2024-02-29"}), []);
+});
+
+test("explicitly zoned minute precision shares UTC-day selection with second precision", () => {
+  const dates = ["2026-03-02T10:15Z", "2026-03-03T01:05+02:00", "2026-03-03T01:00:00+02:00"];
+  const valid = dates.map((recorded_at, index) => record({event_id: `valid-${index}`, recorded_at}));
+  const invalid = ["2026-02-30T10:15Z", "1900-02-29T10:15Z", "2026-03-02T24:00Z", "2026-03-02T10:60Z", "2026-03-02T10:15+24:00", "2026-03-02T10:15+02:60", "2026-03-02T10:15"].map(recorded_at => record({recorded_at}));
+  const rows = [...valid, ...invalid];
+  assert.deepEqual(searchResearchRecords(rows, "", "", undefined, {from: "2026-03-02", to: "2026-03-02"}), valid);
+  assert.deepEqual(searchResearchRecords(rows, ""), rows);
+});
+
+
+test("source timestamp grammar preserves qualified variants with strict range policy", () => {
+  const accepted = [
+    "2026-03-03T01:15+0200", "2026-03-03T01:20:30+0200", "20260303T0115+0200",
+    "2026-W10-2T01:15+0200", "2026W102T0115+02", "2026-03-03 01+02",
+    "2026-03-03x01:15:00,123456+02:00", "2026-03-03T01:15.123456+02:00",
+    "2026-03-03T01:15+02:00:30.5", "2026-03-02t23:59:59.999999z",
+    " 2026-03-03T01:15+0200 ", "2026-03-03T00:00:00+00:00:00.000001",
+  ];
+  const rejected = ["20260230T0115+0200", "1900-W53-1T01+02", "2026-03-02T24+02",
+    "2026-03-02T1260+02", "2026-03-02T120060+02", "2026-03-02T12+0260",
+    "2026-03-02T12+02:00:60", "2026-03-02T12+24", "2026-03-02T12",
+    "2026-03-02", "0001-01-01T00+01", "9999-12-31T23-01"];
+  const outside = ["2026-03-03T00:00:00Z", "2026-03-03T00:00:00+00:00:00.000001"];
+  const rows = [...accepted, ...rejected, ...outside].map((recorded_at, index) => Object.freeze(record({event_id: String(index), recorded_at})));
+  // Python canonicalizes a zero offset even with a fraction: this last accepted grammar is next day.
+  assert.deepEqual(searchResearchRecords(rows, "", "", undefined, {from: "2026-03-02", to: "2026-03-02"}), rows.slice(0, accepted.length - 1));
+  assert.deepEqual(searchResearchRecords(rows, ""), rows, "Never rewrite source text, including whitespace or malformed originals");
+});

@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Callable
 
-from .chat import VisibleResponseStreamFilter, parse_agent_response
-from .chat_agent import (
+from ..chat import VisibleResponseStreamFilter, parse_agent_response
+from ..chat_agent import (
     _agent_item_text,
     _event_thread_id,
     _event_turn_id,
@@ -25,7 +25,7 @@ from .chat_agent import (
 )
 
 if TYPE_CHECKING:
-    from .chat_agent import CodexChatAgentSession
+    from ..chat_agent import CodexChatAgentSession
 
 
 USAGE = (

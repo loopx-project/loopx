@@ -363,8 +363,21 @@ def execute_turn_run_once(
         # Never treat a model's progress/completion assertion as that validation.
         if task_validator is None and settlement_identity.replan_obligation_id and not selected_todo:
             def validate_replan(_plan: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
-                passed = (result.get("result_kind") == "replan_required"
-                    and refresh_candidate(dict(result), dry_run=True).get("ok") is True)
+                from ..control_plane.work_items.semantic_replan_writeback import ReplanWritebackRejected
+
+                try:
+                    passed = (result.get("result_kind") == "replan_required"
+                        and refresh_candidate(dict(result), dry_run=True).get("ok") is True)
+                except ReplanWritebackRejected as exc:
+                    reason_code = str(
+                        (exc.semantic_delta or {}).get("reason_code") or "replan_writeback_rejected"
+                    ).strip() or "replan_writeback_rejected"
+                    return {
+                        "status": "failed",
+                        "validator_kind": "callback",
+                        "summary": f"independent native semantic replan preview rejected ({reason_code})",
+                        "recovery_kind": "replan_required",
+                    }
                 return {"status": "passed" if passed else "failed", "validator_kind": "callback",
                     "summary": "independent native semantic replan preview " + ("passed" if passed else "failed"),
                     **({"recovery_kind": "repair_required"} if not passed else {})}

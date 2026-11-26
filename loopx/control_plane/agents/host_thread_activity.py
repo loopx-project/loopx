@@ -10,7 +10,7 @@ write to the host, and a record they cannot recognize is reported as
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -158,6 +158,10 @@ class HostDeliveryWindowUnknownReason(str, Enum):
     NO_EXPECTATION = "no_expectation"
     NO_OBSERVATION = "no_observation"
     UNPARSEABLE_OBSERVATION = "unparseable_observation"
+    # The lane moved recently, but nothing ties that activity to a scheduled
+    # prompt. A hand-written message or an empty turn leaves the same trace as
+    # a delivered tick; calling that `fresh` would hide a silent automation.
+    UNVERIFIED_ACTIVITY = "unverified_activity"
 
 
 _REASONED_DELIVERY_WINDOW_STATES = frozenset(
@@ -212,6 +216,9 @@ class HostDeliveryWindow:
     window_minutes: int | None = None
     tolerance: int | None = None
     source: str | None = None
+    # The most recent tick that a scheduled prompt, not just any activity,
+    # produced. Present only when the caller asked for delivery evidence.
+    delivery_evidence_at: str | None = None
 
     def __post_init__(self) -> None:
         reasoned = self.state in _REASONED_DELIVERY_WINDOW_STATES
@@ -242,6 +249,7 @@ class HostDeliveryWindow:
             "window_minutes": self.window_minutes,
             "tolerance": self.tolerance,
             "source": self.source,
+            "delivery_evidence_at": self.delivery_evidence_at,
         }
         return {key: value for key, value in payload.items() if value is not None}
 
@@ -265,11 +273,19 @@ def build_host_delivery_window(
     *,
     now: datetime | None = None,
     tolerance: int = DEFAULT_DELIVERY_WINDOW_TOLERANCE,
+    delivered_at: str | None = None,
+    require_evidence: bool = False,
 ) -> HostDeliveryWindow:
     """Compare one observed lane against the cadence it is expected to keep.
 
     Absence of evidence is never reported as healthy: an unobserved lane is
     ``missing`` and an incomputable window is ``unknown``. Neither is ``fresh``.
+
+    ``require_evidence`` narrows ``fresh`` to activity a scheduled prompt
+    produced: ``delivered_at`` is the most recent tick the caller could attribute
+    to this lane's automation. A lane with recent activity and no such tick is
+    ``unknown``/``unverified_activity`` while keeping its activity time, so an
+    operator still sees the last thing the host recorded.
     """
 
     if tolerance < 1:
@@ -291,12 +307,27 @@ def build_host_delivery_window(
     window_minutes = expectation.expected_interval_minutes * tolerance
     reference = now or datetime.now(timezone.utc)
     age_seconds = max(0, int((reference - observed).total_seconds()))
+    inside_window = age_seconds <= window_minutes * 60
+    evidence = _parse_observation_time(delivered_at) if require_evidence else None
+    evidenced = (
+        evidence is not None
+        and max(0, int((reference - evidence).total_seconds())) <= window_minutes * 60
+    )
+    state = HostDeliveryWindowState.STALE
+    reason: HostDeliveryWindowUnknownReason | None = None
+    if inside_window:
+        if require_evidence and not evidenced:
+            # The thread moved, but nothing ties that movement to the installed
+            # prompt; the activity time is kept for the operator.
+            state, reason = (
+                HostDeliveryWindowState.UNKNOWN,
+                HostDeliveryWindowUnknownReason.UNVERIFIED_ACTIVITY,
+            )
+        else:
+            state = HostDeliveryWindowState.FRESH
     return HostDeliveryWindow(
-        state=(
-            HostDeliveryWindowState.FRESH
-            if age_seconds <= window_minutes * 60
-            else HostDeliveryWindowState.STALE
-        ),
+        state=state,
+        reason=reason,
         last_observed_at=activity.last_event_at,
         age_seconds=age_seconds,
         age_hours=round(age_seconds / 3600, 2),
@@ -304,6 +335,7 @@ def build_host_delivery_window(
         window_minutes=window_minutes,
         tolerance=tolerance,
         source=expectation.source,
+        delivery_evidence_at=evidence.isoformat() if evidence is not None else None,
     )
 
 
@@ -311,6 +343,12 @@ def build_host_delivery_window(
 # resolve are omitted rather than guessed.
 HostDeliveryExpectationProvider = Callable[
     [Iterable[HostDeliveryScope]], Mapping[HostDeliveryScope, HostDeliveryExpectation]
+]
+
+# Maps bound lanes to the most recent tick a scheduled prompt produced; lanes it
+# cannot attribute are omitted or mapped to ``None`` rather than guessed.
+HostDeliveryEvidenceProvider = Callable[
+    [Iterable[HostDeliveryScope]], Mapping[HostDeliveryScope, str | None]
 ]
 
 
@@ -349,6 +387,8 @@ def attach_host_delivery_windows(
     expectations: HostDeliveryExpectationProvider,
     tolerance: int = DEFAULT_DELIVERY_WINDOW_TOLERANCE,
     now: datetime | None = None,
+    evidence: HostDeliveryEvidenceProvider | None = None,
+    ambiguous_lanes: Mapping[str, set[tuple[str, str]]] | None = None,
 ) -> None:
     """Add ``delivery_window`` to each observed lane of ``host_thread_activity``.
 
@@ -357,6 +397,12 @@ def attach_host_delivery_windows(
     canonical binding the Goal records, so a cadence installed for another
     thread of the same Goal is not read as this lane's. A lane the expectation
     provider cannot resolve is reported as ``unknown``, never as healthy.
+
+    ``evidence``, when given, names the most recent tick a scheduled prompt
+    produced for each lane; ``fresh`` then requires one inside the window.
+    ``ambiguous_lanes`` carries the lanes the caller resolved over the Goal's
+    complete binding list: a lane naming two threads has no canonical identity,
+    so trimming the observed bindings must not let the survivor look unique.
     """
 
     run_history = status_payload.get("run_history")
@@ -385,14 +431,33 @@ def attach_host_delivery_windows(
             if scope is not None:
                 scopes.append(scope)
     resolved = expectations(scopes) if scopes else {}
+    delivered = evidence(scopes) if evidence is not None and scopes else {}
     for goal_id, rows, bound in rows_by_goal:
+        ambiguous = (ambiguous_lanes or {}).get(goal_id) or set()
         for row in rows:
             scope = _scope_from_row(goal_id, row, bound)
+            if (row.get("agent_id"), row.get("host_surface")) in ambiguous:
+                # Keep the observed tick and cadence the lane still carries, and
+                # only refuse to call the lane measured.
+                measured = build_host_delivery_window(
+                    _activity_from_row(row),
+                    resolved.get(scope) if scope is not None else None,
+                    now=now,
+                    tolerance=tolerance,
+                )
+                row["delivery_window"] = replace(
+                    measured,
+                    state=HostDeliveryWindowState.UNKNOWN,
+                    reason=HostDeliveryWindowUnknownReason.NO_EXPECTATION,
+                ).to_payload()
+                continue
             row["delivery_window"] = build_host_delivery_window(
                 _activity_from_row(row),
                 resolved.get(scope) if scope is not None else None,
                 now=now,
                 tolerance=tolerance,
+                delivered_at=delivered.get(scope) if scope is not None else None,
+                require_evidence=evidence is not None,
             ).to_payload()
 
 

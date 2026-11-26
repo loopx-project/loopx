@@ -1693,6 +1693,10 @@ so agent executors know to write newly discovered user/owner work with
 hiding it in `Next Action`, review docs, or chat. Multi-agent writes must also
 name `--bound-agent <registered-agent>` or `--goal-bound`; agent-scoped
 `user_gate` writes bind to the same agent named by `--blocks-agent`.
+For one blocked action, the template also sets `--unblocks-todo-id`. The Agent
+links the smallest Todo that actually needs the owner's action, splitting it
+from any independent work bundled in the same Todo. The gate's notice and
+independent work can both be admitted by the next guard.
 When available, `quota should-run` keeps next-action signals separate:
 `active_state_next_action` is the compatibility `## Next Action` display,
 `latest_run_recommended_action` is a historical run recommendation, and

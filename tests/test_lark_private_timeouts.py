@@ -7,7 +7,7 @@ from test_chat_ordinary_project import ordinary  # noqa: F401
 from test_lark_private_conversations import connect
 from test_native_steward_private import steward  # noqa: F401
 
-from loopx.chat_codex_goal import CodexGoalDriver
+from loopx.chat.codex_goal import CodexGoalDriver
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 
 

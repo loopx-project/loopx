@@ -171,6 +171,31 @@ project state. The legacy `codex-ide` value remains an accepted compatibility
 alias but is no longer advertised. This prevents an upgrade from silently
 routing an IDE plugin or terminal start to a desktop-app heartbeat.
 
+## Find Goals in the selected registry
+
+Use `registry` to discover Goal IDs before choosing a Goal-specific command:
+
+```bash
+loopx registry --query research --limit 10
+loopx --format json registry --query research --limit 10 --offset 10
+loopx registry --goal-id <goal-id>
+```
+
+The query is a case-insensitive, Unicode-normalized literal substring of the
+Goal ID, repository path, domain, status, or adapter kind. Exact `--goal-id` and
+`--query` filters compose. Filtering happens before pagination, in registry
+declaration order. Any selection option enables a default page size of 20;
+`--limit` must be positive and `--offset` non-negative. JSON `selection` reports
+matching and returned counts and `next_offset` (null at the end). Offsets apply
+to the current registry snapshot; edits between requests can change pages.
+
+Without selection options, `registry` keeps its complete existing output.
+Selection only narrows displayed Goal rows: registry-wide totals, status counts,
+diagnostics, and failure exit status remain complete. An unknown exact Goal ID
+fails, while a query with no matches returns an empty selection. Inspection still
+reads and validates the whole selected registry; pagination does not bound scan
+work or follow entries into their source registries.
+
 ## Inspect an earlier run-history window
 
 To investigate an earlier day without dumping all newer runs, select a time

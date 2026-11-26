@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -13,27 +14,30 @@ const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'u
 const args = process.argv.slice(2)
 let tarball
 let registry = 'https://registry.npmjs.org/'
+let registryPropagationTimeoutMs = 0
 let searchTimeoutMs = 45_000
 let searchPollMs = 3_000
 for (let index = 0; index < args.length; index += 2) {
   const [flag, value] = args.slice(index, index + 2)
   assert(
-    value && (flag === '--tarball' || flag === '--registry' || flag === '--search-timeout-ms' || flag === '--search-poll-ms'),
-    'usage: verify-distribution.mjs --tarball PATH [--registry URL] [--search-timeout-ms MS] [--search-poll-ms MS]',
+    value && ['--tarball', '--registry', '--registry-propagation-timeout-ms', '--search-timeout-ms', '--search-poll-ms'].includes(flag),
+    'usage: verify-distribution.mjs --tarball PATH [--registry URL] [--registry-propagation-timeout-ms MS] [--search-timeout-ms MS] [--search-poll-ms MS]',
   )
   if (flag === '--tarball') tarball = resolve(value)
   else if (flag === '--registry') registry = `${value.replace(/\/+$/u, '')}/`
   else {
     const parsed = Number(value)
     assert(Number.isFinite(parsed) && parsed >= 0, `${flag} must be a non-negative number`)
-    if (flag === '--search-timeout-ms') searchTimeoutMs = parsed
+    if (flag === '--registry-propagation-timeout-ms') registryPropagationTimeoutMs = parsed
+    else if (flag === '--search-timeout-ms') searchTimeoutMs = parsed
     else searchPollMs = parsed
   }
 }
 assert(tarball, '--tarball is required: compare the exact package approved for publication')
 
-async function json(path) {
+async function json(path, { allowMissing = false } = {}) {
   const response = await fetch(new URL(path, registry), { signal: AbortSignal.timeout(15_000) })
+  if (allowMissing && response.status === 404) return null
   assert(response.ok, `registry readback failed: HTTP ${response.status}`)
   return response.json()
 }
@@ -42,8 +46,19 @@ function repoSlug(url) {
   return String(url ?? '').replace(/^git\+/u, '').replace(/\.git$/u, '').toLowerCase()
 }
 
-const published = await json(encodeURIComponent(manifest.name))
-const version = published.versions?.[manifest.version]
+// npm can accept a publish before the public package metadata and latest tag
+// reflect it. Only the publishing workflow opts into waiting for that state.
+const packagePath = encodeURIComponent(manifest.name)
+const allowMissing = registryPropagationTimeoutMs > 0
+const registryDeadline = Date.now() + registryPropagationTimeoutMs
+let published = await json(packagePath, { allowMissing })
+while (!published?.versions?.[manifest.version] || published['dist-tags']?.latest !== manifest.version) {
+  const remainingMs = registryDeadline - Date.now()
+  if (remainingMs <= 0) break
+  await delay(Math.min(3_000, remainingMs))
+  published = await json(packagePath, { allowMissing })
+}
+const version = published?.versions?.[manifest.version]
 assert(version, `registry has no ${manifest.name}@${manifest.version}`)
 assert.equal(published['dist-tags']?.latest, manifest.version,
   'DSH Hub installs the unversioned package: latest must name the qualified release')
@@ -98,7 +113,7 @@ let candidates = await searchRepositoryCandidates()
 let selected = selectPluginCandidate(candidates)
 while (selected?.package.name !== manifest.name && Date.now() < deadline) {
   const delayMs = Math.min(searchPollMs, Math.max(0, deadline - Date.now()))
-  if (delayMs > 0) await new Promise(resolveDelay => setTimeout(resolveDelay, delayMs))
+  if (delayMs > 0) await delay(delayMs)
   candidates = await searchRepositoryCandidates()
   selected = selectPluginCandidate(candidates)
 }

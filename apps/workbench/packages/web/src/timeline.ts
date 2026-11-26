@@ -2,6 +2,7 @@
  * Turns the daemon's event log into the items the thread view renders.
  * Pure: no React, no I/O, so it can be unit-tested directly.
  */
+import type { ContextReference } from './context-references';
 import { diffStats } from './diff';
 import { IMAGE_FILE, relativePath } from './paths';
 import type { TurnChannel, TurnPart, VideoRef } from './api';
@@ -246,7 +247,7 @@ export type Item =
    */
   | { kind: 'input'; key: string; turnId: string; inputId: string; title: string; inputKind?: string; plan?: string; questions: import('./api').UserQuestion[]; answer: import('./api').UserInputAnswer | { cancelled: true; ended: true } | null; auto?: boolean }
   | { kind: 'voice-recap'; key: string; turnId: null; sessionId: string; seconds: number; count: number }
-  | { kind: 'user'; voice?: boolean; background?: boolean; streaming?: boolean; handoverCollapsed?: boolean; workMode?: string; key: string; turnId: string; text: string; images: ImageRef[]; videos?: VideoRef[]; fromTerminal?: boolean; scheduled?: boolean; coordination?: CoordinationNote; channel?: TurnChannel }
+  | { kind: 'user'; voice?: boolean; background?: boolean; streaming?: boolean; optimistic?: boolean; handoverCollapsed?: boolean; workMode?: string; key: string; turnId: string; text: string; images: ImageRef[]; videos?: VideoRef[]; fromTerminal?: boolean; scheduled?: boolean; coordination?: CoordinationNote; channel?: TurnChannel }
   /** The turn's answer: the text after everything the agent did. */
   | { kind: 'assistant'; key: string; turnId: string; text: string; done: boolean }
   /**
@@ -373,6 +374,8 @@ export interface Note {
   /** The earlier conversation of a handover chain the passage was picked out of. The agent cannot
    * see that one, so the note says where to read it; the person sees the note as any other. */
   source?: NoteSource;
+  /** The visible note owns this permission; it is not kept as an unrelated hidden attachment. */
+  reference?: ContextReference;
 }
 
 /** Where a passage came from: the earlier part of a handover chain, or (`elsewhere`) another thread. */
@@ -658,6 +661,7 @@ export function buildTimeline(events: StoredEvent[], speech: readonly VoiceTrans
           ...(Array.isArray(ev.data.videos) && ev.data.videos.length ? { videos: ev.data.videos } : {}),
           ...(ev.data.fromTerminal ? { fromTerminal: true } : {}),
           ...(ev.data.scheduled ? { scheduled: true } : {}),
+          ...(ev.data.optimistic ? { optimistic: true } : {}),
           ...(ev.data.source === 'background' ? { background: true } : {}),
           ...(delivered ? { coordination: delivered.note } : {}),
           ...(turnChannel(ev.data.channel) ? { channel: turnChannel(ev.data.channel)! } : {}),
@@ -1343,6 +1347,22 @@ export function turnPreviews(items: Item[]): Map<string, TurnPreview> {
     out.set(group.turnId, { question: question.text.trim(), answer });
   }
   return out;
+}
+
+/**
+ * Whether a work block is followed by later output from the same turn (e.g. a streamed answer,
+ * proposal, plan or subsequent work block). Once later output exists, the trailing thought inside
+ * this work block is already over and must not stay labelled "Thinking".
+ */
+export function workHasFollowingOutput(list: readonly Item[], index: number, turnId: string): boolean {
+  if (!turnId) return false;
+  for (let i = index + 1; i < list.length; i++) {
+    const it = list[i];
+    if (it.turnId !== turnId) continue;
+    if (it.kind === 'assistant' && it.text.trim()) return true;
+    if (it.kind === 'proposal' || it.kind === 'plan' || it.kind === 'work') return true;
+  }
+  return false;
 }
 
 /** The conversation as Markdown, for "copy conversation". Tool output is left out; file changes are listed. */

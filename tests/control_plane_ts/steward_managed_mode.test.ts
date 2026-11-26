@@ -418,6 +418,24 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
       contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
       event_kinds: ["turn.queued", "turn.failed", "agent.phase", "manager.context"],
     },
+    {
+      error_code: "lock_acquire_timeout",
+      error: "file lock acquisition timed out (recorded holder pid 4189)",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_error",
+      error: "file lock acquisition timed out (recorded holder pid 4189)",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
+    {
+      error_code: "runtime_error",
+      error: "file lock acquisition timed out (lock busy, current holder unknown)",
+      contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+    },
   ]) {
     const original = {turn_id: "4".repeat(32), session_id: params.session.session_id,
       status: "failed", error_code: scenario.error_code, error: scenario.error,
@@ -442,6 +460,25 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
     ]) {
       assert.throws(() => admitStewardManagedTurn({...input, monitor_restart_basis: {...basis, ...bad}}));
     }
+  }
+  for (const badLockError of [
+    "file lock acquisition timed out (recorded holder pid 0)",
+    "file lock acquisition timed out (arbitrary detail)",
+    "prefix file lock acquisition timed out (recorded holder pid 4189)",
+  ]) {
+    const original = {turn_id: "4".repeat(32), session_id: params.session.session_id,
+      status: "failed", error_code: "runtime_error", error: badLockError,
+      origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
+      delta_count: 0, loopx_request: prior};
+    const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
+      phases: [{phase: "manager_context"}],
+      event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
+      poll_absent: true, old_worker_excluded: true, lease_available: true};
+    assert.throws(() => admitStewardManagedTurn({
+      ...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
+      request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
+      monitor_todo: monitor, monitor_restart_basis: basis,
+    }));
   }
 });
 
@@ -470,6 +507,18 @@ test("chained post-context transient watch carriers recover only after cooldown 
     request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
     monitor_todo: monitor, monitor_restart_basis: basis};
   assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  for (const [errorCode, errorText] of [
+    ["lock_acquire_timeout", "file lock acquisition timed out (recorded holder pid 4189)"],
+    ["runtime_error", "file lock acquisition timed out (recorded holder pid 4189)"],
+  ] as const) {
+    const lockCarrier = {...carrier, error_code: errorCode, error: errorText};
+    assert.equal(admitStewardManagedTurn({
+      ...input, monitor_restart_basis: {...basis, original: lockCarrier},
+    }).observation_only, true);
+    assert.throws(() => admitStewardManagedTurn({
+      ...input, monitor_restart_basis: {...basis, original: lockCarrier, observed_at: completedSec + 299},
+    }));
+  }
 
   for (const badBasis of [
     {observed_at: completedSec + 299},

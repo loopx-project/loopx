@@ -50,3 +50,11 @@ test("a displayed-language match exports exactly the source revision and preserv
   assert.deepEqual(result.coverage, {loaded_records: 1, exported_records: 1, history_complete: false, refresh_failed: true});
   assert.doesNotMatch(JSON.stringify(result.records), /负向证据|完整成本未知/);
 });
+
+test("date selection exports the same original records and discloses the UTC bounds", () => {
+  const events = Array.from({length: 80}, (_, index) => ({goal_id: "goal-a", event_id: `event-${index}`, recorded_at: index === 79 ? "2026-01-03T23:59:59Z" : "2026-01-01T00:00:00Z", status: "tentative"}));
+  const snapshot = JSON.parse(exportResearchRecords({goalId: "goal-a", events, query: "", status: "", from: "2026-01-03", to: "2026-01-03", complete: false, stale: true, exportedAt: "2026-01-05T00:00:00Z"}));
+  assert.deepEqual(snapshot.records, [events[79]]);
+  assert.deepEqual(snapshot.filters, {query: "", status: "", from: "2026-01-03", to: "2026-01-03"});
+  assert.deepEqual(snapshot.coverage, {loaded_records: 80, exported_records: 1, history_complete: false, refresh_failed: true});
+});

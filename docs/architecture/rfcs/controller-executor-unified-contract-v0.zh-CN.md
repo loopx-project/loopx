@@ -1105,9 +1105,9 @@ owner。列明后续切换消费者；不能添加无人使用的基础设施或
 writer，桌面打包观察归档 writer，发布要求声明的支持契约与观察一致。已发布的
 `v2.4.0` 标签保留 quota-packet writer。发布器和桌面更新器都支持观测到的契约后，
 C1 制品才具备发布条件。通过工程资格检查的 main 制品可从不可变预发布版本取得，供按版本
-验证。Runtime 和 Desktop 的 main 自动更新渠道继续使用已发布的默认契约，直到共享发布
-策略经评审登记 C1 资格。逐一记录受支持 profile 的安装和实际采用证据，并按第 9 节验证
-成果和完整成本。
+验证。v2.4.1 切换后，Runtime 和 Desktop 的 main 与 stable 更新渠道都要求同一
+Complete Turn 契约。回退使用本机已安装的上一版本或 App 备份。记录真实安装和采用证据，
+并按第 9 节验证成果和完整成本。
 详见[发布边界](../../product/release-readiness.md)。
 
 原生启动重查只从原 `SettlementIdentity` 取得 Todo/obligation 绑定。

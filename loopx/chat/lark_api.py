@@ -6,18 +6,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlparse
 
-from .control_plane.runtime.runtime_projection_route import (
+from ..control_plane.runtime.runtime_projection_route import (
     resolve_goal_source_runtime_route,
 )
-from .extensions.lark.goal_channel import (
+from ..extensions.lark.goal_channel import (
     default_goal_channel_binding_path,
     default_goal_channel_target_path,
     read_goal_channel_binding,
     read_goal_channel_targets,
 )
-from .extensions.lark.app_setup import LarkAppSetupManager
-from .extensions.lark.cli_resolution import LarkCliResolution, LarkCliUnavailableError
-from .extensions.lark.goal_topic_connections import (
+from ..extensions.lark.app_setup import LarkAppSetupManager
+from ..extensions.lark.cli_resolution import LarkCliResolution, LarkCliUnavailableError
+from ..extensions.lark.goal_topic_connections import (
     LarkGroupChatLookupError,
     connect_lark_goal_topic,
     disconnect_lark_goal_topic,
@@ -26,10 +26,10 @@ from .extensions.lark.goal_topic_connections import (
     list_lark_group_chats,
     rebind_lark_manager_session,
 )
-from .extensions.lark.goal_topic_batch import connect_lark_goal_topics
-from .extensions.lark.cli_transport import CommandRunner, default_subprocess_runner
-from .chat_agent import CodexChatAgentError
-from .chat_manager import (
+from ..extensions.lark.goal_topic_batch import connect_lark_goal_topics
+from ..extensions.lark.cli_transport import CommandRunner, default_subprocess_runner
+from ..chat_agent import CodexChatAgentError
+from ..chat_manager import (
     controller_runtime_root,
     manager_channel,
     manager_connection_executor_endpoint,
@@ -37,20 +37,20 @@ from .chat_manager import (
     open_manager_session,
     steward_machine_defaults,
 )
-from .chat_store import RESUMABLE_SESSION_STATES
-from .extensions.lark.goal_channel_contracts import binding_for_goal, goal_from_registry
-from .extensions.lark.goal_channel_targets import goal_channel_target_for_name
-from .history import load_registry
-from .paths import resolve_runtime_root
-from .registry import registry_goals
-from .repository_identity import normalize_repository_identity
+from ..chat_store import RESUMABLE_SESSION_STATES
+from ..extensions.lark.goal_channel_contracts import binding_for_goal, goal_from_registry
+from ..extensions.lark.goal_channel_targets import goal_channel_target_for_name
+from ..history import load_registry
+from ..paths import resolve_runtime_root
+from ..registry import registry_goals
+from ..repository_identity import normalize_repository_identity
 
 
 def manager_source_scope_resolver(
     server: Any, *, registry_path: Path, executor_runtime_root: Path,
 ) -> Callable[[dict[str, Any]], list[str] | None]:
     """Keep the default manager's native and legacy source routing together."""
-    from .extensions.lark.manager_routing import authorized_manager_goal_ids
+    from ..extensions.lark.manager_routing import authorized_manager_goal_ids
 
     def read(session):
         controller = server.runtime_controller
@@ -579,7 +579,7 @@ class LarkChatRequestMixin:
                 error_code=exc.error_code,
             )
             return
-        from .extensions.lark.conversation_identity import identity_ref
+        from ..extensions.lark.conversation_identity import identity_ref
         bindings = self.server.runtime_controller.project_contexts.conversation_bindings
         binding = next((row for row in bindings.read()["bindings"] if row["transport_ref"] == app_ref), None) if bindings else None
         self._send_json(
@@ -608,7 +608,7 @@ class LarkChatRequestMixin:
                 else None
             ),
         )
-        from .capabilities.manager_context import evidence_scope_readback
+        from ..capabilities.manager_context import evidence_scope_readback
 
         targets = read_goal_channel_targets(self._goal_channel_target_path())
         for row in connections:
@@ -697,7 +697,7 @@ class LarkChatRequestMixin:
                 or "goal"
             )
             if "turn_trigger" in body:
-                from .control_plane.collaboration import conversation_trigger
+                from ..control_plane.collaboration import conversation_trigger
                 if conversation_kind != "manager" or app_refs_by_agent is not None:
                     raise ValueError("turn_trigger is only supported for manager connections")
                 conversation_trigger(body["turn_trigger"])
@@ -714,7 +714,7 @@ class LarkChatRequestMixin:
             selected_profiles = [app_ref] if app_ref else [str(row.get("app_ref") or "") for row in body.get("agent_bindings", [])]
             provider_runner = self._lark_runner()
             if private is not None:
-                from .extensions.lark.conversation_identity import identity_ref
+                from ..extensions.lark.conversation_identity import identity_ref
                 configured = private.read()["bindings"]
                 # Only active private bindings require the collision check.
                 if configured:
@@ -781,7 +781,7 @@ class LarkChatRequestMixin:
                 read_scope = body.get("read_goal_scope", "all_registered" if not stored else None)
                 read_scope_args = None
                 if read_scope is not None:
-                    from .capabilities.manager_context import configure_evidence_scope, evidence_scope_readback
+                    from ..capabilities.manager_context import configure_evidence_scope, evidence_scope_readback
                     policy_root = getattr(self.server.runtime_controller, "coordination_runtime_root", None) or controller_runtime_root(self.server.runtime_controller)
                     if policy_root is None:
                         raise ValueError("manager runtime is unavailable")
@@ -944,7 +944,7 @@ class LarkChatRequestMixin:
 
 
 def _app_identity_for_private_guard(profile: str, runner: Any, cli_bin: str) -> str:
-    from .extensions.lark.goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
+    from ..extensions.lark.goal_channel_transport import APP_ID_PATTERN, call, json_payload, lark_args
     result = call(runner, lark_args(cli_bin=cli_bin, profile=profile, tail=["auth", "status", "--verify", "--json"]))
     payload = json_payload(result)
     app_id = str(payload.get("appId") or "")

@@ -205,10 +205,7 @@ def require_stable_runtime_publication(dist_dir: Path, identity: ReleaseIdentity
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     try:
         from loopx.cli_commands.update_artifact import (
-            HISTORICAL_DEFAULT_CONTRACT,
-            public_channel_allows_default,
             validate_published_manifest,
-            validate_manifest,
             verify_runtime_installation_qualification,
         )
     finally:
@@ -216,11 +213,9 @@ def require_stable_runtime_publication(dist_dir: Path, identity: ReleaseIdentity
 
     runtime = dist_dir / "runtime"
     try:
-        raw = json.loads((runtime / "loopx-runtime.json").read_text(encoding="utf-8"))
-        if isinstance(raw, dict) and raw.get("default_contract") == HISTORICAL_DEFAULT_CONTRACT:
-            manifest = validate_manifest(raw)
-        else:
-            manifest = validate_published_manifest(raw)
+        manifest = validate_published_manifest(
+            json.loads((runtime / "loopx-runtime.json").read_text(encoding="utf-8"))
+        )
         sources = json.loads((dist_dir / "RELEASE-SOURCES.json").read_text(encoding="utf-8"))
         revision = manifest["source_revision"]
         if (
@@ -233,8 +228,6 @@ def require_stable_runtime_publication(dist_dir: Path, identity: ReleaseIdentity
         qualification = json.loads((runtime / "qualification.json").read_text(encoding="utf-8"))
         archive = runtime / f"loopx-runtime-{revision}.tar.gz"
         verify_runtime_installation_qualification(manifest, qualification, archive, channel="stable")
-        if not public_channel_allows_default(manifest["default_contract"]):
-            raise ValueError("Stable runtime is pending public channel qualification")
     except (OSError, ValueError) as exc:
         raise ReleaseArtifactError(str(exc)) from exc
 

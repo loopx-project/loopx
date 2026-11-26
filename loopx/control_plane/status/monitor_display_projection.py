@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Any
+from typing import Any, Literal
 
 from ..scheduler.monitor_display import (
     attention_item_is_monitor_quiet_display_candidate as _attention_item_is_monitor_quiet_display_candidate,
@@ -30,7 +30,8 @@ MONITOR_DISPLAY_FALLBACK_ACTION = (
     "No immediate agent work; keep the monitor quiet until a material monitor "
     "transition, regression, or concrete blocker appears."
 )
-MONITOR_SIGNAL_WAITING_ON = "monitor_signal"
+MonitorSignalWaitingOn = Literal["monitor_signal"]
+MONITOR_SIGNAL_WAITING_ON: MonitorSignalWaitingOn = "monitor_signal"
 
 
 def build_project_asset(

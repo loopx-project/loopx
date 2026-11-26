@@ -332,6 +332,7 @@ class AccountTests(unittest.TestCase):
                 self.manager.switch('a')
                 self.assertEqual(json.loads(self.manager.slot('api').read_text())['loopx_model_provider'], 'openai')
 
+    @unittest.skipUnless(sys.platform == "darwin", "NativeHost account switching is supported on macOS")
     def test_quoted_and_backslash_gateway_providers_survive_switch_and_independent_readback(self):
         host_module = importlib.import_module('loopx_codex_provider_routing.native_host')
         cases = [

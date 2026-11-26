@@ -2,6 +2,7 @@
 if (process.argv.includes('--version')) { process.stdout.write('fixture 1.2.3\n'); process.exit(0); }
 // Antigravity ACP fixture plus the account-query and login CLI entry points.
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, symlinkSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { agyUsage } from './live-usage.mjs';
 import { coordinationFixture } from './coordination.mjs';
@@ -86,6 +87,15 @@ if (promptIndex >= 0 && args[promptIndex + 1] !== undefined) {
 }
 
 if (args[0] !== 'acp') throw new Error('expected agy acp');
+const { DatabaseSync } = await import('node:sqlite');
+if (process.env.FAKE_AGY_ENV_FILE) {
+  writeFileSync(process.env.FAKE_AGY_ENV_FILE, JSON.stringify({
+    HOME: process.env.HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    GH_CONFIG_DIR: process.env.GH_CONFIG_DIR,
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+  }));
+}
 let conversation = 'agy-conv-1', model = 'default', effort, mode = 'default';
 let fullAccess = false, pending, waiting = false;
 let stepIndex = 0;
@@ -123,9 +133,27 @@ const config = () => [{ id: 'model', category: 'model', currentValue: model, opt
 const info = () => ({ sessionId: conversation, configOptions: config(), modes: { currentModeId: mode,
   availableModes: ['default', 'accept-edits', 'auto', 'plan'].map(id => ({ id, name: id })) } });
 
+const ensureConversationDb = id => {
+  const home = process.env.LOOCHAT_AGY_HOME;
+  if (!home || !id || id === 'unforkable' || !/^[a-z0-9_-]{1,128}$/i.test(id)) return;
+  const dir = join(home, 'conversations');
+  const dbPath = join(dir, `${id}.db`);
+  if (existsSync(dbPath)) return;
+  mkdirSync(dir, { recursive: true });
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec('CREATE TABLE IF NOT EXISTS trajectory_meta (trajectory_id TEXT PRIMARY KEY, cascade_id TEXT, trajectory_type INTEGER, source INTEGER)');
+    db.exec('CREATE TABLE IF NOT EXISTS steps (idx INTEGER PRIMARY KEY, step_payload BLOB)');
+    db.prepare('INSERT INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 4, 17)').run(randomUUID(), id);
+    db.prepare('INSERT INTO steps (idx, step_payload) VALUES (0, ?)').run(Buffer.from(`step:${id}`, 'utf8'));
+  } finally { db.close(); }
+};
+
 let advanceIndex = 0;
 let advanceScript = '';
 function runTurn(text) {
+  // Fixture commands belong to the current ask, not the interrupted request in its envelope.
+  if (text.includes('[Loochat interrupted-turn context]\n')) text = text.split('\nCurrent user message:\n').at(-1);
   step({ step_index: stepIndex++, state: 'DONE', step_type: 'user_input' });
   if (process.env.FAKE_AGY_WEB && text.startsWith('Search the web using')) {
     const index = stepIndex++;
@@ -290,6 +318,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     case 'session/resume':
     case 'session/load':
       conversation = p.sessionId ?? (process.env.FAKE_HANDOVER_EXHAUST_ONCE || process.env.FAKE_TRANSIENT_ONCE ? `agy-conv-${process.pid}` : 'agy-conv-1');
+      ensureConversationDb(conversation);
       reply(msg.id, info());
       update({ sessionUpdate: 'available_commands_update', availableCommands: [
         { name: 'compact', description: 'Compact the conversation' }, { name: 'goal', description: 'Set a native goal' },
@@ -315,6 +344,24 @@ createInterface({ input: process.stdin }).on('line', async line => {
         reply(msg.id, { stopReason: 'end_turn' }); break;
       }
       if (text === 'usage-drop') { update({ sessionUpdate: 'usage_update', used: 10, size: 1048576 }); reply(msg.id, { stopReason: 'end_turn' }); break; }
+      if (text === 'background-notice') {
+        reply(msg.id, { stopReason: 'end_turn' });
+        setTimeout(() => {
+          update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Individual quota reached.' } });
+        }, 15);
+        break;
+      }
+      if (text === 'background-tool') {
+        reply(msg.id, { stopReason: 'end_turn' });
+        setTimeout(() => {
+          update({ sessionUpdate: 'tool_call', toolCallId: 'bg-tool-1', title: 'Background check', kind: 'execute', status: 'in_progress' });
+        }, 15);
+        setTimeout(() => {
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 'bg-tool-1', status: 'completed', rawOutput: 'ok' });
+          update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'background work done' } });
+        }, 135);
+        break;
+      }
       if (text.includes('run a command')) {
         const id = ++approvalId;
         const answer = new Promise(resolve => approvals.set(id, resolve));

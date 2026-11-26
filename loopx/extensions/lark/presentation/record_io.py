@@ -1,27 +1,33 @@
 from __future__ import annotations
 
-from typing import Any, Protocol
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 
 
 class RecordTarget(Protocol):
-    cli_bin: str
-    identity: str
-    base_token: str
-    table_id: str
+    @property
+    def cli_bin(self) -> str: ...
+    @property
+    def identity(self) -> str: ...
+    @property
+    def base_token(self) -> str: ...
+    @property
+    def table_id(self) -> str: ...
 
 
-def lark_record_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
-    fields = data.get("fields") if isinstance(data, dict) else None
-    rows = data.get("data") if isinstance(data, dict) else None
-    record_ids = data.get("record_id_list") if isinstance(data, dict) else None
+def lark_record_rows(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    raw_data = payload.get("data")
+    data: Mapping[str, object] = raw_data if isinstance(raw_data, Mapping) else payload
+    fields = data.get("fields")
+    rows = data.get("data")
+    record_ids = data.get("record_id_list")
     if not isinstance(fields, list) or not isinstance(rows, list):
         return []
-    records: list[dict[str, Any]] = []
+    records: list[dict[str, object]] = []
     for index, values in enumerate(rows):
         if not isinstance(values, list):
             continue
-        record = {
+        record: dict[str, object] = {
             str(field): values[pos] if pos < len(values) else None
             for pos, field in enumerate(fields)
         }
@@ -31,9 +37,10 @@ def lark_record_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
-def todo_record_entries(parsed: Any) -> list[dict[str, str]]:
+def todo_record_entries(parsed: object) -> list[dict[str, str]]:
     result: list[dict[str, str]] = []
-    for record in lark_record_rows(parsed if isinstance(parsed, dict) else {}):
+    payload: Mapping[str, object] = parsed if isinstance(parsed, Mapping) else {}
+    for record in lark_record_rows(payload):
         todo_id = str(record.get("LoopX Todo ID") or "").strip()
         goal_id = str(record.get("LoopX Goal ID") or "").strip()
         record_id = str(record.get("_record_id") or "").strip()
@@ -42,11 +49,12 @@ def todo_record_entries(parsed: Any) -> list[dict[str, str]]:
     return result
 
 
-def record_list_is_complete(parsed: Any) -> bool:
-    if not isinstance(parsed, dict):
+def record_list_is_complete(parsed: object) -> bool:
+    if not isinstance(parsed, Mapping):
         return False
-    data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
-    if not isinstance(data, dict):
+    raw_data = parsed.get("data")
+    data: object = raw_data if isinstance(raw_data, Mapping) else parsed
+    if not isinstance(data, Mapping):
         return False
     return (
         data.get("has_more") is False
@@ -54,11 +62,12 @@ def record_list_is_complete(parsed: Any) -> bool:
     )
 
 
-def todo_record_list_is_authoritative(parsed: Any) -> bool:
-    if not record_list_is_complete(parsed) or not isinstance(parsed, dict):
+def todo_record_list_is_authoritative(parsed: object) -> bool:
+    if not record_list_is_complete(parsed) or not isinstance(parsed, Mapping):
         return False
-    data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
-    if not isinstance(data, dict):
+    raw_data = parsed.get("data")
+    data: object = raw_data if isinstance(raw_data, Mapping) else parsed
+    if not isinstance(data, Mapping):
         return False
     fields = data.get("fields")
     rows = data.get("data")
@@ -77,7 +86,7 @@ def todo_record_list_is_authoritative(parsed: Any) -> bool:
 def build_record_delete_command(
     config: RecordTarget,
     *,
-    record_ids: list[str],
+    record_ids: Sequence[str],
 ) -> list[str]:
     args = [
         config.cli_bin,
