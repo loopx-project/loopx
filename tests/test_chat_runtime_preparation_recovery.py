@@ -230,3 +230,74 @@ def test_antigravity_steward_active_cascade_resume_failed_waits_for_idle_then_re
     record = _read_json(transport.root / f"{row['request_ref']}.json")
     assert any(key.startswith("terminal.recovery.") and value.get("verified")
                for key, value in record["deliveries"].items())
+
+
+def test_antigravity_preparation_waits_while_model_catalog_unready_without_spending_attempts(
+    steward, language_server, monkeypatch,  # noqa: F811
+):
+    from loopx.capabilities.steward_executor import (
+        STEWARD_EXECUTOR_SCHEMA,
+        effective_steward_executor_defaults,
+    )
+
+    store, runtime, provider, transport, binding, _capture, _workspace = steward
+    defaults = effective_steward_executor_defaults({
+        "schema_version": "loopx_machine_configuration_v0",
+        "namespaces": {"steward_executor": {
+            "schema_version": STEWARD_EXECUTOR_SCHEMA,
+            "selection_policy": "preferred",
+            "executor_endpoint": "antigravity",
+            "eligible_endpoints": [],
+            "executor_model": "gemini-4-argon-high",
+            "executor_reasoning_effort": "high",
+        }},
+    })
+    monkeypatch.setattr(runtime, "steward_executor_defaults", lambda: defaults)
+    transport.bindings.configure(
+        transport_ref="steward-app",
+        project_ref=binding["project_ref"],
+        executor_endpoint_id="antigravity",
+        context_kind="steward",
+    )
+
+    assert transport.admit("steward-app", provider.event("steward-app", "warmup-catalog", "Warm up cascade"))["status"] == "durably_accepted"
+    warmup = transport.core.pending()[0]
+    assert finish(runtime, warmup)["status"] == "completed"
+    assert transport.reconcile() >= 1
+    language_server["active"] = False
+
+    # Simulate a process restart / cold open before FetchAvailableModels completes (empty catalog).
+    with runtime.lock:
+        cached_adapters = list(runtime.adapters.values())
+        runtime.adapters.clear()
+    for cached in cached_adapters:
+        cached.close_session()
+    language_server["model_configs"] = []
+    assert transport.admit("steward-app", provider.event("steward-app", "unready-models", "Replay after startup"))["status"] == "durably_accepted"
+    row = next(item for item in transport.core.pending() if item["request_ref"] != warmup["request_ref"])
+    failed = finish(runtime, row)
+    assert failed["status"] == "failed" and failed["error_code"] == "resume_failed"
+    assert transport.reconcile() >= 1
+    assert transport.core.read_request(row["request_ref"])["delivery_verified"] is True
+
+    advance_recovery_clock(monkeypatch)
+    # While model configs remain unready, auto-recovery stays candidate-only without burning attempts.
+    assert transport.core.context_recovery_candidate(row["request_ref"]) is True
+    transport.reconcile()
+    current = transport.core.read_request(row["request_ref"])
+    assert current["turn_id"] == failed["turn_id"]
+    assert not current.get("context_recovery")
+    assert not any(method == "SendUserCascadeMessage" and "Replay after startup" in json.dumps(body)
+                   for method, body in language_server["calls"])
+
+    # Once model catalog loads, attempt 1 succeeds and delivers.
+    language_server["model_configs"] = [{"modelId": "gemini-4-argon-high", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]
+    transport.reconcile_request(transport.root / f"{row['request_ref']}.json")
+    recovered = transport.core.read_request(row["request_ref"])
+    assert recovered["turn_id"] != failed["turn_id"]
+    assert recovered["context_recovery"]["preparation_attempt"] == 1
+    assert finish(runtime, recovered)["status"] == "completed"
+    transport.reconcile()
+    record = _read_json(transport.root / f"{row['request_ref']}.json")
+    assert any(key.startswith("terminal.recovery.") and value.get("verified")
+               for key, value in record["deliveries"].items())
