@@ -13,6 +13,7 @@ from .cli_commands.automation_cadence import (
     register_automation_cadence_command, handle_automation_cadence_command,
 )
 
+from pathlib import Path
 import sys
 
 from .cli_commands.agent_capabilities import register_agent_capabilities
@@ -559,15 +560,32 @@ def _main(argv: list[str] | None = None) -> int:
     if agent_turn_recall_result is not None:
         return agent_turn_recall_result
 
+    def _decision_context_runtime_root() -> Path | None:
+        if args.command != "decision-context":
+            return None
+        if args.decision_context_command in {
+            "hook",
+            "recall-context",
+            "prepare-evidence",
+            "prepare-review",
+            "capture",
+        }:
+            return effective_runtime_root(registry_path, args.runtime_root)
+        if args.decision_context_command in {
+            "inspect-profile",
+            "source-manifest",
+            "capture-status",
+        } and not str(getattr(args, "profile", None) or "").strip():
+            try:
+                return effective_runtime_root(registry_path, args.runtime_root)
+            except (OSError, ValueError):
+                return None
+        return None
+
     decision_context_result = handle_decision_context_command(
         args,
-        runtime_root=(
-            effective_runtime_root(registry_path, args.runtime_root)
-            if args.command == "decision-context"
-            and args.decision_context_command
-            in {"recall-context", "prepare-evidence", "prepare-review", "capture"}
-            else None
-        ),
+        runtime_root=_decision_context_runtime_root(),
+        registry_path=registry_path,
         output_format=output_format,
         print_payload=print_payload,
     )

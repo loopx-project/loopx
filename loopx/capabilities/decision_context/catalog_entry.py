@@ -151,6 +151,21 @@ DECISION_CONTEXT_CATALOG_ENTRY: dict[str, Any] = {
                 "updates private cursors; no external action or authority change"
             ),
         },
+        {
+            "command": (
+                "loopx decision-context hook read|bind|unbind|history|turn-context "
+                "--goal-id <goal-id> --agent-id <agent-id> [--format json]"
+            ),
+            "purpose": (
+                "Manage or inspect an opt-in host-local turn-start hook binding "
+                "and its public-safe source freshness/change projection."
+            ),
+            "write_boundary": (
+                "bind/unbind --execute writes only the scoped private hook "
+                "binding store; turn-context and turn-start observations are "
+                "read-only and never advance cursors or emit private locators"
+            ),
+        },
     ],
     "implemented_protocols": [
         {
@@ -215,6 +230,10 @@ DECISION_CONTEXT_CATALOG_ENTRY: dict[str, Any] = {
                 "decision_review_settlement_v0",
                 "loopx.capabilities.decision_context.review_settlement",
             ),
+            (
+                "decision_context_hook_view_v1",
+                "loopx.capabilities.decision_context.turn_start_hook",
+            ),
         )
     ],
     "smokes": ["python3 examples/decision-context-contract-smoke.py"],
@@ -229,6 +248,7 @@ DECISION_CONTEXT_CATALOG_ENTRY: dict[str, Any] = {
         "DecisionSourceProvider rebases current authority; ContextProvider supplies advisory recall only.",
         "Prepare-evidence is read-only; prepare-review writes only private unapplied state when explicitly executed.",
         "Cursor commit requires a canonical review receipt, exact gate or semantic no-change proof, lifecycle-event readback, private-state CAS, and atomic verified write; future outcome observation is separate.",
+        "Turn-start hook bindings are opt-in per registered Goal/Agent, project only public-safe freshness and changed-source ids, and never commit cursors.",
     ],
     "next_real_step": (
         "Exercise one private source profile through approve, reject, defer, and "

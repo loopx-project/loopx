@@ -5,8 +5,9 @@
 ## 定位
 
 Decision Context 是 LoopX 内置、默认关闭、goal-scoped 的高层决策 capability。
-它运行在 LoopX Core 之上，消费 Core truth，但不进入
-`loopx/control_plane/`，也不改变 todo、gate、quota、authority 的语义。
+它运行在 LoopX Core 之上，消费 Core truth，不改变 Core 的 todo、gate、quota 准入或
+authority 语义；其可选本机回合起始钩子绑定遵循 TypeScript 控制面迁移契约，落在
+`loopx/control_plane/capabilities/decision_context_hook.ts` 能力钩子边界内，不把领域打分、信源适配器或决策建议下沉进 Core。
 
 ```mermaid
 flowchart TD
@@ -276,6 +277,11 @@ id 必须先由私有 goal profile 声明，实例身份也必须与声明一致
 checkpoint 路径，而不必把私有 adapter 注册进公开包。activation 只投影
 `runtime-bound`；adapter 名称、配置、locator、payload 和 cursor 均留在私有边界。
 provider 缺失或身份不匹配时 fail open，且不会推进 cursor。
+
+本机轮次启动钩子（`decision_context.turn_context`）同样遵守默认关闭与只读边界：只有通过
+`<runtime-root>/decision-context/agent-bindings/` 下的事务型 CAS 绑定显式接入单个已注册
+`(goal_id, agent_id)` 后，`quota should-run` 与 `turn run-once` 才会交付公开安全的
+`decision_context_hook_view_v1` 新鲜度/变更摘要，不暴露私有路径、游标与正文，也不触发审阅结算或游标提交。
 
 ### P1：首个 dogfood
 

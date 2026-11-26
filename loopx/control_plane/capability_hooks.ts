@@ -23,6 +23,7 @@ import { projectPendingCapabilityIntent } from "./work_items/pending_capability_
 
 import {exploreResultWritebackAffordance, exploreReusableContextPaths} from "./capabilities/explore_context_delivery.ts";
 import {agentPreferenceReusableContextPaths} from "./capabilities/agent_preferences.ts";
+import {decisionContextReusableContextPaths} from "./capabilities/decision_context_hook.ts";
 
 /** The registered owner selects reusable read-model subtrees. Unknown hooks
  * remain complete; payloads cannot nominate their own execution fields. */
@@ -46,6 +47,11 @@ export function reusableTurnContext(source: JsonObject, binding: JsonObject): {
     if ((content.goal_id !== undefined && content.goal_id !== goal)
         || (content.agent_id !== undefined && content.agent_id !== agent)) return null;
     paths = agentPreferenceReusableContextPaths(content);
+  } else if (source.hook_id === "decision_context.turn_context" && source.capability_id === "decision-context"
+      && source.kind === "decision_context") {
+    goal = binding.goal_id; agent = binding.agent_id;
+    if (content.goal_id !== goal || content.agent_id !== agent) return null;
+    paths = decisionContextReusableContextPaths(content);
   } else return null;
   return paths.length && typeof goal === "string" && typeof agent === "string"
     ? {identity: [source.source, source.hook_id, source.capability_id, goal, agent, content.todo_id ?? null], paths} : null;

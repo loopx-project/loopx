@@ -300,6 +300,7 @@ export function createEffectRuntimeHandlers(
     ["benchmark.terminal-followthrough.prepare", lazyHandler(() => import("./capabilities/benchmark_terminal_followthrough.ts"), ({prepareBenchmarkTerminalFollowthrough}) => prepareBenchmarkTerminalFollowthrough)],
     ["benchmark.cli_source_activation", lazyHandler(() => import("./capabilities/benchmark_cli_source_activation.ts"), ({qualifyCliSourceActivation}) => qualifyCliSourceActivation)],
     ["agent.preferences", lazyHandler(() => import("./capabilities/agent_preferences.ts"), ({agentPreferences}) => agentPreferences)],
+    ["decision_context.hook", lazyHandler(() => import("./capabilities/decision_context_hook.ts"), ({decisionContextHook}) => decisionContextHook)],
     ["todo.archive.capture_dependencies", lazyHandler(() => Promise.all([import("./todos/archive_capture.ts"), import("./coordination/source_transfer.ts")]), ([{captureArchivedTodoDependencies}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("todo.archive.capture_dependencies", captureArchivedTodoDependencies))],
     ["agent.supervisor.plan_append", lazyHandler(() => import("./agents/supervisor_event_append.ts"), ({planSupervisorEventAppend}) => planSupervisorEventAppend)],
     ["coordination.source.project", lazyHandler(() => Promise.all([import("./coordination/source_projection.ts"), import("./coordination/source_transfer.ts")]), ([{projectCoordinationSource}, {withCoordinationSourceTransfer}]) => withCoordinationSourceTransfer("coordination.source.project", projectCoordinationSource))],
