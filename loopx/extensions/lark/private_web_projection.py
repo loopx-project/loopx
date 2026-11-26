@@ -182,19 +182,15 @@ class PrivateUnsupportedMediaHistory:
         revision = summary.get("transcript_revision")
         if not revision or not markers:
             return summary
-        digest = hashlib.sha256(json.dumps(markers, sort_keys=True, ensure_ascii=False,
-                                          separators=(",", ":")).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(json.dumps(markers, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
         return {**summary, "transcript_revision": f"{revision}.lark.{digest}"}
 
     @staticmethod
     def insert(messages: list[dict[str, Any]], markers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not markers:
             return messages
-        # Keep canonical append order and insert presentation rows by original
-        # time before paging. A late insertion must invalidate the old prefix.
         ids = {row.get("message_id") for row in messages}
-        pending = [(_history_timestamp(row["created_at"]), row) for row in reversed(markers)
-                   if row["message_id"] not in ids]
+        pending = [(_history_timestamp(row["created_at"]), row) for row in reversed(markers) if row["message_id"] not in ids]
         projected = []
         for message in messages:
             try:
@@ -204,7 +200,13 @@ class PrivateUnsupportedMediaHistory:
             while pending and stamp is not None and pending[-1][0] < stamp:
                 projected.append(pending.pop()[1])
             projected.append(message)
-        return projected + [row[1] for row in reversed(pending)]
+        merged = projected + [row[1] for row in reversed(pending)]
+        journal_sha = getattr(messages, "journal_sha256", None)
+        if not isinstance(journal_sha, bytes):
+            return merged
+        from ...chat.journal import CachedJournalRows
+        raw_markers = json.dumps(markers, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return CachedJournalRows(merged, journal_sha256=journal_sha, markers_sha256=hashlib.sha256(raw_markers).digest())
 
 
 class PrivateWebProjectionMixin:

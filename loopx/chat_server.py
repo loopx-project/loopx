@@ -762,15 +762,15 @@ class ChatRequestHandler(
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
             self._send_error(str(exc), status=400)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except OSError:
             self._send_error("Chat history is temporarily unavailable", status=503)
 
     def _list_sessions(self) -> None:
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
         if "managed_agent_id" in query:
-            # Agent registration is distinct from the executor's agent_id.
-            # Reuse Core's exact original identity admission; an older service
-            # ignoring this selector must not look like a successful discovery.
+            # Agent registration is distinct from the executor's agent_id. Reuse Core's exact identity admission.
             from .capabilities.native_chat.steward_managed_mode import StewardManagedMode, managed_session_identity
             if (set(query) != {"goal_id", "managed_agent_id"}
                     or any(len(values) != 1 or not values[0] for values in query.values())):

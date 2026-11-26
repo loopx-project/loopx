@@ -33,12 +33,20 @@ def original_turn_reader(store: ChatSessionStore, session_id: str) -> Callable[[
     """
     turns_dir = store._session_dir(session_id) / "turns"
     paths: dict[str, Path] = {}
-    for path in turns_dir.glob("*.json") if turns_dir.is_dir() else []:
-        if path.name.endswith(".events.json"):
-            continue
-        client_id = _read_json(path).get("client_turn_id")
-        if isinstance(client_id, str):
-            paths.setdefault(client_id, path)
+    if turns_dir.is_dir():
+        discovery = getattr(store, "_turn_discovery_rows", None)
+        if callable(discovery):
+            for path, observation, _ in discovery(session_id, turns_dir, _read_json):
+                client_id = observation.get("client_turn_id") if isinstance(observation, dict) else None
+                if isinstance(client_id, str):
+                    paths.setdefault(client_id, path)
+        else:
+            for path in turns_dir.glob("*.json"):
+                if path.name.endswith(".events.json"):
+                    continue
+                client_id = _read_json(path).get("client_turn_id")
+                if isinstance(client_id, str):
+                    paths.setdefault(client_id, path)
 
     def read(client_turn_id: str) -> dict[str, Any] | None:
         path = paths.get(client_turn_id)

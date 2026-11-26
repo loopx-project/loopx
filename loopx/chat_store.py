@@ -26,7 +26,7 @@ from .capabilities.native_chat.model_settings import (
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
 from .chat.event_cache import ChatEventCache, ChatEventStreamMixin
-from .chat.journal import decode_chat_journal
+from .chat.journal import CachedJournalRows, decode_chat_journal
 from .chat.ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
@@ -57,10 +57,10 @@ REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "tu
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _SESSION_RELEASE_UNSET = object()
 
-# Keep both active conversation journals warm within the original total budget.
-_PAGED_HISTORY_MAX_SESSIONS = 2
-_PAGED_HISTORY_MAX_BYTES = 64 * 1024 * 1024
-_PAGED_HISTORY_MAX_ROWS = 8192
+# Keep active steward and project conversation journals warm across multi-MB image histories.
+_PAGED_HISTORY_MAX_SESSIONS = 4
+_PAGED_HISTORY_MAX_BYTES = 256 * 1024 * 1024
+_PAGED_HISTORY_MAX_ROWS = 65536
 
 
 def utc_now() -> str:
@@ -845,7 +845,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         rows = decode_chat_journal(lines, strict=True)
         if digest is not None and len(rows) <= _PAGED_HISTORY_MAX_ROWS:
             with suppress(RecursionError):
-                saved = deepcopy(rows)
+                saved = CachedJournalRows(deepcopy(rows), journal_sha256=digest)
                 with self._paged_history_lock:
                     self._paged_history[session_id] = (digest, size, saved)
                     self._paged_history.move_to_end(session_id)
@@ -1685,23 +1685,22 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             and payload.get("status") in RESUMABLE_SESSION_STATES,
         }
 
-    def session_snapshot(self, session_id: str, *, strict_messages: bool = False) -> dict[str, Any]:
+    def session_snapshot(
+        self, session_id: str, *, strict_messages: bool = False, copy_messages: bool = True,
+    ) -> dict[str, Any]:
         payload = self.load_session(session_id)
         if payload is None:
             raise KeyError("chat session was not found")
-        active_turn = None
-        if payload.get("active_turn_id"):
-            active_turn = self.load_turn(session_id, str(payload["active_turn_id"]))
-            if active_turn is not None:
-                active_turn = {
-                    key: value
-                    for key, value in active_turn.items()
-                    if key != "_acceptance"
-                }
+        active_turn = self.load_turn(session_id, str(payload["active_turn_id"])) if payload.get("active_turn_id") else None
+        if active_turn is not None:
+            active_turn = {key: value for key, value in active_turn.items() if key != "_acceptance"}
         return {
             "ok": True,
             "schema_version": CHAT_STORE_SCHEMA_VERSION,
             "session": self.public_session(payload),
-            "messages": self._paged_history_messages(session_id) if strict_messages else self.messages(session_id),
+            "messages": (
+                self._paged_history_messages(session_id, copy_cached=copy_messages)
+                if strict_messages else self.messages(session_id)
+            ),
             "active_turn": active_turn,
         }
