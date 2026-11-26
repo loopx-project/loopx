@@ -289,6 +289,30 @@ def build_antigravity_hooks_template(
     }
 
 
+def build_antigravity_launchd_command(
+    *,
+    cli_bin: str = "loopx",
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+    runtime_root: str | None = None,
+    conversation_id: str | None = None,
+    registry: str | None = None,
+    resolve_local_executable: bool = True,
+) -> list[str]:
+    """Return argv to preview or install the reboot-surviving LaunchAgent watchdog."""
+    conversation_id = conversation_id or os.environ.get(ANTIGRAVITY_CONVERSATION_ID_ENV)
+    return _antigravity_provider_args(
+        "install-launchd",
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        runtime_root=runtime_root,
+        registry=registry,
+        resolve_local_executable=resolve_local_executable,
+    )
+
+
 def agy_activation_extras() -> dict[str, Any]:
     """Keyword overrides for ``agy_cli_activation``'s facade call.
 
@@ -374,6 +398,14 @@ def antigravity_app_activation_extras(
         registry=registry,
         resolve_local_executable=False,
     )
+    launchd_command = build_antigravity_launchd_command(
+        cli_bin=cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        runtime_root=runtime_root,
+        registry=registry,
+        resolve_local_executable=False,
+    )
     wake_prompt = sidecar_template["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]
     return {
         "activation_method": "bind_antigravity_schedule_loop_and_sidecar",
@@ -391,6 +423,7 @@ def antigravity_app_activation_extras(
             "host_mcp_config": ANTIGRAVITY_MCP_CONFIG_LABEL,
             "host_hooks_config": ANTIGRAVITY_HOOKS_CONFIG_LABEL,
             "host_sidecar_config": ANTIGRAVITY_SIDECAR_CONFIG_LABEL,
+            "reboot_watchdog_command": shlex.join([*launchd_command, "--execute"]),
             "in_session_schedule_call": {
                 "tool": "schedule",
                 "arguments": {
