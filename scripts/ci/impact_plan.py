@@ -45,6 +45,22 @@ FULL_PREFIXES = (
     "packages/loopx-core/",
     "tests/requirements-",
 )
+FULL_MANIFEST_PREFIXES = ("packages/", "apps/", "examples/")
+FULL_MANIFEST_NAMES = {
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "MANIFEST.in",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "uv.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "requirements.txt",
+}
 LIGHT_EXACT_PATHS = {
     "AGENTS.md",
     "CLAUDE.md",
@@ -92,8 +108,15 @@ def is_frontend_path(path: str) -> bool:
     return False
 
 
+def _is_subpackage_manifest(path: str) -> bool:
+    if not path.startswith(FULL_MANIFEST_PREFIXES):
+        return False
+    name = PurePosixPath(path).name
+    return name in FULL_MANIFEST_NAMES or name.startswith(("requirements-", "requires-"))
+
+
 def is_full_risk_path(path: str) -> bool:
-    if path in FULL_EXACT_PATHS or path.startswith(FULL_PREFIXES):
+    if path in FULL_EXACT_PATHS or path.startswith(FULL_PREFIXES) or _is_subpackage_manifest(path):
         return True
     return path not in LIGHT_EXACT_PATHS and not path.startswith(LIGHT_PREFIXES)
 

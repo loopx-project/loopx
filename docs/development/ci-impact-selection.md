@@ -27,10 +27,12 @@ Stage 2C, and release/package dry-run matrices on Nightly `schedule`, `push` to
 The presentation boundary is deliberately small: Dashboard `src/`, `public/`
 and packaged `loopx/web/chat/`, with explicit client-code/image/font extensions.
 Package manifests (`pyproject.toml`, `setup.py`, `MANIFEST.in`, `package.json`,
-`package-lock.json`, `tsconfig.control-plane.json`, `uv.lock`, Dashboard locks
-and `vite.config.ts`), `scripts/ci/**`, `.github/**`, `packages/loopx-core/**`,
-`examples/shared-goal-authority-e2e/**`, `tests/requirements-*`, and unknown root
-files force `full` qualification on PRs. Both sides of renames are classified;
+`package-lock.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
+`tsconfig.control-plane.json`, `uv.lock`, `Cargo.toml`, `Cargo.lock`,
+subpackage/app/example manifests under `packages/`, `apps/`, and `examples/`,
+and Dashboard `vite.config.ts`), `scripts/ci/**`, `.github/**`,
+`packages/loopx-core/**`, `examples/shared-goal-authority-e2e/**`,
+`tests/requirements-*`, and unknown root files force `full` qualification on PRs. Both sides of renames are classified;
 moving runtime code into a UI directory runs backend + browser checks (`mixed`),
 and moving files into `docs/` runs backend checks rather than `docs`. Symlinks
 and nonregular Git objects always stay `full`.

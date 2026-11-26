@@ -51,7 +51,10 @@ class ImpactTests(unittest.TestCase):
     def test_backend_mixed_and_full_risk_tiering(self):
         for path in ("loopx/cli.py", "loopx/control_plane/goals/vision_checkpoint.ts",
                      "loopx/claude_goal_mode/commands/loopx.md", "tests/test_ui.py",
-                     "AGENTS.md", "docs/build.py"):
+                     "AGENTS.md", "docs/build.py",
+                     "packages/dsh-loopx-plugin/src/cli.ts", "packages/loopx-ark-turn/tests/test_cli.py",
+                     "packages/dsh-loopx-plugin/smoke/dsh-legacy-host.package.json",
+                     "tests/fixtures/change_quality/oracles/typescript/package.json"):
             with self.subTest(backend_path=path):
                 self.assertEqual(candidate([Change("M", path)])[0], "backend")
                 self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "mixed")
@@ -60,10 +63,19 @@ class ImpactTests(unittest.TestCase):
             with self.subTest(mixed_or_non_presentation=path):
                 self.assertNotEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "presentation")
         for path in ("apps/presentation/dashboard/package-lock.json", "apps/presentation/dashboard/vite.config.ts",
+                     "apps/desktop/loopx-control-plane/src-tauri/Cargo.toml",
+                     "examples/dsh-loopx-demo/package.json",
+                     "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                     "packages/loopx-jev/uv.lock",
+                     "packages/loopx-memt-turn/MANIFEST.in",
+                     "packages/dsh-loopx-plugin/package.json",
+                     "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+                     "packages/dsh-loopx-plugin/pnpm-workspace.yaml",
                      "scripts/ci/impact_plan.py", ".github/workflows/python-tests.yml",
                      "pyproject.toml", "package-lock.json", "examples/shared-goal-authority-e2e/mutants.py",
                      "packages/loopx-core/prepare.py", "unknown"):
             with self.subTest(full_path=path):
+                self.assertEqual(candidate([Change("M", path)])[0], "full")
                 self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "full")
 
     def test_invalid_empty_and_non_pr_are_full(self):
@@ -197,6 +209,107 @@ class ImpactTests(unittest.TestCase):
             self.assertEqual(packet["change_kind"], "docs")
             self.assertFalse(packet["python_tests"])
             self.assertEqual(packet["python_shards"], 0)
+
+    def test_subpackage_dependency_manifests_require_full_under_trusted_policy(self):
+        script = str(Path(__file__).with_name("review_gate.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTEST", "COVERAGE", "COV_CORE"))}
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, env=env, text=True).strip()
+
+            def write(path, content):
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+
+            git("init", "-q")
+            git("config", "user.name", "CI Fixture")
+            git("config", "user.email", "ci@example.invalid")
+            git("config", "core.hooksPath", str(root / "no-hooks"))
+            for policy in POLICY_PATHS:
+                write(
+                    policy,
+                    "jobs:\n  test-shard:\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4, 5, 6]\n"
+                    if policy.endswith(".yml")
+                    else "reviewed policy",
+                )
+            for manifest_path in (
+                "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                "packages/dsh-loopx-plugin/package.json",
+                "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+            ):
+                write(manifest_path, "initial")
+            git("add", ".")
+            git("commit", "-qm", "trusted base")
+
+            for manifest_path in (
+                "packages/loopx-capability-benchmark-toolkit/pyproject.toml",
+                "packages/dsh-loopx-plugin/package.json",
+                "packages/dsh-loopx-plugin/pnpm-lock.yaml",
+            ):
+                with self.subTest(manifest_path=manifest_path):
+                    base = git("rev-parse", "HEAD")
+                    write(manifest_path, f"updated {manifest_path}")
+                    git("add", "--", manifest_path)
+                    git("commit", "-qm", f"update {manifest_path}")
+                    plan_file = root / "plan.json"
+                    classified = subprocess.run(
+                        [sys.executable, script, "classify", "--base", base, "--head", "HEAD", "--plan", str(plan_file)],
+                        cwd=root,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(classified.returncode, 0, classified.stderr)
+                    packet = json.loads(plan_file.read_text())
+                    self.assertEqual(packet["change_kind"], "full")
+                    self.assertTrue(packet["core_tests"])
+                    self.assertTrue(packet["backend_tests"])
+                    self.assertTrue(packet["frontend_tests"])
+                    self.assertTrue(packet["compat_tests"])
+                    self.assertTrue(packet["python_tests"])
+                    self.assertTrue(packet["stage2c_tests"])
+                    self.assertFalse(packet["presentation_tests"])
+                    self.assertEqual(packet["python_shards"], 6)
+                    outputs = {
+                        "change_kind": packet["change_kind"],
+                        **{
+                            key: str(bool(packet[key])).lower()
+                            for key in (
+                                "core_tests", "backend_tests", "frontend_tests",
+                                "compat_tests", "python_tests", "stage2c_tests", "presentation_tests",
+                            )
+                        },
+                    }
+                    all_full = {
+                        "changes": {"result": "success", "outputs": outputs},
+                        "checks": {"result": "success"},
+                        "pytest": {"result": "success"},
+                        "node-minimum-compatibility": {"result": "success"},
+                        "stage2c-correctness-e2e": {"result": "success"},
+                        "windows-powershell": {"result": "success"},
+                        "presentation": {"result": "skipped"},
+                    }
+                    ok = subprocess.run(
+                        [sys.executable, script, "verify"],
+                        cwd=root,
+                        env={**env, "NEEDS_JSON": json.dumps(all_full)},
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(ok.returncode, 0, ok.stderr)
+                    for blocked in ("pytest", "node-minimum-compatibility", "stage2c-correctness-e2e", "windows-powershell"):
+                        skipped_needs = {**all_full, blocked: {"result": "skipped"}}
+                        bad = subprocess.run(
+                            [sys.executable, script, "verify"],
+                            cwd=root,
+                            env={**env, "NEEDS_JSON": json.dumps(skipped_needs)},
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertNotEqual(bad.returncode, 0, blocked)
 
 
 if __name__ == "__main__":
