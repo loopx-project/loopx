@@ -260,6 +260,14 @@ document links because it is not a publishable artifact. If that same file is
 tracked by git, it enters the public boundary and is scanned like any other
 publishable file.
 
+A directory scan also walks files that git does not track. An untracked
+Finder `.DS_Store` or AppleDouble `._*` file is skipped only when its own
+header carries that format's magic number; a text file that merely shares the
+name is scanned like any other text. If git tracks a file with that name, it
+stays in the scan. Text is read as UTF-8, and a Windows `desktop.ini` with an
+explicit UTF-16 BOM is decoded as UTF-16 before the same content rules run;
+other undecodable input still fails closed.
+
 Projects that intentionally publish tracked files with private document links
 can opt in through the project registry:
 
