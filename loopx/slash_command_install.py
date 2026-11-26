@@ -582,6 +582,12 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
     return normalized
 
 
+def _requests_default_all_surfaces(surfaces: list[str] | None) -> bool:
+    """Only default/``all`` installs migrate stale Kiro MCP entries; targeted selections skip Kiro."""
+    requested = surfaces or ["all"]
+    return any(item.strip().casefold() == "all" for item in requested)
+
+
 # Every surface that registers the LoopX stdio server shares one key, one
 # ownership marker file name and one merge rule; only the config location, the
 # host-specific server script and the reported status names differ.
@@ -1050,7 +1056,11 @@ def install_slash_commands(
             uninstall=uninstall,
             execute=execute,
         )
-    elif not uninstall and _managed_kiro_mcp_needs_migration(kiro_mcp_config_path):
+    elif (
+        not uninstall
+        and _requests_default_all_surfaces(surfaces)
+        and _managed_kiro_mcp_needs_migration(kiro_mcp_config_path)
+    ):
         # Updater runs default `--install` (`surfaces=all`, without `kiro-cli`);
         # migrate proven managed Kiro MCP entries whose server path moved.
         kiro_mcp_migrated = True

@@ -111,7 +111,7 @@ def opencode_direct_goal_plugin_conflicts(
             if path.suffix == ".jsonc":
                 content = strip_jsonc_trailing_commas(strip_jsonc_comments(content))
             payload_obj: object = json.loads(content)
-        except (json.JSONDecodeError, OSError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             invalid.append(str(path))
             continue
         if not isinstance(payload_obj, dict):
@@ -150,7 +150,7 @@ def target_package_dependencies(
     if path.exists():
         try:
             payload_obj: object = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return "blocked_invalid_user_package_json"
         if not isinstance(payload_obj, dict):
             return "blocked_invalid_user_package_json"
@@ -200,7 +200,7 @@ def read_json_marker_section(marker_path: Path, section: str) -> dict[str, objec
     """Read one mapping section from a LoopX ownership marker, failing closed to ``{}``."""
     try:
         payload_obj: object = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     if not isinstance(payload_obj, dict):
         return {}
@@ -221,7 +221,7 @@ def read_managed_json_entry(
     try:
         marker_obj: object = json.loads(marker_path.read_text(encoding="utf-8"))
         config_obj: object = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(marker_obj, dict) or not isinstance(config_obj, dict):
         return None
@@ -267,7 +267,7 @@ def merge_managed_json_entry(
     try:
         text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
         raw_obj: object = json.loads(text) if text.strip() else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return invalid_status
     if not isinstance(raw_obj, dict):
         return invalid_status

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import cast
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -581,3 +582,131 @@ def test_default_install_leaves_unverified_or_user_owned_kiro_mcp_untouched(
     assert payload_summary["kiro_cli_mcp_path"] is None
     assert all(row["surface"] != "kiro-cli" for row in payload_installed)
     assert config.read_text(encoding="utf-8") == raw_config
+
+
+@pytest.mark.parametrize("sidecar_kind", ("stale_managed", "non_utf8_sidecar"))
+def test_explicit_codex_surface_skips_kiro_mcp_probe_and_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sidecar_kind: str,
+) -> None:
+    monkeypatch.setattr(
+        slash_command_install,
+        "_managed_kiro_mcp_needs_migration",
+        lambda _path: pytest.fail("explicit --surface codex must not probe Kiro sidecar"),
+    )
+    monkeypatch.setattr(
+        slash_command_install,
+        "_kiro_cli_mcp_command",
+        lambda: pytest.fail("explicit --surface codex must not provision Kiro MCP"),
+    )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    kiro_home = tmp_path / "kiro-home"
+    config = kiro_home / KIRO_CLI_MCP_CONFIG_SUBPATH
+    marker = config.parent / slash_command_install.CURSOR_MCP_MARKER_NAME
+    config.parent.mkdir(parents=True)
+    stale_entry = {"command": "/stale/python", "args": ["/stale/mcp_server.py"]}
+    config_bytes = json.dumps({"mcpServers": {"loopx": stale_entry}}).encode("utf-8")
+    config.write_bytes(config_bytes)
+    if sidecar_kind == "stale_managed":
+        marker_bytes = json.dumps(
+            {
+                "schema_version": slash_command_install.KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+                "servers": {"loopx": stale_entry},
+            }
+        ).encode("utf-8")
+    else:
+        marker_bytes = b"\xff\xfe\x00not-utf8-sidecar"
+    marker.write_bytes(marker_bytes)
+
+    codex_home = str(tmp_path / "codex")
+    for execute in (False, True):
+        payload = install_slash_commands(
+            execute=execute,
+            surfaces=["codex"],
+            codex_home=codex_home,
+            kiro_home=str(kiro_home),
+        )
+        assert payload["ok"] is True
+        assert payload["effective_surfaces"] == ["codex"]
+        summary = cast(dict[str, object], payload["summary"])
+        installed = cast(list[dict[str, object]], payload["installed"])
+        assert summary["kiro_cli_mcp_path"] is None
+        assert summary["kiro_cli_skill_dir"] is None
+        assert all(row["surface"] != "kiro-cli" for row in installed)
+        assert config.read_bytes() == config_bytes
+        assert marker.read_bytes() == marker_bytes
+        assert not (kiro_home / "skills").exists()
+
+
+def test_real_cli_handles_non_utf8_kiro_sidecar_and_selective_codex_cleanly(
+    tmp_path: Path,
+) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    kiro_home = tmp_path / "kiro-home"
+    config = kiro_home / KIRO_CLI_MCP_CONFIG_SUBPATH
+    marker = config.parent / slash_command_install.CURSOR_MCP_MARKER_NAME
+    config.parent.mkdir(parents=True)
+    preserved_entry = {"command": "/existing/python", "args": ["/existing/mcp_server.py"]}
+    config_bytes = json.dumps({"mcpServers": {"loopx": preserved_entry}}).encode("utf-8")
+    corrupt_sidecar_bytes = b"\xff\xfe\x00\x80corrupt-kiro-sidecar"
+    config.write_bytes(config_bytes)
+    marker.write_bytes(corrupt_sidecar_bytes)
+
+    env = {
+        **os.environ,
+        "HOME": str(tmp_path / "home"),
+        "KIRO_HOME": str(kiro_home),
+        "CODEX_HOME": str(tmp_path / "codex"),
+        "CLAUDE_HOME": str(tmp_path / "claude"),
+        "OPENCODE_CONFIG_DIR": str(tmp_path / "opencode"),
+        "XDG_CONFIG_HOME": str(tmp_path / "xdg"),
+        "PYTHONPATH": str(repo_root),
+    }
+
+    def run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "loopx.cli_runtime", "slash-commands", *args, "--format", "json"],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
+        )
+
+    codex_only = run_cli("--install", "--surface", "codex")
+    assert codex_only.returncode == 0, codex_only.stderr
+    codex_payload = json.loads(codex_only.stdout)
+    assert codex_payload["ok"] is True
+    assert codex_payload["effective_surfaces"] == ["codex"]
+    assert codex_payload["summary"]["kiro_cli_mcp_path"] is None
+    assert config.read_bytes() == config_bytes
+    assert marker.read_bytes() == corrupt_sidecar_bytes
+
+    default_all = run_cli("--install")
+    assert default_all.returncode == 0, default_all.stderr
+    default_payload = json.loads(default_all.stdout)
+    assert default_payload["ok"] is True
+    assert default_payload["effective_surfaces"] == ["codex", "claude-code", "opencode"]
+    assert default_payload["summary"]["kiro_cli_mcp_path"] is None
+    assert all(row["surface"] != "kiro-cli" for row in default_payload["installed"])
+    assert config.read_bytes() == config_bytes
+    assert marker.read_bytes() == corrupt_sidecar_bytes
+
+    kiro_selected = run_cli("--install", "--surface", "kiro-cli")
+    assert kiro_selected.returncode == 0, kiro_selected.stderr
+    kiro_payload = json.loads(kiro_selected.stdout)
+    assert kiro_payload["ok"] is True
+    assert _mcp_row(kiro_payload)["status"] == "skipped_user_owned_mcp_entry"
+    assert config.read_bytes() == config_bytes
+    assert marker.read_bytes() == corrupt_sidecar_bytes
+
+    # Non-UTF-8 mcp.json itself also fails closed structurally rather than raising UnicodeDecodeError.
+    config.write_bytes(corrupt_sidecar_bytes)
+    bad_config = run_cli("--install", "--surface", "kiro-cli")
+    assert bad_config.returncode == 1, bad_config.stderr
+    bad_payload = json.loads(bad_config.stdout)
+    assert bad_payload["ok"] is False
+    assert _mcp_row(bad_payload)["status"] == "blocked_invalid_kiro_cli_mcp_json"
+    assert config.read_bytes() == corrupt_sidecar_bytes
