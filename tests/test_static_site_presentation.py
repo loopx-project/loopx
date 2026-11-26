@@ -482,8 +482,14 @@ def test_cli_package_keeps_character_class_rules_public(
         "<p>Password: 8 to 64 ASCII characters.</p>\n"
         "</body></html>\n"
     )
+    composition_page = (
+        "<html><body><h1>Password composition</h1>\n"
+        "<p>Password: 1 uppercase, 1 lowercase, and 1 number.</p>\n"
+        "</body></html>\n"
+    )
     (site / "password-alphanumeric.html").write_text(alphanumeric_page, encoding="utf-8")
     (site / "password-ascii.html").write_text(ascii_page, encoding="utf-8")
+    (site / "password-composition.html").write_text(composition_page, encoding="utf-8")
     output = tmp_path / "publish"
 
     assert _cli_package(site, output, tmp_path / "state") == 0
@@ -491,6 +497,7 @@ def test_cli_package_keeps_character_class_rules_public(
     assert payload["write_performed"] is True
     assert (output / "password-alphanumeric.html").read_text(encoding="utf-8") == alphanumeric_page
     assert (output / "password-ascii.html").read_text(encoding="utf-8") == ascii_page
+    assert (output / "password-composition.html").read_text(encoding="utf-8") == composition_page
 
 
 def test_cli_package_keeps_quoted_button_labels_public(
@@ -508,8 +515,14 @@ def test_cli_package_keeps_quoted_button_labels_public(
         '<p>Token: "Copy token" is the button to use.</p>\n'
         "</body></html>\n"
     )
+    continue_page = (
+        "<html><body><h1>Device setup</h1>\n"
+        '<p>Password: "Continue!" is the button to use.</p>\n'
+        "</body></html>\n"
+    )
     (site / "forgot-password.html").write_text(forgot_page, encoding="utf-8")
     (site / "copy-token.html").write_text(copy_page, encoding="utf-8")
+    (site / "continue-button.html").write_text(continue_page, encoding="utf-8")
     output = tmp_path / "publish"
 
     assert _cli_package(site, output, tmp_path / "state") == 0
@@ -517,6 +530,7 @@ def test_cli_package_keeps_quoted_button_labels_public(
     assert payload["write_performed"] is True
     assert (output / "forgot-password.html").read_text(encoding="utf-8") == forgot_page
     assert (output / "copy-token.html").read_text(encoding="utf-8") == copy_page
+    assert (output / "continue-button.html").read_text(encoding="utf-8") == continue_page
 
 
 def test_cli_package_still_rejects_a_credential_value_in_an_asset(

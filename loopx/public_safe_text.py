@@ -394,8 +394,9 @@ _PRESENTATION_KEY_LABELS_SOURCE = (
 # `Token: 24 hours`. A bare number after a label is not by itself a secret;
 # when it is a quantity with a length or time unit it is a public rule. The
 # negative lookahead also covers word ranges (`8 to 64 characters`),
-# qualified units (`2 business days`) and character classes (`12 alphanumeric
-# characters`) while a bare number (`Password: 12345678`) and a mixed value
+# qualified units (`2 business days`), character classes (`12 alphanumeric
+# characters`) and counted composition rules (`1 uppercase, 1 lowercase, and
+# 1 number`) while a bare number (`Password: 12345678`) and a mixed value
 # (`token: abc123`) still fail closed.
 _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?![\"']?\d+(?:\.\d+)?"
@@ -403,7 +404,8 @@ _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?:\s+or\s+(?:more|fewer|less))?"
     r"\s*[-\u2013\u2014]?\s*"
     r"(?:[A-Za-z][A-Za-z-]*[-\s]+){0,2}"
-    r"(?:characters?|chars?|letters?|digits?|symbols?"
+    r"(?:characters?|chars?|letters?|digits?|numbers?|symbols?"
+    r"|uppercase|lowercase"
     r"|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s"
     r"|days?|workdays?|d|weeks?|months?|years?)\b)"
 )
@@ -414,7 +416,9 @@ _PRESENTATION_COLON_VALUE_SOURCE = (
     # base64/symbol character, or a long opaque letters-only run. A quoted
     # interface label (`"Forgot password?"`, `"Copy token"`) has spaces or
     # ordinary Title Case words and stays public help.
-    r"[\"'](?=[^\s\"'`<>]*[0-9+/=@#$%^&*_!])[^\s\"'`<>]+[\"']|"
+    r"[\"']"
+    + _SHAPE_VALUE_TOKEN_SOURCE
+    + r"[\"']|"
     r"[\"'][A-Za-z]{16,}[\"']|"
     + _SHAPE_VALUE_TOKEN_SOURCE
     + r"|"
