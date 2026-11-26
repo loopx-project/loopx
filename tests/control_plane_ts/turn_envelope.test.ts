@@ -276,6 +276,7 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     const checked = evaluateTurnEnvelope({...request, include_model_context: true});
     assert.equal(checked.model_context_schema_version, "loopx_turn_model_context_v0");
     assert.equal(checked.ordinary_work_segment_guidance, false);
+    assert.equal(checked.owner_blocker_guidance, false);
     const view = structuredClone(complete);
     const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
       (row as Record<string | number, unknown>)[key], root);
@@ -328,6 +329,46 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     const edits = (checked.model_context_changes as JsonObject).changes as JsonObject[];
     assert.equal(edits.some(edit =>
       (edit.path as string[]).join(".") === "heartbeat_recommendation.spend_policy" && edit.remove === true), allowed);
+  }
+  const standardHint = {
+    rule: "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted " +
+      "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner " +
+      "the action and verification check. Before yielding, reuse a runnable independent " +
+      "Todo or check Goal acceptance for a useful independent successor to record. " +
+      "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action.",
+    section: "User Todo / Owner Review Reading Queue",
+    agent_todo_command_template: "loopx todo add --role agent --priority P1 --text '<x>'",
+    user_action_command_template: "loopx todo add --role user --task-class user_action --text '<x>'",
+    user_gate_command_template: "loopx todo add --role user --task-class user_gate --text '<x>'",
+    task_evidence: {instruction: "Preserve extra task hint metadata."},
+  };
+  for (const [modeName, delivered, action, ruleText, expectsStandard] of [
+    ["normal", true, "normal_run", standardHint.rule, true],
+    ["custom", true, "normal_run", "Custom owner-blocker policy: keep this verbatim.", false],
+    ["non_ordinary_delivery", false, "normal_run", standardHint.rule, false],
+    ["non_ordinary_action", true, "control_plane_repair", standardHint.rule, false],
+  ] as const) {
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: {
+      ...source, normal_delivery_allowed: delivered, effective_action: action,
+      todo_write_hint: {...standardHint, rule: ruleText},
+    }, scheduler_execution_args: ""});
+    const checked = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: captured, include_model_context: true,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"d".repeat(64)}`}});
+    assert.equal(checked.owner_blocker_guidance, expectsStandard, modeName);
+    const view = structuredClone(captured);
+    const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
+      (row as Record<string | number, unknown>)[key], root);
+    for (const edit of (checked.model_context_changes as JsonObject).changes as JsonObject[]) {
+      const path = edit.path as (string | number)[], key = path.at(-1)!;
+      const parent = at(view, path.slice(0, -1)) as Record<string | number, unknown>;
+      if (edit.remove) delete parent[key];
+      else parent[key] = edit.from ? at(captured, edit.from as (string | number)[]) : edit.value;
+    }
+    assert.deepEqual(view.todo_write_hint, expectsStandard
+      ? {task_evidence: standardHint.task_evidence}
+      : {rule: ruleText, task_evidence: standardHint.task_evidence}, modeName);
+    assert.equal((captured.todo_write_hint as JsonObject).user_gate_command_template,
+      standardHint.user_gate_command_template, modeName);
   }
   assert.deepEqual(complete, before);
 });

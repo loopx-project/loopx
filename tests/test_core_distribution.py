@@ -1018,6 +1018,9 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     assert "largest coherent work segment you can reliably complete and verify with your capabilities" in instructions
     assert "same verifiable outcome in one Todo" in instructions
     assert "dependency, approval or validation boundaries" in instructions
+    assert "isolate the smallest blocked Todo" in instructions
+    assert "exact blocking action and verification check" in instructions
+    assert "continue runnable independent work" in instructions
     model_input = json.loads(task_context_json)
     capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
     original = json.loads(capture.read_text(encoding="utf-8"))

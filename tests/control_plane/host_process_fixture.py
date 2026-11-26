@@ -32,8 +32,14 @@ def assert_host_task_context(model_input, source):
     expected = {field: value for field, value in source.items() if field not in outer_fields}
     hints = expected.get("todo_write_hint")
     if isinstance(hints, dict):
-        commands = {"rule", "section", "agent_todo_command_template", "user_action_command_template",
+        from loopx.control_plane.todos.write_hint import STANDARD_TODO_WRITE_HINT_RULE
+
+        commands = {"section", "agent_todo_command_template", "user_action_command_template",
                     "user_gate_command_template"}
+        if (source.get("normal_delivery_allowed") is True
+                and source.get("effective_action") == "normal_run"
+                and hints.get("rule") == STANDARD_TODO_WRITE_HINT_RULE):
+            commands.add("rule")
         retained = {k: v for k, v in hints.items() if k not in commands or not isinstance(v, str)}
         if retained:
             expected["todo_write_hint"] = retained

@@ -230,11 +230,15 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
         assert promotion['message'] not in prompt
         assert archive['archive_command_template'] not in prompt
         assert 'one_step means one work segment' not in prompt
+        assert 'isolate the smallest blocked Todo' in prompt
+        assert 'Verified owner-only blocker: report it for a user_gate' in prompt
+        assert 'loopx todo add' not in prompt
     model_input, _ = json.JSONDecoder().raw_decode(structured.split('Turn request:\n', 1)[1])
     codex_input = json.loads(codex_prompt.split('Turn request:\n', 1)[1])
     assert model_input == codex_input
     worker = assert_host_task_context(model_input, full)
     assert worker['heartbeat_recommendation']['spend_policy'] == full['heartbeat_recommendation']['spend_policy']
+    assert 'todo_write_hint' not in worker
     assert worker["reward_memory_recall"] == {"status": "disabled", "goal_id": GOAL_ID, "agent_id": AGENT_ID}
     full_dispatch = full["turn_start_capability_hook_dispatch"]
     assert full_dispatch["results"] and full_dispatch["registered_count"] >= 1
@@ -249,6 +253,7 @@ def test_authored_requirements_survive_capture_projection_and_host(tmp_path, mon
     assert goal in worker_sources['goal_state']['text']
     if repetitions == 1:
         _assert_one_step_spend_policy_parity(full)
+        _assert_owner_blocker_rule_parity(full)
     if provider == "sqlite" and repetitions == 1:
         _assert_optional_readbacks_survive_when_relevant(full)
     receipts = _heartbeat_receipt_count(runtime, TURN_ID)
@@ -326,6 +331,96 @@ def _assert_one_step_spend_policy_parity(full):
             assert task_heartbeat["spend_policy"] == custom_policy
             for key, value in extra_fields.items():
                 assert model_input["task_context"][key] == value
+
+
+def _assert_owner_blocker_rule_parity(full):
+    """Ordinary standard blocker rules deliver Worker requirements without templates."""
+    from loopx.control_plane.quota.turn_envelope import compose_turn_decision
+    from loopx.control_plane.todos.write_hint import (
+        STANDARD_TODO_WRITE_HINT_RULE,
+        worker_owner_blocker_instruction,
+    )
+    from loopx.control_plane.turn_driver.host_candidate import render_dsh_host_prompt
+
+    custom_rule = "Custom blocker rule: record blocking verification and keep unrelated work active."
+    worker_rule = worker_owner_blocker_instruction(True)
+    for case_name, normal_delivery, effective_action, rule_text, extra_fields, expects_builtin in (
+        ("normal", True, "normal_run", STANDARD_TODO_WRITE_HINT_RULE, {}, True),
+        ("custom_rule", True, "normal_run", custom_rule, {}, False),
+        (
+            "custom_with_colliding_flags",
+            True,
+            "normal_run",
+            custom_rule,
+            {"owner_blocker_guidance": True, "_owner_blocker_guidance": True},
+            False,
+        ),
+        ("non_ordinary_delivery_off", False, "normal_run", STANDARD_TODO_WRITE_HINT_RULE, {}, False),
+        (
+            "non_ordinary_repair_with_colliding_flags",
+            True,
+            "control_plane_repair",
+            STANDARD_TODO_WRITE_HINT_RULE,
+            {"owner_blocker_guidance": True, "_owner_blocker_guidance": True},
+            False,
+        ),
+    ):
+        source = copy.deepcopy({key: value for key, value in full.items() if key not in {"schema_version", "contract_binding"}})
+        source["normal_delivery_allowed"] = normal_delivery
+        source["effective_action"] = effective_action
+        source["todo_write_hint"] = {**source["todo_write_hint"], "rule": rule_text}
+        for key, value in extra_fields.items():
+            source[key] = value
+        decision = compose_turn_decision(source)
+        if normal_delivery:
+            plan = build_loopx_turn_plan(decision, host="generic-cli", execution_mode="isolated-headless",
+                                        turn_instance_id=TURN_ID)
+            request = build_loopx_turn_host_request(plan)
+        else:
+            request = {
+                "schema_version": "loopx_turn_host_request_v1",
+                "turn_key": f"sha256:{'a' * 64}",
+                "work_contract": decision,
+                "source_decision_hash": decision["contract_binding"]["content_hash"],
+            }
+        authority = extract_turn_authority(request)
+        assert (authority.get("_owner_blocker_guidance") is True) is expects_builtin, case_name
+        assert bool(worker_owner_blocker_instruction(authority)) is expects_builtin, case_name
+        structured = render_prompt(authority)
+        dsh_prompt = render_dsh_host_prompt(request)
+        codex_prompt = _prompt(request)
+        assert dsh_prompt is not None
+        for rendered in (structured, dsh_prompt, codex_prompt):
+            assert (worker_rule in rendered) is expects_builtin, case_name
+            for fragment in (
+                "user_gate",
+                "user_action",
+                "smallest blocked Todo",
+                "action and verification check",
+                "continue runnable independent work",
+            ):
+                if expects_builtin:
+                    assert fragment in rendered, (case_name, fragment)
+            for forbidden in (
+                "loopx todo add",
+                source["todo_write_hint"]["user_gate_command_template"],
+                source["todo_write_hint"]["user_action_command_template"],
+                source["todo_write_hint"]["agent_todo_command_template"],
+            ):
+                assert forbidden not in rendered, (case_name, forbidden)
+        model_input, _ = json.JSONDecoder().raw_decode(structured.split("Turn request:\n", 1)[1])
+        dsh_input, _ = json.JSONDecoder().raw_decode(dsh_prompt.split("Turn request:\n", 1)[1])
+        codex_input = json.loads(codex_prompt.split("Turn request:\n", 1)[1])
+        assert model_input == codex_input == dsh_input
+        task_context = assert_host_task_context(model_input, decision)
+        if expects_builtin:
+            assert "todo_write_hint" not in task_context
+        else:
+            assert task_context["todo_write_hint"] == {"rule": rule_text}
+            assert "section" not in task_context["todo_write_hint"]
+            for key, value in extra_fields.items():
+                assert task_context[key] == value
+        assert decision["todo_write_hint"] == source["todo_write_hint"]
 
 
 def _assert_optional_readbacks_survive_when_relevant(full):

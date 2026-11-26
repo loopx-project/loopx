@@ -871,11 +871,25 @@ const STANDARD_ONE_STEP_SPEND_POLICY =
   "append exactly one heartbeat spend only after scope-bounded work " +
   "is validated and written back; one_step: mode, not an operation limit";
 
+const STANDARD_TODO_WRITE_HINT_RULE =
+  "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted " +
+  "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner " +
+  "the action and verification check. Before yielding, reuse a runnable independent " +
+  "Todo or check Goal acceptance for a useful independent successor to record. " +
+  "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action.";
+
 function usesStandardOneStepWorkSegment(decision: JsonObject): boolean {
   const heartbeat = object(decision.heartbeat_recommendation);
   return decision.normal_delivery_allowed === true &&
     heartbeat.recommended_mode === "steering_audit_then_one_step" &&
     heartbeat.spend_policy === STANDARD_ONE_STEP_SPEND_POLICY;
+}
+
+function usesStandardOwnerBlockerGuidance(decision: JsonObject): boolean {
+  const writeHint = object(decision.todo_write_hint);
+  return decision.normal_delivery_allowed === true &&
+    decision.effective_action === EffectiveAction.NORMAL_RUN &&
+    writeHint.rule === STANDARD_TODO_WRITE_HINT_RULE;
 }
 
 function hostModelContextChanges(decision: JsonObject): JsonObject {
@@ -886,12 +900,17 @@ function hostModelContextChanges(decision: JsonObject): JsonObject {
     "scheduler_execution_context", "promotion_readiness_warning", "completed_todo_archive_warning"]) {
     delete context[field];
   }
-  // Todo-authoring directions belong to the outer executor. Preserve other
-  // fields because task context may depend on future additions.
+  // Todo-authoring CLI templates and queue headings stay with the outer executor.
+  // Strip the standard rule only for admitted ordinary work (replacing it with
+  // checked Worker disposition guidance); preserve custom or non-ordinary rules.
   const writeHint = object(decision.todo_write_hint);
   const hintCount = Object.keys(writeHint).length;
-  for (const key of ["rule", "section", "agent_todo_command_template",
-    "user_action_command_template", "user_gate_command_template"]) {
+  const removeWriteHintKeys = usesStandardOwnerBlockerGuidance(decision)
+    ? ["rule", "section", "agent_todo_command_template",
+       "user_action_command_template", "user_gate_command_template"]
+    : ["section", "agent_todo_command_template",
+       "user_action_command_template", "user_gate_command_template"];
+  for (const key of removeWriteHintKeys) {
     if (typeof writeHint[key] === "string") delete writeHint[key];
   }
   const retainedHints = Object.keys(writeHint).length;
@@ -1791,6 +1810,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       checkpointed_write_approval: checkpointedBoundaryAuthority(object(decision.goal_boundary)) !== null,
       execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
       ordinary_work_segment_guidance: usesStandardOneStepWorkSegment(decision),
+      owner_blocker_guidance: usesStandardOwnerBlockerGuidance(decision),
       ...(request.include_model_context === true
         ? {model_context_schema_version: "loopx_turn_model_context_v0",
           model_context_changes: hostModelContextChanges(decision)} : {}),

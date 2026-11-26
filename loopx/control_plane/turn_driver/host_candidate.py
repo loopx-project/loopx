@@ -155,6 +155,7 @@ def extract_turn_authority(
             "execution_profile": _mapping(decision.get("execution_profile")),
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
             "_ordinary_work_segment_guidance": checked.get("ordinary_work_segment_guidance") is True,
+            "_owner_blocker_guidance": checked.get("owner_blocker_guidance") is True,
             "_work_identity": dict(checked["work_identity"]),
             **({"_session_lineage": dict(checked["session_lineage"])} if include_session_lineage else {}),
             "_model_input": projected_host_model_input(request, checked)}
@@ -370,12 +371,19 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
         separators=(",", ":"),
     )
     if model_input is not None:
+        from ..todos.write_hint import worker_owner_blocker_instruction
+
         detail = _mapping(model_input.get("detail_ref"))
         work_segment = ordinary_work_segment_instruction(
             authority.get("_ordinary_work_segment_guidance") is True
         )
         if work_segment:
             work_segment += "\n"
+        owner_blocker = worker_owner_blocker_instruction(
+            authority.get("_owner_blocker_guidance") is True
+        )
+        if owner_blocker:
+            owner_blocker += "\n"
         input_prompt = (
             "You are executing one bounded LoopX-governed work segment.\n"
             "Use task_context for the admitted work. The outer executor retains "
@@ -394,6 +402,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "completion cannot close the Goal. Use execution_profile to size and "
             "qualify work, including artifact, validation, outcome and degradation rules.\n"
             f"{work_segment}"
+            f"{owner_blocker}"
             "For required additional detail, use detail_ref.full_decision from the "
             "saved original observation identified by detail_ref.captured_decision; "
             "verify Goal/Agent/Turn and source_decision_hash. Never re-enter admission "

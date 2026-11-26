@@ -124,6 +124,17 @@ execution profile (`one_step` is a work segment, not a single operation, and a
 Todo groups related steps toward one verifiable outcome). Unrecognized policy
 text stays in the task view untouched without substituting that guidance,
 because it can carry additional constraints.
+When admitted ordinary work carries the standard owner-only blocker rule in
+`todo_write_hint`, command templates and queue section headings remain with the
+outer executor while the TypeScript source check enables the Todo rules owner's
+Worker disposition requirements in the prompt: report verified owner-only
+blockers for `user_gate` even when noted in Next Action (non-blocking requests
+belong in `user_action`), split mixed work and isolate the smallest blocked Todo,
+give the owner the exact action and verification check, and continue runnable
+independent work or identify a useful independent successor from Goal acceptance
+before yielding. Custom `todo_write_hint.rule` text and non-ordinary turns
+retain the original `rule` in `task_context` (still isolating CLI templates and
+section headers) without substituting the built-in guidance.
 The model receives the original `source_decision_hash`, reader references and
 `source_schema_version`; that hash commits the original source, not the task
 view. Inline task context does not require a filesystem read of a private
@@ -156,6 +167,13 @@ Goal、Agent 和停用状态。已知的空观察
 自身能力、预算、已准入任务、范围和执行要求，选择能可靠完成并验证的最大连贯工作段
 （`one_step` 指一个工作段而非单次操作，同一可验证结果的相关操作归在一个 Todo）。
 无法识别的策略原文继续完整交付给 Worker 且不以该指导替代，因为它可能带有额外约束。
+当普通任务准入后的 `todo_write_hint` 携带标准所有者阻塞处置规则时，写入命令
+模板与队列标题留在外层执行器，TypeScript 来源校验通过 Todo 规则 owner 在内置
+Worker 提示中保留阻塞报告与继续工作的必要条件：确认属于所有者的阻塞时立即作为
+`user_gate` 报告（即使已在 Next Action 记述；非阻塞请求归入 `user_action`），拆分混合工作并
+隔离最小受阻 Todo，向所有者提供具体动作与验真检查，并在交还前继续独立可做的工作或从
+Goal acceptance 中识别独立后继；自定义 `todo_write_hint.rule` 文本及非普通模式保留原
+`rule`（同时继续隔离命令模板与标题）而不以内置提示替代。
 模型仍收到原始
 `source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
