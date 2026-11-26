@@ -5,7 +5,9 @@ import {syncBuiltinESMExports} from "node:module";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
+import {gunzipSync} from "node:zlib";
 import {readTodo, TODO_READ_REQUEST} from "../../loopx/control_plane/todos/read_projection.ts";
+import {readTodoRuntime} from "../../loopx/control_plane/todos/read_transport.ts";
 import {projectCanonicalQuotaBatch, readCanonicalTodoProjection, verifyCanonicalTodoAuthorityWitness} from "../../loopx/control_plane/todos/read_transaction.ts";
 import {goalRolloutEventLogPath} from "../../loopx/control_plane/rollout_receipt_log.ts";
 import {readAgent, readScope} from "../../loopx/control_plane/todos/read_codec.ts";
@@ -17,6 +19,7 @@ import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/
 import {TODO_CANONICAL_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
 import {goalAcceptanceTodoDigest, normalizeGoalAcceptanceDocument} from "../../loopx/control_plane/goals/acceptance_contract.ts";
+import {refineGoalOutcome} from "../../loopx/control_plane/goals/outcome_requirements.ts";
 
 const now = "2026-10-19T07:00:00Z";
 const row = (todo_id: string, extra: JsonObject = {}): JsonObject => ({schema_version: "todo_item_v0", todo_id,
@@ -641,3 +644,229 @@ for (const provider of ["file", "sqlite"] as const) {
     assert.equal(drifted.cursor, commit2.cursor);
   });
 }
+
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider} todo.read query include_acceptance=false omits acceptance payloads with exact todo parity`, async t => {
+    const root = await mkdtemp(join(tmpdir(), `loopx-todo-accept-${provider}-`));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const state = join(root, "state.md"), goal = `goal-accept-${provider}`;
+    await writeFile(state, "# Synthetic Goal\n");
+    if (provider === "sqlite") await selectLocalSqliteAuthority(root, goal, true);
+    const store = await openLocalAuthorityStore(root, goal);
+    const bound = row("todo_bound", {text: "Bound acceptance item"});
+    const unbound = row("todo_unbound", {index: 2, text: "Unbound active item"});
+    const document = normalizeGoalAcceptanceDocument({
+      objective: "Keep acceptance evaluation intact without repeating acceptance payloads",
+      non_goals: [],
+      criteria: [{
+        id: "criterion-a",
+        description: "Bound item remains checked",
+        validation_argv: ["python3", "check.py"],
+        validation_files: [{path: "check.py", sha256: "a".repeat(64)}],
+        oracle: {kind: "owner_pinned_oracle", source_id: "accept-checker", input_refs: [], output_refs: ["out.txt"]},
+      }],
+      bindings: [{todo_id: "todo_bound", criterion_ids: ["criterion-a"]}],
+    });
+    const acceptance = {
+      schema_version: "loopx_goal_acceptance_v0",
+      enabled: true,
+      revision: 1,
+      digest: canonicalAuthoritySha256(document),
+      document,
+      verification: null,
+      bindings: [{
+        todo_id: "todo_bound",
+        todo_semantic_digest: goalAcceptanceTodoDigest(bound),
+        revision: 1,
+        criterion_ids: ["criterion-a"],
+        confirmed_by: "owner",
+      }],
+    };
+    const baseProjection = authorityProjectionFixture(goal, [bound, unbound], [], "native", {
+      root_commitments: {objective: "Keep acceptance evaluation intact", acceptance: ["Bound item remains checked"]},
+      goal_acceptance: acceptance,
+    });
+    const goalOutcomes = refineGoalOutcome(baseProjection, goal, null, "owner", {
+      outcome_id: "outcome-a",
+      owner_agent_id: "owner",
+      objective: "Keep acceptance evaluation intact",
+      requirements: [{id: "req-a", description: "Bound item remains checked"}],
+      todo_ids: ["todo_bound"],
+      source: {ref: "message:1", summary: "Keep acceptance evaluation intact"},
+    });
+    const projection = authorityProjectionFixture(goal, [bound, unbound], [], "native", {
+      root_commitments: {objective: "Keep acceptance evaluation intact", acceptance: ["Bound item remains checked"]},
+      goal_outcomes: goalOutcomes,
+      goal_acceptance: acceptance,
+    });
+    const committed = await store.commitAuthority({
+      expected_provider_revision: null,
+      operation_id: "seed-accept-skip",
+      events: [],
+      next_projection: projection,
+      receipts: [],
+    });
+    assert.equal(committed.status, "applied");
+    if (committed.status !== "applied") return;
+    const fence = await engageLegacyCoordinationWriterFence({
+      schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+      runtime_root: root,
+      goal_id: goal,
+      state_path: state,
+      fence: {
+        schema_version: "loopx_legacy_coordination_writer_fence_v0",
+        state: "engaged",
+        goal_id: goal,
+        fence_id: `accept-fence-${provider}`,
+        source_version: "fixture",
+        source_projection_sha256: canonicalAuthoritySha256(projection),
+        expected_shadow_provider_revision: committed.provider_revision,
+      },
+    });
+    assert.equal(fence.status, "applied");
+
+    for (const role of ["agent", null] as const) {
+      const baseRequest = {
+        schema_version: TODO_READ_REQUEST,
+        kind: "query",
+        source: {runtime_root: root, goal_id: goal},
+        observed_at: Date.parse(now) / 1000,
+        evaluated_at: now,
+        query: {
+          goal_id: goal,
+          role,
+          status: null,
+          todo_id: null,
+          agent_id: null,
+          limit: null,
+          read_scope: "active",
+          json_references: false,
+          thin: false,
+          state_file: state,
+          project: root,
+        },
+      };
+      const withAcceptance = await readTodo(baseRequest);
+      assert.ok(withAcceptance.canonical_acceptance);
+      if (role === null) assert.ok(withAcceptance.source_projection);
+      else assert.equal(withAcceptance.source_projection, undefined);
+
+      const nestedOff = await readTodo({
+        ...baseRequest,
+        query: {...baseRequest.query, include_acceptance: false},
+      });
+      const topOff = await readTodo({
+        ...baseRequest,
+        include_acceptance: false,
+      });
+
+      const fullPayload = withAcceptance.payload as JsonObject;
+      for (const stripped of [nestedOff, topOff]) {
+        assert.equal(stripped.canonical_acceptance, undefined);
+        assert.equal(stripped.source_projection, undefined);
+        const strippedPayload = stripped.payload as JsonObject;
+        assert.deepEqual(strippedPayload.todos, fullPayload.todos);
+        assert.deepEqual(strippedPayload.authority_read, fullPayload.authority_read);
+        assert.equal(strippedPayload.open_count, fullPayload.open_count);
+        for (const lane of ["agent_todos", "user_todos"] as const) {
+          const fullSummary = fullPayload[lane] as JsonObject | undefined;
+          const strippedSummary = strippedPayload[lane] as JsonObject | undefined;
+          if (!fullSummary) {
+            assert.equal(strippedSummary, undefined);
+            continue;
+          }
+          assert.equal(strippedSummary!.goal_acceptance_contract, undefined);
+          assert.deepEqual(strippedSummary!.items, fullSummary.items);
+          assert.deepEqual(strippedSummary!.first_executable_items, fullSummary.first_executable_items);
+        }
+      }
+
+      await assert.rejects(
+        () => readTodo({...baseRequest, query: {...baseRequest.query, include_acceptance: "false"}}),
+        /include_acceptance/,
+      );
+      await assert.rejects(
+        () => readTodo({...baseRequest, include_acceptance: false, query: {...baseRequest.query, include_acceptance: true}}),
+        /conflicts/,
+      );
+    }
+  });
+}
+
+test("readTodoRuntime compresses >1 MiB canonical_fields responses cleanly", async t => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-todo-large-gzip-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const state = join(root, "state.md"), goal = "goal-large-canonical";
+  await writeFile(state, "# Large Synthetic Goal\n");
+  const store = await openLocalAuthorityStore(root, goal);
+  const longText = "Preserve exact canonical fields across >1 MiB read compression. ".repeat(30);
+  const todos = Array.from({length: 600}, (_, index) =>
+    row(`todo_large_${String(index).padStart(4, "0")}`, {index: index + 1, text: `${index}:${longText}`}),
+  );
+  const document = normalizeGoalAcceptanceDocument({
+    objective: "Compress >1 MiB canonical_fields responses when acceptance is attached",
+    non_goals: [],
+    criteria: [{id: "criterion-a", description: "Large response still gzips", validation_argv: ["true"]}],
+    bindings: [{todo_id: "todo_large_0000", criterion_ids: ["criterion-a"]}],
+  });
+  const acceptance = {
+    schema_version: "loopx_goal_acceptance_v0",
+    enabled: true,
+    revision: 1,
+    digest: canonicalAuthoritySha256(document),
+    document,
+    verification: null,
+    bindings: [{
+      todo_id: "todo_large_0000",
+      todo_semantic_digest: goalAcceptanceTodoDigest(todos[0]!),
+      revision: 1,
+      criterion_ids: ["criterion-a"],
+      confirmed_by: "owner",
+    }],
+  };
+  const projection = authorityProjectionFixture(goal, todos, [], "native", {goal_acceptance: acceptance});
+  const committed = await store.commitAuthority({
+    expected_provider_revision: null,
+    operation_id: "seed-large-gzip",
+    events: [],
+    next_projection: projection,
+    receipts: [],
+  });
+  assert.equal(committed.status, "applied");
+  if (committed.status !== "applied") return;
+  const fence = await engageLegacyCoordinationWriterFence({
+    schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+    runtime_root: root,
+    goal_id: goal,
+    state_path: state,
+    fence: {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0",
+      state: "engaged",
+      goal_id: goal,
+      fence_id: "large-gzip-fence",
+      source_version: "fixture",
+      source_projection_sha256: canonicalAuthoritySha256(projection),
+      expected_shadow_provider_revision: committed.provider_revision,
+    },
+  });
+  assert.equal(fence.status, "applied");
+
+  const request = {
+    schema_version: TODO_READ_REQUEST,
+    kind: "canonical_fields",
+    source: {runtime_root: root, goal_id: goal},
+    observed_at: Date.parse(now) / 1000,
+    evaluated_at: now,
+  };
+  const plain = await readTodo(request);
+  const plainBytes = Buffer.byteLength(JSON.stringify(plain), "utf8");
+  assert.ok(plainBytes > 1024 * 1024, `expected >1 MiB canonical_fields payload, got ${plainBytes}`);
+  const packed = await readTodoRuntime(request);
+  const piece = packed.result_piece as JsonObject;
+  assert.ok(piece, JSON.stringify(packed));
+  assert.equal(piece.content_encoding, "gzip");
+  assert.equal(piece.decoded_byte_count, plainBytes);
+  assert.ok(Number(piece.byte_count) < 256 * 1024, `expected compact gzip piece, got ${piece.byte_count}`);
+  const decoded = JSON.parse(gunzipSync(Buffer.from(String(piece.data), "base64")).toString("utf8"));
+  assert.deepEqual(decoded, plain);
+});

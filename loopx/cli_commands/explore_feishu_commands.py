@@ -3,30 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from ..capabilities.explore.result_log import NODE_STATUSES
-from ..extensions.lark.presentation.explore_results import (
+from ..extensions.lark.cli_transport import DEFAULT_CLI_BIN
+from ..extensions.lark.presentation.explore_singleflight import (
     DEFAULT_EXPLORE_BASE_NAME,
     EXPLORE_TABLE_KEYS,
-    LarkExploreConfig,
-    build_explore_result_card,
-    configure_lark_explore_visual_sink,
-    explore_visual_semantic_digest,
-    lark_explore_config_from_payload,
-    read_lark_explore_local_config,
-    setup_lark_explore_board,
-    sync_explore_results_to_lark,
-    sync_explore_visual_to_lark,
-    sync_explore_visuals_to_lark,
-    write_lark_explore_local_config,
 )
-from ..extensions.lark.presentation.explore_singleflight import (
-    explore_feishu_sync_busy_packet,
-    explore_feishu_sync_singleflight,
-)
-from ..extensions.lark.cli_transport import DEFAULT_CLI_BIN
 from ..extensions.lark.presentation.sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITIES
+
+if TYPE_CHECKING:
+    from ..extensions.lark.presentation.explore_results import LarkExploreConfig
 
 
 SubcommandArg = Callable[[argparse.ArgumentParser], None]
@@ -182,6 +170,12 @@ def register_explore_feishu_commands(
 
 
 def _target_config(args: argparse.Namespace, *, config_path: Path) -> LarkExploreConfig:
+    from ..extensions.lark.presentation.explore_results import (
+        LarkExploreConfig,
+        lark_explore_config_from_payload,
+        read_lark_explore_local_config,
+    )
+
     stored = lark_explore_config_from_payload(read_lark_explore_local_config(config_path))
     base_token = args.base_token or (stored.base_token if stored else None)
     table_ids = dict(stored.table_ids) if stored else {}
@@ -206,6 +200,22 @@ def handle_explore_feishu_command(
     runtime_root: Path,
     projection_for: ProjectionFor,
 ) -> dict[str, object]:
+    from ..extensions.lark.presentation.explore_results import (
+        build_explore_result_card,
+        configure_lark_explore_visual_sink,
+        explore_visual_semantic_digest,
+        read_lark_explore_local_config,
+        setup_lark_explore_board,
+        sync_explore_results_to_lark,
+        sync_explore_visual_to_lark,
+        sync_explore_visuals_to_lark,
+        write_lark_explore_local_config,
+    )
+    from ..extensions.lark.presentation.explore_singleflight import (
+        explore_feishu_sync_busy_packet,
+        explore_feishu_sync_singleflight,
+    )
+
     if args.explore_command == "feishu-setup":
         return setup_lark_explore_board(
             config_path=config_path,

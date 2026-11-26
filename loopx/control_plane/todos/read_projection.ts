@@ -264,6 +264,19 @@ export async function projectTodoReadGroup(
     orchestration: Object.fromEntries(Object.entries(projected.orchestration).map(([name, ordinals]) => [name, ordinals.map(i => compacts[i]!)]))};
 }
 
+export function includeTodoAcceptance(input: JsonObject, query: JsonObject = {}): boolean {
+  const top = input.include_acceptance === undefined
+    ? undefined
+    : requireBoolean(input.include_acceptance, "Todo read include_acceptance");
+  const nested = query.include_acceptance === undefined
+    ? undefined
+    : requireBoolean(query.include_acceptance, "Todo list query include_acceptance");
+  if (top !== undefined && nested !== undefined && top !== nested) {
+    throw new EffectRuntimeRequestError("Todo read include_acceptance conflicts with query.include_acceptance");
+  }
+  return nested ?? top ?? true;
+}
+
 export async function projectCanonicalTodoFields(
   input: JsonObject,
   options?: TodoResumeRolloutReadOptions,
@@ -280,6 +293,7 @@ export async function projectCanonicalTodoFields(
   const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
   const includeArchived = input.include_archived === true || input.retained === true;
   const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
+  const includeAcceptance = includeTodoAcceptance(input, query);
   const detailId = query.agent_id == null && query.limit == null ? query.todo_id : null;
   const fields: JsonObject = {}, evaluations: JsonObject = {};
   for (const role of ["user", "agent"]) {
@@ -295,7 +309,9 @@ export async function projectCanonicalTodoFields(
     if (grouped.rejection) return grouped;
     const summary = requireJsonObject(grouped.summary, "canonical Todo summary");
     if (role === "agent" && input.retained !== true) {
-      if (checksConfigured || Object.keys(object(acceptance.outcome_requirements)).length || acceptance.goal_objective) summary.goal_acceptance_contract = acceptance;
+      if (includeAcceptance && (checksConfigured || Object.keys(object(acceptance.outcome_requirements)).length || acceptance.goal_objective)) {
+        summary.goal_acceptance_contract = acceptance;
+      }
       const done = all.filter(row => archived.has(row.todo_id) && row.done === true && taskClass(row) === "advancement_task").length;
       if (done) {summary.archived_advancement_done_count = done; summary.advancement_done_count = Number(summary.advancement_done_count || 0) + done;}
     }

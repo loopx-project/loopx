@@ -6,7 +6,7 @@ import {readCanonicalSnapshot} from "../coordination/canonical_snapshot_page.ts"
 import {readLocalCoordinationTodoSource} from "../coordination/local_authority_read.ts";
 import {LOCAL_COORDINATION_TODO_SNAPSHOT_PAGE_REQUEST_SCHEMA,
   LOCAL_COORDINATION_TODO_LIST_RESULT_SCHEMA} from "../coordination/coordination_state_contract.generated.ts";
-import {projectCompletionEvidence, projectCanonicalTodoFields, selectTodoReadFields, projectTodoReadGroup, TODO_READ_RESULT} from "./read_projection.ts";
+import {includeTodoAcceptance, projectCompletionEvidence, projectCanonicalTodoFields, selectTodoReadFields, projectTodoReadGroup, TODO_READ_RESULT} from "./read_projection.ts";
 import {id, canonicalTodoReadItems, structureCanonicalTodo} from "./read_codec.ts";
 import {compactTodoReadSummary, compactThinTodoRead, compactTodoQueueSummary, todoReadProjectionContract} from "./read_presentation.ts";
 import {projectTodoContextPage, SUMMARY_SOURCES, PLANNING_SOURCES} from "./context_projection.ts";
@@ -533,7 +533,8 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
     coverage: {scope: "goal_todo_query", expected_count: projection.uncapped_todo_count,
       included_count: projection.uncapped_todo_count, shown_count: shownCount,
       available_count: projection.uncapped_todo_count, omitted: []}});
-  const completeSource = !query.role && !query.status && !query.todo_id && !query.agent_id && query.limit == null &&
+  const includeAcceptance = includeTodoAcceptance(input, query);
+  const completeSource = includeAcceptance && !query.role && !query.status && !query.todo_id && !query.agent_id && query.limit == null &&
     !query.thin && !query.json_references && !summary && !fullText && !includeArchived;
   const sourceFields = requireJsonObject(fields.fields, "canonical Todo fields");
   const sourceIdentity = Object.fromEntries(["source_authority", "store_identity", "provider_revision", "cursor"].map(key => [key, canonical[key]]));
@@ -546,7 +547,7 @@ async function todoListPayload(input: JsonObject, original: JsonObject[], fields
           {field, field_sha256: canonicalAuthoritySha256(sourceFields[field]), changes: [], python_values: []}])),
         selector: {roles, status: null, todo_id: null, agent_id: null, limit: null, source_name: sourceName,
           observed_at: input.observed_at, evaluated_at: input.evaluated_at}}]}}} : {}),
-    ...(canonical.goal_acceptance_oracle_observation_basis ? {canonical_acceptance: {
+    ...(includeAcceptance && canonical.goal_acceptance_oracle_observation_basis ? {canonical_acceptance: {
       goal_acceptance_contract: canonical.goal_acceptance_contract,
       goal_acceptance_oracle_observation_basis: canonical.goal_acceptance_oracle_observation_basis,
     }} : {})};

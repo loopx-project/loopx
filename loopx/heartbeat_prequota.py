@@ -18,7 +18,7 @@ from .control_plane.effect_runtime import (
     effect_runtime_result,
 )
 from .control_plane.todos.list_readback import list_goal_todos
-from .history import load_registry
+from .control_plane.projects.registry_codec import load_registry
 from .paths import resolve_runtime_root
 
 
@@ -107,6 +107,7 @@ def run_heartbeat_pre_quota(
                     runtime_root_arg=str(runtime),
                     goal_id=goal_id,
                     role=None,
+                    include_acceptance=False,
                 )
                 cached = result["todos"]
                 shared_todo_cache["todos"] = cached

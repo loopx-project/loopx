@@ -3,6 +3,7 @@ import { AGENT_SCOPE_FRONTIER_ACTIONS } from "../../loopx/control_plane/agents/a
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { deflateSync } from "node:zlib";
 
 import {
   TURN_ACTION_ROUTES,
@@ -10,6 +11,7 @@ import {
   ACTION_SIGNATURE_COVERAGE_V0,
   ACTION_SIGNATURE_COVERAGE_V3,
   buildTurnEnvelope,
+  decodeTurnSource,
   assertTurnEnvelopeConsumerVersion,
   evaluateTurnEnvelope,
   quotaActionSignatureDocument,
@@ -2477,4 +2479,34 @@ test("C1 rejects dangling, chained, unsupported and conflicting outcome requirem
     outcome_requirements_ref: "$.interaction_contract.agent_channel.work_context.sources[0].content.goal_acceptance_contract.outcome_requirements",
   };
   assert.throws(() => evaluateTurnEnvelope({operation: "build", payload: dualReqs, scheduler_execution_args: ""}), EffectRuntimeRequestError);
+});
+
+test("decodeTurnSource and compose_complete round-trip >1 MiB compressible sources and reject oversized transport", () => {
+  const source = payload();
+  source.large_context_notes = Array.from({length: 16000}, (_, index) =>
+    `Item ${index}: preserve complete compressed source parity across >1 MiB turn envelopes. `,
+  );
+  const rawJson = Buffer.from(JSON.stringify(source), "utf8");
+  assert.ok(rawJson.length > 1024 * 1024, `expected >1 MiB test source, got ${rawJson.length}`);
+  const encoded = deflateSync(rawJson, {level: 1}).toString("base64");
+  assert.ok(encoded.length < 2 * 1024 * 1024);
+  const transport = {encoding: "deflate-base64-json-v0", data: encoded};
+
+  assert.deepEqual(decodeTurnSource({source_transport: transport}, "payload"), source);
+  const inline = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+  const transported = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    source_transport: transport,
+    scheduler_execution_args: "",
+  });
+  assert.deepEqual(transported, inline);
+
+  assert.throws(
+    () => decodeTurnSource({source_transport: {encoding: "deflate-base64-json-v0", data: "A".repeat(2 * 1024 * 1024 + 4)}}, "payload"),
+    /invalid Turn composition source transport/,
+  );
+  assert.throws(
+    () => decodeTurnSource({source_transport: {encoding: "deflate-base64-json-v0", data: deflateSync(Buffer.from("{not-json", "utf8")).toString("base64")}}, "payload"),
+    /Turn composition source must be valid compressed JSON within 64 MiB/,
+  );
 });

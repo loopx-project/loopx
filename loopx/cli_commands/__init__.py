@@ -1,4 +1,3 @@
-# ruff: noqa: F401
 """Modular CLI command registrations.
 
 Command modules expose two small functions:
@@ -8,128 +7,114 @@ Command modules expose two small functions:
 
 The top-level CLI keeps global options, registry fallback, and dispatch order.
 
-The historical function re-exports remain available, but they are loaded only
-when a caller requests one. Importing a command-owned submodule must not import
-every other CLI command first.
+The historical function re-exports remain available, but each requested symbol
+loads only its owning command submodule rather than importing every CLI command.
 """
 
-_EXPORTS_LOADED = False
+from importlib import import_module
 
-
-def _load_exports() -> None:
-    """Load the legacy function facade on first attribute access."""
-
-    global _EXPORTS_LOADED
-    if _EXPORTS_LOADED:
-        return
-
-    from .turn import handle_turn_command, register_turn_commands
-    from .host_mode_plan import (
-        handle_host_mode_plan_command,
-        register_host_mode_plan_command,
-    )
-    from .benchmark_boundary import (
-        handle_benchmark_boundary_command,
-        register_benchmark_boundary_commands,
-    )
-    from .benchmark_dispatch import (
-        handle_benchmark_command,
-        register_benchmark_command_group,
-    )
-    from .benchmark_continuation import (
-        handle_benchmark_continuation_command,
-        register_benchmark_continuation_commands,
-    )
-    from .bootstrap_connect import (
-        handle_bootstrap_connect_command,
-        register_bootstrap_connect_command,
-    )
-    from .canary import handle_canary_command, register_canary_commands
-    from .authority_archive import handle_authority_archive_command, register_authority_archive_command
-    from .postgres import handle_postgres_command, register_postgres_commands
-    from .coordination_shadow import (
-        handle_coordination_shadow_command,
-        register_coordination_shadow_command,
-    )
-    from .capability import handle_capability_command, register_capability_commands
-    from .extension import handle_extension_command, register_extension_commands
-    from .doctor import handle_doctor_command, register_doctor_command
-    from .first_run_report import (
-        handle_first_run_report_command,
-        register_first_run_report_command,
-    )
-    from .dreaming import handle_dreaming_command, register_dreaming_commands
-    from .explore import handle_explore_command, register_explore_commands
-    from .handoff_mode import handle_handoff_mode_command, register_handoff_mode_command
-    from .history import handle_history_command, register_history_command
-    from .goal_channel import handle_goal_channel_command, register_goal_channel_commands
-    from .lark_inbox import (
-        build_lark_issue_fix_reviewer_provider_hooks,
-        handle_lark_inbox_command,
-        register_lark_inbox_commands,
-    )
-    from .lark_kanban import handle_lark_kanban_command, register_lark_kanban_commands
-    from .ml_experiment import handle_ml_experiment_command, register_ml_experiment_commands
-    from .project_lifecycle import (
-        handle_project_lifecycle_command,
-        register_project_lifecycle_commands,
-    )
-    from .project import handle_project_command, register_project_commands
-    from .preset import handle_preset_command, register_preset_commands
-    from .presentation import handle_presentation_command, register_presentation_commands
-    from .dash import handle_dash_command, register_dash_commands
-    from .pr_review import handle_pr_review_command, register_pr_review_command
-    from .deepresearch import handle_deepresearch_command, register_deepresearch_command
-    from .quota import handle_quota_command, register_quota_command
-    from .ready_score import handle_ready_score_command, register_ready_score_command
-    from .review_batch import handle_review_batch_command, register_review_batch_commands
-    from .registry_admin import (
-        handle_registry_admin_command,
-        register_registry_admin_commands,
-    )
-    from .slash_commands import handle_slash_commands_command, register_slash_commands_command
-    from .starter import (
-        handle_demo_command,
-        handle_starter_command,
-        register_starter_commands,
-    )
-    from .starter_bootstrap import (
-        handle_codex_cli_bootstrap_message_command,
-        handle_loopx_bootstrap_command_pack_command,
-        handle_new_project_prompt_command,
-        handle_starter_bootstrap_command,
-    )
-    from .starter_bootstrap_registration import register_starter_bootstrap_commands
-    from .summary_all import handle_summary_all_command, register_summary_all_command
-    from .status import (
-        handle_check_command,
-        handle_diagnose_command,
-        handle_review_packet_command,
-        handle_status_command,
-        register_status_commands,
-    )
-    from .support_control import (
-        handle_support_control_command,
-        register_support_control_commands,
-    )
-    from .authority_shadow import (
-        handle_authority_shadow_command,
-        register_authority_shadow_command,
-    )
-    from .task_lease import handle_task_lease_command, register_task_lease_command
-    from .todo import handle_todo_command
-    from .todo_registration import register_todo_command
-    from .version import handle_version_command, register_version_command
-    from .usage_ping import handle_usage_ping_command, register_usage_ping_command
-    from .worker_bridge import handle_worker_bridge_command, register_worker_bridge_commands
-    from .workflow_skills import (
-        handle_workflow_skills_command,
-        register_workflow_skills_command,
-    )
-
-    namespace = locals()
-    globals().update({name: namespace[name] for name in __all__})
-    _EXPORTS_LOADED = True
+_EXPORT_SUBMODULES: dict[str, str] = {
+    "handle_turn_command": "turn",
+    "register_turn_commands": "turn",
+    "handle_host_mode_plan_command": "host_mode_plan",
+    "register_host_mode_plan_command": "host_mode_plan",
+    "handle_benchmark_boundary_command": "benchmark_boundary",
+    "register_benchmark_boundary_commands": "benchmark_boundary",
+    "handle_benchmark_command": "benchmark_dispatch",
+    "register_benchmark_command_group": "benchmark_dispatch",
+    "handle_benchmark_continuation_command": "benchmark_continuation",
+    "register_benchmark_continuation_commands": "benchmark_continuation",
+    "handle_bootstrap_connect_command": "bootstrap_connect",
+    "register_bootstrap_connect_command": "bootstrap_connect",
+    "handle_canary_command": "canary",
+    "register_canary_commands": "canary",
+    "handle_authority_archive_command": "authority_archive",
+    "register_authority_archive_command": "authority_archive",
+    "handle_postgres_command": "postgres",
+    "register_postgres_commands": "postgres",
+    "handle_coordination_shadow_command": "coordination_shadow",
+    "register_coordination_shadow_command": "coordination_shadow",
+    "handle_capability_command": "capability",
+    "register_capability_commands": "capability",
+    "handle_extension_command": "extension",
+    "register_extension_commands": "extension",
+    "handle_doctor_command": "doctor",
+    "register_doctor_command": "doctor",
+    "handle_first_run_report_command": "first_run_report",
+    "register_first_run_report_command": "first_run_report",
+    "handle_dreaming_command": "dreaming",
+    "register_dreaming_commands": "dreaming",
+    "handle_explore_command": "explore",
+    "register_explore_commands": "explore",
+    "handle_handoff_mode_command": "handoff_mode",
+    "register_handoff_mode_command": "handoff_mode",
+    "handle_history_command": "history",
+    "register_history_command": "history",
+    "handle_goal_channel_command": "goal_channel",
+    "register_goal_channel_commands": "goal_channel",
+    "build_lark_issue_fix_reviewer_provider_hooks": "lark_inbox",
+    "handle_lark_inbox_command": "lark_inbox",
+    "register_lark_inbox_commands": "lark_inbox",
+    "handle_lark_kanban_command": "lark_kanban",
+    "register_lark_kanban_commands": "lark_kanban",
+    "handle_ml_experiment_command": "ml_experiment",
+    "register_ml_experiment_commands": "ml_experiment",
+    "handle_project_lifecycle_command": "project_lifecycle",
+    "register_project_lifecycle_commands": "project_lifecycle",
+    "handle_project_command": "project",
+    "register_project_commands": "project",
+    "handle_preset_command": "preset",
+    "register_preset_commands": "preset",
+    "handle_presentation_command": "presentation",
+    "register_presentation_commands": "presentation",
+    "handle_dash_command": "dash",
+    "register_dash_commands": "dash",
+    "handle_pr_review_command": "pr_review",
+    "register_pr_review_command": "pr_review",
+    "handle_deepresearch_command": "deepresearch",
+    "register_deepresearch_command": "deepresearch",
+    "handle_quota_command": "quota",
+    "register_quota_command": "quota",
+    "handle_ready_score_command": "ready_score",
+    "register_ready_score_command": "ready_score",
+    "handle_review_batch_command": "review_batch",
+    "register_review_batch_commands": "review_batch",
+    "handle_registry_admin_command": "registry_admin",
+    "register_registry_admin_commands": "registry_admin",
+    "handle_slash_commands_command": "slash_commands",
+    "register_slash_commands_command": "slash_commands",
+    "handle_demo_command": "starter",
+    "handle_starter_command": "starter",
+    "register_starter_commands": "starter",
+    "handle_codex_cli_bootstrap_message_command": "starter_bootstrap",
+    "handle_loopx_bootstrap_command_pack_command": "starter_bootstrap",
+    "handle_new_project_prompt_command": "starter_bootstrap",
+    "handle_starter_bootstrap_command": "starter_bootstrap",
+    "register_starter_bootstrap_commands": "starter_bootstrap_registration",
+    "handle_summary_all_command": "summary_all",
+    "register_summary_all_command": "summary_all",
+    "handle_check_command": "status",
+    "handle_diagnose_command": "status",
+    "handle_review_packet_command": "status",
+    "handle_status_command": "status",
+    "register_status_commands": "status",
+    "handle_support_control_command": "support_control",
+    "register_support_control_commands": "support_control",
+    "handle_authority_shadow_command": "authority_shadow",
+    "register_authority_shadow_command": "authority_shadow",
+    "handle_task_lease_command": "task_lease",
+    "register_task_lease_command": "task_lease",
+    "handle_todo_command": "todo",
+    "register_todo_command": "todo_registration",
+    "handle_version_command": "version",
+    "register_version_command": "version",
+    "handle_usage_ping_command": "usage_ping",
+    "register_usage_ping_command": "usage_ping",
+    "handle_worker_bridge_command": "worker_bridge",
+    "register_worker_bridge_commands": "worker_bridge",
+    "handle_workflow_skills_command": "workflow_skills",
+    "register_workflow_skills_command": "workflow_skills",
+}
 
 __all__ = [
     "handle_turn_command",
@@ -236,10 +221,12 @@ __all__ = [
 
 
 def __getattr__(name: str) -> object:
-    if name not in __all__:
+    module_name = _EXPORT_SUBMODULES.get(name)
+    if module_name is None or name not in __all__:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    _load_exports()
-    return globals()[name]
+    value = getattr(import_module(f".{module_name}", __name__), name)
+    globals()[name] = value
+    return value
 
 
 def __dir__() -> list[str]:

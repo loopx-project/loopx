@@ -75,6 +75,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"goal-acceptance",
 	"goal-lifecycle",
 	"host-mode-plan",
+	"explore",
 	"capability",
 	"workbench",
 	"history",
@@ -576,6 +577,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.history import register_history_command
 
 		register_history_command(subparsers)
+	elif command == "explore":
+		from .cli_commands.explore import register_explore_commands
+
+		register_explore_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -913,6 +918,16 @@ def _dispatch_common_command(
 			runtime_root_arg=args.runtime_root,
 			print_payload=print_payload,
 			append_cli_rollout_event=append_cli_rollout_event,
+		)
+	if args.command == "explore":
+		from .cli_commands.explore import handle_explore_command
+
+		return handle_explore_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			print_payload=print_payload,
+			output_format=output_format,
 		)
 	return None
 

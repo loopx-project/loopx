@@ -2286,3 +2286,103 @@ def test_guided_core_preview_matches_complete_owner_without_writes(tmp_path):
     assert packet['goal_text'] == 'Report "inventory" and 总计.'
     assert packet['guided_transaction']['writes_now'] is False
     assert not list(project.iterdir()) and not (tmp_path / 'runtime').exists()
+
+
+def test_cli_commands_package_loads_submodules_lazily():
+    script = """
+import sys
+import loopx.cli_commands as cmds
+
+assert len(cmds.__all__) == 100
+for mod in ("loopx.cli_commands.benchmark_dispatch", "loopx.cli_commands.quota", "loopx.cli_commands.explore"):
+    assert mod not in sys.modules, f"eager import leaked {mod}"
+
+handler = cmds.handle_version_command
+assert callable(handler)
+assert "loopx.cli_commands.benchmark_dispatch" not in sys.modules
+assert "loopx.cli_commands.quota" not in sys.modules
+
+try:
+    getattr(cmds, "nonexistent_command_handler")
+except AttributeError:
+    pass
+else:
+    raise AssertionError("expected AttributeError for unknown cli_commands export")
+"""
+    result = run_isolated_script(script)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("arguments", [
+    ["explore", "--help"],
+    ["explore", "turn-context", "--help"],
+    ["heartbeat-prequota", "--help"],
+])
+def test_selected_explore_and_heartbeat_prequota_help_match_without_full_cli(arguments):
+    selected = run_cli_main(
+        "loopx.entrypoint",
+        arguments,
+        forbidden_modules=(
+            "loopx.cli",
+            "loopx.chat",
+            "loopx.canary",
+            "loopx.history",
+            "loopx.capabilities.explore.worker_branch_plan",
+            "loopx.capabilities.explore.todo_branch_plan",
+            "loopx.extensions.lark.presentation.explore_results",
+            "loopx.extensions.lark.presentation.kanban",
+        ),
+    )
+    full = run_cli_main("loopx.cli", arguments)
+    assert (selected.returncode, selected.stdout, selected.stderr) == (full.returncode, full.stdout, full.stderr)
+    assert selected.returncode == 0
+
+
+def test_selected_explore_turn_context_and_heartbeat_prequota_match_full_cli_lazily(tmp_path):
+    registry, runtime = write_command_fixture(tmp_path)
+    explore_args = [
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "explore", "turn-context",
+        "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+    ]
+    selected_explore = run_cli_main(
+        "loopx.entrypoint",
+        explore_args,
+        forbidden_modules=(
+            "loopx.cli",
+            "loopx.chat",
+            "loopx.canary",
+            "loopx.history",
+            "loopx.capabilities.explore.worker_branch_plan",
+            "loopx.capabilities.explore.todo_branch_plan",
+            "loopx.capabilities.explore.research_evidence",
+            "loopx.extensions.lark.presentation.explore_results",
+            "loopx.extensions.lark.presentation.kanban",
+        ),
+    )
+    full_explore = run_cli_main("loopx.cli", explore_args)
+    assert selected_explore.returncode == full_explore.returncode == 0, (selected_explore.stderr, full_explore.stderr)
+    assert json.loads(selected_explore.stdout) == json.loads(full_explore.stdout)
+
+    prequota_args = [
+        "--registry", str(registry), "--runtime-root", str(runtime),
+        "--format", "json", "heartbeat-prequota",
+        "--goal-id", "perf-goal", "--agent-id", "perf-agent",
+    ]
+    selected_prequota = run_cli_main(
+        "loopx.entrypoint",
+        prequota_args,
+        forbidden_modules=(
+            "loopx.cli",
+            "loopx.chat",
+            "loopx.canary",
+            "loopx.history",
+            "loopx.heartbeat_prompt",
+            "loopx.cli_commands.quota",
+            "loopx.cli_commands.benchmark_dispatch",
+            "loopx.cli_commands.explore",
+        ),
+    )
+    full_prequota = run_cli_main("loopx.cli", prequota_args)
+    assert selected_prequota.returncode == full_prequota.returncode == 0, (selected_prequota.stderr, full_prequota.stderr)
+    assert json.loads(selected_prequota.stdout) == json.loads(full_prequota.stdout)

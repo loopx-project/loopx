@@ -175,9 +175,10 @@ export function coldPath(
 export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "source" | "context"): JsonObject {
   const transport = requireJsonObject(request.source_transport, "Turn composition source transport");
   const { encoding, data } = transport;
-  const maxSourceBytes = 1024 * 1024;
+  const maxEncodedBytes = 2 * 1024 * 1024;
+  const maxSourceBytes = 64 * 1024 * 1024;
   if (Object.hasOwn(request, inlineField) || encoding !== "deflate-base64-json-v0" ||
-      typeof data !== "string" || data.length > maxSourceBytes ||
+      typeof data !== "string" || data.length > maxEncodedBytes ||
       data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
     throw new EffectRuntimeRequestError("invalid Turn composition source transport");
   }
@@ -191,7 +192,7 @@ export function decodeTurnSource(request: JsonObject, inlineField: "payload" | "
     if (engine.bytesWritten !== compressed.length) throw new Error("trailing compressed source data");
     source = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer));
   } catch {
-    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 1 MiB");
+    throw new EffectRuntimeRequestError("Turn composition source must be valid compressed JSON within 64 MiB");
   }
   return requireJsonObject(source, "complete Turn decision source");
 }
