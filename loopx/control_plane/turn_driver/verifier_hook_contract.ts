@@ -63,6 +63,8 @@ export type VerifiedScopeIdentity = Readonly<{
   child_scope_ref: string;
   /** Canonical SHA-256 digest of the candidate submitted to the verifier. */
   candidate_sha: string;
+  /** Canonical SHA-256 digest of the Goal acceptance contract (outcome_context.acceptance_digest). */
+  acceptance_digest: string;
   verifier_version: string;
 }>;
 

@@ -9,6 +9,7 @@ import type {
   VerifiedCloseReader, VerifiedCloseRequest, VerifiedScopeEvidence, VerifierHookEvent, VerifierScopeReceipt,
 } from "../../loopx/control_plane/turn_driver/verifier_hook_contract.ts";
 import {negotiateVerifierHooks, recommendVerifiedClose} from "./fixtures/verifier_hook_contract.ts";
+import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {capturedContextSelection} from "../../loopx/control_plane/quota/context_selection.ts";
 
 const l1 = { session_lineage: true, boundary_context: true };
@@ -31,9 +32,11 @@ test("enabled negotiation uses observed capabilities and never infers pre-tool o
     { tier: "L2", pre_tool_use: true });
 });
 
+const acceptanceR1 = canonicalAuthoritySha256({ criteria: [{ id: "R1", required: true }] });
+const acceptanceR2 = canonicalAuthoritySha256({ criteria: [{ id: "R1", required: true }, { id: "R2", required: true }] });
 const identity = {
   goal_id: "goal", todo_id: "todo", parent_epoch_ref: "epoch:9", child_scope_ref: "scope:3",
-  candidate_sha: "sha256:" + "a".repeat(64), verifier_version: "verifier:4",
+  candidate_sha: "sha256:" + "a".repeat(64), acceptance_digest: acceptanceR1, verifier_version: "verifier:4",
 };
 const request: VerifiedCloseRequest = {
   identity, receipt_ref: "receipt:21", overlap: "low", open_obligations: false,
@@ -71,27 +74,32 @@ test("verified return resolves the named oracle receipt and stages the exact sou
   });
 });
 
-test("matching candidate identifiers must still identify immutable content", () => {
-  for (const candidate_sha of [
-    "main", "candidate:26", "a".repeat(64),
-    "sha256:" + "a".repeat(63), "sha256:" + "g".repeat(64), "sha256:" + "A".repeat(64),
-  ]) {
-    const invalid = { ...identity, candidate_sha };
-    const reads: string[] = [];
-    const reader = {
-      readReceipt(ref: string): VerifierScopeReceipt {
-        reads.push(ref);
-        return { ...passed, identity: invalid };
-      },
-      readEvidence(ref: string): VerifiedScopeEvidence | undefined {
-        reads.push(ref);
-        const record = evidence.get(ref);
-        return record && { ...record, identity: invalid };
-      },
-    };
-    assert.deepEqual(recommendVerifiedClose({ ...request, identity: invalid }, reader),
-      { action: "KeepRaw" }, candidate_sha);
-    assert.deepEqual(reads, [], candidate_sha);
+test("matching candidate and acceptance identifiers must still identify immutable content", () => {
+  const cases: readonly ["candidate_sha" | "acceptance_digest", readonly string[]][] = [
+    ["candidate_sha", ["main", "candidate:26", "a".repeat(64),
+      "sha256:" + "a".repeat(63), "sha256:" + "g".repeat(64), "sha256:" + "A".repeat(64)]],
+    ["acceptance_digest", ["main", "R1", "sha256:" + "a".repeat(64),
+      "a".repeat(63), "g".repeat(64), "A".repeat(64)]],
+  ];
+  for (const [field, malformed] of cases) {
+    for (const digest of malformed) {
+      const invalid = { ...identity, [field]: digest };
+      const reads: string[] = [];
+      const reader = {
+        readReceipt(ref: string): VerifierScopeReceipt {
+          reads.push(ref);
+          return { ...passed, identity: invalid };
+        },
+        readEvidence(ref: string): VerifiedScopeEvidence | undefined {
+          reads.push(ref);
+          const record = evidence.get(ref);
+          return record && { ...record, identity: invalid };
+        },
+      };
+      assert.deepEqual(recommendVerifiedClose({ ...request, identity: invalid }, reader),
+        { action: "KeepRaw" }, `${field}:${digest}`);
+      assert.deepEqual(reads, [], `${field}:${digest}`);
+    }
   }
 });
 
@@ -106,7 +114,11 @@ test("open, overlapping, unknown and mismatched work stays raw", () => {
   const missingObligations = { ...request, open_obligations: undefined } as unknown as VerifiedCloseRequest;
   assert.deepEqual(recommendVerifiedClose(missingObligations, authority(passed)), { action: "KeepRaw" });
   for (const key of Object.keys(identity) as (keyof typeof identity)[]) {
-    const different = key === "candidate_sha" ? "sha256:" + "b".repeat(64) : "different";
+    const different = key === "candidate_sha"
+      ? "sha256:" + "b".repeat(64)
+      : key === "acceptance_digest"
+        ? "b".repeat(64)
+        : "different";
     const mismatch = { ...identity, [key]: different };
     assert.deepEqual(recommendVerifiedClose(request, authority({ ...passed, identity: mismatch })),
       { action: "KeepRaw" });
@@ -323,4 +335,74 @@ test("startup and recovery use the same captured C1 Goal boundary", () => {
   }
   assert.throws(() => capturedContextSelection({context: {}, select: [boundary.pointer]}),
     /pointer does not exist/);
+});
+
+test("acceptance revision drift R1 -> R2 forces KeepRaw against identical file-backed receipt while R1 folds", () => {
+  const directory = mkdtempSync(join(tmpdir(), "loopx-verifier-acceptance-"));
+  const protectedPaths: string[] = [];
+  try {
+    const receiptPath = join(directory, "receipt.json");
+    const oraclePath = join(directory, "oracle.json");
+    const sourcePath = join(directory, "source.json");
+    const summaryPath = join(directory, "summary.json");
+    writeFileSync(receiptPath, JSON.stringify(passed), "utf8");
+    writeFileSync(oraclePath, JSON.stringify(evidence.get(passed.oracle_evidence_ref)), "utf8");
+    writeFileSync(sourcePath, JSON.stringify(evidence.get(passed.source_ref)), "utf8");
+    writeFileSync(summaryPath, JSON.stringify(evidence.get(passed.summary_ref)), "utf8");
+    const filePaths = new Map([
+      [passed.oracle_evidence_ref, oraclePath],
+      [passed.source_ref, sourcePath],
+      [passed.summary_ref, summaryPath],
+    ]);
+    const fileReader: VerifiedCloseReader = {
+      readReceipt: ref => (ref === request.receipt_ref ? JSON.parse(readFileSync(receiptPath, "utf8")) : undefined),
+      readEvidence: ref => {
+        const target = filePaths.get(ref);
+        return target ? JSON.parse(readFileSync(target, "utf8")) : undefined;
+      },
+    };
+
+    assert.deepEqual(recommendVerifiedClose(request, fileReader), {
+      action: "FoldToReceipt",
+      receipt_ref: request.receipt_ref,
+      source_ref: passed.source_ref,
+      summary_ref: passed.summary_ref,
+    });
+
+    // Only Goal acceptance changes (R1 -> R2); candidate, other 5 fields and verifier_version remain identical.
+    assert.notEqual(acceptanceR1, acceptanceR2);
+    assert.deepEqual(
+      recommendVerifiedClose({ ...request, identity: { ...identity, acceptance_digest: acceptanceR2 } }, fileReader),
+      { action: "KeepRaw" },
+    );
+
+    // Control 1: verifier_version mismatch still returns KeepRaw.
+    assert.deepEqual(
+      recommendVerifiedClose({ ...request, identity: { ...identity, verifier_version: "verifier:5" } }, fileReader),
+      { action: "KeepRaw" },
+    );
+
+    // Control 2: EACCES unreadable receipt still returns KeepRaw rather than folding.
+    if (typeof process.getuid !== "function" || process.getuid() !== 0) {
+      chmodSync(receiptPath, 0o000);
+      protectedPaths.push(receiptPath);
+      const unavailableFsReader: VerifiedCloseReader = {
+        readReceipt: () => {
+          try {
+            return JSON.parse(readFileSync(receiptPath, "utf8"));
+          } catch (error) {
+            if (error instanceof Error && "code" in error && error.code === "EACCES") return undefined;
+            throw error;
+          }
+        },
+        readEvidence: fileReader.readEvidence,
+      };
+      assert.deepEqual(recommendVerifiedClose(request, unavailableFsReader), { action: "KeepRaw" });
+    }
+  } finally {
+    for (const target of protectedPaths) {
+      try { chmodSync(target, 0o600); } catch {}
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

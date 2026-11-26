@@ -1,5 +1,5 @@
 // Executable examples for the Verifier Hook contract before history-owner integration.
-import { ENVELOPED_SHA256_PATTERN } from "../../../loopx/control_plane/content_digest.ts";
+import { BARE_SHA256_PATTERN, ENVELOPED_SHA256_PATTERN } from "../../../loopx/control_plane/content_digest.ts";
 import type {
   HarnessVerifierCapabilities, VerifiedCloseReader, VerifiedCloseRecommendation, VerifiedCloseRequest,
   VerifiedScopeEvidence, VerifiedScopeIdentity, VerifierHookNegotiation, VerifierHookPolicy,
@@ -21,7 +21,8 @@ export function negotiateVerifierHooks(
 }
 
 const scopeIdentityFields = [
-  "goal_id", "todo_id", "parent_epoch_ref", "child_scope_ref", "candidate_sha", "verifier_version",
+  "goal_id", "todo_id", "parent_epoch_ref", "child_scope_ref",
+  "candidate_sha", "acceptance_digest", "verifier_version",
 ] as const;
 
 function hasReference(ref: string): boolean {
@@ -69,6 +70,7 @@ export function recommendVerifiedClose(
   const expected = request.identity;
   if (!expected || !scopeIdentityFields.every(field => hasReference(expected[field]))
     || !ENVELOPED_SHA256_PATTERN.test(expected.candidate_sha)
+    || !BARE_SHA256_PATTERN.test(expected.acceptance_digest)
     || !hasReference(request.receipt_ref)) {
     return { action: "KeepRaw" };
   }
