@@ -14,7 +14,7 @@ from pathlib import Path
 from runpy import run_path
 
 REPOSITORY = Path(__file__).resolve().parents[2]
-# These are distribution exclusions.
+# These are distribution exclusions, not an authority or activation policy.
 EXCLUDED_TREES = ("loopx/web/", "loopx/canary/")
 WORKSPACE_DISTRIBUTION = "loopx-workspace"
 WORKSPACE_MODULES = {
@@ -34,6 +34,17 @@ WORKSPACE_MODULES = {
     "loopx/presentation/runtime_workspace.py",
 }
 WORKSPACE_ASSETS = Path("loopx/web/chat")
+BENCHMARK_DISTRIBUTION = "loopx-capability-benchmark-toolkit"
+BENCHMARK_EXECUTION_PREFIXES = (
+    "loopx/capabilities/benchmark_toolkit/",
+    "loopx/cli_commands/benchmark_",
+)
+# Keep the catalog in a namespace package so discovery skips the execution facade.
+BENCHMARK_CATALOG_FILES = {
+    "loopx/capabilities/benchmark_toolkit/README.md",
+    "loopx/capabilities/benchmark_toolkit/catalog_entry.py",
+    "loopx/capabilities/benchmark_toolkit/four_arm_contract.py",
+}
 SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
 PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
@@ -88,6 +99,10 @@ RESEARCH_FILES = {
     EXPLORE_DIRECTORY / "worker_branch_plan.py",
 }
 CAPABILITY_ENTRY_MODULES = {
+    BENCHMARK_DISTRIBUTION: {
+        Path("loopx/cli_commands/benchmark_dispatch.py"),
+        Path("loopx/capabilities/benchmark_toolkit/trajectory_assessment_store.py"),
+    },
     RECALL_DISTRIBUTION: {
         Path("loopx/capabilities/agent_turn_recall/cli.py"),
         Path("loopx/capabilities/agent_turn_recall/core.py"),
@@ -117,6 +132,10 @@ def _implementation_paths(sources: list[Path], directory: Path, core_files: set[
 def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
     tracked = set(sources)
     return {
+        BENCHMARK_DISTRIBUTION: {
+            path for path in sources
+            if path.suffix in SOURCE_SUFFIXES and _benchmark_execution_source(path)
+        },
         RECALL_DISTRIBUTION: tracked & CAPABILITY_ENTRY_MODULES[RECALL_DISTRIBUTION],
         PR_REVIEW_DISTRIBUTION: (
             _implementation_paths(sources, PR_REVIEW_DIRECTORY, PR_REVIEW_CORE_FILES)
@@ -139,6 +158,11 @@ def _workspace_source(path: Path) -> bool:
         or path.is_relative_to("loopx/chat")
         or (path.parent == Path("loopx") and path.name.startswith("chat_"))
     )
+
+
+def _benchmark_execution_source(path: Path) -> bool:
+    name = path.as_posix()
+    return name.startswith(BENCHMARK_EXECUTION_PREFIXES) and name not in BENCHMARK_CATALOG_FILES
 
 
 def prepare_core_source(output: Path, *, repository: Path = REPOSITORY) -> Path:

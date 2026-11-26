@@ -61,6 +61,12 @@ To view the same work in your browser, install the matching
 [`loopx-workspace` wheel](../loopx-workspace/README.md) in this environment and
 start `loopx dashboard` with the original registry.
 
+Core keeps the benchmark catalog and the four-arm contract it references.
+Install the matching [Benchmark Toolkit wheel](../loopx-capability-benchmark-toolkit/README.md)
+to run `loopx benchmark` or use registered analysis packs in Workspace.
+`loopx capability show benchmark-toolkit` reports availability and installation
+guidance. Normal discovery leaves benchmark execution unloaded.
+
 Ordinary Core goal previews omit Issue Fix command templates. Install the
 [matching workflow wheel](../loopx-capability-issue-fix/README.md) to select
 `--capability-route issue-fix` or run `loopx issue-fix`. Core retains existing
@@ -131,7 +137,7 @@ new default, migration, automatic upgrade, PyPI publication or platform release.
 
 This is the first independently installable core-artifact slice of R1/M3 in the
 [small-kernel RFC](../../docs/architecture/rfcs/monorepo-distribution-split-v0.md).
-It still retains built-in capability implementations, policy helpers and several
+It still retains other built-in capability implementations, policy helpers and several
 host/CLI dependencies because the current imports are coupled. This makes it a
 workspace-free installation prerequisite, not a qualified minimal mechanism
 closure. Those dependencies are migration debt, not evidence that every

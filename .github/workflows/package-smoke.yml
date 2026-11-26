@@ -4,11 +4,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/package-smoke.yml"
-      - "packages/**"
-      - "apps/presentation/dashboard/**"
-      - "scripts/chat_bundle.py"
       - "tests/test_core_distribution.py"
       - "tests/test_core_workspace_distribution.py"
+      - "tests/test_core_benchmark_distribution.py"
       - "tests/test_core_recall_distribution.py"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
@@ -30,6 +28,7 @@ on:
       - "loopx/**"
       - "tests/test_core_distribution.py"
       - "tests/test_core_workspace_distribution.py"
+      - "tests/test_core_benchmark_distribution.py"
       - "tests/test_core_recall_distribution.py"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
@@ -81,6 +80,17 @@ jobs:
           uv run --extra test python -m pytest -q
           tests/test_core_distribution.py
           tests/control_plane/test_installed_core_context.py
+      - name: Qualify matching Benchmark Toolkit installation and recovery
+        env:
+          LOOPX_USAGE_PING: "0"
+        run: |
+          uv run --extra test python packages/loopx-core/prepare.py \
+            --distribution loopx-capability-benchmark-toolkit --output "$RUNNER_TEMP/benchmark-source"
+          uv build --wheel "$RUNNER_TEMP/benchmark-source" --out-dir "$RUNNER_TEMP/benchmark-dist"
+          export LOOPX_CORE_TEST_WHEEL=$(printf '%s' "$RUNNER_TEMP"/core-dist/loopx_core-*.whl)
+          export LOOPX_BENCHMARK_TEST_WHEEL=$(printf '%s' "$RUNNER_TEMP"/benchmark-dist/loopx_capability_benchmark_toolkit-*.whl)
+          uv run --extra test python -m pytest -q tests/test_core_benchmark_distribution.py
+
       - name: Qualify matched recall installation, execution, and removal
         env:
           LOOPX_USAGE_PING: "0"
@@ -144,6 +154,17 @@ jobs:
           uv pip uninstall --python "$LOOPX_CORE_TEST_PYTHON" loopx-capability-research
           uv run --extra test python -m pytest -q tests/test_core_research_distribution.py
           LOOPX_CORE_TEST_PYTHON="$LOOPX_CORE_TEST_PYTHON" uv run --extra test python -m pytest -q tests/test_core_distribution.py -k 'identity_help_and_unavailable_workspace or defers_explore_evaluation'
+
+      - name: Qualify matching Benchmark Toolkit installation and recovery
+        env:
+          LOOPX_USAGE_PING: "0"
+        run: |
+          uv run --extra test python packages/loopx-core/prepare.py \
+            --distribution loopx-capability-benchmark-toolkit --output "$RUNNER_TEMP/benchmark-source"
+          uv build --wheel "$RUNNER_TEMP/benchmark-source" --out-dir "$RUNNER_TEMP/benchmark-dist"
+          export LOOPX_CORE_TEST_WHEEL=$(printf '%s' "$RUNNER_TEMP"/core-dist/loopx_core-*.whl)
+          export LOOPX_BENCHMARK_TEST_WHEEL=$(printf '%s' "$RUNNER_TEMP"/benchmark-dist/loopx_capability_benchmark_toolkit-*.whl)
+          uv run --extra test python -m pytest -q tests/test_core_benchmark_distribution.py
 
       - name: Build the matching Workspace wheel
         run: |

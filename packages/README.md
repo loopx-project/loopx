@@ -26,6 +26,8 @@ Current co-located distributions, in directory order:
 - [`loopx-ark-turn`](loopx-ark-turn/README.md): an optional host for one
   LoopX-governed work unit on Ark Managed Agents (Python distribution, no
   `extension.toml`; selected with `turn run-once --host generic-cli`);
+- [`loopx-capability-benchmark-toolkit`](loopx-capability-benchmark-toolkit/README.md)
+  adds benchmark commands and registered analysis packs to the matching Core.
 - [`loopx-codex-provider-routing`](loopx-codex-provider-routing/README.md):
   native Codex account slots, allowance observation and automatic handoff at
   safe boundaries, with legacy CPA qualification and rollback compatibility;

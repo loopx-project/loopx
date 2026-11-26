@@ -136,6 +136,59 @@ def test_record_root_alias_keeps_exact_physical_ownership(owned_package):
     assert manifest.release_runtime_identity() == before
 
 
+def test_missing_record_declared_file_refuses_runtime_identity_in_real_wheel(tmp_path: Path):
+    version = manifest.__version__
+    metadata = f"loopx-{version}.dist-info"
+    contents = {
+        "loopx/__init__.py": Path(manifest.__file__).with_name("__init__.py").read_text(),
+        "loopx/release_manifest.py": Path(manifest.__file__).read_text(),
+        "loopx/doctor_git.py": Path(manifest.__file__).with_name("doctor_git.py").read_text(),
+        "loopx/python_install_owner.py": Path(manifest.__file__).with_name("python_install_owner.py").read_text(),
+        "loopx/extensions/__init__.py": "",
+        "loopx/extensions/process_runtime.py": Path(manifest.__file__).with_name(
+            "extensions"
+        ).joinpath("process_runtime.py").read_text(),
+        f"{metadata}/METADATA": f"Metadata-Version: 2.1\nName: loopx\nVersion: {version}\n",
+        f"{metadata}/WHEEL": "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    contents[f"{metadata}/RECORD"] = "".join(f"{name},,\n" for name in [*contents, f"{metadata}/RECORD"])
+    wheel = tmp_path / f"loopx-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+    environment = tmp_path / "env"
+    venv.EnvBuilder(with_pip=True, symlinks=os.name != "nt").create(environment)
+    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    subprocess.run([str(python), "-I", "-m", "pip", "install", "--no-index", "--no-deps",
+                    "--disable-pip-version-check", "--no-compile", str(wheel)],
+                   check=True, capture_output=True, text=True, timeout=60)
+    probe = subprocess.check_output([str(python), "-I", "-c",
+        "import json; from importlib.metadata import distribution; "
+        "from loopx.release_manifest import release_runtime_identity; "
+        "target = next(p.locate() for p in distribution('loopx').files if p.as_posix() == 'loopx/extensions/process_runtime.py'); "
+        "print(json.dumps({'identity': release_runtime_identity(), 'target': str(target)}))"
+    ], text=True, timeout=60)
+    before = json.loads(probe)
+    assert before["identity"]["package_fingerprint"].startswith("sha256:")
+    target = Path(before["target"])
+    backup = tmp_path / "process_runtime.py.removed"
+    try:
+        target.rename(backup)
+        broken = json.loads(subprocess.check_output([str(python), "-I", "-c",
+            "import json; from loopx.release_manifest import release_runtime_identity; "
+            "print(json.dumps(release_runtime_identity()))"
+        ], text=True, timeout=60))
+        assert "package_fingerprint" not in broken
+    finally:
+        if backup.exists() and not target.exists():
+            backup.rename(target)
+    restored = json.loads(subprocess.check_output([str(python), "-I", "-c",
+        "import json; from loopx.release_manifest import release_runtime_identity; "
+        "print(json.dumps(release_runtime_identity()))"
+    ], text=True, timeout=60))
+    assert restored == before["identity"]
+
+
 def test_core_companion_distributions_extend_and_fence_runtime_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

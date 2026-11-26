@@ -7,6 +7,10 @@ belongs to the provider. There is no second scheduler or assessment authority.
 from importlib import import_module
 from urllib.parse import parse_qs, urlparse
 
+from ..capabilities.benchmark_toolkit.catalog_entry import (
+    BENCHMARK_TOOLKIT_INSTALL_HINT,
+    benchmark_toolkit_installed,
+)
 from ..feedback import validate_goal_id
 from ..control_plane.effect_runtime import EffectRuntimeRejected
 from .goal_source_routing import goal_source_catalog, linked_goal_source
@@ -18,13 +22,20 @@ _ASSESSMENT_STORE = f"{_ASSESSMENT_PACKAGE}.trajectory_assessment_store"
 
 class ResearchAnalysisRequestMixin:
     def _research_analysis_store(self):
+        if not benchmark_toolkit_installed():
+            self._send_error(
+                BENCHMARK_TOOLKIT_INSTALL_HINT,
+                status=503,
+                error_code="research_analysis_unavailable",
+            )
+            return None
         try:
             return import_module(_ASSESSMENT_STORE)
         except ModuleNotFoundError as exc:
             if exc.name not in {_ASSESSMENT_PACKAGE, _ASSESSMENT_STORE}:
                 raise
             self._send_error(
-                "Research analysis needs the Benchmark Toolkit. Use an installation that includes it.",
+                BENCHMARK_TOOLKIT_INSTALL_HINT,
                 status=503,
                 error_code="research_analysis_unavailable",
             )
