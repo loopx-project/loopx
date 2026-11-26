@@ -19,7 +19,7 @@ cleanup suggestion instead.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import argparse
 import json
@@ -572,23 +572,73 @@ _PYTHON_EXE_NAME_RE = re.compile(
 _PYTHON_PASSTHROUGH_FLAGS = frozenset(
     {"-B", "-E", "-I", "-O", "-OO", "-P", "-S", "-s", "-u", "-v", "-q"}
 )
+_PYTHON_SHORT_FLAG_CHARS = frozenset("BbEdiIOPqRsSuvx")
+_PYTHON_VALUE_FLAGS = frozenset({"-W", "-X", "--check-hash-based-pycs"})
+_PYTHON_TERMINAL_FLAGS = frozenset({"-c", "-m", "-"})
+_SHELL_OPERATORS_ORDERED = (
+    "<<-",
+    "<<<",
+    ";;&",
+    "&&",
+    "||",
+    "|&",
+    ";;",
+    ";&",
+    ">>",
+    ">&",
+    "<&",
+    "<<",
+    "<>",
+    ";",
+    "|",
+    "&",
+    "(",
+    ")",
+    "<",
+    ">",
+    "\n",
+)
+_SHELL_OPERATOR_CHARS = frozenset(";|&()<>\n")
+_REDIRECTION_OPS = frozenset({"<<-", "<<<", ">>", ">&", "<&", "<<", "<>", "<", ">"})
+_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
+_ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-C", "--chdir", "-P", "-a", "--argv0"})
+_TIMEOUT_VALUE_FLAGS = frozenset({"-k", "--kill-after", "-s", "--signal"})
+_SHELL_NAMES = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
+
+
+class _ShellToken(NamedTuple):
+    start: int
+    end: int
+    unquoted: str
+    is_operator: bool = False
 
 
 def _tokenize_shell_spans(
     raw_command: str, *, powershell: bool
-) -> list[tuple[int, int, str]]:
-    """Return `(start, end, unquoted)` spans without rewriting surrounding tokens."""
+) -> list[_ShellToken]:
+    """Return word and operator tokens with original offsets intact."""
     n = len(raw_command)
     i = 0
-    tokens: list[tuple[int, int, str]] = []
+    tokens: list[_ShellToken] = []
     while i < n:
-        while i < n and raw_command[i].isspace():
+        while i < n and raw_command[i] in " \t\r\v\f":
             i += 1
         if i >= n:
             break
+        matched_op: str | None = None
+        if raw_command[i] in _SHELL_OPERATOR_CHARS:
+            for candidate in _SHELL_OPERATORS_ORDERED:
+                if raw_command.startswith(candidate, i):
+                    matched_op = candidate
+                    break
+        if matched_op is not None:
+            tokens.append(_ShellToken(i, i + len(matched_op), matched_op, is_operator=True))
+            i += len(matched_op)
+            continue
+
         start = i
         buf: list[str] = []
-        while i < n and not raw_command[i].isspace():
+        while i < n and raw_command[i] not in " \t\r\v\f" and raw_command[i] not in _SHELL_OPERATOR_CHARS:
             ch = raw_command[i]
             if ch == "'":
                 i += 1
@@ -626,7 +676,10 @@ def _tokenize_shell_spans(
                 ch == "\\"
                 and not powershell
                 and i + 1 < n
-                and (raw_command[i + 1].isspace() or raw_command[i + 1] in {"'", '"', "\\"})
+                and (
+                    raw_command[i + 1].isspace()
+                    or raw_command[i + 1] in {"'", '"', "\\", "|", "&", ";", "(", ")", "<", ">"}
+                )
             ):
                 i += 1
                 buf.append(raw_command[i])
@@ -634,7 +687,7 @@ def _tokenize_shell_spans(
             else:
                 buf.append(ch)
                 i += 1
-        tokens.append((start, i, "".join(buf)))
+        tokens.append(_ShellToken(start, i, "".join(buf)))
     return tokens
 
 
@@ -645,6 +698,273 @@ def _looks_like_python_token(unquoted: str) -> bool:
     return bool(_PYTHON_EXE_NAME_RE.fullmatch(name))
 
 
+def _is_unquoted_env_assignment(token: _ShellToken, *, raw_command: str) -> bool:
+    if not _ENV_ASSIGN_RE.fullmatch(token.unquoted):
+        return False
+    eq_pos = raw_command.find("=", token.start, token.end)
+    if eq_pos <= token.start:
+        return False
+    prefix = raw_command[token.start : eq_pos]
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", prefix))
+
+
+def _split_command_segments(
+    tokens: list[_ShellToken], *, powershell: bool
+) -> list[tuple[list[_ShellToken], bool]]:
+    segments: list[tuple[list[_ShellToken], bool]] = []
+    words: list[_ShellToken] = []
+    has_ps_call = False
+    idx = 0
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok.is_operator:
+            if tok.unquoted in _REDIRECTION_OPS:
+                if words and words[-1].end == tok.start and words[-1].unquoted.isdigit():
+                    words.pop()
+                if idx + 1 < len(tokens) and not tokens[idx + 1].is_operator:
+                    idx += 2
+                else:
+                    idx += 1
+                continue
+            if tok.unquoted == "&" and powershell and not words and not has_ps_call:
+                has_ps_call = True
+                idx += 1
+                continue
+            if words:
+                segments.append((words, has_ps_call))
+            words = []
+            has_ps_call = False
+            idx += 1
+            continue
+        words.append(tok)
+        idx += 1
+    if words:
+        segments.append((words, has_ps_call))
+    return segments
+
+
+def _advance_command_wrappers(
+    words: list[_ShellToken],
+    *,
+    raw_command: str,
+    legacy_suffix: str,
+    powershell: bool,
+) -> int | None:
+    idx = 0
+    while idx < len(words):
+        if not powershell and _is_unquoted_env_assignment(words[idx], raw_command=raw_command):
+            idx += 1
+            continue
+        if (
+            not powershell
+            and words[idx].unquoted == "!"
+            and raw_command[words[idx].start : words[idx].end] == "!"
+        ):
+            idx += 1
+            continue
+        if powershell:
+            break
+
+        cmd_word = words[idx].unquoted
+        cmd_name = Path(cmd_word.replace("\\", "/")).name.lower()
+        probe = idx + 1
+        if cmd_name == "env":
+            while probe < len(words):
+                arg = words[probe].unquoted
+                if arg == "--":
+                    probe += 1
+                    break
+                if arg in {"-S", "--split-string"} or arg.startswith(("-S", "--split-string=")):
+                    return None
+                if arg in _ENV_VALUE_FLAGS:
+                    probe += 2
+                    continue
+                if arg.startswith("-") or _ENV_ASSIGN_RE.fullmatch(arg):
+                    probe += 1
+                    continue
+                break
+            if probe > len(words):
+                return None
+            idx = probe
+            continue
+        if cmd_word == "command":
+            while probe < len(words) and words[probe].unquoted.startswith("-") and words[probe].unquoted != "--":
+                flag = words[probe].unquoted
+                if "v" in flag or "V" in flag or flag != "-p":
+                    return None
+                probe += 1
+            if probe < len(words) and words[probe].unquoted == "--":
+                probe += 1
+            idx = probe
+            continue
+        if cmd_word == "exec":
+            while probe < len(words) and words[probe].unquoted.startswith("-"):
+                flag = words[probe].unquoted
+                if flag == "--":
+                    probe += 1
+                    break
+                if flag == "-a":
+                    probe += 2
+                elif len(flag) > 1 and set(flag[1:]) <= {"c", "l"}:
+                    probe += 1
+                else:
+                    return None
+            if probe > len(words):
+                return None
+            idx = probe
+            continue
+        if cmd_word in {"nohup", "time"} or cmd_name == "nice":
+            if cmd_word == "time" and probe < len(words) and words[probe].unquoted == "-p":
+                probe += 1
+            elif cmd_name == "nice" and probe < len(words):
+                arg = words[probe].unquoted
+                if arg in {"-n", "--adjustment"}:
+                    probe += 2
+                elif arg.startswith("--adjustment=") or (
+                    arg.startswith("-") and arg[1:].lstrip("+-").isdigit()
+                ):
+                    probe += 1
+            if probe > len(words):
+                return None
+            idx = probe
+            continue
+        if cmd_name == "timeout":
+            while probe < len(words) and words[probe].unquoted.startswith("-"):
+                arg = words[probe].unquoted
+                if arg == "--":
+                    probe += 1
+                    break
+                if arg in _TIMEOUT_VALUE_FLAGS:
+                    probe += 2
+                elif arg.startswith(("--kill-after=", "--signal=")) or arg in {
+                    "-v",
+                    "--verbose",
+                    "--foreground",
+                    "--preserve-status",
+                }:
+                    probe += 1
+                else:
+                    return None
+            if probe >= len(words):
+                return None
+            dur = words[probe].unquoted
+            if dur.startswith("-") or dur.replace("\\", "/").endswith(legacy_suffix):
+                return None
+            idx = probe + 1
+            continue
+        break
+    return idx if idx < len(words) else None
+
+
+def _segment_edits(
+    words: list[_ShellToken],
+    *,
+    has_ps_call: bool,
+    raw_command: str,
+    legacy_suffix: str,
+    new_script: str,
+    py_exe: str,
+    powershell: bool,
+) -> list[tuple[int, int, str]]:
+    cmd_idx = _advance_command_wrappers(
+        words,
+        raw_command=raw_command,
+        legacy_suffix=legacy_suffix,
+        powershell=powershell,
+    )
+    if cmd_idx is None:
+        return []
+
+    cmd_tok = words[cmd_idx]
+    cmd_name = Path(cmd_tok.unquoted.replace("\\", "/")).name.lower()
+    if cmd_name.removesuffix(".exe") in _SHELL_NAMES and not cmd_tok.unquoted.startswith("-"):
+        probe = cmd_idx + 1
+        saw_dash_c = False
+        while probe < len(words):
+            arg = words[probe].unquoted
+            if arg == "--":
+                probe += 1
+                break
+            if not arg.startswith("-") and not (arg.startswith("+") and len(arg) > 1):
+                break
+            if arg in {"-o", "+o"}:
+                probe += 2
+                continue
+            if arg.startswith("-") and not arg.startswith("--") and "c" in arg[1:]:
+                saw_dash_c = True
+                probe += 1
+                break
+            probe += 1
+        if not saw_dash_c or probe >= len(words):
+            return []
+        inner_tok = words[probe]
+        if legacy_suffix not in inner_tok.unquoted.replace("\\", "/"):
+            return []
+        inner = _rewrite_legacy_claude_command(
+            inner_tok.unquoted,
+            legacy_suffix=legacy_suffix,
+            new_script=new_script,
+            py_exe=py_exe,
+            powershell=False,
+        )
+        if inner is None:
+            return []
+        return [(inner_tok.start, inner_tok.end, _shell_literal(inner, powershell=powershell))]
+
+    needs_ps_call = powershell and not (has_ps_call and cmd_idx == 0)
+    py_replacement = (
+        _shell_command(py_exe, powershell=True)
+        if needs_ps_call
+        else _shell_literal(py_exe, powershell=powershell)
+    )
+    script_literal = _shell_literal(new_script, powershell=powershell)
+
+    if _looks_like_python_token(cmd_tok.unquoted):
+        probe = cmd_idx + 1
+        while probe < len(words):
+            arg = words[probe].unquoted
+            if arg in _PYTHON_TERMINAL_FLAGS or arg.startswith(("-c", "-m")):
+                return []
+            if arg in _PYTHON_VALUE_FLAGS:
+                probe += 2
+                if probe > len(words):
+                    return []
+                continue
+            if arg.startswith(("-W", "-X", "--check-hash-based-pycs=")):
+                probe += 1
+                continue
+            if arg in _PYTHON_PASSTHROUGH_FLAGS or (
+                len(arg) > 1
+                and arg[0] == "-"
+                and not arg.startswith("--")
+                and set(arg[1:]) <= _PYTHON_SHORT_FLAG_CHARS
+            ):
+                probe += 1
+                continue
+            if arg.startswith("-"):
+                return []
+            break
+        if probe >= len(words):
+            return []
+        script_tok = words[probe]
+        normalized = script_tok.unquoted.replace("\\", "/")
+        if not normalized.startswith("-") and normalized.endswith(legacy_suffix):
+            return [
+                (script_tok.start, script_tok.end, script_literal),
+                (cmd_tok.start, cmd_tok.end, py_replacement),
+            ]
+        return []
+
+    normalized_cmd = cmd_tok.unquoted.replace("\\", "/")
+    if (
+        not normalized_cmd.startswith("-")
+        and not _ENV_ASSIGN_RE.fullmatch(normalized_cmd)
+        and normalized_cmd.endswith(legacy_suffix)
+    ):
+        return [(cmd_tok.start, cmd_tok.end, f"{py_replacement} {script_literal}")]
+    return []
+
+
 def _rewrite_legacy_claude_command(
     raw_command: str,
     *,
@@ -653,75 +973,37 @@ def _rewrite_legacy_claude_command(
     py_exe: str,
     powershell: bool,
 ) -> str | None:
-    """Upgrade a legacy Claude hook/statusline path while keeping wrappers and flags."""
+    """Upgrade executed legacy Claude hook/statusline commands while keeping wrappers and data args."""
     if legacy_suffix not in raw_command.replace("\\", "/"):
         return None
     tokens = _tokenize_shell_spans(raw_command, powershell=powershell)
     if not tokens:
         return None
 
-    script_idx: int | None = None
-    for index, (start, _end, unquoted) in enumerate(tokens):
-        normalized = unquoted.replace("\\", "/")
-        if not normalized.startswith("-") and normalized.endswith(legacy_suffix):
-            script_idx = index
-            break
-        if (
-            index >= 1
-            and tokens[index - 1][2] in {"-c", "-lc"}
-            and raw_command[start] in {"'", '"'}
-            and legacy_suffix in normalized
-        ):
-            inner = _rewrite_legacy_claude_command(
-                unquoted,
+    edits: list[tuple[int, int, str]] = []
+    for words, has_ps_call in _split_command_segments(tokens, powershell=powershell):
+        edits.extend(
+            _segment_edits(
+                words,
+                has_ps_call=has_ps_call,
+                raw_command=raw_command,
                 legacy_suffix=legacy_suffix,
                 new_script=new_script,
                 py_exe=py_exe,
-                powershell=False,
+                powershell=powershell,
             )
-            if inner is None:
-                return None
-            literal = _shell_literal(inner, powershell=powershell)
-            return raw_command[:start] + literal + raw_command[tokens[index][1] :]
-    if script_idx is None:
+        )
+    if not edits:
         return None
 
-    py_idx: int | None = None
-    probe_idx = script_idx - 1
-    while probe_idx >= 0 and tokens[probe_idx][2] in _PYTHON_PASSTHROUGH_FLAGS:
-        probe_idx -= 1
-    if probe_idx >= 0 and _looks_like_python_token(tokens[probe_idx][2]):
-        py_idx = probe_idx
-
-    script_start, script_end, _ = tokens[script_idx]
-    script_literal = _shell_literal(new_script, powershell=powershell)
-    edits: list[tuple[int, int, str]] = []
-    if py_idx is not None:
-        py_start, py_end, _ = tokens[py_idx]
-        needs_ps_call = powershell and (
-            py_idx == 0 or tokens[py_idx - 1][2] in {";", "&&", "||", "|"}
-        )
-        py_replacement = (
-            _shell_command(py_exe, powershell=True)
-            if needs_ps_call
-            else _shell_literal(py_exe, powershell=powershell)
-        )
-        edits.append((script_start, script_end, script_literal))
-        edits.append((py_start, py_end, py_replacement))
-    else:
-        needs_ps_call = powershell and (
-            script_idx == 0 or tokens[script_idx - 1][2] in {";", "&&", "||", "|"}
-        )
-        py_replacement = (
-            _shell_command(py_exe, powershell=True)
-            if needs_ps_call
-            else _shell_literal(py_exe, powershell=powershell)
-        )
-        edits.append((script_start, script_end, f"{py_replacement} {script_literal}"))
-
+    edits.sort(key=lambda item: item[0], reverse=True)
     updated = raw_command
+    last_start = len(raw_command) + 1
     for start, end, replacement in edits:
+        if end > last_start:
+            return None
         updated = updated[:start] + replacement + updated[end:]
+        last_start = start
     return updated if updated != raw_command else None
 
 

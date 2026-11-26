@@ -1822,3 +1822,207 @@ def test_claude_legacy_migration_preserves_wrapped_commands_and_reads_v2_envelop
     assert ps_migrated.startswith("& '/new/python.exe' ")
     assert ps_migrated.endswith(" --flag")
     assert "& &" not in ps_migrated
+
+
+def test_claude_legacy_migration_command_position_and_operator_boundaries(
+    tmp_path: Path,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-cmd-pos"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-pos",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-pos",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_status = "/opt/old dir/loopx/claude_goal_mode/statusline/goal_status.py"
+    legacy_hook = "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py"
+    new_status = claude_install._p("statusline", "goal_status.py")
+    new_hook = claude_install._p("hooks", "goal_policy.py")
+
+    # Data-argument, query, redirection, and non-script Python invocations stay untouched.
+    untouched_commands = [
+        f"printf '%s\\n' {shlex.quote(legacy_status)}",
+        f"echo {shlex.quote(legacy_status)}",
+        f"FOO=1 env BAR=2 printf '%s\\n' {shlex.quote(legacy_status)}",
+        f"command -v {shlex.quote(legacy_status)}",
+        f"cat <{shlex.quote(legacy_status)}",
+        f"echo hi>{shlex.quote(legacy_status)}",
+        f"/old/python3 -c \"print('{legacy_status}')\"",
+        f"/old/python3 -m user_tool {shlex.quote(legacy_status)}",
+        f"/old/python3 /user/custom_tool.py {shlex.quote(legacy_status)}",
+        f"sh -c 'printf \"%s\\n\" \"{legacy_status}\"'",
+        f"FOO={shlex.quote(legacy_status)} printf '%s\\n' ok",
+    ]
+    for raw in untouched_commands:
+        assert (
+            claude_install._rewrite_legacy_claude_command(
+                raw,
+                legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+                new_script=new_status,
+                py_exe=sys.executable,
+                powershell=False,
+            )
+            is None
+        ), raw
+
+    # Executed commands right before adjacent unquoted shell operators migrate cleanly.
+    adjacent_status = f"/old/python3 -u {shlex.quote(legacy_status)}&&echo AFTER_STATUS"
+    migrated_adj = claude_install._rewrite_legacy_claude_command(
+        adjacent_status,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_adj is not None
+    assert migrated_adj.endswith("&&echo AFTER_STATUS")
+    assert "/old/python3" not in migrated_adj
+    assert " -u " in migrated_adj
+    assert new_status in migrated_adj
+
+    # Direct adjacent operator with no interpreter prefix and pipe/semicolon/or-else boundaries.
+    for sep in ("&&", "||", ";", "|"):
+        direct_cmd = f"/opt/old{legacy_hook.removeprefix('/opt/old')}{sep}cat"
+        migrated_direct = claude_install._rewrite_legacy_claude_command(
+            direct_cmd,
+            legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+            new_script=new_hook,
+            py_exe=sys.executable,
+            powershell=False,
+        )
+        assert migrated_direct is not None, sep
+        assert migrated_direct.endswith(f"{sep}cat")
+        assert new_hook in migrated_direct
+        assert "/claude_goal_mode/" not in migrated_direct
+
+    # Mixed print-then-execute leaves the printed data arg intact and upgrades only the launcher.
+    print_then_run_adj = f"printf '%s\\n' {shlex.quote(legacy_status)}&&/old/python3 {shlex.quote(legacy_status)}"
+    migrated_mix = claude_install._rewrite_legacy_claude_command(
+        print_then_run_adj,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_mix is not None
+    head_part, tail_part = migrated_mix.split("&&", 1)
+    assert head_part == f"printf '%s\\n' {shlex.quote(legacy_status)}"
+    assert "/old/python3" not in tail_part
+    assert new_status in tail_part
+
+    # Nested sh -c with both print-data segment and adjacent executed launcher.
+    nested_mix = f"env WRAP=1 sh -ec 'printf \"%s\\n\" \"{legacy_status}\"&&/old/python3 \"{legacy_status}\"'"
+    migrated_nested = claude_install._rewrite_legacy_claude_command(
+        nested_mix,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_nested is not None
+    assert legacy_status in migrated_nested
+    assert new_status in migrated_nested
+    assert "/old/python3" not in migrated_nested
+
+    # PowerShell mixed literal arg + executed command keeps literal arg and `&`.
+    ps_mix = (
+        "printf '%s' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'; "
+        "& 'C:\\old\\python.exe' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'"
+    )
+    migrated_ps_mix = claude_install._rewrite_legacy_claude_command(
+        ps_mix,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe="/new/python.exe",
+        powershell=True,
+    )
+    assert migrated_ps_mix is not None
+    assert migrated_ps_mix.startswith(
+        "printf '%s' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'; & '/new/python.exe' "
+    )
+
+    # Full migrate_legacy_claude_dir + actual /bin/sh execution for print-only, adjacent-&&, and print-then-launch.
+    env_exec = {
+        **slash_command_install.os.environ,
+        "HOME": str(home),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "LOOPX_GOAL_FORCE": "1",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "PATH": f"{Path(sys.executable).parent}:{slash_command_install.os.environ.get('PATH', '')}",
+    }
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    (proj_claude / "loop.md").write_text("<!-- loopx:armed {\"goal_id\": \"cc-pos\"} -->\n", encoding="utf-8")
+    proj_settings = proj_claude / "settings.json"
+    cases = [
+        ("print_only", f"printf '%s\\n' {shlex.quote(legacy_status)}", legacy_status, False),
+        ("adjacent_and", f"/old/python3 {shlex.quote(legacy_status)}&&echo CHAIN_OK", "CHAIN_OK", True),
+        (
+            "print_then_launch",
+            f"printf '%s\\n' {shlex.quote(legacy_status)}&&/old/python3 {shlex.quote(legacy_status)}",
+            legacy_status,
+            True,
+        ),
+    ]
+    for name, raw_cmd, expected_line, expect_status_output in cases:
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": raw_cmd}}),
+            encoding="utf-8",
+        )
+        res = claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True)
+        if expect_status_output:
+            assert res == [{"path": str(proj_settings), "status": "updated"}], name
+        else:
+            assert res == [], name
+        updated_cmd = json.loads(proj_settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+        proc = subprocess.run(
+            ["/bin/sh", "-c", updated_cmd],
+            input=json.dumps({"cwd": str(proj)}),
+            capture_output=True,
+            text=True,
+            env=env_exec,
+            check=False,
+        )
+        assert proc.returncode == 0, f"{name}: {proc.stderr} {proc.stdout}"
+        assert expected_line in proc.stdout, (name, proc.stdout)
+        if expect_status_output:
+            assert "cc-pos" in proc.stdout, (name, proc.stdout)
+        # Idempotent on repeat run.
+        assert claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True) == []
