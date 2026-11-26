@@ -194,7 +194,6 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     assert CODEX_CLI_HOST_CAPABILITIES.integration_tier == "boundary_cli"
     assert CODEX_CLI_HOST_CAPABILITIES.supported_capabilities == (
         "epoch_reset",
-        "fold_and_prefetch",
         "quiet_turn",
         "managed_thread_resume",
     )
@@ -228,12 +227,16 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     assert host_supports_capability("codex-app-server", "session_fork") is True
     assert host_supports_capability("codex-app-server", "managed_thread_resume") is True
     assert host_supports_capability("codex-cli", "epoch_reset") is True
-    assert host_supports_capability("codex-cli", "fold_and_prefetch") is True
+    assert host_supports_capability("codex-cli", "fold_and_prefetch") is False
     assert host_supports_capability("codex-cli", "quiet_turn") is True
     assert host_supports_capability("codex-cli", "managed_thread_resume") is True
     assert host_supports_capability("codex-cli", "compact_hook") is False
+    assert host_supports_capability("codex-cli-hooks", "fold_and_prefetch") is True
     assert host_supports_capability("codex-cli-hooks", "compact_hook") is True
     assert host_supports_capability("codex-cli-hooks", "verifier_hook") is False
+    assert [
+        entry.host_id for entry in list_host_capabilities(capability="fold_and_prefetch")
+    ] == ["codex-cli-hooks"]
     assert host_supports_capability("dsh", "native_context_budget") is False
     assert host_supports_capability("dsh", "managed_thread_resume") is False
     assert host_supports_capability("agy", "quiet_turn") is False

@@ -436,7 +436,6 @@ export const CODEX_CLI_HOST_CAPABILITIES: HostHarnessCapabilities =
     adapter_module: "loopx.control_plane.turn_driver.codex_cli",
     supported_capabilities: [
       "epoch_reset",
-      "fold_and_prefetch",
       "quiet_turn",
       "managed_thread_resume",
     ],
@@ -445,7 +444,7 @@ export const CODEX_CLI_HOST_CAPABILITIES: HostHarnessCapabilities =
     native_goal_primitive: false,
     native_scheduler_primitive: false,
     description:
-      "Outer-driven Codex CLI (codex exec) boundary Turn runner with UTF-8 stdio, managed thread resume, Quiet-Turn pre-admission skips, EpochReset transitions, and bounded epoch prefetch delivery.",
+      "Outer-driven Codex CLI (codex exec) boundary Turn runner with UTF-8 stdio, managed thread resume, Quiet-Turn pre-admission skips, and EpochReset prefetch transitions (no intra-epoch fold_and_prefetch without hooks).",
   });
 
 export const CODEX_CLI_HOOKS_HOST_CAPABILITIES: HostHarnessCapabilities =

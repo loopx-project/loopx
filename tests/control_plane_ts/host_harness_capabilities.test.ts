@@ -100,7 +100,6 @@ test("canonical flagship descriptors cover all three integration tiers truthfull
   assert.equal(CODEX_CLI_HOST_CAPABILITIES.integration_tier, "boundary_cli");
   assert.deepEqual(CODEX_CLI_HOST_CAPABILITIES.supported_capabilities, [
     "epoch_reset",
-    "fold_and_prefetch",
     "quiet_turn",
     "managed_thread_resume",
   ]);
@@ -168,10 +167,11 @@ test("capability lookup and tier/capability list filters behave deterministicall
     true,
   );
   assert.equal(hostSupportsCapability("codex-cli", "epoch_reset"), true);
-  assert.equal(hostSupportsCapability("codex-cli", "fold_and_prefetch"), true);
+  assert.equal(hostSupportsCapability("codex-cli", "fold_and_prefetch"), false);
   assert.equal(hostSupportsCapability("codex-cli", "quiet_turn"), true);
   assert.equal(hostSupportsCapability("codex-cli", "managed_thread_resume"), true);
   assert.equal(hostSupportsCapability("codex-cli", "compact_hook"), false);
+  assert.equal(hostSupportsCapability("codex-cli-hooks", "fold_and_prefetch"), true);
   assert.equal(hostSupportsCapability("codex-cli-hooks", "compact_hook"), true);
   assert.equal(hostSupportsCapability("codex-cli-hooks", "verifier_hook"), false);
   assert.equal(
@@ -211,6 +211,12 @@ test("capability lookup and tier/capability list filters behave deterministicall
   assert.deepEqual(
     listHostCapabilities({ capability: "epoch_reset" }).map((item) => item.host_id),
     ["codex-cli", "codex-cli-hooks"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "fold_and_prefetch" }).map(
+      (item) => item.host_id,
+    ),
+    ["codex-cli-hooks"],
   );
   assert.deepEqual(
     listHostCapabilities({ capability: "compact_hook" }).map((item) => item.host_id),
