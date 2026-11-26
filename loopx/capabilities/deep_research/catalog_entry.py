@@ -2,24 +2,38 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...python_install_owner import RESEARCH_DISTRIBUTION, builtin_capability_installed
+from ...python_install_owner import (
+    RESEARCH_DISTRIBUTION,
+    inspect_builtin_capability_distribution,
+)
 
 
 RESEARCH_INSTALL_HINT = "Install the matching loopx-capability-research wheel into this Core environment."
+RESEARCH_MODULES = (
+    "loopx.capabilities.deep_research.runtime",
+    "loopx.capabilities.external_research.cli",
+    "loopx.capabilities.external_research.projection",
+    "loopx.capabilities.external_research.provider_probe",
+    "loopx.cli_commands.deepresearch",
+    "loopx.extensions.public_github_research",
+)
+RESEARCH_RESOURCES = ("loopx/control_plane/capabilities/external_evidence.ts",)
+
+
+def inspect_research_workflow_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    return inspect_builtin_capability_distribution(
+        RESEARCH_DISTRIBUTION,
+        RESEARCH_MODULES,
+        builtin_cli_present=builtin_cli_present,
+        resources=RESEARCH_RESOURCES,
+    )
 
 
 def research_workflows_installed(*, builtin_cli_present: bool | None = None) -> bool:
-    return builtin_capability_installed(
-        RESEARCH_DISTRIBUTION,
-        (
-            "loopx.capabilities.deep_research.runtime",
-            "loopx.capabilities.external_research.cli",
-            "loopx.capabilities.external_research.projection",
-            "loopx.cli_commands.deepresearch",
-            "loopx.extensions.public_github_research",
-        ),
-        builtin_cli_present=builtin_cli_present,
-        resources=("loopx/control_plane/capabilities/external_evidence.ts",),
+    return bool(
+        inspect_research_workflow_distribution(builtin_cli_present=builtin_cli_present)["ready"]
     )
 
 

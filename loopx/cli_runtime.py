@@ -1062,6 +1062,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 def _available_selected_commands() -> frozenset[str]:
 	from .capabilities.agent_turn_recall.catalog_entry import agent_turn_recall_installed
+	from .capabilities.deep_research.catalog_entry import research_workflows_installed
 	from .capabilities.issue_fix.catalog_entry import issue_fix_workflow_installed
 	from .capabilities.pr_review_queue.catalog_entry import pull_request_review_installed
 
@@ -1072,6 +1073,8 @@ def _available_selected_commands() -> frozenset[str]:
 		commands.add("pr-review")
 	if issue_fix_workflow_installed(builtin_cli_present=False):
 		commands.add("issue-fix")
+	if research_workflows_installed(builtin_cli_present=False):
+		commands.update(("deepresearch", "external-evidence"))
 	return frozenset(commands)
 
 

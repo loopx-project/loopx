@@ -346,3 +346,49 @@ def test_real_record_missing_asset_fails_closed_despite_filtered_dist_files(
         install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
     )
     assert manifest.release_runtime_identity() == before
+
+
+def test_core_research_companion_extends_and_fences_runtime_identity(
+    owned_package, monkeypatch: pytest.MonkeyPatch,
+):
+    package, core_dist = owned_package
+    core_dist.name = "loopx-core"
+    distributions = {"loopx-core": core_dist}
+
+    def lookup(name: str):
+        if name not in distributions:
+            raise manifest.PackageNotFoundError(name)
+        return distributions[name]
+
+    monkeypatch.setattr(manifest, "distribution", lookup)
+    core_only = manifest.release_runtime_identity()
+    assert core_only["package_fingerprint"].startswith("sha256:")
+
+    research_file = package / "cli_commands/deepresearch.py"
+    research_file.parent.mkdir(parents=True, exist_ok=True)
+    research_file.write_text("research = 1\n", encoding="utf-8")
+    research_item = SimpleNamespace(
+        as_posix=lambda: "loopx/cli_commands/deepresearch.py",
+        locate=lambda: research_file,
+    )
+    research_dist = SimpleNamespace(
+        name="loopx-capability-research",
+        version=manifest.__version__,
+        files=[research_item],
+        read_text=lambda _name: None,
+    )
+    distributions["loopx-capability-research"] = research_dist
+    with_research = manifest.release_runtime_identity()
+    assert with_research["package_fingerprint"].startswith("sha256:")
+    assert with_research["package_fingerprint"] != core_only["package_fingerprint"]
+
+    research_dist.version = "0.0.0"
+    assert "package_fingerprint" not in manifest.release_runtime_identity()
+
+    research_dist.version = manifest.__version__
+    research_dist.read_text = lambda _name: json.dumps({"dir_info": {"editable": True}})
+    assert "package_fingerprint" not in manifest.release_runtime_identity()
+
+    research_dist.read_text = lambda _name: None
+    core_dist.files.append(research_item)
+    assert "package_fingerprint" not in manifest.release_runtime_identity()

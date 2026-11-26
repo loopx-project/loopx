@@ -63,6 +63,7 @@ RESEARCH_FILES = {
     Path("loopx/capabilities/deep_research/runtime.py"),
     Path("loopx/capabilities/external_research/cli.py"),
     Path("loopx/capabilities/external_research/projection.py"),
+    Path("loopx/capabilities/external_research/provider_probe.py"),
     Path("loopx/cli_commands/deepresearch.py"),
     Path("loopx/control_plane/capabilities/external_evidence.ts"),
     Path("loopx/extensions/public_github_research.py"),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from importlib.metadata import Distribution, PackageNotFoundError, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
 import hashlib
 import json
 import os
