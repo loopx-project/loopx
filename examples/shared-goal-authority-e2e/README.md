@@ -28,7 +28,7 @@ The standalone ladder always runs every selected row.
 | `s0.native_sqlite_conformance` | 0 | `store_direct` | deterministic | The current `SqliteAuthorityStore` passes the same complete conformance contract against real SQLite files. |
 | `s1.cli_document_decodes_through_ts_store` | 1 | `real_cli` | deterministic | Public CLI bootstrap creates canonical File authority. Todo add, lease acquire, and Todo update commit at cursors 2 through 4. An independent TypeScript process reads the four ordered transactions and the first business receipt from `runtime/authority/file-v0`. |
 | `s2a.nokv_live_qualification` | 2a | `store_direct` | `env:nokv_authority` | The NoKV candidate passes the live single-node qualification with SDK `0.11.1`, API `1`, and both stale-incarnation fence checks. |
-| `s2b.postgresql_conformance_live` | 2b | `pending` | `loopx-cloud` | Declared pending in `loopx-project/loopx`; server-side PostgreSQL integration and service admission moved to `loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store` / `npm run test:postgresql-authority-service`). Pre-split self-hosted tags remain archived at `v2.4.0`. |
+| `s2b.postgresql_conformance_live` | 2b | `pending` | `loopx-cloud` | Declared pending in `loopx-project/loopx`; server-side PostgreSQL integration and service admission moved to private/licensed `loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store` / `npm run test:postgresql-authority-service`; unauthenticated public requests return 404). Public self-hosted baseline stays frozen at `v2.4.0` (`5037daecee`). |
 
 Stage 1 checks the complete public path. It applies File creation defaults,
 bootstraps a new Goal, configures its registered agents, performs three
@@ -105,7 +105,9 @@ Exit code `0` requires:
 - no pending declaration unless `--allow-pending` is set.
 
 `s2b.postgresql_conformance_live` is declared in `PENDING_ROWS` pointing to
-`loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store`):
+private/licensed `loopx-project/loopx-cloud`
+(`npm run test:postgresql-authority-store`, with the public pre-split
+self-hosted baseline frozen at `v2.4.0` / `5037daecee`):
 `--stage 2b --list` prints the pending declaration (`exit 0`), selecting stage
 `2b` without `--allow-pending` exits non-zero, and `--allow-pending` reports
 `pending` (never `pass`). `--list` prints the registry and makes no verification

@@ -344,30 +344,36 @@ Mutation 运行必须经过同一 public entrypoint，并让独立 oracle 失败
 Refactors must exercise the affected production entrypoint and real backend
 before delivery. Unit tests, mocks, and in-memory conformance remain useful,
 but cannot replace that proof. In `loopx-project/loopx` (Apache-2.0 core), run
-`npm run test:control-plane` (`FileAuthorityStore` and `SqliteAuthorityStore`)
-and `npm run test:remote-authority` (outbound HTTPS/mTLS client and gateway).
-For changes affecting server-side PostgreSQL authority, configure
-`LOOPX_TEST_POSTGRES_URL` to an isolated disposable server in
-`loopx-project/loopx-cloud` (`https://github.com/loopx-project/loopx-cloud`) and
-run `npm run test:postgresql-authority-store` plus
+`npm run test:control-plane` (`FileAuthorityStore` and `SqliteAuthorityStore`),
+`npm run test:remote-authority` (outbound HTTPS client contract with server TLS
+certificate verification and `Bearer` authentication), and
+`python -m pytest tests/control_plane/test_remote_authority_gateway.py` (Python
+read-only scheduler gateway). For changes affecting server-side PostgreSQL
+authority, configure `LOOPX_TEST_POSTGRES_URL` to an isolated disposable
+server inside authorized access to the private/separately licensed
+`loopx-project/loopx-cloud` repository (unauthenticated public fetches return
+HTTP 404) and run `npm run test:postgresql-authority-store` plus
 `npm run test:postgresql-authority-service`; a skipped suite is an evidence gap,
 not a pass. Record the exact commit, backend version, tested behavior, and
 failures or limits. The `PostgreSQL Integration` workflow in `loopx-cloud`
-qualifies those suites against a disposable server, while pre-split self-hosted
-installations retain the frozen `v2.4.0` tag (`loopx postgres`, Compose bundle,
-and legacy test runner). If no safe real environment is available, hold
-delivery.
+qualifies those suites against a disposable server, while public pre-split
+self-hosted installations stay on the frozen `v2.4.0` (`5037daecee`) tag
+(`loopx postgres`, Compose bundle, and legacy test runner). If no safe real
+environment is available, hold delivery.
 
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
 不能替代这项证据。在开源核心 `loopx-project/loopx` 中，运行
-`npm run test:control-plane`（`FileAuthorityStore` 与 `SqliteAuthorityStore`）与
-`npm run test:remote-authority`（出站 HTTPS/mTLS 客户端与只读网关）。影响服务端
-PostgreSQL authority 时，请在 `loopx-project/loopx-cloud` 中配置指向隔离临时实例的
-`LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store` 与
+`npm run test:control-plane`（`FileAuthorityStore` 与 `SqliteAuthorityStore`）、
+`npm run test:remote-authority`（校验服务端 TLS 证书并携带 `Bearer` 凭证的出站
+HTTPS 客户端契约）以及
+`python -m pytest tests/control_plane/test_remote_authority_gateway.py`（Python 只读
+调度器网关）。影响服务端 PostgreSQL authority 时，请在经授权访问的私有／独立许可
+仓库 `loopx-project/loopx-cloud`（未登录匿名公开访问会返回 HTTP 404）中配置指向隔离
+临时实例的 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store` 与
 `npm run test:postgresql-authority-service`；跳过不算通过。记录精确 commit、
 后端版本、验证行为与失败或局限；`loopx-cloud` 的 `PostgreSQL Integration`
-workflow 会在临时实例上验证这些套件，拆分前的自托管部署可继续参考冻结标签
-`v2.4.0`。没有安全的真实环境则暂停交付。
+workflow 会在临时实例上验证这些套件，而公开拆分前的自托管部署可继续保留冻结标签
+`v2.4.0`（`5037daecee`、`loopx postgres`、Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
 
 #### Default-Provider Performance Qualification / 默认 Provider 性能资格
 
@@ -458,9 +464,10 @@ uv run --extra test python examples/control_plane/authority-three-arm-rehearsal.
 
 本地三臂归档演练可直接执行（对比不可变 legacy 基线、隔离 `File` 与隔离
 `SQLite`），且只输出有界计数和 digest 前缀，不修改真实 Goal、也不输出 raw
-projection、Todo 标识或源路径；PostgreSQL 服务端演练与迁移验证归属
-`loopx-project/loopx-cloud`（`npm run test:postgresql-authority-store`，以
-`LOOPX_TEST_POSTGRES_URL` 指向一次性隔离实例）。
+projection、Todo 标识或源路径；PostgreSQL 服务端演练与迁移验证归属经授权访问的
+私有／独立许可仓库 `loopx-project/loopx-cloud`（`npm run test:postgresql-authority-store`，以
+`LOOPX_TEST_POSTGRES_URL` 指向一次性隔离实例；公开自托管基线保留在冻结标签
+`v2.4.0` / `5037daecee`）。
 
 Keep tests separate from active state: use a disposable database/tenant and
 runtime directory, with synthetic fixtures or an owner-authorized read-only

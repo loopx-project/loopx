@@ -112,13 +112,17 @@ Apache-2.0. In particular:
   and [`remote-authority-client.ts`](../../examples/coordination/remote-authority-client.ts))
   remain Apache-2.0 in `loopx-project/loopx`.
 - Server-side PostgreSQL authority, distributed lease coordination, and
-  multi-tenant governance live in `loopx-project/loopx-cloud` (preserving full
-  Apache-2.0 `LICENSE` and `NOTICE` attributions on any migrated base files).
+  multi-tenant governance live in the private/separately licensed
+  `loopx-project/loopx-cloud` repository (unauthenticated public GitHub access
+  returns HTTP 404; migrated base files preserve full Apache-2.0 `LICENSE` and
+  `NOTICE` attributions). The pre-split Apache-2.0 self-hosted PostgreSQL
+  baseline stays publicly readable at the frozen `v2.4.0` (`5037daecee`) tag in
+  `loopx-project/loopx`.
 
-A separately delivered Managed Control Plane (`loopx-project/loopx-cloud`),
-enterprise-only modules, hosted operations, or implementation and support
-services may use separate commercial terms when they are not part of this
-repository's Apache-2.0 core distribution.
+A separately delivered Managed Control Plane (`loopx-project/loopx-cloud`,
+private/separately licensed), enterprise-only modules, hosted operations, or
+implementation and support services may use separate commercial terms when they
+are not part of this repository's Apache-2.0 core distribution.
 
 Apache-2.0 itself permits commercial use, modification, and distribution
 subject to its terms. The separate project-name and logo guidance in
