@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .readiness import ResolvedRuntimeEntrypoint
@@ -101,15 +102,23 @@ def _assemble_runtime_binding(
     )
 
 
+@dataclass(frozen=True)
+class _ReadyCapabilityMatch:
+    extension_id: str
+    entry: dict[str, object]
+    active_revision: str
+    manifest: Mapping[str, object]
+    verified_entrypoint: ResolvedRuntimeEntrypoint
+    implementation_count: int
+
+
 def _ready_capability_matches_in_state(
     state: Mapping[str, object],
     *,
     capability_id: str,
     protocol: str,
-) -> list[tuple[str, dict[str, object], str, Mapping[str, object], ResolvedRuntimeEntrypoint]]:
-    matches: list[
-        tuple[str, dict[str, object], str, Mapping[str, object], ResolvedRuntimeEntrypoint]
-    ] = []
+) -> list[_ReadyCapabilityMatch]:
+    matches: list[_ReadyCapabilityMatch] = []
     for extension_id, entry in _extensions_dict(state).items():
         if not isinstance(entry, dict):
             raise ValueError(f"extension `{extension_id}` runtime entry is invalid")
@@ -129,24 +138,30 @@ def _ready_capability_matches_in_state(
         )
         if verified is None:
             continue
-        if _matching_capability_implementations(
+        impl_matches = _matching_capability_implementations(
             manifest, capability_id=capability_id, protocol=protocol
-        ):
+        )
+        if impl_matches:
             matches.append(
-                (str(provider["id"]), entry, active_revision, manifest, verified)
+                _ReadyCapabilityMatch(
+                    extension_id=str(provider["id"]),
+                    entry=entry,
+                    active_revision=active_revision,
+                    manifest=manifest,
+                    verified_entrypoint=verified,
+                    implementation_count=len(impl_matches),
+                )
             )
     return matches
 
 
 def _select_single_capability_match(
-    matches: list[
-        tuple[str, dict[str, object], str, Mapping[str, object], ResolvedRuntimeEntrypoint]
-    ],
+    matches: list[_ReadyCapabilityMatch],
     *,
     capability_id: str,
     protocol: str,
-) -> tuple[str, dict[str, object], str, Mapping[str, object], ResolvedRuntimeEntrypoint]:
-    matching_ids = [item[0] for item in matches]
+) -> _ReadyCapabilityMatch:
+    matching_ids = [item.extension_id for item in matches]
     if not matching_ids:
         raise ValueError(
             f"no enabled, doctor-ready extension implements `{capability_id}` "
@@ -174,7 +189,7 @@ def resolve_capability_extension_id(
     selected = _select_single_capability_match(
         matches, capability_id=capability_id, protocol=protocol
     )
-    return selected[0]
+    return selected.extension_id
 
 
 def resolve_extension_activation(
@@ -568,22 +583,20 @@ def resolve_capability_binding(
     matches = _ready_capability_matches_in_state(
         state, capability_id=capability_id, protocol=protocol
     )
-    extension_id, entry, active_revision, manifest, verified = (
-        _select_single_capability_match(
-            matches, capability_id=capability_id, protocol=protocol
-        )
+    selected = _select_single_capability_match(
+        matches, capability_id=capability_id, protocol=protocol
     )
     return _capability_binding_from_entry(
-        extension_id,
-        entry=entry,
+        selected.extension_id,
+        entry=selected.entry,
         capability_id=capability_id,
         protocol=protocol,
         permission=permission,
-        active_revision=active_revision,
-        manifest=manifest,
+        active_revision=selected.active_revision,
+        manifest=selected.manifest,
         incompatibility_checked=True,
-        verified_entrypoint=verified,
-        matching_checked=True,
+        verified_entrypoint=selected.verified_entrypoint,
+        matching_checked=selected.implementation_count == 1,
     )
 
 

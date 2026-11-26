@@ -47,6 +47,7 @@ def _write_manifest(
     permissions: list[str] | None = None,
     protocol: str = "cap_v0",
     capability_id: str | None = None,
+    implements_count: int = 1,
 ) -> Path:
     perms = list(permissions or [])
     lines = [
@@ -69,11 +70,14 @@ def _write_manifest(
             "[[provides]]",
             f"id = {json.dumps(capability_id)}",
             'kind = "advisory"',
-            "",
-            "[[implements]]",
-            f"capability_id = {json.dumps(capability_id)}",
-            f"protocol = {json.dumps(protocol)}",
         ]
+        for _ in range(implements_count):
+            lines += [
+                "",
+                "[[implements]]",
+                f"capability_id = {json.dumps(capability_id)}",
+                f"protocol = {json.dumps(protocol)}",
+            ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -401,3 +405,60 @@ def test_lifecycle_rollback_api_guard_and_runtime_failure_modes(
 
     # Silence unused import check while anchoring manifest version coupling.
     assert ext_manifest.EXTENSION_MANIFEST_SCHEMA_VERSION == "loopx_extension_manifest_v0"
+
+
+def test_duplicate_implements_rejects_auto_explicit_and_optional_consistently(
+    tmp_path: Path,
+) -> None:
+    provider = _write_provider_script(tmp_path / "dup_provider.py")
+    manifest = _write_manifest(
+        tmp_path / "dup_manifest.toml",
+        entrypoint=provider,
+        extension_id="ext-dup",
+        permissions=["read_state"],
+        protocol="dup_v0",
+        capability_id="cap.dup",
+        implements_count=2,
+    )
+    state_file = tmp_path / "ext_state.json"
+    install = ext_runtime.install_extension(manifest, state_file=state_file, execute=True)
+    assert install["changed"] is True
+    assert install["enabled"] is True
+    assert (
+        ext_runtime.resolve_capability_extension_id(
+            state_file=state_file,
+            capability_id="cap.dup",
+            protocol="dup_v0",
+        )
+        == "ext-dup"
+    )
+    with pytest.raises(ValueError, match="does not implement"):
+        ext_runtime.resolve_capability_binding(
+            state_file=state_file,
+            capability_id="cap.dup",
+            protocol="dup_v0",
+            permission="read_state",
+        )
+    with pytest.raises(ValueError, match="does not implement"):
+        ext_runtime.resolve_extension_binding(
+            "ext-dup",
+            state_file=state_file,
+            capability_id="cap.dup",
+            protocol="dup_v0",
+            permission="read_state",
+        )
+    for explicit_id in (None, "ext-dup"):
+        opt = ext_runtime.resolve_optional_capability_binding(
+            state_file=state_file,
+            capability_id="cap.dup",
+            protocol="dup_v0",
+            permission="read_state",
+            extension_id=explicit_id,
+        )
+        assert opt.status == "extension_incompatible"
+        assert opt.extension_id == "ext-dup"
+        assert opt.installed is True
+        assert opt.enabled is True
+        assert opt.doctor_verified is True
+        assert opt.next_action == "install_compatible_extension"
+        assert opt.binding is None
