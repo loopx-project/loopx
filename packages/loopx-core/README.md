@@ -115,9 +115,13 @@ uv pip uninstall --python "$LOOPX_CORE_PYTHON" \
   loopx-capability-agent-turn-recall loopx-capability-pull-request-review loopx-capability-issue-fix
 ```
 
-To add the optional research workflows, build and install the matching
-[research workflow wheel](../loopx-capability-research/README.md). Check the
-capability entries before opening an existing project ledger.
+To add optional Explore orchestration (frontier/multi-branch planning, replay,
+external-evidence observation, and read-only citation export) alongside the
+standalone `deepresearch` evidence ledger and `external-evidence` commands, build
+and install the matching [research workflow wheel](../loopx-capability-research/README.md).
+Core retains Explore's result-event schema, lightweight projection, and Goal
+permission/settlement validation; existing project ledgers remain readable and
+unmodified on rollback.
 
 The candidate owns the same `loopx` import namespace and console command as the
 ordinary distribution. Do not co-install or overlay them. Return to the ordinary

@@ -372,9 +372,17 @@ Operation provider 必须说明某个 effect 能否核对、能否安全重试�
 
 ### 产品与 benchmark 执行
 
-在独立 Core 中，私有证据账本和外部证据命令随 `loopx-capability-research` 一起发行。
-Core 目录保留原有能力条目，并显示匹配安装包是否可用。选择命令时加载原有实现。
-研究任务沿已有的项目账本续作，继续使用原来的证据准入和报告规则。
+在独立 Core 中，`loopx-capability-research` 以 **Explore** 为主工作流（将
+Explore 重编排、多分支/前沿规划、harness 与回放运行时、来源对账及 `explore` CLI 移出
+Core），并与独立 `deepresearch` 证据账本和 `external-evidence` 取证命令一并发行。Core
+仅保留 Explore 的结果事件契约、轻量投影、机器/Goal 配置适配与既有 Goal 权限和结算校验
+（裸 Core 常规 Turn 保持惰性加载、不依赖该包），且研究包不增加新的 Goal 写入权限。已获父级
+明确采纳的 `external-evidence` 可通过显式证据插件入口向已启用的同 Goal Explore 节点写入
+经净化的公共安全引用（不自动执行外部 provider）；`deepresearch` 引用报告提供单向、幂等、
+只读导出（`explore import-citations`），已保存的本地路径、私有来源与报告正文留在
+`.loopx/deepresearch/` 原权限边界内，进入 Goal 图谱的内容仅限净化引用，且原账本完全不被
+反写。Core 目录将 `explore`、`deep-research` 与 `external-evidence-research` 绑定到
+`loopx-capability-research`，复用现有包归属、惰性命令发现与安装诊断接口暴露版本/缺件状态。
 
 遵守 [长程研究计划](long-horizon-harness-benchmark-research-program-v0.zh-CN.md)：
 native/plain 对照、被动观测、受治理执行与 ablation 具有明确身份。
@@ -445,8 +453,12 @@ parsing、global options、输出、错误与 exit code 合格；不兼容版本
 继续前验证新 owner 与解析后的装配；不能跨活跃 lease 热切换。回滚同样先核对并保留持久状态。
 后续不可逆数据变化须另设迁移/导出门槛。
 
-这些结构/装配变化的回滚不需要数据迁移。默认值变化须有明确 owner 决策与 release notes；
-本提案不改变现有默认值。
+这些结构/装配变化的回滚不需要数据迁移。对于已有的独立 `.loopx/deepresearch/` 账本，
+未结束的研究会话可继续使用原有 `deepresearch status|add-source|resolve-question|close|report`
+命令完成闭环与归档，也可按需通过只读单向导出把已授权引用投影为同 Goal Explore 的净化引用，
+原账本与报告保留可读与完整回滚路径。卸载 `loopx-capability-research` 后保留 Goal
+权限、Explore 事件日志与独立研究账本，可平滑回退至裸 Core，重装同版本包即可续作。
+默认值变化须有明确 owner 决策与 release notes；本提案不改变现有默认值。
 
 ## 9. 验证与验收
 

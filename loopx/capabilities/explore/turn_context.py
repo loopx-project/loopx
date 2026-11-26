@@ -119,7 +119,8 @@ def explore_turn_context(
     )
     from ..todo_replan_cadence.machine_defaults import work_yardstick_enabled
     yardstick = work_yardstick_enabled(goal, runtime_root)
-    projection, plan, focus, todos = {}, {}, {}, {}
+    projection, focus, todos = {}, {}, {}
+    plan: Mapping[str, object] = {}
     page_tasks = {row["todo_id"] for row in review_pages
                   if isinstance(row, Mapping) and isinstance(row.get("todo_id"), str)} if isinstance(review_pages, list) else set()
     if graph or gate["enabled"]:
@@ -146,16 +147,19 @@ def explore_turn_context(
             include_acceptance=False,
         )
     if gate["enabled"]:
-        from .todo_branch_plan import build_explore_todo_branch_plan
-
-        plan = build_explore_todo_branch_plan(
-            goal_id=goal_id,
-            agent_id=agent_id,
-            todos=todos.get("todos") or [],
-            projection=projection,
-            orchestration=goal.get("spawn_policy"),
-            width=3,
-        )
+        try:
+            from .todo_branch_plan import build_explore_todo_branch_plan
+        except ModuleNotFoundError:
+            plan = {}
+        else:
+            plan = build_explore_todo_branch_plan(
+                goal_id=goal_id,
+                agent_id=agent_id,
+                todos=todos.get("todos") or [],
+                projection=projection,
+                orchestration=goal.get("spawn_policy"),
+                width=3,
+            )
     # Transport only the existing identity/link fields consumed by the typed
     # reader, not task descriptions, notes or unrelated acceptance material.
     scopes = {row["todo_id"]: {key: row[key] for key in (

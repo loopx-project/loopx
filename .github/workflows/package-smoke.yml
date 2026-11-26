@@ -131,7 +131,7 @@ jobs:
           LOOPX_STANDARD_TEST_WHEELHOUSE="$RUNNER_TEMP/core-dist" uv run --extra test python -m pytest -q \
             tests/test_core_standard_distribution.py
 
-      - name: Qualify research availability, ledger recovery and removal
+      - name: Qualify research availability, Explore primary workflow, ledger recovery and removal
         env:
           LOOPX_USAGE_PING: "0"
         run: |
@@ -143,6 +143,7 @@ jobs:
           LOOPX_RESEARCH_TEST_PYTHON="$LOOPX_CORE_TEST_PYTHON" uv run --extra test python -m pytest -q tests/capabilities/test_external_evidence_cli.py -k preserves_receipt_clocks_and_idempotent_ledger
           uv pip uninstall --python "$LOOPX_CORE_TEST_PYTHON" loopx-capability-research
           uv run --extra test python -m pytest -q tests/test_core_research_distribution.py
+          LOOPX_CORE_TEST_PYTHON="$LOOPX_CORE_TEST_PYTHON" uv run --extra test python -m pytest -q tests/test_core_distribution.py -k 'identity_help_and_unavailable_workspace or defers_explore_evaluation'
 
       - name: Build the matching Workspace wheel
         run: |

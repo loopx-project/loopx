@@ -223,9 +223,11 @@ def build_capability_registry(
         )
     for record in BUILTIN_CAPABILITIES:
         if not builtin_cli_present and (
-            record is DEEP_RESEARCH_CATALOG_ENTRY or record is EXTERNAL_RESEARCH_CATALOG_ENTRY
+            record is EXPLORE_CATALOG_ENTRY
+            or record is DEEP_RESEARCH_CATALOG_ENTRY
+            or record is EXTERNAL_RESEARCH_CATALOG_ENTRY
         ):
-            adapted: dict[str, Any] = dict(record) | {"provider_id": RESEARCH_DISTRIBUTION}
+            adapted = dict(record) | {"provider_id": RESEARCH_DISTRIBUTION}
             if not research_ready:
                 adapted["next_real_step"] = RESEARCH_INSTALL_HINT
             registry.register_capability(adapted)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "loopx-capability-research"
 dynamic = ["version", "dependencies"]
-description = "Evidence-ledger and external evidence workflows for matching LoopX Core."
+description = "Explore orchestration, evidence-ledger, and external evidence workflows for matching LoopX Core."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -17,6 +17,8 @@ dependencies = {file = "requires-core.txt"}
 
 [tool.setuptools.packages.find]
 include = [
+    "loopx",
+    "loopx.capabilities.explore",
     "loopx.capabilities.deep_research",
     "loopx.capabilities.external_research",
     "loopx.cli_commands",

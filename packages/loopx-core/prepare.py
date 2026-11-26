@@ -59,7 +59,20 @@ ISSUE_FIX_CORE_FILES = {
     "pr_gate_reconcile.py", "pr_lifecycle.py", "pr_lifecycle_rollout.py",
     "pr_review_ack.py", "pr_wait_hook.py", "pr_wait_reconcile.py",
 }
+EXPLORE_DIRECTORY = Path("loopx/capabilities/explore")
+# Core retains Explore's result event schema, lightweight projection, machine/goal
+# configuration adapters, and Goal permission/settlement interfaces.
+EXPLORE_CORE_FILES = {
+    "__init__.py", "activation.py", "candidate_content.py", "catalog_entry.py",
+    "composition_frontier.py", "execution_observation.py", "harness_gate.py",
+    "machine_defaults.py", "measurements.py", "research_evidence.py",
+    "research_frontier.py", "result_log.py", "result_writeback.py",
+    "turn_context.py", "README.md", "README.zh-CN.md",
+}
 RESEARCH_FILES = {
+    Path("loopx/cli_commands/explore.py"),
+    Path("loopx/cli_commands/explore_planning_commands.py"),
+    Path("loopx/cli_commands/explore_feishu_commands.py"),
     Path("loopx/capabilities/deep_research/runtime.py"),
     Path("loopx/capabilities/external_research/cli.py"),
     Path("loopx/capabilities/external_research/projection.py"),
@@ -67,6 +80,12 @@ RESEARCH_FILES = {
     Path("loopx/cli_commands/deepresearch.py"),
     Path("loopx/control_plane/capabilities/external_evidence.ts"),
     Path("loopx/extensions/public_github_research.py"),
+    EXPLORE_DIRECTORY / "harness_runtime.py",
+    EXPLORE_DIRECTORY / "harness_frontier.py",
+    EXPLORE_DIRECTORY / "replay_runtime.py",
+    EXPLORE_DIRECTORY / "research_bridge.py",
+    EXPLORE_DIRECTORY / "todo_branch_plan.py",
+    EXPLORE_DIRECTORY / "worker_branch_plan.py",
 }
 CAPABILITY_ENTRY_MODULES = {
     RECALL_DISTRIBUTION: {
@@ -104,7 +123,10 @@ def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
             | (tracked & CAPABILITY_ENTRY_MODULES[PR_REVIEW_DISTRIBUTION])
         ),
         ISSUE_FIX_DISTRIBUTION: _implementation_paths(sources, ISSUE_FIX_DIRECTORY, ISSUE_FIX_CORE_FILES),
-        RESEARCH_DISTRIBUTION: tracked & RESEARCH_FILES,
+        RESEARCH_DISTRIBUTION: (
+            _implementation_paths(sources, EXPLORE_DIRECTORY, EXPLORE_CORE_FILES)
+            | (tracked & RESEARCH_FILES)
+        ),
     }
 
 
@@ -208,22 +230,8 @@ def prepare_capability_source(
     return output
 
 
-def _tracked_loopx_sources(repository: Path) -> list[Path]:
-    names = subprocess.check_output(
-        ["git", "ls-files", "--cached", "-z", "--", "loopx"], cwd=repository,
-    ).split(b"\0")
-    return [Path(name.decode("utf-8")) for name in names if name]
-
-
 def prepare_research_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
-    repository = repository.resolve()
-    if not RESEARCH_FILES.issubset(_tracked_loopx_sources(repository)):
-        raise ValueError(f"the complete {RESEARCH_DISTRIBUTION} source is required")
-    version = run_path(str(repository / "loopx/__init__.py"))["__version__"]
-    output = _stage_source(output, repository, RESEARCH_DISTRIBUTION, sorted(RESEARCH_FILES))
-    (output / "VERSION").write_text(f"{version}\n", encoding="utf-8")
-    (output / "requires-core.txt").write_text(f"loopx-core=={version}\n", encoding="utf-8")
-    return output
+    return prepare_capability_source(output, RESEARCH_DISTRIBUTION, repository=repository)
 
 
 def main() -> int:
@@ -235,8 +243,6 @@ def main() -> int:
         output = prepare_core_source(args.output)
     elif args.distribution == WORKSPACE_DISTRIBUTION:
         output = prepare_workspace_source(args.output)
-    elif args.distribution == RESEARCH_DISTRIBUTION:
-        output = prepare_research_source(args.output)
     else:
         output = prepare_capability_source(args.output, args.distribution)
     print(output)
