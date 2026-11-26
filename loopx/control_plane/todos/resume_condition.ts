@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { completionDependencyCycles } from "./completion_dependency.ts";
 
-import { readGoalRolloutEventSnapshot } from "../rollout_receipt_log.ts";
+import { readGoalRolloutEventSnapshotWithStat } from "../rollout_receipt_log.ts";
+import type { ReceiptLogStat } from "../runtime/receipt_log_snapshot.ts";
 
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { monitorScopeGeneration, normalizeMonitorChangeScope } from "./monitor_scope.ts";
@@ -459,21 +460,43 @@ export function compactTodoResumeMergeEvidence(items: unknown[], events: readonl
   return [...facts.values()];
 }
 
+export interface RolloutLogReadWitness {
+  readonly logPath: string;
+  readonly stat: ReceiptLogStat;
+  readonly stable: boolean;
+}
+
+export interface TodoResumeRolloutReadOptions {
+  readonly onRolloutLogRead?: (witness: RolloutLogReadWitness) => void;
+}
+
 /** Host transport supplies the existing Goal log location, never a display
  * tail as complete evidence. The pure evaluator and all non-local callers keep
  * their existing request shape and semantics. No Todo or log is written here.
  */
-export async function readTodoResumeRolloutEvents(request: JsonObject): Promise<readonly JsonObject[]> {
+export async function readTodoResumeRolloutEvents(
+  request: JsonObject,
+  options?: TodoResumeRolloutReadOptions,
+): Promise<readonly JsonObject[]> {
   if (request.rollout_event_source === undefined) {
     return Array.isArray(request.rollout_events) ? request.rollout_events as JsonObject[] : [];
   }
   const source = requireJsonObject(request.rollout_event_source, "rollout_event_source");
   const runtimeRoot = requireNonEmptyString(source.runtime_root, "runtime_root");
   const goalId = requireNonEmptyString(source.goal_id, "goal_id");
-  return (await readGoalRolloutEventSnapshot(runtimeRoot, goalId))?.events ?? [];
+  const result = await readGoalRolloutEventSnapshotWithStat(runtimeRoot, goalId);
+  options?.onRolloutLogRead?.({
+    logPath: result.logPath,
+    stat: result.stat,
+    stable: result.stable,
+  });
+  return result.snapshot?.events ?? [];
 }
 
-export async function evaluateTodoResumeConditionsFromSource(value: unknown): Promise<JsonObject> {
+export async function evaluateTodoResumeConditionsFromSource(
+  value: unknown,
+  options?: TodoResumeRolloutReadOptions,
+): Promise<JsonObject> {
   const request = requireJsonObject(value, "todo_resume_evaluation_request");
   const evaluated = evaluateTodoResumeConditions(request); // Reject bad input before IO.
   if (request.rollout_event_source === undefined) return evaluated;
@@ -481,7 +504,7 @@ export async function evaluateTodoResumeConditionsFromSource(value: unknown): Pr
   const waits = items.some(raw => parseResumeWhen(raw.resume_when)?.kind === "pr_merged");
   if (!waits) return evaluated;
   return evaluateTodoResumeConditions({...request, rollout_events: [
-    ...compactTodoResumeMergeEvidence(items, await readTodoResumeRolloutEvents(request)),
+    ...compactTodoResumeMergeEvidence(items, await readTodoResumeRolloutEvents(request, options)),
     ...(Array.isArray(request.rollout_events) ? request.rollout_events : []),
   ]});
 }

@@ -15,6 +15,7 @@ from ..control_plane.turn_driver.decision_capture import (
     context_capture_read_command,
     project_captured_context,
 )
+from .context_delivery_retention import maybe_prune_context_delivery_root
 from .quota_capture import (
     bind_capture_selection_transport,
     budgeted_settlement_result,
@@ -41,6 +42,66 @@ PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
     None,
 ]
+
+
+def _prune_ephemeral_context_delivery(
+    args: argparse.Namespace,
+    *,
+    context: QuotaCommandContext | None,
+    capture_directory: Path | None,
+) -> None:
+    try:
+        if getattr(args, "dry_run", False) is True:
+            return
+        runtime_root = (
+            context.runtime_root
+            if context is not None
+            else getattr(args, "_progressive_context_runtime", None)
+        )
+        if not isinstance(runtime_root, (str, Path)):
+            return
+        resolved_runtime = Path(runtime_root).expanduser().resolve()
+        managed_root = resolved_runtime / "context-delivery"
+        capture_parent: Path | None = None
+        if isinstance(capture_directory, Path):
+            try:
+                capture_parent = capture_directory.expanduser().resolve().parent
+            except OSError:
+                capture_parent = capture_directory.expanduser().absolute().parent
+        protected = (
+            frozenset({capture_directory.name})
+            if capture_directory is not None and capture_parent == managed_root
+            else frozenset()
+        )
+        maybe_prune_context_delivery_root(
+            managed_root,
+            runtime_root=resolved_runtime,
+            protected_names=protected,
+        )
+    except Exception:  # noqa: BLE001 - best-effort retention pruning never blocks emission.
+        return
+
+
+def _emit_and_prune_result(
+    payload: dict[str, object],
+    args: argparse.Namespace,
+    *,
+    renderer: Callable[[dict[str, object]], str],
+    print_payload: PrintPayload,
+    context: QuotaCommandContext | None,
+    capture_directory: Path | None,
+    exit_code: int,
+) -> int:
+    print_payload(payload, args.format, renderer)
+    try:
+        _prune_ephemeral_context_delivery(
+            args,
+            context=context,
+            capture_directory=capture_directory,
+        )
+    except Exception:  # noqa: BLE001 - stdout already emitted; never emit a second error payload.
+        pass
+    return exit_code
 
 
 def _emit_bounded_settlement(
@@ -259,7 +320,12 @@ def _publish_quota_result(
         )
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
-    cli = (payload.get("interaction_contract") or {}).get("cli_channel")
+    interaction_contract = payload.get("interaction_contract")
+    cli = (
+        interaction_contract.get("cli_channel")
+        if isinstance(interaction_contract, Mapping)
+        else None
+    )
     if isinstance(cli, dict) and isinstance(cli.get("settlement_plan"), Mapping):
         from ..capabilities.explore.turn_context import project_settlement_attachment
 
@@ -317,8 +383,14 @@ def _publish_quota_result(
         # Bind the existing immutable reader route before signing. Its sidecar
         # receives the final byte digest after publication, avoiding a self-hash.
         source = capture_directory / "decision.json"
+        existing_detail_ref = payload.get("detail_ref")
+        detail_ref = (
+            dict(existing_detail_ref)
+            if isinstance(existing_detail_ref, Mapping)
+            else {}
+        )
         payload = {**payload, "detail_ref": {
-            **payload.get("detail_ref", {}),
+            **detail_ref,
             "full_decision": context_capture_read_command(source, "",
                 reference_file=source.with_suffix(".reader.json"), reader_argv=reader_argv),
         }}
@@ -377,12 +449,15 @@ def _publish_quota_result(
             prepared_capture_reference,
         )
 
-        print_payload(
+        return _emit_and_prune_result(
             prepared_capture_reference(payload, captured_digest),
-            args.format,
-            _quota_renderer(args),
+            args,
+            renderer=_quota_renderer(args),
+            print_payload=print_payload,
+            context=context,
+            capture_directory=capture_directory,
+            exit_code=0,
         )
-        return 0
     if (
         payload.get("ok") is False
         and context_delivery_enabled
@@ -390,16 +465,19 @@ def _publish_quota_result(
         and args.format == "json"
         and not getattr(args, "defer_context_presentation", False)
     ):
-        print_payload(
+        return _emit_and_prune_result(
             quota_module._export("captured_quota_failure_view")(
                 payload,
                 capture_directory=capture_directory,
                 max_page_output_bytes=getattr(args, "max_page_output_bytes", None),
             ),
-            args.format,
-            _quota_renderer(args, failure=True),
+            args,
+            renderer=_quota_renderer(args, failure=True),
+            print_payload=print_payload,
+            context=context,
+            capture_directory=capture_directory,
+            exit_code=1,
         )
-        return 1
     if payload.get("ok") is True:
         delivery_request = handoff_decision(
             capture_directory,
@@ -494,5 +572,12 @@ def _publish_quota_result(
             raise QuotaDecisionTransportError(
                 "Current context recovery could not be prepared. Read the saved original decision and receipt."
             ) from exc
-    print_payload(payload, args.format, _quota_renderer(args, failure=not succeeded))
-    return 0 if succeeded else 1
+    return _emit_and_prune_result(
+        payload,
+        args,
+        renderer=_quota_renderer(args, failure=not succeeded),
+        print_payload=print_payload,
+        context=context,
+        capture_directory=capture_directory,
+        exit_code=0 if succeeded else 1,
+    )

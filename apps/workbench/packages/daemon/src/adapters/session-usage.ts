@@ -1,8 +1,14 @@
-import { readdir, realpath } from 'node:fs/promises';
+import { access, readdir, realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { LiveUsage, validCount, type NativeUsage } from './live-usage.js';
 import { configDirectory, findSessionFile } from './session-location.js';
 import type { UsageSample } from '../telemetry.js';
+
+export interface NativeThinking {
+  id: string;
+  text: string;
+  at: number;
+}
 
 /** Claude input excludes cache reads/writes; content blocks repeat the whole request's usage. */
 export function claudeSessionUsage(line: string): NativeUsage | null {
@@ -52,7 +58,55 @@ export function claudeLiveUsage(id: string, cwd: string, env: Record<string, str
   }, claudeSessionUsage, emit);
 }
 
-export function agyLiveUsage(id: string, cwd: string, env: Record<string, string>, emit: (s: UsageSample) => void): LiveUsage {
+/** agy transcripts record each planner step's internal thinking text alongside its usage. */
+export function agySessionThinking(line: string): NativeThinking | null {
+  if (!line.includes('PLANNER_RESPONSE') || !line.includes('"thinking"')) return null;
+  const record = JSON.parse(line);
+  if (record.type !== 'PLANNER_RESPONSE' || !Number.isInteger(record.step_index)
+    || typeof record.thinking !== 'string' || !record.thinking) return null;
+  return {
+    id: `agy:${record.step_index}:${record.created_at}`,
+    text: record.thinking,
+    at: Date.parse(record.created_at),
+  };
+}
+
+export function agyLiveUsage(
+  id: string,
+  cwd: string,
+  env: Record<string, string>,
+  emit: (s: UsageSample) => void,
+  onThinking?: (text: string) => void,
+): LiveUsage {
   const root = configDirectory(env, 'LOOCHAT_AGY_HOME', ['.gemini', 'antigravity-cli'], cwd);
-  return new LiveUsage(async () => /^[a-z0-9_-]+$/i.test(id) ? [join(root, 'brain', id, '.system_generated', 'logs', 'transcript.jsonl')] : [], agySessionUsage, emit);
+  const validId = /^[a-z0-9_-]+$/i.test(id);
+  const logsDir = validId ? join(root, 'brain', id, '.system_generated', 'logs') : '';
+  const fullPath = validId ? join(logsDir, 'transcript_full.jsonl') : '';
+  const compactPath = validId ? join(logsDir, 'transcript.jsonl') : '';
+  const seenThinking = new Map<string, string>();
+  const observeThinking = onThinking
+    ? (line: string, minAt: number) => {
+        const thought = agySessionThinking(line);
+        if (!thought || !Number.isFinite(thought.at) || thought.at < minAt) return;
+        const prior = seenThinking.get(thought.id);
+        if (prior === undefined) {
+          seenThinking.set(thought.id, thought.text);
+          onThinking(thought.text);
+        } else if (thought.text.length > prior.length && thought.text.startsWith(prior)) {
+          seenThinking.set(thought.id, thought.text);
+          onThinking(thought.text.slice(prior.length));
+        }
+      }
+    : undefined;
+  return new LiveUsage(
+    async () => {
+      if (!validId) return [];
+      // Compact transcript.jsonl truncates long thinking blocks; prefer transcript_full.jsonl when present.
+      const hasFull = await access(fullPath).then(() => true, () => false);
+      return [hasFull ? fullPath : compactPath];
+    },
+    agySessionUsage,
+    emit,
+    observeThinking,
+  );
 }

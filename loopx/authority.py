@@ -253,7 +253,7 @@ def _render_authority_markdown(
 
 def render_authority_source_markdown(payload: PayloadView) -> str:
     return _render_authority_markdown(
-        "LoopX Authority Source Registration",
+        "LoopX Authority Source Metadata Update" if payload.get("operation") == "update" else "LoopX Authority Source Registration",
         payload,
         entry_fields=(*_COMMON_MARKDOWN_ENTRY_FIELDS, "owner_status", "gate_status"),
         include_registry=True,

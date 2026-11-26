@@ -24,6 +24,7 @@ export function exportResearchReport(input: ResearchRecordExport, zh: boolean): 
     field(label("Refresh", "刷新"), input.stale ? label("Failed; previously read records retained", "失败；保留先前读取的记录") : label("No refresh failure reported", "未报告刷新失败")),
     field(label("Search", "搜索"), input.query || label("All text", "全部文字")),
     field(label("Status filter", "状态筛选"), input.status || label("All statuses", "全部状态")),
+    ...(input.from || input.to ? [field(label("Recorded dates (UTC, inclusive)", "记录日期（UTC，含起止日）"), `${input.from || "…"} — ${input.to || "…"}`)] : []),
     label("Filters may match saved display translations; the records below retain their original language and revision. Record time is not execution time. References are identifiers, not downloaded source files. Keep this report as private as its source research.",
       "筛选可能匹配已保存的展示翻译；以下记录保留原始语言与版本。记录时间不是执行时间。引用是标识，不包含其源文件。请按原研究的隐私范围保管本报告。"),
   ];

@@ -1382,7 +1382,9 @@ class AntigravityAdapter:
             max_cascade_steps=max_steps,
         )
 
-    def _build_turn_prompt(self, message: str, *, isolated_cascade: bool = False) -> str:
+    def _build_turn_prompt(self, message: str, *, isolated_cascade: bool = False, raw_prompt: bool = False) -> str:
+        if raw_prompt:
+            return message
         parts: list[str] = []
         if isolated_cascade:
             if self.objective.strip():
@@ -1453,14 +1455,17 @@ class AntigravityAdapter:
                    *, read_only_review: bool = False,
                    media: list[dict[str, Any]] | None = None,
                    isolated_cascade: bool = False,
+                   raw_prompt: bool = False,
                    idle_timeout_sec: float | None = None) -> dict[str, Any]:
         _check_positive_timeout(idle_timeout_sec, "idle")
+        if raw_prompt and read_only_review:
+            raise ValueError("raw_prompt cannot be combined with read_only_review")
         self._read_only_review = read_only_review
         self._interrupted.clear()
         self._cancel_acknowledged = False
         try:
             return self._run_turn(message, event_sink, media=media, isolated_cascade=isolated_cascade,
-                                  idle_timeout_sec=idle_timeout_sec)
+                                  raw_prompt=raw_prompt, idle_timeout_sec=idle_timeout_sec)
         except BaseException as failure:
             # A timeout/transport or permission failure is not a successful turn.
             # Retain an unconfirmed cancellation as an error for the caller fence.
@@ -1479,7 +1484,7 @@ class AntigravityAdapter:
 
     def _run_turn(self, message: str, event_sink: Callable[[str, dict[str, Any]], None] | None = None, *,
                   media: list[dict[str, Any]] | None = None, isolated_cascade: bool = False,
-                  idle_timeout_sec: float | None = None) -> dict[str, Any]:
+                  raw_prompt: bool = False, idle_timeout_sec: float | None = None) -> dict[str, Any]:
         if self._closed:
             raise CodexChatAgentError("Antigravity session is closed", gate=None, error_code="session_closed")
 
@@ -1514,7 +1519,11 @@ class AntigravityAdapter:
                 self._system_primed = False
                 self._pending_history = list(self._recent_history)
         user_config = self._build_cascade_config()
-        full_prompt = self._build_turn_prompt(message, isolated_cascade=isolated_cascade)
+        full_prompt = self._build_turn_prompt(
+            message,
+            isolated_cascade=isolated_cascade,
+            raw_prompt=raw_prompt,
+        )
 
         send_payload: dict[str, Any] = {
             "cascadeId": target_cascade_id,

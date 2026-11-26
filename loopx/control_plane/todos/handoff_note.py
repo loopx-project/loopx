@@ -117,6 +117,8 @@ def attach_todo_handoff_note(item: dict[str, Any], *, goal_id: str | None = None
 
 
 def attach_todo_handoff_notes(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not items:
+        return items
     results = project_handoff_context([todo_read_source(item) for item in items])
     for item, result in zip(items, results, strict=True):
         if result["note"]:

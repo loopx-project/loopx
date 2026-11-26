@@ -165,7 +165,8 @@ export function goalObservationGaps(goal: Pick<GoalActivityInput, "hostThreadAct
   for (const thread of threads) {
     if (thread.state === "unknown" || thread.deliveryWindow?.state === "missing"
       || (thread.state === "turn_open" && (!thread.lastEventAt || Number.isNaN(Date.parse(thread.lastEventAt))))
-      || thread.deliveryWindow?.reason === "unparseable_observation") missing++;
+      || thread.deliveryWindow?.reason === "unparseable_observation"
+      || thread.deliveryWindow?.reason === "unverified_activity") missing++;
     else if (thread.deliveryWindow?.state === "stale") stale++;
   }
   return {

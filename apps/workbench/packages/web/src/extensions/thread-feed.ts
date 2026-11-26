@@ -11,6 +11,7 @@ export function createThreadFeed(
   let fresh = false;
   let closed = false;
   let generation = 0;
+  let appliedGeneration = 0;
   let retry: ReturnType<typeof setTimeout> | undefined;
   const publish = () => connection(api.demo ? 'offline' : connected && fresh ? 'live' : 'reconnecting');
   const clearRetry = () => { clearTimeout(retry); retry = undefined; };
@@ -18,7 +19,8 @@ export function createThreadFeed(
     const request = ++generation;
     try {
       const threads = await api.threads();
-      if (!closed && request === generation) {
+      if (!closed && request > appliedGeneration) {
+        appliedGeneration = request;
         clearRetry();
         fresh = true;
         receive(threads, api.demo ? null : new Date().toISOString());
@@ -39,12 +41,12 @@ export function createThreadFeed(
     read,
     start() { closed = false; publish(); },
     stream(online: boolean) {
-      if (online !== connected) generation++;
+      if (online !== connected) appliedGeneration = ++generation;
       connected = online;
       fresh = false;
       publish();
       if (online) void read().catch(() => undefined);
     },
-    dispose() { closed = true; generation++; clearRetry(); },
+    dispose() { closed = true; appliedGeneration = ++generation; clearRetry(); },
   };
 }

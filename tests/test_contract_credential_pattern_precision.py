@@ -49,6 +49,10 @@ def _scan_line(tmp_path: Path, line: str) -> dict[str, list[str]]:
         f"{AUTH_HEADER} Basic {{encoded}}",
         f'auth = f"Proxy-{AUTH_HEADER} Basic {{encoded}}\\r\\n"',
         f"{AUTH_HEADER} Basic {{config.encoded}}",
+        # A template interpolation is a runtime expression even when the
+        # expression starts with a call rather than a name.
+        f"{TOKEN_ASSIGN}${{(await linkTokens.issue()).token}}",
+        f"{{ user{AUTH_HEADER} userAuthLevel, rationale: 'authorized' }}",
     ],
 )
 def test_non_literal_credential_hits_are_downgraded(tmp_path: Path, line: str) -> None:

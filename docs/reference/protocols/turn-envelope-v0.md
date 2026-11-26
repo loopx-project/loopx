@@ -378,6 +378,34 @@ the original admission's lease proof after a renewal in that same generation.
 The submitted version must be between the admitted and current versions,
 inclusive, and the lease must still match the original admission. Ordinary
 refresh without the option still requires the current proof.
+
+An unfinished prepared Turn can also resume after lease expiry through the
+ordinary managed claim and its original `quota should-run`. For local File and
+SQLite authority, a fresh eligible guard checks the same Agent's current lease
+under the canonical maintenance fence and appends a `lease_takeover` receipt.
+The original admission, workspace obligation, quota source and settlement effect
+stay unchanged. The append records both generations and current Todo/acceptance
+digests; it does not accept an old result. The current holder reads current
+requirements, dependencies and artifact revisions, reuses only still-valid
+evidence and runs affected validation before completion or writeback. Stale keys,
+competing holders, unavailable authority and stopped work remain fenced. Existing
+writeback/spend effects are recovered exactly once; takeover cannot reopen a
+closeout that has started. Explicit administrative no-spend closeout remains
+available when no business result can be recovered.
+
+中文：未交账的原轮次在租约过期后，可通过普通领取和原 `quota should-run` 接续。
+本地 File/SQLite 权威源在维护锁下核验同一 Agent 的当前有效租约，追加
+`lease_takeover` 回执，保留原准入、工作区义务、额度来源与结算身份，并记录两代
+租约及当前任务、验收摘要。接管不代表旧成果自动通过：当前持有人核对需求、依赖和
+产物版本，只复用仍有效的证据，完成受影响检查后交账。旧 key、其他持有人、权威源
+不可用和停止状态继续受到保护；已开始的交账只能恢复欠缺步骤，不能重开或重复扣账。
+没有可复用业务成果时，仍可显式执行不扣账的中断关闭。
+
+This requires no saved automation prompt migration and adds no user confirmation.
+It does not attach Codex App to a background lease-renewal timer: automatic
+renewal remains scoped to the existing supervised live-host process.
+中文：该流程不需要迁移已有自动化提示词，也不增加用户确认。它没有为 Codex App
+增加后台续租计时器；自动续租仍限于现有可信宿主进程监督路径。
 When `--delivery-workspace-path` names the producing worktree, the combined
 operation also runs the owed command there, using the originating CLI's
 implementation. The normal workspace and settlement guards still apply; a

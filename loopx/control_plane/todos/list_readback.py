@@ -10,10 +10,8 @@ from typing import Any, Literal
 
 from ..projects.registry_codec import load_registry
 from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from ..goals.state_resolution import resolve_goal_state
 from .contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_status
-from .todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from .resume_condition import TodoResumeRolloutEvents
 
 
@@ -78,12 +76,7 @@ def list_goal_todos(
         raise ValueError(f"goal {goal_id!r} is not present in the registry")
 
     runtime_root = Path(route["source_runtime_root"])
-    rollout_events = load_rollout_events(
-        rollout_event_log_path(runtime_root, goal_id),
-        limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-    )
-
-    rollout_events = TodoResumeRolloutEvents(rollout_events, runtime_root=runtime_root, goal_id=goal_id)
+    rollout_events = TodoResumeRolloutEvents([], runtime_root=runtime_root, goal_id=goal_id)
 
     from ..coordination.local_authority import CanonicalAuthorityRequired, LocalCoordinationAuthorityUnavailable
     from .goal_todo_projection import project_todo_read

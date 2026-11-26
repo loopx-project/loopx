@@ -9,7 +9,7 @@ from test_lark_private_conversations import Provider, connect
 from test_lark_private_feedback import active
 from test_native_steward_private import steward  # noqa: F401
 
-from loopx.chat_codex_goal import CodexGoalDriver
+from loopx.chat.codex_goal import CodexGoalDriver
 from loopx.chat_store import _atomic_write_json, _read_json
 from loopx.extensions.lark.private_conversations import LarkPrivateConversations, PROGRESS_EDIT_BUDGET
 from loopx.extensions.lark.private_progress import ANSWER_WINDOW, project_progress

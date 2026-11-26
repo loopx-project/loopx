@@ -41,6 +41,7 @@ export function TurnRuler({ threadId, scrollerRef, previews, turnIds, onJump }: 
   const [activeIdx, setActiveIdx] = useState(-1);
   const [hoverIdx, setHoverIdx] = useState(-1);
   const [height, setHeight] = useState(0);
+  const [fits, setFits] = useState(true);
   const [first, setFirst] = useState(0);
   const [dragging, setDragging] = useState(false);
   const handsOff = useRef(0);
@@ -57,12 +58,26 @@ export function TurnRuler({ threadId, scrollerRef, previews, turnIds, onJump }: 
     const measure = () => {
       const h = rootRef.current?.clientHeight ?? 0;
       if (h > 0) setHeight(h);
+      const host = rootRef.current?.parentElement;
+      const scroller = scrollerRef.current;
+      if (host && scroller) {
+        const thread = scroller.querySelector<HTMLElement>('.thread');
+        const gutter = thread
+          ? thread.getBoundingClientRect().left - host.getBoundingClientRect().left + (parseFloat(getComputedStyle(thread).paddingLeft) || 0)
+          : host.clientWidth >= 840 ? 48 : 0;
+        setFits(gutter >= 34);
+      }
     };
-    measure();
+    const raf = requestAnimationFrame(measure);
     const observer = new ResizeObserver(measure);
+    const host = rootRef.current?.parentElement;
     if (rootRef.current) observer.observe(rootRef.current);
-    return () => observer.disconnect();
-  }, []);
+    if (host) observer.observe(host);
+    if (scrollerRef.current) observer.observe(scrollerRef.current);
+    host?.addEventListener('transitionend', measure);
+    window.addEventListener('resize', measure);
+    return () => { cancelAnimationFrame(raf); observer.disconnect(); host?.removeEventListener('transitionend', measure); window.removeEventListener('resize', measure); };
+  }, [scrollerRef, count]);
 
   useEffect(() => {
     const scroller = scrollerRef.current;
@@ -195,7 +210,7 @@ export function TurnRuler({ threadId, scrollerRef, previews, turnIds, onJump }: 
 
   const shown = turnIds.slice(first, first + visible);
   return (
-    <div className="turn-ruler" ref={rootRef} onMouseLeave={() => { if (!drag.current) setHoverIdx(-1); }}>
+    <div className={`turn-ruler${fits ? '' : ' cramped'}`} ref={rootRef} aria-hidden={!fits || undefined} onMouseLeave={() => { if (!drag.current) setHoverIdx(-1); }}>
       <div
         ref={trackRef}
         className={`ruler-track${first > 0 ? ' more-above' : ''}${first + visible < count ? ' more-below' : ''}${dragging ? ' dragging' : ''}`}

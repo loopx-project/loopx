@@ -29,6 +29,7 @@ from ..control_plane.turn_driver.native_context_profile import (
     NATIVE_CONTEXT_FIRST_READ_FALLBACK_BYTES, NATIVE_CONTEXT_PAGE_BYTES,
     native_context_page_budget as native_context_page_budget,
 )
+from .context_delivery_retention import maybe_prune_context_delivery_root
 from .quota_context_reader import (
     budgeted_ready_opening,
     _capture_selection_transport_template,
@@ -379,6 +380,13 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
         and "vision" not in quota_detail_sections_from_args(args))
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
+        try:
+            maybe_prune_context_delivery_root(
+                root,
+                runtime_root=runtime_root.expanduser().resolve(),
+            )
+        except Exception:  # noqa: BLE001 - best-effort pre-allocation pruning is non-blocking.
+            pass
         directory = Path(tempfile.mkdtemp(prefix="context-", dir=root))
     if payload.get("schema_version") == "loopx_turn_envelope_v1":
         surface = "complete_turn"
@@ -575,12 +583,17 @@ def budgeted_settlement_result(
         return payload
     try:
         uid = private_capture_uid()
-        root = runtime_root.expanduser().resolve() / "context-delivery"
+        resolved_runtime = runtime_root.expanduser().resolve()
+        root = resolved_runtime / "context-delivery"
         root.mkdir(mode=0o700, exist_ok=True)
         metadata = root.lstat()
         if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid
                 or metadata.st_mode & 0o077):
             raise ValueError("result capture requires a private physical directory owned by this user")
+        try:
+            maybe_prune_context_delivery_root(root, runtime_root=resolved_runtime)
+        except Exception:  # noqa: BLE001 - best-effort pre-allocation pruning is non-blocking.
+            pass
         directory = Path(tempfile.mkdtemp(prefix="settlement-", dir=root))
         saved = directory / "result.json"
         digest = write_decision_capture(saved, payload)

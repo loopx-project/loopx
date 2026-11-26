@@ -222,7 +222,9 @@ def test_default_native_first_read_reaches_inline_vision_writeback(
     def choose(request: Mapping[str, Any]) -> ScriptedExecToolAction | ScriptedAssistantAction:
         latest = request["messages"][-1]
         if latest["role"] != "tool":
-            return ScriptedExecToolAction(fixture.quota_guard_command)
+            # Choose the inline input. The ordinary first-read selection still
+            # has to expose the writer; the staged route is exercised above.
+            return ScriptedExecToolAction(fixture.quota_guard_command + " --include-detail vision")
         if not latest["content"]:
             refresh = selected["/interaction_contract/cli_channel/next_cli_actions"][0]
             return ScriptedExecToolAction(refresh.replace(

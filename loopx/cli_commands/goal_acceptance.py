@@ -48,6 +48,12 @@ All steps require --goal-id GOAL. Proposal preparation alone requires neither
 owner input nor adoption; only an applied objective revision needs adoption.
 Authority, budgets, stops and existing gated actions remain binding.
 
+Outcome declaration (refine):
+  --document schema: {"outcome_id":"<opaque-id>", "owner_agent_id":"AGENT", "objective":"...", "requirements":[{"id":"<opaque-id>", "description":"..."}], "source":{"ref":"<opaque-id>", "summary":"..."}}
+  Optional refine fields: "todo_ids":["todo_..."], "review":[...], "review_patch":[...], "storage_format":"records".
+  Opaque IDs (outcome_id, requirements[*].id, source.ref): <=128 UTF-16 code units matching ^[A-Za-z0-9][A-Za-z0-9_.:@-]*$ (no '/' paths or spaces).
+  Limits (UTF-16 code units): objective <=1024, requirements <=32 items (description <=2000 each), source.summary <=512.
+
 Long-horizon requirements (refine):
   Keep the same outcome_id. Add "storage_format":"records" to the document to
   preview/commit lossless record storage with the next authorized refinement.

@@ -5,11 +5,17 @@ from typing import Any
 
 def build_todo_write_hint(goal_id: str) -> dict[str, str]:
     return {
-        "rule": "Write user/owner actions to User Todo, not Next Action/docs/chat.",
+        "rule": (
+            "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted "
+            "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner "
+            "the action and verification check. Before yielding, reuse a runnable independent "
+            "Todo or check Goal acceptance for a useful independent successor to record. "
+            "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action."
+        ),
         "user_gate_command_template": (
             f"loopx todo add --goal-id {goal_id} --role user "
             "--task-class user_gate --blocks-agent <agent-id> "
-            "--text '<blocking user decision>'"
+            "--unblocks-todo-id <todo-id> --text '<blocking user action and verification>'"
         ),
         "user_action_command_template": (
             f"loopx todo add --goal-id {goal_id} --role user "

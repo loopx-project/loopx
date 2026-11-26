@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from pathlib import Path
 
 from ..control_plane.todos.contract import TODO_CONTINUATION_POLICY_VALUES
 from ..control_plane.todos.completed_archive import ARCHIVE_COMPLETED_DEFAULT_MAX_ACTIVE_DONE
@@ -11,6 +12,26 @@ from .todo_argument_validation import (
     register_todo_successor_creation_arguments,
 )
 from .action_help import install_action_help
+
+
+class _PlanBatchSchemaAction(argparse.Action):
+    """Allow `loopx todo plan-batch --schema` without requiring --goal-id."""
+
+    def __init__(self, option_strings: list[str], dest: str, **kwargs: object) -> None:
+        super().__init__(option_strings, dest, nargs=0, default=False, **kwargs)  # type: ignore[arg-type]
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, True)
+        if getattr(namespace, "todo_command", None) == "plan-batch":
+            for action in parser._actions:
+                if action.dest == "goal_id":
+                    action.required = False
 
 
 def register_todo_command(
@@ -41,6 +62,7 @@ def register_todo_command(
             "supersede",
             "archive-completed",
             "plan",
+            "plan-batch",
             "project-markdown",
         ],
         default=None,
@@ -48,7 +70,8 @@ def register_todo_command(
             "Use add to append a checkbox todo, claim to prepare execution by registered "
             "agent id, list to read projected todos, update/complete/supersede to transition by todo_id, or "
             "archive-completed to move older completed todos into Completed Work Archive. "
-            "Use plan with --text and --agent-id for the existing Goal's model planning checkpoint; the caller owns subsequent execution."
+            "Use plan with --text and --agent-id for the existing Goal's model planning checkpoint, or "
+            "plan-batch with --document and --agent-id to preview/apply one initial outcome + Todo batch."
         ),
     )
     todo_parser.add_argument("--goal-id", required=True, help="Goal id whose active state should receive the todo.")
@@ -312,7 +335,7 @@ def register_todo_command(
         type=int,
         help=(
             "For todo claim, optional lease TTL in seconds (1..86400; default "
-            "2700 = 45m). Pass a higher TTL on claim for long (>45m) execution "
+            "10800 = 3h). Pass a higher TTL on claim for long (>3h) execution "
             "wakes, or renew via `task-lease renew` before expiry."
         ),
     )
@@ -505,7 +528,7 @@ def register_todo_command(
     todo_parser.add_argument(
         "--execute",
         action="store_true",
-        help="For archive-completed or project-markdown, write the active-state edit.",
+        help="For archive-completed, project-markdown, or plan-batch, write the active-state edit.",
     )
     todo_parser.add_argument(
         "--provider-revision",
@@ -513,6 +536,16 @@ def register_todo_command(
             "For project-markdown, exact canonical authority revision rendered "
             "into the Todo section markers."
         ),
+    )
+    todo_parser.add_argument(
+        "--document",
+        type=Path,
+        help="For todo plan-batch, path to the initial planning batch JSON proposal.",
+    )
+    todo_parser.add_argument(
+        "--schema",
+        action=_PlanBatchSchemaAction,
+        help="For todo plan-batch, print the self-contained JSON proposal schema and example.",
     )
     install_action_help(todo_parser, command_dest="todo_command",
                         action_fields=TODO_ACTION_FIELDS,

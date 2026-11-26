@@ -46,7 +46,7 @@ def checked_session_home(base_home: Path, session: Mapping[str, Any]) -> Path:
 
 
 def managed_upstream_mode(session: Mapping[str, Any]) -> str:
-    from ...chat_codex_goal import UPSTREAM_MODE
+    from ...chat.codex_goal import UPSTREAM_MODE
     if session.get("agent_id") == "codex":
         return UPSTREAM_MODE if session.get("upstream_mode") == UPSTREAM_MODE else "chat"
     return str(session.get("upstream_mode") or "default")

@@ -28,13 +28,12 @@ import {
 } from "../coordination/local_authority_shadow_outbox.ts";
 import { TASK_LEASE_ACQUIRE_REQUEST_SCHEMA, TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA } from "../coordination/coordination_state_contract.generated.ts";
 import { BARE_SHA256_PATTERN } from "../content_digest.ts";
-import {TASK_LEASE_SCHEMA_VERSION, TaskLeaseAcquireError, type LeaseRecord} from "./task_lease_record.ts";
+import {TASK_LEASE_SCHEMA_VERSION, DEFAULT_TASK_LEASE_TTL_SECONDS, TaskLeaseAcquireError, type LeaseRecord} from "./task_lease_record.ts";
 export {TASK_LEASE_SCHEMA_VERSION, TaskLeaseAcquireError, leaseInteger, leaseVersion,
   leaseEpoch, leaseIsActive, type LeaseRecord} from "./task_lease_record.ts";
 
 export const TASK_LEASE_ACQUIRE_REQUEST_SCHEMA_VERSION =
   TASK_LEASE_ACQUIRE_REQUEST_SCHEMA;
-const DEFAULT_TTL_SECONDS = 45 * 60;
 const MAX_TTL_SECONDS = 24 * 60 * 60;
 type FileState = "file" | "missing";
 export type TodoFactField =
@@ -192,7 +191,7 @@ export function requireWriteScopes(value: unknown): string[] {
 
 export function normalizeTtl(value: unknown): number {
   const ttl = value === null || value === undefined
-    ? DEFAULT_TTL_SECONDS
+    ? DEFAULT_TASK_LEASE_TTL_SECONDS
     : optionalInteger(value, "ttl_seconds");
   if (ttl === null || ttl <= 0 || ttl > MAX_TTL_SECONDS) {
     throw new TaskLeaseAcquireError(

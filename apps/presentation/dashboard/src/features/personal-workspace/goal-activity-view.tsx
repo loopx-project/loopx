@@ -71,6 +71,7 @@ const observationReasons: Readonly<Record<string, WorkspaceMessageKey>> = {
   record_unrecognized: "activity.reason.recordUnrecognized",
   no_turn_marker: "activity.reason.noTurnMarker",
   unparseable_observation: "activity.reason.unparseableObservation",
+  unverified_activity: "activity.reason.unverifiedActivity",
 };
 
 /** A sibling of the Goal navigation button so help never selects a Goal. */

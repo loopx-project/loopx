@@ -1,20 +1,31 @@
 //! Real HTTP and the shipped updater/signature verifier; no App installation,
 //! Core service, credentials or external network. Only the window runtime is fake.
 use super::*;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{
         atomic::{AtomicBool, AtomicUsize},
-        Arc,
+        Arc, LazyLock,
     },
 };
 
-const BODY: &[u8] = b"LoopX synthetic signed update transport fixture. No install or runtime.\n";
+const BODY_B64: &str = "H4sIAAAAAAAA/+3SzWoDIRQF4DzK4DpkHBgSyLbbrrrKToxzQ20dFf9oKXn3mum0lECh00Xbxfk2il49gvfWOX/YSO/bG2cT2RTbO4ouB0WxDdkmPVKrh7qh0/PmITq7WoxX276fxup65D3vPubTerfrd9tVw5dHLZdjkqFpfiPqP3phUd3TKEWhELWzbM8Gio/JeTH/vjhmOxgSpWNr9tYZIlDRczX/pnp4oJPMJglVOy1Ildi+pudwkorqRcqN3lAikXKwl6jrd5naqk/TriBbyDg/P0rXxr3cV8vEF6c+l7zHi8LZ+fzXHwAAAAAAAAAAAAAAAAAAAAAAAPBDrxI79dYAKAAA";
+
+fn qualified_body() -> &'static [u8] {
+    static BODY: LazyLock<Vec<u8>> =
+        LazyLock::new(|| STANDARD.decode(BODY_B64).expect("fixture archive"));
+    &BODY
+}
 // Disposable fixture public key and prehashed minisign signature. The signing
 // key is not retained. These bytes are deliberately not an installable App.
+#[allow(dead_code)]
 const KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IExvb3BYIHRlc3QgcHVibGljIGtleQpSV1JzYjI5d2VIUnpkRWJGVGJ5dExTQ0VKK2RpdGw1NGgwcnBBTTFLa2xjdW5OYy9PaE80KzYwZwo=";
+#[allow(dead_code)]
 const SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IExvb3BYIHN5bnRoZXRpYyB0cmFuc3BvcnQgZml4dHVyZQpSVVJzYjI5d2VIUnpkQVJhZGtJKy9nSTdQRzVibndOY3VDbUhyQmVzamNZOTgxaFg4KzhOYXZkRFJhTi91SDNheGNmNnBmOUNyaXRvL2UzTitHMklwMWM0dGVxNHNVTWNld0E9CnRydXN0ZWQgY29tbWVudDogTG9vcFggdHJhbnNwb3J0IGZpeHR1cmUKQUdNUDBuTnhqN0NITHdONURZY2hrTm5Rc0RxZklSZUxVMWM5WEpKcm1WTHpvUWR0bkJJb2F5TGlOY29LZlNHV00zVXdLbTB3c1N1WEVhSStQZFFOQWc9PQo=";
+const QUALIFIED_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXkKUldReitVUjg5RUZCVHB6aWZha0hFUmprTmRBZUJCa0ZPNENQMGRwWGhnRVgyckFLMm52WUtRNDUK";
+const QUALIFIED_SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIG1pbmlzaWduIHNlY3JldCBrZXkKUlVReitVUjg5RUZCVHVZWWJaeTY5TjBEWGJTWlVRZEJUSXJHRUNhUnBCZzJBZ3BEVFRiUSs1UzJhbGEyWThaaWRORktrLzRvaEwwd1hPMGR2TXlNdFVkN09UMTRNVXFQaEFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDowCWZpbGU6TG9vcFguYXBwLnRhci5neglwcmVoYXNoZWQKK1c2S2xwZUUxL0hOS24zRFNYeGlNeWx5elExUk1jMURQY2lnMER5K29oVkdwR3JyaW1ZMDRpbzMyQUJhRVJjRUxJck01UEtabmk5YVZkRE5qYWRvQUE9PQo=";
 
 struct Server {
     base: String,
@@ -33,7 +44,7 @@ fn pause(stop: &AtomicBool, duration: Duration) {
 
 impl Server {
     fn new() -> Self {
-        Self::with_archive(BODY.to_vec(), SIGNATURE.into())
+        Self::with_archive(qualified_body().to_vec(), QUALIFIED_SIGNATURE.into())
     }
 
     fn with_archive(bytes: Vec<u8>, signature: String) -> Self {
@@ -171,7 +182,7 @@ fn app(key: &str) -> tauri::App<tauri::test::MockRuntime> {
 
 #[test]
 fn manual_native_feed_releases_startup_before_http_finishes() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let state = Arc::new(Maintenance::default());
     let read_state = state.clone();
@@ -215,7 +226,7 @@ fn manual_native_feed_releases_startup_before_http_finishes() {
 
 #[test]
 fn manual_native_feed_timeout_retains_failure_and_allows_service_start() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let state = Maintenance::default();
     let result = tauri::async_runtime::block_on(state.run_manual_check(
@@ -240,7 +251,7 @@ fn manual_native_feed_timeout_retains_failure_and_allows_service_start() {
 
 #[test]
 fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     tauri::async_runtime::block_on(async {
         for (mode, expected_error) in [
@@ -264,7 +275,7 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
                 continue;
             }
             let bytes = result.unwrap();
-            assert_eq!(bytes, BODY);
+            assert_eq!(bytes, qualified_body());
             let root = tempfile::tempdir().unwrap();
             crate::prepared_update::save(
                 root.path(),
@@ -274,17 +285,18 @@ fn native_update_transport_checks_signatures_truncation_and_cache_readback() {
                 &bytes,
             )
             .unwrap();
-            let prepared = crate::prepared_update::load(root.path(), "0.1.0", "stable", KEY)
-                .unwrap()
-                .unwrap();
-            assert_eq!(prepared.bytes, BODY);
+            let prepared =
+                crate::prepared_update::load(root.path(), "0.1.0", "stable", QUALIFIED_KEY)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(prepared.bytes, qualified_body());
         }
     });
 }
 
 #[test]
 fn background_download_failures_keep_their_cause_without_blocking_local_services() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     tauri::async_runtime::block_on(async {
         for (mode, expected) in [
@@ -322,7 +334,7 @@ fn background_download_failures_keep_their_cause_without_blocking_local_services
 
 #[test]
 fn native_feed_keeps_its_short_deadline() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let start = Instant::now();
     let error = tauri::async_runtime::block_on(find_update(
@@ -338,7 +350,7 @@ fn native_feed_keeps_its_short_deadline() {
 }
 
 fn assert_manual_feed_window(mode: &str) {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let start = Instant::now();
     let update = tauri::async_runtime::block_on(find_update(
@@ -353,7 +365,7 @@ fn assert_manual_feed_window(mode: &str) {
     assert!(elapsed > Duration::from_secs(30));
     assert!(elapsed < Duration::from_secs(48));
     let bytes = tauri::async_runtime::block_on(download_update(&update, |_, _| {})).unwrap();
-    assert_eq!(bytes, BODY);
+    assert_eq!(bytes, qualified_body());
     eprintln!(
         "manual {mode} feed: {:.3}s; signed archive still downloads",
         elapsed.as_secs_f64()
@@ -375,7 +387,7 @@ fn manual_feed_body_keeps_the_original_forty_five_second_window() {
 #[test]
 #[ignore = "real transport spans the historical thirty-second download deadline"]
 fn progressing_signed_download_survives_the_old_total_deadline() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let state = Maintenance::default();
     state.reconcile_services(|| Ok(())).unwrap();
@@ -397,16 +409,16 @@ fn progressing_signed_download_survives_the_old_total_deadline() {
                 let bytes = download_update(&update, |size, total| {
                     *received += size;
                     assert_eq!(state.recover_connected(|| 1), Some(1));
-                    assert_eq!(total, Some(BODY.len() as u64));
+                    assert_eq!(total, Some(qualified_body().len() as u64));
                 })
                 .await?;
-                assert_eq!(bytes, BODY);
+                assert_eq!(bytes, qualified_body());
                 Ok(json!({"version":update.version, "prepared":true}))
             }
         },
     ))
     .unwrap();
-    assert_eq!(received, BODY.len());
+    assert_eq!(received, qualified_body().len());
     assert!(start.elapsed() > Duration::from_secs(30));
     assert_eq!(state.status_snapshot()["details"]["prepared"], true);
     eprintln!(
@@ -419,7 +431,7 @@ fn progressing_signed_download_survives_the_old_total_deadline() {
 #[test]
 #[ignore = "real thirty-second idle deadlines for headers and mid-body stalls"]
 fn stalled_update_transfer_remains_bounded() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     for mode in ["headers", "body-stall"] {
         let update = tauri::async_runtime::block_on(find_update(
@@ -487,7 +499,7 @@ fn released_archive_survives_slow_native_transport_and_cache_reopen() {
 #[cfg(target_os = "macos")]
 #[test]
 fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let root = tempfile::tempdir().unwrap();
     let automatic = root.path().join("automatic");
@@ -516,7 +528,7 @@ fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
                 update.clone(),
                 "0.1.0",
                 "stable",
-                KEY,
+                QUALIFIED_KEY,
                 &automatic,
                 &request.preparation_directory()
             )
@@ -527,18 +539,25 @@ fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
         assert_eq!(server.requests.load(Ordering::Acquire), 2);
         assert_eq!(
             request
-                .prepared_target("0.1.0", KEY)
+                .prepared_target("0.1.0", QUALIFIED_KEY)
                 .unwrap()
                 .unwrap()
                 .bytes,
-            BODY
+            qualified_body()
         );
-        crate::prepared_update::save(&automatic, "stable", "1.1.0", SIGNATURE, BODY).unwrap();
+        crate::prepared_update::save(
+            &automatic,
+            "stable",
+            "1.1.0",
+            QUALIFIED_SIGNATURE,
+            qualified_body(),
+        )
+        .unwrap();
         prepare_terminal_candidate(
             update,
             "0.1.0",
             "stable",
-            KEY,
+            QUALIFIED_KEY,
             &automatic,
             &request.preparation_directory(),
         )
@@ -553,11 +572,11 @@ fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
     drop(server); // No network is available at the replacement boundary.
     assert_eq!(
         request
-            .prepared_target("0.1.0", KEY)
+            .prepared_target("0.1.0", QUALIFIED_KEY)
             .unwrap()
             .unwrap()
             .bytes,
-        BODY
+        qualified_body()
     );
     // Another window's background cache cannot replace this request's bytes.
     crate::prepared_update::clear(&automatic).unwrap();
@@ -566,20 +585,23 @@ fn terminal_preparation_reuses_verified_bytes_and_freezes_an_offline_handoff() {
         &request.preparation_directory(),
         "stable",
         "1.2.0",
-        SIGNATURE,
-        BODY,
+        QUALIFIED_SIGNATURE,
+        qualified_body(),
     )
     .unwrap();
-    assert!(request.prepared_target("0.1.0", KEY).is_err());
+    assert!(request.prepared_target("0.1.0", QUALIFIED_KEY).is_err());
     crate::prepared_update::clear(&request.preparation_directory()).unwrap();
-    assert!(request.prepared_target("0.1.0", KEY).is_err());
-    assert!(request.prepared_target("1.1.0", KEY).unwrap().is_none());
+    assert!(request.prepared_target("0.1.0", QUALIFIED_KEY).is_err());
+    assert!(request
+        .prepared_target("1.1.0", QUALIFIED_KEY)
+        .unwrap()
+        .is_none());
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn terminal_preparation_rejects_bad_download_before_any_handoff() {
-    let app = app(KEY);
+    let app = app(QUALIFIED_KEY);
     let server = Server::new();
     let root = tempfile::tempdir().unwrap();
     tauri::async_runtime::block_on(async {
@@ -597,7 +619,7 @@ fn terminal_preparation_rejects_bad_download_before_any_handoff() {
                 update,
                 "0.1.0",
                 "stable",
-                KEY,
+                QUALIFIED_KEY,
                 &root.path().join("automatic"),
                 &request
             )
@@ -607,9 +629,16 @@ fn terminal_preparation_rejects_bad_download_before_any_handoff() {
         );
         assert!(!request.exists());
         assert_eq!(
-            prepare_terminal_candidate(None, "1.1.0", "stable", KEY, root.path(), &request)
-                .await
-                .unwrap(),
+            prepare_terminal_candidate(
+                None,
+                "1.1.0",
+                "stable",
+                QUALIFIED_KEY,
+                root.path(),
+                &request,
+            )
+            .await
+            .unwrap(),
             "1.1.0"
         );
         assert!(!request.exists());
@@ -619,11 +648,22 @@ fn terminal_preparation_rejects_bad_download_before_any_handoff() {
 #[cfg(target_os = "macos")]
 #[test]
 fn rejected_cross_channel_preparation_preserves_original_verified_cache() {
-    let app = app(KEY);
-    let server = Server::with_version(BODY.to_vec(), SIGNATURE.into(), "1.1.0-main.2");
+    let app = app(QUALIFIED_KEY);
+    let server = Server::with_version(
+        qualified_body().to_vec(),
+        QUALIFIED_SIGNATURE.into(),
+        "1.1.0-main.2",
+    );
     let automatic = tempfile::tempdir().unwrap();
     let request = tempfile::tempdir().unwrap();
-    crate::prepared_update::save(automatic.path(), "stable", "1.1.0", SIGNATURE, BODY).unwrap();
+    crate::prepared_update::save(
+        automatic.path(),
+        "stable",
+        "1.1.0",
+        QUALIFIED_SIGNATURE,
+        qualified_body(),
+    )
+    .unwrap();
     let before = std::fs::read(automatic.path().join("prepared.json")).unwrap();
     let update = tauri::async_runtime::block_on(find_update(
         app.handle(),
@@ -636,7 +676,7 @@ fn rejected_cross_channel_preparation_preserves_original_verified_cache() {
         update,
         "1.0.0",
         "main",
-        KEY,
+        QUALIFIED_KEY,
         automatic.path(),
         request.path(),
     ));
@@ -646,10 +686,10 @@ fn rejected_cross_channel_preparation_preserves_original_verified_cache() {
         std::fs::read(automatic.path().join("prepared.json")).unwrap(),
         before
     );
-    let original = crate::prepared_update::load(automatic.path(), "1.0.0", "stable", KEY)
+    let original = crate::prepared_update::load(automatic.path(), "1.0.0", "stable", QUALIFIED_KEY)
         .unwrap()
         .expect("failed Main preparation must retain the signed Stable cache");
-    assert_eq!(original.bytes, BODY);
-    assert_eq!(original.signature, SIGNATURE);
+    assert_eq!(original.bytes, qualified_body());
+    assert_eq!(original.signature, QUALIFIED_SIGNATURE);
     assert_eq!(server.requests.load(Ordering::Acquire), 2);
 }

@@ -24,6 +24,8 @@ import {TASK_LEASE_CANONICAL_ACQUIRE_REQUEST_SCHEMA, TASK_LEASE_ACQUIRE_REQUEST_
   TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.generated.ts";
 import {shadowManagementStatePath} from "../../loopx/control_plane/coordination/shadow_management.ts";
 import {atomicWriteJson} from "../../loopx/control_plane/effect_runtime_io.ts";
+import {observeFencedExecution} from "../../loopx/control_plane/quota/execution_loss_closeout.ts";
+import {settlementIdentity} from "../../loopx/control_plane/effect_program.ts";
 
 const NOW = new Date("2026-09-13T10:05:00Z");
 const CHILD = fileURLToPath(new URL("./canonical_task_lease_renew_process.ts", import.meta.url));
@@ -108,6 +110,30 @@ for (const provider of ["file", "sqlite"] as const) {
       expected_version: 1, ttl_seconds: 600, write_scopes: ["src/**"], authority: request.authority};
   }
   const acquireNow = new Date("2026-09-13T10:11:00Z");
+  providerTest(`${provider} original expiry projects administrative recovery, never delivery`, async t => {
+    const {runtime, goal, lease} = await fixture(t, provider);
+    const identity = settlementIdentity({goal_id: goal, agent_id: "agent-a", todo_id: "todo_renew",
+      turn_instance_id: "original-turn"});
+    const details = {todo_id: "todo_renew", settlement_effect_id: identity.effect_id,
+      closeout_required: true, prepared_lease_required: true, ok: true, should_run: true,
+      must_attempt_work: true, delivery_allowed: true, quiet_noop_allowed: false,
+      prepared_lease_key_sha256: createHash("sha256").update(lease.idempotency_key).digest("hex"),
+      prepared_lease_version: lease.version, prepared_lease_epoch: lease.lease_epoch};
+    const receipt = {schema_version: "loopx_rollout_event_v0", event_kind: "quota_should_run",
+      event_id: "original-admission", goal_id: goal, agent_id: "agent-a", run_id: "original-turn",
+      recorded_at: "2026-09-13T10:01:00Z", status: "normal_run", details};
+    t.mock.timers.enable({apis: ["Date"], now: NOW});
+    assert.equal(await observeFencedExecution(runtime, identity, receipt), null);
+    t.mock.timers.setTime(new Date(lease.expires_at).valueOf());
+    const lost = await observeFencedExecution(runtime, identity, receipt);
+    assert.equal(lost?.can_reclaim_control_writer, true);
+    assert.equal(lost?.current_control_writer_active, false);
+    assert.equal(lost?.original_prepared_epoch, lost?.current_lease_epoch);
+    for (const patch of [{prepared_lease_key_sha256: "a".repeat(64)},
+      {prepared_lease_version: lease.version + 1}, {delivery_allowed: false}]) {
+      assert.equal(await observeFencedExecution(runtime, identity, {...receipt, details: {...details, ...patch}}), null);
+    }
+  });
   providerTest(`${provider} malformed receipt scopes cannot become a root wildcard`, async t => {
     const {store, request, lease, goal} = await fixture(t, provider);
     const command = {...acquireRequest(request), write_scopes: ["**"]};

@@ -527,10 +527,17 @@ export function sessionEnvironment(base: Record<string, string>, context?: Recor
   // A daemon launched from another agent must never lend that agent's scoped credentials
   // to a new session. Undefined also masks inherited keys in adapters that merge env again.
   const env: NodeJS.ProcessEnv = {
-    ...process.env, ...base, LOOCHAT_TEAM_SOCKET: undefined, LOOCHAT_TEAM_KEY: undefined, LOOCHAT_BIN_DIR: undefined,
+    ...process.env, ...base,
+    LOOCHAT_TEAM_SOCKET: undefined, LOOCHAT_TEAM_KEY: undefined, LOOCHAT_BIN_DIR: undefined,
     LOOCHAT_HANDOVER_SOCKET: undefined, LOOCHAT_HANDOVER_KEY: undefined,
     LOOCHAT_TODO_SOCKET: undefined, LOOCHAT_TODO_KEY: undefined,
-    LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined, LOOCHAT_TOKEN: undefined, ...context,
+    LOOCHAT_TOOLS_SOCKET: undefined, LOOCHAT_TOOLS_KEY: undefined, LOOCHAT_TOKEN: undefined,
+    CALLI_TEAM_SOCKET: undefined, CALLI_TEAM_KEY: undefined, CALLI_BIN_DIR: undefined,
+    CALLI_HANDOVER_SOCKET: undefined, CALLI_HANDOVER_KEY: undefined,
+    CALLI_TODO_SOCKET: undefined, CALLI_TODO_KEY: undefined,
+    CALLI_TOOLS_SOCKET: undefined, CALLI_TOOLS_KEY: undefined, CALLI_TOKEN: undefined,
+    LIMI_SOCKET: undefined, LIMI_KEY: undefined, RAH_TOKEN: undefined,
+    ...context,
   };
   if (context?.LOOCHAT_BIN_DIR) env.PATH = `${context.LOOCHAT_BIN_DIR}${process.platform === 'win32' ? ';' : ':'}${base.PATH ?? process.env.PATH ?? ''}`;
   return env;

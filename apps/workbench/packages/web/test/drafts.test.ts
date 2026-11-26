@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DRAFTS_KEY, MAX_DRAFTS, readDrafts, writeDraft } from '../src/drafts.js';
+import { DRAFTS_KEY, hasDraftContent, MAX_DRAFTS, readDrafts, storedDraftKeys, threadDraftKey, writeDraft } from '../src/drafts.js';
 
 const memory = (initial: Record<string, string> = {}) => {
   const data = new Map(Object.entries(initial));
@@ -61,4 +61,28 @@ test('a noted passage keeps its file and the conversation it came from', () => {
   const note = { quote: 'q', comment: '', file: 'a.md', source: { threadId: 'th', turnId: 'turn' } };
   writeDraft(s, 't1', { text: '', notes: [note] }, 1);
   assert.deepEqual(readDrafts(s).t1.notes, [note]);
+});
+
+test('hasDraftContent and storedDraftKeys track non-empty drafts by host key', () => {
+  assert.equal(hasDraftContent(null), false);
+  assert.equal(hasDraftContent({ text: '   ', notes: [] }), false);
+  assert.equal(hasDraftContent({ text: 'hello', notes: [] }), true);
+  assert.equal(hasDraftContent({ text: '', notes: [{ quote: 'q', comment: '' }] }), true);
+  assert.equal(hasDraftContent({ text: '', notes: [], images: [{}] }), true);
+  assert.equal(hasDraftContent({ text: '', notes: [], videos: [{}] }), true);
+  assert.equal(hasDraftContent({ text: '', notes: [], mentions: [{}] }), true);
+  assert.equal(hasDraftContent({ text: '', notes: [], references: [{}] }), true);
+
+  assert.equal(threadDraftKey('t1'), 't1');
+  assert.equal(threadDraftKey('t1', null), 't1');
+  assert.equal(threadDraftKey('t1', 'remote'), 'host:remote:t1');
+
+  const s = memory({
+    [DRAFTS_KEY]: JSON.stringify({
+      empty: { text: '   ', notes: [], at: 1 },
+      t1: { text: 'unsent', notes: [], at: 2 },
+      'host:remote:t2': { text: '', quote: 'passage', at: 3 },
+    }),
+  });
+  assert.deepEqual([...storedDraftKeys(s)].sort(), ['host:remote:t2', 't1']);
 });

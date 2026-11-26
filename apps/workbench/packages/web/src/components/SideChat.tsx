@@ -1,9 +1,11 @@
 import { mergeHistory, watchHistory } from '../history';
+import { createOptimisticThread, createOptimisticThreadId, createOptimisticTurn, isOptimisticThreadId, maxEventSeq, mergeOptimisticEvents, reconcileOrCleanupEmptyThread, useOptimisticTurns } from '../optimistic';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Api, type AgentInfo, type AgentMention, type ModelOption, type Thread } from '../api';
 import type { PreparedImage } from '../images';
 import { restoreVideos, type PreparedVideo } from '../videos';
 import { folderName } from '../paths';
+import { attachFallbackReference, splitReferences, withReferences } from '../context-references';
 import { buildTimeline, splitNotes, withNotes, type StoredEvent } from '../timeline';
 import { Composer } from './Composer';
 import { ThreadView } from './ThreadView';
@@ -33,11 +35,13 @@ interface Props {
   quoteText: string;
   /** The thread the passage was selected in, so the new agent knows where it came from. */
   sourceTitle: string | null;
+  /** The source thread id, attached as a read-only reference when native forking is unavailable. */
+  sourceThreadId?: string | null;
   /**
    * Set while that thread can be forked: the side chat is then an ephemeral fork of it, the way
    * Codex's side conversation works — the questions land with the whole conversation as context,
    * while the panel itself starts empty. Null (agent cannot fork, no session yet, or a turn is
-   * running) falls back to a fresh thread carrying the quoted passage alone.
+   * running) falls back to a fresh thread with a read-only reference to the source conversation.
    */
   forkSourceId: string | null;
   /** Why pictures cannot be attached, or null when they can. */
@@ -72,6 +76,7 @@ export function SideChat({
   effort,
   quoteText,
   sourceTitle,
+  sourceThreadId,
   forkSourceId,
   attachBlocked,
   onClose,
@@ -88,13 +93,16 @@ export function SideChat({
   const [models, setModels] = useState(cachedModels);
   const [modelsStatus, setModelsStatus] = useState<'loading' | 'ready' | 'error'>(cachedModels.length || agentInfo?.capabilities.modelCatalog === false ? 'ready' : 'loading');
   const [events, setEvents] = useState<StoredEvent[]>([]);
+  const optimistic = useOptimisticTurns();
+  const [restore, setRestore] = useState<{ text: string; nonce: number } | null>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   // Where a fork's inherited history ends: the panel shows only what is asked here. Written before
   // the first question is sent, so no event of ours can land below it and be hidden as inherited.
   const baseSeq = useRef(0);
   const threadId = thread?.id ?? null;
-  const timeline = useMemo(() => buildTimeline(events), [events]);
+  const displayEvents = useMemo(() => mergeOptimisticEvents(events, optimistic.turns, threadId), [events, optimistic.turns, threadId]);
+  const timeline = useMemo(() => buildTimeline(displayEvents), [displayEvents]);
   const running = timeline.running || thread?.status === 'running';
   const caps = agentInfo?.capabilities;
   const shownModel = thread ? thread.model : draftModel;
@@ -159,15 +167,19 @@ export function SideChat({
 
   useEffect(() => {
     setEvents([]);
-    if (!threadId) return;
+    if (!threadId || isOptimisticThreadId(threadId)) return;
     const ctrl = new AbortController();
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const visible = (events: StoredEvent[]) => thread?.forkedFrom ? events.filter(e => e.seq > baseSeq.current) : events;
     void watchHistory(api, threadId, ctrl.signal, {
       minimumSeq: thread?.forkedFrom ? baseSeq.current : undefined,
-      page: page => setEvents(visible(page.events)),
+      page: page => { const next = visible(page.events); setEvents(next); optimistic.reconcile(threadId, next); },
       events: batch => {
-        setEvents(previous => visible(mergeHistory(previous, batch)));
+        setEvents(previous => {
+          const next = visible(mergeHistory(previous, batch));
+          optimistic.reconcile(threadId, next);
+          return next;
+        });
         if (batch.some(e => e.type.startsWith('turn.') || e.type === 'history.reset')) {
           clearTimeout(refreshTimer);
           refreshTimer = setTimeout(() => {
@@ -187,56 +199,120 @@ export function SideChat({
   useEffect(() => {
     const el = scrollerRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [displayEvents]);
 
   const onScroll = () => {
     const el = scrollerRef.current;
     if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
   };
 
-  const send = async (text: string, images: PreparedImage[], _mentions?: AgentMention[], videos: PreparedVideo[] = []) => {
+  const send = async (text: string, images: PreparedImage[], _mentions?: AgentMention[], videos: PreparedVideo[] = [], _onCreated?: (draftKey: string) => void, references: string[] = []) => {
     const outgoing = images.map(({ data, mimeType }) => ({ data, mimeType }));
-    if (threadId) {
-      await api.startTurn(threadId, text, outgoing, { queue: true, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(threadId, video.file)).id)) });
-      return;
+    if (threadId && !isOptimisticThreadId(threadId)) {
+      const optTurn = !running ? createOptimisticTurn({ threadId, text, workMode: thread?.workMode, images, videos, afterSeq: maxEventSeq(events) }) : null;
+      if (optTurn) { optimistic.add(optTurn); stick.current = true; }
+      try {
+        const result = await api.startTurn(threadId, text, outgoing, { queue: true, references, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(threadId, video.file)).id)) });
+        if ('turnId' in result) {
+          if (optTurn) optimistic.bindTurnId(optTurn.localId, result.turnId);
+          else {
+            const late = createOptimisticTurn({ threadId, text, workMode: thread?.workMode, images, videos, afterSeq: maxEventSeq(events) });
+            late.turnId = result.turnId;
+            optimistic.add(late);
+          }
+        } else if (optTurn) optimistic.remove(optTurn.localId);
+        return;
+      } catch (error) {
+        if (optTurn) optimistic.remove(optTurn.localId);
+        throw error;
+      }
     }
     const title = t('sideChat.threadTitle', quoteText.replace(/\s+/g, ' ').slice(0, 24));
-    let created: Thread;
+    const tempId = createOptimisticThreadId();
+    const optTurn = createOptimisticTurn({ threadId: tempId, text, images, videos, afterSeq: 0 });
+    if (!api.demo) {
+      setThread(createOptimisticThread({ id: tempId, agent, cwd, title, permissionMode, model: draftModel, effort: draftEffort }));
+      optimistic.add(optTurn);
+      stick.current = true;
+    }
+    let created: Thread | null = null;
     let firstText = text;
+    let firstReferences = [...references];
     const choicePatch = {
       ...(draftEdited.model || draftModel !== model ? { model: draftModel } : {}),
       ...(draftEdited.effort || (!draftEdited.model && draftEffort !== effort) ? { effort: draftEffort } : {}),
     };
     const choiceChanged = choicePatch.model !== undefined || choicePatch.effort !== undefined;
-    if (forkSourceId) {
-      // The fork carries the conversation the passage was selected from, so the first question
-      // already lands with all its context. The message itself stays just the quote and the
-      // question: the history around it is the attribution. The boundary between inherited
-      // history and this panel's turns is read before the question is sent, or the question
-      // could be counted as inherited.
-      const forked = await api.forkThread(forkSourceId);
-      created = await api.updateThread(forked.id, {
-        title,
-        ...(choiceChanged ? { ...choicePatch, rememberModelChoice: true } : {}),
-      });
-      baseSeq.current = (await api.historyPosition(created.id)).snapshotSeq;
-    } else {
-      // A fresh agent seeing a bare snippet has nothing to go on but the words, so the message
-      // says which thread the notes were lifted out of.
-      created = await api.createThread({ agent, cwd, permissionMode, model: draftModel, effort: draftEffort, title });
-      if (choiceChanged) created = await api.updateThread(created.id, { ...choicePatch, rememberModelChoice: true });
-      const { notes, body } = splitNotes(text);
-      if (sourceTitle && notes.length) firstText = withNotes(notes, `${t('sideChat.notesFrom', sourceTitle)}\n\n${body}`);
+    try {
+      if (forkSourceId) {
+        // The fork carries the conversation the passage was selected from, so the first question
+        // already lands with all its context. The message itself stays just the quote and the
+        // question: the history around it is the attribution. The boundary between inherited
+        // history and this panel's turns is read before the question is sent, or the question
+        // could be counted as inherited.
+        const forked = await api.forkThread(forkSourceId);
+        created = await api.updateThread(forked.id, {
+          title,
+          ...(choiceChanged ? { ...choicePatch, rememberModelChoice: true } : {}),
+        });
+        baseSeq.current = (await api.historyPosition(created.id)).snapshotSeq;
+      } else {
+        // A fresh agent seeing a bare snippet has nothing to go on but the words, so the message
+        // names the source thread and attaches a read-only snapshot of it when available.
+        created = await api.createThread({ agent, cwd, permissionMode, model: draftModel, effort: draftEffort, title });
+        if (choiceChanged) created = await api.updateThread(created.id, { ...choicePatch, rememberModelChoice: true });
+        const { notes, body } = splitNotes(text);
+        const referenced = splitReferences(body);
+        if (sourceTitle && notes.length) {
+          firstText = withNotes(notes, withReferences(referenced.references, `${t('sideChat.notesFrom', sourceTitle)}\n\n${referenced.body}`));
+        }
+        if (!api.demo && sourceThreadId
+          && referenced.references.length < 12
+          && firstReferences.length < 12
+          && !referenced.references.some(item => item.kind === 'thread' && item.sourceId === sourceThreadId)) {
+          const sourceReference = await api.createReference({ kind: 'thread', sourceId: sourceThreadId }).catch(() => null);
+          if (sourceReference) {
+            firstText = attachFallbackReference(firstText, sourceReference);
+            if (!firstReferences.includes(sourceReference.id)) firstReferences.push(sourceReference.id);
+          }
+        }
+      }
+      if (choiceChanged) onPreferenceChanged?.();
+      draftPref.current = applyModelPreference(draftPref.current, { model: created.model, effort: created.effort });
+      if (!api.demo) optimistic.migrateThread(tempId, created.id);
+      setThread({ ...created, status: 'running' });
+      onThreadCreated(created);
+      const result = await api.startTurn(created.id, firstText, outgoing, { queue: true, references: firstReferences, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(created!.id, video.file)).id)) });
+      if (!api.demo) {
+        if ('turnId' in result) optimistic.bindTurnId(optTurn.localId, result.turnId);
+        else optimistic.remove(optTurn.localId);
+      }
+    } catch (error) {
+      if (!api.demo) {
+        if (created) {
+          const outcome = await reconcileOrCleanupEmptyThread(api, created, error);
+          if (outcome.kind === 'accepted') {
+            optimistic.reconcile(created.id, outcome.events);
+            if (outcome.events.some(ev => ev.turnId !== null || ev.type.startsWith('turn.'))) {
+              optimistic.remove(optTurn.localId);
+            }
+            setThread(outcome.thread);
+            setEvents(created.forkedFrom ? outcome.events.filter(e => e.seq > baseSeq.current) : outcome.events);
+            return;
+          }
+          optimistic.remove(optTurn.localId);
+          if (outcome.kind === 'deleted') setThread(null);
+        } else {
+          optimistic.remove(optTurn.localId);
+          setThread(null);
+        }
+      }
+      throw error;
     }
-    if (choiceChanged) onPreferenceChanged?.();
-    draftPref.current = applyModelPreference(draftPref.current, { model: created.model, effort: created.effort });
-    setThread(created);
-    onThreadCreated(created);
-    await api.startTurn(created.id, firstText, outgoing, { queue: true, videos: await Promise.all(videos.map(async video => (await api.uploadVideo(created.id, video.file)).id)) });
   };
 
   const loadImage = (attachmentId: string) =>
-    threadId ? api.attachment(threadId, attachmentId) : Promise.reject(new Error('no thread'));
+    optimistic.imageBlob(attachmentId) ? Promise.resolve(optimistic.imageBlob(attachmentId)!) : threadId && !isOptimisticThreadId(threadId) ? api.attachment(threadId, attachmentId) : Promise.reject(new Error('no thread'));
   const loadFile = (path: string) => (threadId ? api.threadFile(threadId, path) : Promise.reject(new Error('no thread')));
 
   const roots = useMemo(() => (thread ? [thread.cwd, thread.cwdReal] : [cwd]), [thread, cwd]);
@@ -309,6 +385,7 @@ export function SideChat({
             <ThreadView
               historyApi={api}
               historyThreadId={thread.id}
+              historyTitle={thread.title}
               items={timeline.items}
               roots={roots}
               loadImage={loadImage}
@@ -329,7 +406,7 @@ export function SideChat({
           running={running}
           placeholder={running ? t('sideChat.queuePlaceholder') : t('sideChat.placeholder')}
           onSend={send}
-          onStop={() => threadId && api.cancel(threadId).catch(onError)}
+          onStop={() => threadId && api.cancel(threadId).then(result => { if (result.dropped.length) setRestore({ text: result.dropped.join('\n\n'), nonce: Date.now() }); }).catch(onError)}
           header={null}
           left={null}
           right={modelPicker}
@@ -347,7 +424,8 @@ export function SideChat({
             return { ...taken, videos: await restoreVideos(api, threadId, taken.videos) };
           }}
           onSendQueuedNow={(id) => threadId && api.sendQueuedNow(threadId, id).catch(onError)}
-          restore={null}
+          restore={restore}
+          referenceSource={{ api, cwd: thread?.cwd ?? cwd, threadId: threadId ?? undefined }}
           note={{ id: 'side-chat-passage', quote: quoteText, comment: '', nonce: 1 }}
         />
       </aside>
