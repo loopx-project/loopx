@@ -23,10 +23,40 @@ class Utf8FileRead:
     error: OSError | UnicodeDecodeError | None
 
 
+def _decode_bom_utf16(data: bytes) -> str:
+    """Decode UTF-16 text whose byte order is named by its own BOM."""
+
+    if data.startswith(b"\xff\xfe"):
+        return data[2:].decode("utf-16-le")
+    return data[2:].decode("utf-16-be")
+
+
 def _read_utf8(path: Path) -> Utf8FileRead:
     try:
         return Utf8FileRead(path, path.read_text(encoding="utf-8"), None)
-    except (OSError, UnicodeDecodeError) as error:
+    except OSError as error:
+        return Utf8FileRead(path, None, error)
+    except UnicodeDecodeError:
+        pass
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        return Utf8FileRead(path, None, error)
+    # Windows Explorer writes desktop.ini as UTF-16LE with a BOM. Decode only
+    # an explicit UTF-16 BOM with a text payload; a bare BOM stays undecodable,
+    # and UTF-32 BOMs and every other byte sequence keep the strict UTF-8
+    # rejection.
+    if len(data) > 2 and (
+        (data.startswith(b"\xff\xfe") and not data.startswith(b"\xff\xfe\x00\x00"))
+        or data.startswith(b"\xfe\xff")
+    ):
+        try:
+            return Utf8FileRead(path, _decode_bom_utf16(data), None)
+        except UnicodeDecodeError as error:
+            return Utf8FileRead(path, None, error)
+    try:
+        return Utf8FileRead(path, data.decode("utf-8"), None)
+    except UnicodeDecodeError as error:
         return Utf8FileRead(path, None, error)
 
 
@@ -57,7 +87,8 @@ def iter_binary_file_reads(
 def iter_utf8_file_reads(
     paths: Iterable[Path], *, max_workers: int = 8
 ) -> Generator[Utf8FileRead, None, None]:
-    """Read UTF-8 text with the same ordered, bounded filesystem lifetime."""
+    """Read UTF-8 text, plus BOM-marked UTF-16 text, in the same ordered,
+    bounded filesystem lifetime."""
     yield from _ordered_reads(paths, _read_utf8, max_workers)
 
 

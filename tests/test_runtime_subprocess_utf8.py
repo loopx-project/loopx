@@ -141,3 +141,28 @@ def test_change_quality_scope_git_helper_pins_codec_only_in_text_mode(
     assert raw.returncode == 0
     assert isinstance(raw.stdout, bytes)
     assert "中文笔记.txt".encode("utf-8") in raw.stdout
+
+
+def test_planning_batch_cli_backend_survives_gbk_host_locale(monkeypatch) -> None:
+    """The batch-planning CLI receipt decodes UTF-8 JSON on a cp936 host."""
+
+    from loopx.control_plane.goals.planning_batch import CliPlanningBatchBackend
+
+    monkeypatch.setattr(subprocess, "_text_encoding", lambda: "gbk")
+    payload = '{"ok": true, "title": "中文目标"}'
+    script = (
+        "import sys; sys.stdout.buffer.write("
+        + repr(payload.encode("utf-8"))
+        + ")"
+    )
+    backend = CliPlanningBatchBackend(
+        cli=[sys.executable, "-c", script],
+        cwd=".",
+        env={},
+        packet_reader=lambda: {},
+        project=".",
+    )
+
+    receipt = backend._call("status", "read")
+
+    assert receipt["title"] == "中文目标"

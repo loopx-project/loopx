@@ -11,6 +11,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .control_plane.runtime.run_compaction import HUMAN_REWARD_LESSON_STRUCTURED_SCOPE_FIELDS
 from .control_plane.runtime.time import chronology_key
 from .paths import resolve_runtime_root
 from .public_safe_text import (
@@ -207,6 +208,38 @@ def compact_reward(
     return payload
 
 
+
+def _compact_reward_lesson_scope_value(field: str, value: Any) -> Any:
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        validate_public_safe_text(f"lesson {field}", cleaned)
+        return cleaned
+    if isinstance(value, list):
+        items: list[str] = []
+        for entry in value:
+            cleaned = str(entry or "").strip()
+            if not cleaned:
+                continue
+            validate_public_safe_text(f"lesson {field}", cleaned)
+            if cleaned not in items:
+                items.append(cleaned)
+        return items[:10] if items else None
+    if isinstance(value, dict):
+        nested: dict[str, Any] = {}
+        for key, entry in value.items():
+            if not isinstance(key, str) or entry is None or entry == "":
+                continue
+            cleaned_entry = _compact_reward_lesson_scope_value(f"{field}.{key}", entry)
+            if cleaned_entry is not None:
+                nested[key] = cleaned_entry
+        return nested or None
+    return None
+
+
 def compact_reward_lesson(lesson: dict[str, Any]) -> dict[str, Any]:
     kind = str(lesson.get("kind") or "").strip()
     summary = str(lesson.get("summary") or "").strip()
@@ -234,6 +267,11 @@ def compact_reward_lesson(lesson: dict[str, Any]) -> dict[str, Any]:
                 items.append(item)
         if items:
             payload[field] = items[:5]
+    for field in HUMAN_REWARD_LESSON_STRUCTURED_SCOPE_FIELDS:
+        if field in lesson:
+            compacted = _compact_reward_lesson_scope_value(field, lesson[field])
+            if compacted is not None:
+                payload[field] = compacted
     return payload
 
 

@@ -175,6 +175,47 @@ Legal scheduler host state transition.
 - typescript: [`SCHEDULER_HOST_TRANSITIONS`](../../loopx/control_plane/scheduler/state_transition_rules.ts).
 - Values / 值: `apply_required`, `host_match_ack_required`, `recorded_failure_suppressed`, `settled`.
 
+## session_fabric_handover_disposition
+
+Fence-bound governed session handover evaluation verdict returned without executing switches or acquiring leases.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`SESSION_FABRIC_HANDOVER_DISPOSITIONS`](../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts).
+- Values / 值: `no_handover_needed`, `user_gate_required`, `await_turn_fence`, `ready_for_lease_reacquisition`.
+
+## session_fabric_quota_availability
+
+Opaque-profile quota window availability state decoded fail-closed by L0 session fabric.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`SESSION_FABRIC_QUOTA_AVAILABILITIES`](../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts).
+- Values / 值: `available`, `near_limit`, `exhausted`, `unknown`.
+
+## session_fabric_ssh_connection_state
+
+Read-only L0 SSH host readiness state attached optionally to ssh_host_catalog_v0 entries.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`SESSION_FABRIC_SSH_CONNECTION_STATES`](../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts).
+- Values / 值: `connected`, `degraded`, `disconnected`, `unknown`.
+
+## session_fabric_ssh_failure_code
+
+Typed SSH readiness failure reason required on degraded or disconnected L0 SSH host observations.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- typescript: [`SESSION_FABRIC_SSH_FAILURE_CODES`](../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts).
+- Values / 值: `no_ssh`, `host_key`, `auth`, `unreachable`, `ssh_failed`, `daemon_missing`, `forward_denied`.
+
+## session_mode
+
+Explicit, non-implicitly-switchable execution ownership mode of a LoopX agent session binding.
+
+- Tier / 层级: `cross_runtime`; status / 状态: `canonical`.
+- python: [`CHAT_SESSION_MODES`](../../loopx/chat_store.py).
+- typescript: [`SESSION_MODES`](../../loopx/control_plane/collaboration/session_quota_fabric_contract.ts).
+- Values / 值: `managed_runtime`, `attached_host`.
+
 ## settlement_binding_kind
 
 How a settlement step binds to its receipt.
