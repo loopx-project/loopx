@@ -98,8 +98,11 @@ surviving restarts without disturbing healthy `swarm_wait` or `schedule` sleeps:
   2. `now - last_modified_epoch >= long_idle_seconds` (default `2400`s / 40m
      stall fallback, bounded by `>= 1800`s cooldown).
 - `install-launchd`: previews (default dry-run) or installs/unloads a
-  `~/Library/LaunchAgents/<label>.plist` (`RunAtLoad=true`, `StartInterval=300`)
-  running `heartbeat-tick` with `--execute` (or `--uninstall --execute`).
+  `~/Library/LaunchAgents/<label>.plist` (`RunAtLoad=true`, `StartInterval=300`,
+  resolved absolute `--registry`/`--runtime-root`/`--state-dir`/`--log-dir`, and
+  captured `PATH`) running `heartbeat-tick` with `--execute` (or
+  `--uninstall --execute`, verifying via `launchctl print` that the job is
+  unloaded or absent before removing the plist).
 
 ```bash
 python3 -E -P -m loopx.agy_goal_mode.host_runtime install-launchd \

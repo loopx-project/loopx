@@ -17,6 +17,56 @@ MIN_LAUNCHD_INTERVAL_SECONDS = 60
 DEFAULT_LONG_IDLE_SECONDS = 2400
 MIN_STALL_COOLDOWN_SECONDS = 1800
 _LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
+_DEFAULT_LAUNCHD_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+_HOST_GLOBAL_REGISTRY_SELECTOR = "@host-global"
+
+
+def _resolved_optional_path(
+    raw: str | None, *, preserve_tokens: frozenset[str] = frozenset()
+) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    if stripped in preserve_tokens:
+        return stripped
+    return str(Path(stripped).expanduser().resolve())
+
+
+def _resolved_executable_path(binary: str) -> str:
+    expanded = os.path.expanduser(binary)
+    return os.path.abspath(expanded)
+
+
+def _resolved_launchd_path(
+    env_path: str | None = None,
+    *,
+    python_bin: str | None = None,
+    cli_bin: str | None = None,
+    resolve_local_executable: bool = True,
+) -> str:
+    raw = env_path if isinstance(env_path, str) and env_path.strip() else os.environ.get("PATH")
+    parts = [entry for entry in (raw or "").split(os.pathsep) if entry]
+    if not parts:
+        parts = _DEFAULT_LAUNCHD_PATH.split(os.pathsep)
+    if resolve_local_executable:
+        search_path = os.pathsep.join(parts)
+        node_bin = shutil.which("node", path=search_path) or shutil.which("node")
+        extras: list[str] = []
+        if node_bin:
+            extras.append(str(Path(os.path.abspath(node_bin)).parent))
+        for candidate in (python_bin, cli_bin):
+            if candidate and Path(candidate).is_absolute():
+                extras.append(str(Path(candidate).parent))
+        for entry in extras:
+            if entry not in parts:
+                parts.append(entry)
+    deduped: list[str] = []
+    for entry in parts:
+        if entry not in deduped:
+            deduped.append(entry)
+    return os.pathsep.join(deduped)
 
 
 def default_launchd_label(goal_id: str, agent_id: str, conversation_id: str) -> str:
@@ -56,19 +106,34 @@ def build_antigravity_launchd_plist(
     long_idle_seconds: int = DEFAULT_LONG_IDLE_SECONDS,
     cooldown_seconds: int = MIN_STALL_COOLDOWN_SECONDS,
     resolve_local_executable: bool = True,
+    env_path: str | None = None,
 ) -> dict[str, object]:
     """Build a reboot-surviving macOS LaunchAgent plist for `heartbeat-tick`."""
     resolved_label = validated_launchd_label(
         label, goal_id=goal_id, agent_id=agent_id, conversation_id=conversation_id
     )
-    python_bin = sys.executable if resolve_local_executable else "python3"
+    python_bin = (
+        _resolved_executable_path(sys.executable)
+        if resolve_local_executable
+        else "python3"
+    )
+    found_cli = shutil.which(cli_bin) if resolve_local_executable else None
     resolved_cli_bin = (
-        (shutil.which(cli_bin) or cli_bin) if resolve_local_executable else cli_bin
+        _resolved_executable_path(found_cli or cli_bin)
+        if resolve_local_executable
+        and (found_cli is not None or os.sep in cli_bin or cli_bin.startswith("."))
+        else cli_bin
     )
-    resolved_state = str(
-        Path(state_dir or str(Path.home() / ".loopx/host-state/antigravity")).expanduser()
+    resolved_state = _resolved_optional_path(state_dir) or str(
+        (Path.home() / ".loopx/host-state/antigravity").resolve()
     )
-    resolved_logs = Path(log_dir or str(Path(resolved_state) / "logs")).expanduser()
+    resolved_logs = Path(
+        _resolved_optional_path(log_dir) or str(Path(resolved_state) / "logs")
+    )
+    resolved_registry = _resolved_optional_path(
+        registry, preserve_tokens=frozenset({_HOST_GLOBAL_REGISTRY_SELECTOR})
+    )
+    resolved_runtime_root = _resolved_optional_path(runtime_root)
     program_args = [
         python_bin,
         "-E",
@@ -91,10 +156,10 @@ def build_antigravity_launchd_plist(
         "--cooldown-seconds",
         str(max(MIN_STALL_COOLDOWN_SECONDS, int(cooldown_seconds))),
     ]
-    if registry:
-        program_args.extend(["--registry", registry])
-    if runtime_root:
-        program_args.extend(["--runtime-root", runtime_root])
+    if resolved_registry:
+        program_args.extend(["--registry", resolved_registry])
+    if resolved_runtime_root:
+        program_args.extend(["--runtime-root", resolved_runtime_root])
     return {
         "Label": resolved_label,
         "ProgramArguments": program_args,
@@ -103,7 +168,15 @@ def build_antigravity_launchd_plist(
         "ProcessType": "Background",
         "StandardOutPath": str(resolved_logs / f"{resolved_label}.stdout.log"),
         "StandardErrorPath": str(resolved_logs / f"{resolved_label}.stderr.log"),
-        "EnvironmentVariables": {"LOOPX_USAGE_PING": "0"},
+        "EnvironmentVariables": {
+            "LOOPX_USAGE_PING": "0",
+            "PATH": _resolved_launchd_path(
+                env_path,
+                python_bin=python_bin,
+                cli_bin=resolved_cli_bin,
+                resolve_local_executable=resolve_local_executable,
+            ),
+        },
     }
 
 
@@ -113,10 +186,41 @@ def _run_launchctl(argv: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _bootout_launchd_agent(label: str) -> None:
+def _uninstall_launchd_agent(label: str) -> tuple[bool, bool | None, str | None]:
+    """Boot out the LaunchAgent and verify via launchd readback that it is unloaded."""
     uid = os.getuid() if hasattr(os, "getuid") else None
-    target = f"gui/{uid}/{label}" if isinstance(uid, int) else label
-    _run_launchctl(["bootout", target])
+    if not isinstance(uid, int):
+        return False, None, "launchd_uid_unavailable"
+    target = f"gui/{uid}/{label}"
+    try:
+        bootout = _run_launchctl(["bootout", target])
+        readback = _run_launchctl(["print", target])
+    except (OSError, subprocess.SubprocessError):
+        return False, None, "launchctl_unavailable"
+    if readback.returncode == 0:
+        error_kind = (
+            "launchctl_bootout_failed"
+            if bootout.returncode != 0
+            else "launchctl_still_loaded"
+        )
+        return False, True, error_kind
+    readback_text = f"{readback.stdout}\n{readback.stderr}".lower()
+    bootout_text = f"{bootout.stdout}\n{bootout.stderr}".lower()
+    absent_confirmed = (
+        readback.returncode == 113
+        or bootout.returncode == 0
+        or "could not find service" in readback_text
+        or "no such process" in bootout_text
+    )
+    if not absent_confirmed:
+        return (
+            False,
+            None,
+            "launchctl_bootout_failed"
+            if bootout.returncode != 0
+            else "launchctl_readback_failed",
+        )
+    return True, False, None
 
 
 def _reload_launchd_agent(label: str, plist_path: Path) -> tuple[bool, str | None]:
@@ -155,8 +259,9 @@ def install_launchd(args: argparse.Namespace) -> dict[str, object]:
         conversation_id=str(args.conversation_id),
     )
     agents_dir = Path(
-        str(getattr(args, "launch_agents_dir", None) or (Path.home() / "Library/LaunchAgents"))
-    ).expanduser()
+        _resolved_optional_path(getattr(args, "launch_agents_dir", None))
+        or str((Path.home() / "Library/LaunchAgents").resolve())
+    )
     plist_path = agents_dir / f"{label}.plist"
     execute = bool(getattr(args, "execute", False))
     no_load = bool(getattr(args, "no_load", False))
@@ -185,17 +290,30 @@ def install_launchd(args: argparse.Namespace) -> dict[str, object]:
                     "label": label,
                     "plist_path": str(plist_path),
                 }
-            _bootout_launchd_agent(label)
+            uninstalled, loaded_state, error_kind = _uninstall_launchd_agent(label)
+            if not uninstalled:
+                return {
+                    "ok": False,
+                    "operation": operation,
+                    "dry_run": False,
+                    "uninstalled": False,
+                    "loaded": loaded_state,
+                    "error_kind": error_kind,
+                    "label": label,
+                    "plist_path": str(plist_path),
+                }
         plist_path.unlink(missing_ok=True)
         return {
             "ok": True,
             "operation": operation,
             "dry_run": False,
             "uninstalled": True,
+            "loaded": False if not no_load else None,
             "label": label,
             "plist_path": str(plist_path),
         }
 
+    raw_state_dir = getattr(args, "state_dir", None)
     plist_payload = build_antigravity_launchd_plist(
         goal_id=str(args.goal_id),
         agent_id=str(args.agent_id),
@@ -203,7 +321,7 @@ def install_launchd(args: argparse.Namespace) -> dict[str, object]:
         cli_bin=str(args.cli_bin),
         registry=getattr(args, "registry", None),
         runtime_root=getattr(args, "runtime_root", None),
-        state_dir=str(args.state_dir),
+        state_dir=str(raw_state_dir) if raw_state_dir is not None else None,
         log_dir=getattr(args, "log_dir", None),
         label=label,
         interval_seconds=int(

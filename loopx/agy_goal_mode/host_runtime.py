@@ -109,7 +109,7 @@ def bootstrap_prompt(args: argparse.Namespace) -> str:
 def _state_path(args: argparse.Namespace) -> Path:
     # Native conversation ids never become path components.
     key = hashlib.sha256(str(args.conversation_id).encode("utf-8")).hexdigest()
-    return Path(str(args.state_dir)).expanduser() / f"{key}.json"
+    return Path(str(args.state_dir)).expanduser().resolve() / f"{key}.json"
 
 
 def _read_state(args: argparse.Namespace) -> dict[str, Any]:
