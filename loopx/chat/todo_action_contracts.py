@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import NoReturn, Protocol, runtime_checkable
 
 from ..chat_store import TERMINAL_TURN_STATES
-from .action_store_common import is_str_dict, require_str_dict
+from ..control_plane.collaboration.action_store_common import is_str_dict, require_str_dict
 
 CANONICAL_UPDATE_BASIS_SCHEMA_VERSION = "loopx_chat_canonical_update_basis_v0"
 CANONICAL_TERMINAL_BASIS_SCHEMA_VERSION = "loopx_chat_canonical_terminal_basis_v0"

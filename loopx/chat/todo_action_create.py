@@ -11,7 +11,7 @@ from ..control_plane.coordination.local_authority import (
     read_canonical_todos_if_promoted,
 )
 from ..control_plane.todos.mutation_api import update_goal_todo
-from .action_store_common import _opaque_id, is_str_dict, require_str_dict
+from ..control_plane.collaboration.action_store_common import _opaque_id, is_str_dict, require_str_dict
 from .todo_action_contracts import (
     ChatTodoActionHost,
     as_optional_str,

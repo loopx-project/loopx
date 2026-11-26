@@ -30,9 +30,9 @@ def test_chat_action_store_modularization_zero_any_and_exports() -> None:
     root = Path(__file__).resolve().parents[1] / "loopx"
     limits = {
         "chat_action_store.py": 650,
-        "chat/action_store_common.py": 700,
-        "chat/action_store_review_cards.py": 700,
-        "chat/action_store_operations.py": 700,
+        "control_plane/collaboration/action_store_common.py": 700,
+        "control_plane/collaboration/action_store_review_cards.py": 700,
+        "control_plane/collaboration/action_store_operations.py": 700,
     }
     for filename, max_lines in limits.items():
         source = (root / filename).read_text(encoding="utf-8")

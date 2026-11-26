@@ -14,7 +14,7 @@ from types import MappingProxyType
 import pytest
 
 from loopx.chat import todo_action_contracts, todo_action_create, todo_action_tasks, todo_action_updates, todo_actions
-from loopx.chat.action_store_common import ActionConflictError, _canonical_digest
+from loopx.control_plane.collaboration.action_store_common import ActionConflictError, _canonical_digest
 from loopx.chat.todo_action_contracts import (
     TodoRuntimeControllerProtocol,
     TodoTurnLoaderProtocol,
