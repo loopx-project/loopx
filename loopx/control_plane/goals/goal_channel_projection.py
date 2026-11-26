@@ -1,110 +1,44 @@
+"""Read-only frontstage channel projection for LoopX goals."""
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
-
-GOAL_CHANNEL_PROJECTION_SCHEMA_VERSION = "goal_channel_projection_v0"
-
-RAW_MATERIAL_KEY_HINTS = (
-    "credential",
-    "local_path",
-    "log",
-    "raw",
-    "secret",
-    "stderr",
-    "stdout",
-    "token",
-    "trace",
-    "transcript",
+from .goal_channel_projection_contracts import (
+    GOAL_CHANNEL_PROJECTION_SCHEMA_VERSION as GOAL_CHANNEL_PROJECTION_SCHEMA_VERSION,
+    PRIVATE_VALUE_HINTS as PRIVATE_VALUE_HINTS,
+    RAW_MATERIAL_KEY_HINTS as RAW_MATERIAL_KEY_HINTS,
+    GoalChannelDecisionFrame as GoalChannelDecisionFrame,
+    GoalChannelSourceRefs as GoalChannelSourceRefs,
+    GoalChannelSourceWarning as GoalChannelSourceWarning,
+    GoalChannelTruthContract as GoalChannelTruthContract,
+    _GoalChannelMode,
+    _TodoRole,
+    _as_mapping as _as_mapping,
+    _as_mappings as _as_mappings,
+    _copy_compact_text_fields,
+    _first_text as _first_text,
+    _interaction_channel,
+    _mapping_or_empty,
+    _private_value as _private_value,
+    _project_asset as _project_asset,
+    _raw_material_keys as _raw_material_keys,
+    _text as _text,
+    compact_goal_channel_text as compact_goal_channel_text,
 )
-
-PRIVATE_VALUE_HINTS = (
-    "/private/",
-    "/users/",
-    "credential" + "-value",
-    "secret" + "-value",
-    "token" + "-value",
-)
-
-
-def _as_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _as_mappings(values: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
-    if not values:
-        return []
-    return [dict(item) for item in values if isinstance(item, Mapping)]
-
-
-def _private_value(value: Any) -> bool:
-    text = str(value).lower()
-    private_doc_host = ".".join(("byte" + "dance", "lark" + "office"))
-    return private_doc_host in text or any(hint in text for hint in PRIVATE_VALUE_HINTS)
-
-
-def compact_goal_channel_text(value: Any, *, limit: int = 180) -> str | None:
-    if value is None or _private_value(value):
-        return None
-    text = " ".join(str(value).split())
-    if not text:
-        return None
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 1)].rstrip() + "..."
-
-
-def _text(value: Any, *, limit: int = 180) -> str | None:
-    return compact_goal_channel_text(value, limit=limit)
-
-
-def _raw_material_keys(*values: Any) -> list[str]:
-    keys: set[str] = set()
-
-    def visit(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for key, child in value.items():
-                lowered = str(key).lower()
-                if any(hint in lowered for hint in RAW_MATERIAL_KEY_HINTS):
-                    keys.add(str(key))
-                if _private_value(child):
-                    keys.add(str(key))
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-
-    for value in values:
-        visit(value)
-    return sorted(keys)
-
-
-def _first_text(*values: Any, limit: int = 180) -> str | None:
-    for value in values:
-        text = _text(value, limit=limit)
-        if text:
-            return text
-    return None
-
-
-def _project_asset(status_item: Mapping[str, Any]) -> dict[str, Any]:
-    asset = status_item.get("project_asset")
-    return dict(asset) if isinstance(asset, Mapping) else {}
 
 
 def _source_refs(
     *,
-    status_payload: Mapping[str, Any],
-    project_asset: Mapping[str, Any],
-    run_history_goal: Mapping[str, Any],
-    review_packet: Mapping[str, Any],
-) -> dict[str, Any]:
-    latest_runs = (
-        run_history_goal.get("latest_runs")
-        if isinstance(run_history_goal.get("latest_runs"), list)
-        else []
+    status_payload: Mapping[str, object],
+    project_asset: Mapping[str, object],
+    run_history_goal: Mapping[str, object],
+    review_packet: Mapping[str, object],
+) -> GoalChannelSourceRefs:
+    latest_runs_raw = run_history_goal.get("latest_runs")
+    latest_runs = latest_runs_raw if isinstance(latest_runs_raw, list) else []
+    latest_run: Mapping[str, object] = (
+        latest_runs[0] if latest_runs and isinstance(latest_runs[0], Mapping) else {}
     )
-    latest_run = latest_runs[0] if latest_runs and isinstance(latest_runs[0], Mapping) else {}
     return {
         "status_generated_at": _first_text(
             status_payload.get("generated_at"),
@@ -127,19 +61,24 @@ def _source_refs(
     }
 
 
-def _compact_quota(quota_payload: Mapping[str, Any], project_asset: Mapping[str, Any]) -> dict[str, Any]:
-    source = quota_payload.get("quota") if isinstance(quota_payload.get("quota"), Mapping) else {}
-    if not source and isinstance(project_asset.get("quota"), Mapping):
-        source = project_asset["quota"]
-    compact: dict[str, Any] = {}
-    for key in ("state", "reason", "spend_policy", "spent_slots", "allowed_slots"):
-        value = _text(source.get(key), limit=220)
-        if value is not None:
-            compact[key] = value
+def _compact_quota(
+    quota_payload: Mapping[str, object],
+    project_asset: Mapping[str, object],
+) -> dict[str, object]:
+    raw_quota = quota_payload.get("quota")
+    source: Mapping[str, object] = raw_quota if isinstance(raw_quota, Mapping) else {}
+    if not source:
+        asset_quota = project_asset.get("quota")
+        if isinstance(asset_quota, Mapping):
+            source = asset_quota
+    compact: dict[str, object] = {}
+    _copy_compact_text_fields(
+        compact, source, ("state", "reason", "spend_policy", "spent_slots", "allowed_slots"), limit=220,
+    )
     return compact
 
 
-def _todo_candidates(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _todo_candidates(summary: Mapping[str, object]) -> list[dict[str, object]]:
     for key in (
         "first_open_items",
         "first_executable_items",
@@ -153,35 +92,37 @@ def _todo_candidates(summary: Mapping[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _compact_todo(item: Mapping[str, Any]) -> dict[str, Any] | None:
+def _compact_todo(item: Mapping[str, object]) -> dict[str, object] | None:
     title = _first_text(item.get("title"), item.get("text"), limit=220)
     if not title:
         return None
-    compact: dict[str, Any] = {
+    compact: dict[str, object] = {
         "title": title,
         "status": _first_text(item.get("status"), limit=40) or "open",
     }
-    for key in (
-        "todo_id",
-        "priority",
-        "claimed_by",
-        "bound_agent",
-        "goal_bound",
-        "task_class",
-        "action_kind",
-        "task_repository",
-    ):
-        value = _text(item.get(key), limit=120)
-        if value:
-            compact[key] = value
+    _copy_compact_text_fields(
+        compact,
+        item,
+        (
+            "todo_id",
+            "priority",
+            "claimed_by",
+            "bound_agent",
+            "goal_bound",
+            "task_class",
+            "action_kind",
+            "task_repository",
+        ),
+        limit=120,
+    )
     return compact
 
 
-def _compact_todos(project_asset: Mapping[str, Any], role: str) -> list[dict[str, Any]]:
+def _compact_todos(project_asset: Mapping[str, object], role: _TodoRole) -> list[dict[str, object]]:
     summary = project_asset.get(f"{role}_todos")
     if not isinstance(summary, Mapping):
         return []
-    compact: list[dict[str, Any]] = []
+    compact: list[dict[str, object]] = []
     for item in _todo_candidates(summary):
         todo = _compact_todo(item)
         if todo:
@@ -189,7 +130,7 @@ def _compact_todos(project_asset: Mapping[str, Any], role: str) -> list[dict[str
     return compact
 
 
-def _user_gate_todos(user_todos: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def _user_gate_todos(user_todos: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
     return [
         dict(todo)
         for todo in user_todos
@@ -200,12 +141,14 @@ def _user_gate_todos(user_todos: Sequence[Mapping[str, Any]]) -> list[dict[str, 
 
 def _open_gates(
     *,
-    quota_payload: Mapping[str, Any],
-    project_asset: Mapping[str, Any],
-    user_todos: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    gates: list[dict[str, Any]] = []
-    user_gate_todos = _user_gate_todos(user_todos)
+    quota_payload: Mapping[str, object],
+    project_asset: Mapping[str, object],
+    user_todos: Sequence[Mapping[str, object]],
+    user_channel: Mapping[str, object] | None = None,
+    user_gate_todos: Sequence[Mapping[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    gates: list[dict[str, object]] = []
+    resolved_user_gates = list(user_gate_todos) if user_gate_todos is not None else _user_gate_todos(user_todos)
     raw_gates = project_asset.get("open_gates")
     if isinstance(raw_gates, list):
         for gate in raw_gates:
@@ -214,37 +157,31 @@ def _open_gates(
             status = _first_text(gate.get("status"), gate.get("state"), limit=80)
             if status in {None, "done", "closed", "resolved"}:
                 continue
-            compact = {
-                "gate_id": _first_text(gate.get("gate_id"), gate.get("id"), limit=120)
-                or "gate",
-                "kind": _first_text(gate.get("kind"), gate.get("type"), limit=80)
-                or "operator_gate",
+            compact: dict[str, object] = {
+                "gate_id": _first_text(gate.get("gate_id"), gate.get("id"), limit=120) or "gate",
+                "kind": _first_text(gate.get("kind"), gate.get("type"), limit=80) or "operator_gate",
                 "status": status or "open",
             }
             blocks = gate.get("blocks")
             if isinstance(blocks, list):
-                compact["blocks"] = [_text(item, limit=120) for item in blocks if _text(item, limit=120)]
+                compact["blocks"] = [text for item in blocks if (text := _text(item, limit=120))]
             gates.append(compact)
-    interaction = quota_payload.get("interaction_contract")
-    user_channel = (
-        interaction.get("user_channel")
-        if isinstance(interaction, Mapping) and isinstance(interaction.get("user_channel"), Mapping)
-        else {}
+    resolved_user_channel = (
+        user_channel
+        if user_channel is not None
+        else _interaction_channel(quota_payload.get("interaction_contract"), "user_channel")
     )
-    if (user_channel.get("action_required") is True or user_gate_todos) and not gates:
-        blocking_todos = user_gate_todos or list(user_todos)
+    action_required = resolved_user_channel.get("action_required") is True
+    if (action_required or resolved_user_gates) and not gates:
+        blocking_todos = resolved_user_gates or list(user_todos)
         gates.append(
             {
                 "gate_id": (
                     "interaction_contract_user_channel"
-                    if user_channel.get("action_required") is True
+                    if action_required
                     else "project_asset_user_gate_todos"
                 ),
-                "kind": (
-                    "user_channel"
-                    if user_channel.get("action_required") is True
-                    else "user_todo"
-                ),
+                "kind": "user_channel" if action_required else "user_todo",
                 "status": "action_required",
                 "blocks": [
                     str(todo.get("todo_id") or todo.get("title") or "user_todo")
@@ -255,49 +192,48 @@ def _open_gates(
     return gates
 
 
-def _compact_coordination_entry(item: Mapping[str, Any]) -> dict[str, Any]:
+def _compact_coordination_entry(item: Mapping[str, object]) -> dict[str, object]:
     """The existing channel redaction boundary owns display text, not lease rules."""
-    row: dict[str, Any] = {}
-    for key in ("todo_id", "owner_agent", "claimed_by", "lease_until", "expires_at", "status", "reason"):
-        value = _text(item.get(key), limit=120)
-        if value:
-            row[key] = value
+    row: dict[str, object] = {}
+    _copy_compact_text_fields(
+        row,
+        item,
+        ("todo_id", "owner_agent", "claimed_by", "lease_until", "expires_at", "status", "reason"),
+        limit=120,
+    )
     for key in ("lease_version", "lease_epoch"):
-        if isinstance(item.get(key), int) and not isinstance(item[key], bool):
-            row[key] = item[key]
-    if isinstance(item.get("write_scope"), list):
-        row["write_scope"] = [text for value in item["write_scope"] if (text := _text(value, limit=120))]
+        val = item.get(key)
+        if isinstance(val, int) and not isinstance(val, bool):
+            row[key] = val
+    write_scope = item.get("write_scope")
+    if isinstance(write_scope, list):
+        row["write_scope"] = [text for value in write_scope if (text := _text(value, limit=120))]
     return row
 
 
-def _compact_artifacts(artifacts: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]]:
-    compact: list[dict[str, Any]] = []
-    for item in _as_mappings(artifacts):
-        artifact: dict[str, Any] = {}
-        for key in ("kind", "label", "path", "run_id"):
-            value = _text(item.get(key), limit=160)
-            if value:
-                artifact[key] = value
+def _compact_artifacts(artifacts: Sequence[Mapping[str, object]] | None) -> list[dict[str, object]]:
+    if not artifacts:
+        return []
+    compact: list[dict[str, object]] = []
+    for item in artifacts:
+        if not isinstance(item, Mapping):
+            continue
+        artifact: dict[str, object] = {}
+        _copy_compact_text_fields(artifact, item, ("kind", "label", "path", "run_id"), limit=160)
         if artifact:
             compact.append(artifact)
     return compact
 
 
-def _recent_events(run_history_goal: Mapping[str, Any]) -> list[dict[str, Any]]:
-    runs = (
-        run_history_goal.get("latest_runs")
-        if isinstance(run_history_goal.get("latest_runs"), list)
-        else []
-    )
-    events: list[dict[str, Any]] = []
+def _recent_events(run_history_goal: Mapping[str, object]) -> list[dict[str, object]]:
+    raw_runs = run_history_goal.get("latest_runs")
+    runs = raw_runs if isinstance(raw_runs, list) else []
+    events: list[dict[str, object]] = []
     for run in runs[:5]:
         if not isinstance(run, Mapping):
             continue
-        event: dict[str, Any] = {}
-        for key in ("generated_at", "classification"):
-            value = _text(run.get(key), limit=160)
-            if value:
-                event[key] = value
+        event: dict[str, object] = {}
+        _copy_compact_text_fields(event, run, ("generated_at", "classification"), limit=160)
         summary = _first_text(run.get("health_check"), run.get("recommended_action"), limit=260)
         if summary:
             event["summary"] = summary
@@ -306,7 +242,7 @@ def _recent_events(run_history_goal: Mapping[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
-def _source_warnings(raw_keys: Sequence[str]) -> list[dict[str, Any]]:
+def _source_warnings(raw_keys: Sequence[str]) -> list[GoalChannelSourceWarning]:
     if not raw_keys:
         return []
     return [
@@ -325,16 +261,16 @@ def _source_warnings(raw_keys: Sequence[str]) -> list[dict[str, Any]]:
 def build_goal_channel_projection(
     *,
     goal_id: str,
-    status_item: Mapping[str, Any] | None = None,
-    status_payload: Mapping[str, Any] | None = None,
-    quota_payload: Mapping[str, Any] | None = None,
-    run_history_goal: Mapping[str, Any] | None = None,
-    review_packet: Mapping[str, Any] | None = None,
-    artifacts: Sequence[Mapping[str, Any]] | None = None,
-    active_leases: Sequence[Mapping[str, Any]] | None = None,
+    status_item: Mapping[str, object] | None = None,
+    status_payload: Mapping[str, object] | None = None,
+    quota_payload: Mapping[str, object] | None = None,
+    run_history_goal: Mapping[str, object] | None = None,
+    review_packet: Mapping[str, object] | None = None,
+    artifacts: Sequence[Mapping[str, object]] | None = None,
+    active_leases: Sequence[Mapping[str, object]] | None = None,
     generated_at: str | None = None,
-    runtime_root: Any = None,
-) -> dict[str, Any]:
+    runtime_root: object = None,
+) -> dict[str, object]:
     """Build a read-only channel snapshot for a LoopX goal.
 
     The returned object is a frontstage projection.
@@ -342,11 +278,11 @@ def build_goal_channel_projection(
     records raw/private-looking inputs as warnings without copying their values.
     """
 
-    status_item_dict = _as_mapping(status_item)
-    status_payload_dict = _as_mapping(status_payload)
-    quota_payload_dict = _as_mapping(quota_payload)
-    run_history_goal_dict = _as_mapping(run_history_goal)
-    review_packet_dict = _as_mapping(review_packet)
+    status_item_dict = _mapping_or_empty(status_item)
+    status_payload_dict = _mapping_or_empty(status_payload)
+    quota_payload_dict = _mapping_or_empty(quota_payload)
+    run_history_goal_dict = _mapping_or_empty(run_history_goal)
+    review_packet_dict = _mapping_or_empty(review_packet)
     project_asset = _project_asset(status_item_dict)
     user_todos = _compact_todos(project_asset, "user")
     agent_todos = _compact_todos(project_asset, "agent")
@@ -367,22 +303,36 @@ def build_goal_channel_projection(
     )
 
     interaction = quota_payload_dict.get("interaction_contract")
-    user_channel = (
-        interaction.get("user_channel")
-        if isinstance(interaction, Mapping) and isinstance(interaction.get("user_channel"), Mapping)
-        else {}
-    )
-    agent_channel = (
-        interaction.get("agent_channel")
-        if isinstance(interaction, Mapping) and isinstance(interaction.get("agent_channel"), Mapping)
-        else {}
-    )
+    user_channel = _interaction_channel(interaction, "user_channel")
+    agent_channel = _interaction_channel(interaction, "agent_channel")
     user_gate_todos = _user_gate_todos(user_todos)
+    source_warnings = _source_warnings(raw_keys)
 
-    projection = {
+    raw_entries = observation.get("entries")
+    entries: Sequence[object] = (
+        raw_entries if isinstance(raw_entries, Sequence) and not isinstance(raw_entries, (str, bytes)) else ()
+    )
+
+    mode: _GoalChannelMode = "read_only"
+    decision_frame: GoalChannelDecisionFrame = {
+        "user_action_required": bool(user_channel.get("action_required") or user_gate_todos),
+        "agent_action_required": bool(agent_channel.get("must_attempt")),
+        "quiet_noop_allowed": bool(agent_channel.get("quiet_noop_allowed")),
+    }
+    truth_contract: GoalChannelTruthContract = {
+        "event_ledger_is_source_of_truth": True,
+        "projection_is_writable": False,
+        "write_authority": "none",
+        "recompute_rule": (
+            "refresh from LoopX status/quota/run history; do not "
+            "edit the channel projection as project truth"
+        ),
+    }
+
+    projection: dict[str, object] = {
         "schema_version": GOAL_CHANNEL_PROJECTION_SCHEMA_VERSION,
         "goal_id": str(goal_id),
-        "mode": "read_only",
+        "mode": mode,
         "generated_at": _text(generated_at, limit=80),
         "display_name": _first_text(
             # History carries the current registry name, including after a rename.
@@ -415,13 +365,7 @@ def build_goal_channel_projection(
             status_item_dict.get("recommended_action"),
             limit=260,
         ),
-        "decision_frame": {
-            "user_action_required": bool(
-                user_channel.get("action_required") or user_gate_todos
-            ),
-            "agent_action_required": bool(agent_channel.get("must_attempt")),
-            "quiet_noop_allowed": bool(agent_channel.get("quiet_noop_allowed")),
-        },
+        "decision_frame": decision_frame,
         "quota": _compact_quota(quota_payload_dict, project_asset),
         "user_todos": user_todos,
         "agent_todos": agent_todos,
@@ -429,30 +373,47 @@ def build_goal_channel_projection(
             quota_payload=quota_payload_dict,
             project_asset=project_asset,
             user_todos=user_todos,
+            user_channel=user_channel,
+            user_gate_todos=user_gate_todos,
         ),
         "artifacts": _compact_artifacts(artifacts),
-        "active_leases": [_compact_coordination_entry(row) for row in observation["entries"]],
+        "active_leases": [
+            _compact_coordination_entry(row) for row in entries if isinstance(row, Mapping)
+        ],
         "coordination_authority": coordination_authority_transition(observation),
         "recent_events": _recent_events(run_history_goal_dict),
-        "source_warnings": _source_warnings(raw_keys),
-        "truth_contract": {
-            "event_ledger_is_source_of_truth": True,
-            "projection_is_writable": False,
-            "write_authority": "none",
-            "recompute_rule": (
-                "refresh from LoopX status/quota/run history; do not "
-                "edit the channel projection as project truth"
-            ),
-        },
+        "source_warnings": source_warnings,
+        "truth_contract": truth_contract,
     }
     if "source_authority" in observation:
-        projection["coordination_observation"] = {key: observation[key] for key in (
-            "status", "source_authority", "provider_revision", "observed_at", "legacy_fallback_used",
-            "total_count", "truncated", "display_limit", "todo_count", "lease_count") if key in observation}
-    if observation["status"] != "loaded":
-        projection["source_warnings"].append({"kind": "coordination_unavailable",
-            "message": "Task ownership could not be read; an empty list does not prove that no task is owned."})
+        projection["coordination_observation"] = {
+            key: observation[key]
+            for key in (
+                "status",
+                "source_authority",
+                "provider_revision",
+                "observed_at",
+                "legacy_fallback_used",
+                "total_count",
+                "truncated",
+                "display_limit",
+                "todo_count",
+                "lease_count",
+            )
+            if key in observation
+        }
+    if observation.get("status") != "loaded":
+        source_warnings.append(
+            {
+                "kind": "coordination_unavailable",
+                "message": "Task ownership could not be read; an empty list does not prove that no task is owned.",
+            }
+        )
     elif observation.get("truncated") is True:
-        projection["source_warnings"].append({"kind": "coordination_truncated",
-            "message": "Ownership display is limited to 100 entries; diagnostics are shown first. Read the full task/lease state before acting."})
+        source_warnings.append(
+            {
+                "kind": "coordination_truncated",
+                "message": "Ownership display is limited to 100 entries; diagnostics are shown first. Read the full task/lease state before acting.",
+            }
+        )
     return {key: value for key, value in projection.items() if value is not None}
