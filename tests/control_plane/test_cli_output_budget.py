@@ -2121,9 +2121,90 @@ def test_brief_prunes_duplicate_non_command_metadata_and_smoke_isolates_host(tmp
     with isolated_probe_host_env(empty_home):
         assert os.environ["HOME"] == str(empty_home)
         assert os.environ["USERPROFILE"] == str(empty_home)
-        assert "CODEX_HOME" not in os.environ
-        assert "ANTIGRAVITY_CONVERSATION_ID" not in os.environ
-        assert "LOOPX_CHAT_CODEX_MODEL_PROVIDER" not in os.environ
+        assert os.environ["XDG_CONFIG_HOME"] == str(empty_home / ".config")
+        assert os.environ["APPDATA"] == str(empty_home / "AppData" / "Roaming")
+        for cleared in (
+            "CODEX_HOME",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "LOOPX_CHAT_CODEX_MODEL_PROVIDER",
+            "GH_CONFIG_DIR",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "LOOPX_OFFLINE",
+            "LOOPX_AUTO_CAPABILITY_PROBE",
+        ):
+            assert cleared not in os.environ
+
+
+@pytest.mark.parametrize(
+    ("auth_kind", "env_key"),
+    [
+        ("token", "GH_TOKEN"),
+        ("token", "GITHUB_TOKEN"),
+        ("token", "GITHUB_ENTERPRISE_TOKEN"),
+        ("token", "GH_ENTERPRISE_TOKEN"),
+        ("hosts_dir", "GH_CONFIG_DIR"),
+        ("xdg_hosts", "XDG_CONFIG_HOME"),
+        ("appdata_hosts", "APPDATA"),
+    ],
+)
+def test_isolated_probe_host_env_ignores_ambient_github_auth_and_keeps_brief_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_kind: str,
+    env_key: str,
+) -> None:
+    from loopx.control_plane.agents.capability_probe import probe_host_runtime_capabilities
+    from tests.control_plane.cli_output_fixture import isolated_probe_host_env
+
+    clean_home = tmp_path / "clean-home"
+    dirty_home = tmp_path / "dirty-home"
+    with isolated_probe_host_env(clean_home):
+        baseline_caps = probe_host_runtime_capabilities()
+        assert baseline_caps == []
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+
+    for cleared in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "APPDATA",
+    ):
+        monkeypatch.delenv(cleared, raising=False)
+    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    monkeypatch.delenv("LOOPX_OFFLINE", raising=False)
+    monkeypatch.setenv("LOOPX_AUTO_CAPABILITY_PROBE", "1")
+
+    if auth_kind == "token":
+        expected_value = "ghp_synthetic_probe_token_fixture"
+    else:
+        auth_root = tmp_path / "synthetic-auth" / env_key.lower()
+        if auth_kind == "hosts_dir":
+            hosts_path = auth_root / "hosts.yml"
+        elif auth_kind == "xdg_hosts":
+            hosts_path = auth_root / "gh" / "hosts.yml"
+        else:
+            hosts_path = auth_root / "GitHub CLI" / "hosts.yml"
+        hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        hosts_path.write_text("github.com:\n  user: synthetic-fixture\n", encoding="utf-8")
+        expected_value = str(auth_root)
+    monkeypatch.setenv(env_key, expected_value)
+
+    with isolated_probe_host_env(dirty_home):
+        assert env_key not in os.environ or os.environ[env_key] in {
+            str(dirty_home / ".config"),
+            str(dirty_home / "AppData" / "Roaming"),
+        }
+        assert probe_host_runtime_capabilities() == baseline_caps
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+
+    assert os.environ.get(env_key) == expected_value
 
 
 @pytest.mark.parametrize("nested_temp", [False, True])
