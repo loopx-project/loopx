@@ -1109,7 +1109,7 @@ def build_attention_queue(
         agent_lane_id=agent_lane_id,
     )
     if runtime_root is not None:
-        for item in queue.get("items") or []:
+        for item in (raw_items if isinstance((raw_items := queue.get("items")), list) else ()):
             if not isinstance(item, dict):
                 continue
             goal_id = str(item.get("goal_id") or "").strip()
