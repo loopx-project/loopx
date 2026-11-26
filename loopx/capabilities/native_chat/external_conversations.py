@@ -43,6 +43,7 @@ from .file_discovery import (
     QuotaBacklogObservationCache,
     _DeferredBacklogRequest,
     _RecoveryDiscoveryReads,
+    _iso_datetime,
     _preparation_image_identity,
     _project_source_request_digest,
     _project_user_message_hint,
@@ -242,7 +243,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 "failure_notice_receipt_unknown": bool(failure_notice_receipt_unknown),
                 "later_source_input_present": any(item.get("binding_id") == row["binding_id"]
                     and item.get("source") == row["source"] and item.get("command") is None
-                    and datetime.fromisoformat(item["created_at"]) > datetime.fromisoformat(row["created_at"])
+                    and _iso_datetime(item["created_at"]) > datetime.fromisoformat(row["created_at"])
                     for item in read_source_controls()) if turn.get("error_code") == "antigravity_step_error" else None,
                 "native_input": anchors[0] if len(anchors) == 1 else None,
                 **({"retained_result_review": retained_review} if retained_review is not None else {}),
