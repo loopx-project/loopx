@@ -927,3 +927,156 @@ def test_disabled_context_delivery_preserves_full_inline_outcomes_without_captur
     assert detail_after_reqs["revision"] == admitted_rev + 1
     assert "hreq-post-off-admission" in [r["id"] for r in detail_after_reqs["outcomes"][1]["requirements"]]
     assert [r["id"] for r in off_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unscoped_prereqs_recovery_and_first_read_keep_file_and_sqlite_lean_with_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    env = _seed_mature_goal(tmp_path, monkeypatch, provider=provider, outcome_count=15)
+    cli = env["cli"]
+    goal_id = env["goal_id"]
+    agent_id = env["agent_id"]
+
+    # 1. Pre-claim should-run without --codex-app keeps planning_horizon lean via progressive context
+    #    capture while preserving verbatim historical requirement recovery from context_details.
+    _, pre_view = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id)
+    pre_required = (
+        json.loads(Path(read_context_read_reference(pre_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in pre_view
+        else pre_view
+    )
+    ph_outcomes = pre_required["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(ph_outcomes) == 15
+    by_id = {row["id"]: row for row in ph_outcomes}
+    assert "requirements" in by_id["outcome-current"]
+    assert "requirements" not in by_id["outcome-hist-5"]
+    assert "sources" not in by_id["outcome-hist-5"]
+    hist_ptr = by_id["outcome-hist-5"]["supporting_material_pointer"]
+    unread_ptrs = set(pre_required["context_details"]["unread_context_index"]["pointers"])
+    assert f"{hist_ptr}/requirements" in unread_ptrs
+    pre_read_cmd = pre_required["context_details"]["command_template"].replace(
+        "'<pointer>'", shlex.quote(f"{hist_ptr}/requirements"),
+    )
+    pre_read = subprocess.run(
+        shlex.split(pre_read_cmd),
+        cwd=env["project"], capture_output=True, text=True,
+    )
+    assert pre_read.returncode == 0, pre_read.stderr
+    pre_selected = json.loads(json.loads(pre_read.stdout)["content"])["selections"]
+    assert len(pre_selected) == 1 and len(pre_selected[0]["value"]) == 8
+
+    # 2. Claim todo_current: first_read_command skips redundant summary_only row pointers when container
+    #    capture_read_command + cold_read_command exist, while decision.json and required-context.json keep them.
+    _claim_current_todo(env)
+    native_claimed = tmp_path / "native_claimed"
+    native_claimed.mkdir(mode=0o700)
+    captures_claimed = tmp_path / "captures_claimed"
+    captures_claimed.mkdir(mode=0o700)
+    captures_claimed_resolved = captures_claimed.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"claimed-{provider}")
+    codex_context_hook(
+        str(native_claimed),
+        {"hook_event_name": "SessionStart", "session_id": f"claimed-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, claimed_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-claimed-1",
+        "--codex-context-dir", str(native_claimed), "--decision-output-root", str(captures_claimed_resolved),
+    )
+    claimed_required = json.loads(Path(read_context_read_reference(claimed_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+    assert claimed_required["effective_action"] == "normal_run"
+    first_chunks: list[str] = []
+    page_count = 0
+    next_offset: int | None = None
+    while True:
+        page_cmd = shlex.split(claimed_view["first_read_command"])
+        if next_offset is not None:
+            page_cmd.extend(["--offset", str(next_offset)])
+        first_read = subprocess.run(page_cmd, cwd=env["project"], capture_output=True, text=True)
+        assert first_read.returncode == 0, first_read.stderr
+        page = json.loads(first_read.stdout)
+        first_chunks.append(page["content"])
+        page_count += 1
+        if page["eof"]:
+            break
+        next_offset = page["next_offset"]
+    assert page_count <= 4
+    first_content = json.loads("".join(first_chunks))
+    first_ptrs = [row["pointer"] for row in first_content["selections"]]
+    ga_idx, ga_src = next(
+        (idx, src)
+        for idx, src in enumerate(claimed_required["interaction_contract"]["agent_channel"]["work_context"]["sources"])
+        if src.get("source") == "goal_acceptance"
+    )
+    req_prefix = f"/interaction_contract/agent_channel/work_context/sources/{ga_idx}/content/goal_acceptance_contract/outcome_requirements"
+    assert f"{req_prefix}/capture_read_command" in first_ptrs
+    assert f"{req_prefix}/cold_read_command" in first_ptrs
+    assert f"{req_prefix}/outcomes/0" in first_ptrs
+    assert not any(p.startswith(f"{req_prefix}/outcomes/1") or p.startswith(f"{req_prefix}/outcomes/14") for p in first_ptrs)
+    assert ga_src["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][1]["capture_read_command"]
+
+    # 3. Unsettled recovery (no --todo-id and --todo-id + --include-detail agent-todos) scopes acceptance
+    #    while preserving full deferred admission outcomes.
+    native_rec1 = tmp_path / "native_rec1"
+    native_rec1.mkdir(mode=0o700)
+    captures_rec1 = tmp_path / "captures_rec1"
+    captures_rec1.mkdir(mode=0o700)
+    captures_rec1_resolved = captures_rec1.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"rec1-{provider}")
+    codex_context_hook(
+        str(native_rec1),
+        {"hook_event_name": "SessionStart", "session_id": f"rec1-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, rec_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id,
+        "--turn-instance-id", "turn-rec-1",
+        "--codex-context-dir", str(native_rec1), "--decision-output-root", str(captures_rec1_resolved),
+    )
+    rec_decision = json.loads(next(captures_rec1_resolved.rglob("decision.json")).read_text())
+    assert rec_decision["effective_action"] == "unsettled_host_turn_recovery"
+    rec_ph_reqs = rec_decision["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]
+    assert rec_ph_reqs["projection_mode"] == "turn_scoped_v0"
+    assert rec_ph_reqs["full_outcome_count"] == 15
+    assert rec_ph_reqs["inline_outcome_count"] == 1
+    assert rec_ph_reqs["compacted_outcome_count"] == 14
+    assert rec_ph_reqs["outcomes"][0]["id"] == "outcome-current"
+    assert len(rec_decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["outcomes"]) == 15
+    rec_required = (
+        json.loads(Path(read_context_read_reference(rec_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in rec_view
+        else rec_view
+    )
+    assert rec_required.get("blocked_priority_fallback") is None or (
+        rec_required.get("heartbeat_recommendation", {}).get("blocked_priority_fallback")
+        == {"context_ref": "/blocked_priority_fallback"}
+    )
+
+    native_rec2 = tmp_path / "native_rec2"
+    native_rec2.mkdir(mode=0o700)
+    captures_rec2 = tmp_path / "captures_rec2"
+    captures_rec2.mkdir(mode=0o700)
+    captures_rec2_resolved = captures_rec2.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"rec2-{provider}")
+    codex_context_hook(
+        str(native_rec2),
+        {"hook_event_name": "SessionStart", "session_id": f"rec2-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, rec_detail_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-rec-2", "--include-detail", "agent-todos",
+        "--codex-context-dir", str(native_rec2), "--decision-output-root", str(captures_rec2_resolved),
+    )
+    rec_detail_decision = json.loads(next(captures_rec2_resolved.rglob("decision.json")).read_text())
+    assert rec_detail_decision["effective_action"] == "unsettled_host_turn_recovery"
+    rec_summary_reqs = rec_detail_decision["agent_todo_summary"]["goal_acceptance_contract"]["outcome_requirements"]
+    assert rec_summary_reqs["projection_mode"] == "turn_scoped_v0"
+    assert rec_summary_reqs["full_outcome_count"] == 15
+    assert rec_summary_reqs["inline_outcome_count"] == 1
+    assert rec_summary_reqs["compacted_outcome_count"] == 14
+    assert len(rec_detail_decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["outcomes"]) == 15

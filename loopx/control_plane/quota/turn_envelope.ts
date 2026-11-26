@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from "node:util";
 import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_preparation.ts";
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
@@ -952,6 +953,17 @@ function checkedContextPresentationSource(request: JsonObject): JsonObject {
   return context;
 }
 
+function legacyRecommendationFallbackReferences(payload: JsonObject): JsonObject[] {
+  const rootFallback = jsonObject(payload.blocked_priority_fallback);
+  const recFallback = jsonObject(object(payload.heartbeat_recommendation).blocked_priority_fallback);
+  if (!rootFallback || !recFallback || !isDeepStrictEqual(rootFallback, recFallback)) return [];
+  return [{
+    path: ["heartbeat_recommendation", "blocked_priority_fallback"],
+    from: ["blocked_priority_fallback"],
+    value: {context_ref: "/blocked_priority_fallback"},
+  }];
+}
+
 /** The unsigned root is used for path selection; edits and recovery still
  * address the unchanged, signed original capture. */
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
@@ -961,8 +973,11 @@ function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
-  return nativeReplanPresentation(request) ??
-    progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScopes(source));
+  return nativeReplanPresentation(request) ?? progressiveContextPlan(
+    {payload: source, surface: "quota_packet"},
+    progressivePreparationScopes(source),
+    legacyRecommendationFallbackReferences(source),
+  );
 }
 
 function completeWorkIdentity(decision: JsonObject): JsonObject {
@@ -1524,7 +1539,11 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 
 function contextPresentationPlan(request: JsonObject): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
-  return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScopes(context));
+  return progressiveContextPlan(
+    {payload: context, surface: request.surface},
+    progressivePreparationScopes(context),
+    legacyRecommendationFallbackReferences(context),
+  );
 }
 
 const resolveViewWriteback = (

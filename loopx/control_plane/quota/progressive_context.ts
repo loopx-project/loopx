@@ -14,7 +14,7 @@ import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {capturedContextSelection} from "./context_selection.ts";
-import {SCOPED_OUTCOME_PROJECTION_MODE} from "./turn_envelope_scoping.ts";
+import {SCOPED_OUTCOME_PROJECTION_MODE, SCOPED_OUTCOME_THRESHOLD} from "./turn_envelope_scoping.ts";
 import {createHash} from "node:crypto";
 
 
@@ -32,6 +32,8 @@ const MAX_INLINE_WORK_OPENING_BYTES = 7000;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const COMPLETE_REQUIREMENTS_CLAUSE = "This view retains complete requirements and current review/check states. ";
+const PROGRESSIVE_COMPLETE_REQUIREMENTS_CLAUSE =
+  "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. ";
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -517,7 +519,8 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
-    scopes: readonly PreparationScopeDetail[] = []): JsonObject {
+    scopes: readonly PreparationScopeDetail[] = [],
+    extraReferences: readonly JsonObject[] = []): JsonObject {
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -526,12 +529,25 @@ export function progressiveContextPlan(request: JsonObject,
   if (request.surface !== "quota_packet" || payload.ok !== true || payload.schema_version !== undefined
       || payload.contract_binding !== undefined || payload.context_details !== undefined
       || payload.context_reference_instruction !== undefined) return unchanged;
-  const references = quotaSummaryReferences(payload);
-  const carriers: Path[] = [
-    ["planning_horizon", "core_goal", "acceptance_contract"],
-    ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"],
-    ["agent_todo_summary", "goal_acceptance_contract"],
+  const references = [...quotaSummaryReferences(payload), ...extraReferences];
+  const carriers: {path: Path; suggestedIds?: Set<string>}[] = [
+    {path: ["planning_horizon", "core_goal", "acceptance_contract"]},
+    {path: ["agent_todo_summary", "goal_acceptance_contract"]},
+    {path: ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"]},
   ];
+  const selectedTodo = jsonObject(payload.selected_todo);
+  const relevantTodoIds = new Set<string>(
+    [selectedTodo?.todo_id, selectedTodo?.unblocks_todo_id,
+      ...(Array.isArray(selectedTodo?.dependency_todo_ids) ? selectedTodo.dependency_todo_ids : []),
+      ...(Array.isArray(selectedTodo?.successor_todo_ids) ? selectedTodo.successor_todo_ids : [])]
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  const gapOutcomeIds = new Set<string>(
+    (Array.isArray(jsonObject(payload.goal_frontier_projection)?.acceptance_gaps)
+      ? jsonObject(payload.goal_frontier_projection)!.acceptance_gaps as unknown[] : [])
+      .map(gap => jsonObject(gap)?.outcome_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
   const agent = ["interaction_contract", "agent_channel"];
   const sourcePath = [...agent, "work_context", "sources"];
   const sources = at(payload, sourcePath);
@@ -539,12 +555,23 @@ export function progressiveContextPlan(request: JsonObject,
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (source?.source === "goal_acceptance" && content?.ok !== false && content?.read_complete !== false
         && (content?.status === undefined || content.status === "loaded")
-        && (source.reason === undefined || typeof source.reason === "string" && source.reason.includes(FULL_OUTCOME_READ_GUIDANCE)))
-      carriers.push([...sourcePath, i, "content", "goal_acceptance_contract"]);
+        && (source.reason === undefined || typeof source.reason === "string" && source.reason.includes(FULL_OUTCOME_READ_GUIDANCE))) {
+      const outcomeCtx = jsonObject(content?.outcome_context);
+      const suggested = Array.isArray(outcomeCtx?.suggested_outcome_ids)
+        ? new Set(outcomeCtx.suggested_outcome_ids.filter((id): id is string => typeof id === "string" && id.length > 0))
+        : undefined;
+      carriers.push({path: [...sourcePath, i, "content", "goal_acceptance_contract"], suggestedIds: suggested});
+    }
   });
-  for (const carrier of carriers) {
+  let deferredHistoricalRequirements = false;
+  for (const {path: carrier, suggestedIds} of carriers) {
     const path = [...carrier, "outcome_requirements"], declaration = jsonObject(at(payload, path));
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
+    const isReplanObligationCarrier = carrier[0] === "autonomous_replan_obligation"
+      && payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED;
+    const deferLargeHistoricalOutcomes = !isReplanObligationCarrier
+      && declaration.outcomes.length > SCOPED_OUTCOME_THRESHOLD
+      && declaration.projection_mode !== SCOPED_OUTCOME_PROJECTION_MODE;
     declaration.outcomes.forEach((value, i) => {
       const row = jsonObject(value);
       if (!row || !known(row, ["id", "owner_agent_id", "declaration_owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
@@ -571,11 +598,28 @@ export function progressiveContextPlan(request: JsonObject,
       }
       const parent = [...path, "outcomes", i];
       const index_key = "supporting_material_pointer";
+      const isActiveOutcome = suggestedIds?.has(row.id) === true
+        || gapOutcomeIds.has(row.id)
+        || (Array.isArray(row.todo_ids) && row.todo_ids.some(id => typeof id === "string" && relevantTodoIds.has(id)));
+      if (deferLargeHistoricalOutcomes && !isActiveOutcome) {
+        if (row.sources.length) deferred.push({path: [...parent, "sources"], parent, index_key});
+        if (row.requirements.length) {
+          deferred.push({path: [...parent, "requirements"], parent, index_key});
+          deferredHistoricalRequirements = true;
+        }
+        return;
+      }
       if (row.sources.length) deferred.push({path: [...parent, "sources"], parent, index_key});
       for (const j of reviews) for (const field of ["note", "evidence_refs"])
         deferred.push({path: [...parent, "requirements", j, "agent_review", field], parent, index_key});
     });
   }
+  const progressiveOutcomeGuidance = deferredHistoricalRequirements
+    ? PROGRESSIVE_OUTCOME_READ_GUIDANCE.replace(
+        PROGRESSIVE_COMPLETE_REQUIREMENTS_CLAUSE,
+        "Read the complete acceptance basis, work links and current review/check states. Active/suggested outcomes retain complete requirements here; historical non-selected outcome requirements remain in context_details (read via supporting_material_pointer before dependent work). ",
+      )
+    : PROGRESSIVE_OUTCOME_READ_GUIDANCE;
   // Replace only the exact source-owned obligation. Other merged obligations,
   // objective adoption, unknown provider prose and pending reads remain intact.
   for (const listPath of deferred.length ? [sourcePath, [...agent, "required_reads"]] : []) {
@@ -586,7 +630,7 @@ export function progressiveContextPlan(request: JsonObject,
       if (row?.source === "goal_acceptance" && typeof row.reason === "string"
           && row.reason.includes(FULL_OUTCOME_READ_GUIDANCE))
         instructions.push({path: [...listPath, i, "reason"], value:
-          row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
+          row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, progressiveOutcomeGuidance)});
     });
   }
   const deferredDetails = jsonObject(at(payload, ["deferred_settlement_details"]));
@@ -687,6 +731,12 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       });
       const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
       const sources = at(context, sourcePath);
+      const hasDeferredOutcomeRequirements = deferred.some(
+        edit => Array.isArray(edit.path) && edit.path.at(-1) === "requirements",
+      );
+      const requirementsClause = hasDeferredOutcomeRequirements
+        ? "Active/suggested outcomes retain complete requirements and current review/check states here; historical non-selected outcome requirements are supporting material in this same capture (append /requirements alongside supporting_material_pointer or use unread_context_index.pointers). "
+        : COMPLETE_REQUIREMENTS_CLAUSE;
       required.context_details = {path: details.path, sha256: details.sha256,
         ...(typeof details.command_template === "string" ? {command_template: details.command_template} : {}),
         source_path: details.path,
@@ -702,7 +752,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         }) : [],
       },
       instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
-        + COMPLETE_REQUIREMENTS_CLAUSE
+        + requirementsClause
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "Use the outcome's supporting_material_pointer when shown, or remove /id from its selected JSON pointer. "
@@ -1274,6 +1324,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       }
     }
     const outcomesPath = [...requirementsPath, "outcomes"];
+    const hasContainerOutcomeReadCommands = requirements?.projection_mode === SCOPED_OUTCOME_PROJECTION_MODE
+      && typeof requirements.capture_read_command === "string"
+      && typeof requirements.cold_read_command === "string"
+      && typeof requirements.cold_read_instruction === "string"
+      && Array.isArray(outcomes) && outcomes.length > SCOPED_OUTCOME_THRESHOLD;
     const canDeferSuggested = openingBudget !== undefined && readyIdentity !== undefined && expanded.size > 0
       && inlineSupportingDetails && details?.outcome_support_from_id === true
       && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
@@ -1292,6 +1347,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       const row = object(_outcome), outcomeId = row?.id;
       const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
       if (suggested && !deferSuggested) { include(...outcome); return; }
+      if (row?.summary_only === true && hasContainerOutcomeReadCommands) return;
       include(...outcome, "id");
       if (row?.summary_only === true) {
         for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "capture_read_command", "read_modes", "cold_read_command"]) {

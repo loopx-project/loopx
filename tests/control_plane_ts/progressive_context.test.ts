@@ -3,6 +3,7 @@ import test from "node:test";
 import {visionAuthoringContract} from "../../loopx/control_plane/goals/vision_checkpoint.ts";
 import {contextReadSectionDigests, initialContextReadPointers,
   prepareProgressiveContextDelivery, progressiveContextPlan} from "../../loopx/control_plane/quota/progressive_context.ts";
+import {evaluateTurnEnvelope} from "../../loopx/control_plane/quota/turn_envelope.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE} from "../../loopx/control_plane/work_items/interaction_contract.ts";
 
 const outcome = {id: "o", objective: "Keep all requirements.", revision: 1, owner_agent_id: "a", todo_ids: ["t"],
@@ -337,4 +338,233 @@ test("bounded ready opening discloses omitted suggested outcome parents before d
   assert.ok(largerPointers.includes(prefix + "/0") && largerPointers.includes(prefix + "/1"));
   assert.equal(largerPlan.deferred_suggested_outcomes, undefined);
   assert.equal(largerPlan.opening_context_instruction, undefined);
+});
+
+test("progressiveContextPlan defers large unscoped historical requirements and deduplicates blocked_priority_fallback", () => {
+  const makeOutcome = (id: string, todoId: string) => ({
+    id, objective: `Deliver ${id}.`, revision: 2, owner_agent_id: "a1", todo_ids: [todoId],
+    sources: [{ref: `${id}:doc`, summary: "Supporting evidence summary. ".repeat(25)}],
+    requirements: [{
+      id: `${id}-req`, description: `Acceptance criterion for ${id}. `.repeat(20), status: "unverified", planning_satisfied: false,
+      agent_review: {
+        id: `${id}-req`, conclusion: "met", note: "Detailed agent review note. ".repeat(15), evidence_refs: [`ev:${id}`],
+        basis_current: true, independently_verified: false,
+      },
+    }],
+  });
+  const outcomes = [
+    makeOutcome("o-cur", "todo-cur"),
+    makeOutcome("o-gap", "todo-gap"),
+    makeOutcome("o-sug", "todo-sug"),
+    ...Array.from({length: 5}, (_, idx) => makeOutcome(`o-hist-${idx}`, `todo-hist-${idx}`)),
+  ];
+  const fallback = {reason: "blocked by open prerequisite", priority_todo_id: "todo-cur", guidance: "Inspect dependency first. ".repeat(20)};
+  const payload = {
+    ok: true, goal_id: "goal-unscoped", agent_id: "a1",
+    selected_todo: {todo_id: "todo-cur"},
+    goal_frontier_projection: {acceptance_gaps: [{outcome_id: "o-gap"}]},
+    blocked_priority_fallback: fallback,
+    heartbeat_recommendation: {action: "retry", blocked_priority_fallback: structuredClone(fallback)},
+    planning_horizon: {core_goal: {acceptance_contract: {outcome_requirements: {
+      schema_version: "loopx_goal_outcomes_v0", outcomes: structuredClone(outcomes),
+    }}}},
+    interaction_contract: {
+      schema_version: "loopx_interaction_contract_v0",
+      agent_channel: {
+        required_reads: [{source: "goal_acceptance", reason: "Check acceptance. " + FULL_OUTCOME_READ_GUIDANCE}],
+        work_context: {sources: [{
+          source: "goal_acceptance",
+          reason: "Adopt goal objective. " + FULL_OUTCOME_READ_GUIDANCE,
+          content: {
+            status: "loaded", ok: true, read_complete: true,
+            outcome_context: {suggested_outcome_ids: ["o-sug"]},
+            goal_acceptance_contract: {outcome_requirements: {
+              schema_version: "loopx_goal_outcomes_v0", outcomes: structuredClone(outcomes),
+            }},
+          },
+        }]},
+      },
+    },
+  };
+
+  const plan = progressiveContextPlan({payload, surface: "quota_packet"}) as {
+    deferred: {path: (string | number)[]; parent: (string | number)[]; index_key: string}[];
+    instructions: {path: (string | number)[]; value: unknown}[];
+    references?: {path: (string | number)[]; from: (string | number)[]; value: unknown}[];
+  };
+
+  const wcDeferredPaths = plan.deferred
+    .filter(item => item.path[0] === "interaction_contract")
+    .map(item => item.path.slice(-2).join("/"));
+  assert.ok(wcDeferredPaths.includes("3/requirements"), "historical non-active outcomes defer requirements");
+  assert.ok(wcDeferredPaths.includes("7/requirements"));
+  assert.ok(!wcDeferredPaths.includes("0/requirements"), "selected_todo outcome keeps requirements inline");
+  assert.ok(!wcDeferredPaths.includes("1/requirements"), "gap outcome keeps requirements inline");
+  assert.ok(!wcDeferredPaths.includes("2/requirements"), "suggested outcome keeps requirements inline");
+  const phDeferredPaths = plan.deferred
+    .filter(item => item.path[0] === "planning_horizon")
+    .map(item => item.path.slice(-2).join("/"));
+  assert.ok(!phDeferredPaths.includes("0/requirements"));
+  assert.ok(!phDeferredPaths.includes("1/requirements"));
+  assert.ok(phDeferredPaths.includes("2/requirements") && phDeferredPaths.includes("7/requirements"));
+
+  const reasonUpdate = plan.instructions.find(inst => inst.path.at(-1) === "reason");
+  assert.ok(typeof reasonUpdate?.value === "string");
+  assert.ok(!reasonUpdate.value.includes("cumulative outcome requirements"));
+  assert.ok(reasonUpdate.value.includes("Active/suggested outcomes retain complete requirements here"));
+  assert.ok(reasonUpdate.value.includes("historical non-selected outcome requirements remain in context_details"));
+
+  // Autonomous replan obligation carriers retain full requirements inline for all outcomes.
+  const replanPlan = progressiveContextPlan({
+    payload: {
+      ok: true,
+      effective_action: "autonomous_replan_required",
+      autonomous_replan_obligation: {replan_context: {core_goal: {acceptance_contract: {
+        outcome_requirements: {schema_version: "loopx_goal_outcomes_v0", outcomes: structuredClone(outcomes)},
+      }}}},
+    },
+    surface: "quota_packet",
+  }) as {deferred: {path: (string | number)[]}[]};
+  assert.equal(replanPlan.deferred.some(item => item.path.at(-1) === "requirements"), false);
+
+  // Full evaluateTurnEnvelope context_delivery applies blocked_priority_fallback context_ref when equal,
+  // leaves unequal fallbacks intact, and moves historical requirements cleanly.
+  const {changes} = evaluateTurnEnvelope({
+    operation: "context_delivery",
+    scope: {goal_id: "goal-unscoped", agent_id: "a1", session_id: "s1", context_epoch: "e1"},
+    capture_id: "cap-unscoped",
+    surface: "quota_packet",
+    context: payload,
+    native_projection: {
+      path: "projection.json", sha256: "b".repeat(64),
+      command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "b".repeat(64) + " --select '<pointer>'",
+    },
+  }) as {changes: {path: (string | number)[]; from?: (string | number)[]; value?: unknown; remove?: true}[]};
+  assert.ok(changes.some(edit => edit.path.join("/") === "context/heartbeat_recommendation/blocked_priority_fallback"
+    && (edit.value as {context_ref?: string} | undefined)?.context_ref === "/blocked_priority_fallback"));
+  assert.ok(changes.some(edit =>
+    edit.path.join("/") === "context/planning_horizon/core_goal/acceptance_contract/outcome_requirements/outcomes/3/requirements"
+    && edit.remove === true));
+
+  const {changes: unequalChanges} = evaluateTurnEnvelope({
+    operation: "context_delivery",
+    scope: {goal_id: "goal-unscoped", agent_id: "a1", session_id: "s1", context_epoch: "e1"},
+    capture_id: "cap-unscoped",
+    surface: "quota_packet",
+    context: {
+      ...payload,
+      heartbeat_recommendation: {action: "retry", blocked_priority_fallback: {...fallback, priority_todo_id: "other"}},
+    },
+    native_projection: {
+      path: "projection.json", sha256: "b".repeat(64),
+      command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "b".repeat(64) + " --select '<pointer>'",
+    },
+  }) as {changes: {path: (string | number)[]}[]};
+  assert.equal(unequalChanges.some(edit =>
+    edit.path.join("/") === "context/heartbeat_recommendation/blocked_priority_fallback"), false);
+});
+
+test("initial read omits redundant summary_only outcome rows when container read commands exist", () => {
+  const identity = {schema_version: "quota_settlement_identity_v0", effect_id: "eff-1",
+    goal_id: "goal-scoped", agent_id: "agent-1", todo_id: "todo-1", turn_instance_id: "turn-1"};
+  const summaryRow = (idx: number) => ({
+    id: `out-${idx}`,
+    owner_agent_id: "peer-1",
+    basis_digest: "sha256:" + "c".repeat(64),
+    revision: 2,
+    todo_count: 1,
+    summary_only: true,
+    capture_read_command: `loopx quota context-read --select /deferred_settlement_details/goal_acceptance/outcome_requirements/outcomes/${idx}`,
+    cold_read_command: "loopx goal-acceptance inspect --goal-id goal-scoped",
+    read_modes: "capture_read_command=immutable admission baseline; cold_read_command=live workspace inspect",
+  });
+  const scopedContext = {
+    ok: true, goal_id: "goal-scoped", agent_id: "agent-1", agent_identity: {agent_id: "agent-1"},
+    should_run: true, effective_action: "normal_run", normal_delivery_allowed: true,
+    selected_todo: {todo_id: "todo-1"}, heartbeat_receipt: {settlement_identity: identity},
+    interaction_contract: {
+      schema_version: "loopx_interaction_contract_v0",
+      agent_channel: {delivery_allowed: true, work_context: {sources: [{
+        source: "goal_acceptance",
+        reason: FULL_OUTCOME_READ_GUIDANCE,
+        content: {
+          status: "loaded", ok: true, read_complete: true, decision_read_from_provider: true,
+          legacy_fallback_used: false, provider_revision: "rev-scoped",
+          goal_acceptance_contract: {outcome_requirements: {
+            schema_version: "loopx_goal_outcomes_v0", current_lifetime: true, revision: 9, outcome_revision: 9,
+            projection_mode: "turn_scoped_v0", full_outcome_count: 9, inline_outcome_count: 1, compacted_outcome_count: 8,
+            full_outcomes_sha256: "sha256:" + "d".repeat(64),
+            capture_read_command: "loopx quota context-read --select /deferred_settlement_details/goal_acceptance",
+            cold_read_command: "loopx goal-acceptance inspect --goal-id goal-scoped",
+            cold_read_instruction: "Use --include-detail goal_acceptance or cold_read_command.",
+            outcomes: [
+              {
+                id: "out-0", objective: "Active objective.", revision: 9, owner_agent_id: "agent-1", todo_ids: ["todo-1"],
+                sources: [{ref: "spec:0", summary: "Active provenance"}],
+                requirements: [{id: "req-0", description: "Active requirement.", status: "unverified", planning_satisfied: false}],
+              },
+              ...Array.from({length: 8}, (_, i) => summaryRow(i + 1)),
+            ],
+          }},
+          outcome_context: {
+            schema_version: "outcome_context_navigation_v1", goal_id: "goal-scoped", agent_id: "agent-1",
+            todo_id: "todo-1", outcome_revision: 9, provider_revision: "rev-scoped",
+            coverage_complete: true, suggested_outcome_ids: ["out-0"],
+          },
+        },
+      }]}},
+      cli_channel: {
+        execution_preparation: {state: "ready", todo_id: "todo-1"},
+        settlement_plan: {schema_version: "quota_settlement_plan_v2", identity, ordered_steps: []},
+      },
+    },
+  };
+  const prefix = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements/outcomes";
+  const request = {
+    scope: {goal_id: "goal-scoped", agent_id: "agent-1", session_id: "sess-1", context_epoch: "ep-1"},
+    capture_id: "cap-scoped", surface: "quota_packet",
+    context: scopedContext, include_initial_read_plan: true,
+    native_projection: {
+      path: "projection.json", sha256: "e".repeat(64), initial_read_output_bytes: 12000,
+      command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "e".repeat(64) + " --select '<pointer>'",
+    },
+  };
+  const {changes} = prepareProgressiveContextDelivery(request, [], ["ok", "goal_id"]) as {
+    changes: {path: (string | number)[]; from?: (string | number)[]; value?: unknown; remove?: true}[];
+  };
+  const applied = structuredClone(request) as Record<string, unknown>;
+  const get = (root: unknown, path: (string | number)[]) =>
+    path.reduce<unknown>((node, key) => (node as Record<string | number, unknown>)[key], root);
+  for (const edit of changes) {
+    const parent = get(applied, edit.path.slice(0, -1)) as Record<string | number, unknown>;
+    const key = edit.path.at(-1)!;
+    if (edit.remove) delete parent[key];
+    else parent[key] = structuredClone(edit.from ? get(request, edit.from) : edit.value);
+  }
+  const initialSelections = ((applied.initial_read_plan as {plan: {selections: {pointer: string}[]}}).plan.selections)
+    .map(sel => sel.pointer);
+  const reqBase = "/interaction_contract/agent_channel/work_context/sources/0/content/goal_acceptance_contract/outcome_requirements";
+  assert.ok(initialSelections.includes(reqBase + "/capture_read_command"));
+  assert.ok(initialSelections.includes(reqBase + "/cold_read_command"));
+  assert.ok(initialSelections.includes(prefix + "/0"));
+  assert.equal(initialSelections.some(p => p.startsWith(prefix + "/1")), false);
+  assert.equal(initialSelections.some(p => p.startsWith(prefix + "/8")), false);
+
+  // Delivered required-context projection still preserves per-row #9395 commands and read_modes verbatim.
+  const deliveredSummaryRow = (get(applied, ["context", "interaction_contract", "agent_channel", "work_context", "sources", 0,
+    "content", "goal_acceptance_contract", "outcome_requirements", "outcomes", 1]) as Record<string, unknown>);
+  assert.equal(deliveredSummaryRow.summary_only, true);
+  assert.ok(typeof deliveredSummaryRow.capture_read_command === "string");
+  assert.ok(typeof deliveredSummaryRow.cold_read_command === "string");
+  assert.ok(typeof deliveredSummaryRow.read_modes === "string");
+
+  // Boundary <= 6 outcomes retains summary_only rows in initial read selections.
+  const smallContext = structuredClone(scopedContext);
+  const smallReqs = (smallContext.interaction_contract.agent_channel.work_context.sources[0].content
+    .goal_acceptance_contract.outcome_requirements as {outcomes: unknown[]; full_outcome_count: number; compacted_outcome_count: number});
+  smallReqs.outcomes = smallReqs.outcomes.slice(0, 6);
+  smallReqs.full_outcome_count = 6;
+  smallReqs.compacted_outcome_count = 5;
+  const smallPointers = initialContextReadPointers(smallContext, []);
+  assert.ok(smallPointers.includes(prefix + "/1/capture_read_command"));
 });
