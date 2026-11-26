@@ -172,10 +172,13 @@ export async function observeFencedExecution(root: string, identity: ReturnType<
   const writerMatches = todo.claimed_by === identity.agent_id && lease.owner === identity.agent_id
     && todo.done !== true && leaseRepositoryRejection(todo, lease) === null
     && canonicalLeaseTodoFact(todo)?.excluded_agents.includes(identity.agent_id) === false;
-  const active = writerMatches && leaseIsActive(lease, now);
+  // Same-owner recovery can re-enter the original guard. That path records a
+  // fenced takeover before any new validation/writeback; this observation alone
+  // never admits work or accepts a result. Competing ownership still holds.
+  if (writerMatches) return null;
   return {original_prepared_epoch: prepared.prepared_lease_epoch, current_lease_epoch: lease.lease_epoch,
     current_lease_version: lease.version, current_owner: lease.owner,
-    current_control_writer_active: active, can_reclaim_control_writer: writerMatches && !active};
+    current_control_writer_active: false, can_reclaim_control_writer: false};
 }
 
 function optionalAssignedReplan(receipt: JsonObject): boolean {
