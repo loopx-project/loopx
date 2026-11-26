@@ -566,11 +566,169 @@ def _migrated_command_md_text(raw: str, *, py_exe: str) -> str | None:
     return updated if updated != raw else None
 
 
+_PYTHON_EXE_NAME_RE = re.compile(
+    r"^(?:pypy3?|python(?:w|3(?:\.\d+)?)?)(?:\.exe)?$"
+)
+_PYTHON_PASSTHROUGH_FLAGS = frozenset(
+    {"-B", "-E", "-I", "-O", "-OO", "-P", "-S", "-s", "-u", "-v", "-q"}
+)
+
+
+def _tokenize_shell_spans(
+    raw_command: str, *, powershell: bool
+) -> list[tuple[int, int, str]]:
+    """Return `(start, end, unquoted)` spans without rewriting surrounding tokens."""
+    n = len(raw_command)
+    i = 0
+    tokens: list[tuple[int, int, str]] = []
+    while i < n:
+        while i < n and raw_command[i].isspace():
+            i += 1
+        if i >= n:
+            break
+        start = i
+        buf: list[str] = []
+        while i < n and not raw_command[i].isspace():
+            ch = raw_command[i]
+            if ch == "'":
+                i += 1
+                closed = False
+                while i < n:
+                    if raw_command[i] == "'":
+                        if powershell and i + 1 < n and raw_command[i + 1] == "'":
+                            buf.append("'")
+                            i += 2
+                            continue
+                        i += 1
+                        closed = True
+                        break
+                    buf.append(raw_command[i])
+                    i += 1
+                if not closed:
+                    return []
+            elif ch == '"':
+                i += 1
+                while i < n and raw_command[i] != '"':
+                    if (
+                        raw_command[i] == "\\"
+                        and i + 1 < n
+                        and raw_command[i + 1] == '"'
+                    ):
+                        buf.append('"')
+                        i += 2
+                        continue
+                    buf.append(raw_command[i])
+                    i += 1
+                if i >= n:
+                    return []
+                i += 1
+            elif (
+                ch == "\\"
+                and not powershell
+                and i + 1 < n
+                and (raw_command[i + 1].isspace() or raw_command[i + 1] in {"'", '"', "\\"})
+            ):
+                i += 1
+                buf.append(raw_command[i])
+                i += 1
+            else:
+                buf.append(ch)
+                i += 1
+        tokens.append((start, i, "".join(buf)))
+    return tokens
+
+
+def _looks_like_python_token(unquoted: str) -> bool:
+    if "=" in unquoted:
+        return False
+    name = Path(unquoted.replace("\\", "/")).name.lower()
+    return bool(_PYTHON_EXE_NAME_RE.fullmatch(name))
+
+
+def _rewrite_legacy_claude_command(
+    raw_command: str,
+    *,
+    legacy_suffix: str,
+    new_script: str,
+    py_exe: str,
+    powershell: bool,
+) -> str | None:
+    """Upgrade a legacy Claude hook/statusline path while keeping wrappers and flags."""
+    if legacy_suffix not in raw_command.replace("\\", "/"):
+        return None
+    tokens = _tokenize_shell_spans(raw_command, powershell=powershell)
+    if not tokens:
+        return None
+
+    script_idx: int | None = None
+    for index, (start, _end, unquoted) in enumerate(tokens):
+        normalized = unquoted.replace("\\", "/")
+        if not normalized.startswith("-") and normalized.endswith(legacy_suffix):
+            script_idx = index
+            break
+        if (
+            index >= 1
+            and tokens[index - 1][2] in {"-c", "-lc"}
+            and raw_command[start] in {"'", '"'}
+            and legacy_suffix in normalized
+        ):
+            inner = _rewrite_legacy_claude_command(
+                unquoted,
+                legacy_suffix=legacy_suffix,
+                new_script=new_script,
+                py_exe=py_exe,
+                powershell=False,
+            )
+            if inner is None:
+                return None
+            literal = _shell_literal(inner, powershell=powershell)
+            return raw_command[:start] + literal + raw_command[tokens[index][1] :]
+    if script_idx is None:
+        return None
+
+    py_idx: int | None = None
+    probe_idx = script_idx - 1
+    while probe_idx >= 0 and tokens[probe_idx][2] in _PYTHON_PASSTHROUGH_FLAGS:
+        probe_idx -= 1
+    if probe_idx >= 0 and _looks_like_python_token(tokens[probe_idx][2]):
+        py_idx = probe_idx
+
+    script_start, script_end, _ = tokens[script_idx]
+    script_literal = _shell_literal(new_script, powershell=powershell)
+    edits: list[tuple[int, int, str]] = []
+    if py_idx is not None:
+        py_start, py_end, _ = tokens[py_idx]
+        needs_ps_call = powershell and (
+            py_idx == 0 or tokens[py_idx - 1][2] in {";", "&&", "||", "|"}
+        )
+        py_replacement = (
+            _shell_command(py_exe, powershell=True)
+            if needs_ps_call
+            else _shell_literal(py_exe, powershell=powershell)
+        )
+        edits.append((script_start, script_end, script_literal))
+        edits.append((py_start, py_end, py_replacement))
+    else:
+        needs_ps_call = powershell and (
+            script_idx == 0 or tokens[script_idx - 1][2] in {";", "&&", "||", "|"}
+        )
+        py_replacement = (
+            _shell_command(py_exe, powershell=True)
+            if needs_ps_call
+            else _shell_literal(py_exe, powershell=powershell)
+        )
+        edits.append((script_start, script_end, f"{py_replacement} {script_literal}"))
+
+    updated = raw_command
+    for start, end, replacement in edits:
+        updated = updated[:start] + replacement + updated[end:]
+    return updated if updated != raw_command else None
+
+
 def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict[str, Any] | None:
     powershell = _uses_powershell()
-    py_cmd = _shell_command(py_exe, powershell=powershell)
-    gate_literal = _shell_literal(_p("hooks", "goal_policy.py"), powershell=powershell)
-    status_literal = _shell_literal(_p("statusline", "goal_status.py"), powershell=powershell)
+    gate_script = _p("hooks", "goal_policy.py")
+    status_script = _p("statusline", "goal_status.py")
     updated: dict[str, Any] = dict(raw_data)
     changed = False
 
@@ -591,17 +749,21 @@ def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict
                 new_group_hooks: list[Any] = []
                 group_changed = False
                 for item in group_hooks:
-                    if (
-                        isinstance(item, dict)
-                        and _LEGACY_POLICY_HOOK_SUFFIX
-                        in str(item.get("command", "")).replace("\\", "/")
-                    ):
-                        new_item = dict(item)
-                        new_item["command"] = f"{py_cmd} {gate_literal}"
-                        new_group_hooks.append(new_item)
-                        group_changed = True
-                    else:
-                        new_group_hooks.append(item)
+                    if isinstance(item, dict) and isinstance(item.get("command"), str):
+                        migrated_cmd = _rewrite_legacy_claude_command(
+                            item["command"],
+                            legacy_suffix=_LEGACY_POLICY_HOOK_SUFFIX,
+                            new_script=gate_script,
+                            py_exe=py_exe,
+                            powershell=powershell,
+                        )
+                        if migrated_cmd is not None:
+                            new_item = dict(item)
+                            new_item["command"] = migrated_cmd
+                            new_group_hooks.append(new_item)
+                            group_changed = True
+                            continue
+                    new_group_hooks.append(item)
                 if group_changed:
                     new_group = dict(group)
                     new_group["hooks"] = new_group_hooks
@@ -616,15 +778,19 @@ def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict
                 changed = True
 
     sl_obj = raw_data.get("statusLine")
-    if (
-        isinstance(sl_obj, dict)
-        and _LEGACY_STATUSLINE_SCRIPT_SUFFIX
-        in str(sl_obj.get("command", "")).replace("\\", "/")
-    ):
-        new_sl = dict(sl_obj)
-        new_sl["command"] = f"{py_cmd} {status_literal}"
-        updated["statusLine"] = new_sl
-        changed = True
+    if isinstance(sl_obj, dict) and isinstance(sl_obj.get("command"), str):
+        migrated_sl = _rewrite_legacy_claude_command(
+            sl_obj["command"],
+            legacy_suffix=_LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+            new_script=status_script,
+            py_exe=py_exe,
+            powershell=powershell,
+        )
+        if migrated_sl is not None:
+            new_sl = dict(sl_obj)
+            new_sl["command"] = migrated_sl
+            updated["statusLine"] = new_sl
+            changed = True
 
     return updated if changed else None
 

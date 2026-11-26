@@ -1677,3 +1677,148 @@ def test_claude_legacy_migration_skips_targeted_uninstall_and_unowned_or_corrupt
     assert default_payload["ok"] is True
     assert user_cmd.read_bytes() == custom_cmd_bytes
     assert user_settings.read_bytes() == corrupt_settings_bytes
+
+
+def test_claude_legacy_migration_preserves_wrapped_commands_and_reads_v2_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import sys
+
+    from loopx.control_plane.projects.registry_codec import (
+        SOURCE_SESSION_PROFILE_ID,
+        SOURCE_SESSION_SCHEMA_VERSION,
+        SOURCE_SESSION_WRITER_PROTOCOL,
+    )
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-v2"
+    (proj / ".loopx").mkdir(parents=True)
+    payload = {
+        "schema_version": "0.1",
+        "profile_id": SOURCE_SESSION_PROFILE_ID,
+        "goals": [{"id": "cc-v2", "repo": str(proj)}],
+    }
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            [
+                {
+                    "schema_version": SOURCE_SESSION_SCHEMA_VERSION,
+                    "minimum_writer_protocol": SOURCE_SESSION_WRITER_PROTOCOL,
+                    "payload_sha256": digest,
+                },
+                payload,
+            ],
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    proj_settings = proj_claude / "settings.json"
+    proj_settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "env FOO=bar /old/python3 "
+                                        "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py --flag"
+                                    ),
+                                    "timeout": 10,
+                                },
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "sh -c 'BAR=\"a b\" /old/python3 -I "
+                                        "\"/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py\" --inner'"
+                                    ),
+                                },
+                            ],
+                        }
+                    ]
+                },
+                "statusLine": {
+                    "type": "command",
+                    "command": (
+                        "env BAZ='x y' /old/python3 -u "
+                        "\"/opt/old/loopx/claude_goal_mode/statusline/goal_status.py\" --compact"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert slash_command_install._projects_from_registry_file(proj / ".loopx" / "registry.json") == [proj]
+
+    result = install_slash_commands(
+        execute=True,
+        registry_path=str(proj / ".loopx" / "registry.json"),
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert result["ok"] is True
+
+    migrated = json.loads(proj_settings.read_text(encoding="utf-8"))
+    hook_cmds = [h["command"] for h in migrated["hooks"]["PreToolUse"][0]["hooks"]]
+    assert hook_cmds[0].startswith("env FOO=bar ")
+    assert "/old/python3" not in hook_cmds[0]
+    assert sys.executable in hook_cmds[0]
+    assert "/loopx/hosts/claude/hooks/goal_policy.py" in hook_cmds[0]
+    assert hook_cmds[0].endswith(" --flag")
+
+    assert "BAR=\"a b\"" in hook_cmds[1]
+    assert "/loopx/hosts/claude/hooks/goal_policy.py" in hook_cmds[1]
+    assert hook_cmds[1].endswith("--inner'")
+
+    sl_cmd = migrated["statusLine"]["command"]
+    assert sl_cmd.startswith("env BAZ='x y' ")
+    assert " -u " in sl_cmd
+    assert "/loopx/hosts/claude/statusline/goal_status.py" in sl_cmd
+    assert sl_cmd.endswith(" --compact")
+
+    # Idempotent after migration.
+    assert claude_install._migrated_settings_payload(migrated, py_exe=sys.executable) is None
+
+    # PowerShell wrapped command preserves `&`, prefix, and flags.
+    ps_migrated = claude_install._rewrite_legacy_claude_command(
+        "& 'C:\\old\\python.exe' 'C:\\old\\loopx\\claude_goal_mode\\hooks\\goal_policy.py' --flag",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=claude_install._p("hooks", "goal_policy.py"),
+        py_exe="/new/python.exe",
+        powershell=True,
+    )
+    assert ps_migrated is not None
+    assert ps_migrated.startswith("& '/new/python.exe' ")
+    assert ps_migrated.endswith(" --flag")
+    assert "& &" not in ps_migrated

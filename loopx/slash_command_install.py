@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import os
 import re
 import sys
@@ -665,7 +664,11 @@ def _projects_from_registry_file(registry_file: Path) -> list[Path]:
     if not registry_file.is_file():
         return []
     try:
-        payload_obj: object = json.loads(registry_file.read_text(encoding="utf-8"))
+        from .control_plane.projects.registry_codec import (
+            read_activation_upgrade_registry,
+        )
+
+        payload_obj: object = read_activation_upgrade_registry(registry_file)
     except (OSError, UnicodeDecodeError, ValueError):
         return []
     if not isinstance(payload_obj, dict):
