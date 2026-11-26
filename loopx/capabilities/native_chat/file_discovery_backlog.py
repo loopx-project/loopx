@@ -251,14 +251,21 @@ def _summarize_turn_events(events: Sequence[Mapping[str, object]]) -> _EventSumm
     steering = False
     interrupted = False
     for item in events:
+        if not isinstance(item, Mapping):
+            anchor_count += 1
+            anchor = None
+            continue
         kind = item.get("kind")
         if kind == "turn.started":
             payload = item.get("payload")
             if isinstance(payload, Mapping):
                 native_input = payload.get("native_input")
-                if native_input and isinstance(native_input, dict):
+                if native_input:
                     anchor_count += 1
-                    anchor = native_input if anchor_count == 1 else None
+                    anchor = native_input if anchor_count == 1 and isinstance(native_input, dict) else None
+            elif payload is not None:
+                anchor_count += 1
+                anchor = None
         elif kind == "turn.steered":
             steering = True
         elif kind in {"turn.interrupt_requested", "turn.interrupted"}:

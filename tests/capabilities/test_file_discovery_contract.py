@@ -218,6 +218,25 @@ def test_summarize_turn_events_single_pass_and_isolation() -> None:
     assert steered is True
     assert interrupted is True
 
+    assert fd._summarize_turn_events([{"kind": "turn.started", "payload": {"native_input": "corrupt"}}])[0] is None
+    assert fd._summarize_turn_events(
+        [
+            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
+            {"kind": "turn.started", "payload": {"native_input": "corrupt"}},
+        ]
+    ) == (None, False, False)
+    assert fd._summarize_turn_events(
+        [
+            {"kind": "turn.started", "payload": {"native_input": ["corrupt"]}},
+            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "2"}}},
+        ]
+    ) == (None, False, False)
+    assert fd._summarize_turn_events(
+        [
+            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
+            {"kind": "turn.started", "payload": "corrupt-payload"},
+        ]
+    ) == (None, False, False)
     two_anchors, steered_2, interrupted_2 = fd._summarize_turn_events(
         [
             {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
@@ -459,3 +478,65 @@ def test_paired_origin_main_behavioral_parity(tmp_path: Path) -> None:
     assert fd.capture_reply_image_plan(tmp_path, _TURN_HEX, [str(img_file), "https://x.test/ok.png"]) == baseline.capture_reply_image_plan(
         tmp_path, _TURN_HEX, [str(img_file), "https://x.test/ok.png"]
     )
+
+
+def test_real_discovery_preserves_malformed_start_ambiguity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    from loopx.capabilities.native_chat import external_conversations as ext_mod
+    from loopx.chat_manager import MANAGER_CONTEXT_VERSION
+    from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION
+
+    baseline = _load_baseline_file_discovery()
+    binding_id, prov_id, op_id, proj_id, src_id = ("b" * 24, "a" * 24, "e" * 24, "f" * 24, "c" * 24)
+    binding = {
+        "schema_version": "loopx_chat_conversation_binding_v0", "binding_id": binding_id, "enabled": True,
+        "transport_ref": "steward-app", "context_kind": "steward", "goal_ids": [], "grant": "portfolio_read",
+        "provider_ref": prov_id, "operator_ref": op_id, "project_ref": proj_id, "executor_endpoint_id": "antigravity",
+    }
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    bindings = SimpleNamespace(controller=None, read=lambda: {"bindings": [binding]}, resolve=lambda **_: {"binding": binding})
+    ctrl = SimpleNamespace(store=store, project_contexts=SimpleNamespace(conversation_bindings=bindings), lock=threading.Lock(), adapters={}, codex_home=tmp_path)
+    core = ext_mod.ChatExternalConversations(ctrl)
+    core.root.mkdir(parents=True, exist_ok=True)
+    anchor: dict[str, object] = {"thread_id": "cas-1", "start_step_index": 0, "input_sha256": "a" * 64}
+    cases: list[tuple[str, list[tuple[str, dict[str, object]]], str | None, bool, bool]] = [
+        ("clean", [("turn.started", {"native_input": anchor})], None, True, True),
+        ("malformed_second_str", [("turn.started", {"native_input": anchor}), ("turn.started", {"native_input": "corrupt"})], None, False, True),
+        ("malformed_first_list", [("turn.started", {"native_input": ["corrupt"]}), ("turn.started", {"native_input": anchor})], None, False, True),
+        ("single_malformed", [("turn.started", {"native_input": "corrupt-only"})], None, False, False),
+        ("corrupt_second_payload", [("turn.started", {"native_input": anchor})], "corrupt-payload", False, False),
+    ]
+    for idx, (_label, evs, corrupt_payload, expected, check_baseline) in enumerate(cases):
+        sid, tid, req = f"{3000 + idx:032x}", f"{4000 + idx:032x}", f"{5000 + idx:024x}"
+        store.create_session(
+            goal_id="loopx-manager", agent_id="antigravity", adapter_kind="antigravity", upstream_thread_id="cas-1",
+            upstream_mode="default", session_id=sid, channel_id=f"manager.external.native.{binding_id}.{src_id}",
+            steward_context={"kind": "bound_steward", "binding_id": binding_id, "audience": "bound_owner", "grant": "portfolio_read",
+                             "goal_ids": [], "provider_ref": prov_id, "operator_ref": op_id, "project_ref": proj_id, "source_ref": src_id, "workspace_path": str(tmp_path)},
+        )
+        loaded_session = store.load_session(sid)
+        assert loaded_session is not None
+        _atomic_write_json(store._session_path(sid), {**loaded_session, "session_mode": "managed_runtime", "executor_endpoint_id": "antigravity", "manager_context_version": MANAGER_CONTEXT_VERSION})
+        _atomic_write_json(store._turn_path(sid, tid), {"schema_version": CHAT_TURN_SCHEMA_VERSION, "session_id": sid, "turn_id": tid,
+            "client_turn_id": f"external-{req}", "message": "q", "origin": "lark", "status": "failed", "error_code": "antigravity_step_error",
+            "delta_count": 0, "upstream_turn_id": "up-1", "created_at": "2026-01-01T00:00:00+00:00", "completed_at": "2026-01-01T00:01:00+00:00", "response": None})
+        for kind, payload in evs:
+            store.append_event(sid, tid, kind=kind, payload=dict(payload), buffered=False)
+        if corrupt_payload is not None:
+            store.append_event(sid, tid, kind="turn.started", payload={"native_input": "placeholder"}, buffered=False)
+            ev_path = store._event_path(sid, tid)
+            lines = ev_path.read_text(encoding="utf-8").splitlines()
+            lines[-1] = json.dumps({**json.loads(lines[-1]), "payload": corrupt_payload})
+            ev_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        row: dict[str, object] = {"request_ref": req, "binding_id": binding_id, "source": {"source_ref": src_id, "sender_ref": op_id, "private_human_message": True},
+                                  "session_id": sid, "turn_id": tid, "command": None, "origin": "lark", "status": "accepted", "delivery_verified": True,
+                                  "message": "q", "created_at": "2026-01-01T00:00:00+00:00"}
+        _atomic_write_json(core.root / f"{req}.json", row)
+        assert core.context_recovery_candidate(req) is expected
+        if check_baseline:
+            assert (core._context_recovery_plan(row, discovery_only=False).get("recovery_candidate") is True) is expected
+            if baseline is not None:
+                with monkeypatch.context() as mp:
+                    mp.setattr(ext_mod, "observed_turn_event_summary", baseline.observed_turn_event_summary)
+                    core._quota_backlog_cache.drop_event_summary(sid, tid)
+                    assert core.context_recovery_candidate(req) is expected
