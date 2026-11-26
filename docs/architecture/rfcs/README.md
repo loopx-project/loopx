@@ -327,6 +327,11 @@ Paired diffs do not certify translation accuracy.
     worktree comparisons and native/passive/governed outcome/cost attribution.
     Filesystem checkpoints do not qualify complete research-state continuation.
 
+- [Provider-Neutral Sandbox Snapshot and Fork SPI v0](provider-neutral-sandbox-snapshot-fork-spi-v0.md)
+  ([中文版](provider-neutral-sandbox-snapshot-fork-spi-v0.zh-CN.md))
+  - **Delivery on `main`:** Proposal; M0 contract conformance suite in pytest over shipped `ReplayPointRegistry` and `counterfactual_runtime` owners, with zero microVM provider runtime change.
+  - **Current boundary:** Optional, default-off, extension-hosted 4-op SPI (`pause`, `resume`, `snapshot`, `fork`, plus `destroy`) keeping control-plane authority externalized outside guest VMs and mapping declared fidelity onto `ReplayFidelity`; M1–M3 live provider integration and controlled trials remain open.
+
 - [Goal-scoped Capability Portfolio and Connector Lifecycle v0](goal-scoped-capability-portfolio-v0.md)
   ([中文版](goal-scoped-capability-portfolio-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal; catalog, Agent-context hooks and connector

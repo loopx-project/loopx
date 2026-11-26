@@ -731,11 +731,55 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 # Preparation never starts a model request. Check the same
                 # optional transport owner before reserving a bounded retry.
                 if session.get("agent_id") == "antigravity":
-                    from .antigravity_adapter import discover_antigravity_language_server, probe_cascade_idle
+                    from ...chat_manager import MANAGER_AGENT_GOAL_ID, manager_session_model_allocation
+                    from ..steward_executor import allocation as alloc
+                    from .antigravity_adapter import (
+                        _discovered_model_configs,
+                        discover_antigravity_language_server,
+                        probe_cascade_idle,
+                        resolve_antigravity_model_placeholder,
+                    )
+                    from .model_settings import native_adapter_configuration
 
-                    discovered = discover_antigravity_language_server(deadline=time.monotonic() + 3.0)
+                    discovered = discover_antigravity_language_server(
+                        deadline=time.monotonic() + 3.0,
+                        include_model_config=True,
+                    )
                     if discovered is None:
                         return False
+                    allocation = (
+                        manager_session_model_allocation(self.controller, session)
+                        if session.get("steward_context") is not None
+                        else None
+                    )
+                    executor_model = (
+                        alloc.manager_executor_model(allocation)
+                        if allocation is not None and allocation.get("executor_endpoint") == "antigravity"
+                        else alloc.restored_executor_model(session)
+                    )
+                    last_model = session.get("agent_model_id")
+                    agent_config = {
+                        **(session.get("codex_chat_configuration") or {}),
+                        **({"model": last_model} if last_model else {}),
+                        **({"reasoning_effort": session["requested_agent_reasoning_effort"]}
+                           if session.get("requested_agent_reasoning_effort") else {}),
+                    }
+                    goal_id = MANAGER_AGENT_GOAL_ID if session.get("steward_context") is not None else session.get("goal_id")
+                    _profile, _obj, model_config = native_adapter_configuration(
+                        self.controller,
+                        agent_id="antigravity",
+                        goal_id=goal_id,
+                        objective="",
+                        manager_runtime=None,
+                        executor_model=executor_model,
+                        agent_config=agent_config or None,
+                        execution_mode=str(session.get("channel_id") or "").startswith("task."),
+                    )
+                    resolve_antigravity_model_placeholder(
+                        model_config.get("model"),
+                        model_config.get("reasoning_effort"),
+                        dynamic_configs=_discovered_model_configs(discovered),
+                    )
                     cascade_id = str(session.get("upstream_thread_id") or "").strip()
                     if cascade_id and not probe_cascade_idle(
                         str(discovered["url"]), str(discovered["csrf_token"]), cascade_id, timeout=2.5,
