@@ -1683,7 +1683,7 @@ def serve_chat(
             for app in list_lark_apps(runner=server.lark_runner, cli_bin=lark_cli_cmd)
         ),
     )
-    server.chat_store = ChatSessionStore(runtime_root)
+    server.chat_store = ChatSessionStore(runtime_root, compact_on_init=False)
     server.action_store = ChatActionStore(runtime_root / "chat" / "actions")
     from .presentation.request_control_api import bound_steward_inventory_scope
     from .chat.lark_api import manager_source_scope_resolver
@@ -1762,8 +1762,7 @@ def serve_chat(
     server.delegation_wake_service = DelegationWakeService(
         server.runtime_controller, goal_context=_wake_goal_context
     ).start()
-    # Resume only retained, explicitly confirmed creation requests through the
-    # existing Session queue. Its owner rechecks source, native work and gates.
+    # Resume confirmed creation requests via Session queue (rechecking gates).
     server.runtime_controller.resume_creation_requests()
     url = f"http://{host}:{port}{DEFAULT_CHAT_PATH}"
     print(f"Serving LoopX Chat at {url}", flush=True)
@@ -1781,6 +1780,7 @@ def serve_chat(
             server.conversation_transports.start(server)
         background_api.register_chat_background_services(server)
         server.background_services.start()
+        server.chat_store.start_background_compaction()
         server.serve_forever()
     except KeyboardInterrupt:
         print("Stopping LoopX Chat", flush=True)
