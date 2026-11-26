@@ -14,7 +14,7 @@ LegacyRuntimeGoalAttention = Callable[
     Optional[dict[str, Any]],
 ]
 OperatorQuestionBuilder = Callable[[str, str], str]
-OperatorQuestionNormalizer = Callable[..., str]
+OperatorQuestionNormalizer = Callable[..., str | None]
 RunHasExternalEvidenceWatchSignal = Callable[[dict[str, Any]], bool]
 SessionRuntimeProjectionFromRun = Callable[[Optional[dict[str, Any]]], Optional[dict[str, Any]]]
 PublicSafeText = Callable[..., Optional[str]]

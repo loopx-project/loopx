@@ -10,18 +10,18 @@ from ..effect_runtime import effect_runtime_result
 from ..goals.legacy_event_source import RetiredTodoEventSourceError
 from .attention_queue_types import (
     ACTIONABLE_REGISTRY_SEVERITIES as ACTIONABLE_REGISTRY_SEVERITIES,
+    ATTENTION_WAITING_ON_VALUES as ATTENTION_WAITING_ON_VALUES,
     USER_OR_CONTROLLER_WAIT_STATES as USER_OR_CONTROLLER_WAIT_STATES,
     ActiveStateProjectAssetAttacher as ActiveStateProjectAssetAttacher,
     ActiveStateTodoAttentionBuilder as ActiveStateTodoAttentionBuilder,
     ActiveStateTodoFieldsBuilder as ActiveStateTodoFieldsBuilder,
     AttentionItemBuilder as AttentionItemBuilder,
     AttentionQueueContext as AttentionQueueContext,
-    AttentionQueueCounts as AttentionQueueCounts,
+    AttentionQueueItem as AttentionQueueItem,
     AttentionQueueProjection as AttentionQueueProjection,
     AttentionWaitingOn as AttentionWaitingOn,
     EnrichProjectAssetFn as EnrichProjectAssetFn,
     ExternalProgressReviewLoader as ExternalProgressReviewLoader,
-    GlobalRegistryFindingSeverity as GlobalRegistryFindingSeverity,
     GlobalRegistryShadowAttacher as GlobalRegistryShadowAttacher,
     GoalChannelProjectionAttacher as GoalChannelProjectionAttacher,
     LatestRunRecommendedActionBuilder as LatestRunRecommendedActionBuilder,
@@ -99,12 +99,12 @@ def merge_global_registry_findings(
 
 def build_attention_queue_projection(
     *,
-    items: list[dict[str, object]],
+    items: Sequence[AttentionQueueItem],
     goal_id_filter: str | None,
     autonomous_backlog_candidates: dict[str, object] | None,
     autonomous_monitor_candidates: dict[str, object] | None,
     monitor_signal_waiting_on: str,
-) -> dict[str, object]:
+) -> AttentionQueueProjection:
     needs_user_or_controller = 0
     needs_controller = 0
     needs_codex = 0
@@ -123,7 +123,8 @@ def build_attention_queue_projection(
         if waiting_on == monitor_signal_waiting_on:
             watching_monitor += 1
 
-    queue: dict[str, object] = {
+    queue_items = items if isinstance(items, list) else list(items)
+    queue: AttentionQueueProjection = {
         "available": True,
         "item_count": len(items),
         "needs_user_or_controller": needs_user_or_controller,
@@ -131,7 +132,7 @@ def build_attention_queue_projection(
         "needs_codex": needs_codex,
         "watching_external_evidence": watching_external_evidence,
         "watching_monitor": watching_monitor,
-        "items": items,
+        "items": queue_items,
     }
     if goal_id_filter:
         queue["goal_filter"] = goal_id_filter
@@ -449,6 +450,21 @@ def _build_goal_attention_item(
     return item
 
 
+def _validated_queue_items(
+    items: Sequence[dict[str, object]],
+    *,
+    monitor_signal_waiting_on: str,
+) -> list[AttentionQueueItem]:
+    validated: list[AttentionQueueItem] = []
+    allowed = ATTENTION_WAITING_ON_VALUES | {monitor_signal_waiting_on}
+    for item in items:
+        waiting_on = item["waiting_on"]
+        if not isinstance(waiting_on, str) or waiting_on not in allowed:
+            raise ValueError(f"unsupported attention queue waiting_on: {waiting_on!r}")
+        validated.append(cast(AttentionQueueItem, item))
+    return validated
+
+
 def build_attention_queue(
     *,
     contract: dict[str, object],
@@ -461,7 +477,7 @@ def build_attention_queue(
     include_stopped_goal_context: bool = False,
     include_goal_channel_projection: bool = True,
     agent_lane_id: str | None = None,
-) -> dict[str, object]:
+) -> AttentionQueueProjection:
     """Build the executable attention queue or a stopped-Goal archive view.
 
     Normal callers omit stopped Goals because they must never become runnable
@@ -522,7 +538,9 @@ def build_attention_queue(
     monitor_candidates = context.autonomous_monitor_candidates(items)
 
     return build_attention_queue_projection(
-        items=items,
+        items=_validated_queue_items(
+            items, monitor_signal_waiting_on=context.monitor_signal_waiting_on
+        ),
         goal_id_filter=goal_id_filter,
         autonomous_backlog_candidates=backlog_candidates,
         autonomous_monitor_candidates=monitor_candidates,
