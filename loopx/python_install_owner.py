@@ -75,14 +75,27 @@ def builtin_capability_installed(
         return False
     if builtin_cli_present:
         return True
+    package_parent = Path(__file__).resolve().parent.parent
+    recorded_entries = [
+        path for path in (implementation.files or ())
+        if path.as_posix().startswith("loopx/")
+        and "__pycache__" not in (record_path := Path(path.as_posix())).parts
+        and record_path.suffix not in {".pyc", ".pyo"}
+    ]
     recorded = {
         distribution_record_path(path).resolve()
         for path in implementation.files or ()
     }
-    package_parent = Path(__file__).resolve().parent.parent
-    return all(origin in recorded for origin in origins) and all(
-        (package_parent / resource) in recorded and (package_parent / resource).is_file()
-        for resource in resources
+    return (
+        all(
+            (target := package_parent / path.as_posix()) in recorded and target.is_file()
+            for path in recorded_entries
+        )
+        and all(origin in recorded for origin in origins)
+        and all(
+            (package_parent / resource) in recorded and (package_parent / resource).is_file()
+            for resource in resources
+        )
     )
 
 

@@ -232,3 +232,40 @@ def test_matching_workspace_owns_only_its_records(owned_package, monkeypatch, ch
         assert result == original
     else:
         assert "package_fingerprint" not in result
+
+
+def test_builtin_capability_requires_every_recorded_artifact(owned_package, monkeypatch):
+    from loopx import python_install_owner as install_owner
+
+    package, core = owned_package
+    core.name = "loopx-core"
+    owner_file = package / "python_install_owner.py"
+    owner_file.write_text("python")
+    asset = core.files.pop()
+    store_file = package / "chat_store.py"
+    store_file.write_text("store")
+    store_item = SimpleNamespace(as_posix=lambda: "loopx/chat_store.py", locate=lambda: store_file)
+    workspace = SimpleNamespace(
+        name=install_owner.WORKSPACE_DISTRIBUTION,
+        version=manifest.__version__,
+        files=[asset, store_item],
+        read_text=lambda _name: None,
+    )
+    monkeypatch.setattr(install_owner, "__file__", str(owner_file))
+    monkeypatch.setattr(
+        install_owner,
+        "distribution",
+        lambda name: core if name == "loopx-core" else workspace,
+    )
+    monkeypatch.setattr(
+        install_owner,
+        "find_spec",
+        lambda module: SimpleNamespace(origin=str(store_file)) if module == "loopx.chat_store" else None,
+    )
+    assert install_owner.builtin_capability_installed(
+        install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
+    )
+    (package / "web/chat/index.html").unlink()
+    assert not install_owner.builtin_capability_installed(
+        install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
+    )

@@ -256,11 +256,14 @@ assert u.find_spec("loopx.cli") is None
 with contextlib.redirect_stdout(io.StringIO()):
     assert main(["--help"]) == 0
     assert main(["commands", "--format", "json"]) == 0
+assert "loopx.chat" not in sys.modules
 assert "loopx.chat_server" not in sys.modules
+assert "loopx.chat_store" not in sys.modules
 assert "loopx.dashboard_launcher" not in sys.modules
 analysis = "loopx/capabilities/benchmark_toolkit/trajectory_assessment_store.py"
 print(json.dumps({
     "module": str(Path(owner.locate_file("loopx/dashboard_launcher.py"))),
+    "chat_store": str(Path(owner.locate_file("loopx/chat_store.py"))),
     "has_analysis": any(p.as_posix() == analysis for p in core.files),
 }))
 """)
@@ -270,6 +273,28 @@ print(json.dumps({
     assert "loopx dashboard" in help_text
     endpoint_help = _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
     assert "chat-endpoint" in endpoint_help
+
+    chat_store = Path(installed["chat_store"])
+    missing_store = chat_store.with_suffix(".py.missing")
+    chat_store.rename(missing_store)
+    try:
+        assert "loopx dashboard" not in _run(core_python, ["--help"], workspace).stdout
+        commands_payload = json.loads(_run(core_python, ["commands", "--format", "json"], workspace).stdout)
+        listed_names = {
+            match[1]
+            for group in commands_payload["groups"]
+            for entry in group.get("commands", [])
+            if (match := re.match(r"loopx ([a-z0-9-]+)(?: |$)", entry.get("command", "")))
+        }
+        assert not (listed_names & {"chat", "chat-endpoint", "dashboard"})
+        for blocked in (["dashboard", "--help"], ["chat-endpoint", "--help"], ["chat"]):
+            denied = _run(core_python, blocked, workspace, expected=2)
+            assert "install the matching loopx-workspace wheel" in denied.stderr
+    finally:
+        missing_store.rename(chat_store)
+    assert "loopx dashboard" in _run(core_python, ["--help"], workspace).stdout
+    assert "chat-endpoint" in _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
+    assert "dashboard" in _run(core_python, ["dashboard", "--help"], workspace).stdout
     native_spend = _python_json(core_python, workspace, f"""
 import json
 from pathlib import Path
