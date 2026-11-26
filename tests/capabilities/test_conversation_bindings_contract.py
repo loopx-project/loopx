@@ -702,3 +702,23 @@ def test_execute_start_guard_reads_guarded_entry_once(tmp_path: Path) -> None:
     # Read 1: initial row; Read 2: fenced inbox fetch; Read 3: single read in start_guard.
     assert len(entry_calls) == 3
     assert events == [("answer.delta", {"text": "done"})]
+
+
+def test_real_chat_runtime_controller_satisfies_binding_controller_protocol(
+    tmp_path: Path,
+) -> None:
+    from loopx.capabilities.native_chat.project_context import ChatProjectContexts
+    from loopx.chat_runtime import ChatRuntimeController
+
+    contexts = ChatProjectContexts([])
+    contexts.conversation_bindings = _make_bindings(tmp_path)
+    controller = ChatRuntimeController(
+        store=chat_store.ChatSessionStore(tmp_path / "chat"),
+        codex_bin="codex",
+        project_contexts=contexts,
+    )
+    proto_controller: BindingControllerProtocol = controller
+    proto_contexts: ProjectContextsProtocol = controller.project_contexts
+    requests = OriginalConversationRequests(controller)
+    assert requests.controller is proto_controller
+    assert proto_contexts is controller.project_contexts

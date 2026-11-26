@@ -303,7 +303,9 @@ class BindingControllerProtocol(Protocol):
     registry_path: Path | None
     coordination_runtime_root: Path
     store: ChatSessionStore
-    project_contexts: ProjectContextsProtocol
+
+    @property
+    def project_contexts(self) -> ProjectContextsProtocol: ...
 
     def interrupt_turn(
         self,
