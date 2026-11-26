@@ -20,6 +20,7 @@ import {
   referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
 } from "./diagnostic_projection.ts";
 import { completeCliSettlementChannel } from "./settlement_plan.ts";
+import { compactRoutineSettlementPlan, scopeTurnGoalAcceptance } from "./turn_envelope_scoping.ts";
 import {
   interpretQuotaShouldRunPacket, assertSupportedQuotaPacket,
   settlementIdentityFromPlan, settlementIdentityPayload, type JsonObject,
@@ -1026,9 +1027,33 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
   const composedSettlement = request.composed_settlement === undefined ? false
     : requireBoolean(request.composed_settlement, "composed_settlement");
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
+  const includeVisionDetail = request.include_vision_detail === undefined ? false
+    : requireBoolean(request.include_vision_detail, "include_vision_detail");
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
+  const cliArgv = request.cli_argv === undefined ? ["loopx"] : executableCliArgs(request.cli_argv);
+  if (request.cli_argv !== undefined && cliArgv.length === 0) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_argv must be a non-empty list of strings");
+  }
+  const captureReferenceFile = request.capture_reference_file;
+  if (captureReferenceFile !== undefined && !isNonEmptyFilePath(captureReferenceFile)) {
+    throw new EffectRuntimeRequestError("Turn envelope capture_reference_file must be a non-empty file path");
+  }
+  if (request.cli_registry !== undefined && !isNonEmptyFilePath(request.cli_registry)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_registry must be a non-empty file path");
+  }
+  if (request.cli_runtime_root !== undefined && !isNonEmptyFilePath(request.cli_runtime_root)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_runtime_root must be a non-empty file path");
+  }
+  const coldReadOptions = {
+    cliArgv,
+    captureReferenceFile,
+    registry: request.cli_registry ?? payload.registry,
+    runtimeRoot: request.cli_runtime_root ?? payload.runtime_root,
+  };
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
@@ -1083,7 +1108,13 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
         })}}}};
     }
   }
+  if (!includeVisionDetail) {
+    source = compactRoutineSettlementPlan(source, coldReadOptions);
+  }
   source = referenceGoalAcceptance(source, sourceIdentity);
+  if (!includeGoalAcceptanceDetail) {
+    source = scopeTurnGoalAcceptance(source, coldReadOptions);
+  }
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);

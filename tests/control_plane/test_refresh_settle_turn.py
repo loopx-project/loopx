@@ -932,6 +932,13 @@ def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path
     assert rc == 0 and detail["eof"], detail
     plan = json.loads(detail["content"])["selections"][0]["value"]
     writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    assert writeback["optional_attachments"][0]["summary_only"] is True
+    assert "explore turn-context" in writeback["optional_attachments"][0]["cold_read_command"]
+    rc, detail_entry = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        *binding, "--context-delivery", "off", "--include-detail", "vision", cwd=project)
+    assert rc == 0, detail_entry
+    detail_writeback = next(step for step in detail_entry["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                            if step["kind"] == "durable_writeback")
 
     refs = ["result:probe", "source:" + "e" * 64]
     revision = "dataset:" + "d" * 64
@@ -978,7 +985,7 @@ def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path
     assert settled["settlement_identity"] == plan["identity"]
     assert settled["quota_spend"]["ok"] and "settlement_owed" not in settled
 
-    example = writeback["optional_attachments"][0]["optional_execution_observation_example"]
+    example = detail_writeback["optional_attachments"][0]["optional_execution_observation_example"]
     assert example["execution_observation"]["schema_version"] == compact["schema_version"]
     assert compact["schema_version"] not in json.dumps(entry)
     assert settled["explore_result"]["execution_observation"] == observation
