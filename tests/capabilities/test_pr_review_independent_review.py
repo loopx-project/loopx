@@ -225,3 +225,115 @@ def test_malformed_provider_history_retains_ordinary_review(pages):
 def test_inline_only_submitted_review_does_not_need_an_agent_body():
     row = packet([review() | {"body": ""}])["pull_requests"][0]
     assert row["review_action_kind"] is None and not row["review_conclusion"]["valid"]
+
+
+def _provider_with_comments(
+    review_pages, comment_pages, *, pr_author="cocolord", current_head=HEAD,
+):
+    snapshot = deepcopy(review_pages[0][0])
+    pr = raw_pr([{
+        "id": snapshot["id"], "url": snapshot["html_url"],
+        "author": {"login": snapshot["user"]["login"]},
+        "authorAssociation": snapshot["author_association"],
+        "state": snapshot["state"], "commit": {"oid": snapshot["commit_id"]},
+        "body": snapshot["body"], "submittedAt": snapshot["submitted_at"],
+    }], head=current_head)
+    pr["author"] = {"login": pr_author}
+    pr.pop("reviews_complete")
+    calls = []
+
+    def run(args, *, cwd=None):
+        del cwd
+        calls.append(args)
+        if args[:2] == ["pr", "view"]:
+            if args[args.index("--json") + 1] == "headRefOid,baseRefOid":
+                return {"headRefOid": current_head, "baseRefOid": pr["baseRefOid"]}
+            return deepcopy(pr)
+        if args[:4] == ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/42/reviews?per_page=100"]:
+            return deepcopy(review_pages)
+        if args[:4] == ["api", "--paginate", "--slurp", "repos/owner/repo/pulls/42/comments?per_page=100"]:
+            if isinstance(comment_pages, Exception):
+                raise comment_pages
+            return deepcopy(comment_pages)
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    return run, calls
+
+
+def test_thread_reply_only_empty_commented_review_does_not_conclude_current_head():
+    # Shape of GitHub GraphQL addPullRequestReviewThreadReply on cocolord PR:
+    # prior CHANGES_REQUESTED on OLD head, plus empty-body COMMENTED wrapper on HEAD.
+    old_req = rest_review(review(1, login="loopx-agent", state="CHANGES_REQUESTED", head=OLD, association="MEMBER"))
+    reply_wrapper = rest_review(review(2, login="loopx-agent", state="COMMENTED", head=HEAD, association="MEMBER")) | {"body": ""}
+    comments = [[{
+        "id": 4713426271,
+        "pull_request_review_id": 2,
+        "in_reply_to_id": 4713301777,
+    }]]
+    run, calls = _provider_with_comments([[old_req, reply_wrapper]], comments, pr_author="cocolord")
+    row = source_packet(run)["pull_requests"][0]
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["scheduling_lane"] != "current_head_concluded"
+    assert "independent_review" not in row
+    assert any("pulls/42/comments" in " ".join(call) for call in calls)
+
+
+@pytest.mark.parametrize("comments", [
+    [[{"id": 99, "pull_request_review_id": 1}]],
+    [[{"id": 99, "pull_request_review_id": 1, "in_reply_to_id": None}]],
+    [[{"id": 99, "pull_request_review_id": 1}, {"id": 100, "pull_request_review_id": 1, "in_reply_to_id": 88}]],
+])
+def test_inline_root_empty_commented_review_still_establishes_independent_review(comments):
+    root_inline = rest_review(review(1, login="contributor", state="COMMENTED", head=HEAD)) | {"body": "   "}
+    run, _ = _provider_with_comments([[root_inline]], comments, pr_author="author")
+    row = source_packet(run)["pull_requests"][0]
+    assert row["review_action_kind"] is None
+    assert row["independent_review"]["review_id"] == 1
+
+
+def test_thread_reply_wrapper_preserves_earlier_current_head_formal_opinion():
+    formal = rest_review(review(10, login="loopx-agent", state="CHANGES_REQUESTED", head=HEAD, association="MEMBER"))
+    reply_wrapper = rest_review(review(11, login="loopx-agent", state="COMMENTED", head=HEAD, association="MEMBER")) | {"body": ""}
+    comments = [[{
+        "id": 4713426271,
+        "pull_request_review_id": 11,
+        "in_reply_to_id": 4713301777,
+    }]]
+    for ordered in ([formal, reply_wrapper], [reply_wrapper, formal]):
+        run, _ = _provider_with_comments([ordered], comments, pr_author="cocolord")
+        row = source_packet(run)["pull_requests"][0]
+        assert row["review_action_kind"] is None
+        assert row["independent_review"]["review_id"] == 10
+        assert row["independent_review"]["state"] == "CHANGES_REQUESTED"
+
+
+@pytest.mark.parametrize("bad_comments", [
+    OSError("comments unavailable"),
+    [],
+    [[]],
+    {},
+    [[123]],
+])
+def test_incomplete_or_empty_comment_fetch_fails_closed_for_thread_reply_detection(bad_comments):
+    empty_review = rest_review(review(1, login="contributor", state="COMMENTED", head=HEAD)) | {"body": ""}
+    run, _ = _provider_with_comments([[empty_review]], bad_comments)
+    row = source_packet(run)["pull_requests"][0]
+    # Fail closed on thread_reply_only inference: do not mark thread_reply_only when
+    # comments read failed, returned 0 matched comments, or was malformed.
+    assert row["review_action_kind"] is None
+    assert row["independent_review"]["review_id"] == 1
+
+
+def test_cross_model_coverage_ignores_thread_reply_only_commented_review():
+    reply_wrapper = review(2, login="loopx-agent", state="COMMENTED", head=HEAD, association="MEMBER") | {
+        "body": "", "thread_reply_only": True,
+    }
+    pr = raw_pr([reply_wrapper], complete=True, head=HEAD) | {"author": {"login": "cocolord"}}
+    data = build_pr_review_packet(
+        pull_requests=[pr], repository="owner/repo", source="fixture", limit=10,
+        state_filter="all", reviewer_login="loopx-agent", wait_for_ci=False,
+        reviewer_model_family="gpt",
+    )
+    row = data["pull_requests"][0]
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert "independent_review" not in row

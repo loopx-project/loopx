@@ -35,7 +35,8 @@ function effectiveOpinions<T extends Opinion>(reviews: readonly T[], author: str
 
 /** Submitted review activity establishes account-level evidence. Model coverage
  * also requires a qualified conclusion. Comments here are formal review events;
- * issue comments do not enter this history. Dismissal retires only that actor. */
+ * inline thread replies and issue comments do not establish or retire activity.
+ * Dismissal retires only that actor. */
 function independentReviewEvidence(reviews: readonly ProviderOpinion[],
   complete: boolean, author: string | null, head: string, includeCoverage: boolean): JsonObject {
   if (!complete || !author) return {};
@@ -51,6 +52,8 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     if (row.state === "PENDING") continue;
     const submittedAt = typeof source.submitted_at === "string" ? parseIsoTimestamp(source.submitted_at) : null;
     if (!submittedAt || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(row.head)) return {};
+    // GraphQL thread-reply wrappers have no formal opinion and must not claim coverage or retire prior reviews.
+    if (row.state === "COMMENTED" && source.thread_reply_only === true && row.conclusion.valid !== true) continue;
     const candidate = {...row, id, time: submittedAt.getTime()};
     submitted?.push(candidate);
     const previous = latest.get(row.login);

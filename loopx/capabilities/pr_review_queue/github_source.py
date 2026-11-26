@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .selection_execution import normalize_fresh_audit_exact_heads
@@ -242,6 +242,75 @@ def fetch_complete_pr_reviews(*, repository: str, number: str, cwd: Path | None,
     return reviews
 
 
+def fetch_complete_pr_review_comments(*, repository: str, number: str, cwd: Path | None,
+                                      run_gh_json: GitHubJsonRunner) -> list[dict[str, Any]] | None:
+    """Read completely paginated PR inline comments; return None when incomplete."""
+    try:
+        pages = run_gh_json(["api", "--paginate", "--slurp",
+                             f"repos/{repository}/pulls/{number}/comments?per_page=100"],
+                            **({"cwd": cwd} if cwd is not None else {}))
+    except Exception:
+        return None
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        return None
+    comments = [row for page in pages for row in page]
+    if any(not isinstance(row, dict) for row in comments):
+        return None
+    return comments
+
+
+def _empty_commented_non_author_review_ids(
+    reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
+) -> set[int]:
+    if not isinstance(head_oid, str) or not head_oid.strip():
+        return set()
+    expected_head = head_oid.strip().casefold()
+    author_key = author.strip().casefold()
+    candidate_ids: set[int] = set()
+    for review in reviews:
+        review_id = review.get("id")
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        commit_id = review.get("commit_id")
+        state = str(review.get("state") or "").strip().upper()
+        body = review.get("body")
+        body_text = body if isinstance(body, str) else str(body or "")
+        if (type(review_id) is int and review_id > 0
+                and isinstance(login, str) and login.strip().casefold() != author_key
+                and isinstance(commit_id, str) and commit_id.strip().casefold() == expected_head
+                and state == "COMMENTED" and not body_text.strip()):
+            candidate_ids.add(review_id)
+    return candidate_ids
+
+
+def _thread_reply_only_review_ids(
+    reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
+    repository: str, number: str, cwd: Path | None, run_gh_json: GitHubJsonRunner,
+) -> set[int]:
+    candidate_ids = _empty_commented_non_author_review_ids(reviews, author=author, head_oid=head_oid)
+    if not candidate_ids:
+        return set()
+    comments = fetch_complete_pr_review_comments(
+        repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
+    )
+    if comments is None:
+        return set()
+    matched_counts: dict[int, int] = {}
+    non_reply_ids: set[int] = set()
+    for comment in comments:
+        review_id = comment.get("pull_request_review_id")
+        if type(review_id) is not int or review_id not in candidate_ids:
+            continue
+        matched_counts[review_id] = matched_counts.get(review_id, 0) + 1
+        parent_id = comment.get("in_reply_to_id")
+        if type(parent_id) is not int or parent_id <= 0:
+            non_reply_ids.add(review_id)
+    return {
+        review_id for review_id, count in matched_counts.items()
+        if count >= 1 and review_id not in non_reply_ids
+    }
+
+
 def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                               repository: str, number: str, cwd: Path | None,
                               run_gh_json: GitHubJsonRunner,
@@ -276,6 +345,13 @@ def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                 "authorAssociation": review.get("author_association"), "state": review.get("state"),
                 "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
                 "body": review.get("body")})
+        reply_only_ids = _thread_reply_only_review_ids(
+            reviews, author=author, head_oid=row.get("headRefOid"),
+            repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
+        )
+        for item, review in zip(normalized, reviews, strict=True):
+            if review["id"] in reply_only_ids:
+                item["thread_reply_only"] = True
         after = run_gh_json(["pr", "view", number, "--json", "headRefOid,baseRefOid",
                              "--repo", repository], cwd=cwd)
         if not isinstance(after, dict) or any(after.get(key) != row.get(key)

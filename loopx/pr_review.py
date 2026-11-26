@@ -873,6 +873,7 @@ def _review_conclusion(
             "is_bot": _as_dict(review.get("author")).get("is_bot"),
             "submitted_at": review.get("submittedAt"),
             "conclusion": conclusion,
+            **({"thread_reply_only": True} if review.get("thread_reply_only") is True else {}),
             **({"review_body_valid": body_valid} if include_model_coverage else {})}
             for review, (conclusion, body_valid) in zip(reviews, evaluations, strict=True)
     ]
