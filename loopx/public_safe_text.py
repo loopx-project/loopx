@@ -395,9 +395,10 @@ _PRESENTATION_KEY_LABELS_SOURCE = (
 # when it is a quantity with a length or time unit it is a public rule. The
 # negative lookahead also covers word ranges (`8 to 64 characters`),
 # qualified units (`2 business days`), character classes (`12 alphanumeric
-# characters`) and counted composition rules (`1 uppercase, 1 lowercase, and
-# 1 number`) while a bare number (`Password: 12345678`) and a mixed value
-# (`token: abc123`) still fail closed.
+# characters`), counted composition rules (`1 uppercase, 1 lowercase, and
+# 1 number`) and encoded-length units (`12 Unicode code points`) while a bare
+# number (`Password: 12345678`) and a mixed value (`token: abc123`) still fail
+# closed.
 _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?![\"']?\d+(?:\.\d+)?"
     r"(?:\s*[-\u2013\u2014]\s*\d+|\s+(?:to|through|and)\s+\d+|\+)?"
@@ -406,6 +407,9 @@ _PRESENTATION_RULE_QUANTITY_SOURCE = (
     r"(?:[A-Za-z][A-Za-z-]*[-\s]+){0,2}"
     r"(?:characters?|chars?|letters?|digits?|numbers?|symbols?"
     r"|uppercase|lowercase"
+    r"|code[-\s]?points?|code[-\s]?units?"
+    r"|(?:utf-?8|utf-?16|utf-?32)\s+(?:code[-\s]?units?|bytes?)"
+    r"|bytes?"
     r"|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s"
     r"|days?|workdays?|d|weeks?|months?|years?)\b)"
 )

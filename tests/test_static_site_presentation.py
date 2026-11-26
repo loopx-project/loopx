@@ -487,9 +487,15 @@ def test_cli_package_keeps_character_class_rules_public(
         "<p>Password: 1 uppercase, 1 lowercase, and 1 number.</p>\n"
         "</body></html>\n"
     )
+    code_points_page = (
+        "<html><body><h1>Password length</h1>\n"
+        "<p>Password: 12 Unicode code points.</p>\n"
+        "</body></html>\n"
+    )
     (site / "password-alphanumeric.html").write_text(alphanumeric_page, encoding="utf-8")
     (site / "password-ascii.html").write_text(ascii_page, encoding="utf-8")
     (site / "password-composition.html").write_text(composition_page, encoding="utf-8")
+    (site / "password-code-points.html").write_text(code_points_page, encoding="utf-8")
     output = tmp_path / "publish"
 
     assert _cli_package(site, output, tmp_path / "state") == 0
@@ -498,6 +504,7 @@ def test_cli_package_keeps_character_class_rules_public(
     assert (output / "password-alphanumeric.html").read_text(encoding="utf-8") == alphanumeric_page
     assert (output / "password-ascii.html").read_text(encoding="utf-8") == ascii_page
     assert (output / "password-composition.html").read_text(encoding="utf-8") == composition_page
+    assert (output / "password-code-points.html").read_text(encoding="utf-8") == code_points_page
 
 
 def test_cli_package_keeps_quoted_button_labels_public(
