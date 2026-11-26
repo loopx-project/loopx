@@ -81,8 +81,38 @@ and audit-continuation) with `quota should-run` (advisory guidance; LoopX
 does not intercept native host continuations), and arm the next bounded
 wake with the native `schedule` tool only when quota allows more work.
 
+## Reboot-Survival Watchdog (`antigravity-app` on macOS)
+
+In-session `schedule(...)` timers suspend while Antigravity is running, so an
+OS reboot or Antigravity Language Server restart clears in-memory timers.
+`loopx.agy_goal_mode.host_runtime` provides two guarded subcommands for
+surviving restarts without disturbing healthy `swarm_wait` or `schedule` sleeps:
+
+- `heartbeat-tick`: discovers the running Antigravity Language Server, reads
+  `trajectorySummaries[<conversation-id>]` (`status` and `lastModifiedTime`)
+  and `ps -o lstart= -p <ls_pid>`, checks Core admission (`quota should-run --scheduler-observation`)
+  only when eligible, acquires an exclusive file lock before sending
+  `SendUserCascadeMessage`, and wakes **only** when `status == "CASCADE_RUN_STATUS_IDLE"` and either:
+  1. `ls_start_epoch > last_modified_epoch + 5.0` (proven OS reboot or LS restart
+     since the last turn, deduped once per `last_woken_ls_pid`), **or**
+  2. `now - last_modified_epoch >= long_idle_seconds` (default `2400`s / 40m
+     stall fallback, bounded by `>= 1800`s cooldown).
+- `install-launchd`: previews (default dry-run) or installs/unloads a
+  `~/Library/LaunchAgents/<label>.plist` (`RunAtLoad=true`, `StartInterval=300`,
+  resolved absolute `--registry`/`--runtime-root`/`--state-dir`/`--log-dir`, and
+  captured `PATH`) running `heartbeat-tick` with `--execute` (or
+  `--uninstall --execute`, verifying via `launchctl print` that the job is
+  unloaded or absent before removing the plist).
+
+```bash
+python3 -E -P -m loopx.agy_goal_mode.host_runtime install-launchd \
+  --goal-id <goal-id> --agent-id <agent-id> --conversation-id <conversation-id> --execute
+```
+
 ## Layout
 
 - `__init__.py` — host facts: install surface id, fixed skills root resolution,
   activation extras (advisory quota pacing and continuation boundaries),
   and the native goal + wake primitives the activation cites.
+- `host_runtime.py` — stdio `Stop` hook recovery and guarded `heartbeat-tick` / LaunchAgent CLI.
+- `launchd_watchdog.py` — macOS LaunchAgent plist builder and `launchctl` lifecycle helper.
