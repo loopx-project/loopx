@@ -722,12 +722,14 @@ def _resolve_operation_executor_binding(
         )
     if not isinstance(executor, Mapping):
         raise ValueError("operation executor binding is unavailable")
-    return resolve_extension_binding(
-        str(executor["extension_id"]),
-        state_file=default_extension_state_file(runtime_root),
-        capability_id=OPERATION_EXECUTOR_CAPABILITY_ID,
-        protocol=str(executor["protocol"]),
-        permission=str(executor["permission"]),
+    return dict(
+        resolve_extension_binding(
+            str(executor["extension_id"]),
+            state_file=default_extension_state_file(runtime_root),
+            capability_id=OPERATION_EXECUTOR_CAPABILITY_ID,
+            protocol=str(executor["protocol"]),
+            permission=str(executor["permission"]),
+        )
     )
 
 
