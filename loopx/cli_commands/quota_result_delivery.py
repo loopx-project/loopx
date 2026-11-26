@@ -531,6 +531,7 @@ def _publish_quota_result(
             goal_id=decision_identity[0],
             agent_id=decision_identity[1],
             surface=quota_context_surface(captured_payload),
+            include_goal_acceptance_detail="goal_acceptance" in detail_sections,
         )
     if (
         not deferred_context

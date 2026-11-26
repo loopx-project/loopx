@@ -967,6 +967,8 @@ function legacyRecommendationFallbackReferences(payload: JsonObject): JsonObject
 /** The unsigned root is used for path selection; edits and recovery still
  * address the unchanged, signed original capture. */
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
   const context = checkedContextPresentationSource(request);
   if (request.surface !== "complete_turn")
     return nativeReplanPresentation(request) ?? contextPresentationPlan(request);
@@ -974,7 +976,11 @@ function checkedContextPresentationPlan(request: JsonObject): JsonObject {
   delete source.schema_version;
   delete source.contract_binding;
   return nativeReplanPresentation(request) ?? progressiveContextPlan(
-    {payload: source, surface: "quota_packet"},
+    {
+      payload: source,
+      surface: "quota_packet",
+      ...(includeGoalAcceptanceDetail ? {include_goal_acceptance_detail: true} : {}),
+    },
     progressivePreparationScopes(source),
     legacyRecommendationFallbackReferences(source),
   );
@@ -1538,9 +1544,15 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
 }
 
 function contextPresentationPlan(request: JsonObject): JsonObject {
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
   const context = requireJsonObject(request.context, "current projection");
   return progressiveContextPlan(
-    {payload: context, surface: request.surface},
+    {
+      payload: context,
+      surface: request.surface,
+      ...(includeGoalAcceptanceDetail ? {include_goal_acceptance_detail: true} : {}),
+    },
     progressivePreparationScopes(context),
     legacyRecommendationFallbackReferences(context),
   );

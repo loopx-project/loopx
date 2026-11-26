@@ -521,6 +521,8 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 export function progressiveContextPlan(request: JsonObject,
     scopes: readonly PreparationScopeDetail[] = [],
     extraReferences: readonly JsonObject[] = []): JsonObject {
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -569,7 +571,8 @@ export function progressiveContextPlan(request: JsonObject,
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
     const isReplanObligationCarrier = carrier[0] === "autonomous_replan_obligation"
       && payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED;
-    const deferLargeHistoricalOutcomes = !isReplanObligationCarrier
+    const deferLargeHistoricalOutcomes = !includeGoalAcceptanceDetail
+      && !isReplanObligationCarrier
       && declaration.outcomes.length > SCOPED_OUTCOME_THRESHOLD
       && declaration.projection_mode !== SCOPED_OUTCOME_PROJECTION_MODE;
     declaration.outcomes.forEach((value, i) => {
@@ -661,7 +664,11 @@ export function progressiveContextPlan(request: JsonObject,
 const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path[i] === key);
 
 function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
-    plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
+    plan = progressiveContextPlan({
+      payload: request.context,
+      surface: request.surface,
+      ...(request.include_goal_acceptance_detail === undefined ? {} : {include_goal_acceptance_detail: request.include_goal_acceptance_detail}),
+    })):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const original = requireJsonObject(request.context, "current projection");
   const staged = jsonObject(plan.staged_context);

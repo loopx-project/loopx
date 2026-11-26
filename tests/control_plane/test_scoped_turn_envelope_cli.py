@@ -1080,3 +1080,138 @@ def test_unscoped_prereqs_recovery_and_first_read_keep_file_and_sqlite_lean_with
     assert rec_summary_reqs["inline_outcome_count"] == 1
     assert rec_summary_reqs["compacted_outcome_count"] == 14
     assert len(rec_detail_decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["outcomes"]) == 15
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_goal_acceptance_detail_retains_historical_requirements_directly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    env = _seed_mature_goal(
+        tmp_path, monkeypatch, provider=provider, outcome_count=9, goal_id=f"explicit-ga-{provider}",
+    )
+    cli = env["cli"]
+    goal_id = str(env["goal_id"])
+    agent_id = str(env["agent_id"])
+
+    # 1a. Pre-claim plain entry defers historical requirements in planning_horizon (recoverable via context-read);
+    #     explicit --include-detail goal_acceptance and --include-detail all return all 8 directly.
+    _, ordinary_plain = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id)
+    ordinary_plain_req = (
+        json.loads(Path(read_context_read_reference(ordinary_plain["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in ordinary_plain
+        else ordinary_plain
+    )
+    plain_hist = [
+        row
+        for row in ordinary_plain_req["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+        if row["id"].startswith("outcome-hist-")
+    ]
+    assert len(plain_hist) == 8
+    assert all("requirements" not in row and row.get("supporting_material_pointer") for row in plain_hist)
+    plain_cmd = ordinary_plain_req["context_details"]["command_template"].replace(
+        "'<pointer>'", shlex.quote(f"{plain_hist[0]['supporting_material_pointer']}/requirements"),
+    )
+    plain_recovered = json.loads(
+        json.loads(subprocess.run(shlex.split(plain_cmd), cwd=env["project"], capture_output=True, text=True, check=True).stdout)["content"]
+    )
+    assert len(plain_recovered["selections"][0]["value"]) == 8
+
+    for detail in ("goal_acceptance", "all"):
+        _, detail_plain = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id, "--include-detail", detail)
+        detail_plain_req = (
+            json.loads(Path(read_context_read_reference(detail_plain["recovery"]["reference_file"])[1]["path"]).read_bytes())
+            if "recovery" in detail_plain
+            else detail_plain
+        )
+        plain_detail_hist = [
+            row
+            for row in detail_plain_req["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+            if row["id"].startswith("outcome-hist-")
+        ]
+        assert len(plain_detail_hist) == 8
+        assert all(isinstance(row.get("requirements"), list) and len(row["requirements"]) == 8 for row in plain_detail_hist)
+
+    # 1b. Claimed Codex App entry compacts ordinary goal_acceptance (recoverable from capture) while
+    #     explicit --include-detail goal_acceptance and --include-detail all keep all 8 inline directly.
+    _claim_current_todo(env)
+
+    def _run_case(name: str, extra_args: tuple[str, ...]) -> tuple[dict, dict]:
+        native = tmp_path / f"native_{name}"
+        captures = tmp_path / f"captures_{name}"
+        native.mkdir(mode=0o700)
+        captures.mkdir(mode=0o700)
+        caps_resolved = captures.resolve()
+        monkeypatch.setenv("CODEX_THREAD_ID", f"{name}-{provider}")
+        codex_context_hook(
+            str(native),
+            {"hook_event_name": "SessionStart", "session_id": f"{name}-{provider}", "cwd": str(env["project"]), "source": "startup"},
+        )
+        _, view = cli(
+            "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+            "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+            "--turn-instance-id", f"turn-{name}",
+            "--codex-context-dir", str(native), "--decision-output-root", str(caps_resolved),
+            *extra_args,
+        )
+        _, req_ref = read_context_read_reference(view["recovery"]["reference_file"])
+        return view, json.loads(Path(req_ref["path"]).read_bytes())
+
+    _, ordinary_req = _run_case("ordinary", ())
+    ordinary_wc_ga = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in ordinary_req["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert ordinary_wc_ga["projection_mode"] == "turn_scoped_v0"
+    assert len(ordinary_wc_ga["outcomes"]) == 9
+    assert "requirements" in ordinary_wc_ga["outcomes"][0]
+    hist_ordinary = [row for row in ordinary_wc_ga["outcomes"] if row["id"].startswith("outcome-hist-")]
+    assert len(hist_ordinary) == 8
+    assert all(row.get("summary_only") is True and "requirements" not in row for row in hist_ordinary)
+    recovered = json.loads(
+        json.loads(
+            subprocess.run(
+                shlex.split(hist_ordinary[0]["capture_read_command"].replace(
+                    "outcome_requirements/outcomes/1",
+                    "outcome_requirements/outcomes/1/requirements",
+                )),
+                cwd=env["project"], capture_output=True, text=True, check=True,
+            ).stdout
+        )["content"]
+    )
+    assert len(recovered["selections"][0]["value"]) == 8
+
+    for detail in ("goal_acceptance", "all"):
+        detail_root = tmp_path / f"case_{detail}"
+        detail_root.mkdir()
+        detail_env = _seed_mature_goal(
+            detail_root, monkeypatch, provider=provider, outcome_count=9, goal_id=f"explicit-ga-{detail}-{provider}",
+        )
+        _claim_current_todo(detail_env)
+        d_native = detail_root / "native"
+        d_captures = detail_root / "captures"
+        d_native.mkdir(mode=0o700)
+        d_captures.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", f"{detail}-{provider}")
+        codex_context_hook(
+            str(d_native),
+            {"hook_event_name": "SessionStart", "session_id": f"{detail}-{provider}", "cwd": str(detail_env["project"]), "source": "startup"},
+        )
+        _, detail_view = detail_env["cli"](
+            "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+            "--goal-id", str(detail_env["goal_id"]), "--agent-id", str(detail_env["agent_id"]), "--todo-id", "todo_current",
+            "--turn-instance-id", f"turn-{detail}",
+            "--codex-context-dir", str(d_native), "--decision-output-root", str(d_captures.resolve()),
+            "--include-detail", detail,
+        )
+        _, d_ref = read_context_read_reference(detail_view["recovery"]["reference_file"])
+        detail_req = json.loads(Path(d_ref["path"]).read_bytes())
+        assert detail_req["effective_action"] == "normal_run"
+        wc_ga = next(
+            s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+            for s in detail_req["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if s.get("source") == "goal_acceptance"
+        )
+        hist_rows = [row for row in wc_ga["outcomes"] if row["id"].startswith("outcome-hist-")]
+        assert len(hist_rows) == 8
+        assert all(isinstance(row.get("requirements"), list) and len(row["requirements"]) == 8 for row in hist_rows)

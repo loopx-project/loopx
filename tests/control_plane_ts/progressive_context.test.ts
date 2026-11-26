@@ -462,6 +462,25 @@ test("progressiveContextPlan defers large unscoped historical requirements and d
   }) as {changes: {path: (string | number)[]}[]};
   assert.equal(unequalChanges.some(edit =>
     edit.path.join("/") === "context/heartbeat_recommendation/blocked_priority_fallback"), false);
+
+  // Explicit include_goal_acceptance_detail keeps historical requirements inline directly.
+  const explicitPlan = progressiveContextPlan({payload, surface: "quota_packet", include_goal_acceptance_detail: true}) as {
+    deferred: {path: (string | number)[]}[];
+  };
+  assert.equal(explicitPlan.deferred.some(item => item.path.at(-1) === "requirements"), false);
+  const {changes: explicitChanges} = evaluateTurnEnvelope({
+    operation: "context_delivery",
+    scope: {goal_id: "goal-unscoped", agent_id: "a1", session_id: "s1", context_epoch: "e1"},
+    capture_id: "cap-unscoped",
+    surface: "quota_packet",
+    context: payload,
+    include_goal_acceptance_detail: true,
+    native_projection: {
+      path: "projection.json", sha256: "b".repeat(64),
+      command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "b".repeat(64) + " --select '<pointer>'",
+    },
+  }) as {changes: {path: (string | number)[]; remove?: true}[]};
+  assert.equal(explicitChanges.some(edit => edit.path[0] === "context" && edit.path.at(-1) === "requirements" && edit.remove === true), false);
 });
 
 test("initial read omits redundant summary_only outcome rows when container read commands exist", () => {
