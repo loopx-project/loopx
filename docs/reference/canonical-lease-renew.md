@@ -148,12 +148,16 @@ opaque digests and the existing public repository identity enter the private
 authority record.
 
 Regular files within the declared scopes, including direct symlink targets,
-must have a single filesystem link. Hard-linked files are rejected with
-`invalid_worktree_lease_request`, even when all aliases are inside the checkout:
-writes could otherwise modify another checkout. Replace the hard link with an
-independent copy and retry acquisition. Hard links outside the declared scopes
-do not affect admission. This check applies only to explicit `--write-worktree`
-acquisition; it does not prevent later filesystem changes.
+must have a single filesystem link. Hard-linked files are rejected even when
+all aliases are inside the checkout: writes could otherwise modify another
+checkout. This check applies to every entrypoint that observes the worktree,
+including explicit `task-lease acquire --write-worktree`, ordinary managed
+`todo claim` with automatic worktree discovery and expired-claim recovery
+previews. Standalone acquisition returns `invalid_worktree_lease_request`;
+claim and recovery retain their existing rejection responses. Replace the
+hard link with an independent copy and retry the claim or acquisition. Hard
+links outside the declared scopes do not affect admission. The check does not
+prevent later filesystem changes.
 
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key; an alias resolving to the same worktree is valid.
@@ -196,10 +200,12 @@ JSON 与 Markdown 读回同一仓库字段或未知状态。这是物理 checkou
 不再生成逐路径 `write_scope_conflict` 或 `integration_overlap_advisories`。
 重定向软链接、Git 管理目录和仓库不匹配仍在入口拒绝。
 声明范围内的普通文件及直接软链接的目标必须只有一个文件系统链接。
-硬链接即使全部位于当前 checkout 内，也会返回 `invalid_worktree_lease_request`：
-原地写入可能同时修改另一 checkout。将硬链接替换为独立副本后重新获取租约；
-声明范围外的硬链接不影响准入。这项检查仅用于显式 `--write-worktree` 获取，
-不能阻止获取后的文件系统修改。
+硬链接即使全部位于当前 checkout 内，也会被拒绝，因为原地写入可能同时修改
+另一 checkout。这项检查适用于所有观察 worktree 的入口，包括显式
+`task-lease acquire --write-worktree`、自动发现工作区的普通托管 `todo claim`
+及过期 claim 的恢复预览。独立获取租约返回 `invalid_worktree_lease_request`；
+claim 和恢复保留原有的拒绝响应。将硬链接替换为独立副本后重新 claim 或获取租约。
+声明范围外的硬链接不影响准入；检查不能阻止获取后的文件系统修改。
 
 这是并发租约模型的行为简化：将写锁收敛回 Todo 归属 + 物理 worktree 独占，
 不再要求独立 worktree 为静态 path glob 做跨 checkout 阻塞或生成集成提示列表。

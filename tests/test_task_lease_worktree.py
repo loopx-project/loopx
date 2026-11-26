@@ -193,6 +193,16 @@ def test_ordinary_claim_uses_its_independent_worktree(tmp_path, monkeypatch, cap
     git("remote", "set-url", "origin", "https://github.com/example/other.git")
     assert claim("b", "wrong-repository", expected=1)["ok"] is False
     git("remote", "set-url", "origin", "https://github.com/example/project.git")
+    (b / "src").mkdir()
+    shared_source = a / "shared.ts"
+    shared_source.write_text("export const value = 1;\n")
+    shared_edit = b / "src" / "shared.ts"
+    shared_edit.hardlink_to(shared_source)
+    assert claim("b", "hardlink-claim", expected=1)["ok"] is False
+    assert not cli(["task-lease", "inspect"], "b")["active"]
+    assert cli(["todo", "list"], "b")["todo"].get("claimed_by") != "agent-b"
+    shared_edit.unlink()
+    shared_edit.write_text(shared_source.read_text())
     (b / "nested").mkdir()
     monkeypatch.chdir(b / "nested")
     if large_peer_scope:
@@ -292,6 +302,18 @@ def test_expired_claim_recovery_reuses_current_worktree_admission(tmp_path, monk
     assert snapshot() == original
 
     monkeypatch.chdir(a)
+    (a / "src").mkdir()
+    shared_source = b / "shared.ts"
+    shared_source.write_text("export const value = 1;\n")
+    shared_edit = a / "src" / "shared.ts"
+    shared_edit.hardlink_to(shared_source)
+    refused = run(attempt, expected=1)
+    assert refused["recovery"]["action"] == "resolve_acquire_rejection"
+    assert "claim" not in refused["recovery"]
+    assert claim("a", "hardlink-preview", preview=True, expected=1)["ok"] is False
+    assert snapshot() == original, "hardlink rejection must preserve both claims and leases"
+    shared_edit.unlink()
+    shared_edit.write_text(shared_source.read_text())
     ordinary_preview = claim("a", "independent-preview", preview=True)
     assert ordinary_preview["status"] == "planned"
     assert "integration_overlap_advisories" not in ordinary_preview
