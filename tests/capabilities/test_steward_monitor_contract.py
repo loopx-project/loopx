@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timedelta, timezone
 import json
@@ -53,9 +54,11 @@ from loopx.capabilities.native_chat.steward_monitor import (
     steward_monitor_snapshot_path,
     write_steward_monitor_scope,
 )
+from loopx.capabilities.native_chat.steward_managed_mode import StewardManagedMode
 from loopx.capabilities.native_chat.steward_monitor_turns import (
     StewardControllerProtocol,
     StewardSessionStoreProtocol,
+    StewardTodoRecord,
 )
 from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
 from loopx.chat_store import ChatSessionStore
@@ -585,3 +588,94 @@ def test_steward_monitor_failure_modes_and_negative_paths(
             {}, {"todo_id": "todo-inc", "target_key": "inc-watch", "text": "watch"},
         )
     assert not snap_path.exists()
+
+
+class _StubManaged:
+    def __init__(self, tmp_path: Path, session: dict[str, object]) -> None:
+        self._tmp_path = tmp_path
+        self._sess = session
+
+    def _session(self, binding_id: str, session_id: str | None) -> dict[str, object]:
+        return dict(self._sess)
+
+    def _workspace(self, session: Mapping[str, object]) -> Path:
+        return self._tmp_path
+
+    def _goal(self, goal_id: str) -> dict[str, object]:
+        return {"goal_id": goal_id}
+
+
+def test_configure_steward_monitor_rejects_non_mapping_plan_todo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binding_row: dict[str, object] = {
+        "binding_id": "bind-cfg",
+        "managed_actor": {"goal_id": "steward-agent-cfg", "agent_id": "steward"},
+    }
+    session_row: dict[str, object] = {
+        "session_id": "sess-cfg",
+        "steward_context": {"source_ref": "src-cfg", "operator_ref": "op-cfg"},
+    }
+
+    class _ConfigBindings(_StubBindings):
+        def resolve(self, **_kwargs: object) -> dict[str, object]:
+            return {"binding": dict(binding_row), "observation": {}}
+
+    bindings = _ConfigBindings(tmp_path / "bindings.json", bindings_rows=[binding_row])
+    controller = _StubController(tmp_path, bindings=bindings)
+    monkeypatch.setattr(steward_monitor_config, "load_goal_from_registry", lambda *_a: {"status": "active"})
+    managed = cast(StewardManagedMode, _StubManaged(tmp_path, session_row))
+
+    writes: list[list[str]] = []
+
+    def fake_run(controller: StewardControllerProtocol, argv: list[str]) -> dict[str, object]:
+        del controller
+        writes.append(list(argv))
+        return {"ok": True, "written": True}
+
+    def fake_current(
+        actor: Mapping[str, object], *, todos: Sequence[StewardTodoRecord] | None = None
+    ) -> StewardTodoRecord | None:
+        del actor, todos
+        return None
+
+    def fake_acquire(
+        actor: Mapping[str, object],
+        todo: Mapping[str, object],
+        key: str,
+        *,
+        expected_version: int | None = None,
+    ) -> dict[str, object]:
+        del actor, todo, key, expected_version
+        return {"lease": {"version": 1}}
+
+    def run_cfg(operation: str, plan_todo: object) -> dict[str, object]:
+        bindings.core_responses["collaboration.steward.monitor.plan"] = {
+            "plan_id": "plan-1",
+            "todo": plan_todo,
+        }
+        return steward_monitor_config.configure_steward_monitor(
+            _as_controller(controller),
+            managed=managed,
+            binding_id="bind-cfg",
+            operation=operation,
+            expected_plan_id="plan-1",
+            execute=True,
+            read_todos=lambda _actor: [],
+            current_monitor=fake_current,
+            acquire_lease=fake_acquire,
+            release_lease=lambda _actor, _todo, _lease: None,
+            clear_next_check_hint=lambda _binding_id: None,
+            run_command=fake_run,
+        )
+
+    for bad_todo in ("bad-non-mapping", "", ["bad"], 123, False):
+        for op in ("pause", "enable"):
+            with pytest.raises(TypeError, match="mapping or None"):
+                run_cfg(op, bad_todo)
+    assert writes == []
+
+    # Explicit None remains the only representation of "no monitor Todo" on pause.
+    none_pause = run_cfg("pause", None)
+    assert none_pause == {"ok": True, "applied": True, "plan": {"plan_id": "plan-1", "todo": None}}
+    assert writes == []

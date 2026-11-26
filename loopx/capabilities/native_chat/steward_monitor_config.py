@@ -243,6 +243,8 @@ def configure_steward_monitor(
             raise ValueError("refresh the current native monitor preview")
         plan_id = str(plan["plan_id"])
         raw_todo = plan["todo"]
+        if raw_todo is not None and not isinstance(raw_todo, Mapping):
+            raise TypeError("monitor plan todo must be a mapping or None")
         todo = _coerce_dict(raw_todo) if isinstance(raw_todo, Mapping) else None
         if operation == "pause" and todo is None:
             return {"ok": True, "applied": True, "plan": plan}
