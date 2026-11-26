@@ -349,17 +349,21 @@ but cannot replace that proof. In `loopx-project/loopx` (Apache-2.0 core), run
 certificate verification and `Bearer` authentication), and
 `python -m pytest tests/control_plane/test_remote_authority_gateway.py` (Python
 read-only scheduler gateway). For changes affecting server-side PostgreSQL
-authority, configure `LOOPX_TEST_POSTGRES_URL` to an isolated disposable
-server inside authorized access to the private/separately licensed
-`loopx-project/loopx-cloud` repository (unauthenticated public fetches return
-HTTP 404) and run `npm run test:postgresql-authority-store` plus
-`npm run test:postgresql-authority-service`; a skipped suite is an evidence gap,
-not a pass. Record the exact commit, backend version, tested behavior, and
-failures or limits. The `PostgreSQL Integration` workflow in `loopx-cloud`
-qualifies those suites against a disposable server, while public pre-split
-self-hosted installations stay on the frozen `v2.4.0` (tag `5037daecee`, commit `a6ffb3be6e`) release
-(`loopx postgres`, Compose bundle, and legacy test runner). If no safe real
-environment is available, hold delivery.
+authority, configure `LOOPX_TEST_POSTGRES_URL` (for store tests) and
+`LOOPX_TEST_POSTGRES_SERVICE_URL` (for real service admission integration) to
+an isolated disposable server inside authorized access to the private/separately
+licensed `loopx-project/loopx-cloud` repository (unauthenticated public fetches
+return HTTP 404) and run `npm run test:postgresql-authority-store` plus
+`npm run test:postgresql-authority-service`. Verify both suites report zero
+skipped tests (`0 skipped`, including the service suite, rather than relying on
+exit code `0` alone); a skipped suite or skipped service integration case is an
+evidence gap, not a pass. Record the exact commit, backend version, tested
+behavior, and failures or limits. The `PostgreSQL Integration` workflow in
+`loopx-cloud` qualifies those suites against a disposable server, while public
+pre-split self-hosted installations stay on the frozen `v2.4.0` (tag
+`5037daecee`, commit `a6ffb3be6e`) release (`loopx postgres`, Compose bundle,
+and legacy test runner). If no safe real environment is available, hold
+delivery.
 
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
 不能替代这项证据。在开源核心 `loopx-project/loopx` 中，运行
@@ -368,12 +372,16 @@ environment is available, hold delivery.
 HTTPS 客户端契约）以及
 `python -m pytest tests/control_plane/test_remote_authority_gateway.py`（Python 只读
 调度器网关）。影响服务端 PostgreSQL authority 时，请在经授权访问的私有／独立许可
-仓库 `loopx-project/loopx-cloud`（未登录匿名公开访问会返回 HTTP 404）中配置指向隔离
-临时实例的 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store` 与
-`npm run test:postgresql-authority-service`；跳过不算通过。记录精确 commit、
-后端版本、验证行为与失败或局限；`loopx-cloud` 的 `PostgreSQL Integration`
-workflow 会在临时实例上验证这些套件，而公开拆分前的自托管部署可继续保留冻结标签
-`v2.4.0`（tag `5037daecee`、commit `a6ffb3be6e`、`loopx postgres`、Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
+仓库 `loopx-project/loopx-cloud`（未登录匿名公开访问会返回 HTTP 404）中为隔离
+临时实例同时配置 `LOOPX_TEST_POSTGRES_URL`（store 套件）与
+`LOOPX_TEST_POSTGRES_SERVICE_URL`（真实服务接入集成），运行
+`npm run test:postgresql-authority-store` 与
+`npm run test:postgresql-authority-service`，并明确以两套测试（含服务套件 `0 skipped`）
+零跳过作为回读标准；不能仅凭退出码 `0` 判定通过，存在被跳过的套件或服务集成用例即
+视为证据缺口而非通过。记录精确 commit、后端版本、验证行为与失败或局限；`loopx-cloud`
+的 `PostgreSQL Integration` workflow 会在临时实例上验证这些套件，而公开拆分前的自托管
+部署可继续保留冻结标签 `v2.4.0`（tag `5037daecee`、commit `a6ffb3be6e`、`loopx postgres`、
+Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
 
 #### Default-Provider Performance Qualification / 默认 Provider 性能资格
 
