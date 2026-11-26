@@ -157,11 +157,22 @@ export async function observeFencedExecution(root: string, identity: ReturnType<
   if (!todo || todo.status !== "open" || todo.role !== "agent" || todo.task_class !== "advancement_task"
       || todo.archive_state !== "active" || !rawLease) return null;
   const lease = canonicalTaskLease(rawLease, identity.goal_id, identity.todo_id);
-  if (!fencesPreparedGeneration(prepared, lease)) return null;
+  // Expiry/release already ends the original execution. A fresh managed claim
+  // may establish the administrative writer, but must never be advertised as
+  // preparation to resume that execution. The commit still requires a newer
+  // generation and independently verifies it under the writer fence.
+  const now = new Date();
+  const originalLost = lease.lease_epoch === prepared.prepared_lease_epoch
+    && typeof lease.version === "number" && Number.isSafeInteger(lease.version)
+    && lease.version >= prepared.prepared_lease_version
+    && typeof lease.idempotency_key === "string"
+    && createHash("sha256").update(lease.idempotency_key).digest("hex") === prepared.prepared_lease_key_sha256
+    && !leaseIsActive(lease, now);
+  if (!originalLost && !fencesPreparedGeneration(prepared, lease)) return null;
   const writerMatches = todo.claimed_by === identity.agent_id && lease.owner === identity.agent_id
     && todo.done !== true && leaseRepositoryRejection(todo, lease) === null
     && canonicalLeaseTodoFact(todo)?.excluded_agents.includes(identity.agent_id) === false;
-  const active = writerMatches && leaseIsActive(lease, new Date());
+  const active = writerMatches && leaseIsActive(lease, now);
   return {original_prepared_epoch: prepared.prepared_lease_epoch, current_lease_epoch: lease.lease_epoch,
     current_lease_version: lease.version, current_owner: lease.owner,
     current_control_writer_active: active, can_reclaim_control_writer: writerMatches && !active};
