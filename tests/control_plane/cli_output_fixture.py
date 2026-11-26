@@ -47,6 +47,34 @@ def budget_fixture_path(root: Path) -> Path:
 
 
 @contextlib.contextmanager
+def isolated_probe_host_env(home: Path):
+    """Prevent host-level auth/context env (e.g. gh hosts) from mutating isolated public fixtures."""
+    home.mkdir(parents=True, exist_ok=True)
+    previous = {
+        key: os.environ.get(key)
+        for key in (
+            "HOME",
+            "USERPROFILE",
+            "CODEX_HOME",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "LOOPX_CHAT_CODEX_MODEL_PROVIDER",
+        )
+    }
+    os.environ["HOME"] = str(home)
+    os.environ["USERPROFILE"] = str(home)
+    for key in ("CODEX_HOME", "ANTIGRAVITY_CONVERSATION_ID", "LOOPX_CHAT_CODEX_MODEL_PROVIDER"):
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@contextlib.contextmanager
 def stable_budget_fixture_root(root: Path):
     fixture = budget_fixture_path(root)
     if fixture.exists() or fixture.is_symlink():

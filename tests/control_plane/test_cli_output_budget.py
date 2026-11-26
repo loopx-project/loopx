@@ -2079,6 +2079,53 @@ def test_long_path_budget_is_independent_of_runner_temp_prefix(
     test_brief_budget_retains_full_commands_on_real_long_paths()
 
 
+def test_brief_prunes_duplicate_non_command_metadata_and_smoke_isolates_host(tmp_path: Path) -> None:
+    from tests.control_plane.cli_output_fixture import isolated_probe_host_env
+
+    payload = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        active_state=tmp_path / "ACTIVE_GOAL_STATE.md",
+        brief=True,
+        agent_id="codex-alpha",
+        registered_agents=["codex-alpha"],
+        agent_scopes=["Public CLI output qualification."],
+        agent_profile={"schema_version": "agent_profile_v1", "profile_role": "fixture"},
+        runtime_root=tmp_path / "runtime",
+        registry_path=tmp_path / "registry.json",
+        reward_memory_enabled=True,
+    )
+    for removed in (
+        "material_queue_rule",
+        "permission_rule",
+        "agent_profile",
+        "registered_agents",
+        "reward_memory_enabled",
+    ):
+        assert removed not in payload
+    for retained in (
+        "agent_model",
+        "agent_role",
+        "agent_scopes",
+        "active_state_source",
+        "resolved_active_state",
+        "cli_preflight",
+        "brief_prompt_command",
+        "quota_guard_command",
+        "quota_spend_command",
+        "refresh_state_command",
+        "progress_refresh_state_command",
+    ):
+        assert retained in payload
+
+    empty_home = tmp_path / "isolated-home"
+    with isolated_probe_host_env(empty_home):
+        assert os.environ["HOME"] == str(empty_home)
+        assert os.environ["USERPROFILE"] == str(empty_home)
+        assert "CODEX_HOME" not in os.environ
+        assert "ANTIGRAVITY_CONVERSATION_ID" not in os.environ
+        assert "LOOPX_CHAT_CODEX_MODEL_PROVIDER" not in os.environ
+
+
 @pytest.mark.parametrize("nested_temp", [False, True])
 def test_long_path_budget_uses_native_temp_without_a_drive_root_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested_temp: bool,

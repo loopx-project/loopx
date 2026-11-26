@@ -884,3 +884,58 @@ test("scopeTurnGoalAcceptance scopes unsettled recovery planning_horizon and sta
     undefined,
   );
 });
+
+test("compactRoutineSettlementPlan trims non-explore graph boilerplate on unsettled recovery and VCA normal turns", () => {
+  const base = baseNormalPayload(4);
+  const boilerplateGraph = () => ({
+    ...exploreResultWritebackAffordance(),
+    counts: {nodes: 1},
+    guidance: "Check evidence first.",
+    result_writeback_option: exploreResultWritebackAffordance().option,
+    result_writeback_inline_option: exploreResultWritebackAffordance().inline_option,
+    result_writeback_inline_field: exploreResultWritebackAffordance().inline_field,
+    result_attachment_schema: exploreResultWritebackAffordance().attachment_schema,
+    path_delta_attachment_schema: exploreResultWritebackAffordance().path_delta_attachment_schema,
+    path_delta_attachment_template: exploreResultWritebackAffordance().path_delta_attachment_template,
+    linked_question_attachment_template: exploreResultWritebackAffordance().linked_question_attachment_template,
+    optional_question_evolution_example: exploreResultWritebackAffordance().optional_question_evolution_example,
+    optional_execution_observation_example: exploreResultWritebackAffordance().optional_execution_observation_example,
+    result_writeback_guidance: exploreResultWritebackAffordance().guidance,
+    result_attachment_template: exploreResultWritebackAffordance().attachment_template,
+    optional_measurement_example: exploreResultWritebackAffordance().optional_measurement_example,
+  });
+  const exploreSource = {
+    source: "turn_start_capability_hook",
+    hook_id: "explore.turn_context",
+    capability_id: "explore",
+    content: {ok: true, graph_enabled: true, graph: boilerplateGraph()},
+  };
+  const unsettled = {
+    ...base,
+    effective_action: "unsettled_host_turn_recovery",
+    normal_delivery_allowed: false,
+    vision_continuation_audit: {required: true},
+    interaction_contract: {
+      agent_channel: {work_context: {sources: [structuredClone(exploreSource)]}},
+      cli_channel: {settlement_plan: {schema_version: "quota_settlement_plan_v2", identity: {goal_id: "g1", agent_id: "a1"}, ordered_steps: []}},
+    },
+  };
+  const compacted = compactRoutineSettlementPlan(unsettled, {captureReferenceFile: "/tmp/ref.json", cliArgv: ["loopx"]});
+  const compactedGraph = (((((compacted.interaction_contract as JsonObject).agent_channel as JsonObject)
+    .work_context as JsonObject).sources as JsonObject[])[0].content as JsonObject).graph as JsonObject;
+  assert.equal(compactedGraph.result_writeback_guidance, undefined);
+  assert.equal(compactedGraph.optional_question_evolution_example, undefined);
+  assert.equal(compactedGraph.result_writeback_guidance_summary_only, true);
+  assert.match(String(compactedGraph.result_writeback_guidance_cold_read_command), /explore turn-context/);
+
+  // Explicit explore requirement preserves full graph boilerplate on recovery too.
+  const requiredExplore = structuredClone(unsettled);
+  (requiredExplore.selected_todo as JsonObject).required_capabilities = ["explore"];
+  assert.equal(compactRoutineSettlementPlan(requiredExplore, {captureReferenceFile: "/tmp/ref.json", cliArgv: ["loopx"]}), requiredExplore);
+
+  // Pure replan packets remain untouched by compactRoutineSettlementPlan.
+  const replan = structuredClone(unsettled);
+  replan.effective_action = "autonomous_replan_required";
+  (replan as JsonObject).replan_action_packet = {schema_version: "replan_action_packet_v0"};
+  assert.equal(compactRoutineSettlementPlan(replan, {captureReferenceFile: "/tmp/ref.json", cliArgv: ["loopx"]}), replan);
+});

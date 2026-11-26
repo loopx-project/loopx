@@ -677,3 +677,162 @@ test("initial read omits redundant summary_only outcome rows when container read
   const smallPointers = initialContextReadPointers(smallContext, []);
   assert.ok(smallPointers.includes(prefix + "/1/capture_read_command"));
 });
+
+test("progressiveContextPlan handles agent_review basis_digest, defers large manager agenda items and non-explore graph bloat", () => {
+  const mkOutcome = (id: string, todoId: string, owner: string, note: string) => ({
+    id, objective: `Deliver ${id}.`, revision: 2, owner_agent_id: owner, todo_ids: [todoId],
+    sources: [{ref: `src:${id}`, summary: "Historical source provenance."}],
+    requirements: [{
+      id: "req-1",
+      description: `Requirement for ${id}. ` + "Detailed criteria. ".repeat(12),
+      status: "unverified",
+      planning_satisfied: false,
+      agent_review: {
+        id: "req-1", conclusion: "unmet", note, evidence_refs: [`ev:${id}`],
+        basis_digest: "sha256:" + "b".repeat(64), basis_current: false, independently_verified: false,
+      },
+    }],
+  });
+  const outcomes = [
+    mkOutcome("out-active", "todo-active", "agent-a", "Active agent review detail."),
+    mkOutcome("out-other", "todo-other", "peer-b", "Inactive peer review detail."),
+    ...Array.from({length: 7}, (_, idx) => mkOutcome(`out-hist-${idx}`, `todo-h-${idx}`, "peer-c", "Historical detail.")),
+  ];
+  const longPurpose = "Coordinate cross-module review handoff without losing request scope. ".repeat(4);
+  const largeItems = Array.from({length: 8}, (_, idx) => ({
+    request_id: String(idx).repeat(64).slice(0, 64),
+    direction: "incoming",
+    request_revision: 1,
+    agent_id: "agent-a",
+    purpose: longPurpose,
+    purpose_truncated: false,
+    receipt_state: "pending",
+    decision: null,
+    step: "assess_request",
+  }));
+  const managerRead = {
+    source: "turn_start_capability_hook",
+    kind: "operator_inbox",
+    capability_id: "manager-context",
+    hook_id: "manager.context_inbox",
+    ordering: "before_work",
+    command: "loopx manager-inbox read --goal-id g1 --agent-id agent-a",
+  };
+  const managerSource = {
+    ...managerRead,
+    content: {
+      ok: true,
+      read_complete: false,
+      unfinished_delegations: {
+        count_unit: "request",
+        items: largeItems,
+        incoming_count: largeItems.length,
+        outgoing_count: 0,
+        omitted_count: 0,
+        return_attention: {count: 0, items: [], omitted_count: 0},
+        scan_complete: true,
+        unavailable_count: 0,
+        observed_at: "2026-11-27T00:00:00Z",
+        read_command: managerRead.command,
+        instruction: "Reconcile unfinished requests before proceeding.",
+      },
+    },
+  };
+  const largeGuidance = "Explore writeback guidance. ".repeat(60);
+  const largeResults = Array.from({length: 3}, (_, idx) => ({
+    finding_id: `f-${idx}`, node_id: "n-1", finding: `Finding ${idx}`, status: "confirmed",
+    summary: "Detailed finding narrative. ".repeat(20),
+  }));
+  const largeFeedback = Array.from({length: 4}, (_, idx) => ({
+    node_id: `n-${idx}`, metric: "latency", unit: "ms", higher_is_better: false,
+    comparison_scope: "s1", best: {value: 10 + idx}, latest: {value: 11 + idx, measurement: {evidence_ref: `ev-${idx}`}},
+    note: "Comparable profile details. ".repeat(12),
+  }));
+  const exploreSource = {
+    source: "turn_start_capability_hook",
+    kind: "explore_turn_context",
+    capability_id: "explore",
+    hook_id: "explore.turn_context",
+    ordering: "before_work",
+    command: "loopx explore turn-context --goal-id g1 --agent-id agent-a",
+    content: {
+      ok: true,
+      goal_id: "g1",
+      agent_id: "agent-a",
+      graph_enabled: true,
+      graph: {
+        counts: {nodes: 3, findings: 3},
+        guidance: "Check existing evidence.",
+        recent_nodes: [{node_id: "n-1", title: "Node 1", status: "exploring"}],
+        recent_findings: [{finding_id: "f-0", node_id: "n-1", title: "Finding 0", status: "confirmed"}],
+        writeback_results: largeResults,
+        result_page: {total: 3, offset: 0, limit: 3, remaining: 0, revision: "r1"},
+        measurement_feedback: largeFeedback,
+        measurement_guidance: "Compare only matching scopes.",
+        measurement_feedback_page: {total: 4, offset: 0, limit: 3, remaining: 1, revision: "r1"},
+        result_writeback_guidance: largeGuidance,
+        record_node_template: "loopx explore node --title <title>",
+        record_finding_template: "loopx explore finding --node <id>",
+      },
+    },
+  };
+  const payload = {
+    ok: true,
+    goal_id: "g1",
+    agent_id: "agent-a",
+    effective_action: "unsettled_host_turn_recovery",
+    normal_delivery_allowed: false,
+    selected_todo: {todo_id: "todo-active", required_capabilities: []},
+    planning_horizon: {
+      core_goal: {
+        acceptance_contract: {
+          outcome_requirements: {schema_version: "loopx_goal_outcomes_v0", current_lifetime: true, outcomes},
+        },
+      },
+    },
+    interaction_contract: {
+      schema_version: "loopx_interaction_contract_v0",
+      agent_channel: {
+        required_reads: [managerRead],
+        work_context: {sources: [managerSource, exploreSource]},
+      },
+    },
+  };
+
+  const plan = progressiveContextPlan({payload, surface: "quota_packet"});
+  const deferredPointers = (plan.deferred as {path: (string | number)[]}[]).map(
+    entry => "/" + entry.path.map(k => String(k)).join("/"),
+  );
+  // Active outcome preserves requirements while deferring review note/evidence_refs; inactive outcomes defer requirements even with basis_digest.
+  assert.ok(deferredPointers.includes("/planning_horizon/core_goal/acceptance_contract/outcome_requirements/outcomes/0/requirements/0/agent_review/note"));
+  assert.ok(deferredPointers.includes("/planning_horizon/core_goal/acceptance_contract/outcome_requirements/outcomes/1/requirements"));
+  assert.ok(!deferredPointers.includes("/planning_horizon/core_goal/acceptance_contract/outcome_requirements/outcomes/0/requirements"));
+  // Manager unfinished_delegations.items deferred on recovery when in required_reads.
+  assert.ok(deferredPointers.includes("/interaction_contract/agent_channel/work_context/sources/0/content/unfinished_delegations/items"));
+  // Non-explore turn defers large graph writeback_results, measurement_feedback, and authoring boilerplate.
+  assert.ok(deferredPointers.includes("/interaction_contract/agent_channel/work_context/sources/1/content/graph/writeback_results"));
+  assert.ok(deferredPointers.includes("/interaction_contract/agent_channel/work_context/sources/1/content/graph/measurement_feedback"));
+  assert.ok(deferredPointers.includes("/interaction_contract/agent_channel/work_context/sources/1/content/graph/result_writeback_guidance"));
+  assert.ok(initialContextReadPointers(payload, ["ok", "goal_id"]).includes(
+    "/interaction_contract/agent_channel/work_context/sources/0/content/unfinished_delegations/incoming_count",
+  ));
+
+  // When selected_todo explicitly requires explore, keep Explore graph history & templates inline.
+  const exploreTurn = structuredClone(payload);
+  exploreTurn.selected_todo = {todo_id: "todo-active", required_capabilities: ["explore"]};
+  const explorePlan = progressiveContextPlan({payload: exploreTurn, surface: "quota_packet"});
+  const exploreDeferred = (explorePlan.deferred as {path: (string | number)[]}[]).map(
+    entry => "/" + entry.path.map(k => String(k)).join("/"),
+  );
+  assert.equal(exploreDeferred.some(ptr => ptr.includes("/content/graph/")), false);
+
+  // Small manager agenda (< 2048 B) stays inline.
+  const smallPayload = structuredClone(payload);
+  smallPayload.interaction_contract.agent_channel.work_context.sources[0].content.unfinished_delegations.items = [largeItems[0]];
+  smallPayload.interaction_contract.agent_channel.work_context.sources[0].content.unfinished_delegations.incoming_count = 1;
+  const smallPlan = progressiveContextPlan({payload: smallPayload, surface: "quota_packet"});
+  const smallDeferred = (smallPlan.deferred as {path: (string | number)[]}[]).map(
+    entry => "/" + entry.path.map(k => String(k)).join("/"),
+  );
+  assert.equal(smallDeferred.some(ptr => ptr.includes("unfinished_delegations")), false);
+});

@@ -522,34 +522,58 @@ function compactExploreGraphBoilerplate(
   return {sources: next, changed};
 }
 
+function compactExploreBoilerplateForNonExploreTurn(
+  payload: JsonObject,
+  options: CompactSettlementOptions,
+  exploreEnabled: boolean,
+  exploreColdRead: string,
+): JsonObject {
+  if (exploreEnabled) return payload;
+  const action = payload.effective_action;
+  const isNormal = action === EffectiveAction.NORMAL_RUN && payload.normal_delivery_allowed === true;
+  if (!isNormal && action !== EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY) return payload;
+  if (payload.replan_action_packet != null || payload.autonomous_replan_obligation != null) return payload;
+  const interaction = jsonObject(payload.interaction_contract);
+  const agent = jsonObject(interaction?.agent_channel);
+  const workContext = jsonObject(agent?.work_context);
+  if (!interaction || !agent || !workContext || !Array.isArray(workContext.sources)) return payload;
+  const knownExplore = exploreResultWritebackAffordance();
+  const updated = compactExploreGraphBoilerplate(workContext.sources, knownExplore, exploreColdRead);
+  if (!updated.changed) return payload;
+  return {
+    ...payload,
+    interaction_contract: {
+      ...interaction,
+      agent_channel: {
+        ...agent,
+        work_context: {
+          ...workContext,
+          sources: updated.sources,
+        },
+      },
+    },
+  };
+}
+
 export function compactRoutineSettlementPlan(
   payload: JsonObject,
   options: CompactSettlementOptions = {},
 ): JsonObject {
-  if (!isRoutineNormalRun(payload)) return payload;
   const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
   if (!captureReferenceFile) return payload;
-  const frontier = object(payload.goal_frontier_projection);
-  if (Array.isArray(frontier.acceptance_gaps) && frontier.acceptance_gaps.length > 0) return payload;
-
-  const interaction = jsonObject(payload.interaction_contract);
-  const cli = jsonObject(interaction?.cli_channel);
-  const plan = jsonObject(cli?.settlement_plan);
-  if (!interaction || !cli || !plan || !Array.isArray(plan.ordered_steps)) return payload;
-
-  const identity = object(plan.identity);
-  const isTodoBound = identity.binding_kind === "todo"
-    || (identity.binding_kind === undefined && nonEmptyString(identity.todo_id) !== null && identity.replan_obligation_id == null);
-  if (!isTodoBound) return payload;
-  const goalId = nonEmptyString(payload.goal_id ?? identity.goal_id);
-  const agentId = nonEmptyString(object(payload.agent_identity).agent_id ?? payload.agent_id ?? identity.agent_id);
-  const todoId = nonEmptyString(object(payload.selected_todo).todo_id ?? identity.todo_id);
+  const planIdentity = object(object(object(payload.interaction_contract).cli_channel).settlement_plan).identity;
+  const identityObj = object(planIdentity);
+  const goalId = nonEmptyString(payload.goal_id ?? identityObj.goal_id);
+  const agentId = nonEmptyString(
+    object(payload.agent_identity).agent_id
+    ?? payload.agent_id
+    ?? identityObj.agent_id,
+  );
   if (!goalId || !agentId) return payload;
-
   const requiredCaps = new Set(stringList(object(payload.selected_todo).required_capabilities));
   const exploreEnabled = requiredCaps.has("explore");
-  const knownExplore = exploreResultWritebackAffordance();
   const cliArgv = options.cliArgv ?? ["loopx"];
+  const todoId = nonEmptyString(object(payload.selected_todo).todo_id ?? identityObj.todo_id);
   const exploreColdRead = exploreColdReadCommand({
     cliArgv,
     registry: options.registry ?? payload.registry,
@@ -558,6 +582,30 @@ export function compactRoutineSettlementPlan(
     agentId,
     todoId,
   });
+
+  if (!isRoutineNormalRun(payload)) {
+    return compactExploreBoilerplateForNonExploreTurn(payload, options, exploreEnabled, exploreColdRead);
+  }
+  const frontier = object(payload.goal_frontier_projection);
+  if (Array.isArray(frontier.acceptance_gaps) && frontier.acceptance_gaps.length > 0) {
+    return compactExploreBoilerplateForNonExploreTurn(payload, options, exploreEnabled, exploreColdRead);
+  }
+
+  const interaction = jsonObject(payload.interaction_contract);
+  const cli = jsonObject(interaction?.cli_channel);
+  const plan = jsonObject(cli?.settlement_plan);
+  if (!interaction || !cli || !plan || !Array.isArray(plan.ordered_steps)) {
+    return compactExploreBoilerplateForNonExploreTurn(payload, options, exploreEnabled, exploreColdRead);
+  }
+
+  const identity = object(plan.identity);
+  const isTodoBound = identity.binding_kind === "todo"
+    || (identity.binding_kind === undefined && nonEmptyString(identity.todo_id) !== null && identity.replan_obligation_id == null);
+  if (!isTodoBound) {
+    return compactExploreBoilerplateForNonExploreTurn(payload, options, exploreEnabled, exploreColdRead);
+  }
+
+  const knownExplore = exploreResultWritebackAffordance();
   let deferredOptionalAttachments: unknown[] | null = null;
 
   let planChanged = false;
@@ -602,7 +650,9 @@ export function compactRoutineSettlementPlan(
     return rawStep;
   });
 
-  if (!planChanged) return payload;
+  if (!planChanged) {
+    return compactExploreBoilerplateForNonExploreTurn(payload, options, exploreEnabled, exploreColdRead);
+  }
 
   let nextInteraction: JsonObject = {
     ...interaction,
@@ -635,11 +685,14 @@ export function compactRoutineSettlementPlan(
     }
   }
 
-  return {
+  const nextPayload: JsonObject = {
     ...payload,
     interaction_contract: nextInteraction,
     ...(deferredOptionalAttachments !== null
       ? {deferred_settlement_details: {optional_attachments: deferredOptionalAttachments}}
       : {}),
   };
+  return compactedExploreAttachment
+    ? nextPayload
+    : compactExploreBoilerplateForNonExploreTurn(nextPayload, options, exploreEnabled, exploreColdRead);
 }

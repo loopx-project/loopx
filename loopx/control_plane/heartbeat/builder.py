@@ -726,13 +726,20 @@ def _prune_prompt_metadata(
             if not payload.get(key):
                 payload.pop(key, None)
     elif brief:
-        # The brief task body already embeds its compact-detail command. Keep
-        # only the selected brief command as top-level regeneration metadata;
-        # repeating the other mode commands can exceed the registered output
-        # budget when the CLI/runtime paths are long.
+        # The brief task body already embeds its compact-detail command and
+        # rule/profile prose. Keep regeneration metadata and markdown-rendered
+        # diagnostic fields while omitting duplicate non-command copies.
         payload.pop("expanded_prompt_command", None)
         payload.pop("compact_prompt_command", None)
         payload.pop("thin_prompt_command", None)
+        for key in (
+            "material_queue_rule",
+            "permission_rule",
+            "agent_profile",
+            "registered_agents",
+            "reward_memory_enabled",
+        ):
+            payload.pop(key, None)
         if payload.get("pr_review_pre_quota_command") is None:
             payload.pop("pr_review_pre_quota_command", None)
     return payload
