@@ -2,26 +2,43 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
-import hashlib
+from collections.abc import Callable, Mapping, Sequence
 import json
-import math
 import os
 from pathlib import Path
-import re
-from typing import Any, Mapping, Sequence
 import uuid
 
+from .chat import action_store_common as _common
+from .chat import action_store_operations as _operations
+from .chat import action_store_review_cards as _review_cards
+from .chat.action_store_common import (
+    AUTHENTICATED_LARK_CARD_CALLBACK,
+    CHAT_ACTION_PROPOSAL_SCHEMA_VERSION,
+    CHAT_ACTION_STORE_SCHEMA_VERSION,
+    HUMAN_ACTOR_CLASS,
+    OPERATION_ENVELOPE_SCHEMA_VERSION,
+    OPERATION_LIFECYCLE_STATES,
+    PROPOSAL_STATES,
+    RETRYABLE_PROPOSAL_STATES,
+    ActionConflictError,
+    JsonDict,
+    JsonPrimitive,
+    JsonValue,
+    ObjectDict,
+    _bounded_text,
+    _canonical_digest,
+    _opaque_id,
+    _safe_json_value,
+    _utc_now,
+    is_str_dict,
+    normalize_idempotency_key,
+    safe_object_dict,
+    store_idempotency,
+    store_proposals,
+)
 from .file_lock import exclusive_file_lock
 from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .registry import atomic_write_json
-
-
-CHAT_ACTION_STORE_SCHEMA_VERSION = "loopx_chat_action_store_v1"
-CHAT_ACTION_PROPOSAL_SCHEMA_VERSION = "loopx_chat_action_proposal_v1"
-HUMAN_ACTOR_CLASS = "human"
-AUTHENTICATED_LARK_CARD_CALLBACK = "lark_authenticated_card_callback_v1"
 
 ACTION_KINDS = {
     "goal.acceptance.check",
@@ -40,122 +57,33 @@ ACTION_KINDS = {
     "pr.merge",
     "team.plan",
 }
-PROPOSAL_STATES = {
-    "preview_ready",
-    "applying",
-    "gated",
-    "failed",
-    "rejected",
-    "deferred",
-    "cancelled",
-    "stale",
-    "applied",
-}
-RETRYABLE_PROPOSAL_STATES = {"preview_ready", "gated", "failed", "deferred"}
 
-OPERATION_ENVELOPE_SCHEMA_VERSION = "loopx_operation_envelope_v0"
-OPERATION_LIFECYCLE_STATES = {
-    "awaiting_confirmation",
-    "claimed",
-    "outcome_observed",
-}
-
-_LOCAL_PATH = re.compile(
-    r"(?:^|[\s\"'])(?:/Users/|/home/|/private/|/var/folders/|/tmp/|~[/\\]|file://)",
-    re.IGNORECASE,
-)
-_SENSITIVE_TEXT = re.compile(
-    r"(?:bearer\s+[A-Za-z0-9._~+/-]+|sk-[A-Za-z0-9_-]{4,}|raw\s+(?:provider|tool)\s+(?:payload|output))",
-    re.IGNORECASE,
-)
-_SENSITIVE_KEYS = {
-    "api_key",
-    "apikey",
-    "authorization",
-    "auth_token",
-    "access_token",
-    "refresh_token",
-    "password",
-    "passwd",
-    "secret",
-    "credentials",
-    "credential",
-    "private_key",
-    "raw_provider_payload",
-    "provider_payload",
-    "raw_tool_output",
-    "tool_output",
-    "stderr",
-    "command",
-}
-
-
-class ActionConflictError(RuntimeError):
-    """Raised when a typed action transition conflicts with durable state."""
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _opaque_id(value: Any, *, field: str) -> str:
-    token = str(value or "").strip()
-    if not _OPAQUE_ID.fullmatch(token):
-        raise ValueError(f"{field} must be a compact opaque id")
-    return token
-
-
-def normalize_idempotency_key(value: Any) -> str:
-    """Return the canonical token this store binds and persists."""
-    return _opaque_id(value, field="idempotency_key")
-
-
-def _bounded_text(value: Any, *, field: str, limit: int = 4000) -> str:
-    text = str(value or "").strip()
-    if not text or len(text) > limit or any(ord(character) < 32 for character in text):
-        raise ValueError(f"{field} must be bounded visible text")
-    return text
-
-
-def _safe_json_value(value: Any, *, path: str = "payload") -> Any:
-    if value is None or isinstance(value, (bool, int)):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError(f"{path} must contain finite JSON numbers")
-        return value
-    if isinstance(value, str):
-        if _LOCAL_PATH.search(value) or _SENSITIVE_TEXT.search(value):
-            raise ValueError(f"{path} contains sensitive material")
-        if len(value) > 8000 or any(ord(character) < 9 for character in value):
-            raise ValueError(f"{path} must contain bounded public-safe text")
-        return value
-    if isinstance(value, Mapping):
-        safe: dict[str, Any] = {}
-        for raw_key, item in value.items():
-            key = str(raw_key).strip()
-            normalized_key = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
-            if not key or normalized_key in _SENSITIVE_KEYS:
-                raise ValueError(f"{path}.{key or '<empty>'} is a sensitive field")
-            safe[key] = _safe_json_value(item, path=f"{path}.{key}")
-        return safe
-    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
-        return [
-            _safe_json_value(item, path=f"{path}[{index}]")
-            for index, item in enumerate(value)
-        ]
-    raise ValueError(f"{path} must be JSON-compatible")
-
-
-def _canonical_digest(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+__all__ = [
+    "ACTION_KINDS",
+    "AUTHENTICATED_LARK_CARD_CALLBACK",
+    "ActionConflictError",
+    "CHAT_ACTION_PROPOSAL_SCHEMA_VERSION",
+    "CHAT_ACTION_STORE_SCHEMA_VERSION",
+    "ChatActionStore",
+    "HUMAN_ACTOR_CLASS",
+    "JsonDict",
+    "JsonPrimitive",
+    "JsonValue",
+    "OPERATION_ENVELOPE_SCHEMA_VERSION",
+    "OPERATION_LIFECYCLE_STATES",
+    "ObjectDict",
+    "PROPOSAL_STATES",
+    "RETRYABLE_PROPOSAL_STATES",
+    "_OPAQUE_ID",
+    "_bounded_text",
+    "_canonical_digest",
+    "_opaque_id",
+    "_safe_json_value",
+    "_utc_now",
+    "atomic_write_json",
+    "exclusive_file_lock",
+    "normalize_idempotency_key",
+]
 
 
 class ChatActionStore:
@@ -168,37 +96,39 @@ class ChatActionStore:
         os.chmod(self.root, 0o700)
         if not self.path.exists():
             with exclusive_file_lock(
-                self.path, agent_id="loopx-chat", operation="initialize_chat_action_store"
+                self.path,
+                agent_id="loopx-chat",
+                operation="initialize_chat_action_store",
             ):
                 if not self.path.exists():
                     atomic_write_json(self.path, self._empty_payload())
         os.chmod(self.path, 0o600)
 
     @staticmethod
-    def _empty_payload() -> dict[str, Any]:
+    def _empty_payload() -> JsonDict:
         return {
             "schema_version": CHAT_ACTION_STORE_SCHEMA_VERSION,
             "proposals": {},
             "idempotency": {},
         }
 
-    def _read(self) -> dict[str, Any]:
+    def _read(self) -> JsonDict:
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            payload: object = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("typed Chat action store is unreadable") from exc
         if (
-            not isinstance(payload, dict)
+            not is_str_dict(payload)
             or payload.get("schema_version") != CHAT_ACTION_STORE_SCHEMA_VERSION
         ):
             raise ValueError("typed Chat action store has an unsupported schema")
-        if not isinstance(payload.get("proposals"), dict) or not isinstance(
-            payload.get("idempotency"), dict
+        if not is_str_dict(payload.get("proposals")) or not is_str_dict(
+            payload.get("idempotency")
         ):
             raise ValueError("typed Chat action store is malformed")
         return payload
 
-    def _write(self, payload: dict[str, Any]) -> None:
+    def _write(self, payload: JsonDict) -> None:
         atomic_write_json(self.path, payload, preserve_mode=True)
         os.chmod(self.path, 0o600)
 
@@ -207,43 +137,41 @@ class ChatActionStore:
         *,
         action_kind: str,
         summary: str,
-        normalized_parameters: Mapping[str, Any],
-        context: Mapping[str, Any],
+        normalized_parameters: Mapping[str, object],
+        context: Mapping[str, object],
         expected_state_fingerprint: str,
         permission_classification: str,
-        validation_evidence: Sequence[Any],
-        available_transitions: Sequence[Any],
+        validation_evidence: Sequence[object],
+        available_transitions: Sequence[object],
         idempotency_key: str,
-        canonical_update_basis: Mapping[str, Any] | None = None,
-        workspace_binding: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        canonical_update_basis: Mapping[str, object] | None = None,
+        workspace_binding: Mapping[str, object] | None = None,
+    ) -> JsonDict:
         selected_kind = str(action_kind or "").strip()
         if selected_kind not in ACTION_KINDS:
             raise ValueError(f"unsupported action_kind: {selected_kind or '<empty>'}")
-        request = _safe_json_value(
-            {
-                "action_kind": selected_kind,
-                "summary": _bounded_text(summary, field="summary"),
-                "normalized_parameters": dict(normalized_parameters),
-                "context": dict(context),
-                "expected_state_fingerprint": _bounded_text(
-                    expected_state_fingerprint,
-                    field="expected_state_fingerprint",
-                    limit=512,
-                ),
-                "permission_classification": _opaque_id(
-                    permission_classification,
-                    field="permission_classification",
-                ),
-                "validation_evidence": list(validation_evidence),
-                "available_transitions": list(available_transitions),
-                **({"canonical_update_basis": dict(canonical_update_basis)}
-                   if canonical_update_basis is not None else {}),
-                **({"workspace_binding": dict(workspace_binding)}
-                   if workspace_binding is not None else {}),
-            },
-            path="preview",
-        )
+        request_input: JsonDict = {
+            "action_kind": selected_kind,
+            "summary": _bounded_text(summary, field="summary"),
+            "normalized_parameters": dict(normalized_parameters),
+            "context": dict(context),
+            "expected_state_fingerprint": _bounded_text(
+                expected_state_fingerprint,
+                field="expected_state_fingerprint",
+                limit=512,
+            ),
+            "permission_classification": _opaque_id(
+                permission_classification,
+                field="permission_classification",
+            ),
+            "validation_evidence": list(validation_evidence),
+            "available_transitions": list(available_transitions),
+        }
+        if canonical_update_basis is not None:
+            request_input["canonical_update_basis"] = dict(canonical_update_basis)
+        if workspace_binding is not None:
+            request_input["workspace_binding"] = dict(workspace_binding)
+        request = safe_object_dict(request_input, path="preview", label="preview")
         key = normalize_idempotency_key(idempotency_key)
         request_digest = _canonical_digest(request)
         with exclusive_file_lock(
@@ -252,15 +180,17 @@ class ChatActionStore:
             operation="create_chat_action_preview",
         ):
             payload = self._read()
-            existing_binding = payload["idempotency"].get(key)
-            if isinstance(existing_binding, dict):
+            proposals = store_proposals(payload)
+            idempotency = store_idempotency(payload)
+            existing_binding = idempotency.get(key)
+            if is_str_dict(existing_binding):
                 proposal_id = str(existing_binding.get("proposal_id") or "")
                 if existing_binding.get("request_digest") != request_digest:
                     raise ActionConflictError(
                         "idempotency key already belongs to another preview"
                     )
-                existing = payload["proposals"].get(proposal_id)
-                if not isinstance(existing, dict):
+                existing = proposals.get(proposal_id)
+                if not is_str_dict(existing):
                     raise ValueError(
                         "typed Chat action idempotency index is inconsistent"
                     )
@@ -268,7 +198,7 @@ class ChatActionStore:
 
             now = _utc_now()
             proposal_id = f"proposal-{uuid.uuid4().hex}"
-            proposal = {
+            proposal: JsonDict = {
                 "schema_version": CHAT_ACTION_PROPOSAL_SCHEMA_VERSION,
                 "proposal_id": proposal_id,
                 **request,
@@ -290,8 +220,8 @@ class ChatActionStore:
                 "deferred_at": None,
                 "applied_at": None,
             }
-            payload["proposals"][proposal_id] = proposal
-            payload["idempotency"][key] = {
+            proposals[proposal_id] = proposal
+            idempotency[key] = {
                 "proposal_id": proposal_id,
                 "request_digest": request_digest,
             }
@@ -302,189 +232,40 @@ class ChatActionStore:
         self,
         *,
         action_kind: str,
-        context: Mapping[str, Any],
-        normalized_parameters: Mapping[str, Any],
+        context: Mapping[str, object],
+        normalized_parameters: Mapping[str, object],
         idempotency_key: str,
         shared_fields: tuple[str, ...],
         reusable_states: set[str],
         matches_review_basis: Callable[[object], bool] | None = None,
         require_exact_context: bool = False,
         summary: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> JsonDict | None:
         """Resolve an accepted request or bind it to an equivalent pending review."""
-        if summary is not None:
-            _safe_json_value(_bounded_text(summary, field="summary"), path="preview.summary")
-        key = normalize_idempotency_key(idempotency_key)
-        request = _safe_json_value({
-            "action_kind": action_kind,
-            "context": context,
-            "normalized_parameters": normalized_parameters,
-        })
-        digest = _canonical_digest(request)
-
-        def matches_scope(row: dict[str, Any]) -> bool:
-            row_context = row.get("context")
-            return (
-                row.get("action_kind") == action_kind and isinstance(row_context, dict)
-                and all(row_context.get(field) == value for field, value in context.items())
-            )
-
-        with exclusive_file_lock(
-            self.path, agent_id="loopx-chat", operation="reuse_chat_action_preview"
-        ):
-            payload = self._read()
-            proposals = payload["proposals"]
-            bindings = payload["idempotency"]
-            if key in bindings:
-                binding = bindings[key]
-                row = proposals.get(binding["proposal_id"])
-                if not isinstance(row, dict):
-                    raise ValueError("typed Chat action idempotency index is inconsistent")
-                # Original previews already carry their full normalized request.
-                # Reused previews keep the later request's identity in the index.
-                previous_digest = binding.get("reused_request_digest")
-                if previous_digest is not None:
-                    same_request = previous_digest == digest
-                else:
-                    same_request = row["normalized_parameters"] == request["normalized_parameters"] and (
-                        not require_exact_context or row.get("context") == request["context"]
-                    )
-                if not matches_scope(row) or not same_request:
-                    raise ActionConflictError("idempotency key already belongs to another preview")
-                return row
-
-            if not reusable_states or matches_review_basis is None:
-                return None
-            pending = max(
-                (
-                    row for row in proposals.values()
-                    if isinstance(row, dict) and row.get("status") in reusable_states
-                    and matches_scope(row)
-                    and isinstance(row.get("normalized_parameters"), dict)
-                    and all(
-                        row["normalized_parameters"].get(field) == normalized_parameters[field]
-                        for field in shared_fields
-                    )
-                    and matches_review_basis(row.get("expected_state_fingerprint"))
-                ),
-                key=lambda row: (row.get("updated_at") or "", row["proposal_id"]),
-                default=None,
-            )
-            if pending is None:
-                return None
-            bindings[key] = {
-                "proposal_id": pending["proposal_id"],
-                "reused_request_digest": digest,
-            }
-            self._write(payload)
-            return pending
+        return _common.replay_or_reuse_preview(
+            self,
+            action_kind=action_kind,
+            context=context,
+            normalized_parameters=normalized_parameters,
+            idempotency_key=idempotency_key,
+            shared_fields=shared_fields,
+            reusable_states=reusable_states,
+            matches_review_basis=matches_review_basis,
+            require_exact_context=require_exact_context,
+            summary=summary,
+        )
 
     def record_review_card_delivery(
         self,
         proposal_id: str,
         *,
         audience_id: str,
-        delivery: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Bind one verified external review surface to a typed proposal.
-
-        A proposal may be rendered into more than one audience, but every card
-        retains the proposal id and state fingerprint owned by the typed action
-        store.  Recording all audiences on that one proposal is what prevents a
-        manager card and a Goal card from becoming two independent approvals.
-        """
-
-        audience = _opaque_id(audience_id, field="review_card.audience_id")
-        safe_delivery = _safe_json_value(
-            dict(delivery), path=f"review_card.deliveries.{audience}"
+        delivery: Mapping[str, object],
+    ) -> JsonDict:
+        """Bind one verified external review surface to a typed proposal."""
+        return _review_cards.record_review_card_delivery(
+            self, proposal_id, audience_id=audience_id, delivery=delivery
         )
-        if not isinstance(safe_delivery, dict):
-            raise ValueError("review card delivery must be an object")
-        required = {
-            "provider",
-            "message_id",
-            "chat_id",
-            "app_id",
-            "cli_bin",
-            "sender_profile",
-            "binding_digest",
-            "card_digest",
-            "submitted_card",
-            "delivered_at",
-            "authorized_principal",
-        }
-        if set(safe_delivery) != required:
-            raise ValueError(
-                "review card delivery has unsupported or missing fields"
-            )
-        for field in required - {"submitted_card"}:
-            _bounded_text(
-                safe_delivery.get(field),
-                field=f"review_card.delivery.{field}",
-                limit=512,
-            )
-        submitted_card = safe_delivery.get("submitted_card")
-        if not isinstance(submitted_card, dict):
-            raise ValueError("review card submitted payload must be an object")
-        if _canonical_digest(submitted_card) != safe_delivery["card_digest"]:
-            raise ActionConflictError("review card submitted payload drifted")
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="record_review_card_delivery",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            if proposal.get("action_kind") != "team.plan":
-                raise ActionConflictError(
-                    "only a team plan can bind this review card"
-                )
-            review_card = proposal.get("review_card")
-            if review_card is None:
-                raise ActionConflictError(
-                    "review card audiences must be prepared before delivery"
-                )
-            if not isinstance(review_card, dict):
-                raise ValueError("typed review card state is malformed")
-            if review_card.get("state_fingerprint") != proposal.get(
-                "expected_state_fingerprint"
-            ):
-                raise ActionConflictError("review card state fingerprint drifted")
-            if review_card.get("authorized_principal") != safe_delivery.get(
-                "authorized_principal"
-            ):
-                raise ActionConflictError(
-                    "review card audience changed the authorized principal"
-                )
-            deliveries = review_card.get("deliveries")
-            if not isinstance(deliveries, dict):
-                raise ValueError("typed review card deliveries are malformed")
-            expected_audiences = review_card.get("expected_audience_ids")
-            if (
-                not isinstance(expected_audiences, list)
-                or audience not in expected_audiences
-            ):
-                raise ActionConflictError("review card audience was not prepared")
-            existing = deliveries.get(audience)
-            if existing is not None:
-                immutable_fields = required - {"delivered_at"}
-                if not isinstance(existing, Mapping) or any(
-                    existing.get(field) != safe_delivery.get(field)
-                    for field in immutable_fields
-                ):
-                    raise ActionConflictError(
-                        "review card audience is already bound to another message"
-                    )
-                return proposal
-            if review_card.get("confirmation") is not None:
-                raise ActionConflictError("review card decision is already consumed")
-            deliveries[audience] = safe_delivery
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
 
     def prepare_review_card_delivery(
         self,
@@ -492,874 +273,153 @@ class ChatActionStore:
         *,
         audience_ids: Sequence[str],
         authorized_principal: str,
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         """Freeze every audience before the first actionable card is sent."""
-
-        normalized_audiences = sorted(
-            {_opaque_id(value, field="review_card.audience_id") for value in audience_ids}
+        return _review_cards.prepare_review_card_delivery(
+            self,
+            proposal_id,
+            audience_ids=audience_ids,
+            authorized_principal=authorized_principal,
         )
-        if not normalized_audiences or len(normalized_audiences) != len(audience_ids):
-            raise ValueError("review card audiences must be non-empty and unique")
-        principal = _opaque_id(
-            authorized_principal, field="review_card.authorized_principal"
-        )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="prepare_review_card_delivery",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            if proposal.get("action_kind") != "team.plan":
-                raise ActionConflictError(
-                    "only a team plan can bind this review card"
-                )
-            expected = {
-                "schema_version": "loopx_review_card_delivery_v0",
-                "state_fingerprint": proposal.get("expected_state_fingerprint"),
-                "expected_audience_ids": normalized_audiences,
-                "deliveries": {},
-                "confirmation": None,
-                "authorized_principal": principal,
-            }
-            existing = proposal.get("review_card")
-            if existing is None:
-                proposal["review_card"] = expected
-                proposal["updated_at"] = _utc_now()
-                self._write(payload)
-                return proposal
-            if not isinstance(existing, dict):
-                raise ValueError("typed review card state is malformed")
-            immutable = {
-                "schema_version": expected["schema_version"],
-                "state_fingerprint": expected["state_fingerprint"],
-                "expected_audience_ids": expected["expected_audience_ids"],
-                "authorized_principal": expected["authorized_principal"],
-            }
-            if any(existing.get(key) != value for key, value in immutable.items()):
-                raise ActionConflictError("review card audience plan drifted")
-            return proposal
 
     def decide_review_card(
         self,
         proposal_id: str,
         *,
         decision: str,
-        confirmation: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        confirmation: Mapping[str, object],
+    ) -> JsonDict:
         """Consume one verified card decision across every delivered audience."""
-
-        selected_decision = str(decision or "").strip().lower()
-        if selected_decision not in {"confirm", "reject"}:
-            raise ValueError("review card decision must be confirm or reject")
-        safe_confirmation = _safe_json_value(
-            dict(confirmation), path="review_card.confirmation"
+        return _review_cards.decide_review_card(
+            self, proposal_id, decision=decision, confirmation=confirmation
         )
-        if not isinstance(safe_confirmation, dict):
-            raise ValueError("review card confirmation must be an object")
-        required = {
-            "provider",
-            "event_id",
-            "principal",
-            "message_id",
-            "chat_id",
-            "app_id",
-            "audience_id",
-            "state_fingerprint",
-            "card_digest",
-            "confirmed_at",
-            "actor_class",
-            "verification_kind",
-        }
-        if set(safe_confirmation) != required:
-            raise ValueError(
-                "review card confirmation has unsupported or missing fields"
-            )
-        for field in required:
-            _bounded_text(
-                safe_confirmation.get(field),
-                field=f"review_card.confirmation.{field}",
-                limit=512,
-            )
-        if safe_confirmation["actor_class"] != HUMAN_ACTOR_CLASS:
-            raise ValueError("review card confirmation requires a human actor")
-        _opaque_id(
-            safe_confirmation["verification_kind"],
-            field="review_card.confirmation.verification_kind",
-        )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        audience = _opaque_id(
-            safe_confirmation["audience_id"], field="review_card.audience_id"
-        )
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="decide_review_card",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            review_card = (
-                proposal.get("review_card") if isinstance(proposal, dict) else None
-            )
-            if not isinstance(review_card, dict):
-                raise KeyError("typed review card was not found")
-            deliveries = review_card.get("deliveries")
-            delivery = (
-                deliveries.get(audience) if isinstance(deliveries, dict) else None
-            )
-            if not isinstance(delivery, dict):
-                raise ActionConflictError("review card audience was not delivered")
-            expected_audiences = review_card.get("expected_audience_ids")
-            if (
-                not isinstance(expected_audiences, list)
-                or set(deliveries) != set(expected_audiences)
-            ):
-                raise ActionConflictError(
-                    "review card audiences are not completely delivered"
-                )
-            expected = {
-                "provider": delivery.get("provider"),
-                "message_id": delivery.get("message_id"),
-                "chat_id": delivery.get("chat_id"),
-                "app_id": delivery.get("app_id"),
-                "state_fingerprint": review_card.get("state_fingerprint"),
-                "card_digest": delivery.get("card_digest"),
-            }
-            if any(
-                safe_confirmation.get(field) != value
-                for field, value in expected.items()
-            ):
-                raise ActionConflictError(
-                    "review card callback does not match the delivered request"
-                )
-            if safe_confirmation.get("principal") != review_card.get(
-                "authorized_principal"
-            ):
-                raise ActionConflictError(
-                    "principal is not authorized for this review card"
-                )
-            existing = review_card.get("confirmation")
-            if isinstance(existing, dict):
-                # Every audience is a view of the same proposal. Once one exact
-                # decision wins, later clicks only observe that decision and can
-                # never launch a second canonical effect.
-                return proposal
-            status = str(proposal.get("status") or "")
-            if status not in {"preview_ready", "deferred"}:
-                raise ActionConflictError(
-                    "review card proposal is no longer awaiting confirmation"
-                )
-            now = _utc_now()
-            review_card["confirmation"] = {
-                **safe_confirmation,
-                "decision": selected_decision,
-            }
-            if selected_decision == "confirm":
-                proposal["status"] = "applying"
-                proposal["gate"] = None
-                proposal["failure"] = None
-            else:
-                proposal["status"] = "rejected"
-                proposal["rejected_at"] = now
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
 
     def record_review_card_result_delivery(
         self,
         proposal_id: str,
         *,
         audience_id: str,
-        result: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        result: Mapping[str, object],
+    ) -> JsonDict:
         """Record exact result-card readback for one already-bound audience."""
-
-        audience = _opaque_id(audience_id, field="review_card.audience_id")
-        safe_result = _safe_json_value(
-            dict(result), path=f"review_card.deliveries.{audience}.result"
+        return _review_cards.record_review_card_result_delivery(
+            self, proposal_id, audience_id=audience_id, result=result
         )
-        if not isinstance(safe_result, dict):
-            raise ValueError("review card result delivery must be an object")
-        required = {"card_digest", "transport", "delivered_at"}
-        if set(safe_result) != required:
-            raise ValueError(
-                "review card result delivery has unsupported or missing fields"
-            )
-        for field in required:
-            _bounded_text(
-                safe_result.get(field),
-                field=f"review_card.result.{field}",
-                limit=512,
-            )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="record_review_card_result_delivery",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            review_card = (
-                proposal.get("review_card") if isinstance(proposal, dict) else None
-            )
-            deliveries = (
-                review_card.get("deliveries")
-                if isinstance(review_card, dict)
-                else None
-            )
-            delivery = (
-                deliveries.get(audience) if isinstance(deliveries, dict) else None
-            )
-            if not isinstance(delivery, dict):
-                raise KeyError("typed review card audience was not found")
-            existing = delivery.get("result")
-            if existing is not None:
-                if existing != safe_result:
-                    raise ActionConflictError(
-                        "review card result delivery is already immutable"
-                    )
-                return proposal
-            delivery["result"] = safe_result
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
 
-    def arm_operation(self, proposal_id: str) -> dict[str, Any]:
-        """Turn one provider-neutral preview into the canonical confirmation gate.
-
-        The immutable request already lives on the proposal.  This method adds
-        only lifecycle state derived from that request; Lark, the Dashboard and
-        domain executors must all read this same envelope.
-        """
-
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="arm_operation_confirmation",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            if proposal.get("action_kind") != "operation.execute":
-                raise ActionConflictError(
-                    "only operation.execute previews can be armed"
-                )
-            existing = proposal.get("operation")
-            if isinstance(existing, dict):
-                if (
-                    existing.get("schema_version") != OPERATION_ENVELOPE_SCHEMA_VERSION
-                    or existing.get("lifecycle_state") not in OPERATION_LIFECYCLE_STATES
-                ):
-                    raise ValueError("typed operation envelope is malformed")
-                return proposal
-            if proposal.get("status") != "preview_ready":
-                raise ActionConflictError(
-                    f"proposal in {proposal.get('status')} state cannot await confirmation"
-                )
-            parameters = proposal.get("normalized_parameters")
-            if not isinstance(parameters, dict):
-                raise ValueError("typed operation parameters are malformed")
-            now = _utc_now()
-            confirmation_digest = _canonical_digest(
-                {
-                    "action_kind": "operation.execute",
-                    "normalized_parameters": parameters,
-                    "request_digest": proposal.get("request_digest"),
-                }
-            )
-            operation = {
-                "schema_version": OPERATION_ENVELOPE_SCHEMA_VERSION,
-                "operation_id": token,
-                "lifecycle_state": "awaiting_confirmation",
-                "confirmation_digest": confirmation_digest,
-                "payload_digest": parameters.get("payload_digest"),
-                "projection_digest": parameters.get("projection_digest"),
-                "executor_revision": (
-                    parameters.get("executor", {}).get("revision")
-                    if isinstance(parameters.get("executor"), dict)
-                    else None
-                ),
-                "destination_account_ref": parameters.get("destination_account_ref"),
-                "expires_at": parameters.get("expires_at"),
-                "authorized_principals": list(
-                    parameters.get("authorized_principals") or []
-                ),
-                "delivery": None,
-                "confirmation": None,
-                "claim": None,
-                "outcome": None,
-                "result_delivery": None,
-                "armed_at": now,
-            }
-            proposal["operation"] = _safe_json_value(operation, path="operation")
-            proposal["status"] = "gated"
-            proposal["gate"] = {
-                "kind": "human_operation_confirmation",
-                "summary": "This exact operation is awaiting an authenticated human decision.",
-                "next_action": "Use the bound operation card; ordinary typed-action apply is not confirmation.",
-            }
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
+    def arm_operation(self, proposal_id: str) -> JsonDict:
+        """Turn one provider-neutral preview into the canonical confirmation gate."""
+        return _operations.arm_operation(self, proposal_id)
 
     def record_operation_delivery(
-        self,
-        proposal_id: str,
-        *,
-        delivery: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        self, proposal_id: str, *, delivery: Mapping[str, object]
+    ) -> JsonDict:
         """Bind the exact provider message which may attest a later click."""
-
-        safe_delivery = _safe_json_value(dict(delivery), path="operation.delivery")
-        if not isinstance(safe_delivery, dict):
-            raise ValueError("operation delivery must be an object")
-        for field in (
-            "provider",
-            "message_id",
-            "chat_id",
-            "app_id",
-            "binding_digest",
-            "card_digest",
-            "delivered_at",
-        ):
-            _bounded_text(
-                safe_delivery.get(field),
-                field=f"operation.delivery.{field}",
-                limit=512,
-            )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="record_operation_delivery",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            operation = (
-                proposal.get("operation") if isinstance(proposal, dict) else None
-            )
-            if not isinstance(operation, dict):
-                raise KeyError("typed operation was not found")
-            if operation.get("lifecycle_state") != "awaiting_confirmation":
-                existing = operation.get("delivery")
-                if isinstance(existing, dict) and existing == safe_delivery:
-                    return proposal
-                raise ActionConflictError("operation is no longer awaiting delivery")
-            existing = operation.get("delivery")
-            if existing is not None:
-                if existing != safe_delivery:
-                    raise ActionConflictError(
-                        "operation is already bound to another provider message"
-                    )
-                return proposal
-            operation["delivery"] = safe_delivery
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
+        return _operations.record_operation_delivery(
+            self, proposal_id, delivery=delivery
+        )
 
     def record_operation_delivery_snapshot(
-        self,
-        proposal_id: str,
-        *,
-        submitted_card: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        self, proposal_id: str, *, submitted_card: Mapping[str, object]
+    ) -> JsonDict:
         """Persist the immutable sent card after verifying its recorded digest."""
-
-        safe_card = _safe_json_value(
-            dict(submitted_card), path="operation.delivery.submitted_card"
+        return _operations.record_operation_delivery_snapshot(
+            self, proposal_id, submitted_card=submitted_card
         )
-        if not isinstance(safe_card, dict):
-            raise ValueError("operation submitted card must be an object")
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="record_operation_delivery_snapshot",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            operation = (
-                proposal.get("operation") if isinstance(proposal, dict) else None
-            )
-            delivery = (
-                operation.get("delivery") if isinstance(operation, dict) else None
-            )
-            if not isinstance(delivery, dict):
-                raise ActionConflictError("operation card delivery was not recorded")
-            if _canonical_digest(safe_card) != delivery.get("card_digest"):
-                raise ActionConflictError("operation submitted card digest drifted")
-            existing = delivery.get("submitted_card")
-            if existing is not None:
-                if existing != safe_card:
-                    raise ActionConflictError(
-                        "operation submitted card snapshot already differs"
-                    )
-                return proposal
-            delivery["submitted_card"] = safe_card
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
 
     def decide_operation(
         self,
         proposal_id: str,
         *,
         decision: str,
-        confirmation: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Atomically reject, or confirm and claim, one delivered operation.
-
-        The transport owner must supply a verified callback envelope.  A
-        successful confirmation consumes the operation in this transaction so
-        concurrent web/Lark clicks cannot both dispatch it.
-        """
-
-        selected_decision = str(decision or "").strip().lower()
-        if selected_decision not in {"confirm", "reject"}:
-            raise ValueError("operation decision must be confirm or reject")
-        safe_confirmation = _safe_json_value(
-            dict(confirmation), path="operation.confirmation"
+        confirmation: Mapping[str, object],
+    ) -> JsonDict:
+        """Atomically reject, or confirm and claim, one delivered operation."""
+        return _operations.decide_operation(
+            self, proposal_id, decision=decision, confirmation=confirmation
         )
-        if not isinstance(safe_confirmation, dict):
-            raise ValueError("operation confirmation must be an object")
-        required = {
-            "provider",
-            "event_id",
-            "principal",
-            "message_id",
-            "chat_id",
-            "app_id",
-            "surface_kind",
-            "interaction_kind",
-            "confirmation_digest",
-            "card_digest",
-            "confirmed_at",
-            "actor_class",
-            "verification_kind",
-        }
-        if set(safe_confirmation) != required:
-            raise ValueError("operation confirmation has unsupported or missing fields")
-        for field in required:
-            _bounded_text(
-                safe_confirmation.get(field),
-                field=f"operation.confirmation.{field}",
-                limit=512,
-            )
-        if safe_confirmation["actor_class"] != HUMAN_ACTOR_CLASS:
-            raise ValueError("operation confirmation requires a human actor")
-        _opaque_id(
-            safe_confirmation["verification_kind"],
-            field="operation.confirmation.verification_kind",
-        )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="decide_operation",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            operation = (
-                proposal.get("operation") if isinstance(proposal, dict) else None
-            )
-            if not isinstance(operation, dict):
-                raise KeyError("typed operation was not found")
-            existing_confirmation = operation.get("confirmation")
-            if isinstance(existing_confirmation, dict):
-                if (
-                    existing_confirmation.get("event_id")
-                    == safe_confirmation["event_id"]
-                ):
-                    return proposal
-                raise ActionConflictError("operation already consumed another decision")
-            if (
-                proposal.get("status") != "gated"
-                or operation.get("lifecycle_state") != "awaiting_confirmation"
-            ):
-                raise ActionConflictError("operation is not awaiting confirmation")
-            delivery = operation.get("delivery")
-            if not isinstance(delivery, dict):
-                raise ActionConflictError("operation card delivery is not verified")
-            expected = {
-                "provider": delivery.get("provider"),
-                "message_id": delivery.get("message_id"),
-                "chat_id": delivery.get("chat_id"),
-                "app_id": delivery.get("app_id"),
-                "card_digest": delivery.get("card_digest"),
-                "confirmation_digest": operation.get("confirmation_digest"),
-            }
-            if any(
-                safe_confirmation.get(field) != value
-                for field, value in expected.items()
-            ):
-                raise ActionConflictError(
-                    "operation callback does not match the delivered request"
-                )
-            if safe_confirmation.get("principal") not in set(
-                operation.get("authorized_principals") or []
-            ):
-                raise ActionConflictError(
-                    "principal is not authorized for this operation"
-                )
-            expires_at = datetime.fromisoformat(
-                str(operation.get("expires_at") or "").replace("Z", "+00:00")
-            )
-            confirmed_at = datetime.fromisoformat(
-                str(safe_confirmation["confirmed_at"]).replace("Z", "+00:00")
-            )
-            delivered_at = datetime.fromisoformat(
-                str(delivery.get("delivered_at") or "").replace("Z", "+00:00")
-            )
-            if (
-                expires_at.tzinfo is None
-                or confirmed_at.tzinfo is None
-                or delivered_at.tzinfo is None
-            ):
-                raise ValueError("operation timestamps require a timezone")
-            if confirmed_at < delivered_at - timedelta(minutes=5):
-                raise ActionConflictError(
-                    "operation confirmation predates the delivered request"
-                )
-            if confirmed_at > expires_at:
-                raise ActionConflictError("operation confirmation arrived after expiry")
-            now = _utc_now()
-            now_at = datetime.fromisoformat(now.replace("Z", "+00:00"))
-            if confirmed_at > now_at + timedelta(minutes=5):
-                raise ActionConflictError(
-                    "operation confirmation timestamp is in the future"
-                )
-            operation["confirmation"] = {
-                **safe_confirmation,
-                "decision": selected_decision,
-            }
-            if selected_decision == "reject":
-                operation["lifecycle_state"] = "outcome_observed"
-                operation["outcome"] = {
-                    "schema_version": "loopx_operation_outcome_v0",
-                    "outcome": "rejected_by_operator",
-                    "projection_verified": True,
-                    "observed_at": now,
-                }
-                proposal["status"] = "rejected"
-                proposal["rejected_at"] = now
-                proposal["receipt"] = operation["outcome"]
-            else:
-                operation["lifecycle_state"] = "claimed"
-                operation["claim"] = {
-                    "claim_id": "claim-" + uuid.uuid4().hex,
-                    "event_id": safe_confirmation["event_id"],
-                    "claimed_at": now,
-                }
-                proposal["status"] = "applying"
-            proposal["gate"] = None
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
 
     def observe_operation_outcome(
         self,
         proposal_id: str,
         *,
-        outcome: Mapping[str, Any],
-        agent_actor: Mapping[str, Any] | None = None,
+        outcome: Mapping[str, object],
+        agent_actor: Mapping[str, object] | None = None,
         agent_binding_current: bool = False,
         agent_actor_binding_current: bool = False,
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         """Persist the domain result without making it a retryable submission."""
-
-        safe_outcome = _safe_json_value(dict(outcome), path="operation.outcome")
-        if not isinstance(safe_outcome, dict):
-            raise ValueError("operation outcome must be an object")
-        if safe_outcome.get("schema_version") != "loopx_operation_outcome_v0":
-            raise ValueError("operation outcome schema is unsupported")
-        _opaque_id(safe_outcome.get("outcome"), field="operation.outcome.outcome")
-        if safe_outcome.get("projection_verified") is not True:
-            raise ValueError("operation outcome projection must be verified")
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="observe_operation_outcome",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            operation = (
-                proposal.get("operation") if isinstance(proposal, dict) else None
-            )
-            if not isinstance(operation, dict):
-                raise KeyError("typed operation was not found")
-            parameters = proposal.get("normalized_parameters") or {}
-            report_provenance = None
-            if (parameters.get("executor") or {}).get("kind") in {"agent_session", "managed_turn"}:
-                plan = self._agent_operation_plan(
-                    proposal,
-                    action="report",
-                    actor=agent_actor,
-                    binding_current=agent_binding_current,
-                    actor_binding_current=agent_actor_binding_current,
-                    outcome=safe_outcome,
-                )
-                report_provenance = plan["report_provenance"]
-                if plan.get("write_reconciliation") is True:
-                    existing = operation.get("reconciliation")
-                    if existing is not None:
-                        if existing != safe_outcome:
-                            raise ActionConflictError(
-                                "operation reconciliation is already immutable"
-                            )
-                        return proposal
-                    operation["reconciliation"] = safe_outcome
-                    operation["reconciliation_report"] = report_provenance
-                    proposal["receipt"] = safe_outcome
-                    proposal["updated_at"] = _utc_now()
-                    self._write(payload)
-                    return proposal
-            if operation.get("lifecycle_state") == "outcome_observed":
-                if operation.get("outcome") != safe_outcome:
-                    raise ActionConflictError("operation outcome is already immutable")
-                return proposal
-            if (
-                operation.get("lifecycle_state") != "claimed"
-                or proposal.get("status") != "applying"
-            ):
-                raise ActionConflictError(
-                    "only a claimed operation can record an outcome"
-                )
-            now = _utc_now()
-            operation["lifecycle_state"] = "outcome_observed"
-            operation["outcome"] = safe_outcome
-            if report_provenance is not None:
-                operation["outcome_report"] = report_provenance
-            proposal["status"] = "applied"
-            proposal["receipt"] = safe_outcome
-            proposal["applied_at"] = now
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
+        return _operations.observe_operation_outcome(
+            self,
+            proposal_id,
+            outcome=outcome,
+            agent_actor=agent_actor,
+            agent_binding_current=agent_binding_current,
+            agent_actor_binding_current=agent_actor_binding_current,
+        )
 
     @staticmethod
     def _agent_operation_plan(
-        proposal: Mapping[str, Any], **request: Any
-    ) -> dict[str, Any]:
+        proposal: Mapping[str, object], **request: object
+    ) -> JsonDict:
         """One typed decision, using the existing canonical JSON byte format."""
-        from .control_plane.effect_runtime import (
-            EffectRuntimeRemoteError,
-            effect_runtime_result,
-        )
-
-        parameters = proposal.get("normalized_parameters") or {}
-        digests = {
-            "payload_digest": _canonical_digest(parameters.get("payload") or {}),
-            "projection_digest": _canonical_digest(parameters.get("projection") or {}),
-            "confirmation_digest": _canonical_digest(
-                {
-                    "action_kind": "operation.execute",
-                    "normalized_parameters": parameters,
-                    "request_digest": proposal.get("request_digest"),
-                }
-            ),
-            "outcome_digest": _canonical_digest(proposal["operation"]["outcome"])
-            if isinstance((proposal.get("operation") or {}).get("outcome"), dict)
-            else None,
-        }
-        try:
-            return dict(
-                effect_runtime_result(
-                    "operation.agent_handoff.plan",
-                    {
-                        "proposal": dict(proposal),
-                        "digests": digests,
-                        "now": _utc_now(),
-                        **request,
-                    },
-                )
-            )
-        except EffectRuntimeRemoteError as exc:
-            raise ActionConflictError(str(exc)) from exc
+        return _operations.agent_operation_plan(proposal, **request)
 
     def reserve_agent_operation_turn(
-        self, proposal_id: str, **launch_context: Any,
-    ) -> dict[str, Any]:
-        """Internal callback launch intent.
-
-        Commit before spawning. A lost/failed spawn is reconciled from the
-        original Turn; callback replay never launches a replacement process.
-        """
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(self.path, operation="reserve_operation_turn"):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed operation was not found")
-            plan = self._agent_operation_plan(proposal, action="wake", **launch_context)
-            receipt = plan.pop("write_turn_launch", None)
-            if receipt is not None:
-                proposal["operation"]["turn_launch"] = receipt
-                proposal["updated_at"] = _utc_now()
-                self._write(payload)
-                plan["turn_launch"] = receipt
-            return plan
+        self, proposal_id: str, **launch_context: object
+    ) -> JsonDict:
+        """Internal callback launch intent."""
+        return _operations.reserve_agent_operation_turn(
+            self, proposal_id, **launch_context
+        )
 
     def record_agent_operation_host_start(
-        self, proposal_id: str, *, actor: Mapping[str, Any],
-        binding_current: bool, turn_key: str,
-    ) -> dict[str, Any]:
+        self,
+        proposal_id: str,
+        *,
+        actor: Mapping[str, object],
+        binding_current: bool,
+        turn_key: str,
+    ) -> JsonDict:
         """Internal native transport observation; never a caller proof or permit."""
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(self.path, operation="observe_operation_host_start"):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed operation was not found")
-            plan = self._agent_operation_plan(
-                proposal, action="observe_host_start", actor=dict(actor),
-                binding_current=binding_current, turn_key=turn_key,
-            )
-            receipt = plan.pop("write_host_start", None)
-            if receipt is not None:
-                proposal["operation"]["host_start"] = receipt
-                proposal["updated_at"] = _utc_now()
-                self._write(payload)
-                plan.update(host_start=receipt, host_delivery="native_start_accepted")
-            return plan
+        return _operations.record_agent_operation_host_start(
+            self,
+            proposal_id,
+            actor=actor,
+            binding_current=binding_current,
+            turn_key=turn_key,
+        )
 
     def consume_agent_operation(
         self,
         proposal_id: str,
         *,
-        actor: Mapping[str, Any],
+        actor: Mapping[str, object],
         binding_current: bool,
         consumption_id: str,
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         """Commit before external execution. Even an exact replay grants no retry."""
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path, agent_id="loopx-chat", operation="consume_agent_operation"
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed operation was not found")
-            plan = self._agent_operation_plan(
-                proposal,
-                action="consume",
-                actor=dict(actor),
-                binding_current=binding_current,
-                consumption_id=consumption_id,
-            )
-            handoff = plan.pop("write_handoff", None)
-            if handoff is not None:
-                proposal["operation"]["agent_handoff"] = handoff
-                proposal["updated_at"] = _utc_now()
-                self._write(payload)
-                plan["consumption_id"] = handoff["consumption_id"]
-            return plan
+        return _operations.consume_agent_operation(
+            self,
+            proposal_id,
+            actor=actor,
+            binding_current=binding_current,
+            consumption_id=consumption_id,
+        )
 
     def record_operation_result_delivery(
-        self,
-        proposal_id: str,
-        *,
-        delivery: Mapping[str, Any],
-    ) -> dict[str, Any]:
+        self, proposal_id: str, *, delivery: Mapping[str, object]
+    ) -> JsonDict:
         """Persist exact result-card readback without changing domain outcome."""
-
-        safe_delivery = _safe_json_value(
-            dict(delivery), path="operation.result_delivery"
+        return _operations.record_operation_result_delivery(
+            self, proposal_id, delivery=delivery
         )
-        if not isinstance(safe_delivery, dict):
-            raise ValueError("operation result delivery must be an object")
-        required = {
-            "provider",
-            "message_id",
-            "chat_id",
-            "app_id",
-            "card_digest",
-            "transport",
-            "delivered_at",
-        }
-        if set(safe_delivery) not in (required, required | {"outcome_stage"}):
-            raise ValueError(
-                "operation result delivery has unsupported or missing fields"
-            )
-        for field in required:
-            _bounded_text(
-                safe_delivery.get(field),
-                field=f"operation.result_delivery.{field}",
-                limit=512,
-            )
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="record_operation_result_delivery",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            operation = (
-                proposal.get("operation") if isinstance(proposal, dict) else None
-            )
-            if not isinstance(operation, dict):
-                raise KeyError("typed operation was not found")
-            if operation.get("lifecycle_state") != "outcome_observed":
-                raise ActionConflictError(
-                    "operation outcome is unavailable for result delivery"
-                )
-            is_agent = (
-                (proposal.get("normalized_parameters") or {}).get("executor") or {}
-            ).get("kind") in {"agent_session", "managed_turn"}
-            expected_stage = (
-                "reconciled"
-                if operation.get("reconciliation") is not None
-                else "initial"
-            )
-            if is_agent and safe_delivery.get("outcome_stage") != expected_stage:
-                raise ActionConflictError(
-                    "result delivery is not for the current operation outcome"
-                )
-            if not is_agent and "outcome_stage" in safe_delivery:
-                raise ValueError(
-                    "result outcome stage is only supported for Agent handoff"
-                )
-            source_delivery = operation.get("delivery")
-            if not isinstance(source_delivery, dict) or any(
-                safe_delivery.get(field) != source_delivery.get(field)
-                for field in ("provider", "message_id", "chat_id", "app_id")
-            ):
-                raise ActionConflictError(
-                    "operation result delivery does not match the original card"
-                )
-            existing = operation.get("result_delivery")
-            if isinstance(existing, dict):
-                if existing != safe_delivery:
-                    if not (
-                        is_agent
-                        and existing.get("outcome_stage") == "initial"
-                        and expected_stage == "reconciled"
-                    ):
-                        raise ActionConflictError(
-                            "operation result delivery is already immutable"
-                        )
-                else:
-                    return proposal
-            operation["result_delivery"] = safe_delivery
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
 
-    def load(self, proposal_id: str) -> dict[str, Any] | None:
+    def load(self, proposal_id: str) -> JsonDict | None:
         token = _opaque_id(proposal_id, field="proposal_id")
-        proposal = self._read()["proposals"].get(token)
+        proposal = store_proposals(self._read()).get(token)
         if proposal is None:
             return None
-        if (
-            not isinstance(proposal, dict)
-            or proposal.get("status") not in PROPOSAL_STATES
-        ):
+        if not is_str_dict(proposal) or proposal.get("status") not in PROPOSAL_STATES:
             raise ValueError("typed Chat action proposal is malformed")
         return proposal
 
@@ -1369,83 +429,16 @@ class ChatActionStore:
         goal_id: str | None = None,
         context_kind: str | None = None,
         status: str | None = None,
-    ) -> list[dict[str, Any]]:
-        selected_goal = _opaque_id(goal_id, field="goal_id") if goal_id else None
-        selected_context = (
-            _opaque_id(context_kind, field="context_kind") if context_kind else None
-        )
-        if status and status not in PROPOSAL_STATES:
-            raise ValueError("status must be a supported typed action state")
-        proposals: list[dict[str, Any]] = []
-        for raw in self._read()["proposals"].values():
-            if not isinstance(raw, dict) or raw.get("status") not in PROPOSAL_STATES:
-                continue
-            context = raw.get("context")
-            context = context if isinstance(context, dict) else {}
-            parameters = raw.get("normalized_parameters")
-            parameters = parameters if isinstance(parameters, dict) else {}
-            proposal_goal = str(
-                context.get("goal_id") or parameters.get("goal_id") or ""
-            )
-            if selected_goal and proposal_goal != selected_goal:
-                continue
-            if selected_context and str(context.get("kind") or "") != selected_context:
-                continue
-            if status and raw.get("status") != status:
-                continue
-            proposals.append(raw)
-        return sorted(
-            proposals,
-            key=lambda proposal: (
-                str(proposal.get("updated_at") or ""),
-                str(proposal.get("proposal_id") or ""),
-            ),
-            reverse=True,
+    ) -> list[JsonDict]:
+        return _common.list_proposals(
+            self, goal_id=goal_id, context_kind=context_kind, status=status
         )
 
-    def cancel(self, proposal_id: str) -> dict[str, Any]:
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="cancel_chat_action_preview",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            if proposal.get("status") == "cancelled":
-                return proposal
-            if proposal.get("status") not in {
-                "preview_ready",
-                "gated",
-                "failed",
-                "deferred",
-            }:
-                raise ActionConflictError(
-                    f"proposal in {proposal.get('status')} state cannot be cancelled"
-                )
-            now = _utc_now()
-            proposal["status"] = "cancelled"
-            proposal["cancelled_at"] = now
-            operation = proposal.get("operation")
-            if isinstance(operation, dict):
-                operation["lifecycle_state"] = "outcome_observed"
-                operation["outcome"] = {
-                    "schema_version": "loopx_operation_outcome_v0",
-                    "outcome": "cancelled_before_confirmation",
-                    "projection_verified": True,
-                    "observed_at": now,
-                }
-                proposal["receipt"] = operation["outcome"]
-                proposal["gate"] = None
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
+    def cancel(self, proposal_id: str) -> JsonDict:
+        return _common.cancel_proposal(self, proposal_id)
 
-    def start_apply(self, proposal_id: str) -> dict[str, Any]:
+    def start_apply(self, proposal_id: str) -> JsonDict:
         """Persist the execution boundary before any canonical write is attempted."""
-
         return self._transition(
             proposal_id,
             from_states=RETRYABLE_PROPOSAL_STATES,
@@ -1455,11 +448,9 @@ class ChatActionStore:
         )
 
     def mark_gated(
-        self, proposal_id: str, *, gate: Mapping[str, Any]
-    ) -> dict[str, Any]:
-        safe_gate = _safe_json_value(dict(gate), path="gate")
-        if not isinstance(safe_gate, dict):
-            raise ValueError("gate must be an object")
+        self, proposal_id: str, *, gate: Mapping[str, object]
+    ) -> JsonDict:
+        safe_gate = safe_object_dict(gate, path="gate", label="gate")
         _opaque_id(safe_gate.get("kind"), field="gate.kind")
         return self._transition(
             proposal_id,
@@ -1475,12 +466,12 @@ class ChatActionStore:
         *,
         error_code: str,
         message: str,
-        details: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
+        details: Mapping[str, object] | None = None,
+    ) -> JsonDict:
         # A failure that happened after part of the work was committed has to
         # carry those identities, or the retry cannot tell what already exists
         # and the owner has to reconstruct it from the message.
-        record: dict[str, Any] = {
+        record: JsonDict = {
             "error_code": _opaque_id(error_code, field="error_code"),
             "message": _bounded_text(message, field="message", limit=1000),
             "failed_at": _utc_now(),
@@ -1502,42 +493,13 @@ class ChatActionStore:
         proposal_id: str,
         *,
         step: str,
-        receipt: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        safe_step = _opaque_id(step, field="step")
-        safe_receipt = _safe_json_value(dict(receipt), path="checkpoint.receipt")
-        if not isinstance(safe_receipt, dict):
-            raise ValueError("checkpoint receipt must be an object")
-        token = _opaque_id(proposal_id, field="proposal_id")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="checkpoint_chat_action_preview",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            if proposal.get("status") not in {"applying", "gated", "failed"}:
-                raise ActionConflictError(
-                    f"proposal in {proposal.get('status')} state cannot save a checkpoint"
-                )
-            checkpoint = proposal.get("checkpoint")
-            checkpoint = (
-                dict(checkpoint) if isinstance(checkpoint, dict) else {"steps": {}}
-            )
-            steps = checkpoint.get("steps")
-            steps = dict(steps) if isinstance(steps, dict) else {}
-            steps[safe_step] = safe_receipt
-            checkpoint["steps"] = steps
-            checkpoint["last_completed_step"] = safe_step
-            checkpoint["updated_at"] = _utc_now()
-            proposal["checkpoint"] = checkpoint
-            proposal["updated_at"] = checkpoint["updated_at"]
-            self._write(payload)
-            return proposal
+        receipt: Mapping[str, object],
+    ) -> JsonDict:
+        return _common.save_proposal_checkpoint(
+            self, proposal_id, step=step, receipt=receipt
+        )
 
-    def mark_rejected(self, proposal_id: str) -> dict[str, Any]:
+    def mark_rejected(self, proposal_id: str) -> JsonDict:
         now = _utc_now()
         return self._transition(
             proposal_id,
@@ -1547,7 +509,7 @@ class ChatActionStore:
             idempotent_states={"rejected"},
         )
 
-    def mark_deferred(self, proposal_id: str) -> dict[str, Any]:
+    def mark_deferred(self, proposal_id: str) -> JsonDict:
         now = _utc_now()
         return self._transition(
             proposal_id,
@@ -1559,7 +521,7 @@ class ChatActionStore:
 
     def link_regeneration(
         self, proposal_id: str, *, regenerated_from: str
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         token = _opaque_id(proposal_id, field="proposal_id")
         source = _opaque_id(regenerated_from, field="regenerated_from")
         with exclusive_file_lock(
@@ -1568,13 +530,9 @@ class ChatActionStore:
             operation="link_chat_action_regeneration",
         ):
             payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
+            proposal = _common.require_proposal(payload, token)
             proposal["regenerated_from"] = source
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
+            return _common.commit_proposal_mutation(self, payload, proposal)
 
     def _transition(
         self,
@@ -1582,86 +540,28 @@ class ChatActionStore:
         *,
         from_states: set[str],
         to_state: str,
-        updates: Mapping[str, Any],
+        updates: Mapping[str, object],
         idempotent_states: set[str],
-    ) -> dict[str, Any]:
-        token = _opaque_id(proposal_id, field="proposal_id")
-        if to_state not in PROPOSAL_STATES:
-            raise ValueError("unsupported typed action state")
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation=f"transition_chat_action_{to_state}",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            status = str(proposal.get("status") or "")
-            if status in idempotent_states:
-                return proposal
-            if status not in from_states:
-                raise ActionConflictError(
-                    f"proposal in {status} state cannot become {to_state}"
-                )
-            proposal["status"] = to_state
-            proposal.update(_safe_json_value(dict(updates), path="transition"))
-            proposal["updated_at"] = _utc_now()
-            self._write(payload)
-            return proposal
+    ) -> JsonDict:
+        return _common.transition_proposal(
+            self,
+            proposal_id,
+            from_states=from_states,
+            to_state=to_state,
+            updates=updates,
+            idempotent_states=idempotent_states,
+        )
 
     def apply(
         self,
         proposal_id: str,
         *,
         current_state_fingerprint: str,
-        receipt: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        token = _opaque_id(proposal_id, field="proposal_id")
-        current_fingerprint = _bounded_text(
-            current_state_fingerprint,
-            field="current_state_fingerprint",
-            limit=512,
+        receipt: Mapping[str, object],
+    ) -> JsonDict:
+        return _common.apply_proposal(
+            self,
+            proposal_id,
+            current_state_fingerprint=current_state_fingerprint,
+            receipt=receipt,
         )
-        with exclusive_file_lock(
-            self.path,
-            agent_id="loopx-chat",
-            operation="apply_chat_action_preview",
-        ):
-            payload = self._read()
-            proposal = payload["proposals"].get(token)
-            if not isinstance(proposal, dict):
-                raise KeyError("typed Chat action proposal was not found")
-            status = str(proposal.get("status") or "")
-            if status == "applied":
-                return proposal
-            if status not in {"preview_ready", "applying"}:
-                raise ActionConflictError(
-                    f"proposal in {status} state cannot be applied"
-                )
-            expected_fingerprint = str(proposal.get("expected_state_fingerprint") or "")
-            now = _utc_now()
-            if current_fingerprint != expected_fingerprint:
-                proposal["status"] = "stale"
-                proposal["stale"] = {
-                    "expected_state_fingerprint": expected_fingerprint,
-                    "current_state_fingerprint": current_fingerprint,
-                    "detected_at": now,
-                }
-                proposal["updated_at"] = now
-                self._write(payload)
-                return proposal
-
-            safe_receipt = _safe_json_value(dict(receipt), path="receipt")
-            if not isinstance(safe_receipt, dict):
-                raise ValueError("receipt must be an object")
-            _opaque_id(safe_receipt.get("receipt_id"), field="receipt.receipt_id")
-            _opaque_id(safe_receipt.get("outcome"), field="receipt.outcome")
-            if safe_receipt.get("projection_verified") is not True:
-                raise ValueError("receipt.projection_verified must be true")
-            proposal["status"] = "applied"
-            proposal["receipt"] = safe_receipt
-            proposal["applied_at"] = now
-            proposal["updated_at"] = now
-            self._write(payload)
-            return proposal
