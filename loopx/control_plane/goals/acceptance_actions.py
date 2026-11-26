@@ -7,6 +7,7 @@ preparation only validates a document and cannot configure or run it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -45,9 +46,11 @@ def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
     for proposal in store.list(goal_id=parameters["goal_id"], context_kind="goal"):
         if proposal["idempotency_key"] != operation_id:
             continue
+        raw_params = proposal["normalized_parameters"]
         if (proposal["action_kind"] != "goal.acceptance.check"
                 or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
-                or {key: value for key, value in proposal["normalized_parameters"].items()
+                or not isinstance(raw_params, Mapping)
+                or {key: value for key, value in raw_params.items()
                     if key != "resolved_document"} not in accepted_intents):
             raise ActionConflictError("The operation belongs to another check request")
         return proposal
@@ -132,13 +135,23 @@ class GoalAcceptanceActionMixin:
                 raise KeyError("Check plan was not found")
             if proposal["status"] == "applied":
                 return {"proposal": proposal, "turn": None}
-            parameters = proposal["normalized_parameters"]
+            raw_params = proposal["normalized_parameters"]
+            if not isinstance(raw_params, Mapping):
+                raise ValueError("Check plan parameters are malformed")
+            parameters = dict(raw_params)
             route = self._acceptance_route(parameters["goal_id"])
-            steps = (proposal.get("checkpoint") or {}).get("steps", {})
+            raw_checkpoint = proposal.get("checkpoint")
+            raw_steps = (
+                raw_checkpoint.get("steps", {})
+                if isinstance(raw_checkpoint, Mapping)
+                else {}
+            )
+            steps = raw_steps if isinstance(raw_steps, Mapping) else {}
             configured = steps.get("acceptance_configured")
             operation_id = f"acceptance-check:{proposal_id}"
+            expected_fingerprint = str(proposal["expected_state_fingerprint"])
             if configured is None:
-                basis = _review_basis(proposal["expected_state_fingerprint"])
+                basis = _review_basis(expected_fingerprint)
                 expected = basis["provider_revision"]
                 try:
                     # Its native idempotency receipt also recovers a lost
@@ -188,5 +201,5 @@ class GoalAcceptanceActionMixin:
                 "projection_verified": True, "goal_id": parameters["goal_id"],
                 "operation_id": operation_id, "checks_passed": result["checks_passed"]}
             stored = self.store.apply(proposal_id,
-                current_state_fingerprint=proposal["expected_state_fingerprint"], receipt=receipt)
+                current_state_fingerprint=expected_fingerprint, receipt=receipt)
             return {"proposal": stored, "turn": None}
