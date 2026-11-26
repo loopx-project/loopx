@@ -223,13 +223,15 @@ def _normalize_requirement(
     relation = str(payload.get("relation") or default_relation).strip().lower()
     if relation not in _RELATIONS:
         raise ValueError(f"{kind} material relation must be one of {sorted(_RELATIONS)}")
+    todo_id = _safe_text(payload.get("todo_id") or owner.get("todo_id"), field=f"{kind} todo_id")
+    bound_by = {"kind": kind, "ref": _owner_ref(owner, kind=kind, agent_id=agent_id)}
     return _RequirementBinding(
         material_id=material_id,
         relation=relation,
-        bound_by={"kind": kind, "ref": _owner_ref(owner, kind=kind, agent_id=agent_id)},
+        bound_by=bound_by,
         source_priority=_SOURCE_PRIORITY[kind],
         purpose=_safe_text(payload.get("purpose"), field=f"{kind} purpose", limit=220),
-        todo_id=_safe_text(payload.get("todo_id") or owner.get("todo_id"), field=f"{kind} todo_id"),
+        todo_id=todo_id,
         required_revision_hint=_safe_text(
             payload.get("required_revision"), field=f"{kind} required_revision"
         ),
@@ -366,25 +368,30 @@ def _index_matching_receipts(
     goal_id: str,
     agent_id: str,
     required_todos: Mapping[str, str | None],
-) -> dict[str, _ValidatedReceipt]:
-    """Index the latest matching receipt per required material in one pass."""
+) -> tuple[dict[str, _ValidatedReceipt], dict[str, ValueError]]:
+    """Index the latest matching receipt and first validation error per material."""
     if not required_todos:
-        return {}
+        return {}, {}
     indexed: dict[str, _ValidatedReceipt] = {}
+    errors: dict[str, ValueError] = {}
     for receipt in receipts:
         material_id = str(receipt.get("material_id") or "")
-        if material_id not in required_todos:
+        if material_id not in required_todos or material_id in errors:
             continue
-        validated = _validate_receipt(
-            receipt, goal_id=goal_id, agent_id=agent_id,
-            material_id=material_id, todo_id=required_todos[material_id],
-        )
+        try:
+            validated = _validate_receipt(
+                receipt, goal_id=goal_id, agent_id=agent_id,
+                material_id=material_id, todo_id=required_todos[material_id],
+            )
+        except ValueError as exc:
+            errors[material_id] = exc
+            continue
         if validated is None:
             continue
         current = indexed.get(material_id)
         if current is None or validated.sort_key > current.sort_key:
             indexed[material_id] = validated
-    return indexed
+    return indexed, errors
 
 
 def _material_is_accessible(material: PayloadView, *, available_boundaries: frozenset[str]) -> bool:
@@ -469,7 +476,7 @@ def build_agent_material_frontier(
         for raw in available_boundaries
         if (boundary := _safe_text(raw, field="available boundary", limit=80))
     )
-    receipts_by_material = _index_matching_receipts(
+    receipts_by_material, receipt_errors = _index_matching_receipts(
         _mapping_list(receipts),
         goal_id=safe_goal_id,
         agent_id=safe_agent_id,
@@ -482,6 +489,8 @@ def build_agent_material_frontier(
         material = materials.get(material_id)
         authority_revision = _opt_text(material, "revision", field="authority revision")
         required_revision = authority_revision or requirement.required_revision_hint
+        if (receipt_error := receipt_errors.get(material_id)) is not None:
+            raise receipt_error
         validated = receipts_by_material.get(material_id)
         receipt = validated.receipt if validated is not None else None
         state = _frontier_state(

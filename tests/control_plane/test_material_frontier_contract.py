@@ -548,6 +548,113 @@ def test_paired_origin_main_vs_head_equivalence() -> None:
             authority_registry={"project_materials": {}},
             generated_at="not-an-iso",
         ),
+        # Compound diagnostic precedence parity cases (PR #9467 PRRT_kwDOStEbEs68NEYt).
+        lambda mod: mod.build_agent_material_frontier(
+            goal_id="g1",
+            agent_id="a1",
+            authority_registry={
+                "project_materials": {
+                    "m1": {"revision": "r" * 200, "boundary": "public"},
+                    "m2": {"revision": "r1", "boundary": "public"},
+                }
+            },
+            todos=[{"todo_id": "t1", "material_refs": ["m1", "m2"]}],
+            receipts=[
+                {
+                    "schema_version": "material_usage_receipt_v0",
+                    "goal_id": "g1",
+                    "agent_id": "a1",
+                    "material_id": "m2",
+                    "todo_id": "t1",
+                    "receipt_id": "rcpt-" + ("x" * 200),
+                    "outcome": "read",
+                    "recorded_at": "2026-10-12T00:10:00Z",
+                }
+            ],
+        ),
+        lambda mod: mod.build_agent_material_frontier(
+            goal_id="g1",
+            agent_id="a1",
+            authority_registry={
+                "project_materials": {
+                    "m1": {"revision": "r1", "boundary": "public"},
+                    "m2": {"revision": "r1", "boundary": "public"},
+                }
+            },
+            todos=[{"todo_id": "t1", "material_refs": ["m1", "m2"]}],
+            receipts=[
+                {
+                    "schema_version": "material_usage_receipt_v0",
+                    "goal_id": "g1",
+                    "agent_id": "a1",
+                    "material_id": "m1",
+                    "todo_id": "t1",
+                    "receipt_id": "rcpt-1",
+                    "observed_revision": "obs-" + ("x" * 200),
+                    "outcome": "read",
+                    "recorded_at": "2026-10-12T00:10:00Z",
+                },
+                {
+                    "schema_version": "material_usage_receipt_v0",
+                    "goal_id": "g1",
+                    "agent_id": "a1",
+                    "material_id": "m2",
+                    "todo_id": "t1",
+                    "receipt_id": "rcpt-" + ("y" * 200),
+                    "outcome": "read",
+                    "recorded_at": "2026-10-12T00:10:00Z",
+                },
+            ],
+        ),
+        lambda mod: mod.build_agent_material_frontier(
+            goal_id="g1",
+            agent_id="a1",
+            authority_registry={"project_materials": {}},
+            todos=[
+                {
+                    "todo_id": "t" * 200,
+                    "material_refs": [
+                        {
+                            "id": "m1",
+                            "purpose": "p" * 240,
+                            "required_revision": "rev-" + ("z" * 200),
+                        }
+                    ],
+                }
+            ],
+        ),
+        lambda mod: mod.build_agent_material_frontier(
+            goal_id="g1",
+            agent_id="a1",
+            authority_registry={"project_materials": {}},
+            handoffs=[
+                {
+                    "handoff_id": "h" * 200,
+                    "to_agent": "a1",
+                    "material_refs": [
+                        {
+                            "id": "m1",
+                            "todo_id": "t1",
+                            "purpose": "p" * 240,
+                            "required_revision": "rev-" + ("z" * 200),
+                        }
+                    ],
+                }
+            ],
+        ),
+        lambda mod: mod.build_agent_material_frontier(
+            goal_id="g1",
+            agent_id="a1",
+            authority_registry={"project_materials": {}},
+            todos=[
+                {
+                    "todo_id": "t1",
+                    "material_refs": [
+                        {"id": "m1", "purpose": "p" * 240, "required_revision": "rev-" + ("z" * 200)}
+                    ],
+                }
+            ],
+        ),
     ]
     for call in error_calls:
         with pytest.raises(ValueError) as base_exc:
