@@ -4,14 +4,11 @@ import json
 import re
 import subprocess
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ...capabilities.issue_fix.reviewer_notification import (
-    SAFE_LOCAL_KEY_PATTERN,
-    CommandRunner,
-    build_reviewer_notification_sink_result,
-    reviewer_notification_idempotency_key,
-)
+if TYPE_CHECKING:
+    from ...capabilities.issue_fix.reviewer_notification import CommandRunner
+
 from ...control_plane.runtime.public_safety import public_safe_compact_text
 from .identity_shapes import (
     LARK_CHAT_ID_PATTERN,
@@ -126,6 +123,12 @@ def lark_reviewer_notification_sink(
     execute: bool,
     runner: CommandRunner,
 ) -> dict[str, Any]:
+    from ...capabilities.issue_fix.reviewer_notification import (
+        SAFE_LOCAL_KEY_PATTERN,
+        build_reviewer_notification_sink_result,
+        reviewer_notification_idempotency_key,
+    )
+
     sink_kind = "lark_chat"
     if sink.get("identity_scope") != "project_dedicated":
         return build_reviewer_notification_sink_result(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,19 @@ from .repository_change_window.catalog_entry import (
     REPOSITORY_CHANGE_WINDOW_CATALOG_ENTRY,
 )
 from .change_quality.catalog_entry import CHANGE_QUALITY_CATALOG_ENTRY
-from .pr_review_queue.catalog_entry import PR_REVIEW_CATALOG_ENTRY
-from .issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
+from .pr_review_queue.catalog_entry import (
+    PR_REVIEW_CATALOG_ENTRY, PR_REVIEW_INSTALL_HINT, pull_request_review_installed,
+)
+from .issue_fix.catalog_entry import (
+    ISSUE_FIX_CATALOG_ENTRY, ISSUE_FIX_CORE_CATALOG_ENTRY, ISSUE_FIX_INSTALL_HINT,
+    issue_fix_workflow_installed,
+)
 from .decision_context.catalog_entry import DECISION_CONTEXT_CATALOG_ENTRY
 from .project_skill_delivery.catalog_entry import PROJECT_SKILL_DELIVERY_CATALOG_ENTRY
 from .material_lifecycle.catalog_entry import MATERIAL_LIFECYCLE_CATALOG_ENTRY
-from .agent_turn_recall.catalog_entry import AGENT_TURN_RECALL_CATALOG_ENTRY
+from .agent_turn_recall.catalog_entry import (
+    AGENT_TURN_RECALL_CATALOG_ENTRY, RECALL_INSTALL_HINT, agent_turn_recall_installed,
+)
 from .semantic_preference.catalog_entry import SEMANTIC_PREFERENCE_CATALOG_ENTRY
 from .reward_memory.catalog_entry import REWARD_MEMORY_CATALOG_ENTRY
 from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
@@ -139,6 +147,32 @@ def _register_declared_implementation_providers(
         )
 
 
+def _record_for_installed_capability(
+    registry: CapabilityRegistry,
+    record: Mapping[str, object],
+    *,
+    builtin_cli_present: bool,
+) -> Mapping[str, object]:
+    if record is AGENT_TURN_RECALL_CATALOG_ENTRY:
+        installed = agent_turn_recall_installed(builtin_cli_present=builtin_cli_present)
+        hint = RECALL_INSTALL_HINT
+    elif record is PR_REVIEW_CATALOG_ENTRY:
+        installed = pull_request_review_installed(builtin_cli_present=builtin_cli_present)
+        hint = PR_REVIEW_INSTALL_HINT
+    elif record is ISSUE_FIX_CATALOG_ENTRY:
+        installed = issue_fix_workflow_installed(builtin_cli_present=builtin_cli_present)
+        hint = ISSUE_FIX_INSTALL_HINT
+        if not builtin_cli_present:
+            record = ISSUE_FIX_CORE_CATALOG_ENTRY
+    else:
+        return record
+    if installed:
+        return record
+    if not any(provider["id"] == "loopx" for provider in registry.providers()):
+        registry.register_provider({"id": "loopx", "origin": "builtin", "installed": False})
+    return dict(record) | {"provider_id": "loopx", "next_real_step": hint}
+
+
 def build_capability_registry(
     extension_manifest_paths: Iterable[str | Path] = (),
     *,
@@ -155,8 +189,11 @@ def build_capability_registry(
             "ready": True,
         }
     )
+    builtin_cli_present = find_spec("loopx.cli") is not None
     for record in BUILTIN_CAPABILITIES:
-        registry.register_capability(record)
+        registry.register_capability(_record_for_installed_capability(
+            registry, record, builtin_cli_present=builtin_cli_present,
+        ))
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)
     for manifest in extension_catalog_entries(

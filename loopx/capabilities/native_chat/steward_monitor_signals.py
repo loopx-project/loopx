@@ -10,7 +10,7 @@ from typing import Protocol
 
 from ...chat_store import _atomic_write_json
 from ...control_plane.runtime.time import now_utc
-from ..issue_fix.repository_snapshot import _REPO_PATTERN
+from ..issue_fix.github_public import _REPO_PATTERN
 from .steward_commands import NativeStewardCommandError, native_command
 from .steward_monitor_turns import (
     FOLLOWUP_TARGET_PREFIX,

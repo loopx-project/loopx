@@ -450,6 +450,26 @@ packet cannot be treated as proof the executor has the prior context. Recover
 through the owning contract when continuity is unknown. Capability instructions
 are supplied when applicable; authority is never inferred from prompt text.
 
+The Standard CLI composition has three source-built capability wheel
+candidates, `loopx-capability-agent-turn-recall`,
+`loopx-capability-pull-request-review`, and `loopx-capability-issue-fix`.
+Install them together with `loopx-core[standard]` or add each alongside the
+matching Core release. The extra pins these three packages to the Core version.
+Core and each add-on own
+disjoint files and keep existing capability IDs, configuration and runtime
+owners. Independent provider packages use the public capability boundary above.
+
+Discovery reads metadata on its own. The existing Goal/Agent opt-in loads
+recall when installed, and outcome ingest retains its own recovery path.
+The `pr-review` command uses its existing exact-head queue and checkpoint.
+An explicit Issue Fix selection in a Core environment loads the matching
+workflow and presents its existing candidate admission. Ordinary Core goal
+previews stay free of its command templates. Generic PR-wait observation and
+previously acknowledged review reconciliation remain in Core, with public PR
+lifecycle code loaded for the selected observation or reconciliation. Existing
+work and checkpoints survive add-on removal. The full Standard workspace and
+published split release still need qualification.
+
 Optional observers consume committed events or bounded projections. Their
 latency must not enter admission/settlement transactions unless the existing
 contract explicitly requires their receipt. Batch best-effort telemetry only;

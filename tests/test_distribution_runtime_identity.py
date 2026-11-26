@@ -134,3 +134,73 @@ def test_record_root_alias_keeps_exact_physical_ownership(owned_package):
         name = item.as_posix()
         item.locate = lambda name=name: alias / name
     assert manifest.release_runtime_identity() == before
+
+
+def test_core_companion_distributions_extend_and_fence_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "site-packages"
+    package = root / "loopx"
+    package.mkdir(parents=True)
+    files = {
+        "release_manifest.py": "core",
+        "capabilities/issue_fix/cli.py": "issue-fix",
+        "capabilities/pr_review_queue/core.py": "review",
+    }
+    for rel, content in files.items():
+        target = package / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+
+    def _entry(rel: str):
+        return SimpleNamespace(as_posix=lambda rel=rel: "loopx/" + rel,
+                               locate=lambda rel=rel: package / rel)
+
+    dists = {
+        "loopx-core": SimpleNamespace(
+            name="loopx-core",
+            version=manifest.__version__,
+            files=[_entry("release_manifest.py")],
+            read_text=lambda _name: None,
+        ),
+        "loopx-capability-issue-fix": SimpleNamespace(
+            name="loopx-capability-issue-fix",
+            version=manifest.__version__,
+            files=[_entry("capabilities/issue_fix/cli.py")],
+            read_text=lambda _name: None,
+        ),
+        "loopx-capability-pull-request-review": SimpleNamespace(
+            name="loopx-capability-pull-request-review",
+            version=manifest.__version__,
+            files=[_entry("capabilities/pr_review_queue/core.py")],
+            read_text=lambda _name: None,
+        ),
+    }
+
+    def _lookup(name: str):
+        if name not in dists:
+            raise manifest.PackageNotFoundError(name)
+        return dists[name]
+
+    monkeypatch.setattr(manifest, "__file__", str(package / "release_manifest.py"))
+    monkeypatch.setattr(manifest, "distribution", _lookup)
+    monkeypatch.delenv("LOOPX_RELEASE_ROOT", raising=False)
+
+    both_fp = manifest.release_runtime_identity()["package_fingerprint"]
+    assert both_fp.startswith("sha256:")
+
+    # Mismatched companion version or overlapping RECORD entry must fail closed.
+    dists["loopx-capability-pull-request-review"].version = "0.0.0"
+    assert "package_fingerprint" not in manifest.release_runtime_identity()
+
+    dists.pop("loopx-capability-pull-request-review")
+    (package / "capabilities/pr_review_queue/core.py").unlink()
+    single_fp = manifest.release_runtime_identity()["package_fingerprint"]
+    assert single_fp.startswith("sha256:") and single_fp != both_fp
+
+    (package / "capabilities/issue_fix/cli.py").write_text("tampered")
+    tampered_fp = manifest.release_runtime_identity()["package_fingerprint"]
+    assert tampered_fp != single_fp
+
+    dists["loopx-capability-issue-fix"].files.append(_entry("release_manifest.py"))
+    assert "package_fingerprint" not in manifest.release_runtime_identity()
