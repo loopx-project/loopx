@@ -207,10 +207,20 @@ def test_antigravity_steward_active_cascade_resume_failed_waits_for_idle_then_re
     failed = finish(runtime, row)
     assert failed["status"] == "failed" and failed["error_code"] == "resume_failed"
     assert failed["upstream_turn_id"] is None and failed["delta_count"] == 0
-    kinds = [ev["kind"] for ev in store.events_after(row["session_id"], failed["turn_id"], None)]
+    events = store.events_after(row["session_id"], failed["turn_id"], None)
+    kinds = [ev["kind"] for ev in events]
     assert kinds[0] == "turn.queued" and "manager.context" in kinds[1:-1] and kinds[-1] == "turn.failed"
+    assert any(
+        ev["kind"] == "agent.phase"
+        and ev.get("payload", {}).get("phase") == "native_conversation_active"
+        for ev in events
+    )
     assert transport.reconcile() >= 1
     assert transport.core.read_request(row["request_ref"])["delivery_verified"] is True
+    failed_record = _read_json(transport.root / f"{row['request_ref']}.json")
+    terminal_text = failed_record["deliveries"]["terminal"]["text"]
+    assert "原 Antigravity 会话仍在处理其他任务" in terminal_text
+    assert "准备执行器连接时失败" not in terminal_text
 
     advance_recovery_clock(monkeypatch)
     # While the cascade remains RUNNING, auto-recovery stays candidate-only and defers admission.
@@ -301,3 +311,140 @@ def test_antigravity_preparation_waits_while_model_catalog_unready_without_spend
     record = _read_json(transport.root / f"{row['request_ref']}.json")
     assert any(key.startswith("terminal.recovery.") and value.get("verified")
                for key, value in record["deliveries"].items())
+
+
+def test_pending_delivery_paths_orders_deferred_recovery_chronologically(
+    steward, monkeypatch,  # noqa: F811
+):
+    from loopx.chat_store import _atomic_write_json
+
+    _store, _runtime, _provider, transport, binding, _capture, _workspace = steward
+    transport.bindings.configure(
+        transport_ref="steward-app",
+        project_ref=binding["project_ref"],
+        executor_endpoint_id="codex",
+        context_kind="steward",
+    )
+    # Intentionally pick filenames that sort in reverse chronological order ("z-" older vs "a-" newer).
+    older = transport.root / "z-older-request.json"
+    newer = transport.root / "a-newer-request.json"
+    base_row = {
+        "schema_version": "lark_private_chat_delivery_v0",
+        "binding_id": binding["binding_id"],
+        "profile": "steward-app",
+        "session_id": "sess-1",
+        "status": "delivered",
+        "deliveries": {"terminal": {"verified": True}},
+    }
+    _atomic_write_json(older, {
+        **base_row,
+        "request_ref": "z-older-request",
+        "turn_id": "turn-older",
+        "event": {"create_time": "1795711638000"},
+    })
+    _atomic_write_json(newer, {
+        **base_row,
+        "request_ref": "a-newer-request",
+        "turn_id": "turn-newer",
+        "event": {"create_time": "1795711750000"},
+    })
+    monkeypatch.setattr(
+        transport.core,
+        "context_recovery_observer",
+        lambda: (lambda _ref, **_kwargs: True),
+    )
+    ordered = transport.pending_delivery_paths()
+    assert ordered.index(older) < ordered.index(newer)
+
+
+def test_pending_delivery_paths_orders_mixed_clocks_fallback_and_untimed(
+    steward, monkeypatch,  # noqa: F811
+):
+    from loopx.chat_store import _atomic_write_json
+
+    _store, _runtime, _provider, transport, binding, _capture, _workspace = steward
+    transport.bindings.configure(
+        transport_ref="steward-app",
+        project_ref=binding["project_ref"],
+        executor_endpoint_id="codex",
+        context_kind="steward",
+    )
+    base_row = {
+        "schema_version": "lark_private_chat_delivery_v0",
+        "binding_id": binding["binding_id"],
+        "profile": "steward-app",
+        "session_id": "sess-1",
+        "status": "delivered",
+        "deliveries": {"terminal": {"verified": True}},
+    }
+    monkeypatch.setattr(
+        transport.core,
+        "context_recovery_observer",
+        lambda: (lambda _ref, **_kwargs: True),
+    )
+
+    # Case 1: Mixed clocks where older item has only ISO created_at and newer has event.create_time.
+    # Use a filename for the older item ("a-...") that sorts before "z-...", verifying it is NOT pushed behind z-newer.
+    older_fallback = transport.root / "a-older-fallback.json"
+    newer_provider = transport.root / "z-newer-provider.json"
+    _atomic_write_json(older_fallback, {
+        **base_row,
+        "request_ref": "a-older-fallback",
+        "turn_id": "turn-a",
+        "created_at": "2026-11-26T16:47:18+00:00",
+    })
+    _atomic_write_json(newer_provider, {
+        **base_row,
+        "request_ref": "z-newer-provider",
+        "turn_id": "turn-z",
+        "event": {"create_time": "1795711750000"},
+    })
+    ordered = transport.pending_delivery_paths()
+    assert ordered.index(older_fallback) < ordered.index(newer_provider)
+
+    # Reverse filename variant ("z-older" vs "a-newer") must also sort older_fallback_rev first.
+    older_fallback.unlink()
+    newer_provider.unlink()
+    older_fallback_rev = transport.root / "z-older-fallback.json"
+    newer_provider_rev = transport.root / "a-newer-provider.json"
+    _atomic_write_json(older_fallback_rev, {
+        **base_row,
+        "request_ref": "z-older-fallback",
+        "turn_id": "turn-zr",
+        "created_at": "2026-11-26T16:47:18+00:00",
+    })
+    _atomic_write_json(newer_provider_rev, {
+        **base_row,
+        "request_ref": "a-newer-provider",
+        "turn_id": "turn-ar",
+        "event": {"create_time": "1795711750000"},
+    })
+    ordered_rev = transport.pending_delivery_paths()
+    assert ordered_rev.index(older_fallback_rev) < ordered_rev.index(newer_provider_rev)
+
+    # Case 2: Both fallback-only (created_at without event.create_time) + one untimed row.
+    # Untimed row "0-untimed" stays in its scan slot instead of being shoved behind newer_fallback.
+    older_fallback_rev.unlink()
+    newer_provider_rev.unlink()
+    untimed = transport.root / "0-untimed.json"
+    fb_older = transport.root / "z-fb-older.json"
+    fb_newer = transport.root / "a-fb-newer.json"
+    _atomic_write_json(untimed, {
+        **base_row,
+        "request_ref": "0-untimed",
+        "turn_id": "turn-0",
+    })
+    _atomic_write_json(fb_older, {
+        **base_row,
+        "request_ref": "z-fb-older",
+        "turn_id": "turn-fbo",
+        "created_at": "2026-11-26T16:47:18Z",
+    })
+    _atomic_write_json(fb_newer, {
+        **base_row,
+        "request_ref": "a-fb-newer",
+        "turn_id": "turn-fbn",
+        "created_at": "2026-11-26T16:49:10Z",
+    })
+    ordered_fb = transport.pending_delivery_paths()
+    assert ordered_fb.index(untimed) < ordered_fb.index(fb_older) < ordered_fb.index(fb_newer)

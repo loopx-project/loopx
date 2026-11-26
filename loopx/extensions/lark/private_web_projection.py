@@ -301,8 +301,13 @@ class PrivateWebProjectionMixin:
                         or not turn.get("completed_at") or turn.get("error") != message.get("text") or message.get("attachments")):
                     continue
                 failed_turns.add(turn_id)
+                phase_events = (
+                    store.events_after(session_id, turn_id, None)
+                    if turn.get("error_code") in {"host_gate", "response_timeout", "resume_failed"} else []
+                )
                 failure = ("服务在处理此请求时重启，本轮未完成。详情可在 App 的原会话查看。"
-                           if turn.get("error_code") == "server_restarted" else manager_failure_reply(turn)[1])
+                           if turn.get("error_code") == "server_restarted"
+                           else manager_failure_reply(turn, phase_events=phase_events)[1])
                 message = {**message, "text": f"App 执行记录（{turn['completed_at']}）\n\n{failure}"}
             elif verify_turns and not same_turn:
                 raise ValueError("canonical App input identity changed")

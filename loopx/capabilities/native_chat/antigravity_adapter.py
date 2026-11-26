@@ -523,6 +523,12 @@ class AntigravityAdapter:
                 "GetCascadeTrajectory", {"cascadeId": target_cascade_id}, timeout=10.0,
             )
             if before_traj.get("status") != "CASCADE_RUN_STATUS_IDLE":
+                if event_sink is not None:
+                    event_sink("agent.phase", {
+                        "phase": "native_conversation_active",
+                        "method": "native/cascade_active",
+                        "cascade_status": str(before_traj.get("status") or ""),
+                    })
                 raise CodexChatAgentError(
                     "The original Antigravity conversation is still active. Stop it in Antigravity before retrying.",
                     gate=None, error_code="resume_failed",
