@@ -25,7 +25,7 @@ from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
-from .chat.event_cache import ChatEventCache, ChatEventStreamMixin
+from .chat.event_cache import ChatEventCache, ChatEventStreamMixin, recover_completing_turns
 from .chat.journal import CachedJournalRows, decode_chat_journal
 from .chat.ingress import (
     ChatIngressStore,
@@ -201,7 +201,7 @@ def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
     """Filesystem store kept outside project and public LoopX run history."""
 
-    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True) -> None:
+    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True, compact_on_init: bool = True) -> None:
         self.root = runtime_root.expanduser().resolve() / "chat"
         self.sessions_root = self.root / "sessions"
         self._session_lock_guard = threading.Lock()
@@ -215,10 +215,10 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
-        # A scoped lifecycle repair must not compact unrelated history or finish
-        # other pending completions merely by opening their data owner.
+        # Scoped repairs open the data owner without mutating unrelated history.
         if startup_maintenance:
-            self.compact_completed_events()
+            if compact_on_init:
+                self.compact_completed_events()
             self._recover_turn_completions()
 
     def _session_dir(self, session_id: str) -> Path:
@@ -1466,11 +1466,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         return self.finalize_managed_turn_completion(session_id, turn_id)
 
     def _recover_turn_completions(self) -> None:
-        # ponytail: owner-local startup scan; add an index only if history makes it measurable.
-        for path in self.sessions_root.glob("*/turns/*.json"):
-            turn = _read_json(path)
-            if turn.get("schema_version") == CHAT_TURN_SCHEMA_VERSION and turn.get("status") == "completing":
-                self.finalize_turn_completion(str(turn["session_id"]), str(turn["turn_id"]))
+        recover_completing_turns(self)
 
     def finalize_attached_turn_completion(
         self,
