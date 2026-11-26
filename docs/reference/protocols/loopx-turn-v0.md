@@ -101,6 +101,29 @@ the effect projection, scheduler/automation execution data and
 `interaction_contract.cli_channel` remain with the outer executor. The model
 view resolves existing replan authoring and Explore guidance references before
 hiding their outer owner, preserving the original scalar values and text.
+Operators can read release readiness and completed Todo archive warnings in
+quota/status and the original capture. The built-in Worker view omits these
+maintenance directions.
+Recognized unconfigured recall keeps its Goal, Agent and disabled status.
+Known empty pre-turn observations keep their hook, capability and status.
+The full readbacks stay with the executor. Available context, failed
+observations, required reads and extended readbacks reach the Worker intact.
+Work-context delivery keeps scoped Todo records, their provider revision and
+record digest. The canonical Todo reader supplies the field dictionary for
+both registered read formats. Unknown formats retain their supplied metadata.
+For ordinary admitted work, matching recognized ready lease preparations stay
+with the launcher and settlement reader. The Worker retains the admitted task,
+scope, required reads and validation conditions. Unready, differing and
+extended preparations stay in the task view.
+When admitted `steering_audit_then_one_step` carries the standard mixed
+accounting clause, that clause stays with the executor and the TypeScript
+source check enables the built-in work-segment guidance in the Worker prompt:
+check direction, then choose the largest coherent work segment it can reliably
+complete and verify given its capabilities, budget, admitted task, scope and
+execution profile (`one_step` is a work segment, not a single operation, and a
+Todo groups related steps toward one verifiable outcome). Unrecognized policy
+text stays in the task view untouched without substituting that guidance,
+because it can carry additional constraints.
 The model receives the original `source_decision_hash`, reader references and
 `source_schema_version`; that hash commits the original source, not the task
 view. Inline task context does not require a filesystem read of a private
@@ -120,7 +143,20 @@ reader when needed.
 范围、执行要求和未知新增信息。来源绑定、effect projection、scheduler/automation
 执行数据及 `interaction_contract.cli_channel` 留在外层执行器。
 来源中指向外层 owner 的 replan 编写和 Explore 指导引用在隐藏该 owner 前展开，
-保留原始标量和文本。模型仍收到原始
+保留原始标量和文本。操作方在 quota/status 和原始 capture 中读取发布资格和已完成
+Todo 归档提醒。内置 Worker 视图省略这两条维护指令。能识别的未配置召回保留
+Goal、Agent 和停用状态。已知的空观察
+保留钩子、能力和状态。完整回执留在外层执行器。有可用上下文、观察失败、必需读取
+或扩展回执时，Worker 仍收到完整内容。工作上下文保留作用域内的 Todo、读取版本和记录摘要。
+两种已登记格式的字段表由 canonical Todo 读取入口提供，未知格式保留其元数据。
+普通任务准入后，完全一致且可识别的就绪租约记录留在启动和结算入口。Worker 保留已准入
+任务、范围、必需读取与验证条件。未就绪、有差异或带扩展字段的记录继续交付给 Worker。
+当获准执行的 `steering_audit_then_one_step` 携带标准混合扣额条款时，该条款
+留在执行器，由 TypeScript 来源校验开启内置提示中的工作段指导：先核对方向，再按
+自身能力、预算、已准入任务、范围和执行要求，选择能可靠完成并验证的最大连贯工作段
+（`one_step` 指一个工作段而非单次操作，同一可验证结果的相关操作归在一个 Todo）。
+无法识别的策略原文继续完整交付给 Worker 且不以该指导替代，因为它可能带有额外约束。
+模型仍收到原始
 `source_decision_hash`、reader 引用和 `source_schema_version`；该 hash 绑定原始
 来源，不绑定任务视图。已内联的任务上下文不要求 sandbox 读取不可访问的私有 capture，
 缺少必需证据仍暂停依赖该证据的工作。此呈现不是 adapter 请求，也不授予权限、结算或

@@ -27,13 +27,59 @@ def assert_host_task_context(model_input, source):
             assert all(complete_summary[lane] == [] for lane in omitted), omitted
             source[key] = {field: value for field, value in complete_summary.items() if field not in omitted}
     outer_fields = {"schema_version", "contract_binding", "projection_envelope", "scheduler_hint",
-                    "automation_cadence_readback", "automation_liveness", "scheduler_execution_context"}
-    assert set(context) == set(source) - outer_fields
-    for field in set(source) - outer_fields - {"interaction_contract"}:
+                    "automation_cadence_readback", "automation_liveness", "scheduler_execution_context",
+                    "promotion_readiness_warning", "completed_todo_archive_warning"}
+    expected = {field: value for field, value in source.items() if field not in outer_fields}
+    hints = expected.get("todo_write_hint")
+    if isinstance(hints, dict):
+        commands = {"rule", "section", "agent_todo_command_template", "user_action_command_template",
+                    "user_gate_command_template"}
+        retained = {k: v for k, v in hints.items() if k not in commands or not isinstance(v, str)}
+        if retained:
+            expected["todo_write_hint"] = retained
+        elif hints:
+            del expected["todo_write_hint"]
+    heartbeat = expected.get("heartbeat_recommendation")
+    if (source.get("normal_delivery_allowed") is True and isinstance(heartbeat, dict)
+            and heartbeat.get("recommended_mode") == "steering_audit_then_one_step"
+            and heartbeat.get("spend_policy") == (
+                "append exactly one heartbeat spend only after scope-bounded work "
+                "is validated and written back; one_step: mode, not an operation limit"
+            )):
+        expected["heartbeat_recommendation"] = {k: v for k, v in heartbeat.items() if k != "spend_policy"}
+    observations = expected.get("turn_start_capability_hook_dispatch")
+    rendered_observations = context.get("turn_start_capability_hook_dispatch")
+    if isinstance(observations, dict) and isinstance(rendered_observations, dict) and set(rendered_observations) == {"results"}:
+        assert observations["failures"] == observations["required_reads"] == []
+        assert all(row["status"] in {"empty", "not_applicable"} and row["observation_count"] == 0
+                   for row in observations["results"])
+        expected["turn_start_capability_hook_dispatch"] = {"results": [
+            {key: row[key] for key in ("hook_id", "capability_id", "status")} for row in observations["results"]
+        ]}
+    recall = expected.get("reward_memory_recall")
+    rendered_recall = context.get("reward_memory_recall")
+    if isinstance(recall, dict) and isinstance(rendered_recall, dict) and set(rendered_recall) == {"status", "goal_id", "agent_id"}:
+        assert recall["status"] == "disabled" and recall["context"] is None
+        assert recall["experiment"]["automatic_recall"] is recall["experiment"]["automatic_ingest"] is False
+        expected["reward_memory_recall"] = {key: recall[key] for key in ("status", "goal_id", "agent_id")}
+    interaction = {key: value for key, value in source["interaction_contract"].items() if key != "cli_channel"}
+    preparation = expected.get("execution_preparation")
+    if isinstance(preparation, dict) and "execution_preparation" not in context:
+        agent = interaction["agent_channel"]
+        assert preparation["state"] == "ready" and agent["delivery_allowed"] is True
+        assert preparation == agent["execution_preparation"]
+        assert preparation == source["interaction_contract"]["cli_channel"]["execution_preparation"]
+        assert preparation["todo_id"] == source["selected_todo"]["todo_id"]
+        del expected["execution_preparation"]
+        interaction["agent_channel"] = {key: value for key, value in agent.items() if key != "execution_preparation"}
+    assert set(context) == set(expected), {
+        "unexpected": sorted(context.keys() - expected.keys()),
+        "missing": sorted(expected.keys() - context.keys()),
+    }
+    for field in set(expected) - {"interaction_contract"}:
         assert json.dumps(context[field], sort_keys=True, ensure_ascii=False) == json.dumps(
-            source[field], sort_keys=True, ensure_ascii=False), field
-    interaction = source["interaction_contract"]
-    assert context["interaction_contract"] == {k: v for k, v in interaction.items() if k != "cli_channel"}
+            expected[field], sort_keys=True, ensure_ascii=False), field
+    assert context["interaction_contract"] == interaction
     if "source_decision_hash" in model_input:
         assert model_input["source_decision_hash"] == source["contract_binding"]["content_hash"]
     return context

@@ -973,6 +973,7 @@ def test_installed_core_rejects_unverified_artifact_without_settlement(core_pyth
 
 
 def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_python, task, tmp_path, monkeypatch):
+    from tests.control_plane.host_process_fixture import assert_host_task_context
     from tests.test_loopx_turn_codex_cli import _fake_codex
 
     workspace, runtime, registry, _ = task
@@ -985,7 +986,9 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         "--owner", AGENT, "--idempotency-key", lease["idempotency_key"],
         "--expected-version", str(lease["version"])], workspace)
     binary, log = _fake_codex(tmp_path)
-    binary.write_text(binary.read_text().replace('output_path = ',
+    binary.write_text(binary.read_text().replace("prompt = sys.stdin.read()",
+        'prompt = sys.stdin.read()\npathlib.Path("worker-prompt.txt").write_text(prompt, encoding="utf-8")'
+    ).replace('output_path = ',
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -1009,6 +1012,42 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert result["status"] == "committed" and result["validation"]["status"] == "passed", result
     assert json.loads((workspace / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    prompt = (workspace / "worker-prompt.txt").read_text(encoding="utf-8")
+    instructions, task_context_json = prompt.split("Turn request:\n", 1)
+    assert "one_step means one work segment, not one operation" in instructions
+    assert "largest coherent work segment you can reliably complete and verify with your capabilities" in instructions
+    assert "same verifiable outcome in one Todo" in instructions
+    assert "dependency, approval or validation boundaries" in instructions
+    model_input = json.loads(task_context_json)
+    capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
+    original = json.loads(capture.read_text(encoding="utf-8"))
+    for field in ("agent_todo_command_template", "user_action_command_template", "user_gate_command_template"):
+        command_template = original["todo_write_hint"][field]
+        assert command_template.startswith("loopx todo add")
+        assert command_template not in prompt
+    assert original["promotion_readiness_warning"]["requires_readiness_run"] is True
+    spend_policy = original["heartbeat_recommendation"]["spend_policy"]
+    assert "append exactly one heartbeat spend" in spend_policy
+    assert "one_step: mode, not an operation limit" in spend_policy
+    assert "append exactly one heartbeat spend" not in prompt
+    captured_bytes = capture.read_bytes()
+    assert original["execution_preparation"]["lease_proof"]["expected_version"] > 0
+    assert original["interaction_contract"]["cli_channel"]["execution_preparation"] == original["execution_preparation"]
+    model_task = model_input["task_context"]
+    assert "promotion_readiness_warning" not in model_task
+    assert "execution_preparation" not in model_task
+    assert "execution_preparation" not in model_task["interaction_contract"]["agent_channel"]
+    context = assert_host_task_context(model_input, original)
+    assert "todo_write_hint" not in context
+    assert "spend_policy" not in context["heartbeat_recommendation"]
+    assert context["execution_profile"] == original["execution_profile"]
+    users = context["interaction_contract"]["agent_channel"]["work_context"]["user_todos"]
+    model_proof = users["authority_read"]["todo_read_model"]
+    assert model_proof["schema_version"] == "loopx_todo_domain_read_record_v0"
+    assert model_proof["records_sha256"] and "contract_fields" not in model_proof
+    original_reader = json.loads(_run(core_python, [*prefix, "todo", "list", "--goal-id", GOAL, "--role", "user",
+        "--status", "open", "--agent-id", AGENT], workspace).stdout)
+    assert original_reader["authority_read"]["todo_read_model"]["contract_fields"]
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
     resume_command = [item for index, item in enumerate(command)
                       if item != "--todo-id" and (index == 0 or command[index - 1] != "--todo-id")]
@@ -1031,3 +1070,4 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     assert model_input["source_decision_hash"] == original["contract_binding"]["content_hash"]
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+    assert capture.read_bytes() == captured_bytes

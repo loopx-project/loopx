@@ -154,6 +154,7 @@ def extract_turn_authority(
         return {**decision, "primary_action": primary_action,
             "execution_profile": _mapping(decision.get("execution_profile")),
             "replan_action_packet": decision.get("replan_action_packet") if checked["replan_admitted"] else None,
+            "_ordinary_work_segment_guidance": checked.get("ordinary_work_segment_guidance") is True,
             "_work_identity": dict(checked["work_identity"]),
             **({"_session_lineage": dict(checked["session_lineage"])} if include_session_lineage else {}),
             "_model_input": projected_host_model_input(request, checked)}
@@ -321,6 +322,30 @@ def render_dsh_host_prompt(request: Mapping[str, Any]) -> str | None:
     return render_prompt(extract_turn_authority(request))
 
 
+def ordinary_work_segment_instruction(source: bool | Mapping[str, Any] | None) -> str:
+    """Return built-in work-segment guidance only when TS replaced the standard rule."""
+    if isinstance(source, bool):
+        enabled = source
+    elif isinstance(source, Mapping):
+        flag = (
+            source["_ordinary_work_segment_guidance"]
+            if "_ordinary_work_segment_guidance" in source
+            else source.get("ordinary_work_segment_guidance")
+        )
+        enabled = flag is True
+    else:
+        return ""
+    if not enabled:
+        return ""
+    return (
+        "Check the direction first. one_step means one work segment, not one operation. "
+        "Within the admitted task, execution_profile, permissions and available budget, "
+        "prefer the largest coherent work segment you can reliably complete and verify with your capabilities. "
+        "Keep related steps toward the same verifiable outcome in one Todo. "
+        "Split work at independent outcomes or necessary dependency, approval or validation boundaries."
+    )
+
+
 def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
@@ -346,6 +371,11 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     )
     if model_input is not None:
         detail = _mapping(model_input.get("detail_ref"))
+        work_segment = ordinary_work_segment_instruction(
+            authority.get("_ordinary_work_segment_guidance") is True
+        )
+        if work_segment:
+            work_segment += "\n"
         input_prompt = (
             "You are executing one bounded LoopX-governed work segment.\n"
             "Use task_context for the admitted work. The outer executor retains "
@@ -363,6 +393,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "The selected Todo summary is not its full requirements, and Todo "
             "completion cannot close the Goal. Use execution_profile to size and "
             "qualify work, including artifact, validation, outcome and degradation rules.\n"
+            f"{work_segment}"
             "For required additional detail, use detail_ref.full_decision from the "
             "saved original observation identified by detail_ref.captured_decision; "
             "verify Goal/Agent/Turn and source_decision_hash. Never re-enter admission "
