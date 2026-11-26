@@ -17,6 +17,8 @@ on:
       - "package.json"
       - "package-lock.json"
   workflow_dispatch:
+  schedule:
+    - cron: "11 21 * * *"
   push:
     branches:
       - main

@@ -4,50 +4,40 @@ on:
   pull_request:
     paths:
       - ".github/workflows/package-smoke.yml"
-      - "packages/loopx-core/**"
-      - "packages/loopx-capability-agent-turn-recall/**"
-      - "loopx/**"
+      - "packages/**"
       - "tests/test_core_distribution.py"
       - "tests/test_core_recall_distribution.py"
-      - "tests/control_plane/test_installed_core_context.py"
-      - "packages/loopx-repo-health/**"
-      - "packages/loopx-obelisk/**"
-      - "packages/loopx-codex-provider-routing/**"
-      - "loopx/capabilities/decision_context/extension_provider.py"
-      - "loopx/extensions/runtime.py"
-      - "packages/loopx-capability-pull-request-review/**"
-      - "packages/loopx-capability-issue-fix/**"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
       - "tests/test_core_standard_distribution.py"
+      - "tests/control_plane/test_installed_core_context.py"
+      - "loopx/extensions/runtime.py"
+      - "loopx/capabilities/decision_context/extension_provider.py"
+      - "pyproject.toml"
   push:
     branches:
       - main
     paths:
       - ".github/workflows/package-smoke.yml"
-      - "packages/loopx-core/**"
-      - "packages/loopx-capability-agent-turn-recall/**"
+      - "packages/**"
       - "loopx/**"
       - "tests/test_core_distribution.py"
       - "tests/test_core_recall_distribution.py"
-      - "tests/control_plane/test_installed_core_context.py"
-      - "packages/loopx-repo-health/**"
-      - "packages/loopx-obelisk/**"
-      - "packages/loopx-codex-provider-routing/**"
-      - "loopx/capabilities/decision_context/extension_provider.py"
-      - "loopx/extensions/runtime.py"
-      - "packages/loopx-capability-pull-request-review/**"
-      - "packages/loopx-capability-issue-fix/**"
       - "tests/test_core_pr_review_distribution.py"
       - "tests/test_core_issue_fix_distribution.py"
       - "tests/test_core_standard_distribution.py"
+      - "tests/control_plane/test_installed_core_context.py"
+      - "pyproject.toml"
+  schedule:
+    - cron: "47 20 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: package-smoke-${{ github.ref }}
-  cancel-in-progress: true
+  group: package-smoke-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   core:

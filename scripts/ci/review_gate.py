@@ -10,7 +10,7 @@ from impact_plan import Change, OUTPUTS, candidate, job_flags, plan, write_plan
 JOB_OUTPUT = {
     "checks": "core_tests",
     "pytest": "python_tests",
-    "node-minimum-compatibility": "backend_tests",
+    "node-minimum-compatibility": "compat_tests",
     "stage2c-correctness-e2e": "stage2c_tests",
     "windows-powershell": "python_tests",
     "presentation": "presentation_tests",
@@ -19,8 +19,8 @@ CHECK_OUTPUT = {
     "kernel-static-checks": "backend_tests",
     "kernel-contracts": "backend_tests",
     "typescript-coverage": "backend_tests",
-    "dashboard-acceptance": "core_tests",
-    "chat-bundle-browser": "core_tests",
+    "dashboard-acceptance": "frontend_tests",
+    "chat-bundle-browser": "frontend_tests",
 }
 
 

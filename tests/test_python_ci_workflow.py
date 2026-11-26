@@ -86,7 +86,7 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     ) in aggregate
 
 
-@pytest.mark.parametrize("kind", ["full", "presentation"])
+@pytest.mark.parametrize("kind", ["full", "mixed", "backend", "presentation"])
 @pytest.mark.parametrize("kernel", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("typescript", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("dashboard", ["success", "failure", "cancelled", "skipped"])
@@ -98,12 +98,18 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
     command = gate.split("run: ", 1)[1].splitlines()[0]
     args = shlex.split(command)
     args[0] = sys.executable
-    backend = kind == "full"
+    backend = kind in {"full", "mixed", "backend"}
+    frontend = kind in {"full", "mixed", "presentation"}
+    heavy = kind == "full"
     needs = {
         "changes": {"result": "success", "outputs": {
             "change_kind": kind, "core_tests": "true",
-            "backend_tests": str(backend).lower(), "python_tests": str(backend).lower(),
-            "stage2c_tests": str(backend).lower(), "presentation_tests": str(not backend).lower(),
+            "backend_tests": str(backend).lower(),
+            "frontend_tests": str(frontend).lower(),
+            "compat_tests": str(heavy).lower(),
+            "python_tests": str(heavy).lower(),
+            "stage2c_tests": str(heavy).lower(),
+            "presentation_tests": str(kind in {"presentation", "mixed"}).lower(),
         }},
         "kernel-static-checks": {"result": kernel},
         "kernel-contracts": {"result": kernel},
@@ -117,8 +123,9 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
         capture_output=True, check=False,
     )
     required_backend = "success" if backend else "skipped"
+    required_frontend = "success" if frontend else "skipped"
     assert (result.returncode == 0) == (
-        kernel == typescript == required_backend and dashboard == browser == "success"
+        kernel == typescript == required_backend and dashboard == browser == required_frontend
     )
 
 
@@ -283,7 +290,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert producer.index("chat_bundle.py verify --source") < producer.index("actions/upload-artifact")
     assert "smoke:" not in producer
     assert "needs: [changes, chat-bundle]" in browser
-    assert "if: needs.changes.outputs.core_tests == 'true'" in browser
+    assert "if: needs.changes.outputs.frontend_tests == 'true'" in browser
     assert "name: chat-bundle-${{ github.sha }}" in browser
     assert "chat_bundle.py build" not in browser
     assert (
@@ -293,11 +300,14 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
         < browser.index("npm run smoke:chat-upgrade")
     )
     assert "continue-on-error" not in browser
-    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
+    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage"):
         header = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         assert "if: needs.changes.outputs.backend_tests == 'true'" in header
-    dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split("    steps:", 1)[0]
-    assert "if: needs.changes.outputs.core_tests == 'true'" in dashboard
+    compat_header = WORKFLOW.split("  node-minimum-compatibility:\n", 1)[1].split("    steps:", 1)[0]
+    assert "if: needs.changes.outputs.compat_tests == 'true'" in compat_header
+    for name in ("dashboard-browser", "dashboard-acceptance"):
+        dashboard = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
+        assert "if: needs.changes.outputs.frontend_tests == 'true'" in dashboard
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
