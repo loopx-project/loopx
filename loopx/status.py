@@ -109,7 +109,7 @@ from .control_plane.work_items.attention_item import (
     attention_item as _attention_item_read_model,
 )
 from .control_plane.work_items.attention_queue import (
-    AttentionQueueContext,
+    AttentionQueueContext, AttentionQueueItem, AttentionQueueProjection,
     build_attention_queue as _build_attention_queue_read_model,
 )
 from .control_plane.work_items.autonomous_replan_ack import (
@@ -477,11 +477,11 @@ def autonomous_monitor_candidates(
 
 def build_attention_queue_projection(
     *,
-    items: list[dict[str, object]],
+    items: Sequence[AttentionQueueItem],
     goal_id_filter: str | None,
     autonomous_backlog_candidates: dict[str, object] | None,
     autonomous_monitor_candidates: dict[str, object] | None,
-) -> dict[str, object]:
+) -> AttentionQueueProjection:
     from .control_plane.status.attention_projection import (
         build_attention_queue_projection as _build_attention_queue_projection,
     )
@@ -1035,7 +1035,7 @@ def build_attention_queue(
     include_goal_channel_projection: bool = True,
     tolerate_malformed_settlement_history: bool = False,
     agent_lane_id: str | None = None,
-) -> dict[str, object]:
+) -> AttentionQueueProjection:
     def request_active_state_todo_fields(
         goal: dict[str, object],
         *,

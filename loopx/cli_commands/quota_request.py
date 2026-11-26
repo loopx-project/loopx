@@ -10,6 +10,7 @@ QUOTA_SHOULD_RUN_DETAIL_SECTIONS = (
     "agent-todos",
     "user-todos",
     "goal-boundary",
+    "goal_acceptance",
     "vision",
 )
 QUOTA_MONITOR_POLL_DETAIL_SECTIONS = ("decisions",)

@@ -398,6 +398,18 @@ async function verifyRemoteSelection(browser, url) {
     await page.getByRole("tooltip").getByText("此来源仅提供状态快照，无法在这里读取或回复原会话。",{exact:true}).waitFor();
     await page.keyboard.press("Escape");
     assert.equal(await page.getByRole("region", {name:"Agent 工作会话",exact:true}).getByRole("textbox").count(),0);
+    await page.setViewportSize({width:390,height:844});
+    const mastheadInfo = page.getByRole("button",{name:"查看完整 Goal",exact:true});
+    await page.locator('.personal-goal-tabs button[aria-current="page"]').focus();
+    await mastheadInfo.dispatchEvent("click");
+    const conversationDrawer = page.locator('.personal-context-drawer[data-context-kind="goal"]');
+    await page.waitForFunction(() => document.activeElement?.id === "personal-drawer-title");
+    await conversationDrawer.locator(".personal-drawer-close").click();
+    await conversationDrawer.waitFor({state:"detached"});
+    await page.waitForFunction(() => document.activeElement !== document.body);
+    assert.ok(await mastheadInfo.evaluate(button => button === document.activeElement),
+      "The close button returns focus to the Goal button in the conversation masthead");
+    await page.screenshot({path:resolve(outputDir,"goal-detail-masthead-return.png"),animations:"disabled"});
     assert.deepEqual(localOwnerReads,[],"Remote deep link caused local owner reads");
   } finally {await session.close();}
 }
@@ -422,7 +434,10 @@ async function verifyGoalDetails(page, snapshot) {
   snapshot.usage_summary.goals = [];
   await page.getByRole('button',{name:'刷新状态',exact:true}).click();
   const info = page.getByRole('button',{name:'Goal 信息',exact:true});
-  await info.click();
+  const overviewTab = page.locator('.personal-goal-tabs button[aria-current="page"]');
+  // Pointer activation on macOS can open details without focusing the button.
+  await overviewTab.focus();
+  await info.dispatchEvent('click');
   const drawer = page.locator('.personal-context-drawer[data-context-kind="goal"]');
   const acceptance = drawer.locator('.personal-goal-acceptance');
   const usage = drawer.locator('.personal-goal-detail-usage');
@@ -461,9 +476,31 @@ async function verifyGoalDetails(page, snapshot) {
   await page.screenshot({path:resolve(outputDir,'goal-detail-expanded-desktop.png'),animations:'disabled'});
   await page.keyboard.press('Escape');
   await drawer.waitFor({state:'detached'});
-  // The reader owner restores focus in its scheduled animation frame.
-  await page.waitForFunction(() => document.activeElement?.matches('button') && document.activeElement.textContent.includes('Goal 信息'));
-  assert.ok(await info.evaluate(node=>node===document.activeElement),'Closing the Goal reader returns to its exact trigger');
+  await page.waitForFunction(() => document.activeElement !== document.body);
+  await page.screenshot({path:resolve(outputDir,'goal-detail-overview-return.png'),animations:'disabled'});
+  assert.ok(await info.evaluate(node=>node===document.activeElement),'Escape returns to Goal information even when opening did not move focus');
+
+  await info.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.id === 'personal-drawer-title');
+  await info.evaluate(button => { button.disabled = true; });
+  await page.keyboard.press('Escape');
+  await drawer.waitFor({state:'detached'});
+  await page.waitForFunction(() => document.activeElement !== document.body);
+  assert.ok(await overviewTab.evaluate(tab => tab === document.activeElement),
+    'Closing a reader whose opener is unavailable returns to the active Goal tab');
+  await info.evaluate(button => { button.disabled = false; });
+
+  await info.click();
+  await drawer.waitFor();
+  await overviewTab.evaluate(tab => {
+    document.querySelector('.personal-context-drawer .personal-drawer-close').click();
+    tab.focus();
+  });
+  await drawer.waitFor({state:'detached'});
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+  assert.ok(await overviewTab.evaluate(tab => tab === document.activeElement),
+    'Closing the reader preserves focus moved outside the drawer');
 
   snapshot.usage_summary.goals = [{goal_id:source.id,cost_usd_24h:0,duration_ms_7d:7_200_000,input_tokens_7d:12500}];
   await page.getByRole('button',{name:'刷新状态',exact:true}).click(); await info.click();

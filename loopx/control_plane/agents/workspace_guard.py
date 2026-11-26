@@ -237,6 +237,7 @@ def observe_goal_delivery_workspace_isolation(
     selected_todo: dict[str, Any],
     *,
     project_asset: Mapping[str, Any] | None = None,
+    captured_local_workspace: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preview settlement's typed policy, without granting workspace admission.
 
@@ -244,7 +245,10 @@ def observe_goal_delivery_workspace_isolation(
     Goal into a Git task. Refresh still verifies the actual producing workspace.
     """
     from ..quota.selected_todo_projection import resolve_selected_todo_write_contract
-    from ..quota.settlement_workspace_causality import build_delivery_workspace_causality
+    from ..quota.settlement_workspace_causality import (
+        build_delivery_workspace_causality,
+        uses_registered_verification_workspace,
+    )
 
     goal_project_asset = goal.get("project_asset") if isinstance(goal, Mapping) else None
     causality_todo = resolve_selected_todo_write_contract(
@@ -262,20 +266,34 @@ def observe_goal_delivery_workspace_isolation(
     if repo and goal_id and not selected_todo.get("task_repository"):
         root = Path(str(repo)).expanduser()
         if root.is_absolute():
-            workspace = capture_delivery_workspace(
-                root, local_goal_id=str(goal_id), local_project_root=root,
-            )
+            if (
+                isinstance(captured_local_workspace, Mapping)
+                and captured_local_workspace.get("goal_id") == str(goal_id)
+                and captured_local_workspace.get("root") == str(root)
+            ):
+                workspace = captured_local_workspace.get("workspace")
+            else:
+                workspace = capture_delivery_workspace(
+                    root, local_goal_id=str(goal_id), local_project_root=root,
+                )
     policy = goal.get("workspace_guard_policy")
     policy = policy if isinstance(policy, dict) else {}
+    explicit_requirement = policy.get("peer_independent_worktree_required")
+    task_repository = selected_todo.get("task_repository")
+    registered_verification = workspace is not None and uses_registered_verification_workspace(
+        causality, task_repository=task_repository,
+        explicit_peer_worktree_requirement=explicit_requirement,
+    )
     workspace, required = qualify_delivery_workspace_isolation(
         workspace, multi_agent_goal=len(registered_agent_ids_for_goal(goal)) > 1,
-        explicit_peer_worktree_requirement=policy.get("peer_independent_worktree_required"),
-        task_repository=selected_todo.get("task_repository"),
+        explicit_peer_worktree_requirement=False if registered_verification else explicit_requirement,
+        task_repository=task_repository,
     )
     # The preview needs policy and kind, not a second producing-workspace receipt.
     return {
         "identity_kind": (workspace or {}).get("identity_kind"),
         "peer_independent_worktree_required": required,
+        **({"registered_verification_workspace": True} if registered_verification else {}),
     }
 
 
@@ -285,6 +303,11 @@ def delivery_workspace_refresh_hint(isolation: dict[str, Any]) -> str:
         return (
             "independent git worktree that produced the delivery; otherwise "
             "--delivery-workspace-path for that worktree"
+        )
+    if isolation.get("registered_verification_workspace") is True:
+        return (
+            "registered Goal workspace used for verification; otherwise "
+            "--delivery-workspace-path for that workspace"
         )
     if isolation.get("identity_kind") == "local_goal":
         return (
@@ -420,6 +443,8 @@ def observe_goal_local_workspace(
     goal: dict[str, Any],
     selected_todo: dict[str, Any] | None,
     allowed_write_scopes: list[str] | None = None,
+    *,
+    captured_out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reuse the registered workspace identity and project its existing grants."""
     empty: dict[str, Any] = {}
@@ -435,6 +460,13 @@ def observe_goal_local_workspace(
     snapshot = capture_delivery_workspace(
         root, local_goal_id=str(goal_id), local_project_root=root
     )
+    if captured_out is not None:
+        captured_out.clear()
+        captured_out.update({
+            "root": str(root),
+            "goal_id": str(goal_id),
+            "workspace": snapshot,
+        })
     if not snapshot or snapshot.get("identity_kind") != "local_goal":
         return empty
     boundary = goal.get("coordination") or {}

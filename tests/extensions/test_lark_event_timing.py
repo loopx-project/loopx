@@ -10,6 +10,7 @@ from loopx.extensions.lark.goal_channel_transport import record_event_timing
 from loopx.extensions.lark.goal_topic_runtime import stream_lark_goal_topic_profile
 from test_chat_ordinary_project import ordinary  # noqa: F401
 from test_lark_private_conversations import completed_group_stop, connect_group  # noqa: F401
+from test_native_steward_private import steward  # noqa: F401
 from test_lark_realtime_dispatch import _start
 
 
@@ -109,3 +110,55 @@ def test_native_topic_stop_retains_target_delivery_and_duplicate_safety(
             assert root["content"] not in json.dumps(rows)
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize("timing_enabled", [False, True], ids=["disabled", "enabled"])
+def test_held_history_answer_secondary_read_failure_stops_before_core_admission_returned(
+    steward, monkeypatch, capsys, timing_enabled,  # noqa: F811
+):
+    _, _, provider, transport, _, _, _ = steward
+    if timing_enabled:
+        monkeypatch.setenv("LOOPX_LARK_EVENT_TIMING", "1")
+    else:
+        monkeypatch.delenv("LOOPX_LARK_EVENT_TIMING", raising=False)
+
+    event = provider.event("steward-app", "hist-sec-read-fail", "Explain existing result")
+    original_runner = transport.runner
+    api_get_calls = 0
+
+    def failing_secondary_read(args, cwd=None, timeout=None):
+        nonlocal api_get_calls
+        if "api" in args and "GET" in args and any(event["message_id"] in str(item) for item in args):
+            api_get_calls += 1
+            if api_get_calls >= 2:
+                return {"returncode": 1, "stdout": "", "stderr": "secondary envelope read failed"}
+        return original_runner(args, cwd, timeout)
+
+    core_admission_calls = 0
+    original_admit_history = transport.core.admit_history_answer
+
+    def counting_admit_history(*args, **kwargs):
+        nonlocal core_admission_calls
+        core_admission_calls += 1
+        return original_admit_history(*args, **kwargs)
+
+    monkeypatch.setattr(transport, "runner", failing_secondary_read)
+    monkeypatch.setattr(transport.core, "admit_history_answer", counting_admit_history)
+    capsys.readouterr()
+
+    result = transport.admit("steward-app", event, history_review=True)
+    assert result == {"status": "history_answer_held"}
+    assert core_admission_calls == 0
+
+    event_ref = hashlib.sha256(json.dumps(["steward-app", event["message_id"]]).encode()).hexdigest()
+    stages = [row["stage"] for row in _timings(capsys.readouterr().out) if row["event_ref"] == event_ref]
+    if timing_enabled:
+        assert stages == [
+            "admission_started",
+            "binding_hint_ready",
+            "capture_lock_acquired",
+            "core_admission_started",
+        ]
+        assert "core_admission_returned" not in stages
+    else:
+        assert stages == []

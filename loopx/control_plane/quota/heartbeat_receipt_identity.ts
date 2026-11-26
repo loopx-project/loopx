@@ -16,6 +16,11 @@ import { BARE_SHA256_PATTERN } from "../content_digest.ts";
 import { jsonObject, requireJsonObject } from "../runtime_decode.ts";
 import {nativeChildReportAdmission} from "../capabilities/native_child_admission.ts";
 import type {ReceiptBoundReplayPhase} from "./settlement_phase.ts";
+import {createHash} from "node:crypto";
+import {isDeepStrictEqual} from "node:util";
+import {canonicalAuthoritySha256} from "../coordination/authority_store_codec.ts";
+import {leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 
 const TODO_ID_PATTERN = /^todo_[a-z0-9_-]{3,64}$/;
 const REPLAN_OBLIGATION_ID_PATTERN = /^replan-[a-f0-9]{16}$/;
@@ -302,6 +307,87 @@ export function isHeartbeatLeaseReadiness(event: JsonObject): boolean {
   return heartbeatReceiptDetails(event).settlement_receipt_revision === "lease_readiness";
 }
 
+/** A fresh guard and fenced canonical snapshot qualify a new writer, not old
+ * test results. The original admission stays reachable through receipt lineage. */
+function heartbeatLeaseTakeover(original: JsonObject, current: JsonObject,
+  identity: SettlementIdentity, previous: HeartbeatPreparedLease,
+  prepared: HeartbeatPreparedLease | null): JsonObject {
+  const reject = (): never => {throw receiptIdentityConflict(
+    "work requalification must preserve this Turn's original task lease generation unless a fenced current holder qualifies takeover");};
+  const source = jsonObject(current.lease_takeover_source);
+  const basis = jsonObject(source?.takeover_basis), todo = jsonObject(basis?.todo);
+  const leases = source?.leases;
+  const lease = Array.isArray(leases) && leases.length === 1 ? jsonObject(leases[0]) : null;
+  const old = heartbeatReceiptDetails(original);
+  if (!source || !basis || !todo || !lease || !prepared ||
+      typeof original.event_id !== "string" || !original.event_id ||
+      previous.prepared_lease_epoch === undefined || prepared.prepared_lease_epoch === undefined ||
+      source.goal_id !== identity.goal_id || source.todo_id !== identity.todo_id ||
+      source.handoff_mode !== "hard_lease" || !["file_v0", "sqlite_v0"].includes(String(source.source_authority)) ||
+      source.decision_read_from_provider !== true || source.legacy_fallback_used !== false ||
+      typeof source.provider_revision !== "string" || !source.provider_revision ||
+      typeof basis.acceptance_sha256 !== "string" || !BARE_SHA256_PATTERN.test(basis.acceptance_sha256) ||
+      todo.todo_id !== identity.todo_id || todo.role !== "agent" || todo.task_class !== "advancement_task" ||
+      todo.status !== "open" || todo.done === true || todo.archive_state !== "active" ||
+      todo.claimed_by !== identity.agent_id ||
+      (Array.isArray(todo.excluded_agents) && todo.excluded_agents.includes(identity.agent_id)) ||
+      lease.todo_id !== identity.todo_id || lease.owner !== identity.agent_id || lease.status !== "active" ||
+      leaseRepositoryRejection(todo, lease) !== null ||
+      typeof lease.idempotency_key !== "string" || !lease.idempotency_key ||
+      lease.version !== prepared.prepared_lease_version || lease.lease_epoch !== prepared.prepared_lease_epoch ||
+      prepared.prepared_lease_version <= previous.prepared_lease_version ||
+      prepared.prepared_lease_epoch <= previous.prepared_lease_epoch ||
+      prepared.prepared_lease_key_sha256 === previous.prepared_lease_key_sha256 ||
+      createHash("sha256").update(lease.idempotency_key).digest("hex") !== prepared.prepared_lease_key_sha256 ||
+      heartbeatPreparedWorkAdmission(original, identity) === null ||
+      normalizeHeartbeatReplanObligationId(old.semantic_replan_obligation_id) !== null ||
+      normalizeHeartbeatReplanObligationId(current.semantic_replan_obligation_id) !== null) return reject();
+  const clock = (value: unknown): bigint | null => typeof value === "string" ? parseTodoTimestampMicros(value, true) : null;
+  const at = clock(source.observed_at), admitted = clock(original.recorded_at),
+    acquired = clock(lease.acquired_at), updated = clock(lease.updated_at), expires = clock(lease.expires_at);
+  if (at === null || admitted === null || acquired === null || updated === null || expires === null ||
+      admitted > acquired || acquired > updated || updated > at || expires <= at) return reject();
+  return {append: true, details: {...old, ...prepared, settlement_receipt_revision: "lease_takeover",
+    takeover_original_event_id: original.event_id,
+    takeover_original_key_sha256: previous.prepared_lease_key_sha256,
+    takeover_original_version: previous.prepared_lease_version,
+    takeover_original_epoch: previous.prepared_lease_epoch,
+    takeover_owner: identity.agent_id, takeover_observed_at: source.observed_at,
+    takeover_expires_at: lease.expires_at, takeover_provider_revision: source.provider_revision,
+    takeover_todo_sha256: canonicalAuthoritySha256(todo), takeover_acceptance_sha256: basis.acceptance_sha256}};
+}
+
+/** Reject broken or rewritten takeover lineage during cold settlement reads. */
+export function validateHeartbeatTakeoverParent(event: JsonObject, parent: JsonObject,
+  identity: SettlementIdentity): void {
+  const details = heartbeatReceiptDetails(event);
+  if (details.settlement_receipt_revision !== "lease_takeover") return;
+  const old = heartbeatPreparedWorkAdmission(parent, identity), current = heartbeatPreparedLease(details);
+  const fields = {takeover_original_event_id: details.takeover_original_event_id,
+    takeover_original_key_sha256: details.takeover_original_key_sha256,
+    takeover_original_version: details.takeover_original_version, takeover_original_epoch: details.takeover_original_epoch,
+    takeover_owner: details.takeover_owner, takeover_observed_at: details.takeover_observed_at,
+    takeover_expires_at: details.takeover_expires_at, takeover_provider_revision: details.takeover_provider_revision,
+    takeover_todo_sha256: details.takeover_todo_sha256, takeover_acceptance_sha256: details.takeover_acceptance_sha256};
+  const time = (value: unknown): bigint | null => typeof value === "string" ? parseTodoTimestampMicros(value, true) : null;
+  const at = time(details.takeover_observed_at), expires = time(details.takeover_expires_at), recorded = time(event.recorded_at);
+  if (!old || !current || old.prepared_lease_epoch === undefined ||
+      current.prepared_lease_epoch === undefined || current.prepared_lease_epoch <= old.prepared_lease_epoch ||
+      current.prepared_lease_version <= old.prepared_lease_version ||
+      current.prepared_lease_key_sha256 === old.prepared_lease_key_sha256 ||
+      details.takeover_original_event_id !== parent.event_id || details.takeover_owner !== identity.agent_id ||
+      details.takeover_original_key_sha256 !== old.prepared_lease_key_sha256 ||
+      details.takeover_original_version !== old.prepared_lease_version ||
+      details.takeover_original_epoch !== old.prepared_lease_epoch ||
+      !isDeepStrictEqual(details, {...heartbeatReceiptDetails(parent), ...current,
+        settlement_receipt_revision: "lease_takeover", ...fields}) ||
+      ![details.takeover_todo_sha256, details.takeover_acceptance_sha256].every(value => typeof value === "string" && BARE_SHA256_PATTERN.test(value)) ||
+      typeof details.takeover_provider_revision !== "string" || !details.takeover_provider_revision ||
+      at === null || expires === null || recorded === null || expires <= at || recorded < at) {
+    throw receiptIdentityConflict("lease takeover does not preserve original admission and verified current ownership");
+  }
+}
+
 /** Reentry can qualify work on the original binding, never replace its authority.
  * The caller commits this append-only projection under the receipt-log lock. */
 export function heartbeatWorkRequalification(
@@ -338,7 +424,7 @@ export function heartbeatWorkRequalification(
       (previous.prepared_lease_epoch === undefined
         ? preparedLease.prepared_lease_version !== previous.prepared_lease_version
         : preparedLease.prepared_lease_epoch !== previous.prepared_lease_epoch))) {
-    throw receiptIdentityConflict("work requalification must preserve this Turn's original task lease generation");
+    return heartbeatLeaseTakeover(original, currentDetails, identity, previous, preparedLease);
   }
   if (nativeChildReportAdmission(oldDetails, original.status, identity.effect_id, phase, false, originalReplan)
       .report_permission === "new_operation") {

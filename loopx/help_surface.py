@@ -407,6 +407,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "refresh-state",
         "reliability-diagnostics",
         "register-authority-source",
+        "update-authority-source",
         "registry-boundary",
         "reward",
         "reward-memory",

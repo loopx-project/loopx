@@ -4,15 +4,13 @@ from __future__ import annotations
 from collections.abc import Callable, Set as AbstractSet
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol, TypedDict
+from typing import Literal, NotRequired, Protocol, TypedDict, get_args
 
-AttentionWaitingOn = Literal[
-    "user_or_controller",
-    "controller",
-    "codex",
-    "external_evidence",
-]
-GlobalRegistryFindingSeverity = Literal["high", "action"]
+from ..status.goal_attention_projection import RegistryWaitingOnOverride
+from ..status.monitor_display_projection import MonitorSignalWaitingOn
+
+AttentionWaitingOn = Literal[RegistryWaitingOnOverride, MonitorSignalWaitingOn]
+ATTENTION_WAITING_ON_VALUES: frozenset[str] = frozenset(get_args(AttentionWaitingOn))
 
 USER_OR_CONTROLLER_WAIT_STATES: frozenset[str] = frozenset(
     {"user_or_controller", "controller"}
@@ -20,26 +18,72 @@ USER_OR_CONTROLLER_WAIT_STATES: frozenset[str] = frozenset(
 ACTIONABLE_REGISTRY_SEVERITIES: frozenset[str] = frozenset({"high", "action"})
 
 
-class AttentionQueueCounts(TypedDict):
-    """Bucket counts emitted alongside attention queue items."""
+class AttentionQueueItem(TypedDict):
+    """Typed bucket entry and projected work item for the attention queue."""
 
+    waiting_on: AttentionWaitingOn
+    goal_id: NotRequired[str]
+    status: NotRequired[str]
+    severity: NotRequired[str]
+    recommended_action: NotRequired[str]
+    source: NotRequired[str]
+    project_asset: NotRequired[dict[str, object]]
+    quota: NotRequired[dict[str, object]]
+    user_todos: NotRequired[dict[str, object]]
+    agent_todos: NotRequired[dict[str, object]]
+    todo_state_file: NotRequired[str]
+    todo_source: NotRequired[str]
+    activation_state: NotRequired[str]
+    operator_question: NotRequired[str]
+    agent_command: NotRequired[str]
+    controller_stage: NotRequired[str]
+    missing_gates: NotRequired[list[str]]
+    next_handoff_condition: NotRequired[str]
+    lifecycle_phase: NotRequired[str]
+    lifecycle_flags: NotRequired[list[str]]
+    dreaming_proposal: NotRequired[dict[str, object]]
+    dreaming_lane_badge: NotRequired[dict[str, object]]
+    session_runtime_projection: NotRequired[dict[str, object]]
+    shadow_finding: NotRequired[object]
+    latest_run_recommended_action: NotRequired[str]
+    latest_run_recommended_action_source: NotRequired[str]
+    autonomous_replan_ack: NotRequired[dict[str, object]]
+    control_plane: NotRequired[dict[str, object]]
+    agent_lane_recommendation: NotRequired[dict[str, object]]
+    stale_latest_run_warning: NotRequired[dict[str, object]]
+    task_graph_projection: NotRequired[dict[str, object]]
+    evidence_log_read_receipts: NotRequired[object]
+    external_progress_review: NotRequired[dict[str, object]]
+    error_code: NotRequired[str]
+    authority_read: NotRequired[dict[str, object]]
+    state_incomplete: NotRequired[dict[str, object]]
+    execution_waiting_on: NotRequired[str]
+    monitor_display: NotRequired[dict[str, object]]
+    goal_objective: NotRequired[object]
+    active_state_next_action: NotRequired[object]
+    handoff_readiness: NotRequired[dict[str, object]]
+    dependency_blockers: NotRequired[list[dict[str, object]]]
+    agent_lane_id: NotRequired[str]
+    goal_channel_projection: NotRequired[dict[str, object]]
+    handoff_mode: NotRequired[str]
+    long_task_cadence_hint: NotRequired[dict[str, object]]
+
+
+class AttentionQueueProjection(TypedDict):
+    """Structured shape of the serialized ``attention_queue`` projection."""
+
+    available: bool
     item_count: int
     needs_user_or_controller: int
     needs_controller: int
     needs_codex: int
     watching_external_evidence: int
     watching_monitor: int
-
-
-class AttentionQueueProjection(AttentionQueueCounts, total=False):
-    """Structured shape of the serialized ``attention_queue`` projection."""
-
-    available: bool
-    items: list[dict[str, object]]
-    goal_filter: str
-    goal_filter_applied: bool
-    autonomous_backlog_candidates: dict[str, object]
-    autonomous_monitor_candidates: dict[str, object]
+    items: list[AttentionQueueItem]
+    goal_filter: NotRequired[str]
+    goal_filter_applied: NotRequired[bool]
+    autonomous_backlog_candidates: NotRequired[dict[str, object]]
+    autonomous_monitor_candidates: NotRequired[dict[str, object]]
 
 
 class AttentionItemBuilder(Protocol):

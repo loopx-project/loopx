@@ -14,6 +14,7 @@ import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {capturedContextSelection} from "./context_selection.ts";
+import {SCOPED_OUTCOME_PROJECTION_MODE} from "./turn_envelope_scoping.ts";
 import {createHash} from "node:crypto";
 
 
@@ -586,6 +587,19 @@ export function progressiveContextPlan(request: JsonObject,
           && row.reason.includes(FULL_OUTCOME_READ_GUIDANCE))
         instructions.push({path: [...listPath, i, "reason"], value:
           row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
+    });
+  }
+  const deferredDetails = jsonObject(at(payload, ["deferred_settlement_details"]));
+  if (deferredDetails !== null) {
+    const hasGoalAcceptance = Object.hasOwn(deferredDetails, "goal_acceptance");
+    const hasOptionalAttachments = Object.hasOwn(deferredDetails, "optional_attachments");
+    deferred.push({
+      path: ["deferred_settlement_details"],
+      read_instruction: hasGoalAcceptance
+        ? (hasOptionalAttachments
+          ? "Admission-time goal_acceptance outcomes and optional settlement attachment details stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command / optional_attachments[].cold_read_command for live inspection."
+          : "Admission-time goal_acceptance outcomes stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command for live inspection.")
+        : "Complete optional settlement attachment details stay in the original capture; use optional_attachments[].cold_read_command when needed.",
     });
   }
   for (const scope of scopes) {
@@ -1248,7 +1262,18 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && suggested.every(id => typeof id === "string"
         && outcomes.filter(value => object(value)?.id === id).length === 1);
     const expanded = new Set(expand ? suggested as string[] : []);
-    const outcomesPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const requirementsPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements"];
+    if (requirements?.projection_mode === SCOPED_OUTCOME_PROJECTION_MODE) {
+      for (const field of [
+        "schema_version", "revision", "outcome_revision", "current_lifetime",
+        "projection_mode", "full_outcome_count", "inline_outcome_count",
+        "compacted_outcome_count", "full_outcomes_sha256",
+        "capture_read_command", "cold_read_command", "cold_read_instruction",
+      ]) {
+        if (Object.hasOwn(requirements, field)) include(...requirementsPath, field);
+      }
+    }
+    const outcomesPath = [...requirementsPath, "outcomes"];
     const canDeferSuggested = openingBudget !== undefined && readyIdentity !== undefined && expanded.size > 0
       && inlineSupportingDetails && details?.outcome_support_from_id === true
       && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
@@ -1268,6 +1293,11 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
       if (suggested && !deferSuggested) { include(...outcome); return; }
       include(...outcome, "id");
+      if (row?.summary_only === true) {
+        for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "capture_read_command", "read_modes", "cold_read_command"]) {
+          if (Object.hasOwn(row, key)) include(...outcome, key);
+        }
+      }
       if (suggested) {
         include(...outcome, "objective");
         include(...outcome, "revision");

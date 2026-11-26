@@ -357,14 +357,15 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
     }
   }, [authoritativeSubagentConfiguration, verifiedSubagentConfiguration]);
 
+  const openingControl = selection.kind === "goal" ? selection.openingControl : undefined;
   useEffect(() => {
-    const activeElement = document.activeElement;
-    if (activeElement instanceof HTMLElement && !drawerRef.current?.contains(activeElement)) {
-      returnFocusRef.current = activeElement;
+    const opener = openingControl ?? document.activeElement;
+    if (opener instanceof HTMLElement && !drawerRef.current?.contains(opener)) {
+      returnFocusRef.current = opener;
     }
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [selectionIdentity]);
+  }, [openingControl, selectionIdentity]);
 
   useEffect(() => {
     if (!taskInspectorModal || drawerRef.current?.contains(document.activeElement)) return;

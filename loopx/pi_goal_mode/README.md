@@ -144,7 +144,7 @@ loopx_task_lease({
   todoId: "todo_ab12cd34ef56",
   idempotencyKey: "pi-turn-42",
   writeScopes: ["loopx/**"],
-  ttlSeconds: 2700
+  ttlSeconds: 10800
 })
 ```
 

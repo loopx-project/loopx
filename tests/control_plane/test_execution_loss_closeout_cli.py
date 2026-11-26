@@ -227,6 +227,7 @@ def _fixture(tmp_path, monkeypatch, capsys, provider, *, prepared=True,
             code, pending = cli(*_guard_args(context))
             assert code == 0 and pending["execution_preparation"]["state"] == "claim_required", pending
     claim = _claim(context, OWNER, "execution-loss-original-claim")
+    context["current_claim"] = claim
     original_lease = _lease(context)
     context["original_lease"] = original_lease
     if prepared:
@@ -258,8 +259,10 @@ def _fixture(tmp_path, monkeypatch, capsys, provider, *, prepared=True,
         # Registered transport clock seams, never edits to persisted lease bytes.
         monkeypatch.setattr(runtime_time, "datetime", AfterExpiryDatetime)
         monkeypatch.setattr(task_lease, "now_utc", lambda: after_expiry.astimezone(timezone.utc))
+        monkeypatch.setattr(rollout_event_log, "_now_iso", lambda: runtime_time.now_local_iso(timespec="microseconds"))
         assert runtime_time.now_utc() == after_expiry.astimezone(timezone.utc)
         replacement = _claim(context, replacement_owner, "execution-loss-replacement-claim")
+        context["current_claim"] = replacement
         assert replacement["claim_operation_id"] != claim["claim_operation_id"]
         current = _lease(context)
         assert current["owner"] == replacement_owner
@@ -497,38 +500,8 @@ def test_closeout_preserves_the_original_turn_and_releases_the_next_guard(
     _assert_original_prepared_generation(context, original)
     assert not original.writeback.receipts and not original.spend.receipts
     argv = _closeout_args(context)
-    if not source_profile:
-        before_replay = _unchanged_state(context)
-        replay_args = _guard_args(context)
-        selection = replay_args.index("--todo-id")
-        del replay_args[selection:selection + 2]
-
-        code, same_turn = context["cli"](*replay_args)
-        assert code == 0, same_turn
-        assert same_turn["normal_delivery_allowed"] is False
-        assert same_turn["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
-        debt = same_turn["unsettled_host_turn_recovery"]
-        assert debt["prior_turn_instance_id"] == TURN
-        assert debt["repair"] == "execution_loss_closeout"
-        assert _unchanged_state(context) == before_replay
-
-        # A fresh host Turn can also discover the outstanding original debt.
-        route = str(tmp_path / "fixture launcher" / "loopx")
-        code, recovery = context["cli"](
-            "--cli-bin", route, "quota", "should-run", "--context-delivery", "off", "--codex-app",
-            "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", "needs-recovery",
-        )
-        assert code == 0, recovery
-        debt = recovery["unsettled_host_turn_recovery"]
-        assert debt["repair"] == "execution_loss_closeout"
-        assert debt["prior_turn_instance_id"] == TURN
-        assert debt["execution_loss"]["original_prepared_epoch"] == context["original_lease"]["lease_epoch"]
-        assert debt["execution_loss"]["current_lease_epoch"] == context["current_lease"]["lease_epoch"]
-        assert recovery["execution_obligation"]["delivery_allowed"] is False
-        cli_channel = recovery["interaction_contract"]["cli_channel"]
-        assert cli_channel["spend_allowed_now"] is False
-        argv = _projected_preview_args(cli_channel, context["current_lease"])[:-1]
-        assert argv[:2] == ["--cli-bin", route]
+    # Administrative no-spend closeout stays explicit. A same-owner guard now
+    # resumes work through a fenced takeover instead of discarding its result.
     before = _unchanged_state(context)
     code, preview = context["cli"](*argv, "--dry-run")
     assert code == 0 and preview["would_close_without_spend"] is True, preview
@@ -727,59 +700,67 @@ def test_recovery_guides_self_claim_only_for_the_retained_assignee(
     )
     assert code == 0, recovery
     debt = recovery["unsettled_host_turn_recovery"]
-    assert debt["repair"] == "execution_loss_closeout"
-    assert debt["reason_code"] == "execution_loss_control_writer_required"
-    assert "execution_preparation" not in recovery
-    assert recovery["interaction_contract"]["agent_channel"]["must_attempt"] is False
-    assert recovery["execution_obligation"]["delivery_allowed"] is False
-    cli_channel = recovery["interaction_contract"]["cli_channel"]
-    assert cli_channel["spend_allowed_now"] is False
-    claim_commands = [command for command in cli_channel["next_cli_actions"] if "todo claim" in command]
     if owner == PEER:
-        assert not claim_commands
+        assert debt["repair"] == "execution_loss_closeout"
+        assert debt["reason_code"] == "execution_loss_control_writer_required"
+        assert recovery["interaction_contract"]["agent_channel"]["must_attempt"] is False
+        commands = recovery["interaction_contract"]["cli_channel"]["next_cli_actions"]
+        assert not any("todo claim" in command for command in commands)
         _assert_no_completion_or_debit(context)
         return
-
-    [claim_command] = claim_commands
+    assert debt["repair"] == "resume_prior_turn"
+    assert recovery["interaction_contract"]["agent_channel"]["must_attempt"] is True
+    code, prepare = context["cli"](*_guard_args(context))
+    assert code == 0 and prepare["execution_preparation"]["state"] == "claim_required", prepare
+    claim_command = prepare["execution_preparation"]["claim"]["command_line"]
     tokens = shlex.split(claim_command)
     code, claimed = context["cli"](*tokens[tokens.index("todo"):])
     assert code == 0, claimed
     current = _lease(context)
     assert current["owner"] == OWNER and current["lease_epoch"] > lease["lease_epoch"]
-    argv = _projected_preview_args(cli_channel, current)
-    code, preview = context["cli"](*argv)
-    assert code == 0 and preview["would_close_without_spend"] is True, preview
-    code, closed = context["cli"](*argv[:-1])
-    assert code == 0 and closed["settlement_progress"]["no_spend"] is True, closed
-    assert closed["settlement_identity"] == _readback(context).identity.value.as_dict()
-    code, replay = context["cli"](*argv[:-1])
-    assert code == 0 and replay["idempotent_replay"] is True and replay["appended"] is False, replay
+    code, resumed = context["cli"](*_guard_args(context))
+    assert code == 0 and resumed["normal_delivery_allowed"], json.dumps(resumed)
+    assert _readback(context).prepared_lease["prepared_lease_epoch"] == current["lease_epoch"]
     _assert_no_completion_or_debit(context)
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_original_turn_reentry_projects_execution_loss_without_repeating_work(
+def test_original_turn_reentry_qualifies_takeover_without_repeating_work(
     tmp_path, monkeypatch, capsys, provider,
 ):
     context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False)
     before = _receipt_lines(context)
-    # Re-enter through the route a failed refresh returns and through the
-    # implicit receipt binding. Both must preserve the same original guard.
     base = ["quota", "should-run", "--runtime-profile", "generic_cli", "--context-delivery", "off",
             "--goal-id", context["goal_id"], "--agent-id", OWNER, "--turn-instance-id", TURN]
     for scope in (["--todo-id", context["todo"]], []):
         code, recovery = context["cli"](*base, *scope)
-        assert code == 0, (recovery.get("error_code"), recovery.get("reason"))
-        assert recovery["normal_delivery_allowed"] is False
-        assert recovery["unsettled_host_turn_recovery"]["prior_turn_instance_id"] == TURN
-        channel = recovery["interaction_contract"]["cli_channel"]
-        assert channel["spend_allowed_now"] is False
-        preview = _projected_preview_args(channel, context["current_lease"])
-        code, result = context["cli"](*preview)
-        assert code == 0 and result["would_close_without_spend"], result
-    code, closed = context["cli"](*preview[:-1])
-    assert code == 0 and closed["settlement_progress"]["no_spend"], closed
-    code, replay = context["cli"](*preview[:-1])
-    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
-    assert _receipt_lines(context) == before
+        assert code == 0 and recovery["normal_delivery_allowed"], recovery
+        assert recovery["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+    after = _receipt_lines(context)
+    assert after[:len(before)] == before and len(after) == len(before) + 1
+    assert json.loads(after[-1])["details"]["settlement_receipt_revision"] == "lease_takeover"
+    _assert_no_completion_or_debit(context)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_original_lease_loss_claims_then_revalidates_current_work(tmp_path, monkeypatch, capsys, provider):
+    context = _fixture(tmp_path, monkeypatch, capsys, provider, source_profile=False, replace=False)
+    original = context["original_lease"]
+    code, released = context["cli"]("task-lease", "release", "--goal-id", context["goal_id"],
+        "--todo-id", context["todo"], "--owner", OWNER, "--idempotency-key", original["idempotency_key"],
+        "--expected-version", str(original["version"]))
+    assert code == 0, released
+    code, recovery = context["cli"](*_guard_args(context))
+    assert code == 0, recovery
+    assert recovery["execution_preparation"]["state"] == "claim_required"
+    assert recovery["normal_delivery_allowed"] is False
+    channel = recovery["interaction_contract"]["cli_channel"]
+    claims = [shlex.split(command) for command in channel["next_cli_actions"] if "todo claim" in command]
+    assert len(claims) == 1
+    code, claimed = context["cli"](*claims[0][claims[0].index("todo"):])
+    assert code == 0, claimed
+    code, ready = context["cli"](*_guard_args(context))
+    assert code == 0, ready
+    assert ready["normal_delivery_allowed"] is True
+    assert _readback(context).prepared_lease["prepared_lease_epoch"] == _lease(context)["lease_epoch"]
     _assert_no_completion_or_debit(context)

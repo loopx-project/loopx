@@ -109,6 +109,6 @@ export function planPrWaitObservations(value: unknown): JsonObject {
 export async function planPrWaitObservationsFromSource(value: unknown): Promise<JsonObject> {
   const request = requireJsonObject(value, "PR wait observation request");
   const plan = planPrWaitObservations(request); // Validate before reading local state.
-  if (request.rollout_event_source === undefined) return plan;
+  if (request.rollout_event_source === undefined || !(plan.waiting_targets as unknown[]).length) return plan;
   return planPrWaitObservations({...request, rollout_events: [...await readTodoResumeRolloutEvents(request)]});
 }

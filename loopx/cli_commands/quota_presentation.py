@@ -16,13 +16,47 @@ def compose_quota_work_contract(payload: dict[str, object], args: argparse.Names
     """Compose Complete Turn sources before capture and display."""
     if args.quota_command != "should-run" or not isinstance(payload.get("interaction_contract"), Mapping):
         return payload
+    from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
     from ..control_plane.quota.error_codes import QuotaDecisionTransportError
     from ..control_plane.quota.turn_envelope import compose_turn_decision
+    from .quota_request import quota_detail_sections_from_args
 
+    detail_sections = quota_detail_sections_from_args(args)
+    capture_reference_file = (
+        str(capture_directory / "decision.reader.json")
+        if capture_directory is not None
+        else None
+    )
+
+    def _anchor_existing_path(value: object) -> str | None:
+        if not isinstance(value, str) or not value.strip():
+            return None
+        candidate = Path(value).expanduser()
+        if candidate.is_absolute() or not candidate.exists():
+            return None
+        return str(candidate.resolve())
+
+    cli_registry = _anchor_existing_path(payload.get("registry"))
+    cli_runtime_root = _anchor_existing_path(payload.get("runtime_root"))
     try:
-        return compose_turn_decision(payload, scheduler_execution_context=scheduler_context,
-            composed_settlement=True)
+        return compose_turn_decision(
+            payload,
+            scheduler_execution_context=scheduler_context,
+            composed_settlement=True,
+            include_vision_detail=(
+                "vision" in detail_sections
+                or getattr(args, "context_delivery", None) == "off"
+            ),
+            include_goal_acceptance_detail=(
+                "goal_acceptance" in detail_sections
+                or getattr(args, "context_delivery", None) == "off"
+            ),
+            cli_argv=current_loopx_cli_argv(),
+            capture_reference_file=capture_reference_file,
+            cli_registry=cli_registry,
+            cli_runtime_root=cli_runtime_root,
+        )
     except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         from .quota_capture import capture_decision
         from .quota_failure_report import quota_decision_transport_diagnostic
