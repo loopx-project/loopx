@@ -15,6 +15,7 @@ from .models import (
     CodexGptMicrobenchRunner,
     DeepSeekArkMicrobenchRunner,
     MicrobenchModelRunner,
+    require_positive_finite_float,
 )
 from .scenarios import MICROBENCH_SCENARIO_IDS
 from .tier0 import run_tier0_differential
@@ -79,6 +80,13 @@ def render_microbench_markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _positive_finite_float(raw: str) -> float:
+    try:
+        return require_positive_finite_float(raw, label="timeout")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run LoopX Dual-Model Behavior Constraint x Efficiency Microbenchmark (M1/M2/M3)."
@@ -120,8 +128,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-model", default=DEFAULT_CODEX_MODEL)
     parser.add_argument("--ark-model", default=DEFAULT_ARK_FLASH_MODEL)
     parser.add_argument("--codex-auth-json", type=Path, default=None)
-    parser.add_argument("--max-total-seconds", type=float, default=180.0)
-    parser.add_argument("--per-call-timeout-seconds", type=float, default=45.0)
+    parser.add_argument("--max-total-seconds", type=_positive_finite_float, default=180.0)
+    parser.add_argument("--per-call-timeout-seconds", type=_positive_finite_float, default=45.0)
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--output", type=Path, default=None)
     return parser
@@ -185,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rendered = (
         render_microbench_markdown(report)
         if args.format == "markdown"
-        else json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2)
+        else json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
     )
     if args.output is not None:
         args.output.write_text(rendered + "\n", encoding="utf-8")

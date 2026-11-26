@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import shlex
@@ -116,6 +117,27 @@ _MICROBENCH_SPEND_CLASS_KEYS = frozenset({"observed", "attempted", "confirmed"})
 _LOOPX_GLOBAL_VALUE_FLAGS = frozenset({"--registry", "--runtime-root", "--format", "--cli-bin"})
 _POSIX_SHELL_WRAPPERS = frozenset({"sh", "bash", "zsh"})
 _TYPED_SPEND_TOOL_NAMES = frozenset({"quota_spend_slot", "spend_slot"})
+
+
+def require_positive_finite_float(value: object, *, label: str) -> float:
+    """Validate finite positive timeout/budget scalar before scheduling or telemetry emission."""
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite positive number, got bool")
+    if isinstance(value, (int, float)):
+        parsed = float(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError(f"{label} must be a finite positive number")
+        try:
+            parsed = float(stripped)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be a finite positive number, got {value!r}") from exc
+    else:
+        raise ValueError(f"{label} must be a finite positive number, got {type(value).__name__}")
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{label} must be a finite positive number, got {value!r}")
+    return parsed
 
 
 def validate_microbench_verdict(
@@ -460,6 +482,7 @@ class DeepSeekArkMicrobenchRunner:
         project_root: Path,
         timeout_seconds: float = 45.0,
     ) -> ModelRunOutcome:
+        timeout_seconds = require_positive_finite_float(timeout_seconds, label="timeout_seconds")
         started = time.monotonic()
         key = (self._api_key or os.environ.get(ARK_API_KEY_ENV, "")).strip()
         if not key:
@@ -738,6 +761,7 @@ class CodexGptMicrobenchRunner:
         project_root: Path,
         timeout_seconds: float = 90.0,
     ) -> ModelRunOutcome:
+        timeout_seconds = require_positive_finite_float(timeout_seconds, label="timeout_seconds")
         started = time.monotonic()
         wire_bytes = len(prompt_text.encode("utf-8"))
         base_url, api_key, auth_src, auth_err = self._resolve_auth_mode()

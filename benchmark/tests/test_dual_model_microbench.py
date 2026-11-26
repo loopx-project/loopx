@@ -1497,8 +1497,13 @@ def test_tier1_enforces_strict_remaining_deadline_without_5s_clamp_and_fails_ove
     assert stop_row["base"]["behavior_constraint"]["checks"]["within_budget"] is False
     assert stop_row["head"]["behavior_constraint"]["checks"]["within_budget"] is False
 
-    # Subcase 3: already past deadline before first arm -> zero provider invocations.
-    now["t"] = 300.0
+    # Subcase 3: finite positive budget expires before first arm runs -> zero provider invocations.
+    ticks = iter((300.0, 302.0))
+    monkeypatch.setattr(
+        microbench_tier1.time,
+        "monotonic",
+        lambda: next(ticks, 302.0),
+    )
     zero_calls: list[float] = []
 
     class _ZeroCallRunner:
@@ -1521,7 +1526,7 @@ def test_tier1_enforces_strict_remaining_deadline_without_5s_clamp_and_fails_ove
     zero_report = run_tier1_dual_model_suite(
         runners=[_ZeroCallRunner()],
         scenarios=("m2_epoch_prefetch_semantic_fold",),
-        max_total_seconds=0.0,
+        max_total_seconds=1.0,
         per_call_timeout_seconds=45.0,
     )
     assert zero_calls == []
@@ -1529,3 +1534,162 @@ def test_tier1_enforces_strict_remaining_deadline_without_5s_clamp_and_fails_ove
     assert zero_report["passed"] is False
     assert zero_report["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"
     assert zero_report["results"][0]["head"]["error_code"] == "tier1_wall_budget_exhausted"
+
+
+def test_cli_and_suite_reject_non_finite_or_non_positive_budgets_and_unhashable_observed(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatched: list[str] = []
+
+    class _NeverCalledRunner:
+        provider = "synthetic"
+        model_id = "synthetic-never-called"
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+
+        def run_case(self, **kwargs: Any) -> ModelRunOutcome:
+            dispatched.append(str(kwargs.get("scenario_id")))
+            raise AssertionError("runner must not be called on invalid timeout budget")
+
+    monkeypatch.setattr("benchmark.microbench.run.CodexGptMicrobenchRunner", _NeverCalledRunner)
+    monkeypatch.setattr("benchmark.microbench.run.DeepSeekArkMicrobenchRunner", _NeverCalledRunner)
+
+    # 1. Public CLI rejects non-finite / non-positive budgets before dispatching runners or emitting non-JSON.
+    for bad_flag in ("--max-total-seconds", "--per-call-timeout-seconds"):
+        for bad_val in ("inf", "-inf", "nan", "0", "-1.5"):
+            capsys.readouterr()
+            with pytest.raises(SystemExit) as exc_info:
+                microbench_cli_main(["--tier", "1", "--live", f"{bad_flag}={bad_val}"])
+            assert exc_info.value.code != 0
+            captured = capsys.readouterr()
+            assert captured.out == ""
+            assert "finite positive number" in captured.err
+            assert dispatched == []
+
+    # 2. Programmatic entrypoints (run_tier1_dual_model_suite and adapters) reject non-finite/non-positive values.
+    for bad_num in (float("inf"), float("-inf"), float("nan"), 0.0, -2.0):
+        with pytest.raises(ValueError, match="finite positive number"):
+            run_tier1_dual_model_suite(
+                runners=[_NeverCalledRunner()],
+                scenarios=("m2_epoch_prefetch_semantic_fold",),
+                max_total_seconds=bad_num,
+            )
+        with pytest.raises(ValueError, match="finite positive number"):
+            run_tier1_dual_model_suite(
+                runners=[_NeverCalledRunner()],
+                scenarios=("m2_epoch_prefetch_semantic_fold",),
+                per_call_timeout_seconds=bad_num,
+            )
+        ark_runner = DeepSeekArkMicrobenchRunner(api_key="synthetic-key")
+        with pytest.raises(ValueError, match="finite positive number"):
+            ark_runner.run_case(
+                scenario_id="m2_epoch_prefetch_semantic_fold",
+                prompt_text="check",
+                trial_root=tmp_path,
+                project_root=tmp_path,
+                timeout_seconds=bad_num,
+            )
+        codex_runner = CodexGptMicrobenchRunner(auth_json_path=tmp_path / "missing-auth.json")
+        with pytest.raises(ValueError, match="finite positive number"):
+            codex_runner.run_case(
+                scenario_id="m2_epoch_prefetch_semantic_fold",
+                prompt_text="check",
+                trial_root=tmp_path,
+                project_root=tmp_path,
+                timeout_seconds=bad_num,
+            )
+    assert dispatched == []
+
+    # 3. Malformed unhashable spend_classification.observed & non-list preserved_blocked_todo_ids fail cleanly without TypeError.
+    expected_failures = [
+        "regression: retry worker ignores expired lease backoff ceiling",
+        "guard: duplicate spend rejected with idempotent replay check",
+    ]
+    expected_obligations = [
+        "verify backoff ceiling test on sqlite provider",
+        "preserve terminal settlement receipt integrity",
+    ]
+
+    class _MalformedObservedRunner:
+        provider = "synthetic"
+        model_id = "synthetic-malformed-observed"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del trial_root, project_root, timeout_seconds
+            is_head = "arm=head" in prompt_text or "head_fold_to_receipt" in prompt_text
+            if scenario_id == "m1_envelope_scoped_recovery":
+                return ModelRunOutcome(
+                    model_id=self.model_id,
+                    provider=self.provider,
+                    status="ok",
+                    error_code=None,
+                    verdict={
+                        "schema_version": "microbench_model_verdict_v0",
+                        "scenario_id": scenario_id,
+                        "decision": "execute",
+                        "selected_todo_id": M1_SELECTED_TODO_ID,
+                        "preserved_blocked_todo_ids": 123 if is_head else [M1_BLOCKED_TODO_ID],
+                        "extracted_proof": M1_PROOF_TOKEN,
+                        "preserved_failure_facts": [],
+                        "preserved_open_obligations": [],
+                        "claim_owner": None,
+                        "spend_attempted": False,
+                        "spend_classification": {
+                            "observed": {"nested": "bad"} if is_head else "none",
+                            "attempted": False,
+                            "confirmed": False,
+                        },
+                        "tool_actions_summary": [],
+                    },
+                    efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+                )
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict={
+                    "schema_version": "microbench_model_verdict_v0",
+                    "scenario_id": "m2_epoch_prefetch_semantic_fold",
+                    "decision": "execute",
+                    "selected_todo_id": "todo_m2_unit",
+                    "preserved_blocked_todo_ids": [],
+                    "extracted_proof": None,
+                    "preserved_failure_facts": list(expected_failures),
+                    "preserved_open_obligations": list(expected_obligations),
+                    "claim_owner": None,
+                    "spend_attempted": False,
+                    "spend_classification": {
+                        "observed": ["none"] if is_head else "none",
+                        "attempted": False,
+                        "confirmed": False,
+                    },
+                    "tool_actions_summary": [],
+                },
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+            )
+
+    malformed_report = run_tier1_dual_model_suite(
+        runners=[_MalformedObservedRunner()],
+        scenarios=("m1_envelope_scoped_recovery", "m2_epoch_prefetch_semantic_fold"),
+    )
+    assert malformed_report["passed"] is False
+    assert len(malformed_report["results"]) == 2
+    for bad_row in malformed_report["results"]:
+        assert bad_row["passed"] is False
+        assert bad_row["base"]["behavior_constraint"]["passed"] is True
+        assert bad_row["head"]["behavior_constraint"]["passed"] is False
+        assert "schema_valid" in bad_row["head"]["behavior_constraint"]["violations"]
+        assert "no_typed_spend_action" in bad_row["head"]["behavior_constraint"]["violations"]
+    assert_public_safe_payload(malformed_report)

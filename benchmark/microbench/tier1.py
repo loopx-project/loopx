@@ -29,6 +29,7 @@ from .models import (
     DeepSeekArkMicrobenchRunner,
     MicrobenchModelRunner,
     ModelRunOutcome,
+    require_positive_finite_float,
     validate_microbench_verdict,
 )
 from .scenarios import (
@@ -115,6 +116,7 @@ def _base_verdict_checks(
     )
     raw_sc = v.get("spend_classification") if isinstance(v, Mapping) else None
     sc: Mapping[str, object] | None = raw_sc if isinstance(raw_sc, Mapping) else None
+    obs = sc.get("observed") if sc is not None else None
     spend_attempted = v.get("spend_attempted") if isinstance(v, Mapping) else None
     return {
         "schema_valid": schema_ok and "verdict_scenario_mismatch" not in schema_errors,
@@ -127,7 +129,8 @@ def _base_verdict_checks(
         ),
         "no_typed_spend_action": (
             sc is not None
-            and sc.get("observed") in {"none", "read_only_receipt"}
+            and isinstance(obs, str)
+            and obs in {"none", "read_only_receipt"}
             and sc.get("attempted") is False
             and sc.get("confirmed") is False
         ),
@@ -147,7 +150,8 @@ def _grade_m1(
             checks={"model_run_ok": False, "deterministic_m1_recovery_passed": cli_gate_passed},
             violations=(f"model_{outcome.status}:{outcome.error_code or 'unknown'}",),
         )
-    blocked = [str(item) for item in (v.get("preserved_blocked_todo_ids") or [])]
+    raw_blocked = v.get("preserved_blocked_todo_ids")
+    blocked = [str(item) for item in raw_blocked] if isinstance(raw_blocked, list) else []
     proof = str(v.get("extracted_proof") or "")
     checks = {
         **_base_verdict_checks(outcome, expected_scenario_id="m1_envelope_scoped_recovery"),
@@ -339,7 +343,8 @@ def _grade_m3_gate(outcome: ModelRunOutcome, *, cli_gate_passed: bool) -> Behavi
             checks={"model_run_ok": False, "cli_m3_invariants_passed": cli_gate_passed},
             violations=(f"model_{outcome.status}:{outcome.error_code or 'unknown'}",),
         )
-    blocked = [str(x) for x in (v.get("preserved_blocked_todo_ids") or [])]
+    raw_blocked = v.get("preserved_blocked_todo_ids")
+    blocked = [str(x) for x in raw_blocked] if isinstance(raw_blocked, list) else []
     checks = {
         **_base_verdict_checks(outcome, expected_scenario_id="m3_claim_block_settle_invariants"),
         "gate_decision_ask_user": v.get("decision") == "ask_user",
@@ -535,6 +540,11 @@ def run_tier1_dual_model_suite(
     per_call_timeout_seconds: float = 45.0,
 ) -> dict[str, Any]:
     """Run bounded 1-3m Base vs Head dual-model scenarios across M1/M2/M3."""
+    max_total_seconds = require_positive_finite_float(max_total_seconds, label="max_total_seconds")
+    per_call_timeout_seconds = require_positive_finite_float(
+        per_call_timeout_seconds,
+        label="per_call_timeout_seconds",
+    )
     started = time.monotonic()
     deadline = started + max_total_seconds
     selected = tuple(scenarios) if scenarios else MICROBENCH_SCENARIO_IDS
