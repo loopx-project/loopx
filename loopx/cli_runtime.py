@@ -774,12 +774,12 @@ def _dispatch_common_command(
 			build_command_reference_payload, render_command_reference_markdown,
 		)
 
-		available_commands = None
+		available_commands: frozenset[str] | None = None
 		if _standalone_core():
-			available_commands = set(_available_selected_commands())
+			selected = set(_available_selected_commands())
 			if _workspace_installed():
-				available_commands |= _WORKSPACE_COMMANDS
-			available_commands = frozenset(available_commands)
+				selected |= _WORKSPACE_COMMANDS
+			available_commands = frozenset(selected)
 		print_payload(build_command_reference_payload(available_commands=available_commands),
 			output_format(args), render_command_reference_markdown)
 		return 0

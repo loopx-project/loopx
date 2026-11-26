@@ -7,6 +7,7 @@ string literal rather than a command; POSIX keeps shell quoting.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from collections.abc import Callable
 from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
@@ -49,6 +50,43 @@ def verified_distribution_console(recorded: Path) -> Path | None:
     return None
 
 
+def is_distribution_artifact(path: Path) -> bool:
+    """Whether a recorded package path is an installed runtime artifact rather than bytecode."""
+    return "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+
+
+def distribution_recorded_files(installed: Distribution) -> list[tuple[str, Path]] | None:
+    """Read raw wheel RECORD entries without filtering deleted files on disk."""
+    try:
+        record_text = installed.read_text("RECORD")
+    except (OSError, ValueError):
+        return None
+    if record_text is None:
+        if installed.files is None:
+            return None
+        return [
+            (
+                item.as_posix(),
+                distribution_record_path(item)
+                if isinstance(item, PackagePath)
+                else Path(item.locate()),
+            )
+            for item in installed.files
+        ]
+    try:
+        rows = list(csv.reader(record_text.splitlines()))
+    except csv.Error:
+        return None
+    entries: list[tuple[str, Path]] = []
+    for row in rows:
+        if not row or not row[0]:
+            continue
+        item = PackagePath(row[0])
+        item.dist = installed
+        entries.append((item.as_posix(), distribution_record_path(item)))
+    return entries
+
+
 def builtin_capability_installed(
     distribution_name: str,
     modules: tuple[str, ...],
@@ -76,24 +114,28 @@ def builtin_capability_installed(
     if builtin_cli_present:
         return True
     package_parent = Path(__file__).resolve().parent.parent
+    entries = distribution_recorded_files(implementation)
+    if entries is None:
+        return False
     recorded_entries = [
-        path for path in (implementation.files or ())
-        if path.as_posix().startswith("loopx/")
-        and "__pycache__" not in (record_path := Path(path.as_posix())).parts
-        and record_path.suffix not in {".pyc", ".pyo"}
+        (name, path) for name, path in entries
+        if name.startswith("loopx/") and is_distribution_artifact(Path(name))
     ]
-    recorded = {
-        distribution_record_path(path).resolve()
-        for path in implementation.files or ()
-    }
+    recorded = {path.resolve() for _name, path in entries}
     return (
         all(
-            (target := package_parent / path.as_posix()) in recorded and target.is_file()
-            for path in recorded_entries
+            ".." not in Path(name).parts
+            and (target := package_parent / name) in recorded
+            and not target.is_symlink()
+            and target.is_file()
+            and path.resolve() == target
+            for name, path in recorded_entries
         )
         and all(origin in recorded for origin in origins)
         and all(
-            (package_parent / resource) in recorded and (package_parent / resource).is_file()
+            (target := package_parent / resource) in recorded
+            and not target.is_symlink()
+            and target.is_file()
             for resource in resources
         )
     )

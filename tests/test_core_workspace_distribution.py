@@ -264,6 +264,7 @@ analysis = "loopx/capabilities/benchmark_toolkit/trajectory_assessment_store.py"
 print(json.dumps({
     "module": str(Path(owner.locate_file("loopx/dashboard_launcher.py"))),
     "chat_store": str(Path(owner.locate_file("loopx/chat_store.py"))),
+    "bundle_manifest": str(Path(owner.locate_file("loopx/web/chat/bundle-manifest.json"))),
     "has_analysis": any(p.as_posix() == analysis for p in core.files),
 }))
 """)
@@ -274,27 +275,31 @@ print(json.dumps({
     endpoint_help = _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
     assert "chat-endpoint" in endpoint_help
 
-    chat_store = Path(installed["chat_store"])
-    missing_store = chat_store.with_suffix(".py.missing")
-    chat_store.rename(missing_store)
-    try:
-        assert "loopx dashboard" not in _run(core_python, ["--help"], workspace).stdout
-        commands_payload = json.loads(_run(core_python, ["commands", "--format", "json"], workspace).stdout)
-        listed_names = {
-            match[1]
-            for group in commands_payload["groups"]
-            for entry in group.get("commands", [])
-            if (match := re.match(r"loopx ([a-z0-9-]+)(?: |$)", entry.get("command", "")))
-        }
-        assert not (listed_names & {"chat", "chat-endpoint", "dashboard"})
-        for blocked in (["dashboard", "--help"], ["chat-endpoint", "--help"], ["chat"]):
-            denied = _run(core_python, blocked, workspace, expected=2)
-            assert "install the matching loopx-workspace wheel" in denied.stderr
-    finally:
-        missing_store.rename(chat_store)
-    assert "loopx dashboard" in _run(core_python, ["--help"], workspace).stdout
-    assert "chat-endpoint" in _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
-    assert "dashboard" in _run(core_python, ["dashboard", "--help"], workspace).stdout
+    for label, suffix in (("chat_store", ".py.missing"), ("bundle_manifest", ".json.missing")):
+        target = Path(installed[label])
+        backup = target.with_name(target.name + suffix)
+        target.rename(backup)
+        try:
+            assert "loopx dashboard" not in _run(core_python, ["--help"], workspace).stdout
+            commands_payload = json.loads(_run(core_python, ["commands", "--format", "json"], workspace).stdout)
+            listed_names = {
+                match[1]
+                for group in commands_payload["groups"]
+                for entry in group.get("commands", [])
+                if (match := re.match(r"loopx ([a-z0-9-]+)(?: |$)", entry.get("command", "")))
+            }
+            assert not (listed_names & {"chat", "chat-endpoint", "dashboard"})
+            partial_identity = _python_json(core_python, workspace, "import json; " + _RUNTIME_IDENTITY)
+            assert "package_fingerprint" not in partial_identity
+            for blocked in (["dashboard", "--help"], ["dashboard"], ["chat-endpoint", "--help"], ["chat"]):
+                denied = _run(core_python, blocked, workspace, expected=2)
+                assert "install the matching loopx-workspace wheel" in denied.stderr
+        finally:
+            backup.rename(target)
+        assert _python_json(core_python, workspace, "import json; " + _RUNTIME_IDENTITY) == combined
+        assert "loopx dashboard" in _run(core_python, ["--help"], workspace).stdout
+        assert "chat-endpoint" in _run(core_python, ["chat-endpoint", "--help"], workspace).stdout
+        assert "dashboard" in _run(core_python, ["dashboard", "--help"], workspace).stdout
     native_spend = _python_json(core_python, workspace, f"""
 import json
 from pathlib import Path

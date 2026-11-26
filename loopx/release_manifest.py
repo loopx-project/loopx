@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
+from importlib.metadata import Distribution, PackageNotFoundError, distribution
 import hashlib
 import json
 import os
@@ -10,7 +10,12 @@ from typing import Any
 
 from . import __version__
 from .doctor_git import GitSourceState, git_source_metadata
-from .python_install_owner import WORKSPACE_DISTRIBUTION, distribution_record_path, installed_loopx_distribution
+from .python_install_owner import (
+    WORKSPACE_DISTRIBUTION,
+    distribution_recorded_files,
+    installed_loopx_distribution,
+    is_distribution_artifact,
+)
 
 
 RELEASE_MANIFEST_SCHEMA_VERSION = "loopx_release_manifest_v0"
@@ -307,30 +312,24 @@ def release_runtime_identity(release_root: Path | None = None) -> dict[str, str 
 
 
 _CORE_COMPANION_DISTRIBUTIONS = (
-    "loopx-workspace",
+    WORKSPACE_DISTRIBUTION,
     "loopx-capability-agent-turn-recall",
     "loopx-capability-pull-request-review",
     "loopx-capability-issue-fix",
 )
 
 
-def _distribution_artifact_file(path: Path) -> bool:
-    return "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
-
-
 def _owned_runtime_files(installed: Distribution) -> dict[str, Path]:
     direct_url = json.loads(installed.read_text("direct_url.json") or "{}")
     if direct_url.get("dir_info", {}).get("editable") or installed.version != __version__:
         return {}
+    entries = distribution_recorded_files(installed)
+    if entries is None:
+        return {}
     return {
-        item.as_posix(): (
-            distribution_record_path(item)
-            if isinstance(item, PackagePath)
-            else Path(item.locate())
-        )
-        for item in installed.files or ()
-        if item.as_posix().startswith("loopx/")
-        and _distribution_artifact_file(Path(item.as_posix()))
+        name: path
+        for name, path in entries
+        if name.startswith("loopx/") and is_distribution_artifact(Path(name))
     }
 
 
@@ -364,7 +363,7 @@ def _distribution_runtime_fingerprint() -> str | None:
         actual = {
             "loopx/" + path.relative_to(package_root).as_posix()
             for path in entries
-            if path.is_file() and _distribution_artifact_file(path.relative_to(package_root))
+            if path.is_file() and is_distribution_artifact(path.relative_to(package_root))
         }
         if actual != files.keys():
             return None

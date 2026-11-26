@@ -269,3 +269,80 @@ def test_builtin_capability_requires_every_recorded_artifact(owned_package, monk
     assert not install_owner.builtin_capability_installed(
         install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
     )
+
+
+def test_real_record_missing_asset_fails_closed_despite_filtered_dist_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from importlib.metadata import Distribution, PackageNotFoundError
+    from loopx import python_install_owner as install_owner
+
+    site = tmp_path / "site-packages"
+    package = site / "loopx"
+    (package / "web/chat").mkdir(parents=True)
+    files = {
+        "loopx/release_manifest.py": "python",
+        "loopx/python_install_owner.py": "owner",
+        "loopx/chat_store.py": "store",
+        "loopx/web/chat/bundle-manifest.json": '{"files":{}}',
+    }
+    for rel, content in files.items():
+        (site / rel).write_text(content, encoding="utf-8")
+
+    def _make_dist(name: str, owned: list[str]):
+        dist_info = site / f"{name.replace('-', '_')}-{manifest.__version__}.dist-info"
+        dist_info.mkdir(parents=True, exist_ok=True)
+        (dist_info / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {manifest.__version__}\n",
+            encoding="utf-8",
+        )
+        (dist_info / "RECORD").write_text(
+            "".join(f"{entry},,\n" for entry in owned), encoding="utf-8"
+        )
+        return Distribution.at(dist_info)
+
+    core = _make_dist("loopx-core", ["loopx/release_manifest.py", "loopx/python_install_owner.py"])
+    workspace = _make_dist(
+        install_owner.WORKSPACE_DISTRIBUTION,
+        ["loopx/chat_store.py", "loopx/web/chat/bundle-manifest.json"],
+    )
+
+    def _lookup(name: str):
+        if name == "loopx-core":
+            return core
+        if name == install_owner.WORKSPACE_DISTRIBUTION:
+            return workspace
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(manifest, "__file__", str(site / "loopx/release_manifest.py"))
+    monkeypatch.setattr(manifest, "distribution", _lookup)
+    monkeypatch.delenv("LOOPX_RELEASE_ROOT", raising=False)
+    monkeypatch.setattr(install_owner, "__file__", str(site / "loopx/python_install_owner.py"))
+    monkeypatch.setattr(install_owner, "distribution", _lookup)
+    monkeypatch.setattr(
+        install_owner,
+        "find_spec",
+        lambda module: SimpleNamespace(origin=str(site / "loopx/chat_store.py"))
+        if module == "loopx.chat_store"
+        else None,
+    )
+
+    before = manifest.release_runtime_identity()
+    assert before["package_fingerprint"].startswith("sha256:")
+    assert install_owner.builtin_capability_installed(
+        install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
+    )
+
+    bundle_manifest = site / "loopx/web/chat/bundle-manifest.json"
+    bundle_manifest.unlink()
+    assert all(p.as_posix() != "loopx/web/chat/bundle-manifest.json" for p in workspace.files or ())
+    assert not install_owner.builtin_capability_installed(
+        install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
+    )
+    assert "package_fingerprint" not in manifest.release_runtime_identity()
+
+    bundle_manifest.write_text('{"files":{}}', encoding="utf-8")
+    assert install_owner.builtin_capability_installed(
+        install_owner.WORKSPACE_DISTRIBUTION, ("loopx.chat_store",), builtin_cli_present=False,
+    )
+    assert manifest.release_runtime_identity() == before
