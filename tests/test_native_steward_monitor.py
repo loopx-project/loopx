@@ -1687,3 +1687,79 @@ def test_lock_acquire_timeout_preserves_error_code_and_cooldown_bounds(
     done = finish(runtime, recovered[0])
     assert done["status"] == "completed", done
     assert local_watch_row(runtime, actor, todo_id)["next_due_at"] != due
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_configure_rejects_malformed_plan_todo_and_preserves_due_open_watch(
+    steward, tmp_path, monkeypatch, provider,
+):
+    from loopx.capabilities.native_chat import steward_monitor as monitor_mod
+
+    _, runtime, _, _, binding, _, _ = steward
+    _, actor, monitor = prepared(steward, tmp_path, monkeypatch, provider)
+    todo_id = monitor.current(actor)["todo_id"]
+    due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", due)
+    assert local_watch_row(runtime, actor, todo_id)["next_due_at"] == due
+    assert [row["todo_id"] for row in monitor.due_monitors(actor)] == [todo_id]
+
+    bindings = runtime.project_contexts.conversation_bindings
+    orig_core = bindings._core
+    orig_native = monitor_mod.native_command
+    commands = []
+
+    def tracking_native(ctrl, args):
+        commands.append(list(args))
+        return orig_native(ctrl, args)
+
+    monkeypatch.setattr(monitor_mod, "native_command", tracking_native)
+    injected = {"value": None}
+
+    def wrapped_core(command, payload):
+        res = orig_core(command, payload)
+        if command == "collaboration.steward.monitor.plan" and injected["value"] is not _UNSET:
+            return {**res, "todo": injected["value"]}
+        return res
+
+    _UNSET = object()
+    monkeypatch.setattr(bindings, "_core", wrapped_core)
+
+    for bad_todo in ("bad-non-mapping", "", ["bad"], 123, False):
+        injected["value"] = bad_todo
+        for op in ("pause", "enable"):
+            preview = monitor.configure(binding["binding_id"], operation=op)["plan"]
+            with pytest.raises(TypeError, match="mapping or None"):
+                monitor.configure(
+                    binding["binding_id"],
+                    operation=op,
+                    execute=True,
+                    expected_plan_id=preview["plan_id"],
+                )
+        assert commands == []
+        persisted = local_watch_row(runtime, actor, todo_id)
+        assert persisted["status"] == "open"
+        assert persisted["next_due_at"] == due
+        fresh_monitor = StewardMonitor(runtime)
+        assert fresh_monitor.current(actor)["status"] == "open"
+        assert [row["todo_id"] for row in fresh_monitor.due_monitors(actor)] == [todo_id]
+
+    injected["value"] = _UNSET
+    valid_pause = StewardMonitor(runtime).configure(binding["binding_id"], operation="pause")["plan"]
+    paused = StewardMonitor(runtime).configure(
+        binding["binding_id"],
+        operation="pause",
+        execute=True,
+        expected_plan_id=valid_pause["plan_id"],
+    )
+    assert (
+        paused["ok"] is True
+        and paused["applied"] is True
+        and isinstance(paused.get("receipt"), dict)
+        and paused["receipt"].get("ok") is True
+        and len(commands) == 1
+        and "--status" in commands[0]
+        and "blocked" in commands[0]
+    )
+    assert local_watch_row(runtime, actor, todo_id)["status"] == "blocked"
+    assert StewardMonitor(runtime).current(actor)["status"] == "blocked"
+    assert StewardMonitor(runtime).due_monitors(actor) == []
