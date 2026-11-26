@@ -207,7 +207,8 @@ def test_summarize_turn_events_single_pass_and_isolation() -> None:
     anchor_payload = {"thread_id": "th-1", "nested": {"x": 1}}
     single, steered, interrupted = fd._summarize_turn_events(
         [
-            {"kind": "turn.started", "payload": None},
+            {"kind": "turn.started"},
+            {"kind": "turn.started", "payload": {}},
             {"kind": "turn.started", "payload": {"native_input": anchor_payload}},
             {"kind": "turn.steered"},
             {"kind": "turn.interrupt_requested"},
@@ -218,34 +219,16 @@ def test_summarize_turn_events_single_pass_and_isolation() -> None:
     assert steered is True
     assert interrupted is True
 
+    valid_ev: dict[str, object] = {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}}
     assert fd._summarize_turn_events([{"kind": "turn.started", "payload": {"native_input": "corrupt"}}])[0] is None
-    assert fd._summarize_turn_events(
-        [
-            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
-            {"kind": "turn.started", "payload": {"native_input": "corrupt"}},
-        ]
-    ) == (None, False, False)
-    assert fd._summarize_turn_events(
-        [
-            {"kind": "turn.started", "payload": {"native_input": ["corrupt"]}},
-            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "2"}}},
-        ]
-    ) == (None, False, False)
-    assert fd._summarize_turn_events(
-        [
-            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
-            {"kind": "turn.started", "payload": "corrupt-payload"},
-        ]
-    ) == (None, False, False)
-    two_anchors, steered_2, interrupted_2 = fd._summarize_turn_events(
-        [
-            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "1"}}},
-            {"kind": "turn.started", "payload": {"native_input": {"thread_id": "2"}}},
-        ]
-    )
-    assert two_anchors is None
-    assert steered_2 is False
-    assert interrupted_2 is False
+    for bad in (
+        {"kind": "turn.started", "payload": {"native_input": "corrupt"}},
+        {"kind": "turn.started", "payload": None},
+        {"kind": "turn.started", "payload": "corrupt-payload"},
+        {"kind": "turn.started", "payload": {"native_input": {"thread_id": "2"}}},
+    ):
+        assert fd._summarize_turn_events([valid_ev, bad]) == (None, False, False)
+    assert fd._summarize_turn_events([{"kind": "turn.started", "payload": {"native_input": ["corrupt"]}}, valid_ev]) == (None, False, False)
 
 
 def test_cache_and_discovery_bounds_and_monkeypatch_seams(
@@ -485,6 +468,7 @@ def test_real_discovery_preserves_malformed_start_ambiguity(tmp_path: Path, monk
     from loopx.capabilities.native_chat import external_conversations as ext_mod
     from loopx.chat_manager import MANAGER_CONTEXT_VERSION
     from loopx.chat_store import CHAT_TURN_SCHEMA_VERSION
+    from loopx.extensions.lark.private_conversations import LarkPrivateConversations
 
     baseline = _load_baseline_file_discovery()
     binding_id, prov_id, op_id, proj_id, src_id = ("b" * 24, "a" * 24, "e" * 24, "f" * 24, "c" * 24)
@@ -495,18 +479,25 @@ def test_real_discovery_preserves_malformed_start_ambiguity(tmp_path: Path, monk
     }
     store = ChatSessionStore(tmp_path, startup_maintenance=False)
     bindings = SimpleNamespace(controller=None, read=lambda: {"bindings": [binding]}, resolve=lambda **_: {"binding": binding})
-    ctrl = SimpleNamespace(store=store, project_contexts=SimpleNamespace(conversation_bindings=bindings), lock=threading.Lock(), adapters={}, codex_home=tmp_path)
-    core = ext_mod.ChatExternalConversations(ctrl)
+    ctrl = SimpleNamespace(
+        store=store, project_contexts=SimpleNamespace(conversation_bindings=bindings),
+        lock=threading.Lock(), adapters={}, codex_home=tmp_path, registry_path=None, coordination_runtime_root=tmp_path,
+    )
+    lp = LarkPrivateConversations(controller=ctrl, runtime_root=tmp_path, runner=object(), cli_bin="echo")
+    lp.root.mkdir(parents=True, exist_ok=True)
+    core = lp.core
     core.root.mkdir(parents=True, exist_ok=True)
     anchor: dict[str, object] = {"thread_id": "cas-1", "start_step_index": 0, "input_sha256": "a" * 64}
-    cases: list[tuple[str, list[tuple[str, dict[str, object]]], str | None, bool, bool]] = [
+    cases: list[tuple[str, list[tuple[str, dict[str, object]]], dict[str, object] | None, bool, bool]] = [
         ("clean", [("turn.started", {"native_input": anchor})], None, True, True),
+        ("missing_payload", [("turn.started", {"native_input": anchor})], {"kind": "turn.started"}, True, True),
+        ("explicit_none_payload", [("turn.started", {"native_input": anchor})], {"kind": "turn.started", "payload": None}, False, False),
         ("malformed_second_str", [("turn.started", {"native_input": anchor}), ("turn.started", {"native_input": "corrupt"})], None, False, True),
         ("malformed_first_list", [("turn.started", {"native_input": ["corrupt"]}), ("turn.started", {"native_input": anchor})], None, False, True),
         ("single_malformed", [("turn.started", {"native_input": "corrupt-only"})], None, False, False),
-        ("corrupt_second_payload", [("turn.started", {"native_input": anchor})], "corrupt-payload", False, False),
+        ("corrupt_second_payload", [("turn.started", {"native_input": anchor})], {"kind": "turn.started", "payload": "corrupt-payload"}, False, False),
     ]
-    for idx, (_label, evs, corrupt_payload, expected, check_baseline) in enumerate(cases):
+    for idx, (_label, evs, extra_raw, expected, check_baseline) in enumerate(cases):
         sid, tid, req = f"{3000 + idx:032x}", f"{4000 + idx:032x}", f"{5000 + idx:024x}"
         store.create_session(
             goal_id="loopx-manager", agent_id="antigravity", adapter_kind="antigravity", upstream_thread_id="cas-1",
@@ -522,16 +513,24 @@ def test_real_discovery_preserves_malformed_start_ambiguity(tmp_path: Path, monk
             "delta_count": 0, "upstream_turn_id": "up-1", "created_at": "2026-01-01T00:00:00+00:00", "completed_at": "2026-01-01T00:01:00+00:00", "response": None})
         for kind, payload in evs:
             store.append_event(sid, tid, kind=kind, payload=dict(payload), buffered=False)
-        if corrupt_payload is not None:
-            store.append_event(sid, tid, kind="turn.started", payload={"native_input": "placeholder"}, buffered=False)
+        if extra_raw is not None:
+            store.append_event(sid, tid, kind="turn.started", payload={}, buffered=False)
             ev_path = store._event_path(sid, tid)
             lines = ev_path.read_text(encoding="utf-8").splitlines()
-            lines[-1] = json.dumps({**json.loads(lines[-1]), "payload": corrupt_payload})
+            ev_obj = json.loads(lines[-1])
+            ev_obj.pop("payload", None)
+            lines[-1] = json.dumps({**ev_obj, **extra_raw})
             ev_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         row: dict[str, object] = {"request_ref": req, "binding_id": binding_id, "source": {"source_ref": src_id, "sender_ref": op_id, "private_human_message": True},
                                   "session_id": sid, "turn_id": tid, "command": None, "origin": "lark", "status": "accepted", "delivery_verified": True,
                                   "message": "q", "created_at": "2026-01-01T00:00:00+00:00"}
         _atomic_write_json(core.root / f"{req}.json", row)
+        _atomic_write_json(lp.root / f"{req}.json", {
+            "schema_version": "lark_private_delivery_v0", "request_ref": req, "binding_id": binding_id, "session_id": sid, "turn_id": tid,
+            "status": "delivered", "source": {"source_ref": src_id, "sender_ref": op_id, "private_human_message": True},
+            "deliveries": {"terminal": {"status": "delivered"}},
+        })
+        assert core.context_recovery_candidate(req) is expected
         assert core.context_recovery_candidate(req) is expected
         if check_baseline:
             assert (core._context_recovery_plan(row, discovery_only=False).get("recovery_candidate") is True) is expected
@@ -540,3 +539,4 @@ def test_real_discovery_preserves_malformed_start_ambiguity(tmp_path: Path, monk
                     mp.setattr(ext_mod, "observed_turn_event_summary", baseline.observed_turn_event_summary)
                     core._quota_backlog_cache.drop_event_summary(sid, tid)
                     assert core.context_recovery_candidate(req) is expected
+    assert {p.stem for p in lp.pending_delivery_paths()} == {f"{5000 + i:024x}" for i, item in enumerate(cases) if item[3]}
