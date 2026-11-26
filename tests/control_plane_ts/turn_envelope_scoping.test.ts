@@ -777,3 +777,110 @@ test("captured scoped goal_acceptance preserves full admission outcomes in defer
   assert.equal(indexRows[0].capture_read_command, compactRows[0].capture_read_command);
   assert.equal(indexRows[0].read_modes, compactRows[0].read_modes);
 });
+
+test("scopeTurnGoalAcceptance scopes unsettled recovery planning_horizon and standalone agent_todo_summary without selected_todo", () => {
+  const withoutWorkContextAcceptance = (payload: JsonObject): JsonObject => {
+    const ic = payload.interaction_contract as JsonObject;
+    const ac = ic.agent_channel as JsonObject;
+    const wc = ac.work_context as JsonObject;
+    return {
+      ...payload,
+      interaction_contract: {
+        ...ic,
+        agent_channel: {
+          ...ac,
+          work_context: {
+            ...wc,
+            sources: (wc.sources as JsonObject[]).filter(row => row.source !== "goal_acceptance"),
+          },
+        },
+      },
+    };
+  };
+
+  // 1. UNSETTLED_HOST_TURN_RECOVERY with planning_horizon only and selected_todo: null
+  //    derives todo_id from heartbeat_receipt.settlement_identity and scopes 12 outcomes.
+  const unsettledHorizonBase = withoutWorkContextAcceptance(baseNormalPayload(12, "a1", "todo-current"));
+  delete unsettledHorizonBase.agent_todo_summary;
+  const unsettledHorizon: JsonObject = {
+    ...unsettledHorizonBase,
+    should_run: false,
+    normal_delivery_allowed: false,
+    effective_action: "unsettled_host_turn_recovery",
+    selected_todo: null,
+  };
+  const scopedHorizon = scopeTurnGoalAcceptance(unsettledHorizon, {captureReferenceFile: "/tmp/ref.json"});
+  const horizonReqs = ((scopedHorizon.planning_horizon as JsonObject).core_goal as JsonObject)
+    .acceptance_contract as JsonObject;
+  const horizonOutcomeReqs = horizonReqs.outcome_requirements as JsonObject;
+  assert.equal(horizonOutcomeReqs.projection_mode, SCOPED_OUTCOME_PROJECTION_MODE);
+  assert.equal(horizonOutcomeReqs.full_outcome_count, 12);
+  assert.equal(horizonOutcomeReqs.inline_outcome_count, 1);
+  assert.equal(horizonOutcomeReqs.compacted_outcome_count, 11);
+  assert.equal(((horizonOutcomeReqs.outcomes as JsonObject[])[0] as JsonObject).id, "out-current");
+  assert.equal((((scopedHorizon.deferred_settlement_details as JsonObject).goal_acceptance as JsonObject)
+    .outcome_requirements as JsonObject).outcomes instanceof Array, true);
+  assert.equal(((((scopedHorizon.deferred_settlement_details as JsonObject).goal_acceptance as JsonObject)
+    .outcome_requirements as JsonObject).outcomes as JsonObject[]).length, 12);
+
+  // 2. Pre-claim normal_run with planning_horizon only and selected_todo: null also scopes,
+  //    while work_context without selected_todo stays fail-closed.
+  const preClaimHorizon = scopeTurnGoalAcceptance(
+    {...unsettledHorizon, effective_action: "normal_run", should_run: true, normal_delivery_allowed: true},
+    {captureReferenceFile: "/tmp/ref.json"},
+  );
+  assert.equal(
+    ((((preClaimHorizon.planning_horizon as JsonObject).core_goal as JsonObject)
+      .acceptance_contract as JsonObject).outcome_requirements as JsonObject).projection_mode,
+    SCOPED_OUTCOME_PROJECTION_MODE,
+  );
+  const preClaimWorkContextInput = {...baseNormalPayload(12, "a1", "todo-current"), selected_todo: null};
+  const preClaimWorkContext = scopeTurnGoalAcceptance(
+    preClaimWorkContextInput,
+    {captureReferenceFile: "/tmp/ref.json"},
+  );
+  assert.equal(preClaimWorkContext, preClaimWorkContextInput);
+  assert.equal(
+    ((((((preClaimWorkContext.interaction_contract as JsonObject).agent_channel as JsonObject)
+      .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
+      .goal_acceptance_contract as JsonObject).outcome_requirements &&
+      (((((((preClaimWorkContext.interaction_contract as JsonObject).agent_channel as JsonObject)
+        .work_context as JsonObject).sources as JsonObject[])[1].content as JsonObject)
+        .goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject).projection_mode,
+    undefined,
+  );
+
+  // 3. UNSETTLED_HOST_TURN_RECOVERY + standalone agent_todo_summary (--include-detail agent-todos),
+  //    evaluated via evaluateTurnEnvelope end-to-end.
+  const standaloneSummaryBase = withoutWorkContextAcceptance(baseNormalPayload(12, "a1", "todo-current"));
+  delete standaloneSummaryBase.planning_horizon;
+  const capturedSummary = evaluateTurnEnvelope({
+    operation: "compose_complete",
+    payload: {
+      ...standaloneSummaryBase,
+      should_run: false,
+      normal_delivery_allowed: false,
+      effective_action: "unsettled_host_turn_recovery",
+      selected_todo: null,
+    },
+    scheduler_execution_args: "",
+    capture_reference_file: "/tmp/ref.json",
+  });
+  const summaryOutcomeReqs = ((capturedSummary.agent_todo_summary as JsonObject)
+    .goal_acceptance_contract as JsonObject).outcome_requirements as JsonObject;
+  assert.equal(summaryOutcomeReqs.projection_mode, SCOPED_OUTCOME_PROJECTION_MODE);
+  assert.equal(summaryOutcomeReqs.full_outcome_count, 12);
+  assert.equal(summaryOutcomeReqs.inline_outcome_count, 1);
+  assert.equal(summaryOutcomeReqs.compacted_outcome_count, 11);
+
+  // 4. autonomous_replan_required remains fail-closed even with planning_horizon only.
+  const replanHorizon = scopeTurnGoalAcceptance(
+    {...unsettledHorizon, effective_action: "autonomous_replan_required"},
+    {captureReferenceFile: "/tmp/ref.json"},
+  );
+  assert.equal(
+    ((((replanHorizon.planning_horizon as JsonObject).core_goal as JsonObject)
+      .acceptance_contract as JsonObject).outcome_requirements as JsonObject).projection_mode,
+    undefined,
+  );
+});

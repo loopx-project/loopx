@@ -322,11 +322,12 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
             root=getattr(args, "codex_context_root", None), create=True)
     except NativeContextSessionUnavailable:
         directory = None  # Current full input, no fabricated native journal.
+    detail_sections = quota_detail_sections_from_args(args)
     decision_ref = (
         _saved_decision_reference(capture_directory, expected_sha256=capture_id)
         if progressive_enabled
         and (directory is not None or not bool(getattr(args, "begin_turn", False)))
-        and "vision" not in quota_detail_sections_from_args(args)
+        and "vision" not in detail_sections
         else None
     )
     prepared = prepare_codex_context(payload, directory=directory,
@@ -335,7 +336,9 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         capture_id=capture_id, continuity_generation=getattr(args, "_context_delivery_generation", None),
         progressive_enabled=progressive_enabled,
         captured_decision=decision_ref,
-        max_page_output_bytes=getattr(args, "max_page_output_bytes", None))
+        max_page_output_bytes=getattr(args, "max_page_output_bytes", None),
+        include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+        include_agent_todos_detail="agent-todos" in detail_sections)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
@@ -376,8 +379,9 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
 
     # Only a fresh stateless source can supply this route. Saved and explicitly
     # captured decisions keep the reader chosen by their existing callers.
+    detail_sections = quota_detail_sections_from_args(args)
     stage_from_projection = (directory is None and captured_decision is None
-        and "vision" not in quota_detail_sections_from_args(args))
+        and "vision" not in detail_sections)
     if directory is None:
         root = Path(_private_transport_root(runtime_root))
         try:
@@ -393,7 +397,9 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     transport = _capture_selection_transport_template(payload, args, capture_root=directory.parent)
     required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
         selection_command_args_template=transport, captured_decision=captured_decision,
-        replan_reader_argv=reader_argv if stage_from_projection else None)
+        replan_reader_argv=reader_argv if stage_from_projection else None,
+        include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+        include_agent_todos_detail="agent-todos" in detail_sections)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},

@@ -463,6 +463,8 @@ def prepare_context_delivery(
     surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
     consumed_pointers: Mapping[str, str] | None = None, observe_first_read: bool = False,
     include_initial_read_plan: bool = False,
+    include_goal_acceptance_detail: bool = False,
+    include_agent_todos_detail: bool = False,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -479,6 +481,10 @@ def prepare_context_delivery(
         source["native_projection"] = dict(native_projection)
         if include_initial_read_plan:
             source["include_initial_read_plan"] = True
+    if include_goal_acceptance_detail:
+        source["include_goal_acceptance_detail"] = True
+    if include_agent_todos_detail:
+        source["include_agent_todos_detail"] = True
     if consumed_pointers is not None:
         source["consumed_pointers"] = dict(consumed_pointers)
         if consumed_pointers and observe_first_read:
@@ -494,9 +500,15 @@ def prepare_context_delivery(
 
 
 def prepare_progressive_context(context: Mapping[str, Any], *, source_reference: Mapping[str, Any],
-                                surface: str = "quota_packet") -> dict[str, Any]:
+                                surface: str = "quota_packet",
+                                include_goal_acceptance_detail: bool = False,
+                                include_agent_todos_detail: bool = False) -> dict[str, Any]:
     """Stateless IO adapter to the same typed presentation owner; no Delta identity."""
-    source = dict(context=dict(context), native_projection=dict(source_reference), surface=surface)
+    source: dict[str, Any] = dict(
+        context=dict(context), native_projection=dict(source_reference), surface=surface,
+        **({"include_goal_acceptance_detail": True} if include_goal_acceptance_detail else {}),
+        **({"include_agent_todos_detail": True} if include_agent_todos_detail else {}),
+    )
     return _apply_context_projection_changes(source,
         _turn_envelope_result("progressive_context_delivery", **source, source_edits=True))
 

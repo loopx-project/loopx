@@ -120,8 +120,7 @@ function exploreColdReadCommand(options: {
   return parts.join(" ");
 }
 
-function isRoutineNormalRun(payload: JsonObject): boolean {
-  if (payload.effective_action !== EffectiveAction.NORMAL_RUN || payload.normal_delivery_allowed !== true) return false;
+function isNonReplanTurn(payload: JsonObject): boolean {
   if (payload.replan_action_packet != null || payload.autonomous_replan_obligation != null) return false;
   if (object(payload.vision_continuation_audit).required === true) return false;
   if (object(payload.goal_frontier_projection).replan_required === true) return false;
@@ -130,6 +129,19 @@ function isRoutineNormalRun(payload: JsonObject): boolean {
   const todo = object(payload.selected_todo);
   if (todo.task_class === "goal_completion") return false;
   return true;
+}
+
+function isRoutineNormalRun(payload: JsonObject): boolean {
+  if (payload.effective_action !== EffectiveAction.NORMAL_RUN || payload.normal_delivery_allowed !== true) return false;
+  return isNonReplanTurn(payload);
+}
+
+function isScopableGoalAcceptanceTurn(payload: JsonObject): boolean {
+  const action = payload.effective_action;
+  if (action !== EffectiveAction.NORMAL_RUN && action !== EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY) {
+    return false;
+  }
+  return isNonReplanTurn(payload);
 }
 
 function allRequirementsSatisfied(requirements: unknown[]): boolean {
@@ -336,17 +348,22 @@ export function scopeTurnGoalAcceptance(
   payload: JsonObject,
   options: ScopeGoalAcceptanceOptions = {},
 ): JsonObject {
-  if (!isRoutineNormalRun(payload)) return payload;
+  if (!isScopableGoalAcceptanceTurn(payload)) return payload;
   const captureReferenceFile = nonEmptyString(options.captureReferenceFile);
   if (!captureReferenceFile) return payload;
   const goalId = nonEmptyString(payload.goal_id);
   const agentId = nonEmptyString(object(payload.agent_identity).agent_id ?? payload.agent_id);
   const selectedTodo = jsonObject(payload.selected_todo);
-  const todoId = nonEmptyString(selectedTodo?.todo_id);
-  if (!goalId || !agentId || !selectedTodo || !todoId) return payload;
+  const receiptIdentity = jsonObject(object(payload.heartbeat_receipt).settlement_identity);
+  const todoId = nonEmptyString(selectedTodo?.todo_id)
+    ?? (payload.effective_action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY
+      ? nonEmptyString(receiptIdentity?.todo_id)
+      : null);
+  if (!goalId || !agentId) return payload;
 
   const owner = findSingleInlineOutcomeOwner(payload);
   if (!owner) return payload;
+  if (owner.kind === "work_context" && (!selectedTodo || !todoId)) return payload;
   const {contract, requirements, sourceContent} = owner;
   if (requirements.projection_mode === SCOPED_OUTCOME_PROJECTION_MODE) return payload;
   if (requirements.current_lifetime !== true) return payload;
@@ -383,11 +400,12 @@ export function scopeTurnGoalAcceptance(
   const gaps = collectAcceptanceGaps(payload, requirements, agentId);
   if (gaps.globalAmbiguity) return payload;
 
+  const unblocksTodoId = nonEmptyString(selectedTodo?.unblocks_todo_id);
   const relevantTodoIds = new Set<string>([
-    todoId,
-    ...stringList(selectedTodo.dependency_todo_ids),
-    ...stringList(selectedTodo.successor_todo_ids),
-    ...(nonEmptyString(selectedTodo.unblocks_todo_id) ? [nonEmptyString(selectedTodo.unblocks_todo_id)!] : []),
+    ...(todoId ? [todoId] : []),
+    ...stringList(selectedTodo?.dependency_todo_ids),
+    ...stringList(selectedTodo?.successor_todo_ids),
+    ...(unblocksTodoId ? [unblocksTodoId] : []),
   ]);
 
   const cliArgv = options.cliArgv ?? ["loopx"];

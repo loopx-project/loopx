@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from "node:util";
 import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_preparation.ts";
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
@@ -952,17 +953,57 @@ function checkedContextPresentationSource(request: JsonObject): JsonObject {
   return context;
 }
 
+function legacyRecommendationFallbackReferences(payload: JsonObject): JsonObject[] {
+  const rootFallback = jsonObject(payload.blocked_priority_fallback);
+  const recFallback = jsonObject(object(payload.heartbeat_recommendation).blocked_priority_fallback);
+  if (!rootFallback || !recFallback || !isDeepStrictEqual(rootFallback, recFallback)) return [];
+  return [{
+    path: ["heartbeat_recommendation", "blocked_priority_fallback"],
+    from: ["blocked_priority_fallback"],
+    value: {context_ref: "/blocked_priority_fallback"},
+  }];
+}
+
+function presentationDetailFlags(request: JsonObject): {
+  includeGoalAcceptanceDetail: boolean;
+  includeAgentTodosDetail: boolean;
+} {
+  return {
+    includeGoalAcceptanceDetail: request.include_goal_acceptance_detail === undefined ? false
+      : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail"),
+    includeAgentTodosDetail: request.include_agent_todos_detail === undefined ? false
+      : requireBoolean(request.include_agent_todos_detail, "include_agent_todos_detail"),
+  };
+}
+
+function buildContextPresentationPlan(
+  payload: JsonObject,
+  surface: unknown,
+  flags: {includeGoalAcceptanceDetail: boolean; includeAgentTodosDetail: boolean},
+): JsonObject {
+  return progressiveContextPlan(
+    {
+      payload,
+      surface,
+      ...(flags.includeGoalAcceptanceDetail ? {include_goal_acceptance_detail: true} : {}),
+      ...(flags.includeAgentTodosDetail ? {include_agent_todos_detail: true} : {}),
+    },
+    progressivePreparationScopes(payload),
+    flags.includeAgentTodosDetail ? [] : legacyRecommendationFallbackReferences(payload),
+  );
+}
+
 /** The unsigned root is used for path selection; edits and recovery still
  * address the unchanged, signed original capture. */
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+  const flags = presentationDetailFlags(request);
   const context = checkedContextPresentationSource(request);
   if (request.surface !== "complete_turn")
-    return nativeReplanPresentation(request) ?? contextPresentationPlan(request);
+    return nativeReplanPresentation(request) ?? contextPresentationPlan(request, flags);
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
-  return nativeReplanPresentation(request) ??
-    progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScopes(source));
+  return nativeReplanPresentation(request) ?? buildContextPresentationPlan(source, "quota_packet", flags);
 }
 
 function completeWorkIdentity(decision: JsonObject): JsonObject {
@@ -1522,9 +1563,12 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
   return scopes;
 }
 
-function contextPresentationPlan(request: JsonObject): JsonObject {
+function contextPresentationPlan(
+  request: JsonObject,
+  flags = presentationDetailFlags(request),
+): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
-  return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScopes(context));
+  return buildContextPresentationPlan(context, request.surface, flags);
 }
 
 const resolveViewWriteback = (
@@ -1750,6 +1794,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") {
     if (request.native_projection === undefined) {
+      presentationDetailFlags(request);
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }

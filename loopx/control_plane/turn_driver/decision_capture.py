@@ -545,7 +545,9 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
                                 surface: str = "quota_packet",
                                 selection_command_args_template: str | None = None,
                                 captured_decision: dict[str, str] | None = None,
-                                replan_reader_argv: list[str] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
+                                replan_reader_argv: list[str] | None = None,
+                                include_goal_acceptance_detail: bool = False,
+                                include_agent_todos_detail: bool = False) -> tuple[dict[str, Any], dict[str, Any]]:
     """Publish the complete current source before optional stateless presentation.
 
     The typed owner applies the shrink guard. This neither creates a native
@@ -563,7 +565,8 @@ def capture_progressive_context(payload: dict[str, Any], *, directory: Path,
         **({"replan_reader_argv": replan_reader_argv} if replan_reader_argv is not None else {}),
         "source_path": source["path"],
         "command_template": source["command"] + " --select '<pointer>'",
-    })
+    }, include_goal_acceptance_detail=include_goal_acceptance_detail,
+        include_agent_todos_detail=include_agent_todos_detail)
     if not transaction["projected"]:
         return payload, source
     required = transaction["context"]
@@ -574,6 +577,8 @@ def project_captured_context(
     payload: dict[str, Any], *, directory: Path | None, request: dict[str, Any] | None,
     goal_id: str, agent_id: str, surface: str, capture_id: str,
     captured_recovery: dict[str, Any] | None = None,
+    include_goal_acceptance_detail: bool = False,
+    include_agent_todos_detail: bool = False,
 ) -> dict[str, Any]:
     """Adapt an admitted capture to the shared TS presentation owner.
 
@@ -614,7 +619,9 @@ def project_captured_context(
                 continuity = None
         delivery = prepare_context_delivery(payload, scope=scope,
             capture_id=capture_id, surface=surface,
-            baseline=request.get("baseline"), retained=retained, continuity=continuity)
+            baseline=request.get("baseline"), retained=retained, continuity=continuity,
+            include_goal_acceptance_detail=include_goal_acceptance_detail,
+            include_agent_todos_detail=include_agent_todos_detail)
         delivery["recovery"] = recovery
         return delivery
     except (OSError, ValueError, TypeError, EffectRuntimeRemoteError, EffectRuntimeStartupError):

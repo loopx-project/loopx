@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shlex
@@ -28,6 +29,7 @@ def _seed_mature_goal(
     goal_id: str = "mature-scoped-goal",
     objective_prefix: str = "Historical outcome",
     explore_graph_enabled: bool = False,
+    leading_todos: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = tmp_path / "project"
@@ -38,7 +40,10 @@ def _seed_mature_goal(
     registry.parent.mkdir(parents=True)
 
     agent_id = "worker"
+    prefix_todos = copy.deepcopy(leading_todos) if leading_todos else []
+    offset = len(prefix_todos)
     todos = [
+        *prefix_todos,
         {
             "schema_version": "todo_item_v0",
             "todo_id": "todo_current",
@@ -48,7 +53,7 @@ def _seed_mature_goal(
             "done": False,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": 1,
+            "index": 1 + offset,
             "source_section": "Agent Todo",
             "archive_state": "active",
             "claimed_by": agent_id,
@@ -62,7 +67,7 @@ def _seed_mature_goal(
             "done": False,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": 2,
+            "index": 2 + offset,
             "source_section": "Agent Todo",
             "archive_state": "active",
             "claimed_by": "peer-0",
@@ -78,7 +83,7 @@ def _seed_mature_goal(
             "done": True,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": i + 3,
+            "index": i + 3 + offset,
             "source_section": "Completed Work Archive",
             "archive_state": "archive",
             "claimed_by": f"peer-{i % 4}",
@@ -927,3 +932,414 @@ def test_disabled_context_delivery_preserves_full_inline_outcomes_without_captur
     assert detail_after_reqs["revision"] == admitted_rev + 1
     assert "hreq-post-off-admission" in [r["id"] for r in detail_after_reqs["outcomes"][1]["requirements"]]
     assert [r["id"] for r in off_reqs["outcomes"][1]["requirements"]] == orig_req_ids
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unscoped_prereqs_recovery_and_first_read_keep_file_and_sqlite_lean_with_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    provider: str,
+) -> None:
+    env = _seed_mature_goal(tmp_path, monkeypatch, provider=provider, outcome_count=15)
+    cli = env["cli"]
+    goal_id = env["goal_id"]
+    agent_id = env["agent_id"]
+
+    # 1. Pre-claim should-run without --codex-app keeps planning_horizon lean via progressive context
+    #    capture while preserving verbatim historical requirement recovery from context_details.
+    _, pre_view = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id)
+    pre_required = (
+        json.loads(Path(read_context_read_reference(pre_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in pre_view
+        else pre_view
+    )
+    ph_outcomes = pre_required["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+    assert len(ph_outcomes) == 15
+    by_id = {row["id"]: row for row in ph_outcomes}
+    assert "requirements" in by_id["outcome-current"]
+    assert "requirements" not in by_id["outcome-hist-5"]
+    assert "sources" not in by_id["outcome-hist-5"]
+    hist_ptr = by_id["outcome-hist-5"]["supporting_material_pointer"]
+    unread_ptrs = set(pre_required["context_details"]["unread_context_index"]["pointers"])
+    assert f"{hist_ptr}/requirements" in unread_ptrs
+    pre_read_cmd = pre_required["context_details"]["command_template"].replace(
+        "'<pointer>'", shlex.quote(f"{hist_ptr}/requirements"),
+    )
+    pre_read = subprocess.run(
+        shlex.split(pre_read_cmd),
+        cwd=env["project"], capture_output=True, text=True,
+    )
+    assert pre_read.returncode == 0, pre_read.stderr
+    pre_selected = json.loads(json.loads(pre_read.stdout)["content"])["selections"]
+    assert len(pre_selected) == 1 and len(pre_selected[0]["value"]) == 8
+
+    # 2. Claim todo_current: first_read_command skips redundant summary_only row pointers when container
+    #    capture_read_command + cold_read_command exist, while decision.json and required-context.json keep them.
+    _claim_current_todo(env)
+    native_claimed = tmp_path / "native_claimed"
+    native_claimed.mkdir(mode=0o700)
+    captures_claimed = tmp_path / "captures_claimed"
+    captures_claimed.mkdir(mode=0o700)
+    captures_claimed_resolved = captures_claimed.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"claimed-{provider}")
+    codex_context_hook(
+        str(native_claimed),
+        {"hook_event_name": "SessionStart", "session_id": f"claimed-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, claimed_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-claimed-1",
+        "--codex-context-dir", str(native_claimed), "--decision-output-root", str(captures_claimed_resolved),
+    )
+    claimed_required = json.loads(Path(read_context_read_reference(claimed_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+    assert claimed_required["effective_action"] == "normal_run"
+    first_chunks: list[str] = []
+    page_count = 0
+    next_offset: int | None = None
+    while True:
+        page_cmd = shlex.split(claimed_view["first_read_command"])
+        if next_offset is not None:
+            page_cmd.extend(["--offset", str(next_offset)])
+        first_read = subprocess.run(page_cmd, cwd=env["project"], capture_output=True, text=True)
+        assert first_read.returncode == 0, first_read.stderr
+        page = json.loads(first_read.stdout)
+        first_chunks.append(page["content"])
+        page_count += 1
+        if page["eof"]:
+            break
+        next_offset = page["next_offset"]
+    assert page_count <= 4
+    first_content = json.loads("".join(first_chunks))
+    first_ptrs = [row["pointer"] for row in first_content["selections"]]
+    ga_idx, ga_src = next(
+        (idx, src)
+        for idx, src in enumerate(claimed_required["interaction_contract"]["agent_channel"]["work_context"]["sources"])
+        if src.get("source") == "goal_acceptance"
+    )
+    req_prefix = f"/interaction_contract/agent_channel/work_context/sources/{ga_idx}/content/goal_acceptance_contract/outcome_requirements"
+    assert f"{req_prefix}/capture_read_command" in first_ptrs
+    assert f"{req_prefix}/cold_read_command" in first_ptrs
+    assert f"{req_prefix}/outcomes/0" in first_ptrs
+    assert not any(p.startswith(f"{req_prefix}/outcomes/1") or p.startswith(f"{req_prefix}/outcomes/14") for p in first_ptrs)
+    assert ga_src["content"]["goal_acceptance_contract"]["outcome_requirements"]["outcomes"][1]["capture_read_command"]
+
+    # 3. Unsettled recovery (no --todo-id and --todo-id + --include-detail agent-todos) scopes acceptance
+    #    while preserving full deferred admission outcomes.
+    native_rec1 = tmp_path / "native_rec1"
+    native_rec1.mkdir(mode=0o700)
+    captures_rec1 = tmp_path / "captures_rec1"
+    captures_rec1.mkdir(mode=0o700)
+    captures_rec1_resolved = captures_rec1.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"rec1-{provider}")
+    codex_context_hook(
+        str(native_rec1),
+        {"hook_event_name": "SessionStart", "session_id": f"rec1-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, rec_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id,
+        "--turn-instance-id", "turn-rec-1",
+        "--codex-context-dir", str(native_rec1), "--decision-output-root", str(captures_rec1_resolved),
+    )
+    rec_decision = json.loads(next(captures_rec1_resolved.rglob("decision.json")).read_text())
+    assert rec_decision["effective_action"] == "unsettled_host_turn_recovery"
+    rec_ph_reqs = rec_decision["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]
+    assert rec_ph_reqs["projection_mode"] == "turn_scoped_v0"
+    assert rec_ph_reqs["full_outcome_count"] == 15
+    assert rec_ph_reqs["inline_outcome_count"] == 1
+    assert rec_ph_reqs["compacted_outcome_count"] == 14
+    assert rec_ph_reqs["outcomes"][0]["id"] == "outcome-current"
+    assert len(rec_decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["outcomes"]) == 15
+    rec_required = (
+        json.loads(Path(read_context_read_reference(rec_view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in rec_view
+        else rec_view
+    )
+    assert rec_required.get("blocked_priority_fallback") is None or (
+        rec_required.get("heartbeat_recommendation", {}).get("blocked_priority_fallback")
+        == {"context_ref": "/blocked_priority_fallback"}
+    )
+
+    native_rec2 = tmp_path / "native_rec2"
+    native_rec2.mkdir(mode=0o700)
+    captures_rec2 = tmp_path / "captures_rec2"
+    captures_rec2.mkdir(mode=0o700)
+    captures_rec2_resolved = captures_rec2.resolve()
+    monkeypatch.setenv("CODEX_THREAD_ID", f"rec2-{provider}")
+    codex_context_hook(
+        str(native_rec2),
+        {"hook_event_name": "SessionStart", "session_id": f"rec2-{provider}", "cwd": str(env["project"]), "source": "startup"},
+    )
+    _, rec_detail_view = cli(
+        "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+        "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+        "--turn-instance-id", "turn-rec-2", "--include-detail", "agent-todos",
+        "--codex-context-dir", str(native_rec2), "--decision-output-root", str(captures_rec2_resolved),
+    )
+    rec_detail_decision = json.loads(next(captures_rec2_resolved.rglob("decision.json")).read_text())
+    assert rec_detail_decision["effective_action"] == "unsettled_host_turn_recovery"
+    rec_summary_reqs = rec_detail_decision["agent_todo_summary"]["goal_acceptance_contract"]["outcome_requirements"]
+    assert rec_summary_reqs["projection_mode"] == "turn_scoped_v0"
+    assert rec_summary_reqs["full_outcome_count"] == 15
+    assert rec_summary_reqs["inline_outcome_count"] == 1
+    assert rec_summary_reqs["compacted_outcome_count"] == 14
+    assert len(rec_detail_decision["deferred_settlement_details"]["goal_acceptance"]["outcome_requirements"]["outcomes"]) == 15
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_goal_acceptance_detail_retains_historical_requirements_directly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    env = _seed_mature_goal(
+        tmp_path, monkeypatch, provider=provider, outcome_count=9, goal_id=f"explicit-ga-{provider}",
+    )
+    cli = env["cli"]
+    goal_id = str(env["goal_id"])
+    agent_id = str(env["agent_id"])
+
+    # 1a. Pre-claim plain entry defers historical requirements in planning_horizon (recoverable via context-read);
+    #     explicit --include-detail goal_acceptance and --include-detail all return all 8 directly.
+    _, ordinary_plain = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id)
+    ordinary_plain_req = (
+        json.loads(Path(read_context_read_reference(ordinary_plain["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        if "recovery" in ordinary_plain
+        else ordinary_plain
+    )
+    plain_hist = [
+        row
+        for row in ordinary_plain_req["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+        if row["id"].startswith("outcome-hist-")
+    ]
+    assert len(plain_hist) == 8
+    assert all("requirements" not in row and row.get("supporting_material_pointer") for row in plain_hist)
+    plain_cmd = ordinary_plain_req["context_details"]["command_template"].replace(
+        "'<pointer>'", shlex.quote(f"{plain_hist[0]['supporting_material_pointer']}/requirements"),
+    )
+    plain_recovered = json.loads(
+        json.loads(subprocess.run(shlex.split(plain_cmd), cwd=env["project"], capture_output=True, text=True, check=True).stdout)["content"]
+    )
+    assert len(plain_recovered["selections"][0]["value"]) == 8
+
+    for detail in ("goal_acceptance", "all"):
+        _, detail_plain = cli("quota", "should-run", "--goal-id", goal_id, "--agent-id", agent_id, "--include-detail", detail)
+        detail_plain_req = (
+            json.loads(Path(read_context_read_reference(detail_plain["recovery"]["reference_file"])[1]["path"]).read_bytes())
+            if "recovery" in detail_plain
+            else detail_plain
+        )
+        plain_detail_hist = [
+            row
+            for row in detail_plain_req["planning_horizon"]["core_goal"]["acceptance_contract"]["outcome_requirements"]["outcomes"]
+            if row["id"].startswith("outcome-hist-")
+        ]
+        assert len(plain_detail_hist) == 8
+        assert all(isinstance(row.get("requirements"), list) and len(row["requirements"]) == 8 for row in plain_detail_hist)
+
+    # 1b. Claimed Codex App entry compacts ordinary goal_acceptance (recoverable from capture) while
+    #     explicit --include-detail goal_acceptance and --include-detail all keep all 8 inline directly.
+    _claim_current_todo(env)
+
+    def _run_case(name: str, extra_args: tuple[str, ...]) -> tuple[dict, dict]:
+        native = tmp_path / f"native_{name}"
+        captures = tmp_path / f"captures_{name}"
+        native.mkdir(mode=0o700)
+        captures.mkdir(mode=0o700)
+        caps_resolved = captures.resolve()
+        monkeypatch.setenv("CODEX_THREAD_ID", f"{name}-{provider}")
+        codex_context_hook(
+            str(native),
+            {"hook_event_name": "SessionStart", "session_id": f"{name}-{provider}", "cwd": str(env["project"]), "source": "startup"},
+        )
+        _, view = cli(
+            "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+            "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+            "--turn-instance-id", f"turn-{name}",
+            "--codex-context-dir", str(native), "--decision-output-root", str(caps_resolved),
+            *extra_args,
+        )
+        _, req_ref = read_context_read_reference(view["recovery"]["reference_file"])
+        return view, json.loads(Path(req_ref["path"]).read_bytes())
+
+    _, ordinary_req = _run_case("ordinary", ())
+    ordinary_wc_ga = next(
+        s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+        for s in ordinary_req["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+        if s.get("source") == "goal_acceptance"
+    )
+    assert ordinary_wc_ga["projection_mode"] == "turn_scoped_v0"
+    assert len(ordinary_wc_ga["outcomes"]) == 9
+    assert "requirements" in ordinary_wc_ga["outcomes"][0]
+    hist_ordinary = [row for row in ordinary_wc_ga["outcomes"] if row["id"].startswith("outcome-hist-")]
+    assert len(hist_ordinary) == 8
+    assert all(row.get("summary_only") is True and "requirements" not in row for row in hist_ordinary)
+    recovered = json.loads(
+        json.loads(
+            subprocess.run(
+                shlex.split(hist_ordinary[0]["capture_read_command"].replace(
+                    "outcome_requirements/outcomes/1",
+                    "outcome_requirements/outcomes/1/requirements",
+                )),
+                cwd=env["project"], capture_output=True, text=True, check=True,
+            ).stdout
+        )["content"]
+    )
+    assert len(recovered["selections"][0]["value"]) == 8
+
+    for detail in ("goal_acceptance", "all"):
+        detail_root = tmp_path / f"case_{detail}"
+        detail_root.mkdir()
+        detail_env = _seed_mature_goal(
+            detail_root, monkeypatch, provider=provider, outcome_count=9, goal_id=f"explicit-ga-{detail}-{provider}",
+        )
+        _claim_current_todo(detail_env)
+        d_native = detail_root / "native"
+        d_captures = detail_root / "captures"
+        d_native.mkdir(mode=0o700)
+        d_captures.mkdir(mode=0o700)
+        monkeypatch.setenv("CODEX_THREAD_ID", f"{detail}-{provider}")
+        codex_context_hook(
+            str(d_native),
+            {"hook_event_name": "SessionStart", "session_id": f"{detail}-{provider}", "cwd": str(detail_env["project"]), "source": "startup"},
+        )
+        _, detail_view = detail_env["cli"](
+            "quota", "should-run", "--codex-app", "--context-delivery", "on", "--delta-delivery", "auto",
+            "--goal-id", str(detail_env["goal_id"]), "--agent-id", str(detail_env["agent_id"]), "--todo-id", "todo_current",
+            "--turn-instance-id", f"turn-{detail}",
+            "--codex-context-dir", str(d_native), "--decision-output-root", str(d_captures.resolve()),
+            "--include-detail", detail,
+        )
+        _, d_ref = read_context_read_reference(detail_view["recovery"]["reference_file"])
+        detail_req = json.loads(Path(d_ref["path"]).read_bytes())
+        assert detail_req["effective_action"] == "normal_run"
+        wc_ga = next(
+            s["content"]["goal_acceptance_contract"]["outcome_requirements"]
+            for s in detail_req["interaction_contract"]["agent_channel"]["work_context"]["sources"]
+            if s.get("source") == "goal_acceptance"
+        )
+        hist_rows = [row for row in wc_ga["outcomes"] if row["id"].startswith("outcome-hist-")]
+        assert len(hist_rows) == 8
+        assert all(isinstance(row.get("requirements"), list) and len(row["requirements"]) == 8 for row in hist_rows)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_agent_todos_detail_preserves_full_blocked_priority_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    blocked_leading = [{
+        "schema_version": "todo_item_v0",
+        "todo_id": "todo_primary_blocked",
+        "role": "agent",
+        "text": "Wait for external dependency clearance before core implementation.",
+        "status": "blocked",
+        "done": False,
+        "task_class": "advancement_task",
+        "action_kind": "implement",
+        "index": 1,
+        "source_section": "Agent Todo",
+        "archive_state": "active",
+        "claimed_by": "worker",
+    }]
+    env = _seed_mature_goal(
+        tmp_path, monkeypatch, provider=provider, outcome_count=9,
+        goal_id=f"fallback-detail-{provider}", leading_todos=blocked_leading,
+    )
+    _claim_current_todo(env)
+    cli = env["cli"]
+    goal_id = str(env["goal_id"])
+    agent_id = str(env["agent_id"])
+
+    def _run_case(
+        case_name: str,
+        *,
+        context_delivery: str,
+        include_detail: str | None = None,
+        with_native_dir: bool = True,
+    ) -> tuple[dict, dict, Path, dict, dict | None]:
+        case_root = tmp_path / f"case_{case_name}"
+        captures = case_root / "captures"
+        captures.mkdir(parents=True, mode=0o700)
+        args = [
+            "quota", "should-run", "--codex-app",
+            "--context-delivery", context_delivery,
+            "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+            "--turn-instance-id", "turn-fallback",
+            "--decision-output-root", str(captures.resolve()),
+        ]
+        if context_delivery == "on":
+            args.extend(["--delta-delivery", "auto"])
+        if with_native_dir:
+            native = case_root / "native"
+            native.mkdir(mode=0o700)
+            monkeypatch.setenv("CODEX_THREAD_ID", f"{case_name}-{provider}")
+            codex_context_hook(
+                str(native),
+                {"hook_event_name": "SessionStart", "session_id": f"{case_name}-{provider}",
+                 "cwd": str(env["project"]), "source": "startup"},
+            )
+            args.extend(["--codex-context-dir", str(native)])
+        else:
+            monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+        if include_detail is not None:
+            args.extend(["--include-detail", include_detail])
+
+        _, view = cli(*args)
+        decision_path = next(captures.rglob("decision.json"))
+        decision = json.loads(decision_path.read_text())
+        if "recovery" in view:
+            delivered = json.loads(Path(read_context_read_reference(view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        else:
+            delivered = view
+        required_path = next(captures.rglob("required-context.json"), None)
+        return view, delivered, decision_path, decision, (json.loads(required_path.read_text()) if required_path else None)
+
+    cases: list[tuple[str, str, str | None, bool]] = [
+        ("ordinary_on_native", "on", None, True),
+        ("ordinary_on_stateless", "on", None, False),
+        ("agent_todos_on_native", "on", "agent-todos", True),
+        ("agent_todos_on_stateless", "on", "agent-todos", False),
+        ("all_on_native", "on", "all", True),
+        ("all_on_stateless", "on", "all", False),
+        ("ordinary_off", "off", None, True),
+        ("agent_todos_off", "off", "agent-todos", True),
+        ("all_off", "off", "all", True),
+    ]
+
+    expected_fallback: dict | None = None
+    for case_name, delivery_mode, detail, use_native in cases:
+        view, delivered, decision_path, decision, required_copy = _run_case(
+            case_name, context_delivery=delivery_mode, include_detail=detail, with_native_dir=use_native,
+        )
+        assert decision["effective_action"] == "normal_run"
+        assert delivered["effective_action"] == "normal_run"
+        root_fallback = decision["blocked_priority_fallback"]
+        assert root_fallback["kind"] == "blocked_priority_fallback"
+        assert [row["todo_id"] for row in root_fallback["blocked_items"]] == ["todo_primary_blocked"]
+        assert root_fallback["selected_executable"]["todo_id"] == "todo_current"
+        assert decision["heartbeat_recommendation"]["blocked_priority_fallback"] == root_fallback
+        if expected_fallback is None:
+            expected_fallback = root_fallback
+        else:
+            assert root_fallback == expected_fallback
+
+        # Verify digest-bound selection read on saved decision.json returns both complete fallback objects.
+        decision_sha = hashlib.sha256(decision_path.read_bytes()).hexdigest()
+        _, read_back = cli(
+            "quota", "context-read",
+            "--capture-file", str(decision_path),
+            "--capture-sha256", decision_sha,
+            "--select", "/blocked_priority_fallback",
+            "--select", "/heartbeat_recommendation/blocked_priority_fallback",
+        )
+        selections = json.loads(read_back["content"])["selections"]
+        assert [row["value"] for row in selections] == [expected_fallback, expected_fallback]
+
+        for target in [delivered, *([required_copy] if required_copy is not None else [])]:
+            assert target["blocked_priority_fallback"] == expected_fallback
+            rec = target["heartbeat_recommendation"]
+            if detail in {"agent-todos", "all"} or delivery_mode == "off":
+                assert rec["blocked_priority_fallback"] == expected_fallback
+                assert "blocked_priority_fallback_ref" not in rec
+            else:
+                assert rec["blocked_priority_fallback"] == {"context_ref": "/blocked_priority_fallback"}
+                assert "blocked_priority_fallback_ref" not in rec
