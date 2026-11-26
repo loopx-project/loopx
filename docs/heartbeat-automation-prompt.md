@@ -375,6 +375,13 @@ whose capabilities are known when the automation is installed.
 - use `user_gate` only for an exact authority boundary such as approval to merge
   an aggregate branch into `main`, release, launch a benchmark, or perform a
   protected action;
+- when evidence shows an action requires the owner, reuse or file its scoped
+  gate in the same turn via `todo_write_hint`. Ask for the concrete action and
+  state how success is checked. If the current Todo also contains runnable
+  work, give the blocked action its own Todo and link the gate to that ID.
+  Before yielding, reuse a runnable independent Todo or check the Goal's
+  acceptance for a useful independent successor to record. Settle any bound
+  Turn and recheck admission to continue;
 - when work is blocked without a valid successor, keep the todo with the current
   peer and write a concrete blocker rather than inventing a hierarchy route.
 

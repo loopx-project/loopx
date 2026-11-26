@@ -195,7 +195,8 @@ def assert_adoption(provider: str) -> None:
         assert first_quota["todo_write_hint"]["section"] == "User Todo / Owner Review Reading Queue", first_quota
         assert first_quota["todo_write_hint"]["user_gate_command_template"] == (
             f"loopx todo add --goal-id {GOAL_ID} --role user --task-class user_gate "
-            "--blocks-agent <agent-id> --text '<blocking user decision>'"
+            "--blocks-agent <agent-id> --unblocks-todo-id <todo-id> "
+            "--text '<blocking user action and verification>'"
         ), first_quota
         assert first_quota["todo_write_hint"]["user_action_command_template"] == (
             f"loopx todo add --goal-id {GOAL_ID} --role user --task-class user_action "
