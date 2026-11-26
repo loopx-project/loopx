@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ExternalSession, Section, Thread } from '../src/api.js';
-import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, handoverGroups, isLoopxRow, markTerms, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
+import { boardStage, buildActivity, buildMerged, buildSidebar, clampSidebarWidth, externalThreadRow, forkGroupsByRoot, handoverGroups, isLoopxRow, markTerms, ownRows, navOverflow, defaultSidebarWidth, savedSidebarWidth, searchTerms, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, snoozeTimeLabel, taggedAgents, threadAttention, withExternalSessions, type HostSource } from '../src/sidebar.js';
 import { threadMark } from '../src/notices.js';
 
 let clock = 0;
@@ -80,6 +80,22 @@ test('a thread whose section no longer exists goes back under its project', () =
   assert.deepEqual(model.projects.map((p) => ids(p.threads)), [['x']]);
 });
 
+test('done threads gather at the bottom, finished first, ahead of any pin or section', () => {
+  const model = buildSidebar([
+    thread('fresh', { pinned: true }),
+    thread('newer-done', { doneAt: '2026-01-03T10:00:00Z', pinned: true, sectionId: 's1' }),
+    thread('older-done', { doneAt: '2026-01-01T10:00:00Z', cwd: '/work/other' }),
+  ], sections, '');
+  assert.deepEqual(ids(model.done), ['newer-done', 'older-done']);
+  assert.deepEqual(ids(model.pinned), ['fresh']);
+  assert.deepEqual(model.sections.map((s) => ids(s.threads)), [[], []]);
+  assert.deepEqual(model.projects.map((p) => ids(p.threads)), []);
+  assert.equal(model.count, 3);
+  const found = buildSidebar([thread('newer-done', { doneAt: '2026-01-03T10:00:00Z' }), thread('fresh')], sections, 'newer');
+  assert.deepEqual(ids(found.done), ['newer-done']);
+  assert.deepEqual(ids(found.pinned), []);
+});
+
 test('projects are ordered by their most recent thread', () => {
   const newest = thread('n', { cwd: '/work/b' });
   const older = thread('o', { cwd: '/work/a' });
@@ -150,7 +166,24 @@ test('by activity: what wants attention or is at work comes first, the rest by t
   const found = buildActivity(list, 'UNREAD', now, null);
   assert.deepEqual(found.groups.map((g) => [g.label, ids(g.threads)]), [['优先级', ['unread-new', 'unread-old']]]);
   assert.equal(found.count, 2);
-  assert.deepEqual(buildActivity([], '', now, null), { groups: [], count: 0 });
+  assert.deepEqual(buildActivity([], '', now, null), { groups: [], done: [], count: 0 });
+});
+
+test('by activity: finished threads leave the day order for the bottom fold, newest finish first', () => {
+  const now = new Date(2026, 9, 12, 15, 0);
+  const at = (daysAgo: number, hour = 12) => new Date(2026, 9, 12 - daysAgo, hour).toISOString();
+  const list = [
+    thread('busy', { updatedAt: at(0, 10) }),
+    thread('newer-done', { doneAt: at(0, 9), updatedAt: at(0, 9), status: 'error' }),
+    thread('older-done', { doneAt: at(3), updatedAt: at(3) }),
+  ];
+  const model = buildActivity(list, '', now, null);
+  assert.deepEqual(model.groups.map((g) => [g.label, ids(g.threads)]), [['今天', ['busy']]]);
+  assert.deepEqual(ids(model.done), ['newer-done', 'older-done']);
+  assert.equal(model.count, 3);
+  const hit = buildActivity(list, 'NEWER', now, null);
+  assert.deepEqual(ids(hit.done), ['newer-done']);
+  assert.deepEqual(hit.groups.map((g) => ids(g.threads)), []);
 });
 
 test('by activity: a handover chain stays together under its most pressing member, and folds into one row', () => {
@@ -309,6 +342,31 @@ test('the merged list puts every machine in one activity order, names where each
   assert.equal(model.count, 5, 'the member is under its lead, not a row of its own');
   assert.deepEqual(model.notes.map((n) => `${n.hostId}:${n.state}`), ['gpu:offline', 'new:loading'], 'a remembered list being refreshed needs no note');
   assert.deepEqual(buildMerged(sources, 'there', now, null).groups.flatMap((g) => g.items.map((i) => i.thread.id)), ['there']);
+  const finished = buildMerged([
+    { hostId: null, label: '本机', state: 'live', at: null, threads: [th('local-done', '2026-10-21T11:00:00', { doneAt: '2026-10-21T10:00:00' })] },
+    { hostId: 'devbox', label: 'devbox', state: 'live', at: null, threads: [th('remote-done', '2026-10-20T11:00:00', { doneAt: '2026-10-20T11:30:00' })] },
+  ], '', now, null);
+  assert.deepEqual(finished.done.map((i) => `${i.hostId}:${i.thread.id}`), ['null:local-done', 'devbox:remote-done']);
+  assert.deepEqual(finished.groups.flatMap((g) => g.items), []);
+});
+
+test('snooze: a quiet thread joins no attention surface until its time passes, except unread failures', () => {
+  const until = new Date(Date.now() + 3600_000).toISOString();
+  assert.equal(threadAttention(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until }), null), null);
+  assert.equal(threadAttention(thread('a', { unread: true, snoozedUntil: until }), null), null);
+  assert.equal(boardStage(thread('a', { waiting: true, waitingReason: 'approval', snoozedUntil: until })), 'review', 'the board does not count a snoozed wait as blocked');
+  assert.equal(threadMark(thread('a', { unread: true, snoozedUntil: until }), false), null, 'no dot while quiet');
+  // Unread failure breaks through snooze across attention, sidebar mark, activity and board.
+  const failedSnoozed = thread('f', { status: 'error', unread: true, snoozedUntil: until });
+  assert.deepEqual(threadAttention(failedSnoozed, null), { kind: 'error' });
+  assert.equal(threadAttention(failedSnoozed, 'f'), null, 'an open failed thread is being read right now');
+  assert.equal(threadMark(failedSnoozed, false), 'error');
+  assert.equal(boardStage(failedSnoozed), 'blocked');
+  assert.equal(threadAttention(thread('seen-err', { status: 'error', unread: false, snoozedUntil: until }), null), null, 'a seen failure stays quiet while snoozed');
+  assert.deepEqual(threadAttention(thread('a', { unread: true, snoozedUntil: new Date(Date.now() - 1000).toISOString() }), null), { kind: 'unread' });
+  assert.deepEqual(threadAttention(thread('a', { unread: true }), null), { kind: 'unread' });
+  assert.equal(snoozeTimeLabel(new Date('2026-01-02T09:05:00').toISOString(), new Date('2026-01-02T08:00:00')), '09:05');
+  assert.equal(snoozeTimeLabel(new Date('2026-01-03T09:00:00').toISOString(), new Date('2026-01-02T08:00:00')), '1/3 09:00');
 });
 
 test("a machine's sessions mix into the list by their time, as threads of their directory", () => {
@@ -355,4 +413,34 @@ test('the LoopX filter keeps threads and not-yet-imported sessions that belong t
   const goalSession = externalThreadRow({ agent: 'codex', sessionId: 's1', cwd: '/w', title: 'x', updatedAt: null, loopx: { ...info, missing: true } });
   const plainSession = externalThreadRow({ agent: 'codex', sessionId: 's2', cwd: '/w', title: 'y', updatedAt: null });
   assert.deepEqual([goalThread, plainThread, goalSession, plainSession].filter(isLoopxRow).map((r) => r.id), ['t1', 'ext:codex:s1']);
+});
+
+test('grouped forks fold under their root (including across root handovers) and collapse internal handovers into one row', () => {
+  const root1 = thread('root-1', { createdAt: '2026-11-23T01:00:00Z', updatedAt: '2026-11-23T01:00:00Z' });
+  const root2 = thread('root-2', {
+    createdAt: '2026-11-23T02:00:00Z',
+    updatedAt: '2026-11-23T02:00:00Z',
+    handover: { sourceId: root1.id, title: root1.title, agent: root1.agent, mode: 'continue' },
+  });
+  const forkA = thread('fork-a', { forkGroup: root1.id, forkTag: '分析 one page', updatedAt: '2026-11-23T03:00:00Z' });
+  const forkB1 = thread('fork-b1', { forkGroup: root1.id, forkTag: '写代码', createdAt: '2026-11-23T03:10:00Z', updatedAt: '2026-11-23T03:10:00Z' });
+  const forkB2 = thread('fork-b2', {
+    forkGroup: root1.id,
+    forkTag: '写代码',
+    createdAt: '2026-11-23T04:00:00Z',
+    updatedAt: '2026-11-23T04:00:00Z',
+    handover: { sourceId: forkB1.id, title: forkB1.title, agent: forkB1.agent, mode: 'continue' },
+  });
+  const orphanFork = thread('orphan', { forkGroup: 'archived-root', forkTag: '独立保留' });
+
+  const all = [root1, root2, forkA, forkB1, forkB2, orphanFork];
+  assert.deepEqual(new Set(ids(ownRows(all))), new Set([root1.id, root2.id, orphanFork.id]));
+
+  const map = forkGroupsByRoot(all);
+  const items = map.get(root1.id) ?? [];
+  assert.equal(items.length, 2);
+  const itemB = items.find((i) => i.thread.id === forkB2.id);
+  const itemA = items.find((i) => i.thread.id === forkA.id);
+  assert.ok(itemA && !itemA.handedOver);
+  assert.ok(itemB && itemB.handedOver);
 });

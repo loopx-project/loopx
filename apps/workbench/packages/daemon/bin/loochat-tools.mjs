@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 
 export const help = `loochat preview-note ID
-loochat references ID [--before CURSOR --turns N | --turn TURN_ID --offset N [--tool TOOL_ID] | --tools TURN_ID --offset N]
+loochat references ID [--before CURSOR --turns N | --turn TURN_ID [--tool TOOL_ID] | --tools TURN_ID | --input TURN_ID | --answer INPUT_ID | --user-inputs] [continuation: --snapshot SNAPSHOT --offset N | --cursor CURSOR --turns N | --segment THREAD_ID | --via REF --parent-snapshot SNAPSHOT]
 loochat notify --text-file FILE|-
 loochat tools search [QUERY] [--json]
 loochat tools skill
@@ -156,12 +156,18 @@ export async function referencesMain(args) {
   const [id, ...rest] = args;
   if (!id) throw new Error('reference ID is required');
   const input = { op: 'references.read', id };
-  for (let i = 0; i < rest.length; i += 2) {
-    const key = rest[i].slice(2);
-    if (!['before', 'turns', 'turn', 'offset', 'tool', 'tools'].includes(key) || rest[i + 1] === undefined || !rest[i].startsWith('--')) throw new Error('invalid reference option');
-    input[key] = rest[i + 1];
+  const names = { '--before': 'before', '--turns': 'turns', '--turn': 'turn', '--offset': 'offset', '--tool': 'tool', '--tools': 'tools', '--snapshot': 'snapshot', '--input': 'input', '--answer': 'answer', '--cursor': 'cursor', '--segment': 'segment', '--via': 'via', '--parent-snapshot': 'parentSnapshot' };
+  while (rest.length) {
+    const flag = rest.shift();
+    if (flag === '--user-inputs') {
+      if (input.userInputs) throw new Error('duplicate reference option');
+      input.userInputs = true; continue;
+    }
+    const key = names[flag], value = rest.shift();
+    if (!key || value === undefined || input[key] !== undefined) throw new Error('invalid reference option');
+    input[key] = value;
   }
-  console.log(JSON.stringify(await transport('/command', input)));
+  console.log(JSON.stringify(await transport('/command', input, false, false, true)));
 }
 
 export async function previewNoteMain(args) {

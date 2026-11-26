@@ -25,7 +25,7 @@ interface Props {
   x: number;
   y: number;
   /** Which corner of the panel sits at that point. A menu opened from the bottom of the screen grows upwards. */
-  corner?: 'top-left' | 'bottom-right';
+  corner?: 'top-left' | 'top-right' | 'bottom-right';
   items: MenuEntry[];
   /** Optional account summary, mounted only while the root menu is visible. */
   header?: ReactNode;
@@ -112,12 +112,21 @@ export function Menu({ label, x, y, corner = 'top-left', items, header, dense, o
       const viewport = window.visualViewport;
       const minY = (viewport?.offsetTop ?? 0) + EDGE;
       const bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight);
-      const [wantLeft, wantTop] = corner === 'bottom-right' ? [x - rect.width, y - rect.height] : [x, y];
-      const left = Math.max(EDGE, Math.min(wantLeft, innerWidth - rect.width - EDGE));
+      const maxRight = corner === 'top-right' ? Math.min(innerWidth - EDGE, x) : innerWidth - EDGE;
+      const maxW = corner === 'top-right' ? Math.max(200, maxRight - EDGE) : innerWidth - EDGE * 2;
+      el.style.maxWidth = `${maxW}px`;
+      const width = Math.min(el.offsetWidth, maxW);
+      const [wantLeft, wantTop] = corner === 'bottom-right'
+        ? [x - width, y - rect.height]
+        : corner === 'top-right'
+          ? [x - width, y]
+          : [x, y];
+      const left = Math.max(EDGE, Math.min(wantLeft, maxRight - width));
       const top = Math.max(minY, Math.min(wantTop, bottom - rect.height - EDGE));
       const child = branchRef.current;
-      const childLeft = child && left + rect.width + child.offsetWidth + EDGE * 2 <= innerWidth ? left + rect.width + EDGE : left - (child?.offsetWidth ?? 0) - EDGE;
-      const subLeft = Math.max(EDGE, Math.min(childLeft, innerWidth - (child?.offsetWidth ?? 0) - EDGE));
+      const childW = child?.offsetWidth ?? 0;
+      const childLeft = child && left + width + childW + EDGE <= maxRight ? left + width + EDGE : left - childW - EDGE;
+      const subLeft = Math.max(EDGE, Math.min(childLeft, maxRight - childW));
       const subTop = Math.max(minY, Math.min(top, bottom - (child?.offsetHeight ?? 0) - EDGE));
       // Placement is DOM geometry, not React state. Recreated items and queued observers
       // must not schedule another synchronous render while a branch is being removed.

@@ -12,6 +12,7 @@ import pytest
 from loopx.capabilities.native_chat.steward_monitor import (
     FOLLOWUP_TARGET_PREFIX,
     StewardMonitor,
+    ensure_steward_background_session,
     monitor_turn_id,
     pump_steward_monitors,
 )
@@ -297,3 +298,125 @@ def test_monitor_restart_recovery_recovers_background_and_legacy_watches_while_h
     # Subsequent pump sees the completed recovery on bg_sid and does not re-dispatch!
     getattr(runtime, "_steward_monitor_next_check", {}).clear()
     assert pump_steward_monitors(runtime) == []
+
+
+def test_background_monitor_defers_while_foreground_native_turn_active_and_resumes_when_idle(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    store, runtime, _, _, binding, _, _ = steward
+    sid, actor, _, todo_id = _prepare_steward_monitor(steward, tmp_path, monkeypatch)
+    binding_id = binding["binding_id"]
+    bg_sid = StewardTurnHost.background_session_id(binding_id)
+
+    # Active foreground native turn (e.g. inline .replan / report / advancement)
+    # must defer background monitor polls so runs/ cannot drift mid-replan.
+    native_req = {
+        "operation": "native_turn",
+        "host": "codex-app-server",
+        "actor": actor,
+        "turn_instance_id": "fg-native-active-1",
+        "todo_id": None,
+        "work_kind": "report",
+        "validation_command": None,
+    }
+    fg_turn = store.accept_managed_turn(
+        sid,
+        client_turn_id=native_steward_client_id(actor, "fg-native-active-1"),
+        message="Advance native governance work.",
+        display_message="生成本期授权项目日报。",
+        origin="native_loopx",
+        loopx_execution=True,
+        loopx_request=native_req,
+    ).turn
+    store.update_session(sid, status="busy", active_turn_id=fg_turn["turn_id"])
+
+    getattr(runtime, "_steward_monitor_next_check", {}).clear()
+    assert pump_steward_monitors(runtime) == []
+
+    # Queued foreground native turn also defers background monitor polls.
+    store.update_session(sid, status="ready", active_turn_id=None)
+    queued_native, _ = store.create_queued_turn(
+        sid,
+        client_turn_id=native_steward_client_id(actor, "fg-native-queued-1"),
+        message="Advance native governance work.",
+        origin="native_loopx",
+    )
+    getattr(runtime, "_steward_monitor_next_check", {}).clear()
+    assert pump_steward_monitors(runtime) == []
+
+    # Once no foreground native turn is active or queued, background monitor resumes.
+    while (claimed := store.claim_next_queued_turn(sid)) is not None:
+        store.update_turn(sid, claimed["turn_id"], status="completed")
+        store.update_session(sid, active_turn_id=None, status="ready")
+    getattr(runtime, "_steward_monitor_next_check", {}).clear()
+    resumed = pump_steward_monitors(runtime)
+    assert len(resumed) == 1
+    assert resumed[0]["session_id"] == bg_sid
+    assert resumed[0]["loopx_request"]["work_kind"] == "monitor"
+    assert finish(runtime, resumed[0])["status"] == "completed"
+
+
+def test_foreground_advancement_waits_while_background_monitor_active_then_dispatches_without_throttle(
+    steward, tmp_path, monkeypatch,
+) -> None:
+    from loopx.capabilities.native_chat.steward_commands import native_command
+
+    store, runtime, _, _, binding, _, _ = steward
+    sid, actor, _, todo_id = _prepare_steward_monitor(steward, tmp_path, monkeypatch)
+    binding_id = binding["binding_id"]
+    bg_sid = StewardTurnHost.background_session_id(binding_id)
+
+    adv = native_command(
+        runtime,
+        [
+            "todo",
+            "add",
+            "--goal-id",
+            actor["goal_id"],
+            "--role",
+            "agent",
+            "--task-class",
+            "advancement_task",
+            "--action-kind",
+            "triage",
+            "--continuation-policy",
+            "same_agent_non_delivery",
+            "--claimed-by",
+            actor["agent_id"],
+            "--target-key",
+            f"{FOLLOWUP_TARGET_PREFIX}{todo_id}",
+            "--text",
+            "[steward-portfolio-watch] 信号变更跟进：等待后台巡检结束后推进",
+            "--operation-id",
+            "test-adv-wait-bg-1",
+            "--execute",
+        ],
+    )
+    adv_todo_id = adv["todo_id"]
+
+    # First flush the initial due background watch so due_monitors(actor) is empty.
+    getattr(runtime, "_steward_monitor_next_check", {}).clear()
+    initial_bg = pump_steward_monitors(runtime)
+    assert len(initial_bg) == 1
+    assert initial_bg[0]["session_id"] == bg_sid
+    assert finish(runtime, initial_bg[0])["status"] == "completed"
+
+    # Precondition: hold an active turn on background carrier session while no monitor is due.
+    ensure_steward_background_session(store, binding_id, store.load_session(sid))
+    store.update_session(bg_sid, status="busy", active_turn_id="bg-monitor-active")
+    # Simulate an existing pump cache entry with a 60s window before bg_active completes.
+    cache = getattr(runtime, "_steward_monitor_next_check", None)
+    if cache is None:
+        cache = runtime._steward_monitor_next_check = {}
+    cache[binding_id] = 10**12
+    assert pump_steward_monitors(runtime) == []
+
+    # Release bg_sid without clearing the 60s cache: advancement must dispatch immediately.
+    store.update_session(bg_sid, status="ready", active_turn_id=None)
+    with monkeypatch.context() as hold_worker:
+        hold_worker.setattr(runtime, "_start_accepted_turn_worker", lambda **_kw: None)
+        dispatched = pump_steward_monitors(runtime)
+    assert len(dispatched) == 1
+    assert dispatched[0]["session_id"] == sid
+    assert dispatched[0]["loopx_request"]["work_kind"] == "native_turn"
+    assert dispatched[0]["loopx_request"]["todo_id"] == adv_todo_id

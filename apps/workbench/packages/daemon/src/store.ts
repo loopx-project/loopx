@@ -17,6 +17,7 @@ import { HistoryStore } from './history.js';
 import type { Answer, DiffEvent } from './outputs.js';
 import { ToolJobs } from './tool-jobs.js';
 import { MessageEdits } from './message-edits.js';
+import { ToolHistory } from './tool-history.js';
 import type { MeetingReference, SignalMaterial, SignalMaterialRead } from './channels/lark-material.js';
 
 /** Storage cap for one tool snapshot's output; see docs/tool-output-storage-design.md. */
@@ -63,11 +64,17 @@ export interface ThreadRecord {
   sectionId: string | null;
   /** The thread this one was forked from. Kept even if that thread is later deleted. */
   forkedFrom: string | null;
+  /** Root thread id of a grouped fork family (same-workspace sub-conversations that can read each other on demand). */
+  forkGroup?: string | null;
+  /** Short purpose label for a forked sub-conversation (e.g. "analyze one-pager", "write code"). */
+  forkTag?: string | null;
   handover?: HandoverLink | null;
   /** Set when the thread runs in a git worktree the hub made for it, or shares one with the thread it was forked from. */
   worktree: ThreadWorktree | null;
   /** A turn finished and nobody has looked at the result yet. */
   unread: boolean;
+  /** The person asked not to be bothered about this thread until this time; null when off. */
+  snoozedUntil: string | null;
   /** When the hub last started a turn here. Compared with `externalAt` for the terminal warning. */
   hubTurnAt: string | null;
   /** When syncing last found turns the terminal added to this session. */
@@ -370,9 +377,12 @@ interface ThreadRow {
   archived_at: string | null;
   section_id: string | null;
   forked_from: string | null;
+  fork_group: string | null;
+  fork_tag: string | null;
   handover: string | null;
   worktree: string | null;
   unread: number;
+  snoozed_until: string | null;
   hub_turn_at: string | null;
   external_at: string | null;
   preview: string | null;
@@ -409,9 +419,12 @@ const toThread = (r: ThreadRow): ThreadRecord => ({
   archivedAt: r.archived_at,
   sectionId: r.section_id,
   forkedFrom: r.forked_from,
+  forkGroup: r.fork_group ?? null,
+  forkTag: r.fork_tag ?? null,
   handover: r.handover ? JSON.parse(r.handover) : null,
   worktree: r.worktree ? (JSON.parse(r.worktree) as ThreadWorktree) : null,
   unread: r.unread === 1,
+  snoozedUntil: r.snoozed_until ?? null,
   hubTurnAt: r.hub_turn_at,
   externalAt: r.external_at,
   preview: r.preview,
@@ -462,6 +475,7 @@ export class Store {
   readonly telemetry: Telemetry;
   readonly activity: Activity;
   readonly history: HistoryStore;
+  readonly toolHistory: ToolHistory;
   readonly toolJobs: ToolJobs;
   /** The event that records an edit and hides what came before it in the current conversation. */
   readonly messageEdits: MessageEdits;
@@ -542,10 +556,14 @@ export class Store {
     // Migration: forks.
     if (!cols.some((c) => c.name === 'handover')) this.db.exec('ALTER TABLE threads ADD COLUMN handover TEXT');
     if (!cols.some((c) => c.name === 'forked_from')) this.db.exec('ALTER TABLE threads ADD COLUMN forked_from TEXT');
+    if (!cols.some((c) => c.name === 'fork_group')) this.db.exec('ALTER TABLE threads ADD COLUMN fork_group TEXT');
+    if (!cols.some((c) => c.name === 'fork_tag')) this.db.exec('ALTER TABLE threads ADD COLUMN fork_tag TEXT');
     // Migration: the git worktree a forked thread stands in, as JSON.
     if (!cols.some((c) => c.name === 'worktree')) this.db.exec('ALTER TABLE threads ADD COLUMN worktree TEXT');
     // Migration: unread marker.
     if (!cols.some((c) => c.name === 'unread')) this.db.exec('ALTER TABLE threads ADD COLUMN unread INTEGER NOT NULL DEFAULT 0');
+    // Migration: snooze — the thread leaves the person's attention until this time.
+    if (!cols.some((c) => c.name === 'snoozed_until')) this.db.exec('ALTER TABLE threads ADD COLUMN snoozed_until TEXT');
     if (!cols.some(c => c.name === 'work_mode')) this.db.exec("ALTER TABLE threads ADD COLUMN work_mode TEXT NOT NULL DEFAULT 'execute'");
     if (!cols.some(c => c.name === 'speed')) this.db.exec('ALTER TABLE threads ADD COLUMN speed TEXT');
     // Migration: the schedule a thread was started by, if any, as JSON { id, name }.
@@ -684,8 +702,9 @@ export class Store {
     this.mcpEntries = new McpRegistry(this.db);
     this.extensions = new ExtensionStore(this.db);
     this.history = new HistoryStore(this.db);
+    this.toolHistory = new ToolHistory(this.db);
     this.toolJobs = new ToolJobs(this.db);
-    this.messageEdits = new MessageEdits(this.db);
+    this.messageEdits = new MessageEdits(this.db, this.toolHistory);
   }
 
   /** The MCP registry: business line and purpose notes, plus manually registered servers. */
@@ -930,12 +949,15 @@ export class Store {
       | 'forkedFrom'
       | 'worktree'
       | 'unread'
+      | 'snoozedUntil'
       | 'hubTurnAt'
       | 'externalAt'
       | 'preview'
       | 'schedule'
     > & {
       forkedFrom?: string | null;
+      forkGroup?: string | null;
+      forkTag?: string | null;
       worktree?: ThreadWorktree | null;
       sectionId?: string | null;
       schedule?: { id: string; name: string } | null;
@@ -944,7 +966,7 @@ export class Store {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        'INSERT INTO threads (id, agent, cwd, title, status, pinned, permission_mode, model, effort, forked_from, worktree, section_id, created_at, updated_at, handover, schedule, work_mode, speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO threads (id, agent, cwd, title, status, pinned, permission_mode, model, effort, forked_from, fork_group, fork_tag, worktree, section_id, created_at, updated_at, handover, schedule, work_mode, speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         t.id,
@@ -957,6 +979,8 @@ export class Store {
         t.model,
         t.effort,
         t.forkedFrom ?? null,
+        t.forkGroup ?? null,
+        t.forkTag ?? null,
         t.worktree ? JSON.stringify(t.worktree) : null,
         t.sectionId ?? null,
         now,
@@ -978,6 +1002,10 @@ export class Store {
     return thread.handover ? handoverSourceMoved(this.db, thread.handover, thread.createdAt) : null;
   }
 
+  setHandover(id: string, link: HandoverLink | null): void {
+    this.db.prepare('UPDATE threads SET handover = ? WHERE id = ?').run(link ? JSON.stringify(link) : null, id);
+  }
+
   detachHandover(id: string): void {
     const thread = this.getThread(id);
     if (!thread?.handover) return;
@@ -987,6 +1015,13 @@ export class Store {
   getThread(id: string): ThreadRecord | null {
     const row = this.db.prepare('SELECT * FROM threads WHERE id = ?').get(id) as ThreadRow | undefined;
     return row ? toThread(row) : null;
+  }
+
+  /** Threads whose snooze has run out, not archived, earliest wake first. */
+  listSnoozeDue(nowIso: string): ThreadRecord[] {
+    return (this.db
+      .prepare('SELECT * FROM threads WHERE snoozed_until IS NOT NULL AND snoozed_until <= ? AND archived_at IS NULL ORDER BY snoozed_until')
+      .all(nowIso) as unknown as ThreadRow[]).map(toThread);
   }
 
   /** The thread tied to an agent-side session, archived or not. Used to avoid importing one twice. */
@@ -1013,6 +1048,7 @@ export class Store {
         'INSERT INTO events (thread_id, seq, turn_id, type, ts, data) SELECT ?, seq, turn_id, type, ts, data FROM events WHERE thread_id = ? AND seq <= ?',
       )
       .run(toThreadId, fromThreadId, upToSeq);
+    this.toolHistory.copy(fromThreadId, toThreadId, upToSeq);
     this.indexText(toThreadId);
   }
 
@@ -1060,9 +1096,12 @@ export class Store {
         | 'archivedAt'
         | 'sectionId'
         | 'unread'
+        | 'snoozedUntil'
         | 'preview'
         | 'hubTurnAt'
         | 'externalAt'
+        | 'forkGroup'
+        | 'forkTag'
       >
     >,
     /**
@@ -1076,7 +1115,7 @@ export class Store {
     const next = { ...current, ...patch, updatedAt: opts.touch ? new Date().toISOString() : current.updatedAt };
     this.db
       .prepare(
-        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ? WHERE id = ?',
+        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, snoozed_until = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ?, fork_group = ?, fork_tag = ? WHERE id = ?',
       )
       .run(
         next.title,
@@ -1089,12 +1128,15 @@ export class Store {
         next.archivedAt,
         next.sectionId,
         next.unread ? 1 : 0,
+        next.snoozedUntil ?? null,
         next.preview,
         next.hubTurnAt,
         next.externalAt,
         next.updatedAt,
         next.workMode ?? 'execute',
         next.speed ?? null,
+        next.forkGroup ?? null,
+        next.forkTag ?? null,
         id,
       );
   }
@@ -1516,11 +1558,13 @@ export class Store {
     this.db.exec('SAVEPOINT history_event');
     try {
       const ts = new Date().toISOString();
+      const fullData = data;
       data = this.collapseToolSnapshot(threadId, turnId, type, data);
       const row = this.db
         .prepare('SELECT MAX(COALESCE((SELECT MAX(seq) FROM events WHERE thread_id=?),0), COALESCE((SELECT last_seq FROM event_sequences WHERE thread_id=?),0)) + 1 AS next')
         .get(threadId, threadId) as { next: number };
       const seq = row.next;
+      this.toolHistory.record(threadId, turnId, seq, type, fullData);
       this.db
         .prepare('INSERT INTO events (thread_id, seq, turn_id, type, ts, data) VALUES (?, ?, ?, ?, ?, ?)')
         .run(threadId, seq, turnId, type, ts, JSON.stringify(data));

@@ -1,15 +1,17 @@
 import { useState, type ReactNode } from 'react';
 import { ApiError, type AgentInfo, type Api, type HandoverTarget, type Section, type Thread, type Todo } from '../api';
-import { copyText } from '../clipboard';
+import { conversationPointer, copyText } from '../clipboard';
+import { referenceMachine, useReferenceMachine } from '../reference-input';
 import { folderName } from '../paths';
 import { ChoiceDialog, Dialog } from './Dialog';
+import { ForkSubchatDialog } from './ForkSubchatDialog';
 import { HandoverChainDialog } from './HandoverTrail';
 import { HandoverDialog } from './HandoverDialog';
 import { Menu, type MenuEntry } from './Menu';
 import { ChatQuotaMenu } from './ChatQuotaMenu';
-import { IconArchive, IconBoard, IconCheck, IconCopy, IconDot, IconEdit, IconFiles, IconFork, IconHand, IconHandover, IconList, IconPin, IconPlus, IconSparkle, IconTerminal, IconTrace, IconTrash, IconWorktree } from './icons';
+import { IconArchive, IconBoard, IconCheck, IconClock, IconCopy, IconDot, IconEdit, IconFiles, IconFork, IconHand, IconHandover, IconList, IconPin, IconPlus, IconSparkle, IconTerminal, IconTrace, IconTrash, IconWorktree } from './icons';
 import { formatList, t } from '../i18n';
-import { boardStage, threadAttention, type BoardStage } from '../sidebar';
+import { boardStage, snoozed, threadAttention, type BoardStage } from '../sidebar';
 
 interface Deps {
   api: Api | null;
@@ -66,6 +68,10 @@ type DialogState =
   | { kind: 'delete-worktree'; thread: Thread; agentSession: boolean; changes: number; commits: number }
   /** Where the copy should run: beside the original, or in a git worktree of its own. */
   | { kind: 'fork'; thread: Thread; turnId?: string; branch: string | null; changes: number }
+  /** One-step grouped sub-conversation fork in the current directory (optional tag, first message, worktree, agent). */
+  | { kind: 'fork-subchat'; thread: Thread; turnId?: string; worktreeAvailable: boolean; allowFullFork: boolean }
+  /** Edit the short purpose tag of a grouped forked sub-conversation. */
+  | { kind: 'fork-tag'; thread: Thread }
   | { kind: 'new-section'; thread: Thread | null }
   | { kind: 'rename-section'; section: Section }
   | { kind: 'delete-section'; section: Section }
@@ -74,7 +80,7 @@ type DialogState =
   /** The audit trail of a handover chain this thread belongs to. */
   | { kind: 'chain'; thread: Thread };
 
-export type ThreadAction = 'rename' | 'pin' | 'fork' | 'archive' | 'restore' | 'delete';
+export type ThreadAction = 'rename' | 'pin' | 'fork' | 'fork-subchat' | 'fork-tag' | 'archive' | 'restore' | 'delete';
 
 /** Why a thread cannot be forked right now, or null when it can. */
 export function forkBlocked(thread: Thread, turnId?: string): string | null {
@@ -92,6 +98,12 @@ export function forkBlocked(thread: Thread, turnId?: string): string | null {
  */
 export function useThreadActions(deps: Deps) {
   const { api, agents, sections, todos, chain, onTodosChange, onThreadChange, onThreadRemove, onThreadOpen, onMarkedUnread, onSectionsChange, onOpenTerminal, onOpenFiles, onOpenGit, onOpenTrace, onError, onBusy, onArchived, markdownOf, autotitle, board } = deps;
+  const machineId = useReferenceMachine(api?.demo ? null : api);
+  const warmReferenceMachine = () => { if (api && !api.demo) void referenceMachine(api).catch(() => {}); };
+  const copyReference = async (thread: Thread) => {
+    if (!machineId) { warmReferenceMachine(); onError(t('references.copyUnavailable')); return; }
+    if (!await copyText(conversationPointer(thread, undefined, machineId))) onError(t('actions.copyFailed'));
+  };
   /** The chain record when this thread belongs to any handover chain, automatic or manual. */
   const chainOf = (thread: Thread) => chain && (thread.handover
     || chain.threads.some(x => x.handover?.sourceId === thread.id)) ? chain : undefined;
@@ -155,10 +167,24 @@ export function useThreadActions(deps: Deps) {
     }
   };
 
+  const openForkSubchat = async (thread: Thread, turnId?: string) => {
+    if (!api) return;
+    const blocked = forkBlocked(thread, turnId);
+    if (turnId && blocked) return onError(blocked);
+    const agentInfo = agents.find((a) => a.id === thread.agent);
+    const allowFullFork = Boolean(agentInfo?.capabilities.fork) && blocked === null;
+    const options = await api.forkOptions(thread.id).catch(() => null);
+    setDialog({ kind: 'fork-subchat', thread, turnId, worktreeAvailable: Boolean(options?.worktree.available), allowFullFork });
+  };
+
   const run = (action: ThreadAction, thread: Thread) => {
     switch (action) {
       case 'fork':
         return void fork(thread);
+      case 'fork-subchat':
+        return void openForkSubchat(thread);
+      case 'fork-tag':
+        return setDialog({ kind: 'fork-tag', thread });
       case 'rename':
         return setDialog({ kind: 'rename', thread });
       case 'pin':
@@ -182,6 +208,33 @@ export function useThreadActions(deps: Deps) {
     } catch (e) {
       onError(e);
     }
+  };
+
+  /** The snooze menu, the same in every menu that holds it: quiet this thread until a chosen time,
+   *  as an inbox is snoozed. Presets only — an exact minute is rarely the point. */
+  const snoozeMenu = (thread: Thread): MenuEntry => {
+    const set = (at: number) => () => void patch(thread, { snoozedUntil: new Date(at).toISOString() });
+    const morning = (days: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      d.setHours(9, 0, 0, 0);
+      return d.getTime();
+    };
+    return {
+      id: 'snooze',
+      label: t('actions.snooze'),
+      icon: IconClock,
+      submenu: [
+        { id: 'snooze-1h', label: t('actions.snooze1h'), onSelect: set(Date.now() + 3600_000) },
+        { id: 'snooze-morning', label: t('actions.snoozeMorning'), onSelect: set(morning(1)) },
+        { id: 'snooze-week', label: t('actions.snoozeWeek'), onSelect: set(morning(7)) },
+        // Only a thread that is quiet now has something to call off.
+        ...(snoozed(thread) ? [
+          'separator',
+          { id: 'snooze-off', label: t('actions.snoozeOff'), onSelect: () => void patch(thread, { snoozedUntil: null }) },
+        ] as MenuEntry[] : []),
+      ],
+    };
   };
 
   /** What a row's menu offers: how the thread sits in the list. As in ChatGPT and the Claude app,
@@ -209,7 +262,9 @@ export function useThreadActions(deps: Deps) {
         icon: IconDot,
         onSelect: () => void patch(thread, { unread: !thread.unread }, thread.unread ? undefined : () => onMarkedUnread(thread)),
       },
+      snoozeMenu(thread),
       { id: 'rename', label: t('actions.rename'), icon: IconEdit, onSelect: () => run('rename', thread) },
+      ...(thread.forkGroup ? [{ id: 'fork-tag', label: t('actions.editForkTag'), icon: IconFork, onSelect: () => run('fork-tag', thread) }] : []),
       ...(autotitle ? [{ id: 'autotitle', label: t('actions.autotitle'), icon: IconSparkle, onSelect: () => void autoName(thread) }] : []),
       ...(board ? [{ id: 'board', label: t('actions.board'), icon: IconBoard, submenu: (['backlog', 'doing', 'blocked', 'review', 'done'] as const).map(place) }] : []),
       {
@@ -282,6 +337,7 @@ export function useThreadActions(deps: Deps) {
       icon: IconDot,
       onSelect: () => void patch(thread, { unread: !thread.unread }, thread.unread ? undefined : () => onMarkedUnread(thread)),
     },
+    snoozeMenu(thread),
     { id: 'rename', label: t('actions.rename'), icon: IconEdit, onSelect: () => run('rename', thread) },
     ...(autotitle ? [{ id: 'autotitle', label: t('actions.autotitle'), icon: IconSparkle, onSelect: () => void autoName(thread) }] : []),
     {
@@ -289,6 +345,7 @@ export function useThreadActions(deps: Deps) {
       label: t('common.copy'),
       icon: IconCopy,
       submenu: [
+        { id: 'copy-reference', label: t('actions.copyReference'), onSelect: () => void copyReference(thread) },
         { id: 'copy-md', label: t('actions.copyMarkdown'), onSelect: () => void copy(markdownOf(thread)) },
         {
           id: 'copy-resume',
@@ -306,9 +363,11 @@ export function useThreadActions(deps: Deps) {
       ],
     },
     { id: 'continuation', label: t('actions.forkAndHandover'), icon: IconHand, submenu: [
+      { id: 'fork-subchat', label: t('actions.forkSubchat'), icon: IconFork, onSelect: () => run('fork-subchat', thread) },
       ...(agents.find((a) => a.id === thread.agent)?.capabilities.fork
         ? [{ id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: forkBlocked(thread) !== null, onSelect: () => run('fork', thread) }]
         : []),
+      ...(thread.forkGroup ? [{ id: 'fork-tag', label: t('actions.editForkTag'), icon: IconEdit, onSelect: () => run('fork-tag', thread) }] : []),
       { id: 'handover', label: t('handover.title'), icon: IconHand, onSelect: () => setDialog({ kind: 'handover', thread }) },
       ...(chainOf(thread) ? [{ id: 'chain', label: t('handover.trail.title'), icon: IconHandover, onSelect: () => setDialog({ kind: 'chain', thread }) }] : []),
     ] },
@@ -405,12 +464,48 @@ export function useThreadActions(deps: Deps) {
           onCancel={close}
         />
       );
+    } else if (dialog.kind === 'fork-subchat') {
+      const { thread, turnId, worktreeAvailable, allowFullFork } = dialog;
+      dialogNode = (
+        <ForkSubchatDialog
+          worktreeAvailable={worktreeAvailable}
+          allowLightweight={!turnId}
+          allowFullFork={allowFullFork}
+          agents={agents}
+          currentAgent={thread.agent}
+          onConfirm={({ forkTag, firstMessage, worktree, lightweight, agent }) => {
+            close();
+            onBusy({ threadId: thread.id, message: worktree ? t('actions.forkingWorktree') : t('actions.forking') });
+            void api
+              .forkThread(thread.id, { turnId, worktree, grouped: true, lightweight, forkTag, firstMessage, ...(agent ? { agent } : {}) })
+              .then((copy) => {
+                if (firstMessage) onThreadChange(copy);
+                else onThreadOpen(copy);
+              })
+              .catch(onError)
+              .finally(() => onBusy(null));
+          }}
+          onCancel={close}
+        />
+      );
+    } else if (dialog.kind === 'fork-tag') {
+      const { thread } = dialog;
+      dialogNode = (
+        <Dialog
+          title={t('actions.editForkTagTitle')}
+          input={{ initial: thread.forkTag ?? '', label: t('actions.forkTagLabel') }}
+          confirmLabel={t('actions.save')}
+          onConfirm={(value) => void guard(async () => onThreadChange(await api.updateThread(thread.id, { forkTag: (value ?? '').trim() || null })))}
+          onCancel={close}
+        />
+      );
     } else if (dialog.kind === 'fork') {
       const { thread, turnId, branch, changes } = dialog;
       dialogNode = (
         <ChoiceDialog
           title={t('actions.forkTitle')}
           choices={[
+            { id: 'lightweight', icon: <IconFork size={18} />, label: t('actions.forkModeLightweight'), hint: t('actions.forkModeLightweightHint') },
             { id: 'here', icon: <IconFork size={18} />, label: t('actions.forkHere'), hint: t('actions.forkHereHint') },
             {
               id: 'worktree',
@@ -421,7 +516,8 @@ export function useThreadActions(deps: Deps) {
           ]}
           onPick={(id) => {
             close();
-            void fork(thread, turnId, id === 'worktree' ? 'worktree' : 'here');
+            if (id === 'lightweight') setDialog({ kind: 'fork-subchat', thread, worktreeAvailable: true, allowFullFork: true });
+            else void fork(thread, turnId, id === 'worktree' ? 'worktree' : 'here');
           }}
           onCancel={close}
         />
@@ -500,6 +596,7 @@ export function useThreadActions(deps: Deps) {
           label={'thread' in menu ? menu.thread.title : menu.section.name}
           x={menu.x}
           y={menu.y}
+          corner={menu.where === 'page' ? 'top-right' : 'top-left'}
           items={'thread' in menu ? (menu.where === 'list' ? listItems(menu.thread) : pageItems(menu.thread)) : sectionItems(menu.section)}
           dense={menu.where === 'page'}
           // The quota belongs to the conversation being read, not to a row in the list.
@@ -515,7 +612,7 @@ export function useThreadActions(deps: Deps) {
   return {
     openThreadMenu: (thread: Thread, x: number, y: number) => setMenu({ thread, x, y, where: 'list' }),
     /** Opens the open thread's own "…": the conversation's tools, without the list's management. */
-    openPageMenu: (thread: Thread, x: number, y: number) => setMenu({ thread, x, y, where: 'page' }),
+    openPageMenu: (thread: Thread, x: number, y: number) => { warmReferenceMachine(); setMenu({ thread, x, y, where: 'page' }); },
     openSectionMenu: (section: Section, x: number, y: number) => setMenu({ section, x, y, where: 'list' }),
     copyConversation: (thread: Thread) => void copy(markdownOf(thread)),
     newSection: () => setDialog({ kind: 'new-section', thread: null }),
@@ -526,10 +623,10 @@ export function useThreadActions(deps: Deps) {
      * place, with its queue and collaboration lead. For when the thread's own agent cannot go on, so
      * it is not asked. `note` is what the person adds for the successor.
      */
-    takeOver: async (thread: Thread, target: string | HandoverTarget, note?: string) => {
+    takeOver: async (thread: Thread, target: string | HandoverTarget, note?: string, references: string[] = []) => {
       if (!api) return;
       try {
-        onThreadOpen(await api.takeOver(thread.id, target, note));
+        onThreadOpen(await api.takeOver(thread.id, target, note, references));
       } catch (e) {
         onError(e);
         throw e;
@@ -537,6 +634,8 @@ export function useThreadActions(deps: Deps) {
     },
     /** Forks so that the copy ends with the given turn. */
     forkAt: (thread: Thread, turnId: string) => void fork(thread, turnId),
+    /** Opens the one-step grouped sub-conversation fork dialog. */
+    forkSubchat: (thread: Thread, turnId?: string) => void openForkSubchat(thread, turnId),
     run,
     layer,
   };
