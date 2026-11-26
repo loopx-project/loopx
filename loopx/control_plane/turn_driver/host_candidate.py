@@ -314,6 +314,13 @@ def goal_acceptance_prompt_instruction(authority: Mapping[str, Any]) -> str:
     return GOAL_ACCEPTANCE_READ_RULE if authority.get("vision_continuation_audit") else ""
 
 
+def render_dsh_host_prompt(request: Mapping[str, Any]) -> str | None:
+    """Render the exact prompt delivered by run_dsh_host when measurable pre-launch."""
+    if "work_contract" not in request:
+        return None
+    return render_prompt(extract_turn_authority(request))
+
+
 def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = False) -> str:
     """Wrap one signed Turn authority packet in a typed JSON result request.
 
@@ -322,6 +329,15 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     """
 
     model_input = authority.get("_model_input")
+    if isinstance(model_input, Mapping) and isinstance(model_input.get("epoch_prefetch"), Mapping):
+        from .epoch_prefetch import strip_internal_epoch_prefetch_audit_fields
+
+        model_input = {
+            **dict(model_input),
+            "epoch_prefetch": strip_internal_epoch_prefetch_audit_fields(
+                model_input["epoch_prefetch"]
+            ),
+        }
     authority_json = json.dumps(
         model_input if model_input is not None else dict(authority),
         ensure_ascii=False,

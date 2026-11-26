@@ -16,6 +16,15 @@ import {
 import { prepareContextDelivery, restoreContextDelivery } from "./context_delivery.ts";
 import { updateNativeContextLifecycle } from "./native_context_lifecycle.ts";
 import {
+  buildSemanticUnitFoldSwap,
+  computeQuietTurnStateDigest,
+  evaluateEpochPrefetchPromptGate,
+  evaluateEpochPrefetchSwap,
+  evaluateQuietTurn,
+  planStageThenSwapPrefetch,
+  recordSemanticUnitAnchor,
+} from "./stage_then_swap.ts";
+import {
   contextProjectionChanges, contextSourceIdentity, omitEmptyTaskTodoLanes, projectQuotaDiagnostics,
   referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
 } from "./diagnostic_projection.ts";
@@ -1755,6 +1764,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       ? contextProjectionChanges(requireJsonObject(request.state, "native context journal"), journal)
       : journal;
   }
+  if (operation === "stage_then_swap_plan") return planStageThenSwapPrefetch(request);
+  if (operation === "stage_then_swap_evaluate") return evaluateEpochPrefetchSwap(request);
+  if (operation === "stage_then_swap_prompt_gate") return evaluateEpochPrefetchPromptGate(request);
+  if (operation === "semantic_unit_anchor_record") return recordSemanticUnitAnchor(request);
+  if (operation === "semantic_unit_fold_swap") return buildSemanticUnitFoldSwap(request);
+  if (operation === "quiet_turn_evaluate") return evaluateQuietTurn(request);
+  if (operation === "quiet_turn_state_digest") return computeQuietTurnStateDigest(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

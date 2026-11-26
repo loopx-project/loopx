@@ -166,6 +166,7 @@ const CANONICAL_CONSUMERS = [
   "control_plane/quota/heartbeat_receipt_identity.ts",
   "control_plane/quota/refresh_external_delivery.ts",
   "control_plane/quota/semantic_replan_guard.ts",
+  "control_plane/quota/stage_then_swap.ts",
   "control_plane/quota/turn_envelope.ts",
   "control_plane/quota/turn_envelope_references.ts",
   "control_plane/runtime/checkpoint_artifacts.ts",

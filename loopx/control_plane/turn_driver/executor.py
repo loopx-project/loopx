@@ -48,6 +48,23 @@ from .driver import (
     selected_turn_todo, turn_host_lineage,
 )
 from .decision_capture import stage_turn_decision_capture
+from .epoch_prefetch import (
+    HostInputRenderer,
+    UNSET_HOST_INPUT_RENDERER,
+    attach_epoch_metadata_to_journal,
+    attach_turn_replay_epoch_metadata,
+    prepare_turn_execution_epoch_context,
+    reset_failed_turn_journal_with_epoch_metadata,
+    strip_internal_epoch_prefetch_audit_fields,
+)
+from .quiet_turn_store import (
+    assert_no_conflicting_quiet_turn_skip,
+    commit_turn_quiet_state_after_success,
+    effective_turn_agent_id,
+    maybe_skip_quiet_turn_before_admission,
+    resolve_quiet_wait_or_replay_before_admission,
+    resolve_turn_request_or_quiet_wait,
+)
 from .execution_readback import execution_payload
 from .host_process_transport import run_host_process
 from .host_binding import (
@@ -877,6 +894,17 @@ def _host_failure(
     }
 
 
+def serialize_generic_cli_host_input(request: Mapping[str, Any]) -> str:
+    """Serialize the exact JSON payload delivered on stdin to a generic-cli host."""
+    host_input: Mapping[str, Any] = captured_turn_host_input(request) if "work_contract" in request else request
+    if isinstance(host_input.get("epoch_prefetch"), Mapping):
+        host_input = {
+            **dict(host_input),
+            "epoch_prefetch": strip_internal_epoch_prefetch_audit_fields(host_input["epoch_prefetch"]),
+        }
+    return json.dumps(host_input, ensure_ascii=False, separators=(",", ":"))
+
+
 def _run_host(
     request: Mapping[str, Any],
     *,
@@ -888,9 +916,6 @@ def _run_host(
     # Dispatch has checked the source and its internal effect adapter before
     # journal/cadence admission. External stdin gets the same single complete
     # input as native model prompts, not another executable authority carrier.
-    from ..quota.turn_envelope import captured_turn_host_input
-
-    host_input = captured_turn_host_input(request) if "work_contract" in request else request
     stdout: list[str] = []
     stderr_chars = 0
 
@@ -902,7 +927,7 @@ def _run_host(
         observed = run_host_process(
             argv,
             project=project,
-            input_text=json.dumps(host_input, ensure_ascii=False, separators=(",", ":")),
+            input_text=serialize_generic_cli_host_input(request),
             timeout_seconds=timeout_seconds,
             stdout_limit_bytes=HOST_RESULT_MAX_BYTES,
             on_stdout=stdout.append,
@@ -1621,6 +1646,9 @@ def run_loopx_turn_once(
     confirm_start: Callable[[], None] | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
+    epoch_prefetch: Mapping[str, Any] | None = None,
+    quiet_turn: bool | Mapping[str, Any] = False,
+    host_input_renderer: HostInputRenderer | None | object = UNSET_HOST_INPUT_RENDERER,
 ) -> dict[str, Any]:
     argv, host_projection = _prepare_host_invocation(
         plan, host_argv=host_argv, host_runner=host_runner,
@@ -1630,7 +1658,20 @@ def run_loopx_turn_once(
         plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     )
     settlement_lineage = _ensure_turn_settlement_plan(plan, transaction_plan)
-    request = build_loopx_turn_host_request(plan)
+    planned_host = plan.get("host") if isinstance(plan.get("host"), Mapping) else {}
+    quiet_options = {
+        "epoch_prefetch": epoch_prefetch,
+        "quiet_turn": quiet_turn,
+        "decision_capture_payload": decision_capture_payload,
+        "host": "generic-cli" if argv is not None else str(planned_host.get("kind") or ""),
+        "host_input_renderer": host_input_renderer,
+    }
+    request, turn_key = resolve_turn_request_or_quiet_wait(
+        plan=plan, transaction_plan=transaction_plan, execute=execute,
+        runtime_root=runtime_root, goal_id=goal_id, quiet_turn=quiet_turn,
+        decision_capture_payload=decision_capture_payload,
+        journal_path_fn=turn_journal_path, request_builder=build_loopx_turn_host_request,
+    )
     empty_effects = {
         "host_invoked": False,
         "state_written": False,
@@ -1666,7 +1707,6 @@ def run_loopx_turn_once(
             "executing run-once requires writeback, spend, and scheduler callbacks"
         )
 
-    turn_key = str(request["turn_key"])
     journal_path = turn_journal_path(runtime_root, goal_id=goal_id, turn_key=turn_key)
 
     def persist_journal(snapshot: Mapping[str, Any]) -> None:
@@ -1720,15 +1760,12 @@ def run_loopx_turn_once(
                 # Recovery uses the recorded source through Host dispatch,
                 # cached-result validation and settlement.
                 plan, request = recorded_plan, build_loopx_turn_host_request(recorded_plan)
-            if settlement_lineage is not None:
-                agent_id = settlement_lineage["agent_id"]
-            else:
-                envelope = (
-                    plan.get("turn_envelope")
-                    if isinstance(plan.get("turn_envelope"), Mapping)
-                    else {}
-                )
-                agent_id = str(envelope.get("agent_id") or "")
+            elif request is None:
+                request = build_loopx_turn_host_request(plan)
+            agent_id = effective_turn_agent_id(plan, settlement_lineage)
+            assert_no_conflicting_quiet_turn_skip(
+                journal_path=journal_path, goal_id=goal_id, agent_id=agent_id, turn_key=turn_key,
+            )
             assessment = assess_existing_turn_recovery(
                 journal,
                 request,
@@ -1741,25 +1778,34 @@ def run_loopx_turn_once(
             recovery_decision = assessment.decision
             action = recovery_decision.get("action")
             if action == "return_existing":
-                payload = execution_payload(
-                    plan,
-                    journal,
-                    execute=True,
-                    replayed=True,
-                    effects=empty_effects,
+                payload = attach_turn_replay_epoch_metadata(
+                    execution_payload(
+                        plan, journal, execute=True, replayed=True, effects=empty_effects,
+                    ),
+                    plan=plan, request=request, journal_path=journal_path,
+                    goal_id=goal_id, agent_id=agent_id, turn_key=turn_key, project=project,
+                    options=quiet_options, existing_journal=journal,
                 )
                 payload.update(recover_post_settlement(
                     plan=plan, post_settlement=post_settlement, journal=journal,
                 ))
                 payload["recovery"] = build_turn_recovery_audit(
-                    recovery_decision,
-                    journal,
-                    status="finished",
-                    host_invoked=False,
+                    recovery_decision, journal, status="finished", host_invoked=False,
                 )
                 return payload
             request = require_turn_recovery_continuation(assessment)
+        else:
+            quiet_early, request = resolve_quiet_wait_or_replay_before_admission(
+                plan=plan, request=request, journal_path=journal_path,
+                goal_id=goal_id, turn_key=turn_key, settlement_lineage=settlement_lineage,
+                host_projection=host_projection, empty_effects=empty_effects,
+                needs_host=needs_host, goal_admission=goal_admission, options=quiet_options,
+                payload_builder=execution_payload, request_builder=build_loopx_turn_host_request,
+            )
+            if quiet_early is not None:
+                return quiet_early
 
+        assert request is not None
         if needs_host and goal_admission is not None:
             goal_admission.require_current()
         if (reason := _turn_transport_refusal(
@@ -1771,6 +1817,12 @@ def run_loopx_turn_once(
                 plan, {"status": "unavailable", "host": host_projection, "reason": reason},
                 execute=True, replayed=False, effects=empty_effects,
             )
+        if journal is None and needs_host and (quiet_skip_payload := maybe_skip_quiet_turn_before_admission(
+            plan=plan, journal_path=journal_path, goal_id=goal_id, turn_key=turn_key,
+            settlement_lineage=settlement_lineage, host_projection=host_projection,
+            empty_effects=empty_effects, payload_builder=execution_payload, options=quiet_options,
+        )) is not None:
+            return quiet_skip_payload
         capture = stage_turn_decision_capture(
             journal["plan"] if journal is not None else plan, journal_path=journal_path,
             decision=decision_capture_payload, existing_journal=journal is not None,
@@ -1811,37 +1863,26 @@ def run_loopx_turn_once(
                 )
         if capture is not None:
             plan, request = capture.publish_for_host(request)
+        epoch_metadata, request = prepare_turn_execution_epoch_context(
+            plan=plan, request=request, journal_path=journal_path,
+            goal_id=goal_id, turn_key=turn_key, project=project,
+            settlement_lineage=settlement_lineage,
+            options=quiet_options,
+            existing_journal=journal, capture=capture, needs_host=needs_host,
+        )
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
-                recovery_decision,
-                journal,
-                status="started",
-                host_invoked=None,
+                recovery_decision, journal, status="started", host_invoked=None,
             )
             persist_journal(journal)
 
         if journal and journal.get("status") == "failed":
-            receipt = (
-                journal.get("receipt")
-                if isinstance(journal.get("receipt"), dict)
-                else {}
+            reset_failed_turn_journal_with_epoch_metadata(
+                journal,
+                validation_reinvokes_host=validation_reinvokes_host,
+                completed_prefix=list(TRANSACTION_PHASES[:2]),
+                epoch_metadata=epoch_metadata,
             )
-            if receipt.get("failed_phase") == "validation":
-                if validation_reinvokes_host:
-                    journal.pop("host_result", None)
-                journal.pop("result_kind", None)
-                journal["completed_phases"] = (
-                    list(TRANSACTION_PHASES[:2])
-                    if isinstance(journal.get("host_result"), dict)
-                    else []
-                )
-                journal.pop("task_validation", None)
-                journal.pop("validation_stage", None)
-            journal.pop("reason", None)
-            journal.pop("receipt", None)
-            journal.pop("host_recovery", None)
-            journal.pop("host_failure", None)
-            journal["status"] = "in_progress"
             persist_journal(journal)
         reserved_start = admission is not None and admission.get("reserved") is True
         if journal is None or reserved_start:
@@ -1855,6 +1896,7 @@ def run_loopx_turn_once(
                 "host_attempt_count": 0,
                 "plan": dict(plan),
             }
+            attach_epoch_metadata_to_journal(journal, epoch_metadata)
             if reserved_start:
                 journal["admission"] = admission
             # The accepted reservation belongs to the initial snapshot. Keep
@@ -1949,4 +1991,9 @@ def run_loopx_turn_once(
                     else None
                 ),
             )
+        commit_turn_quiet_state_after_success(
+            settled=settled, epoch_metadata=epoch_metadata, plan=plan,
+            journal_path=journal_path, goal_id=goal_id,
+            settlement_lineage=settlement_lineage, options=quiet_options,
+        )
         return finish_recovery(settled)

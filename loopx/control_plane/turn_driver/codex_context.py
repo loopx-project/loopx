@@ -390,6 +390,8 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         observe_completed_native_reread, observe_native_read,
     )
 
+    from .semantic_unit_hook import run_locked_semantic_unit_hook, semantic_unit_event_active
+
     if directory is None:
         return {}
     name, session = event.get("hook_event_name"), event.get("session_id")
@@ -399,9 +401,11 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
         return {}  # no parent recovery reference may escape to a subagent
     pages = _context_pages(event.get("tool_response")) if name == "PostToolUse" else []
     raw_pages = pages
-    if name == "PostToolUse" and not pages:
+    if name == "PostToolUse" and not pages and not semantic_unit_event_active(event):
         return {}  # ordinary tool use neither invalidates nor rewrites the journal
+    state: dict[str, Any] = {}
     recovery = None
+    semantic_unit_output: dict[str, Any] | None = None
     try:
         with _locked(directory) as root:
             try:
@@ -431,22 +435,15 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                     checkpoint_native_read(read_state, updated, event, full_pages)
                     observe_completed_native_reread(read_state, updated, event, full_pages)
                     checkpoint_native_selection(state, updated, event, raw_pages, pages)
-                    previous = updated.get("host_execution_preparation")
-                    ready = previous.get("ready_capture") if isinstance(previous, dict) else None
-                    ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
-                    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
-                        page.get("ok") is True
-                        and ready_digest in (page.get("sha256"), page.get("source_sha256"))
-                        for page in pages
-                    ):
-                        # These bytes were checked against the recorded ready
-                        # capture. An earlier guard read or Hook stdout does not
-                        # show that this recovery path reached the caller.
-                        updated["host_execution_preparation"] = {
-                            **previous,
-                            "ready_read_observed": True,
-                        }
+                    _mark_ready_read_observed(updated, pages)
                 if updated != state:
+                    _save(root, updated)
+                before_semantic_state = (updated.get("semantic_unit_anchors"), updated.get("semantic_unit_folds"))
+                semantic_unit_output = run_locked_semantic_unit_hook(
+                    hook_name=name, session=session,
+                    state=state, updated=updated, event=event,
+                )
+                if (updated.get("semantic_unit_anchors"), updated.get("semantic_unit_folds")) != before_semantic_state:
                     _save(root, updated)
                 saved = updated.get("recovery")
                 current_file_epoch = (isinstance(saved, dict)
@@ -463,15 +460,70 @@ def codex_context_hook(directory: str | None, event: dict[str, Any]) -> dict[str
                 raise
     except (OSError, ValueError, TypeError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError):
         recovery_needed = True
-    if (name == "SessionStart" and recovery_needed
-            and isinstance(recovery, dict) and recovery.get("command")):
-        return {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
+    return _resolve_codex_context_hook_output(
+        directory=directory, name=name, state=state, event=event,
+        recovery=recovery, recovery_needed=recovery_needed,
+        semantic_unit_output=semantic_unit_output,
+    )
+
+
+def _mark_ready_read_observed(updated: dict[str, Any], pages: list[dict[str, Any]]) -> None:
+    previous = updated.get("host_execution_preparation")
+    ready = previous.get("ready_capture") if isinstance(previous, dict) else None
+    ready_digest = ready.get("sha256") if isinstance(ready, dict) else None
+    if isinstance(previous, dict) and isinstance(ready_digest, str) and not previous.get("retired_context_readback") and any(
+        page.get("ok") is True and ready_digest in (page.get("sha256"), page.get("source_sha256"))
+        for page in pages
+    ):
+        updated["host_execution_preparation"] = {**previous, "ready_read_observed": True}
+
+
+def _resolve_codex_context_hook_output(
+    *,
+    directory: str,
+    name: Any,
+    state: Mapping[str, Any],
+    event: Mapping[str, Any],
+    recovery: Any,
+    recovery_needed: bool,
+    semantic_unit_output: dict[str, Any] | None,
+) -> dict[str, Any]:
+    from .epoch_prefetch import resolve_codex_context_epoch_prefetch_hook, resolve_codex_context_quiet_turn_hook
+    from .semantic_unit_hook import merge_semantic_unit_hook_output
+
+    if name == "SessionStart" and recovery_needed and isinstance(recovery, dict) and recovery.get("command"):
+        prefetch_hook = resolve_codex_context_epoch_prefetch_hook(
+            directory=directory,
+            hook_name=name,
+            state=state,
+            event=event,
+            recovery=recovery,
+            lock_ctx=_locked,
+            read_state_fn=_state,
+            save_state_fn=_save,
+            continuation_text=_context_continuation_instructions(recovery["command"]),
+            raw_guidance_text=(
+                CONTEXT_CAPTURE_SELECTION_GUIDANCE
+                + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
+                + "If you choose to read an entire file: "
+                + CONTEXT_CAPTURE_PAGE_GUIDANCE
+            ),
+        )
+        if prefetch_hook is not None:
+            return merge_semantic_unit_hook_output(prefetch_hook, semantic_unit_output)
+        fallback_out: dict[str, Any] = {"hookSpecificOutput": {"hookEventName": name, "additionalContext":
             "LoopX model-context baseline invalidated. Saved files remain available. "
             + _context_continuation_instructions(recovery["command"])
             + CONTEXT_CAPTURE_SELECTION_GUIDANCE
             + _NATIVE_CONTEXT_OUTPUT_GUIDANCE
             + "If you choose to read an entire file: " + CONTEXT_CAPTURE_PAGE_GUIDANCE}}
-    return {}
+        return merge_semantic_unit_hook_output(fallback_out, semantic_unit_output)
+    if semantic_unit_output is not None:
+        return semantic_unit_output
+    quiet_hook = resolve_codex_context_quiet_turn_hook(
+        hook_name=name, state=state, event=event, recovery=recovery, root_dir=_private_root(directory),
+    )
+    return quiet_hook if quiet_hook is not None else {}
 
 
 def _preparation_readback(action: dict[str, Any], previous: dict[str, Any], *,

@@ -61,7 +61,21 @@ export type {
   GoalBarServiceOptions,
 } from './goalbar/service.ts'
 export { LoopXContinuationDriver } from './driver.ts'
-export type { DriverClock, LoopXDriverOptions } from './driver.ts'
+export type {
+  DriverClock,
+  LoopXDriverOptions,
+  LoopXTodoFoldMessageSource,
+  TodoUnitAnchor,
+  TodoUnitAnchorInput,
+  TodoUnitCompletionReceipt,
+  TodoUnitFoldOutcome,
+  TodoUnitFoldPolicy,
+  TodoUnitFoldRequest,
+  TodoUnitObsNextCommand,
+  TodoUnitObsRunner,
+  TodoUnitReceiptMu,
+  TodoUnitSourceRef,
+} from './driver.ts'
 export {
   initializeLoopX,
   LoopXInitError,
