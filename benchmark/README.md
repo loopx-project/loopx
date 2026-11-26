@@ -58,6 +58,8 @@ helper delivery neither launches trials nor changes frozen historical arms.
 
 ## Current work
 
+- [Dual-Model `Behavior Constraint × Efficiency` Microbenchmark (M1/M2/M3)](microbench/README.md) provides a bounded Tier-0 (`<15s` deterministic differential) and Tier-1 (1–3m Base vs Head `Codex GPT` + `DeepSeek V4.1 Flash` suite) for M1 scoped envelope recovery (`#9498`/`#9504`), M2 Stage-then-Swap / semantic-unit fold (`#9503`), and M3 basic claim/block/settle invariants, keeping long-horizon M4/M5 studies in `edgebench/`.
+
 - [Compare a local proxy with released scores](../docs/reference/benchmark-behavior-findings.md#compare-a-local-proxy-with-released-scores) covers source matching, missing feedback and the later-submission control for an offline study.
 
 - [FrontierCS-2 compatibility repair v2](frontiercs2/README.md) provides an opt-in
