@@ -65,7 +65,7 @@ test("canonical flagship descriptors cover all three integration tiers truthfull
   assert.equal(CLAUDE_HOST_CAPABILITIES.native_scheduler_primitive, true);
 
   assert.equal(DSH_HOST_CAPABILITIES.integration_tier, "in_tree_codesigned");
-  assert.deepEqual(DSH_HOST_CAPABILITIES.supported_capabilities, ["native_context_budget"]);
+  assert.deepEqual(DSH_HOST_CAPABILITIES.supported_capabilities, []);
   assert.deepEqual(DSH_HOST_CAPABILITIES.hook_events, []);
   assert.equal(DSH_HOST_CAPABILITIES.native_goal_primitive, false);
   assert.equal(DSH_HOST_CAPABILITIES.native_scheduler_primitive, false);
@@ -80,7 +80,7 @@ test("canonical flagship descriptors cover all three integration tiers truthfull
 test("capability lookup and tier/capability list filters behave deterministically", () => {
   assert.equal(hostSupportsCapability("claude", "verifier_hook"), true);
   assert.equal(hostSupportsCapability("claude", "compact_hook"), false);
-  assert.equal(hostSupportsCapability("dsh", "native_context_budget"), true);
+  assert.equal(hostSupportsCapability("dsh", "native_context_budget"), false);
   assert.equal(hostSupportsCapability("dsh", "managed_thread_resume"), false);
   assert.equal(hostSupportsCapability("agy", "quiet_turn"), false);
 
@@ -93,8 +93,16 @@ test("capability lookup and tier/capability list filters behave deterministicall
     ["agy"],
   );
   assert.deepEqual(
-    listHostCapabilities({ capability: "native_context_budget" }).map((item) => item.host_id),
+    listHostCapabilities({ tier: "in_tree_codesigned" }).map((item) => item.host_id),
     ["dsh"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "verifier_hook" }).map((item) => item.host_id),
+    ["claude"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "native_context_budget" }).map((item) => item.host_id),
+    [],
   );
 });
 

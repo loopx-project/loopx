@@ -406,13 +406,13 @@ export const DSH_HOST_CAPABILITIES: HostHarnessCapabilities =
     host_id: "dsh",
     integration_tier: "in_tree_codesigned",
     adapter_module: "loopx.dsh_goal_mode",
-    supported_capabilities: ["native_context_budget"],
+    supported_capabilities: [],
     hook_events: [],
     requires_utf8_stdio: true,
     native_goal_primitive: false,
     native_scheduler_primitive: false,
     description:
-      "DeepSeek Harness in-tree Turn adapter with typed failure mapping and per-request max_tokens output budget enforcement.",
+      "DeepSeek Harness in-tree Turn adapter with typed failure mapping and per-request max_tokens output limit only (no native input/context budget management).",
   });
 
 export const CANONICAL_HOST_HARNESS_CAPABILITIES: readonly HostHarnessCapabilities[] =

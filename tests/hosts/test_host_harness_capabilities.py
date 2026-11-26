@@ -134,14 +134,14 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     assert CLAUDE_HOST_CAPABILITIES.native_scheduler_primitive is True
 
     assert DSH_HOST_CAPABILITIES.integration_tier == "in_tree_codesigned"
-    assert DSH_HOST_CAPABILITIES.supported_capabilities == ("native_context_budget",)
+    assert DSH_HOST_CAPABILITIES.supported_capabilities == ()
     assert DSH_HOST_CAPABILITIES.hook_events == ()
     assert DSH_HOST_CAPABILITIES.native_goal_primitive is False
     assert DSH_HOST_CAPABILITIES.native_scheduler_primitive is False
 
     assert host_supports_capability("claude", "verifier_hook") is True
     assert host_supports_capability("claude", "compact_hook") is False
-    assert host_supports_capability("dsh", "native_context_budget") is True
+    assert host_supports_capability("dsh", "native_context_budget") is False
     assert host_supports_capability("dsh", "managed_thread_resume") is False
     assert host_supports_capability("agy", "quiet_turn") is False
     assert [entry.host_id for entry in list_host_capabilities()] == [
@@ -154,8 +154,12 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     ] == ["claude"]
     assert [
         entry.host_id
-        for entry in list_host_capabilities(capability="native_context_budget")
+        for entry in list_host_capabilities(tier="in_tree_codesigned")
     ] == ["dsh"]
+    assert [
+        entry.host_id
+        for entry in list_host_capabilities(capability="native_context_budget")
+    ] == []
 
 
 def test_capabilities_lookup_loads_flagship_adapters_lazily_without_cold_import_leak() -> None:
@@ -959,3 +963,64 @@ assert isolated.list() == (
     assert non_matching.get("agy") is None
     assert non_matching.list() == ()
     assert fake_registry.get("claude") == explicit_fake
+
+
+def test_dsh_output_token_budget_does_not_claim_native_context_budget() -> None:
+    from loopx.control_plane.turn_driver.host_binding import (
+        dsh_output_token_budget,
+        managed_executor_binding,
+    )
+
+    budget = dsh_output_token_budget(2048)
+    binding = managed_executor_binding(
+        "dsh",
+        environ={},
+        dsh_runner_configured=True,
+        max_tokens=2048,
+    )
+    assert binding["available"] is True
+    assert binding["output_token_budget"] == budget == {
+        "schema_version": "dsh_output_token_budget_v0",
+        "scope": "per_model_request",
+        "max_tokens": 2048,
+        "valid": True,
+        "source": "explicit_argument",
+        "final_response_reserve_supported": False,
+        "hard_tool_budget_supported": False,
+    }
+
+    assert host_supports_capability("dsh", "native_context_budget") is False
+    py_dsh = get_host_capabilities("dsh")
+    assert py_dsh is not None
+    assert py_dsh.supported_capabilities == ()
+    assert (
+        HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES).supports(
+            "dsh", "native_context_budget"
+        )
+        is False
+    )
+
+    node_script = (
+        f"import * as contract from {json.dumps(TS_CONTRACT_PATH.as_uri())};\n"
+        "console.log(JSON.stringify({\n"
+        "  dsh: contract.getHostCapabilities('dsh'),\n"
+        "  supportsNativeContextBudget: contract.hostSupportsCapability('dsh', 'native_context_budget'),\n"
+        "}));\n"
+    )
+    completed = subprocess.run(
+        [
+            "node",
+            "--no-warnings",
+            "--experimental-strip-types",
+            "--input-type=module",
+            "-e",
+            node_script,
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    ts_payload = json.loads(completed.stdout)
+    assert ts_payload["supportsNativeContextBudget"] is False
+    assert ts_payload["dsh"] == py_dsh.to_dict()
