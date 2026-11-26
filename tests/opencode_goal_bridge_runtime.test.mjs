@@ -10,7 +10,7 @@ import {
   createFileLockStore,
   pidIsAlive,
   waitPlan,
-} from "../loopx/opencode_goal_mode/goal-bridge-runtime.mjs"
+} from "../loopx/hosts/opencode/goal-bridge-runtime.mjs"
 
 
 function fakeTool(spec) {
@@ -704,7 +704,7 @@ test("user messages keep the loop running and clear after the resume probe", asy
 
 
 test("probeLoopxQuota reads a denied decision that exits non-zero", async () => {
-  const { probeLoopxQuota } = await import("../loopx/opencode_goal_mode/goal-bridge-runtime.mjs")
+  const { probeLoopxQuota } = await import("../loopx/hosts/opencode/goal-bridge-runtime.mjs")
   const denied = JSON.stringify({
     ok: false,
     should_run: false,
@@ -726,7 +726,7 @@ test("probeLoopxQuota reads a denied decision that exits non-zero", async () => 
 
 
 test("probeLoopxQuota fails closed when a non-zero exit carries no payload", async () => {
-  const { probeLoopxQuota } = await import("../loopx/opencode_goal_mode/goal-bridge-runtime.mjs")
+  const { probeLoopxQuota } = await import("../loopx/hosts/opencode/goal-bridge-runtime.mjs")
   const execFileImpl = async () => {
     const error = new Error("Command failed: loopx ...")
     error.stdout = ""

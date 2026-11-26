@@ -634,7 +634,7 @@ Source anchors for the classifications include
 `loopx/global_registry.py`, and the host state in
 `loopx/control_plane/scheduler/state.py`,
 `loopx/control_plane/turn_driver/codex_cli.py`,
-and `loopx/pi_goal_mode/pi-goal-loop-runtime.mjs`.
+and `loopx/hosts/pi/pi-goal-loop-runtime.mjs`.
 
 ## 4. What Goes Into This Coordination Ledger
 

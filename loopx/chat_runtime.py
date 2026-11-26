@@ -56,7 +56,7 @@ from .file_lock import (
     LOCK_HOLDER_DEAD, LOCK_HOLDER_LIVE, LOCK_HOLDER_RELEASED, LockAcquireTimeoutError,
     _lock_id, lock_holder_host_label, lock_holder_liveness, process_is_alive, try_exclusive_file_lock,
 )
-from .kiro_cli_goal_mode import KIRO_CLI_BIN
+from .hosts.kiro_cli import KIRO_CLI_BIN
 from .chat_store import (
     CHAT_SESSION_MODE_ATTACHED,
     CHAT_SESSION_MODE_MANAGED,

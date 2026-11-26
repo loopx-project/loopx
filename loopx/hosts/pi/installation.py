@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..slash_command_files import managed_marker as _managed_marker
+from ...slash_command_files import managed_marker as _managed_marker
 from . import extension_source as pi_extension_source
 from . import runtime_source as pi_runtime_source
 

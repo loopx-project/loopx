@@ -19,7 +19,7 @@ from ..heartbeat_prequota import (
     render_heartbeat_pre_quota_markdown,
     run_heartbeat_pre_quota,
 )
-from ..kiro_cli_goal_mode import KIRO_CLI_BIN
+from ..hosts.kiro_cli import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
 from ..registry import (
     inspect_registry,

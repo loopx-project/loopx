@@ -272,7 +272,7 @@ LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并
 [Codex CLI packaged install](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md)和
 [Claude Code adapter](loopx/claude_goal_mode/README.md)、
 [KunlunCode 原生 Goal adapter](docs/guides/kunluncode-adapter.zh-CN.md)、
-[Kiro CLI goal-mode adapter](loopx/kiro_cli_goal_mode/README.md)，以及
+[Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md)，以及
 [DeepSeek Harness turn adapter](loopx/dsh_goal_mode/README.md)。
 
 可查看 [60 秒 DSH × LoopX Replan 真实录屏和可复现

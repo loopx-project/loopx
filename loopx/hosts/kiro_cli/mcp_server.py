@@ -22,14 +22,14 @@ from pathlib import Path
 from typing import Any
 
 # The provisioned MCP interpreter does not have LoopX installed; the package
-# root is two levels above this file in both a checkout and a wheel install.
-PACKAGE_PARENT = Path(__file__).resolve().parents[2]
+# root is three levels above this file in both a checkout and a wheel install.
+PACKAGE_PARENT = Path(__file__).resolve().parents[3]
 if str(PACKAGE_PARENT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_PARENT))
 
 from loopx.goal_mode_context import find_registry, resolve_goal_context  # noqa: E402
 from loopx.goal_mode_mcp import GoalModeMCPConfig, create_fastmcp_server  # noqa: E402
-from loopx.kiro_cli_goal_mode import (  # noqa: E402
+from loopx.hosts.kiro_cli import (  # noqa: E402
     KIRO_CLI_AGENT_TYPE,
     KIRO_CLI_SESSION_ID_ENV,
 )

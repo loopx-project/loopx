@@ -24,14 +24,14 @@ from .hosts.slash_command_surfaces import (
     install_pi_surface as _install_pi_surface,
     installed_entry as _installed_entry,
 )
-from .kiro_cli_goal_mode import (
+from .hosts.kiro_cli import (
     KIRO_CLI_MCP_CONFIG_SUBPATH as _KIRO_MCP_CONFIG_SUBPATH,
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
     kiro_home as _kiro_home,
 )
-from .pi_goal_mode import extension_source as pi_extension_source
-from .pi_goal_mode import runtime_source as pi_runtime_source
-from .pi_goal_mode.installation import (
+from .hosts.pi import extension_source as pi_extension_source
+from .hosts.pi import runtime_source as pi_runtime_source
+from .hosts.pi.installation import (
     _pi_agent_dir,
     _pi_extension_path,
     _pi_extension_root,
@@ -645,7 +645,7 @@ def _loopx_mcp_command() -> tuple[str, str] | None:
 def _kiro_cli_mcp_command() -> tuple[str, str] | None:
     """The Kiro CLI server: same control plane, Kiro runtime profile and
     session-bound identity."""
-    from .kiro_cli_goal_mode import mcp_server_script
+    from .hosts.kiro_cli import mcp_server_script
 
     return _mcp_command_for_script(mcp_server_script())
 

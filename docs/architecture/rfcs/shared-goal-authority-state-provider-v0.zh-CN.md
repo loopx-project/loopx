@@ -514,7 +514,7 @@ owner，新 host 或 extension 也可以新增本地 artifact，而无需修改�
 `loopx/global_registry.py`，以及这些 host state：
 `loopx/control_plane/scheduler/state.py`、
 `loopx/control_plane/turn_driver/codex_cli.py` 和
-`loopx/pi_goal_mode/pi-goal-loop-runtime.mjs`。
+`loopx/hosts/pi/pi-goal-loop-runtime.mjs`。
 
 ## 4. 这本协调账里到底放什么
 

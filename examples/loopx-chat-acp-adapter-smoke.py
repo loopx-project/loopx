@@ -19,7 +19,7 @@ from loopx.chat_agent import CodexChatAgentError  # noqa: E402
 from loopx.chat.endpoints import AgentEndpointRegistry  # noqa: E402
 from loopx.chat_runtime import ChatRuntimeController  # noqa: E402
 from loopx.chat_store import ChatSessionStore  # noqa: E402
-from loopx.kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID  # noqa: E402
+from loopx.hosts.kiro_cli import KIRO_CLI_CHAT_AGENT_ID  # noqa: E402
 
 
 FAKE_ACP = r'''#!/usr/bin/env python3

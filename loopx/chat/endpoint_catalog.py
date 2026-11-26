@@ -23,7 +23,7 @@ from ..control_plane.turn_driver.host_binding import (
     MANAGED_TURN_HOST,
     managed_executor_binding,
 )
-from ..kiro_cli_goal_mode import (
+from ..hosts.kiro_cli import (
     KIRO_CLI_CHAT_ADAPTER_KIND,
     KIRO_CLI_CHAT_AGENT_ID,
     KIRO_CLI_CHAT_DISPLAY_NAME,

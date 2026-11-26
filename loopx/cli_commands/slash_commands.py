@@ -5,7 +5,7 @@ from collections.abc import Callable
 import os
 from pathlib import Path
 
-from ..pi_goal_mode.installation import inspect_pi_installations, render_pi_installation_markdown
+from ..hosts.pi.installation import inspect_pi_installations, render_pi_installation_markdown
 from ..slash_command_install import install_slash_commands, render_slash_command_install_markdown
 from ..slash_commands import build_slash_command_catalog, render_slash_command_catalog_markdown
 

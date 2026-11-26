@@ -22,10 +22,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 OWNER_MODULE = "loopx/slash_command_files.py"
 
 ASSET_HEADERS = (
-    "loopx/opencode_goal_mode/goal-bridge-runtime.mjs",
-    "loopx/opencode_goal_mode/loopx-goal.js",
-    "loopx/pi_goal_mode/loopx-goal.ts",
-    "loopx/pi_goal_mode/pi-goal-loop-runtime.mjs",
+    "loopx/hosts/opencode/goal-bridge-runtime.mjs",
+    "loopx/hosts/opencode/loopx-goal.js",
+    "loopx/hosts/pi/loopx-goal.ts",
+    "loopx/hosts/pi/pi-goal-loop-runtime.mjs",
 )
 
 # Surfaces a generated facade may be written for; each one has to survive the

@@ -8,7 +8,7 @@ machine that has the binary instead of transcribed from documentation.
 
 This probe is replayable and public-safe: it starts the host as an ACP stdio
 agent, reads the advertised `/goal` entry, and compares it with what
-`loopx.kiro_cli_goal_mode` projects. It exits 0 and reports `skipped` when the
+`loopx.hosts.kiro_cli` projects. It exits 0 and reports `skipped` when the
 binary is absent, so it is safe in environments without the host.
 
     python3 examples/kiro-cli-goal-command-contract-probe.py
@@ -28,7 +28,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.kiro_cli_goal_mode import (  # noqa: E402
+from loopx.hosts.kiro_cli import (  # noqa: E402
     KIRO_CLI_GOAL_CLEAR_COMMAND,
     KIRO_CLI_GOAL_COMMAND,
     KIRO_CLI_GOAL_MAX_FLAG,

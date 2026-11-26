@@ -18,7 +18,7 @@ import {
   sanitizedKey,
   sessionKey,
   waitPlan,
-} from "../loopx/pi_goal_mode/pi-goal-loop-runtime.mjs"
+} from "../loopx/hosts/pi/pi-goal-loop-runtime.mjs"
 
 test("Pi thread identity is private, stable and distinguishes colliding basenames", () => {
   const file = path.join(os.tmpdir(), "project-a", "session.jsonl")

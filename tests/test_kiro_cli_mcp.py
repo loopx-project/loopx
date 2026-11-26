@@ -25,12 +25,12 @@ from loopx.control_plane.coordination.goal_storage_initialization import (
     initialize_goal_storage_target,
 )
 from loopx.goal_mode_mcp import GoalModeMCPControlPlane
-from loopx.kiro_cli_goal_mode import (
+from loopx.hosts.kiro_cli import (
     KIRO_CLI_MCP_CONFIG_SUBPATH,
     KIRO_CLI_SESSION_ID_ENV,
     mcp_server_script,
 )
-from loopx.kiro_cli_goal_mode.mcp_server import CONFIG, goal_context
+from loopx.hosts.kiro_cli.mcp_server import CONFIG, goal_context
 from loopx.slash_command_install import install_slash_commands
 from loopx.status import parse_active_state_todos
 from loopx.todos import add_goal_todo

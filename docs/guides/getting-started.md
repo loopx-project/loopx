@@ -100,7 +100,7 @@ can discover user-installed skills:
   loop runs through the persistent `loopx opencode2-goal-worker` process,
   which drives the session over the OpenCode 2 HTTP API and owns the loop
   timers, so long runs survive TUI close. OpenCode 1 plugins do not run under
-  OpenCode 2; see `loopx/opencode2_goal_mode/README.md`.
+  OpenCode 2; see `loopx/hosts/opencode2/README.md`.
 - Pi: the self-contained goal extension exposes `/loopx` after `/reload` or a
   restart and runs the quota-gated goal loop through `loopx_goal_activate`.
   `loopx slash-commands --install --surface pi` installs it for the current

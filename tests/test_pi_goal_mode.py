@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.pi_goal_mode import extension_source, runtime_source
+from loopx.hosts.pi import extension_source, runtime_source
 
 
 def test_pi_extension_source_is_managed_and_self_contained() -> None:
