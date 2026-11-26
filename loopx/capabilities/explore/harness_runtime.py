@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
+import concurrent.futures
+from enum import Enum
+from functools import partial
+import hashlib
 import json
+from pathlib import Path
 import threading
 import time
-from enum import Enum
-from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Protocol, runtime_checkable
 
 from .episode_runtime import (
     RECORD_KIND_STANDALONE,
@@ -110,17 +114,86 @@ ITEM_FAILURE_POLICIES = {policy.value for policy in ItemFailurePolicy}
 DEFAULT_OBSERVATION_WEIGHT = 1.0
 _MIN_DURATION_MINUTES = 0.05
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
+ExecuteFn = Callable[..., PayloadView | Sequence[PayloadView]]
+
+
+@runtime_checkable
+class _SeedAdapter(Protocol):
+    def list_seed_items(self) -> Sequence[PayloadView]: ...
+
+
+@runtime_checkable
+class _VariantAdapter(Protocol):
+    def compile_variant(self, spec: Payload, seed_item: Payload) -> PayloadView: ...
+
+
+@runtime_checkable
+class _LegacyExecutor(Protocol):
+    def execute(
+        self, item: Payload, *, run_root: Path, arm: str, epoch: int, branch_id: str
+    ) -> PayloadView | Sequence[PayloadView]: ...
+
+
+def _missing_attr(adapter: object, attr: str) -> AttributeError:
+    return AttributeError(f"{type(adapter).__name__!r} object has no attribute {attr!r}")
+
+
+def _mapping(value: object) -> PayloadView:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _optional_payload(value: object) -> Payload | None:
+    return dict(value) if isinstance(value, Mapping) else None
+
+
+def _sequence(value: object) -> Sequence[object]:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else ()
+
+
+def _payload_list(value: object) -> list[Payload]:
+    return [dict(item) for item in _sequence(value) if isinstance(item, Mapping)]
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    if not value:
+        return default
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError(f"expected numeric value, got {type(value).__name__}")
+
+
+def _first_seed_by_family(seed_items: Sequence[PayloadView]) -> dict[str, PayloadView]:
+    by_family: dict[str, PayloadView] = {}
+    for item in seed_items:
+        family = str(item.get("family") or "")
+        if family and family not in by_family:
+            by_family[family] = item
+    return by_family
+
+
+def _standalone_metric_records(
+    records: Sequence[Payload], episode_mode: str | None
+) -> list[Payload]:
+    if episode_mode is not None:
+        return list(records)
+    return [
+        {**record, "execution_group_id": None, "record_kind": RECORD_KIND_STANDALONE}
+        for record in records
+    ]
+
 
 def _now_perf_minutes(start: float) -> float:
     return (time.perf_counter() - start) / 60.0
 
 
-def _write_json(path: Path, payload: Any) -> None:
+def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _read_json(path: Path) -> Any:
+def _read_json(path: Path) -> object:
     if not path.exists():
         return None
     try:
@@ -129,7 +202,7 @@ def _read_json(path: Path) -> Any:
         return None
 
 
-def _normalize_item_failure_policy(value: Any) -> str:
+def _normalize_item_failure_policy(value: object) -> str:
     if isinstance(value, ItemFailurePolicy):
         return value.value
     policy = str(value or ITEM_FAILURE_POLICY_RECORD).strip().lower().replace("_", "-")
@@ -142,11 +215,11 @@ def _normalize_item_failure_policy(value: Any) -> str:
 
 
 def _adapter_error_record(
-    item: Mapping[str, Any],
+    item: PayloadView,
     error: Exception,
     *,
     duration_minutes: float,
-) -> dict[str, Any]:
+) -> Payload:
     message = " ".join(str(error).split())
     spec = item.get("variant_spec")
     return {
@@ -166,9 +239,7 @@ def _adapter_error_record(
         "observation_keys": [],
         "weighted_flags": {},
         "duration_minutes": max(_MIN_DURATION_MINUTES, float(duration_minutes)),
-        "retryable_infra_error": bool(
-            getattr(error, "retryable_infra_error", False)
-        ),
+        "retryable_infra_error": bool(getattr(error, "retryable_infra_error", False)),
         "adapter_error": {
             "schema_version": "loopx_explore_adapter_error_v0",
             "type": type(error).__name__,
@@ -188,42 +259,68 @@ class NoveltyLedger:
     def __init__(self) -> None:
         self.seen: set[str] = set()
 
-    def raw_value(self, record: Mapping[str, Any]) -> float:
-        keys = record.get("observation_keys") or []
-        flags = record.get("weighted_flags") or {}
-        return DEFAULT_OBSERVATION_WEIGHT * len(keys) + sum(
-            float(weight) for weight in flags.values()
+    def raw_value(self, record: PayloadView) -> float:
+        return DEFAULT_OBSERVATION_WEIGHT * len(_sequence(record.get("observation_keys"))) + sum(
+            _as_float(weight) for weight in _mapping(record.get("weighted_flags")).values()
         )
 
-    def credit(self, record: Mapping[str, Any]) -> dict[str, float]:
+    def credit(self, record: PayloadView) -> dict[str, float]:
         family = str(record.get("family") or "general")
         novel_value = 0.0
         novel_keys = 0
-        for key in record.get("observation_keys") or []:
-            key = str(key)
+        for raw_key in _sequence(record.get("observation_keys")):
+            key = str(raw_key)
             if key not in self.seen:
                 self.seen.add(key)
                 novel_value += DEFAULT_OBSERVATION_WEIGHT
                 novel_keys += 1
-        for flag, weight in (record.get("weighted_flags") or {}).items():
+        for flag, weight in _mapping(record.get("weighted_flags")).items():
             pseudo = f"flag:{family}:{flag}"
             if pseudo not in self.seen:
                 self.seen.add(pseudo)
-                novel_value += float(weight)
+                novel_value += _as_float(weight)
         return {"novel_value": novel_value, "novel_observation_keys": novel_keys}
 
 
+def _normalize_queue_outcome(outcome: object, item: PayloadView) -> list[Payload]:
+    if isinstance(outcome, Mapping):
+        batch = [dict(outcome)]
+    elif isinstance(outcome, Sequence) and not isinstance(outcome, (str, bytes)):
+        batch = []
+        for candidate in outcome:
+            if not isinstance(candidate, Mapping):
+                raise TypeError(
+                    "queue execute sequences must contain dict observation records"
+                )
+            batch.append(dict(candidate))
+    else:
+        raise TypeError(
+            "queue execute must return a dict or sequence of dict observations"
+        )
+    if not batch:
+        raise TypeError("queue execute must return at least one observation")
+    for record in batch:
+        record.setdefault("item_id", item.get("item_id"))
+        record.setdefault("family", item.get("family"))
+        record.setdefault("is_variant", bool(item.get("is_variant")))
+        if item.get("is_variant"):
+            record.setdefault(
+                "variant_spec_id", _mapping(item.get("variant_spec")).get("spec_id")
+            )
+    return batch
+
+
 def run_queue_epoch(
-    items: Sequence[Mapping[str, Any]],
+    items: Sequence[PayloadView],
     *,
-    execute: Callable[..., dict[str, Any] | Sequence[dict[str, Any]]],
+    execute: ExecuteFn,
     worker_count: int,
     run_root: Path,
     arm: str,
     epoch: int,
     stagger_seconds: float = 0.0,
     item_failure_policy: str = ITEM_FAILURE_POLICY_RECORD,
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     """Drain one epoch's work items through a shared pull queue.
 
     Items may declare one ``concurrency_key`` or several ``concurrency_keys``.
@@ -234,10 +331,10 @@ def run_queue_epoch(
 
     failure_policy = _normalize_item_failure_policy(item_failure_policy)
     lock = threading.Lock()
-    pending: list[dict[str, Any]] = [dict(item) for item in items]
+    pending: list[Payload] = [dict(item) for item in items]
     in_flight: set[str] = set()
 
-    def pull_next() -> dict[str, Any] | None:
+    def pull_next() -> Payload | None:
         with lock:
             for index, item in enumerate(pending):
                 keys = item_concurrency_keys(item)
@@ -248,12 +345,12 @@ def run_queue_epoch(
                 return item
             return None
 
-    def worker(worker_index: int) -> dict[str, Any]:
+    def worker(worker_index: int) -> Payload:
         branch_id = f"queue_worker_{worker_index + 1:02d}"
         started_at = time.perf_counter()
         if worker_index and stagger_seconds > 0:
             time.sleep(min(30.0, worker_index * stagger_seconds))
-        results: list[dict[str, Any]] = []
+        results: list[Payload] = []
         while True:
             item = pull_next()
             if item is None:
@@ -268,41 +365,13 @@ def run_queue_epoch(
                 outcome = execute(
                     item, run_root=run_root, arm=arm, epoch=epoch, branch_id=branch_id
                 )
-                if isinstance(outcome, Mapping):
-                    batch = [dict(outcome)]
-                elif isinstance(outcome, Sequence) and not isinstance(
-                    outcome, (str, bytes)
-                ):
-                    batch = []
-                    for candidate in outcome:
-                        if not isinstance(candidate, Mapping):
-                            raise TypeError(
-                                "queue execute sequences must contain dict observation records"
-                            )
-                        batch.append(dict(candidate))
-                else:
-                    raise TypeError(
-                        "queue execute must return a dict or sequence of dict observations"
-                    )
-                if not batch:
-                    raise TypeError("queue execute must return at least one observation")
-                for record in batch:
-                    record.setdefault("item_id", item.get("item_id"))
-                    record.setdefault("family", item.get("family"))
-                    record.setdefault("is_variant", bool(item.get("is_variant")))
-                    if item.get("is_variant"):
-                        record.setdefault(
-                            "variant_spec_id",
-                            (item.get("variant_spec") or {}).get("spec_id"),
-                        )
+                batch = _normalize_queue_outcome(outcome, item)
             except Exception as error:
                 if failure_policy == ITEM_FAILURE_POLICY_FATAL:
                     raise
                 batch = [
                     _adapter_error_record(
-                        item,
-                        error,
-                        duration_minutes=_now_perf_minutes(item_started),
+                        item, error, duration_minutes=_now_perf_minutes(item_started)
                     )
                 ]
             finally:
@@ -320,8 +389,6 @@ def run_queue_epoch(
         }
 
     thread_count = max(1, min(int(worker_count), len(pending) or 1))
-    import concurrent.futures
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as pool:
         futures = [pool.submit(worker, index) for index in range(thread_count)]
         lanes = [future.result() for future in concurrent.futures.as_completed(futures)]
@@ -329,7 +396,9 @@ def run_queue_epoch(
     return lanes
 
 
-def _frontier_gain(router_state: Mapping[str, Any] | None, family: str, *, epoch: int) -> float:
+def _frontier_gain(
+    router_state: PayloadView | None, family: str, *, epoch: int
+) -> float:
     """Expected value of spending a speculative slot near this family.
 
     Generic signals only: whether the base loop has probed the family yet,
@@ -338,8 +407,8 @@ def _frontier_gain(router_state: Mapping[str, Any] | None, family: str, *, epoch
     id and adapter-prefixed forms (e.g. 'scope:artifacts/<family>').
     """
 
-    stats: Mapping[str, Any] = {}
-    families = (router_state or {}).get("families") if isinstance(router_state, Mapping) else None
+    stats: PayloadView = {}
+    families = _mapping(router_state).get("families") if isinstance(router_state, Mapping) else None
     if isinstance(families, Mapping):
         exact = families.get(family)
         if isinstance(exact, Mapping):
@@ -351,15 +420,15 @@ def _frontier_gain(router_state: Mapping[str, Any] | None, family: str, *, epoch
                     stats = value
                     break
     score = 1.0
-    runs = float(stats.get("runs") or 0.0)
+    runs = _as_float(stats.get("runs"))
     if runs <= 0:
         score += 1.25
     else:
         novelty_rate = stats.get("novelty_rate")
         if novelty_rate is not None:
-            score += min(1.25, max(0.0, float(novelty_rate)) * 1.25)
+            score += min(1.25, max(0.0, _as_float(novelty_rate)) * 1.25)
         accept_rate = stats.get("accept_rate_ema")
-        if accept_rate is not None and float(accept_rate) <= 0.5:
+        if accept_rate is not None and _as_float(accept_rate) <= 0.5:
             score += 0.25
     score += min(0.5, max(0, int(epoch) - 1) * 0.03)
     return round(score, 4)
@@ -378,14 +447,17 @@ class VariantCatalog:
         self.catalog_path = Path(catalog_path)
         self.consumption_path = Path(consumption_path)
         consumed = _read_json(self.consumption_path)
-        self.consumed: set[str] = set(consumed or [])
+        self.consumed: set[str] = {str(spec_id) for spec_id in _sequence(consumed)}
 
-    def _specs(self) -> list[dict[str, Any]]:
-        payload = _read_json(self.catalog_path)
-        specs = (payload or {}).get("specs") if isinstance(payload, Mapping) else None
-        return [dict(spec) for spec in specs or [] if spec.get("spec_id")]
+    def _specs(self) -> list[Payload]:
+        payload = _mapping(_read_json(self.catalog_path))
+        return [
+            dict(spec)
+            for spec in _sequence(payload.get("specs"))
+            if isinstance(spec, Mapping) and spec.get("spec_id")
+        ]
 
-    def pending_for(self, family: str) -> list[dict[str, Any]]:
+    def pending_for(self, family: str) -> list[Payload]:
         return [
             spec
             for spec in self._specs()
@@ -400,20 +472,20 @@ class VariantCatalog:
         self.consumed.add(str(spec_id))
         _write_json(self.consumption_path, sorted(self.consumed))
 
-    def restore_consumed(self, spec_ids: Sequence[Any]) -> None:
+    def restore_consumed(self, spec_ids: Sequence[object]) -> None:
         self.consumed = {str(spec_id) for spec_id in spec_ids if str(spec_id).strip()}
         _write_json(self.consumption_path, sorted(self.consumed))
 
 
 def select_frontier_work(
-    seed_items: Sequence[Mapping[str, Any]],
+    seed_items: Sequence[PayloadView],
     *,
     catalog: VariantCatalog,
-    adapter: Any,
-    router_state: Mapping[str, Any] | None,
+    adapter: _VariantAdapter,
+    router_state: PayloadView | None,
     epoch: int,
     max_lanes: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[list[Payload], Payload]:
     """Pick up to ``max_lanes`` agent-authored variant specs to execute.
 
     Seeds are ranked by the generic frontier gain with an epoch-rotating
@@ -424,44 +496,40 @@ def select_frontier_work(
     it cannot invent them.
     """
 
-    import hashlib
-
     def _hash(value: str) -> int:
         return int(hashlib.sha1(value.encode("utf-8")).hexdigest()[:8], 16)
 
-    by_family: dict[str, Mapping[str, Any]] = {}
-    for item in seed_items:
-        family = str(item.get("family") or "")
-        if family and family not in by_family:
-            by_family[family] = item
+    by_family = _first_seed_by_family(seed_items)
     ranked = sorted(
-        by_family.items(),
-        key=lambda pair: (
-            -_frontier_gain(router_state, pair[0], epoch=epoch),
-            (_hash(pair[0]) * (2 * int(epoch) + 1)) % 1_000_003,
-            pair[0],
+        (
+            (
+                _frontier_gain(router_state, family, epoch=epoch),
+                (_hash(family) * (2 * int(epoch) + 1)) % 1_000_003,
+                family,
+                seed,
+            )
+            for family, seed in by_family.items()
         ),
+        key=lambda entry: (-entry[0], entry[1], entry[2]),
     )
-    selected: list[dict[str, Any]] = []
-    audit_specs: list[dict[str, Any]] = []
-    for family, seed in ranked:
+    selected: list[Payload] = []
+    audit_specs: list[Payload] = []
+    for gain, _, family, seed in ranked:
         if len(selected) >= max(0, int(max_lanes)):
             break
         pending = sorted(
             catalog.pending_for(family),
-            key=lambda spec: (-float(spec.get("priority") or 0.0), str(spec.get("spec_id"))),
+            key=lambda spec: (-_as_float(spec.get("priority")), str(spec.get("spec_id"))),
         )
         if not pending:
             continue
         spec = pending[0]
-        item = adapter.compile_variant(spec, dict(seed))
+        item = dict(adapter.compile_variant(spec, dict(seed)))
         item.setdefault("is_variant", True)
         item.setdefault("variant_spec", spec)
         item.setdefault("family", family)
         item.setdefault("seed_item_id", seed.get("item_id"))
-        item.setdefault(
-            "concurrency_key", f"{family}:variant:{spec.get('spec_id')}"
-        )
+        item.setdefault("concurrency_key", f"{family}:variant:{spec.get('spec_id')}")
         catalog.consume(str(spec.get("spec_id")))
         selected.append(item)
         audit_specs.append(
@@ -469,16 +537,15 @@ def select_frontier_work(
                 "spec_id": spec.get("spec_id"),
                 "seed_family": family,
                 "intent": spec.get("intent"),
-                "gain": _frontier_gain(router_state, family, epoch=epoch),
+                "gain": gain,
             }
         )
-    audit = {
+    return selected, {
         "requested_lanes": int(max_lanes),
         "admitted": len(selected),
         "catalog_pending_after": catalog.pending_count(),
         "specs": audit_specs,
     }
-    return selected, audit
 
 
 def emit_frontier_requests(
@@ -486,10 +553,10 @@ def emit_frontier_requests(
     *,
     arm_key: str,
     epoch: int,
-    seed_items: Sequence[Mapping[str, Any]],
+    seed_items: Sequence[PayloadView],
     ledger: NoveltyLedger,
     catalog: VariantCatalog,
-    router_state: Mapping[str, Any] | None,
+    router_state: PayloadView | None,
     per_family_key_cap: int = 24,
 ) -> None:
     """Publish what the harness NEEDS from the experiment agent.
@@ -501,24 +568,23 @@ def emit_frontier_requests(
     from code.
     """
 
-    families: dict[str, dict[str, Any]] = {}
-    for item in seed_items:
-        family = str(item.get("family") or "")
-        if not family or family in families:
-            continue
+    families: list[Payload] = []
+    for family, item in _first_seed_by_family(seed_items).items():
         seen_for_family = sorted(
             key
             for key in ledger.seen
             if not key.startswith("flag:") or key.startswith(f"flag:{family}:")
         )[: max(1, per_family_key_cap)]
-        families[family] = {
-            "family": family,
-            "seed_item_id": item.get("item_id"),
-            "seed_text": item.get("text"),
-            "pending_spec_count": len(catalog.pending_for(family)),
-            "frontier_gain": _frontier_gain(router_state, family, epoch=epoch),
-            "seen_keys_sample": seen_for_family,
-        }
+        families.append(
+            {
+                "family": family,
+                "seed_item_id": item.get("item_id"),
+                "seed_text": item.get("text"),
+                "pending_spec_count": len(catalog.pending_for(family)),
+                "frontier_gain": _frontier_gain(router_state, family, epoch=epoch),
+                "seen_keys_sample": seen_for_family,
+            }
+        )
     _write_json(
         path,
         {
@@ -527,7 +593,7 @@ def emit_frontier_requests(
             "epoch": int(epoch),
             "total_seen_keys": len(ledger.seen),
             "catalog_pending_total": catalog.pending_count(),
-            "families": sorted(families.values(), key=lambda f: -float(f["frontier_gain"])),
+            "families": sorted(families, key=lambda f: -_as_float(f["frontier_gain"])),
             "how_to_respond": (
                 "Append specs to the variant catalog file: {spec_id, seed_family, "
                 "intent, ops (adapter-defined), key_prefix, priority}. The harness "
@@ -537,23 +603,23 @@ def emit_frontier_requests(
     )
 
 
-def plan_round_robin(seed_items: Sequence[Mapping[str, Any]], **_: Any) -> list[dict[str, Any]]:
+def plan_round_robin(seed_items: Sequence[PayloadView], **_: object) -> list[Payload]:
     """Baseline planner: every seed, catalog untouched, no ordering signal."""
 
     return [dict(item) for item in seed_items]
 
 
 def plan_router_no_prune(
-    seed_items: Sequence[Mapping[str, Any]],
+    seed_items: Sequence[PayloadView],
     *,
     goal_id: str,
     agent_id: str,
     worker_count: int,
-    router_state: Mapping[str, Any] | None,
-    load_profile: Mapping[str, Any] | None,
+    router_state: PayloadView | None,
+    load_profile: PayloadView | None,
     harness_profile: str = "moe-router",
     branch_fill_policy: str = "confident-prefix",
-) -> list[dict[str, Any]]:
+) -> list[Payload]:
     """Router-ordered no-prune planner over generic seed items.
 
     Uses the LoopX worker-branch planner for VALUE ORDERING only, then
@@ -561,8 +627,8 @@ def plan_router_no_prune(
     pruning: an executable seed never loses its slot to low confidence.
     """
 
-    by_id: dict[str, dict[str, Any]] = {}
-    duplicate_items: list[dict[str, Any]] = []
+    by_id: dict[str, Payload] = {}
+    duplicate_items: list[Payload] = []
     for item in seed_items:
         item_id = str(item.get("item_id"))
         if item_id in by_id:
@@ -594,20 +660,15 @@ def plan_router_no_prune(
         router_state=router_state,
         load_profile=load_profile,
     )
-    ordered: list[dict[str, Any]] = []
+    ordered: list[Payload] = []
     used: set[str] = set()
-    for branch in plan.get("selected_worker_branches") or []:
-        for todo_id in branch.get("todo_ids") or []:
-            todo_id = str(todo_id)
-            if todo_id in by_id and todo_id not in used:
-                ordered.append(by_id[todo_id])
-                used.add(todo_id)
-    for branch in plan.get("rejected_worker_branches") or []:
-        for todo_id in branch.get("todo_ids") or []:
-            todo_id = str(todo_id)
-            if todo_id in by_id and todo_id not in used:
-                ordered.append(by_id[todo_id])
-                used.add(todo_id)
+    for branch_key in ("selected_worker_branches", "rejected_worker_branches"):
+        for branch in _sequence(plan.get(branch_key)):
+            for raw_id in _sequence(_mapping(branch).get("todo_ids")):
+                todo_id = str(raw_id)
+                if todo_id in by_id and todo_id not in used:
+                    ordered.append(by_id[todo_id])
+                    used.add(todo_id)
     for item_id, item in by_id.items():
         if item_id not in used:
             ordered.append(item)
@@ -620,7 +681,7 @@ def plan_router_no_prune(
 
 
 def _arm_runtime_signature(
-    adapter: Any,
+    adapter: object,
     *,
     arm_key: str,
     worker_count: int,
@@ -631,9 +692,9 @@ def _arm_runtime_signature(
     agent_id: str,
     item_failure_policy: str,
     episode_mode: str | None,
-) -> dict[str, Any]:
+) -> Payload:
     adapter_type = f"{type(adapter).__module__}.{type(adapter).__qualname__}"
-    signature = {
+    return {
         "arm_key": str(arm_key),
         "adapter_type": adapter_type,
         "worker_count": max(1, int(worker_count)),
@@ -643,15 +704,14 @@ def _arm_runtime_signature(
         "goal_id": str(goal_id),
         "agent_id": str(agent_id),
         "item_failure_policy": item_failure_policy,
+        # Missing keys in legacy manifests read as None, so old standalone arms
+        # remain compatible while a recoverable arm cannot resume as standalone.
+        "episode_mode": episode_mode,
     }
-    # Missing keys in legacy manifests read as None, so old standalone arms
-    # remain compatible while a recoverable arm cannot resume as standalone.
-    signature["episode_mode"] = episode_mode
-    return signature
 
 
 def run_budget_arm(
-    adapter: Any,
+    adapter: object,
     *,
     arm_key: str,
     run_root: Path,
@@ -670,7 +730,7 @@ def run_budget_arm(
     resume: bool = False,
     checkpoint_path: Path | None = None,
     item_failure_policy: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Run ONE arm alone against its wall-clock budget; return arm payload.
 
     ``use_router=False`` is the blind baseline (round-robin sweep, no
@@ -707,18 +767,15 @@ def run_budget_arm(
         episode_mode=episode_mode,
     )
     ledger = NoveltyLedger()
-    router_state = initial_router_state() if use_router else None
-    load_profile: Mapping[str, Any] | None = None
+    router_state: Payload | None = initial_router_state() if use_router else None
+    load_profile: Payload | None = None
     catalog = (
-        VariantCatalog(
-            Path(variant_catalog_path),
-            run_root / f"variant_consumption_{arm_key}.json",
-        )
+        VariantCatalog(Path(variant_catalog_path), run_root / f"variant_consumption_{arm_key}.json")
         if variant_catalog_path
         else None
     )
-    epochs: list[dict[str, Any]] = []
-    checkpoints: list[dict[str, Any]] = []
+    epochs: list[Payload] = []
+    checkpoints: list[Payload] = []
     coverage_first_seen: dict[str, float] = {}
     raw_cum = 0.0
     novel_cum = 0.0
@@ -726,34 +783,23 @@ def run_budget_arm(
     next_epoch = 1
     elapsed_offset = 0.0
     if resume:
-        state = load_arm_checkpoint(
-            checkpoint_file,
-            expected_signature=runtime_signature,
-        )
-        epochs = [dict(epoch) for epoch in state["epochs"]]
-        checkpoints = [dict(checkpoint) for checkpoint in state["checkpoints"]]
-        ledger.seen = {str(key) for key in state["novelty_seen"]}
-        router_state = (
-            dict(state["router_state"])
-            if isinstance(state.get("router_state"), Mapping)
-            else None
-        )
-        load_profile = (
-            dict(state["load_profile"])
-            if isinstance(state.get("load_profile"), Mapping)
-            else None
-        )
+        state = load_arm_checkpoint(checkpoint_file, expected_signature=runtime_signature)
+        epochs = _payload_list(state.get("epochs"))
+        checkpoints = _payload_list(state.get("checkpoints"))
+        ledger.seen = {str(key) for key in _sequence(state.get("novelty_seen"))}
+        router_state = _optional_payload(state.get("router_state"))
+        load_profile = _optional_payload(state.get("load_profile"))
         coverage_first_seen = {
-            str(family): float(minutes)
-            for family, minutes in state["coverage_first_seen"].items()
+            str(family): _as_float(minutes)
+            for family, minutes in _mapping(state.get("coverage_first_seen")).items()
         }
-        raw_cum = float(state.get("raw_value_total") or 0.0)
-        novel_cum = float(state.get("novel_value_total") or 0.0)
-        variant_records_cum = int(state.get("variant_records_total") or 0)
-        next_epoch = int(state["next_epoch"])
-        elapsed_offset = float(state.get("elapsed_minutes") or 0.0)
+        raw_cum = _as_float(state.get("raw_value_total"))
+        novel_cum = _as_float(state.get("novel_value_total"))
+        variant_records_cum = int(_as_float(state.get("variant_records_total")))
+        next_epoch = int(_as_float(state.get("next_epoch")))
+        elapsed_offset = _as_float(state.get("elapsed_minutes"))
         if catalog is not None:
-            catalog.restore_consumed(state["catalog_consumed"])
+            catalog.restore_consumed(_sequence(state.get("catalog_consumed")))
     elif checkpoint_enabled and catalog is not None:
         # Reusing a run_root is not an implicit restart contract. A fresh arm
         # starts with fresh consumption; only resume restores prior attempts.
@@ -761,35 +807,22 @@ def run_budget_arm(
     if not resume:
         checkpoint_file.unlink(missing_ok=True)
     execution_metric_fields = set(combine_execution_metrics([]))
-    historical_execution_metrics: list[dict[str, Any]] = []
+    historical_execution_metrics: list[Payload] = []
     for completed_epoch in epochs:
         stored_metrics = completed_epoch.get("execution_metrics")
-        if (
-            isinstance(stored_metrics, Mapping)
-            and execution_metric_fields.issubset(stored_metrics)
-        ):
+        if isinstance(stored_metrics, Mapping) and execution_metric_fields.issubset(stored_metrics):
             historical_execution_metrics.append(dict(stored_metrics))
             continue
         historical_records = [
-            record
-            for lane in completed_epoch.get("lanes") or []
-            for record in lane.get("results") or []
+            dict(record)
+            for lane in _sequence(completed_epoch.get("lanes"))
+            for record in _sequence(_mapping(lane).get("results"))
+            if isinstance(record, Mapping)
         ]
-        if episode_mode is None:
-            historical_records = [
-                {
-                    **record,
-                    "execution_group_id": None,
-                    "record_kind": RECORD_KIND_STANDALONE,
-                }
-                for record in historical_records
-            ]
         historical_execution_metrics.append(
-            summarize_execution_records(historical_records)
+            summarize_execution_records(_standalone_metric_records(historical_records, episode_mode))
         )
-    execution_metrics_cum = combine_execution_metrics(
-        historical_execution_metrics
-    )
+    execution_metrics_cum: Payload = dict(combine_execution_metrics(historical_execution_metrics))
     stop_reason = "max_epochs"
     started = time.perf_counter()
     for epoch in range(next_epoch, int(max_epochs) + 1):
@@ -801,11 +834,13 @@ def run_budget_arm(
         if epochs and duration_guard_factor > 0:
             recent = epochs[-max(1, int(duration_guard_recent)) :]
             estimated = max(
-                float(entry.get("epoch_wall_minutes") or 0.0) for entry in recent
+                _as_float(entry.get("epoch_wall_minutes")) for entry in recent
             ) * float(duration_guard_factor)
             if remaining < estimated:
                 stop_reason = "duration_guard"
                 break
+        if not isinstance(adapter, _SeedAdapter):
+            raise _missing_attr(adapter, "list_seed_items")
         seed_items = [dict(item) for item in adapter.list_seed_items()]
         if not seed_items:
             stop_reason = "seed_queue_empty"
@@ -814,12 +849,7 @@ def run_budget_arm(
             # Router planning keys by item_id and variant compilation calls
             # adapter code, so fatal structural validation must see the raw
             # seeds before either operation can collapse ids or cause effects.
-            build_episode_execution_units(
-                seed_items,
-                arm=arm_key,
-                epoch=epoch,
-                fatal_preflight=True,
-            )
+            build_episode_execution_units(seed_items, arm=arm_key, epoch=epoch, fatal_preflight=True)
         if use_router:
             queue_items = plan_router_no_prune(
                 seed_items,
@@ -831,8 +861,10 @@ def run_budget_arm(
             )
         else:
             queue_items = plan_round_robin(seed_items)
-        frontier_audit: dict[str, Any] | None = None
+        frontier_audit: Payload | None = None
         if use_router and catalog is not None and int(frontier_max_lanes) > 0:
+            if not isinstance(adapter, _VariantAdapter):
+                raise _missing_attr(adapter, "compile_variant")
             variant_items, frontier_audit = select_frontier_work(
                 seed_items,
                 catalog=catalog,
@@ -860,21 +892,19 @@ def run_budget_arm(
                 epoch=epoch,
                 fatal_preflight=failure_policy == ITEM_FAILURE_POLICY_FATAL,
             )
-
-            def execute_epoch(item: Mapping[str, Any], **context: Any) -> list[dict[str, Any]]:
-                return execute_episode_group(
-                    item,
-                    adapter=adapter,
-                    failure_policy=failure_policy,
-                    fatal_failure_policy=ITEM_FAILURE_POLICY_FATAL,
-                    error_record_factory=_adapter_error_record,
-                    **context,
-                )
-
+            execute_epoch: ExecuteFn = partial(
+                execute_episode_group,
+                adapter=adapter,
+                failure_policy=failure_policy,
+                fatal_failure_policy=ITEM_FAILURE_POLICY_FATAL,
+                error_record_factory=_adapter_error_record,
+            )
         else:
+            if not isinstance(adapter, _LegacyExecutor):
+                raise _missing_attr(adapter, "execute")
             # Accessed lazily so an episode-only adapter (no legacy execute)
             # is valid as long as prepare_episode_group never returns None.
-            execute_epoch: Callable[..., Any] = adapter.execute
+            execute_epoch = adapter.execute
 
         lanes = run_queue_epoch(
             execution_items,
@@ -889,32 +919,26 @@ def run_budget_arm(
         epoch_wall = _now_perf_minutes(epoch_start)
         epoch_raw = 0.0
         epoch_novel = 0.0
-        records: list[dict[str, Any]] = []
+        records: list[Payload] = []
         for lane in lanes:
-            for record in lane.get("results") or []:
-                credit = ledger.credit(record)
-                record["novel_value"] = credit["novel_value"]
-                record["raw_value"] = ledger.raw_value(record)
-                epoch_raw += record["raw_value"]
+            for raw_record in _sequence(lane.get("results")):
+                if not isinstance(raw_record, dict):
+                    continue
+                credit = ledger.credit(raw_record)
+                raw_value = ledger.raw_value(raw_record)
+                raw_record["novel_value"] = credit["novel_value"]
+                raw_record["raw_value"] = raw_value
+                epoch_raw += raw_value
                 epoch_novel += credit["novel_value"]
-                if record.get("is_variant"):
+                if raw_record.get("is_variant"):
                     variant_records_cum += 1
-                records.append(record)
+                records.append(raw_record)
         raw_cum += epoch_raw
         novel_cum += epoch_novel
-        metric_records = records
-        if episode_mode is None:
-            metric_records = [
-                {
-                    **record,
-                    "execution_group_id": None,
-                    "record_kind": RECORD_KIND_STANDALONE,
-                }
-                for record in records
-            ]
+        metric_records = _standalone_metric_records(records, episode_mode)
         epoch_execution_metrics = summarize_execution_records(metric_records)
-        execution_metrics_cum = combine_execution_metrics(
-            [execution_metrics_cum, epoch_execution_metrics]
+        execution_metrics_cum = dict(
+            combine_execution_metrics([execution_metrics_cum, epoch_execution_metrics])
         )
         elapsed_after = elapsed_offset + _now_perf_minutes(started)
         for record in records:
@@ -922,22 +946,8 @@ def run_budget_arm(
             if family:
                 coverage_first_seen.setdefault(family, round(elapsed_after, 3))
         if use_router:
-            if episode_mode is not None:
-                probes = build_router_probes(records)
-            else:
-                probes = [
-                    {
-                        "family": str(record.get("family") or "general"),
-                        "duration_minutes": record.get("duration_minutes"),
-                        "observation_keys": record.get("observation_keys") or [],
-                        "weighted_flags": record.get("weighted_flags") or {},
-                        "accepted": bool(record.get("accepted")),
-                        "retryable_infra_error": bool(
-                            record.get("retryable_infra_error")
-                        ),
-                    }
-                    for record in records
-                ]
+            assert router_state is not None
+            probes = build_router_probes(metric_records)
             router_state = observe_epoch(router_state, epoch=epoch, probes=probes)
             router_state = advance_epoch(
                 router_state,
@@ -948,7 +958,7 @@ def run_budget_arm(
             )
             _write_json(run_root / f"router_state_{arm_key}.json", router_state)
             max_lane_wall = max(
-                (float(lane.get("wall_minutes") or 0.0) for lane in lanes), default=0.0
+                (_as_float(lane.get("wall_minutes")) for lane in lanes), default=0.0
             )
             load_profile = {
                 "source": f"observed_epoch_{epoch:02d}_{arm_key}",
@@ -1036,63 +1046,48 @@ def run_budget_arm(
                 "adapter_owned_restore": episode_mode is not None,
             },
             "planner_guidance": {
-                "retry_backoff": {
-                    "enforced": False,
-                    "owner": "external_runner",
-                },
-                "infra_cooldown": {
-                    "enforced": False,
-                    "owner": "external_runner",
-                },
+                "retry_backoff": {"enforced": False, "owner": "external_runner"},
+                "infra_cooldown": {"enforced": False, "owner": "external_runner"},
             },
         },
     }
 
 
-def step_auc(checkpoints: Sequence[Mapping[str, Any]], *, value_key: str, horizon_minutes: float) -> float:
+def step_auc(
+    checkpoints: Sequence[PayloadView], *, value_key: str, horizon_minutes: float
+) -> float:
     """Step-integrate a cumulative anytime curve to the budget horizon."""
 
     auc = 0.0
     prev_t = 0.0
     prev_v = 0.0
     for checkpoint in checkpoints:
-        t = min(float(checkpoint.get("elapsed_minutes") or 0.0), float(horizon_minutes))
+        t = min(_as_float(checkpoint.get("elapsed_minutes")), float(horizon_minutes))
         if t > prev_t:
             auc += prev_v * (t - prev_t)
             prev_t = t
-        prev_v = float(checkpoint.get(value_key) or 0.0)
+        prev_v = _as_float(checkpoint.get(value_key))
     if float(horizon_minutes) > prev_t:
         auc += prev_v * (float(horizon_minutes) - prev_t)
     return round(auc, 3)
 
 
 def aggregate_arms(
-    arms: Mapping[str, Mapping[str, Any]],
+    arms: Mapping[str, PayloadView],
     *,
     budget_minutes: float,
     worker_count: int,
     coverage_denominator: int | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Generic two-arm (or N-arm) comparison on novelty-first metrics."""
 
-    summary: dict[str, Any] = {
-        "schema_version": "loopx_explore_harness_score_v0",
-        "budget_minutes_per_arm": float(budget_minutes),
-        "worker_count": int(worker_count),
-        "coverage_denominator": coverage_denominator,
-        "arms": {},
-    }
+    arm_summaries: Payload = {}
     for arm_key, arm in arms.items():
-        checkpoints = arm.get("checkpoints") or []
-        execution_metrics = (
-            dict(arm.get("execution_metrics") or {})
-            if isinstance(arm.get("execution_metrics"), Mapping)
-            else {}
-        )
-        effective_compute = float(
-            execution_metrics.get("effective_compute_minutes") or 0.0
-        )
-        summary["arms"][arm_key] = {
+        checkpoints = _payload_list(arm.get("checkpoints"))
+        execution_metrics = _optional_payload(arm.get("execution_metrics")) or {}
+        effective_compute = _as_float(execution_metrics.get("effective_compute_minutes"))
+        novel_total = _as_float(arm.get("novel_value_total"))
+        arm_summaries[arm_key] = {
             "novel_value_endpoint": arm.get("novel_value_total"),
             "novel_value_auc": step_auc(
                 checkpoints, value_key="novel_value_cum", horizon_minutes=budget_minutes
@@ -1105,19 +1100,17 @@ def aggregate_arms(
             "stop_reason": arm.get("stop_reason"),
             "execution_metrics": execution_metrics,
             "novel_value_per_requested_worker_minute": round(
-                float(arm.get("novel_value_total") or 0.0)
-                / max(0.001, float(budget_minutes) * worker_count),
-                4,
+                novel_total / max(0.001, float(budget_minutes) * worker_count), 4
             ),
             "novel_value_per_effective_compute_minute": (
-                round(
-                    float(arm.get("novel_value_total") or 0.0)
-                    / effective_compute,
-                    4,
-                )
-                if effective_compute > 0
-                else None
+                round(novel_total / effective_compute, 4) if effective_compute > 0 else None
             ),
             "anytime_curve": checkpoints,
         }
-    return summary
+    return {
+        "schema_version": "loopx_explore_harness_score_v0",
+        "budget_minutes_per_arm": float(budget_minutes),
+        "worker_count": int(worker_count),
+        "coverage_denominator": coverage_denominator,
+        "arms": arm_summaries,
+    }
