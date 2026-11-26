@@ -8,6 +8,7 @@ from loopx.control_plane.quota.settlement_workspace_causality import (
     delivery_workspace_causality_from_event_details,
     missing_delivery_workspace_resolution,
     resolve_settlement_workspace_requirement,
+    uses_registered_verification_workspace,
 )
 
 
@@ -81,6 +82,57 @@ def test_non_delivery_policy_cannot_override_repository_write_contract(
     assert causality is not None
     assert causality["requirement"] == "required"
     assert causality["reason"] == "declared_repository_or_write_contract"
+
+
+def test_declared_read_only_verification_keeps_the_workspace_receipt() -> None:
+    causality = build_delivery_workspace_causality(
+        {"todo_id": "todo_verify", "action_kind": "verify",
+         "required_capabilities": ["filesystem_read", "shell"]}
+    )
+
+    assert causality is not None
+    assert causality["requirement"] == "required"
+    assert causality["reason"] == "declared_read_only_verification"
+    assert uses_registered_verification_workspace(
+        causality, task_repository=None, explicit_peer_worktree_requirement=None,
+    )
+    assert not uses_registered_verification_workspace(
+        causality, task_repository=None, explicit_peer_worktree_requirement=True,
+    )
+    assert not uses_registered_verification_workspace(
+        causality, task_repository=None, explicit_peer_worktree_requirement="true",
+    )
+    assert not uses_registered_verification_workspace(
+        causality, task_repository="git:github.com/example/other",
+        explicit_peer_worktree_requirement=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"required_capabilities": ["shell"]}, "unknown"),
+        ({"action_kind": "repair"}, "unknown"),
+        ({"required_capabilities": ["filesystem_read", "network"]}, "unknown"),
+        ({"required_capabilities": ["filesystem_read", "filesystem_write"]}, "required"),
+        ({"required_write_scopes": ["docs/**"]}, "required"),
+        ({"required_write_scopes": ["../outside"]}, "unknown"),
+        ({"task_repository": "git:github.com/example/other"}, "required"),
+    ],
+)
+def test_verification_does_not_infer_a_read_only_workspace(
+    overrides: dict[str, object], expected: str,
+) -> None:
+    causality = build_delivery_workspace_causality(
+        {"todo_id": "todo_verify", "action_kind": "verify",
+         "required_capabilities": ["filesystem_read", "shell"], **overrides}
+    )
+
+    assert causality is not None
+    assert causality["requirement"] == expected
+    assert not uses_registered_verification_workspace(
+        causality, task_repository=None, explicit_peer_worktree_requirement=None,
+    )
 
 
 def test_underspecified_current_todo_keeps_workspace_guard_fail_closed() -> None:
