@@ -204,11 +204,13 @@ def _binding_attempt_state(
     binding: Mapping[str, str],
     window: ProofMapping,
 ) -> tuple[bool, ProofObject | None]:
-    """Read durable contradiction ledger and attempt record once for a binding."""
+    """Read attempt record before durable contradiction ledger so concurrent commits cannot lose."""
+    record = _read_report_failure_record(runtime_root, window)
+    if _is_contradicted_proof(record, binding):
+        return True, record
     if _durable_contradiction_status(runtime_root, binding, window) != "absent":
         return True, None
-    record = _read_report_failure_record(runtime_root, window)
-    return _is_contradicted_proof(record, binding), record
+    return False, record
 
 
 def read_retained_report_failure(

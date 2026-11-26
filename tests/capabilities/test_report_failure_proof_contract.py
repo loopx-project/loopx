@@ -90,24 +90,26 @@ def _any_ast_refs(path: Path) -> int:
     return count
 
 
+_SAMPLE_SUBSCRIPTION: dict[str, object] = {
+    "enabled": True,
+    "profile_preset": "portfolio-progress",
+    "effective_revision": "sha256:" + "1" * 64,
+    "schedule": {
+        "schema_version": "periodic_report_schedule_v0",
+        "schedule_id": "daily-report",
+        "timezone": "UTC",
+        "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+        "start_date": "2026-01-01",
+    },
+}
+
+
 def _sample_window(runtime_root: Path) -> dict[str, object]:
-    subscription = {
-        "enabled": True,
-        "profile_preset": "portfolio-progress",
-        "effective_revision": "sha256:" + "1" * 64,
-        "schedule": {
-            "schema_version": "periodic_report_schedule_v0",
-            "schedule_id": "daily-report",
-            "timezone": "UTC",
-            "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
-            "start_date": "2026-01-01",
-        },
-    }
     admitted = admit_cadence_window(
         runtime_root=runtime_root,
         goal_id="goal-1",
         agent_id="agent-1",
-        subscription=subscription,
+        subscription=_SAMPLE_SUBSCRIPTION,
         now=datetime(2026, 1, 2, 10, tzinfo=timezone.utc),
     )
     return dict(cast(dict[str, object], admitted["window"]))
@@ -508,3 +510,58 @@ print("PARITY_OK")
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "PARITY_OK"
+
+
+def test_interleaving_durable_contradiction_prevents_window_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = _sample_window(tmp_path)
+    original = _sample_original(window)
+    store = _MemoryStore({("sess-1", "chat-turn-1"): original})
+    controller = _FakeController(tmp_path)
+    folder = attempt_directory(tmp_path, window)
+    folder.mkdir(parents=True, exist_ok=True)
+    retain_report_failure(
+        tmp_path, store, original, window,
+        {"turn_id": "codex-turn-1", "thread_id": "thread-1", "only_original_user_item": True},
+    )
+    assert (folder / REPORT_FAILURE_PROOF).is_file()
+
+    orig_read_record = report_failure_ledger._read_report_failure_record
+    triggered = False
+    record_reads = 0
+
+    def interleaved_read_record(root: Path, win: dict[str, object]) -> dict[str, object] | None:
+        nonlocal triggered, record_reads
+        record_reads += 1
+        rec = orig_read_record(root, win)
+        if not triggered:
+            triggered = True
+            # Commit durable contradiction while generation.lock holds off attempt overwrite.
+            contradict_report_failure(
+                root, store, original, win,
+                {"contradicted": True, "turn_id": "codex-turn-1", "thread_id": "thread-1"},
+            )
+        return rec
+
+    monkeypatch.setattr(report_failure_ledger, "_read_report_failure_record", interleaved_read_record)
+    monkeypatch.setattr(report_failure_proof, "_read_report_failure_record", interleaved_read_record)
+
+    admitted = admit_cadence_window(
+        runtime_root=tmp_path,
+        goal_id="goal-1",
+        agent_id="agent-1",
+        subscription=_SAMPLE_SUBSCRIPTION,
+        now=datetime(2026, 1, 4, 10, tzinfo=timezone.utc),
+        can_replace_failed_window=lambda w: verify_report_window_failure(
+            controller, store, original, w,
+            probe_fn=lambda *_a, **_kw: (["thread-1"], None),
+            generation_locked=True,
+        ),
+    )
+    assert triggered is True
+    assert record_reads == 1
+    assert admitted["mutated"] is False
+    assert admitted["window"]["window_id"] == window["window_id"]
+    assert is_report_failure_contradicted(tmp_path, original, window) is True
+    assert read_retained_report_failure(tmp_path, original, window) is False
