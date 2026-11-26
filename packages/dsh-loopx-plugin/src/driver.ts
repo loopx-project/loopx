@@ -149,6 +149,7 @@ interface SessionDriverRetention {
   activeTodoUnit?: ActiveTodoUnitState | undefined
   todoUnitAnchors?: Map<string, TodoUnitAnchor> | undefined
   todoUnitFolds?: Map<string, TodoUnitFoldOutcome> | undefined
+  todoUnitFoldsInFlight?: Map<string, Promise<TodoUnitFoldOutcome>> | undefined
 }
 
 // HMR can replace this module while the same Agent and Session keep running.
@@ -1032,10 +1033,10 @@ export class LoopXContinuationDriver {
    * atomically pops contiguous suffix `[anchor..now] -> [mu + Obs(next_cmd)]` on
    * quiescent boundaries while keeping parent prefix Q byte-identical and tool pairing valid.
    */
-  async onTodoUnitSettled(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
+  onTodoUnitSettled(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
     const policy = this.todoUnitFold
     if (policy?.enabled !== true) {
-      return applyTodoUnitFoldAndPrefetch(agent.session, policy, request)
+      return Promise.resolve(applyTodoUnitFoldAndPrefetch(agent.session, policy, request))
     }
     const state = this.stateFor(agent)
     const retained = retainedState(agent, agent.session)
@@ -1044,8 +1045,38 @@ export class LoopXContinuationDriver {
       : undefined
     const cached = foldKey !== undefined ? retained.todoUnitFolds?.get(foldKey) : undefined
     if (cached !== undefined) {
-      return cached
+      return Promise.resolve(cached)
     }
+    if (foldKey !== undefined) {
+      const inFlight = retained.todoUnitFoldsInFlight?.get(foldKey)
+      if (inFlight !== undefined) {
+        return inFlight
+      }
+      const inFlightMap = retained.todoUnitFoldsInFlight ??= new Map()
+      let execution!: Promise<TodoUnitFoldOutcome>
+      execution = (async (): Promise<TodoUnitFoldOutcome> => {
+        try {
+          return await this.executeTodoUnitSettled(agent, state, retained, policy, request, foldKey)
+        } finally {
+          if (inFlightMap.get(foldKey) === execution) {
+            inFlightMap.delete(foldKey)
+          }
+        }
+      })()
+      inFlightMap.set(foldKey, execution)
+      return execution
+    }
+    return this.executeTodoUnitSettled(agent, state, retained, policy, request, undefined)
+  }
+
+  private async executeTodoUnitSettled(
+    agent: Agent,
+    state: DriverState,
+    retained: SessionDriverRetention,
+    policy: TodoUnitFoldPolicy,
+    request: TodoUnitFoldRequest,
+    foldKey: string | undefined,
+  ): Promise<TodoUnitFoldOutcome> {
     const quiescent = isTodoUnitDriverQuiescent(agent, state)
       && typeof agent.session.header.cwd === 'string'
       && agent.session.header.cwd.length > 0

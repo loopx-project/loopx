@@ -1249,4 +1249,99 @@ describe('dsh-loopx-plugin Todo semantic-unit FoldAndPrefetch', () => {
       await rm(cwd, { recursive: true, force: true })
     }
   })
+
+  it('coalesces concurrent same-foldKey invocations in flight and allows sequential retry only after failure or KeepRaw', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'dsh-fold-coalesce-'))
+    const harness = await createRealSessionHarness(cwd)
+    try {
+      appendPrefixQ(harness.session)
+
+      let obsStartedResolve!: () => void
+      let obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+      let obsReleaseResolve!: () => void
+      let obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+      let failMode: 'throw' | 'error_code' | 'ok' = 'throw'
+
+      const obsRunner = vi.fn<TodoUnitObsRunner>(async () => {
+        obsStartedResolve()
+        await obsRelease
+        if (failMode === 'throw') throw new Error('transient obs failure')
+        if (failMode === 'error_code') return { exitCode: 2, output: 'transient obs exit 2' }
+        return { exitCode: 0, output: 'NEXT_COALESCED_OK' }
+      })
+
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: () => true,
+        todoUnitFold: { enabled: true, minNetSavingsTokens: 64 },
+        runObsCommand: obsRunner,
+      })
+
+      driver.anchorTodoUnit(harness.agent, {
+        todoId: VALID_RECEIPT.todoId,
+        turnInstanceId: 'turn-coalesce-1',
+        contextEpoch: 'epoch-coalesce-1',
+        anchorStepIndex: 2,
+      })
+      appendTodoExploratorySuffix(harness.session, 'coalesce', 2)
+
+      const req = {
+        todoId: VALID_RECEIPT.todoId,
+        turnInstanceId: 'turn-coalesce-1',
+        contextEpoch: 'epoch-coalesce-1',
+        nowStepIndex: 5,
+        completionReceipt: VALID_RECEIPT,
+        obsNextCmd: { command: ['git', 'status', '--short'] as const },
+      }
+
+      // 1. Concurrent failure rejects both callers once and cleans up in-flight map for retry.
+      const concurrentErr = Promise.allSettled([
+        driver.onTodoUnitSettled(harness.agent, req),
+        driver.foldAndPrefetch(harness.agent, req),
+      ])
+      await obsStarted
+      obsReleaseResolve()
+      const errResults = await concurrentErr
+      expect(obsRunner).toHaveBeenCalledTimes(1)
+      expect(errResults.map(r => r.status)).toEqual(['rejected', 'rejected'])
+
+      // 2. Concurrent KeepRaw (exitCode != 0) coalesces to 1 obs invocation and remains retryable.
+      obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+      obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+      failMode = 'error_code'
+      const concurrentKeepRaw = Promise.all([
+        driver.onTodoUnitSettled(harness.agent, req),
+        driver.foldAndPrefetch(harness.agent, req),
+      ])
+      await obsStarted
+      obsReleaseResolve()
+      const [kr1, kr2] = await concurrentKeepRaw
+      expect(obsRunner).toHaveBeenCalledTimes(2)
+      expect(kr1.operator).toBe('KeepRaw')
+      expect(kr2).toEqual(kr1)
+
+      // 3. Concurrent success across both public entrypoints executes obs once, writes one FoldToReceipt, and replays cached thereafter.
+      obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+      obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+      failMode = 'ok'
+      const p1 = driver.onTodoUnitSettled(harness.agent, req)
+      const p2 = driver.foldAndPrefetch(harness.agent, req)
+      await obsStarted
+      obsReleaseResolve()
+      const [ok1, ok2] = await Promise.all([p1, p2])
+      expect(obsRunner).toHaveBeenCalledTimes(3)
+      expect(ok1.operator).toBe('FoldToReceipt')
+      expect(ok2).toEqual(ok1)
+      expect(ok1.foldedEventSeq).not.toBeNull()
+      expect(
+        harness.session.deriveMessages().filter(m => m.role === 'user' && m.source.kind === 'loopx-todo-fold'),
+      ).toHaveLength(1)
+
+      const replay = await driver.foldAndPrefetch(harness.agent, req)
+      expect(replay).toEqual(ok1)
+      expect(obsRunner).toHaveBeenCalledTimes(3)
+    } finally {
+      await harness.dispose()
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
 })
