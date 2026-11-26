@@ -7,13 +7,33 @@ effect ordering, and content-free status projection.
 
 from __future__ import annotations
 
-import hashlib
-import re
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
-from urllib.parse import urlsplit
+import hashlib
+from typing import TypedDict
 
 from ..authority import normalize_project_materials
+from .external_connector_permissions import (
+    PERMISSION_GUIDANCE_SCHEMA_VERSION,
+    PERMISSION_REQUIREMENT_SCHEMA_VERSION,
+    SAFE_SCOPE_PATTERN,
+    ExternalConnectorPermissionStatus,
+    _RequirementSpec,
+    build_external_connector_permission_requirement,
+    evaluate_external_connector_permissions,
+    normalize_permission_guidance as _normalize_permission_guidance,
+    normalize_permission_requirement as _normalize_permission_requirement,
+    normalize_permission_requirement_specs,
+    normalize_permission_requirements as _normalize_permission_requirements,
+    permission_guidance_for_registration as _permission_guidance_for_registration,
+    permission_requirement_fingerprint as _permission_requirement_fingerprint,
+    project_external_connector_permission_status,
+    project_permission_status_for_registration,
+    repair_url as _repair_url,
+    safe_token,
+    scope_values as _scope_values,
+    validate_permission_requirements_for_connector as _validate_permission_requirements_for_connector,
+    validate_permission_specs_for_connector,
+)
 from .external_connector_runtime import (
     CONNECTOR_SCHEMA_VERSION,
     EVENT_SCHEMA_VERSION,
@@ -30,380 +50,62 @@ from .external_connector_runtime import (
     settle_external_connector_event,
 )
 
-PERMISSION_REQUIREMENT_SCHEMA_VERSION = (
-    "agent_external_connector_permission_requirement_v0"
-)
-PERMISSION_GUIDANCE_SCHEMA_VERSION = "agent_external_connector_permission_guidance_v0"
 DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION = (
     "agent_document_comment_connector_registration_v0"
 )
 PROVIDER_PAGE_SCHEMA_VERSION = "agent_external_connector_provider_page_v0"
+PROVIDER_CAPTURE_SCHEMA_VERSION = "agent_external_connector_provider_capture_v0"
+PROVIDER_SETTLEMENT_SCHEMA_VERSION = "agent_external_connector_provider_settlement_v0"
 
-SAFE_SCOPE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}")
-
-ProviderPageReader = Callable[[Mapping[str, Any], str | None, int], Mapping[str, Any]]
+ProviderPageReader = Callable[
+    [dict[str, object], str | None, int],
+    Mapping[str, object],
+]
 ProviderResponseWriter = Callable[
-    [Mapping[str, Any], Mapping[str, Any], str, str],
-    Mapping[str, Any],
+    [dict[str, object], dict[str, object], str, str],
+    Mapping[str, object],
 ]
 
 
-def _safe_token(value: Any, *, field: str) -> str:
-    normalized = str(value or "").strip()
-    if not SAFE_TOKEN_PATTERN.fullmatch(normalized):
-        raise ValueError(f"{field} must be an opaque public-safe token")
-    return normalized
+class DocumentCommentConnectorRegistration(TypedDict):
+    """Typed document-comment connector registration payload."""
+
+    schema_version: str
+    connector: dict[str, object]
+    authority_material_ref: str
+    authority_relation: str
+    comment_authority: str
+    permission_requirements: list[dict[str, object]]
 
 
-def _scope_values(values: Sequence[str], *, field: str) -> list[str]:
-    normalized = {str(value or "").strip() for value in values}
-    if not normalized or any(
-        not SAFE_SCOPE_PATTERN.fullmatch(value) for value in normalized
-    ):
-        raise ValueError(f"{field} must contain provider scope tokens")
-    return sorted(normalized)
+class DocumentCommentConnectorStatus(TypedDict):
+    """Typed content-free document-comment connector status projection."""
+
+    schema_version: str
+    connector: dict[str, object]
+    authority_material_bound: bool
+    authority_relation: str
+    comment_authority: str
+    permissions: ExternalConnectorPermissionStatus
+    private_authority_material_ref_captured: bool
 
 
-def _repair_url(value: Any) -> str:
-    normalized = str(value or "").strip()
-    parsed = urlsplit(normalized)
-    if (
-        parsed.scheme != "https"
-        or not parsed.netloc
-        or parsed.username
-        or parsed.password
-        or parsed.fragment
-        or len(normalized) > 2048
-    ):
-        raise ValueError("repair_url must be a bounded official HTTPS URL")
-    return normalized
+def _safe_token(value: object, *, field: str) -> str:
+    return safe_token(value, field=field, pattern=SAFE_TOKEN_PATTERN)
 
 
-def build_external_connector_permission_requirement(
-    *,
-    provider_kind: str,
-    provider_identity: str,
-    operation: str,
-    required_scopes: Sequence[str],
-    publication_required: bool,
-    repair_url: str,
-) -> dict[str, Any]:
-    """Build provider-owned, owner-local permission repair guidance."""
-
-    try:
-        capability = ExternalConnectorCapability(str(operation or "").strip()).value
-    except ValueError as exc:
-        allowed = ", ".join(item.value for item in ExternalConnectorCapability)
-        raise ValueError(f"operation must be one of: {allowed}") from exc
-    return {
-        "schema_version": PERMISSION_REQUIREMENT_SCHEMA_VERSION,
-        "provider_kind": _safe_token(provider_kind, field="provider_kind"),
-        "provider_identity": _safe_token(
-            provider_identity,
-            field="provider_identity",
-        ),
-        "operation": capability,
-        "required_scopes": _scope_values(
-            required_scopes,
-            field="required_scopes",
-        ),
-        "publication_required": bool(publication_required),
-        "repair_url": _repair_url(repair_url),
-    }
-
-
-def _normalize_permission_requirement(value: Mapping[str, Any]) -> dict[str, Any]:
-    if value.get("schema_version") != PERMISSION_REQUIREMENT_SCHEMA_VERSION:
-        raise ValueError("external connector permission requirement schema is invalid")
-    scopes = value.get("required_scopes")
-    if not isinstance(scopes, Sequence) or isinstance(scopes, (str, bytes)):
-        raise TypeError("required_scopes must be a sequence")
-    return build_external_connector_permission_requirement(
-        provider_kind=str(value.get("provider_kind") or ""),
-        provider_identity=str(value.get("provider_identity") or ""),
-        operation=str(value.get("operation") or ""),
-        required_scopes=[str(scope) for scope in scopes],
-        publication_required=value.get("publication_required") is True,
-        repair_url=str(value.get("repair_url") or ""),
-    )
-
-
-def _normalize_permission_requirements(
-    values: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    if isinstance(values, (str, bytes)) or any(
-        not isinstance(requirement, Mapping) for requirement in values
-    ):
-        raise TypeError("external connector permission requirements are invalid")
-    requirements = [
-        _normalize_permission_requirement(requirement) for requirement in values
-    ]
-    identities = [
-        (
-            requirement["provider_kind"],
-            requirement["provider_identity"],
-            requirement["operation"],
-        )
-        for requirement in requirements
-    ]
-    if len(identities) != len(set(identities)):
-        raise ValueError("external connector permission requirements are duplicated")
-    return requirements
-
-
-def _permission_requirement_fingerprint(
-    requirement: Mapping[str, Any],
-) -> tuple[Any, ...]:
-    return (
-        requirement["provider_kind"],
-        requirement["provider_identity"],
-        requirement["operation"],
-        tuple(requirement["required_scopes"]),
-        requirement["publication_required"],
-        requirement["repair_url"],
-    )
-
-
-def evaluate_external_connector_permissions(
-    *,
-    requirements: Sequence[Mapping[str, Any]],
-    granted_scopes: Mapping[str, Sequence[str]],
-    published: bool,
-) -> dict[str, Any]:
-    """Return exact owner-local guidance without promoting it to public status."""
-
-    normalized_requirements = _normalize_permission_requirements(requirements)
-    items: list[dict[str, Any]] = []
-    for requirement in normalized_requirements:
-        identity = str(requirement["provider_identity"])
-        granted = {
-            str(scope or "").strip() for scope in granted_scopes.get(identity, [])
-        }
-        missing_scopes = [
-            scope for scope in requirement["required_scopes"] if scope not in granted
-        ]
-        publication_ready = bool(
-            published or requirement["publication_required"] is not True
-        )
-        ready = not missing_scopes and publication_ready
-        items.append(
-            {
-                **requirement,
-                "missing_scopes": missing_scopes,
-                "publication_ready": publication_ready,
-                "ready": ready,
-            }
-        )
-    return {
-        "ok": True,
-        "schema_version": PERMISSION_GUIDANCE_SCHEMA_VERSION,
-        "ready": all(item["ready"] for item in items),
-        "requirement_count": len(items),
-        "missing_requirement_count": sum(not item["ready"] for item in items),
-        "items": items,
-        "local_private_guidance_returned": bool(items),
-        "credentials_captured": False,
-    }
-
-
-def _normalize_permission_guidance(value: Mapping[str, Any]) -> dict[str, Any]:
-    if value.get("schema_version") != PERMISSION_GUIDANCE_SCHEMA_VERSION:
-        raise ValueError("external connector permission guidance schema is invalid")
-    raw_items = value.get("items")
-    if not isinstance(raw_items, list) or any(
-        not isinstance(item, Mapping) for item in raw_items
-    ):
-        raise TypeError("external connector permission guidance items are invalid")
-    items: list[dict[str, Any]] = []
-    for raw_item in raw_items:
-        requirement = _normalize_permission_requirement(raw_item)
-        missing_scopes = raw_item.get("missing_scopes")
-        if not isinstance(missing_scopes, list):
-            raise TypeError("permission missing_scopes are invalid")
-        normalized_missing = (
-            _scope_values(
-                [str(scope) for scope in missing_scopes],
-                field="missing_scopes",
-            )
-            if missing_scopes
-            else []
-        )
-        if not set(normalized_missing).issubset(requirement["required_scopes"]):
-            raise ValueError("missing_scopes must belong to required_scopes")
-        publication_ready = raw_item.get("publication_ready") is True
-        expected_ready = not normalized_missing and publication_ready
-        if (raw_item.get("ready") is True) != expected_ready:
-            raise ValueError("permission guidance ready state is inconsistent")
-        items.append(
-            {
-                **requirement,
-                "missing_scopes": normalized_missing,
-                "publication_ready": publication_ready,
-                "ready": expected_ready,
-            }
-        )
-    ready = all(item["ready"] for item in items)
-    if (value.get("ready") is True) != ready:
-        raise ValueError("permission guidance aggregate ready state is inconsistent")
-    return {
-        "schema_version": PERMISSION_GUIDANCE_SCHEMA_VERSION,
-        "ready": ready,
-        "requirement_count": len(items),
-        "missing_requirement_count": sum(not item["ready"] for item in items),
-        "items": items,
-    }
-
-
-def _permission_guidance_for_registration(
-    *,
-    registration: Mapping[str, Any],
-    permission_guidance: Mapping[str, Any],
-) -> dict[str, Any]:
-    normalized_guidance = _normalize_permission_guidance(permission_guidance)
-    expected = sorted(
-        _permission_requirement_fingerprint(requirement)
-        for requirement in registration["permission_requirements"]
-    )
-    observed = sorted(
-        _permission_requirement_fingerprint(requirement)
-        for requirement in normalized_guidance["items"]
-    )
-    if observed != expected:
-        raise ValueError(
-            "permission guidance must match the registered Connector requirements"
-        )
-    return normalized_guidance
-
-
-def project_external_connector_permission_status(
-    guidance: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Hide exact scopes and repair URLs from status and quota projections."""
-
-    normalized = _normalize_permission_guidance(guidance)
-    items = normalized["items"]
-    operations = sorted(
-        {
-            _safe_token(item.get("operation"), field="operation")
-            for item in items
-            if isinstance(item, Mapping)
-        }
-    )
-    return {
-        "schema_version": "agent_external_connector_permission_status_v0",
-        "ready": normalized["ready"],
-        "requirement_count": len(items),
-        "missing_requirement_count": sum(
-            isinstance(item, Mapping) and item.get("ready") is not True
-            for item in items
-        ),
-        "operations": operations,
-        "publication_required": any(
-            isinstance(item, Mapping) and item.get("publication_required") is True
-            for item in items
-        ),
-        "private_scope_values_captured": False,
-        "private_repair_urls_captured": False,
-        "private_provider_identity_captured": False,
-    }
-
-
-def _validate_permission_requirements_for_connector(
-    *,
-    connector: Mapping[str, Any],
-    requirements: Sequence[Mapping[str, Any]],
-) -> None:
-    capability_values = set(connector["capabilities"])
-    for requirement in requirements:
-        if requirement["provider_kind"] != connector["provider_kind"]:
-            raise ValueError("permission provider_kind must match the Connector")
-        if requirement["operation"] not in capability_values:
-            raise ValueError("permission operation must be advertised by the Connector")
-    required_operations = {ExternalConnectorCapability.HISTORY_CATCH_UP.value}
-    if connector["response_policy"] != ExternalResponsePolicy.NO_RESPONSE.value:
-        required_operations.update(
-            {
-                ExternalConnectorCapability.RESPONSE_WRITE.value,
-                ExternalConnectorCapability.RESPONSE_READBACK.value,
-            }
-        )
-    missing_operations = required_operations.difference(
-        requirement["operation"] for requirement in requirements
-    )
-    if missing_operations:
-        raise ValueError(
-            "document-comment permission requirements do not cover provider calls"
-        )
-
-
-def build_document_comment_connector_registration(
-    *,
-    connector: Mapping[str, Any],
-    authority_material_ref: str,
-    project_materials: Mapping[str, Any] | Sequence[Mapping[str, Any]],
-    permission_requirements: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    """Link comments to a separately registered material without granting authority."""
-
-    normalized_connector = normalize_external_connector_binding(connector)
-    if normalized_connector["source_kind"] != ExternalSourceKind.DOCUMENT_COMMENT.value:
-        raise ValueError("document-comment registration requires document_comment")
-    material_ref = _safe_token(
-        authority_material_ref,
-        field="authority_material_ref",
-    )
-    materials = normalize_project_materials(project_materials)
-    if material_ref not in materials:
-        raise ValueError("authority material must be registered before its comments")
-    requirements = _normalize_permission_requirements(permission_requirements)
-    _validate_permission_requirements_for_connector(
-        connector=normalized_connector,
-        requirements=requirements,
-    )
-    return {
-        "schema_version": DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION,
-        "connector": normalized_connector,
-        "authority_material_ref": material_ref,
-        "authority_relation": "reference_only",
-        "comment_authority": "external_input_only",
-        "permission_requirements": requirements,
-    }
-
-
-def project_document_comment_connector_status(
-    *,
-    registration: Mapping[str, Any],
-    permission_guidance: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Project a content-free registration and permission status."""
-
-    normalized = _normalize_document_comment_registration(registration)
-    normalized_guidance = _permission_guidance_for_registration(
-        registration=normalized,
-        permission_guidance=permission_guidance,
-    )
-    return {
-        "schema_version": "agent_document_comment_connector_status_v0",
-        "connector": project_external_connector_status(normalized["connector"]),
-        "authority_material_bound": True,
-        "authority_relation": normalized["authority_relation"],
-        "comment_authority": normalized["comment_authority"],
-        "permissions": project_external_connector_permission_status(
-            normalized_guidance
-        ),
-        "private_authority_material_ref_captured": False,
-    }
-
-
-def _normalize_document_comment_registration(
-    value: Mapping[str, Any],
-) -> dict[str, Any]:
+def _normalized_registration_parts(
+    value: Mapping[str, object],
+) -> tuple[DocumentCommentConnectorRegistration, dict[str, object], list[_RequirementSpec]]:
     if value.get("schema_version") != DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION:
         raise ValueError("document-comment Connector registration schema is invalid")
     connector = value.get("connector")
     if not isinstance(connector, Mapping):
         raise TypeError("document-comment Connector is invalid")
-    normalized_connector = normalize_external_connector_binding(connector)
+    raw_connector = normalize_external_connector_binding(connector)
+    normalized_connector: dict[str, object] = {
+        str(key): item for key, item in raw_connector.items()
+    }
     if normalized_connector["schema_version"] != CONNECTOR_SCHEMA_VERSION:
         raise ValueError("document-comment Connector schema is invalid")
     if normalized_connector["source_kind"] != ExternalSourceKind.DOCUMENT_COMMENT.value:
@@ -417,12 +119,12 @@ def _normalize_document_comment_registration(
         not isinstance(requirement, Mapping) for requirement in requirements
     ):
         raise TypeError("document-comment permission requirements are invalid")
-    normalized_requirements = _normalize_permission_requirements(requirements)
-    _validate_permission_requirements_for_connector(
+    specs = normalize_permission_requirement_specs(requirements)
+    validate_permission_specs_for_connector(
         connector=normalized_connector,
-        requirements=normalized_requirements,
+        specs=specs,
     )
-    return {
+    registration: DocumentCommentConnectorRegistration = {
         "schema_version": DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION,
         "connector": normalized_connector,
         "authority_material_ref": _safe_token(
@@ -431,26 +133,112 @@ def _normalize_document_comment_registration(
         ),
         "authority_relation": "reference_only",
         "comment_authority": "external_input_only",
-        "permission_requirements": normalized_requirements,
+        "permission_requirements": [spec.to_dict() for spec in specs],
+    }
+    return registration, normalized_connector, specs
+
+
+def _normalize_document_comment_registration(
+    value: Mapping[str, object],
+) -> DocumentCommentConnectorRegistration:
+    registration, _, _ = _normalized_registration_parts(value)
+    return registration
+
+
+def build_document_comment_connector_registration(
+    *,
+    connector: Mapping[str, object],
+    authority_material_ref: str,
+    project_materials: Mapping[str, object] | Sequence[Mapping[str, object]],
+    permission_requirements: Sequence[Mapping[str, object]],
+) -> DocumentCommentConnectorRegistration:
+    """Link comments to a separately registered material without granting authority."""
+
+    raw_connector = normalize_external_connector_binding(connector)
+    normalized_connector: dict[str, object] = {
+        str(key): item for key, item in raw_connector.items()
+    }
+    if normalized_connector["source_kind"] != ExternalSourceKind.DOCUMENT_COMMENT.value:
+        raise ValueError("document-comment registration requires document_comment")
+    material_ref = _safe_token(
+        authority_material_ref,
+        field="authority_material_ref",
+    )
+    normalized_materials: object = project_materials
+    if isinstance(project_materials, Mapping):
+        normalized_materials = {
+            str(key): dict(entry) if isinstance(entry, Mapping) else entry
+            for key, entry in project_materials.items()
+        }
+    elif isinstance(project_materials, Sequence) and not isinstance(
+        project_materials, (str, bytes)
+    ):
+        normalized_materials = [
+            dict(entry) if isinstance(entry, Mapping) else entry
+            for entry in project_materials
+        ]
+    materials = normalize_project_materials(normalized_materials)
+    if material_ref not in materials:
+        raise ValueError("authority material must be registered before its comments")
+    specs = normalize_permission_requirement_specs(permission_requirements)
+    validate_permission_specs_for_connector(
+        connector=normalized_connector,
+        specs=specs,
+    )
+    return {
+        "schema_version": DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION,
+        "connector": normalized_connector,
+        "authority_material_ref": material_ref,
+        "authority_relation": "reference_only",
+        "comment_authority": "external_input_only",
+        "permission_requirements": [spec.to_dict() for spec in specs],
+    }
+
+
+def project_document_comment_connector_status(
+    *,
+    registration: Mapping[str, object],
+    permission_guidance: Mapping[str, object],
+) -> DocumentCommentConnectorStatus:
+    """Project a content-free registration and permission status."""
+
+    normalized, connector, expected_specs = _normalized_registration_parts(
+        registration
+    )
+    permission_status = project_permission_status_for_registration(
+        expected_specs=expected_specs,
+        permission_guidance=permission_guidance,
+    )
+    raw_status = project_external_connector_status(connector)
+    return {
+        "schema_version": "agent_document_comment_connector_status_v0",
+        "connector": {str(key): item for key, item in raw_status.items()},
+        "authority_material_bound": True,
+        "authority_relation": normalized["authority_relation"],
+        "comment_authority": normalized["comment_authority"],
+        "permissions": permission_status,
+        "private_authority_material_ref_captured": False,
     }
 
 
 def build_external_connector_provider_page(
     *,
-    events: Sequence[Mapping[str, Any]],
+    events: Sequence[Mapping[str, object]],
     expected_cursor: str | None,
     next_cursor: str,
     has_more: bool,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build one owner-private page returned by a provider adapter."""
 
     if len(events) > 500:
         raise ValueError("external connector provider page exceeds 500 events")
+    copied_events: list[dict[str, object]] = []
     for event in events:
         if not isinstance(event, Mapping):
             raise TypeError("provider page events must be objects")
         if event.get("schema_version") != EVENT_SCHEMA_VERSION:
             raise ValueError("provider page contains an invalid event schema")
+        copied_events.append(dict(event))
     normalized_next_cursor = str(next_cursor or "").strip()
     if not normalized_next_cursor or len(normalized_next_cursor) > 2048:
         raise ValueError("next_cursor must be a bounded owner-private value")
@@ -466,35 +254,32 @@ def build_external_connector_provider_page(
         "expected_cursor": normalized_expected_cursor,
         "next_cursor": normalized_next_cursor,
         "has_more": bool(has_more),
-        "events": [dict(event) for event in events],
+        "events": copied_events,
     }
 
 
 def capture_document_comment_provider_page(
     *,
     project: str,
-    registration: Mapping[str, Any],
-    permission_guidance: Mapping[str, Any],
+    registration: Mapping[str, object],
+    permission_guidance: Mapping[str, object],
     page_reader: ProviderPageReader,
     expected_cursor: str | None,
     limit: int = 100,
     max_pending: int = 1000,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Read and durably capture one provider page after permission readiness."""
 
-    normalized = _normalize_document_comment_registration(registration)
-    normalized_guidance = _permission_guidance_for_registration(
-        registration=normalized,
+    _, connector, expected_specs = _normalized_registration_parts(registration)
+    permission_status = project_permission_status_for_registration(
+        expected_specs=expected_specs,
         permission_guidance=permission_guidance,
-    )
-    permission_status = project_external_connector_permission_status(
-        normalized_guidance
     )
     if permission_status["ready"] is not True:
         return {
             "ok": False,
-            "schema_version": "agent_external_connector_provider_capture_v0",
+            "schema_version": PROVIDER_CAPTURE_SCHEMA_VERSION,
             "status": "permission_required",
             "execute": execute,
             "external_read_performed": False,
@@ -504,13 +289,13 @@ def capture_document_comment_provider_page(
     if not execute:
         return {
             "ok": True,
-            "schema_version": "agent_external_connector_provider_capture_v0",
+            "schema_version": PROVIDER_CAPTURE_SCHEMA_VERSION,
             "status": "preview_ready",
             "execute": False,
             "external_read_performed": False,
             "private_provider_payload_captured": False,
         }
-    page = page_reader(normalized["connector"], expected_cursor, bounded_limit)
+    page = page_reader(connector, expected_cursor, bounded_limit)
     if not isinstance(page, Mapping):
         raise TypeError("external connector provider page is invalid")
     if page.get("schema_version") != PROVIDER_PAGE_SCHEMA_VERSION:
@@ -526,7 +311,7 @@ def capture_document_comment_provider_page(
         raise ValueError("external connector provider exceeded the requested limit")
     capture = capture_external_connector_events(
         project=project,
-        binding=normalized["connector"],
+        binding=connector,
         events=events,
         expected_cursor=expected_cursor,
         next_cursor=str(page.get("next_cursor") or ""),
@@ -535,7 +320,7 @@ def capture_document_comment_provider_page(
     )
     return {
         **capture,
-        "schema_version": "agent_external_connector_provider_capture_v0",
+        "schema_version": PROVIDER_CAPTURE_SCHEMA_VERSION,
         "provider_status": "captured" if capture["ok"] else capture["status"],
         "has_more": page.get("has_more") is True,
         "external_read_performed": True,
@@ -543,36 +328,49 @@ def capture_document_comment_provider_page(
     }
 
 
+def _settlement_guard_result(
+    *,
+    ok: bool,
+    status: str,
+    execute: bool,
+    ack_decision: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "ok": ok,
+        "schema_version": PROVIDER_SETTLEMENT_SCHEMA_VERSION,
+        "status": status,
+        "execute": execute,
+        "external_write_performed": False,
+    }
+    if ack_decision is not None:
+        payload["ack_decision"] = dict(ack_decision)
+    return payload
+
+
 def reply_and_settle_document_comment_event(
     *,
     project: str,
-    registration: Mapping[str, Any],
-    permission_guidance: Mapping[str, Any],
+    registration: Mapping[str, object],
+    permission_guidance: Mapping[str, object],
     event_id: str,
-    effect_receipt: Mapping[str, Any] | None,
+    effect_receipt: Mapping[str, object] | None,
     reply_text: str | None,
     response_writer: ProviderResponseWriter | None,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Enforce effect-before-response-before-ACK at the provider call site."""
 
-    normalized = _normalize_document_comment_registration(registration)
-    connector = normalized["connector"]
-    normalized_guidance = _permission_guidance_for_registration(
-        registration=normalized,
+    _, connector, expected_specs = _normalized_registration_parts(registration)
+    permission_status = project_permission_status_for_registration(
+        expected_specs=expected_specs,
         permission_guidance=permission_guidance,
     )
-    permission_status = project_external_connector_permission_status(
-        normalized_guidance
-    )
     if permission_status["ready"] is not True:
-        return {
-            "ok": False,
-            "schema_version": "agent_external_connector_provider_settlement_v0",
-            "status": "permission_required",
-            "execute": execute,
-            "external_write_performed": False,
-        }
+        return _settlement_guard_result(
+            ok=False,
+            status="permission_required",
+            execute=execute,
+        )
     pending = drain_external_connector_inbox(
         project=project,
         binding=connector,
@@ -581,29 +379,25 @@ def reply_and_settle_document_comment_event(
     items = pending.get("items")
     item = items[0] if isinstance(items, list) and items else None
     if not isinstance(item, Mapping) or str(item.get("event_id") or "") != event_id:
-        return {
-            "ok": False,
-            "schema_version": "agent_external_connector_provider_settlement_v0",
-            "status": "ordered_event_required",
-            "execute": execute,
-            "external_write_performed": False,
-        }
+        return _settlement_guard_result(
+            ok=False,
+            status="ordered_event_required",
+            execute=execute,
+        )
     effect_decision = decide_external_event_ack(
         event_id=event_id,
         effect_receipt=effect_receipt,
         response_policy=ExternalResponsePolicy.NO_RESPONSE.value,
     )
     if effect_decision["effect_ready"] is not True:
-        return {
-            "ok": False,
-            "schema_version": "agent_external_connector_provider_settlement_v0",
-            "status": "durable_effect_required",
-            "execute": execute,
-            "external_write_performed": False,
-            "ack_decision": effect_decision,
-        }
+        return _settlement_guard_result(
+            ok=False,
+            status="durable_effect_required",
+            execute=execute,
+            ack_decision=effect_decision,
+        )
     response_policy = str(connector["response_policy"])
-    response_receipt: Mapping[str, Any] | None = None
+    response_receipt: Mapping[str, object] | None = None
     if response_policy != ExternalResponsePolicy.NO_RESPONSE.value:
         text = " ".join(str(reply_text or "").split())[:1200]
         if not text:
@@ -611,13 +405,11 @@ def reply_and_settle_document_comment_event(
         if response_writer is None:
             raise ValueError("response-capable Connector requires a response_writer")
         if not execute:
-            return {
-                "ok": True,
-                "schema_version": "agent_external_connector_provider_settlement_v0",
-                "status": "preview_ready",
-                "execute": False,
-                "external_write_performed": False,
-            }
+            return _settlement_guard_result(
+                ok=True,
+                status="preview_ready",
+                execute=False,
+            )
         idempotency_key = (
             "sha256:"
             + hashlib.sha256(
@@ -630,28 +422,28 @@ def reply_and_settle_document_comment_event(
                 ).encode("utf-8")
             ).hexdigest()
         )
-        response_receipt = response_writer(
+        raw_receipt = response_writer(
             connector,
-            item,
+            dict(item),
             text,
             idempotency_key,
         )
-        if not isinstance(response_receipt, Mapping):
+        if not isinstance(raw_receipt, Mapping):
             raise TypeError("response_writer must return a response receipt")
-        if response_receipt.get("idempotency_key") != idempotency_key:
+        if raw_receipt.get("idempotency_key") != idempotency_key:
             raise ValueError("response receipt must bind the requested idempotency_key")
         response_receipt = build_external_event_response_receipt(
             event_id=event_id,
             external_write_performed=(
-                response_receipt.get("external_write_performed") is True
+                raw_receipt.get("external_write_performed") is True
             ),
             verification_performed=(
-                response_receipt.get("verification_performed") is True
+                raw_receipt.get("verification_performed") is True
             ),
             response_verified=(
-                response_receipt.get("response_verified") is True
-                or response_receipt.get("reply_verified") is True
-                or response_receipt.get("readback_verified") is True
+                raw_receipt.get("response_verified") is True
+                or raw_receipt.get("reply_verified") is True
+                or raw_receipt.get("readback_verified") is True
             ),
         )
     settlement = settle_external_connector_event(
@@ -664,7 +456,7 @@ def reply_and_settle_document_comment_event(
     )
     return {
         **settlement,
-        "schema_version": "agent_external_connector_provider_settlement_v0",
+        "schema_version": PROVIDER_SETTLEMENT_SCHEMA_VERSION,
         "external_write_performed": bool(
             response_receipt
             and response_receipt.get("external_write_performed") is True
@@ -676,3 +468,40 @@ def reply_and_settle_document_comment_event(
         ),
         "private_provider_payload_captured": False,
     }
+
+
+__all__ = [
+    "DOCUMENT_COMMENT_REGISTRATION_SCHEMA_VERSION",
+    "EVENT_SCHEMA_VERSION",
+    "PERMISSION_GUIDANCE_SCHEMA_VERSION",
+    "PERMISSION_REQUIREMENT_SCHEMA_VERSION",
+    "PROVIDER_CAPTURE_SCHEMA_VERSION",
+    "PROVIDER_PAGE_SCHEMA_VERSION",
+    "PROVIDER_SETTLEMENT_SCHEMA_VERSION",
+    "SAFE_SCOPE_PATTERN",
+    "SAFE_TOKEN_PATTERN",
+    "DocumentCommentConnectorRegistration",
+    "DocumentCommentConnectorStatus",
+    "ExternalConnectorCapability",
+    "ExternalConnectorPermissionStatus",
+    "ProviderPageReader",
+    "ProviderResponseWriter",
+    "_normalize_document_comment_registration",
+    "_normalize_permission_guidance",
+    "_normalize_permission_requirement",
+    "_normalize_permission_requirements",
+    "_permission_guidance_for_registration",
+    "_permission_requirement_fingerprint",
+    "_repair_url",
+    "_safe_token",
+    "_scope_values",
+    "_validate_permission_requirements_for_connector",
+    "build_document_comment_connector_registration",
+    "build_external_connector_permission_requirement",
+    "build_external_connector_provider_page",
+    "capture_document_comment_provider_page",
+    "evaluate_external_connector_permissions",
+    "project_document_comment_connector_status",
+    "project_external_connector_permission_status",
+    "reply_and_settle_document_comment_event",
+]
