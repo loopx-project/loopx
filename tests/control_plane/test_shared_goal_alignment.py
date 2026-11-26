@@ -910,3 +910,388 @@ def test_registered_method_rejects_an_illegal_request() -> None:
             },
         )
     assert excinfo.value.error_kind == "request_rejected"
+
+
+def _canonical_record(**fields: object) -> dict[str, object]:
+    raw = {
+        "role": "agent",
+        "source_section": "Agent Todo",
+        "archive_state": "active",
+        "done": False,
+        **fields,
+    }
+    return canonical_todo_read_record(
+        structured_todo_item(
+            raw,
+            role="agent",
+            source_section="Agent Todo",
+            archive_state="active",
+            text_limit=None,
+        )
+    )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_canonical_snapshot_projects_peer_coordination_opportunities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_fixture(tmp_path, todo_specs=[], canonical=False)
+    todos = [
+        _canonical_record(
+            todo_id="todo_caller_verify",
+            text="[P0] Independently verify simplification slice",
+            status="open",
+            task_class="advancement_task",
+            action_kind="verify",
+            task_domain="control_plane",
+            task_repository="https://github.com/loopx-project/loopx.git",
+            target_key="turn-envelope",
+            required_write_scopes=["loopx/control_plane/quota/"],
+            claimed_by="agent-a",
+            priority="P0",
+            index=1,
+        ),
+        _canonical_record(
+            todo_id="todo_peer_slim",
+            text="[P0] Slim Turn-envelope context payload",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            task_repository="git:github.com/loopx-project/loopx",
+            target_key="turn-envelope",
+            required_write_scopes=["loopx/control_plane/quota/turn_envelope.ts"],
+            completion_validation_required=True,
+            claimed_by="agent-b",
+            priority="P0",
+            index=2,
+        ),
+        _canonical_record(
+            todo_id="todo_peer_synergy",
+            text="[P1] Trim redundant alignment helpers",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            task_repository="git:github.com/loopx-project/loopx",
+            required_write_scopes=["loopx/control_plane/agents/"],
+            claimed_by="agent-b",
+            priority="P1",
+            index=3,
+        ),
+    ]
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos)
+    initialize_canonical_authority(
+        paths["runtime"], GOAL_ID, projection, state_path=paths["state_file"], provider=provider
+    )
+
+    result = project_shared_goal_alignment(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        project=paths["project"],
+        registry_path=paths["registry"],
+        runtime_root=paths["runtime"],
+    )
+    assert result["read_only"] is True
+    assert [p["todo_id"] for p in result["peer_frontiers"]] == ["todo_peer_slim", "todo_peer_synergy"]
+    assert all(p["lease_active"] is False for p in result["peer_frontiers"])
+    kinds = [opp["kind"] for opp in result["collaboration_opportunities"]]
+    assert kinds == [
+        "shared_target_collision_risk",
+        "peer_verification_needed",
+        "peer_unleased_lane_attention",
+        "peer_unleased_lane_attention",
+        "shared_domain_synergy",
+    ]
+    assert all(opp["grants_authority"] is False for opp in result["collaboration_opportunities"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_idle_caller_discovers_peer_verification_demand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_fixture(tmp_path, todo_specs=[], canonical=False)
+    todos = [
+        _canonical_record(
+            todo_id="todo_peer_needs_verify",
+            text="[P0] Verify open-core split PR",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="microkernel",
+            completion_validation_required=True,
+            claimed_by="agent-b",
+            priority="P0",
+            index=1,
+        )
+    ]
+    projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos)
+    initialize_canonical_authority(
+        paths["runtime"], GOAL_ID, projection, state_path=paths["state_file"], provider=provider
+    )
+    result = project_shared_goal_alignment(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        project=paths["project"],
+        registry_path=paths["registry"],
+        runtime_root=paths["runtime"],
+    )
+    assert result["frontier_counts"]["current_agent_claimed_advancement_count"] == 0
+    opps = result["collaboration_opportunities"]
+    assert [opp["kind"] for opp in opps] == [
+        "peer_verification_needed",
+        "peer_unleased_lane_attention",
+    ]
+    assert all(opp["peer_todo_id"] == "todo_peer_needs_verify" for opp in opps)
+    assert all(opp["caller_todo_id"] is None for opp in opps)
+    assert all(opp["grants_authority"] is False for opp in opps)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_corrupt_peer_lease_epoch_and_owner_degrade_to_null_while_caller_rejects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+
+    peer_root = tmp_path / "peer_case"
+    peer_paths = _write_fixture(peer_root, todo_specs=[], canonical=False)
+    peer_todos = [
+        _canonical_record(
+            todo_id="todo_peer_epoch_zero",
+            text="[P0] Peer with zero lease epoch",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            claimed_by="agent-b",
+            priority="P0",
+            index=1,
+        ),
+        _canonical_record(
+            todo_id="todo_peer_bad_owner",
+            text="[P0] Peer with empty lease owner",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            claimed_by="agent-b",
+            priority="P0",
+            index=2,
+        ),
+        _canonical_record(
+            todo_id="todo_peer_valid_lease",
+            text="[P0] Peer with valid active lease",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            claimed_by="agent-b",
+            priority="P0",
+            index=3,
+        ),
+    ]
+    peer_projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=peer_todos)
+    peer_projection["leases"] = [
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_peer_epoch_zero",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "agent-b",
+            "lease_epoch": 0,
+            "version": 1,
+        },
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_peer_bad_owner",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "",
+            "lease_epoch": 2,
+            "version": 1,
+        },
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_peer_valid_lease",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "agent-b",
+            "lease_epoch": 2,
+            "version": 1,
+        },
+    ]
+    initialize_canonical_authority(
+        peer_paths["runtime"], GOAL_ID, peer_projection, state_path=peer_paths["state_file"], provider=provider
+    )
+
+    result = project_shared_goal_alignment(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        project=peer_paths["project"],
+        registry_path=peer_paths["registry"],
+        runtime_root=peer_paths["runtime"],
+    )
+    by_id = {item["todo_id"]: item for item in result["peer_frontiers"]}
+    assert by_id["todo_peer_epoch_zero"]["lease_active"] is None
+    assert by_id["todo_peer_bad_owner"]["lease_active"] is None
+    assert by_id["todo_peer_valid_lease"]["lease_active"] is True
+    assert result["collaboration_opportunities"] == []
+
+    # Binding the same epoch=0 lease to the caller fails closed.
+    caller_root = tmp_path / "caller_case"
+    if provider == "sqlite":
+        isolate_sqlite_runtime(caller_root, monkeypatch)
+    caller_paths = _write_fixture(caller_root, todo_specs=[], canonical=False)
+    caller_todos = [
+        _canonical_record(
+            todo_id="todo_caller_epoch_zero",
+            text="[P0] Caller with zero lease epoch",
+            status="open",
+            task_class="advancement_task",
+            action_kind="run",
+            claimed_by="agent-a",
+            priority="P0",
+            index=1,
+        ),
+    ]
+    caller_projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=caller_todos)
+    caller_projection["leases"] = [
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_caller_epoch_zero",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "agent-a",
+            "lease_epoch": 0,
+            "version": 1,
+        }
+    ]
+    initialize_canonical_authority(
+        caller_paths["runtime"], GOAL_ID, caller_projection, state_path=caller_paths["state_file"], provider=provider
+    )
+    with pytest.raises(ValueError, match="lease epoch"):
+        project_shared_goal_alignment(
+            goal_id=GOAL_ID,
+            agent_id="agent-a",
+            project=caller_paths["project"],
+            registry_path=caller_paths["registry"],
+            runtime_root=caller_paths["runtime"],
+        )
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_unrecognized_peer_lease_schema_degrades_to_null_without_false_unleased_attention(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    from canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+
+    paths = _write_fixture(tmp_path, todo_specs=[], canonical=False)
+    todos = [
+        _canonical_record(
+            todo_id="todo_peer_unknown_schema",
+            text="[P0] Peer with unrecognized lease schema_version",
+            status="open",
+            task_class="advancement_task",
+            action_kind="refactor",
+            task_domain="control_plane",
+            claimed_by="agent-b",
+            priority="P0",
+            index=1,
+        ),
+        _canonical_record(
+            todo_id="todo_peer_released_known",
+            text="[P1] Peer with valid released lease",
+            status="open",
+            task_class="advancement_task",
+            action_kind="code",
+            task_domain="control_plane",
+            claimed_by="agent-b",
+            priority="P1",
+            index=2,
+        ),
+    ]
+    unknown_projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos)
+    unknown_projection["leases"] = [
+        {
+            "schema_version": "task_lease_v99",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_peer_unknown_schema",
+            "status": "active",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "agent-b",
+            "lease_epoch": 2,
+            "version": 1,
+        },
+        {
+            "schema_version": "task_lease_v0",
+            "goal_id": GOAL_ID,
+            "todo_id": "todo_peer_released_known",
+            "status": "released",
+            "expires_at": "2099-01-01T00:00:00Z",
+            "owner": "agent-b",
+            "lease_epoch": 2,
+            "version": 1,
+        },
+    ]
+    initialize_canonical_authority(
+        paths["runtime"], GOAL_ID, unknown_projection, state_path=paths["state_file"], provider=provider
+    )
+    degraded = project_shared_goal_alignment(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        project=paths["project"],
+        registry_path=paths["registry"],
+        runtime_root=paths["runtime"],
+    )
+    by_id = {item["todo_id"]: item for item in degraded["peer_frontiers"]}
+    assert by_id["todo_peer_unknown_schema"]["lease_active"] is None
+    assert by_id["todo_peer_released_known"]["lease_active"] is False
+    assert [opp["peer_todo_id"] for opp in degraded["collaboration_opportunities"]] == [
+        "todo_peer_released_known"
+    ]
+
+    # Switching the exact fixture record back to supported task_lease_v0 reports lease_active=True.
+    restored_root = tmp_path / "restored"
+    if provider == "sqlite":
+        isolate_sqlite_runtime(restored_root, monkeypatch)
+    restored_paths = _write_fixture(restored_root, todo_specs=[], canonical=False)
+    restored_projection = build_todo_runtime_shadow_projection(goal_id=GOAL_ID, todos=todos)
+    restored_projection["leases"] = [
+        {**unknown_projection["leases"][0], "schema_version": "task_lease_v0"},
+        unknown_projection["leases"][1],
+    ]
+    initialize_canonical_authority(
+        restored_paths["runtime"],
+        GOAL_ID,
+        restored_projection,
+        state_path=restored_paths["state_file"],
+        provider=provider,
+    )
+    restored = project_shared_goal_alignment(
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        project=restored_paths["project"],
+        registry_path=restored_paths["registry"],
+        runtime_root=restored_paths["runtime"],
+    )
+    restored_by_id = {item["todo_id"]: item for item in restored["peer_frontiers"]}
+    assert restored_by_id["todo_peer_unknown_schema"]["lease_active"] is True
+    assert restored_by_id["todo_peer_released_known"]["lease_active"] is False

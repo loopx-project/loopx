@@ -92,6 +92,29 @@ def render_shared_goal_alignment_markdown(payload: dict[str, object]) -> str:
                     f"  - `{item.get('todo_id')}` "
                     f"claim_required=`{item.get('claim_required_before_work')}`"
                 )
+    peer_frontiers = payload.get("peer_frontiers")
+    if isinstance(peer_frontiers, list) and peer_frontiers:
+        lines.append("- peer_frontiers:")
+        for peer in peer_frontiers:
+            if isinstance(peer, dict):
+                lines.append(
+                    f"  - `{peer.get('agent_id')}` `{peer.get('todo_id')}` "
+                    f"priority=`{peer.get('priority')}` domain=`{peer.get('task_domain')}` "
+                    f"target=`{peer.get('target_key')}` validation_required=`{peer.get('completion_validation_required')}` "
+                    f"lease_active=`{peer.get('lease_active')}`"
+                )
+    opportunities = payload.get("collaboration_opportunities")
+    if isinstance(opportunities, list) and opportunities:
+        lines.append("- collaboration_opportunities:")
+        for opp in opportunities:
+            if isinstance(opp, dict):
+                lines.append(
+                    f"  - `{opp.get('opportunity_id')}` `{opp.get('kind')}` "
+                    f"peer=`{opp.get('peer_agent_id')}`:`{opp.get('peer_todo_id')}` "
+                    f"caller_todo=`{opp.get('caller_todo_id')}` "
+                    f"advisory_action=`{opp.get('advisory_action')}` "
+                    f"grants_authority=`{opp.get('grants_authority')}`"
+                )
     return "\n".join(lines)
 
 

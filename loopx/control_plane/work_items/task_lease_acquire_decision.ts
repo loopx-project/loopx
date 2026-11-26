@@ -498,7 +498,7 @@ export function evaluateTaskLeaseWriteScopesOverlap(value: unknown): JsonObject 
 }
 
 /** Literal segments before the first wildcard, folded for comparison. */
-function schedulingScopeRoot(scope: string): string {
+export function schedulingScopeRoot(scope: string): string {
   const parts: string[] = [];
   for (const part of scope.replace(/^\/+|\/+$/gu, "").split("/")) {
     if (part.includes("*") || part.includes("?") || part.includes("[")) break;
@@ -507,7 +507,7 @@ function schedulingScopeRoot(scope: string): string {
   return caseFold(parts.join("/"));
 }
 
-function schedulingScopePairOverlaps(left: string, right: string): boolean {
+export function schedulingScopePairOverlaps(left: string, right: string): boolean {
   if (scopePairOverlaps(left, right)) return true;
   const leftRoot = schedulingScopeRoot(left);
   const rightRoot = schedulingScopeRoot(right);

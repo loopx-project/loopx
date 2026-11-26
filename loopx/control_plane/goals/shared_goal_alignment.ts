@@ -1,5 +1,13 @@
 import type { JsonObject } from "../effect_program.ts";
 import { sharedGoalWorkFacts } from "./shared_goal_work.ts";
+import {
+  decodeCallerLanes,
+  decodePeerFrontiers,
+  projectPeerCoordination,
+  type CallerLaneSummary,
+  type CollaborationOpportunity,
+  type PeerFrontierItem,
+} from "./peer_coordination.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import {
   optionalNonEmptyString,
@@ -119,6 +127,8 @@ export interface SharedGoalAlignmentRequest extends JsonObject {
   unclaimed_eligible: UnclaimedEligibleFacts[];
   peer_claimed_bound_todo_ids: string[];
   open_lane_replan_obligation_required: boolean;
+  caller_lanes?: CallerLaneSummary[];
+  peer_frontiers?: PeerFrontierItem[];
 }
 
 export interface SharedGoalAlignment extends JsonObject {
@@ -134,6 +144,8 @@ export interface SharedGoalAlignment extends JsonObject {
   }>;
   drift_facts: SharedGoalAlignmentDriftFact[];
   conflict_facts: SharedGoalAlignmentConflictFact[];
+  peer_frontiers: PeerFrontierItem[];
+  collaboration_opportunities: CollaborationOpportunity[];
   read_only: true;
 }
 
@@ -525,7 +537,7 @@ export function decodeSharedGoalAlignmentRequest(
   }
   const agentIdValue = agentId(request.agent_id, "shared_goal_alignment.agent_id");
   if (request.work_items !== undefined) {
-    for (const key of ["claims", "frontier_counts", "unclaimed_eligible", "peer_claimed_bound_todo_ids"]) {
+    for (const key of ["claims", "frontier_counts", "unclaimed_eligible", "peer_claimed_bound_todo_ids", "caller_lanes", "peer_frontiers"]) {
       if (request[key] !== undefined) throw new EffectRuntimeRequestError("work_items cannot mix with preselected alignment facts");
     }
     request = {...request, ...sharedGoalWorkFacts(request.work_items, agentIdValue, request.observed_at)};
@@ -555,12 +567,18 @@ export function decodeSharedGoalAlignmentRequest(
       claimedTodoIds,
     ),
     open_lane_replan_obligation_required: openLaneReplanObligationRequired,
+    caller_lanes: decodeCallerLanes(request.caller_lanes),
+    peer_frontiers: decodePeerFrontiers(request.peer_frontiers),
   };
 }
 
 /** Project one read-only per-Agent alignment view from typed facts. */
 export function projectSharedGoalAlignment(value: unknown): SharedGoalAlignment {
   const request = decodeSharedGoalAlignmentRequest(value);
+  const coordination = projectPeerCoordination(
+    request.caller_lanes ?? [],
+    request.peer_frontiers ?? [],
+  );
   return {
     schema_version: SHARED_GOAL_ALIGNMENT_SCHEMA_VERSION,
     goal_id: request.goal_id,
@@ -580,6 +598,7 @@ export function projectSharedGoalAlignment(value: unknown): SharedGoalAlignment 
       request.peer_claimed_bound_todo_ids,
       request.open_lane_replan_obligation_required,
     ),
+    ...coordination,
     read_only: true,
   };
 }

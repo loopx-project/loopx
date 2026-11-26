@@ -263,6 +263,18 @@ Paired diffs do not certify translation accuracy.
     governed commit policy/verifier, lease-impact handling and Stage 3+
     qualification remain unshipped. Manager handoff consumes these boundaries;
     it does not provide another amendment writer.
+- [Goal-Oriented Multi-Agent Peer Coordination v0](goal-oriented-multi-agent-coordination-v0.md)
+  ([中文版](goal-oriented-multi-agent-coordination-v0.zh-CN.md))
+  - **Delivery on `main`:** M0 read-only peer frontier and collaboration
+    opportunity projection implemented (`peer_coordination.ts`); M1–M3 remain
+    unshipped.
+  - **Current boundary:** Projects bounded `peer_frontiers` and deterministic
+    `collaboration_opportunities` (`shared_target_collision_risk`,
+    `peer_verification_needed`, `peer_unleased_lane_attention`,
+    `shared_domain_synergy`, all with `grants_authority: false`) onto
+    `shared_goal_alignment_v0` from canonical `file_v0`/`sqlite_v0` snapshots.
+    Turn-envelope `<=400 B` digests (M1), cooldown-gated bilateral `manager-inbox`
+    handshakes (M2), and host-neutral live route observers (M3) remain open.
 - [Goal contract evolution and bounded working context v0](goal-contract-evolution-v0.md)
   ([中文版](goal-contract-evolution-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; existing objective revision and additive

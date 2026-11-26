@@ -11,6 +11,16 @@ from typing import Any
 from ...registry import resolve_state_file
 from ..coordination.local_authority import canonical_todo_summary_fields, read_canonical_todos_if_promoted
 from ..todos.contract import normalize_todo_excluded_agents
+from ..todos.todo_semantics import todo_priority_parts
+
+
+def _canonical_lane_priority(source: dict[str, Any]) -> str | None:
+    raw = str(source.get("priority") or "").strip().upper()
+    if raw in {"P0", "P1", "P2", "P3", "P4"}:
+        return raw
+    parsed, _ = todo_priority_parts(str(source.get("text") or ""))
+    token = str(parsed or "").strip().upper()[:2]
+    return token if token in {"P0", "P1", "P2", "P3", "P4"} else None
 
 
 @dataclass(frozen=True)
@@ -43,7 +53,10 @@ def read_shared_goal_work_source(*, goal: dict[str, Any], project: Path,
     items = []
     for source in summary.get("items") or []:
         item = {key: source.get(key) for key in ("todo_id", "status", "done", "task_class",
-            "archive_state", "claimed_by", "bound_agent", "resume_when", "resume_ready", "action_kind")}
+            "archive_state", "claimed_by", "bound_agent", "resume_when", "resume_ready",
+            "action_kind", "task_domain", "task_repository", "target_key",
+            "required_write_scopes", "completion_validation_required")}
+        item["priority"] = _canonical_lane_priority(source)
         item["excluded_agents"] = normalize_todo_excluded_agents(source.get("excluded_agents"))
         item["lease"] = None
         todo_id = item["todo_id"]
