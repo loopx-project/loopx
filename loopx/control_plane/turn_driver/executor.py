@@ -487,7 +487,7 @@ def validate_loopx_turn_host_result(
         errors.append("host result completed_phases must be host_execute, typed_result")
 
     material = kind in MATERIAL_HOST_RESULT_KINDS
-    normalized = {
+    normalized: dict[str, object] = {
         "schema_version": LOOPX_TURN_RESULT_SCHEMA_VERSION,
         "turn_key": turn_key,
         "result_kind": kind.value if kind else None,
