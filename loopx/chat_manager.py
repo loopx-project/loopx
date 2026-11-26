@@ -56,8 +56,7 @@ from .chat import (
 )
 from .chat_agent import CodexChatAgentError
 from .chat_store import (
-    CHAT_SESSION_MODE_ATTACHED,
-    CHAT_SESSION_MODE_MANAGED,
+    CHAT_SESSION_MODES,
     RESUMABLE_SESSION_STATES,
 )
 
@@ -661,10 +660,7 @@ def manager_connection_executor_endpoint(
 MANAGER_CHANNEL_SESSION_MODE_SOURCE_READBACK = "session_readback"
 MANAGER_CHANNEL_SESSION_MODE_SOURCE_UNBOUND = "unbound"
 MANAGER_CHANNEL_SESSION_MODE_SOURCE_UNRECOGNIZED = "unrecognized"
-MANAGER_CHANNEL_SESSION_MODES = (
-    CHAT_SESSION_MODE_MANAGED,
-    CHAT_SESSION_MODE_ATTACHED,
-)
+MANAGER_CHANNEL_SESSION_MODES = CHAT_SESSION_MODES
 
 
 def manager_channel_session_mode_readback(

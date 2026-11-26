@@ -493,18 +493,20 @@ def handle_lark_kanban_command(
             payload["operator_card_fields"] = lark_kanban_operator_card_fields()
         elif args.lark_kanban_command == "sync-loopx-todos":
             target_config = _target_config(args, config_path=config_path)
-            payload = sync_loopx_todos_to_lark_kanban(
-                target_config,
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                config_path=config_path,
-                project=Path(args.project).expanduser() if args.project else None,
-                state_file=Path(args.state_file).expanduser() if args.state_file else None,
-                include_done=bool(args.include_done),
-                limit=args.limit,
-                sink_visibility=args.sink_visibility,
-                execute=bool(args.execute),
+            payload = dict(
+                sync_loopx_todos_to_lark_kanban(
+                    target_config,
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    config_path=config_path,
+                    project=Path(args.project).expanduser() if args.project else None,
+                    state_file=Path(args.state_file).expanduser() if args.state_file else None,
+                    include_done=bool(args.include_done),
+                    limit=args.limit,
+                    sink_visibility=args.sink_visibility,
+                    execute=bool(args.execute),
+                )
             )
             try:
                 if not payload.get("ok"):

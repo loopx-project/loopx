@@ -36,6 +36,12 @@ class HeartbeatReceiptIdentityConflictError(ValueError):
     """Public-safe diagnostic for a same-turn settlement identity conflict."""
 
 
+class MalformedSettlementStateError(ValueError):
+    """Public-safe diagnostic for persisted settlement state rejected by TS readback."""
+
+    diagnostic_code = "malformed_settlement_state"
+
+
 class QuotaRunIndexConflict(ValueError):
     """A quota spend was definitively rejected by the run-index CAS."""
 
