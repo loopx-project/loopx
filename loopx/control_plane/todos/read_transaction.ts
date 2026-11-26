@@ -389,6 +389,8 @@ const originalRecords = (value: unknown): JsonObject[] => Array.isArray(value) ?
  * Reuse full collection validation; only the fields used by preparation cross
  * the caller boundary. This read acquires no lease and grants no readiness. */
 export async function readExecutionPreparationSource(input: JsonObject, dependencies: LocalAuthorityProviderDependencies = {}): Promise<JsonObject> {
+  const takeover = input.include_takeover_basis === undefined ? false
+    : requireBoolean(input.include_takeover_basis, "include_takeover_basis");
   const source = requireJsonObject(input.source, "execution preparation source");
   const goalId = requireNonEmptyString(source.goal_id, "goal_id");
   const todoId = id(input.todo_id);
@@ -401,14 +403,18 @@ export async function readExecutionPreparationSource(input: JsonObject, dependen
   const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
   if (!todo) return unavailable;
   const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
-    .map(({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch}) =>
-      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch}));
+    .map(({todo_id, schema_version, status, owner, acquired_at, updated_at, expires_at,
+      idempotency_key, version, lease_epoch, write_repository}) =>
+      ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch,
+        ...(takeover ? {acquired_at, updated_at, write_repository} : {})}));
   return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
     goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
     source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,
     decision_read_from_provider: canonical.decision_read_from_provider,
     legacy_fallback_used: canonical.legacy_fallback_used,
     todo: {todo_id: todoId, status: todo.status, claimed_by: todo.claimed_by}, leases,
+    ...(takeover ? {takeover_basis: {todo,
+      acceptance_sha256: canonicalAuthoritySha256(canonical.goal_acceptance_contract ?? null)}} : {}),
   }};
 }
 

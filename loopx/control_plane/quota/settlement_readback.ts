@@ -66,6 +66,7 @@ import {
   selectAdmissionHeartbeatReceipt,
   selectEffectiveHeartbeatReceipt,
   heartbeatWorkRequalification,
+  validateHeartbeatTakeoverParent,
   heartbeatPreparedLease,
   heartbeatPreparedWorkAdmission,
   isHeartbeatLeaseReadiness,
@@ -704,7 +705,9 @@ function heartbeatValidationEvent(
   receipt: JsonObject,
   identity: SettlementIdentity,
 ): JsonObject | null {
-  if (!isHeartbeatLeaseReadiness(receipt)) return receipt;
+  const continuation = (event: JsonObject): boolean => isHeartbeatLeaseReadiness(event)
+    || details(event).settlement_receipt_revision === "lease_takeover";
+  if (!continuation(receipt)) return receipt;
   // Readiness appends to the same Turn; only its original positive work
   // admission can serve as validation. Follow durable links toward that root.
   let validation = receipt;
@@ -719,7 +722,8 @@ function heartbeatValidationEvent(
         event.goal_id !== identity.goal_id || event.agent_id !== identity.agent_id ||
         fact.run_id !== identity.turn_instance_id || fact.todo_id !== identity.todo_id ||
         !effectIdsMatch(fact.settlement_effect_id, identity.effect_id)) return null;
-    if (!isHeartbeatLeaseReadiness(event)) return event;
+    validateHeartbeatTakeoverParent(validation, event, identity);
+    if (!continuation(event)) return event;
     validation = event;
   }
   return null;
@@ -1375,6 +1379,9 @@ function readQuotaSettlementFromRequest(
     );
   }
   const receiptDetails = details(heartbeatReceipt);
+  if (receiptDetails.takeover_original_event_id !== undefined && heartbeatValidationEvent(events, heartbeatReceipt, identity) === null) {
+    throw new EffectRuntimeRequestError("lease takeover original admission is unavailable", "malformed_settlement_state");
+  }
   const preparedLease = heartbeatPreparedLease(receiptDetails);
   if (Object.hasOwn(receiptDetails, "prepared_lease_required") && receiptDetails.prepared_lease_required !== true) {
     throw new EffectRuntimeRequestError("Turn readiness requirement is malformed", "malformed_settlement_state");
