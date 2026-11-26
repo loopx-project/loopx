@@ -210,6 +210,103 @@ interface QueuePlan extends Binding {
   readonly todoId?: string | undefined
 }
 
+interface TodoUnitPrefetchPin {
+  readonly session: Agent['session']
+  readonly activationSession: Agent['session']
+  readonly activeUnit: ActiveTodoUnitState | undefined
+  readonly anchor: TodoUnitAnchor | undefined
+  readonly storedAnchor: TodoUnitAnchor | undefined
+  readonly stepCount: number
+  readonly nodes: readonly SessionSeq[]
+  readonly tailSeqs: readonly SessionSeq[]
+  readonly eventCount: number
+  readonly lastEventSeq: number
+}
+
+function isTodoUnitDriverQuiescent(agent: Agent, state: DriverState): boolean {
+  return agent.status === 'idle'
+    && !state.competing
+    && state.commands.size === 0
+    && !inboxHasPending(agent.inbox)
+    && state.activation.pendingModelCalls.size === 0
+    && agent.id === agent.session.id
+    && agent.id === agent.session.header.id
+}
+
+function captureTodoUnitPrefetchPin(
+  agent: Agent,
+  state: DriverState,
+  retained: SessionDriverRetention,
+  todoId: string,
+  anchor: TodoUnitAnchor | undefined,
+): TodoUnitPrefetchPin {
+  const session = agent.session
+  const nodes = [...session.surface.nodes]
+  const events = session.snapshotEvents()
+  const prefixCount = anchor?.prefixNodeCount ?? 0
+  return {
+    session,
+    activationSession: state.activation.session,
+    activeUnit: retained.activeTodoUnit,
+    anchor,
+    storedAnchor: todoId ? retained.todoUnitAnchors?.get(todoId) : undefined,
+    stepCount: retained.todoUnitStepCount ?? 0,
+    nodes,
+    tailSeqs: nodes.slice(prefixCount),
+    eventCount: events.length,
+    lastEventSeq: Number(events.at(-1)?.seq ?? 0),
+  }
+}
+
+function detectTodoUnitPrefetchInterference(
+  driverDisposed: boolean,
+  agent: Agent,
+  state: DriverState,
+  retained: SessionDriverRetention,
+  todoId: string,
+  anchorOverride: TodoUnitAnchor | undefined,
+  pin: TodoUnitPrefetchPin,
+): string | null {
+  if (
+    driverDisposed || state.stopping || agent.session !== pin.session
+    || state.activation.session !== pin.activationSession
+    || agent.id !== agent.session.id || agent.id !== agent.session.header.id
+  ) {
+    return 'session_changed_during_prefetch'
+  }
+  if (retained.activeTodoUnit !== pin.activeUnit) {
+    return 'active_unit_changed_during_prefetch'
+  }
+  const currentStoredAnchor = todoId ? retained.todoUnitAnchors?.get(todoId) : undefined
+  const currentAnchor = anchorOverride ?? currentStoredAnchor
+  if (
+    currentAnchor !== pin.anchor
+    || currentStoredAnchor !== pin.storedAnchor
+    || (retained.todoUnitStepCount ?? 0) !== pin.stepCount
+  ) {
+    return 'segment_advanced_during_prefetch'
+  }
+  const events = pin.session.snapshotEvents()
+  const newEvents = events.filter((ev, idx) => idx >= pin.eventCount || Number(ev.seq) > pin.lastEventSeq)
+  if (newEvents.some(ev => ev.type === 'user/message')) {
+    return 'user_message_during_prefetch'
+  }
+  if (newEvents.some(ev => (
+    ev.type === 'step/start' || ev.type === 'turn/start'
+    || ev.type === 'assistant/message' || ev.type === 'tool/call' || ev.type === 'tool/result'
+  ))) {
+    return 'segment_advanced_during_prefetch'
+  }
+  const liveNodes = pin.session.surface.nodes
+  if (liveNodes.length !== pin.nodes.length || liveNodes.some((seq, idx) => seq !== pin.nodes[idx])) {
+    return 'tail_changed_during_prefetch'
+  }
+  if (!isTodoUnitDriverQuiescent(agent, state)) {
+    return 'non_quiescent_boundary'
+  }
+  return null
+}
+
 interface WaitPlan {
   readonly kind: 'wait'
   readonly delayMs?: number | undefined
@@ -949,22 +1046,18 @@ export class LoopXContinuationDriver {
     if (cached !== undefined) {
       return cached
     }
-    const quiescent = agent.status === 'idle'
-      && state.commands.size === 0
-      && !inboxHasPending(agent.inbox)
-      && state.activation.pendingModelCalls.size === 0
-      && agent.id === agent.session.id
-      && agent.id === agent.session.header.id
+    const quiescent = isTodoUnitDriverQuiescent(agent, state)
       && typeof agent.session.header.cwd === 'string'
       && agent.session.header.cwd.length > 0
       && request.quiescentBoundary !== false
     const sessionCwd = agent.session.header.cwd
-    const storedAnchor = retained.todoUnitAnchors?.get(request.todoId)
+    let storedAnchor = retained.todoUnitAnchors?.get(request.todoId)
     const activeAnchor = request.anchor ?? storedAnchor
     let effectiveRequest: TodoUnitFoldRequest = {
       ...request,
       quiescentBoundary: quiescent,
     }
+    let foldSession = agent.session
     if (
       quiescent
       && typeof sessionCwd === 'string'
@@ -980,21 +1073,52 @@ export class LoopXContinuationDriver {
     ) {
       const safeArgv = validateTodoUnitObsForExecution(request.obsNextCmd)
       if (safeArgv !== null && request.obsNextCmd !== undefined) {
+        const prefetchPin = captureTodoUnitPrefetchPin(agent, state, retained, request.todoId, activeAnchor)
         const obsRes = await this.runObsCommand(safeArgv, sessionCwd)
-        effectiveRequest = {
-          ...effectiveRequest,
-          obsNextCmd: {
-            ...request.obsNextCmd,
-            command: safeArgv,
-            exitCode: obsRes.exitCode,
-            output: obsRes.output,
-            timedOut: obsRes.timedOut,
-            truncated: obsRes.truncated,
-          },
+        const interferenceReason = detectTodoUnitPrefetchInterference(
+          this.disposed,
+          agent,
+          state,
+          retained,
+          request.todoId,
+          request.anchor,
+          prefetchPin,
+        )
+        const obsNextCmd = {
+          ...request.obsNextCmd,
+          command: safeArgv,
+          exitCode: obsRes.exitCode,
+          output: obsRes.output,
+          timedOut: obsRes.timedOut,
+          truncated: obsRes.truncated,
+        }
+        if (interferenceReason !== null) {
+          if (
+            interferenceReason === 'user_message_during_prefetch'
+            || interferenceReason === 'active_unit_changed_during_prefetch'
+            || interferenceReason === 'tail_changed_during_prefetch'
+          ) {
+            retained.todoUnitAnchors?.delete(request.todoId)
+          }
+          foldSession = prefetchPin.session
+          storedAnchor = prefetchPin.storedAnchor
+          effectiveRequest = {
+            ...effectiveRequest,
+            quiescentBoundary: false,
+            nonQuiescentReason: interferenceReason,
+            expectedTailSeqs: prefetchPin.tailSeqs,
+            obsNextCmd,
+          }
+        } else {
+          effectiveRequest = {
+            ...effectiveRequest,
+            expectedTailSeqs: prefetchPin.tailSeqs,
+            obsNextCmd,
+          }
         }
       }
     }
-    const outcome = applyTodoUnitFoldAndPrefetch(agent.session, policy, effectiveRequest, storedAnchor)
+    const outcome = applyTodoUnitFoldAndPrefetch(foldSession, policy, effectiveRequest, storedAnchor)
     if (outcome.operator === 'FoldToReceipt') {
       retained.todoUnitAnchors?.delete(request.todoId)
       if (foldKey !== undefined) {
@@ -1896,6 +2020,15 @@ export class LoopXContinuationDriver {
       retained.activeTodoUnit = undefined
       return
     }
+    const receiptAnchor = active.anchor
+      ?? (active.todoId !== undefined ? retained.todoUnitAnchors?.get(active.todoId) : undefined)
+    const receiptPin = captureTodoUnitPrefetchPin(
+      state.agent,
+      state,
+      retained,
+      active.todoId ?? '',
+      receiptAnchor,
+    )
     try {
       const readback = await runJsonCommand(command, [
         '--registry', '.loopx/registry.json', '--format', 'json', 'quota', 'receipt',
@@ -1908,6 +2041,19 @@ export class LoopXContinuationDriver {
         signal,
       })
       this.ensureReady(state, signal, state.activation.session)
+      if (
+        detectTodoUnitPrefetchInterference(
+          this.disposed,
+          state.agent,
+          state,
+          retained,
+          active.todoId ?? '',
+          active.anchor,
+          receiptPin,
+        ) !== null
+      ) {
+        return
+      }
       const decoded = decodeQuotaSettlementReadback(
         readback,
         binding.goalId,

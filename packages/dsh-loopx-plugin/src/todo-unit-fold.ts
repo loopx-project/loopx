@@ -109,6 +109,8 @@ export interface TodoUnitFoldRequest {
   readonly baselineTokens?: number | undefined
   readonly replacementTokens?: number | undefined
   readonly quiescentBoundary?: boolean | undefined
+  readonly nonQuiescentReason?: string | undefined
+  readonly expectedTailSeqs?: readonly SessionSeq[] | undefined
   readonly failureFacts?: readonly string[] | undefined
   readonly openObligations?: readonly string[] | undefined
 }
@@ -432,7 +434,7 @@ export function applyTodoUnitFoldAndPrefetch(
     return keepRawOutcome('disabled', 'disabled')
   }
   if (request.quiescentBoundary === false) {
-    return keepRawOutcome('fallback_keep_raw', 'non_quiescent_boundary')
+    return keepRawOutcome('fallback_keep_raw', request.nonQuiescentReason ?? 'non_quiescent_boundary')
   }
 
   const anchor = request.anchor ?? storedAnchor
@@ -483,6 +485,15 @@ export function applyTodoUnitFoldAndPrefetch(
   }
 
   const shadowedSeqs = nodes.slice(anchor.prefixNodeCount)
+  if (
+    request.expectedTailSeqs !== undefined
+    && (
+      shadowedSeqs.length !== request.expectedTailSeqs.length
+      || shadowedSeqs.some((seq, i) => seq !== request.expectedTailSeqs![i])
+    )
+  ) {
+    return keepRawOutcome('fallback_keep_raw', 'tail_changed_during_prefetch', undefined, undefined, livePrefixDigest)
+  }
   const startSeq = shadowedSeqs[0]
   const endSeq = shadowedSeqs.at(-1)
   if (startSeq === undefined || endSeq === undefined) {

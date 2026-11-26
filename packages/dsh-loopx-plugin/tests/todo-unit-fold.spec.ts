@@ -122,7 +122,7 @@ function appendPrefixQ(session: Session): SessionSeq[] {
   return [...session.surface.nodes]
 }
 
-function appendTodoExploratorySuffix(session: Session, suffixTag: string): SessionSeq[] {
+function appendTodoExploratorySuffix(session: Session, suffixTag: string, turn = 2): SessionSeq[] {
   const before = session.surface.nodes.length
   const callId = `call-${suffixTag}-1` as ToolCallId
   const bloat = `exploratory search output for ${suffixTag} `.repeat(80)
@@ -133,14 +133,14 @@ function appendTodoExploratorySuffix(session: Session, suffixTag: string): Sessi
     source: { kind: 'user' },
   }, { surfaceOp: 'append' })
   session.append('tool/call', {
-    turn: 2,
+    turn,
     step: 1,
     callId,
     name: 'search',
     arguments: '{"q":"loopx"}',
   })
   session.append('assistant/message', {
-    turn: 2,
+    turn,
     step: 1,
     message: {
       id: `asst-${suffixTag}-1` as MessageId,
@@ -151,7 +151,7 @@ function appendTodoExploratorySuffix(session: Session, suffixTag: string): Sessi
     stream: [],
   }, { surfaceOp: 'append' })
   session.append('tool/result', {
-    turn: 2,
+    turn,
     step: 1,
     message: {
       id: `res-${suffixTag}-1` as MessageId,
@@ -162,7 +162,7 @@ function appendTodoExploratorySuffix(session: Session, suffixTag: string): Sessi
     },
   }, { surfaceOp: 'append' })
   session.append('assistant/message', {
-    turn: 2,
+    turn,
     step: 2,
     message: {
       id: `asst-${suffixTag}-2` as MessageId,
@@ -923,4 +923,330 @@ describe('dsh-loopx-plugin Todo semantic-unit FoldAndPrefetch', () => {
       }
     },
   )
+
+  it('keeps settled tail and mid-prefetch user corrections intact across real DSH inbox and continuation interleavings while running prefetch once', async () => {
+    const runCase = async (mode: 'clean' | 'session_correction_mid_prefetch' | 'inbox_correction_mid_prefetch') => {
+      const cwd = await mkdtemp(join(tmpdir(), `dsh-race-${mode}-`))
+      const harness = await createRealSessionHarness(cwd)
+      try {
+        const sourcePath = join(cwd, 'rollout.jsonl')
+        const sourceContent = `{"event":"settled","mode":"${mode}"}\n`
+        await writeFile(sourcePath, sourceContent, 'utf8')
+        const { createHash } = await import('node:crypto')
+        const sourceSha = createHash('sha256').update(sourceContent, 'utf8').digest('hex')
+
+        appendPrefixQ(harness.session)
+        harness.session.append('user/message', {
+          id: `act-${mode}` as UserMessage['id'],
+          role: 'user',
+          content: [{ type: 'text', text: 'loopx' }],
+          source: { kind: 'skill-invocation', name: 'loopx', form: 'instructions' } as never,
+        }, { surfaceOp: 'append' })
+
+        let settledTurn1 = false
+        let activeTodo = 'todo_real_1'
+        let stepSeq = 0
+        let obsStartedResolve!: () => void
+        const obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+        let obsReleaseResolve!: () => void
+        const obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+
+        const obsRunner = vi.fn<TodoUnitObsRunner>(async () => {
+          obsStartedResolve()
+          if (mode !== 'clean') {
+            await obsRelease
+          }
+          return { exitCode: 0, output: 'OBS_OUTPUT status=clean' }
+        })
+
+        const runner: FileRunner = async (_file, args) => {
+          if (args.includes('resolve-agent-thread')) {
+            return {
+              exitCode: 0,
+              stderr: '',
+              stdout: JSON.stringify({
+                schema_version: 'loopx_thread_agent_binding_resolution_v0',
+                ok: true,
+                status: 'bound',
+                host_surface: 'deepseek-harness-native',
+                thread_id: harness.agent.id,
+                goal_id: 'goal-race',
+                agent_id: 'agent-race',
+                matches: [{ goal_id: 'goal-race', agent_id: 'agent-race' }],
+              }),
+            }
+          }
+          if (args.includes('quota') && args.includes('should-run')) {
+            const turnIdx = args.indexOf('--turn-instance-id')
+            const turnId = turnIdx >= 0 ? args[turnIdx + 1]! : 'turn-x'
+            return {
+              exitCode: 0,
+              stderr: '',
+              stdout: JSON.stringify({
+                ok: true,
+                mode: 'should-run',
+                goal_id: 'goal-race',
+                should_run: true,
+                agent_identity: { agent_id: 'agent-race', registered: true },
+                selected_todo: { todo_id: activeTodo, text: `Execute ${activeTodo}` },
+                heartbeat_receipt: {
+                  schema_version: 'heartbeat_receipt_v0',
+                  status: 'committed',
+                  turn_instance_id: turnId,
+                  settlement_identity: { goal_id: 'goal-race', agent_id: 'agent-race', turn_instance_id: turnId, todo_id: activeTodo },
+                },
+              }),
+            }
+          }
+          if (args.includes('quota') && args.includes('receipt') && args.includes('--include-settlement')) {
+            const turnIdx = args.indexOf('--turn-instance-id')
+            const turnId = turnIdx >= 0 ? args[turnIdx + 1]! : 'turn-x'
+            return {
+              exitCode: 0,
+              stderr: '',
+              stdout: JSON.stringify({
+                ok: true,
+                schema_version: 'quota_receipt_readback_v0',
+                goal_id: 'goal-race',
+                agent_id: 'agent-race',
+                turn_instance_id: turnId,
+                settlement_verified: settledTurn1,
+                settlement_conflict_reason: settledTurn1 ? null : 'missing_completion_event',
+                completion_receipt: settledTurn1
+                  ? {
+                    todo_id: 'todo_real_1',
+                    completion_receipt_id: `ev-${turnId}`,
+                    exit_code: 0,
+                    sha256: 'e'.repeat(64),
+                    failure_facts: [],
+                    open_obligations: ['verify selected scope'],
+                    source_ref: { path: sourcePath, sha256: sourceSha },
+                  }
+                  : null,
+              }),
+            }
+          }
+          if (args.includes('heartbeat-prompt')) {
+            const turnIdx = args.indexOf('--turn-instance-id')
+            const turnId = turnIdx >= 0 ? args[turnIdx + 1]! : 'turn-x'
+            return {
+              exitCode: 0,
+              stderr: '',
+              stdout: JSON.stringify({
+                schema_version: 'heartbeat_agent_input_v1',
+                ok: true,
+                goal_id: 'goal-race',
+                agent_id: 'agent-race',
+                turn_instance_id: turnId,
+                selected_todo: { todo_id: activeTodo },
+                task_body: `LOOPX_TURN=${turnId} work=${activeTodo}`,
+              }),
+            }
+          }
+          throw new Error(`unexpected cli call: ${args.join(' ')}`)
+        }
+
+        const queued = harness.queued
+        let turnCounter = 0
+        const driver = new LoopXContinuationDriver({
+          isLiveAgent: () => true,
+          runner,
+          resolveCommand: async () => ({ file: 'loopx', prefix: [], skillCommand: 'loopx', version: 'loopx 2.4.0' }),
+          makeTurnInstanceId: () => `turn-race-${++turnCounter}`,
+          todoUnitFold: {
+            enabled: true,
+            minNetSavingsTokens: 64,
+            obsNextCmd: { command: ['git', 'status', '--short'] },
+          },
+          runObsCommand: obsRunner,
+        })
+
+        driver.observeAgent(harness.agent)
+        await vi.waitFor(() => expect(queued.length).toBe(1))
+        const msg1 = queued.shift()!
+        driver.onInboxClaimed(harness.agent, msg1)
+        await driver.onPreStep(harness.agent, [msg1], new AbortController().signal, async () => ({ kind: 'proceed', messages: [msg1] } as never))
+        harness.setStatus('running')
+        driver.onSessionEvent(harness.agent, harness.session.append('user/message', msg1, { surfaceOp: 'append' }))
+        driver.onSessionEvent(harness.agent, harness.session.append('step/start', { turn: 2, step: ++stepSeq } as never))
+        appendTodoExploratorySuffix(harness.session, `race-${mode}`)
+        driver.onSessionEvent(harness.agent, harness.session.append('turn/end', { turn: 2, reason: { kind: 'completed' } } as never))
+
+        settledTurn1 = true
+        activeTodo = 'todo_real_2'
+        harness.setStatus('idle')
+        driver.onAgentStatus(harness.agent, 'idle')
+
+        await obsStarted
+
+        const correctionText = `USER_CORRECTION_${mode}: preserve selected todo_real_2 scope`
+        const correctionMessage: UserMessage = {
+          id: `corr-${mode}` as UserMessage['id'],
+          role: 'user',
+          content: [{ type: 'text', text: correctionText }],
+          source: { kind: 'user' },
+        }
+
+        if (mode === 'clean') {
+          await vi.waitFor(() => expect(queued.length).toBe(1))
+          const derived = harness.session.deriveMessages()
+          expect(obsRunner).toHaveBeenCalledTimes(1)
+          expect(derived.some(m => m.role === 'user' && m.source.kind === 'loopx-todo-fold')).toBe(true)
+          expect(derived.some(m => JSON.stringify(m).includes(`exploratory search output for race-${mode}`))).toBe(false)
+          return
+        }
+
+        if (mode === 'session_correction_mid_prefetch') {
+          const corrEv = harness.session.append('user/message', correctionMessage, { surfaceOp: 'append' })
+          driver.onSessionEvent(harness.agent, corrEv)
+          obsReleaseResolve()
+
+          await vi.waitFor(() => expect(queued.length).toBe(1))
+          expect(String((queued[0]!.content[0] as { text: string }).text)).toContain('work=todo_real_2')
+        } else {
+          queued.push(correctionMessage)
+          driver.onInboxInserted(harness.agent, correctionMessage)
+          obsReleaseResolve()
+
+          // Automatic continuation stays fenced while user inbox correction is pending, and raw tail stays un-folded.
+          await vi.waitFor(() => expect(obsRunner).toHaveBeenCalledTimes(1))
+          await Promise.resolve()
+          expect(queued).toEqual([correctionMessage])
+          expect(harness.session.deriveMessages().some(m => m.role === 'user' && m.source.kind === 'loopx-todo-fold')).toBe(false)
+
+          // Now claim and execute the inbox user correction turn, then return idle so todo_real_2 continues.
+          const claimedCorrection = queued.shift()!
+          driver.onInboxClaimed(harness.agent, claimedCorrection)
+          harness.setStatus('running')
+          driver.onSessionEvent(harness.agent, harness.session.append('user/message', claimedCorrection, { surfaceOp: 'append' }))
+          driver.onSessionEvent(harness.agent, harness.session.append('step/start', { turn: 3, step: ++stepSeq } as never))
+          driver.onSessionEvent(harness.agent, harness.session.append('turn/end', { turn: 3, reason: { kind: 'completed' } } as never))
+          harness.setStatus('idle')
+          driver.onAgentStatus(harness.agent, 'idle')
+
+          await vi.waitFor(() => expect(queued.length).toBe(1))
+          expect(String((queued[0]!.content[0] as { text: string }).text)).toContain('work=todo_real_2')
+        }
+
+        const finalMessages = harness.session.deriveMessages()
+        const finalSerialized = JSON.stringify(finalMessages)
+        expect(obsRunner).toHaveBeenCalledTimes(1)
+        expect(finalMessages.some(m => m.role === 'user' && m.source.kind === 'loopx-todo-fold')).toBe(false)
+        expect(finalSerialized).toContain(correctionText)
+        expect(finalSerialized).toContain(`exploratory search output for race-${mode}`)
+        expect(harness.session.snapshotEvents().some(ev => JSON.stringify(ev).includes(correctionText))).toBe(true)
+      } finally {
+        await harness.dispose()
+        await rm(cwd, { recursive: true, force: true })
+      }
+    }
+
+    await runCase('clean')
+    await runCase('session_correction_mid_prefetch')
+    await runCase('inbox_correction_mid_prefetch')
+  })
+
+  it('aborts FoldToReceipt to KeepRaw if a user message or segment advance lands during foldAndPrefetch', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'dsh-fold-segment-'))
+    const harness = await createRealSessionHarness(cwd)
+    try {
+      appendPrefixQ(harness.session)
+
+      let obsStartedResolve!: () => void
+      let obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+      let obsReleaseResolve!: () => void
+      let obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+      const obsRunner = vi.fn<TodoUnitObsRunner>(async () => {
+        obsStartedResolve()
+        await obsRelease
+        return { exitCode: 0, output: 'NEXT_OK' }
+      })
+
+      const driver = new LoopXContinuationDriver({
+        isLiveAgent: () => true,
+        todoUnitFold: { enabled: true, minNetSavingsTokens: 64 },
+        runObsCommand: obsRunner,
+      })
+
+      driver.anchorTodoUnit(harness.agent, {
+        todoId: 'todo-s1-1',
+        turnInstanceId: 'turn-s1-1',
+        contextEpoch: 'epoch-dsh-1',
+        anchorStepIndex: 2,
+      })
+      appendTodoExploratorySuffix(harness.session, 'mid-fold')
+
+      const settlePromise1 = driver.foldAndPrefetch(harness.agent, {
+        todoId: 'todo-s1-1',
+        turnInstanceId: 'turn-s1-1',
+        contextEpoch: 'epoch-dsh-1',
+        nowStepIndex: 5,
+        completionReceipt: VALID_RECEIPT,
+        obsNextCmd: { command: ['git', 'status', '--short'] },
+      })
+      await obsStarted
+
+      // User sends a correction while obsNextCmd is awaiting.
+      harness.session.append('user/message', {
+        id: 'corr-direct' as UserMessage['id'],
+        role: 'user',
+        content: [{ type: 'text', text: 'Keep this raw correction' }],
+        source: { kind: 'user' },
+      }, { surfaceOp: 'append' })
+      obsReleaseResolve()
+
+      const res1 = await settlePromise1
+      expect(res1.operator).toBe('KeepRaw')
+      expect(res1.status).toBe('fallback_keep_raw')
+      expect(res1.fallbackReason).toBe('user_message_during_prefetch')
+      expect(obsRunner).toHaveBeenCalledTimes(1)
+      const msgsAfter1 = JSON.stringify(harness.session.deriveMessages())
+      expect(msgsAfter1).toContain('Keep this raw correction')
+      expect(msgsAfter1).toContain('exploratory search output for mid-fold')
+
+      // Segment advance (new anchor for next Todo) during await also falls back cleanly without removing the new anchor.
+      obsStarted = new Promise<void>(resolve => { obsStartedResolve = resolve })
+      obsRelease = new Promise<void>(resolve => { obsReleaseResolve = resolve })
+      driver.anchorTodoUnit(harness.agent, {
+        todoId: 'todo-s1-2',
+        turnInstanceId: 'turn-s1-2',
+        contextEpoch: 'epoch-dsh-1',
+        anchorStepIndex: 6,
+      })
+      appendTodoExploratorySuffix(harness.session, 'mid-seg', 3)
+
+      const receipt2: TodoUnitCompletionReceipt = {
+        ...VALID_RECEIPT,
+        todoId: 'todo-s1-2',
+        completionReceiptId: 'cqr-s1-2',
+      }
+      const settlePromise2 = driver.foldAndPrefetch(harness.agent, {
+        todoId: 'todo-s1-2',
+        turnInstanceId: 'turn-s1-2',
+        contextEpoch: 'epoch-dsh-1',
+        nowStepIndex: 8,
+        completionReceipt: receipt2,
+        obsNextCmd: { command: ['git', 'status', '--short'] },
+      })
+      await obsStarted
+
+      driver.onSessionEvent(harness.agent, harness.session.append('step/start', { turn: 3, step: 9 } as never))
+      driver.anchorTodoUnit(harness.agent, {
+        todoId: 'todo-s1-2',
+        turnInstanceId: 'turn-s1-2b',
+        contextEpoch: 'epoch-dsh-1',
+        anchorStepIndex: 9,
+      })
+      obsReleaseResolve()
+
+      const res2 = await settlePromise2
+      expect(res2.operator).toBe('KeepRaw')
+      expect(res2.status).toBe('fallback_keep_raw')
+      expect(res2.fallbackReason).toBe('segment_advanced_during_prefetch')
+      expect(obsRunner).toHaveBeenCalledTimes(2)
+    } finally {
+      await harness.dispose()
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
 })
