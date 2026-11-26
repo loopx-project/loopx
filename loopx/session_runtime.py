@@ -207,7 +207,13 @@ VALIDATED_STATUSES = {"ok", "passed", "success", "validated"}
 def _as_mappings(values: Sequence[Mapping[str, object]] | None) -> tuple[Mapping[str, object], ...]:
     if not values:
         return ()
-    return tuple(item for item in values if isinstance(item, Mapping))
+    # Exact builtin dicts cannot compute or cache missing keys on lookup; other
+    # Mappings are snapshotted from their enumerated keys to stay read-only.
+    return tuple(
+        item if type(item) is dict else dict(item)
+        for item in values
+        if isinstance(item, Mapping)
+    )
 
 
 def _text(value: object, *, limit: int = 180) -> str | None:

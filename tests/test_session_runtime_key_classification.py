@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from collections import defaultdict
+from collections.abc import Iterator, Mapping
 import io
 from pathlib import Path
 import tokenize
@@ -363,3 +364,78 @@ def test_gate_blocker_validation_and_empty_text_precedence() -> None:
     assert empty_text_gate["first_screen"]["recommended_action"] is None
     assert empty_text_gate["attention_item"]["title"] is None
     assert empty_text_gate["work_lane_contract"]["lane"] == "user_gate"
+
+
+class _LazyCachingSessionMapping(Mapping[str, object]):
+    """Test Mapping that materializes missing action keys on lookup if probed directly."""
+
+    def __init__(self, initial: Mapping[str, object]) -> None:
+        self._data: dict[str, object] = dict(initial)
+        self.probed_keys: list[str] = []
+
+    def __getitem__(self, key: str) -> object:
+        self.probed_keys.append(key)
+        if key not in self._data and key in ("recommended_action", "agent_next_action", "next_action", "handoff", "summary"):
+            self._data[key] = f"synthesized:{key}"
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(tuple(self._data))
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+
+class _LazyGetDict(dict[str, object]):
+    """Test dict subclass whose .get() lazily caches recommended_action if called."""
+
+    def get(self, key: str, default: object = None) -> object:
+        if key not in self and key == "recommended_action":
+            self[key] = "synthesized:get"
+        return super().get(key, default)
+
+
+def test_lazy_mapping_preserves_enumerated_key_snapshot_and_input_invariance() -> None:
+    base_record: dict[str, object] = {"session_id": "s-idle"}
+    lazy_session = _LazyCachingSessionMapping(base_record)
+    lazy_proxy = MappingProxyType(_LazyCachingSessionMapping(base_record))
+    lazy_subdict: defaultdict[str, object] = defaultdict(lambda: "synthesized", base_record)
+    lazy_get_dict = _LazyGetDict(base_record)
+    lazy_decision = _LazyCachingSessionMapping({"ref_id": "d-idle"})
+    static_proxy = MappingProxyType({"session_id": "s-idle"})
+    static_decision_proxy = MappingProxyType({"ref_id": "d-idle"})
+
+    expected = build_session_runtime_readonly_projection(
+        goal_id="g-lazy",
+        sessions=[static_proxy],
+    )
+    assert expected["first_screen"]["recommended_action"] == "monitor for a material transition"
+    assert expected["first_screen"]["agent_can_continue"] is False
+    assert expected["work_lane_contract"]["lane"] == "monitor"
+    assert expected["work_lane_contract"]["must_attempt_work"] is False
+
+    for candidate in (base_record, lazy_session, lazy_proxy, lazy_subdict, lazy_get_dict):
+        projected = build_session_runtime_readonly_projection(
+            goal_id="g-lazy",
+            sessions=[candidate],
+        )
+        assert projected == expected
+
+    multi_group_expected = build_session_runtime_readonly_projection(
+        goal_id="g-lazy",
+        sessions=[static_proxy],
+        decision_results=[static_decision_proxy],
+    )
+    multi_group_actual = build_session_runtime_readonly_projection(
+        goal_id="g-lazy",
+        sessions=[_LazyCachingSessionMapping(base_record)],
+        decision_results=[lazy_decision],
+    )
+    assert multi_group_actual == multi_group_expected
+    assert lazy_session.probed_keys == ["session_id"]
+    assert lazy_decision.probed_keys == ["ref_id"]
+    assert dict(lazy_session) == {"session_id": "s-idle"}
+    assert dict(lazy_decision) == {"ref_id": "d-idle"}
+    assert dict(lazy_subdict) == {"session_id": "s-idle"}
+    assert dict(lazy_get_dict) == {"session_id": "s-idle"}
+    assert list(lazy_proxy.keys()) == ["session_id"]
