@@ -418,75 +418,91 @@ def read_decision_context_turn_context(
     observed_at: str | None = None,
 ) -> dict[str, Any]:
     """Build the validated public-safe turn context view for one Goal/Agent."""
-    now = (
+    explicit_now = (
         str(observed_at).strip()
         if observed_at and str(observed_at).strip()
-        else datetime.now(timezone.utc).isoformat()
+        else None
     )
-    resolved = decision_context_hook_binding(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        action="resolve_local",
-    )
-    if not resolved.get("ok"):
-        return resolved
-    if resolved.get("status") == "absent":
-        return {
-            "ok": True,
-            "status": "absent",
-            "goal_id": goal_id,
-            "agent_id": agent_id,
-            "observation_count": 0,
-            "current": resolved["current"],
-        }
-
-    local_binding = resolved.get("local_binding")
-    spool_configured = bool(
-        isinstance(local_binding, Mapping) and local_binding.get("spool_path")
-    )
-    commands = _bound_cli_commands(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        spool_configured=spool_configured,
-    )
-    if not isinstance(local_binding, Mapping):
-        # Retired binding: project retirement notice through the TS owner.
-        return decision_context_hook_binding(
+    projected: dict[str, Any] | None = None
+    for _attempt in range(3):
+        now = explicit_now or datetime.now(timezone.utc).isoformat()
+        resolved = decision_context_hook_binding(
             registry_path=registry_path,
             runtime_root=runtime_root,
             goal_id=goal_id,
             agent_id=agent_id,
-            action="project_turn_view",
-            observation={"status": "retired"},
-            commands=commands,
+            action="resolve_local",
         )
+        if not resolved.get("ok"):
+            return resolved
+        if resolved.get("status") == "absent":
+            return {
+                "ok": True,
+                "status": "absent",
+                "goal_id": goal_id,
+                "agent_id": agent_id,
+                "observation_count": 0,
+                "current": resolved["current"],
+            }
 
-    try:
-        observation = _collect_public_safe_observation(
+        current_view = resolved.get("current")
+        expected_revision = (
+            current_view.get("revision")
+            if isinstance(current_view, Mapping)
+            else None
+        )
+        local_binding = resolved.get("local_binding")
+        spool_configured = bool(
+            isinstance(local_binding, Mapping) and local_binding.get("spool_path")
+        )
+        commands = _bound_cli_commands(
+            registry_path=registry_path,
+            runtime_root=runtime_root,
             goal_id=goal_id,
             agent_id=agent_id,
-            runtime_root=runtime_root,
-            local_binding=local_binding,
-            observed_at=now,
+            spool_configured=spool_configured,
         )
-    except Exception:  # noqa: BLE001 - isolate provider/file errors to an unavailable receipt
-        observation = {
-            "status": "unavailable",
-            "error_code": "decision_context_observation_failed",
-        }
-    return decision_context_hook_binding(
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        action="project_turn_view",
-        observation=observation,
-        commands=commands,
-    )
+        if not isinstance(local_binding, Mapping):
+            # Retired binding: project retirement notice through the TS owner,
+            # guarded by expected_revision so a concurrent re-bind cannot be masked.
+            projected = decision_context_hook_binding(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                action="project_turn_view",
+                expected_revision=expected_revision,
+                observation={"status": "retired"},
+                commands=commands,
+            )
+        else:
+            try:
+                observation = _collect_public_safe_observation(
+                    goal_id=goal_id,
+                    agent_id=agent_id,
+                    runtime_root=runtime_root,
+                    local_binding=local_binding,
+                    observed_at=now,
+                )
+            except Exception:  # noqa: BLE001 - isolate provider/file errors to an unavailable receipt
+                observation = {
+                    "status": "unavailable",
+                    "error_code": "decision_context_observation_failed",
+                }
+            projected = decision_context_hook_binding(
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                goal_id=goal_id,
+                agent_id=agent_id,
+                action="project_turn_view",
+                expected_revision=expected_revision,
+                observation=observation,
+                commands=commands,
+            )
+        if projected.get("status") != "revision_conflict":
+            return projected
+    assert projected is not None
+    return projected
 
 
 @overload

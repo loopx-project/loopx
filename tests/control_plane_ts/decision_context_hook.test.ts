@@ -145,6 +145,7 @@ for (const [label, createStore] of [
       const projected = await executeDecisionContextHook(
         baseRequest({
           action: "project_turn_view",
+          expected_revision: rev1,
           observation: {
             status: "available",
             observed_at: "2026-11-26T15:05:00Z",
@@ -220,6 +221,7 @@ for (const [label, createStore] of [
         executeDecisionContextHook(
           baseRequest({
             action: "project_turn_view",
+            expected_revision: rev1,
             observation: {
               status: "available",
               observed_at: "2026-11-26T15:05:00Z",
@@ -249,6 +251,30 @@ for (const [label, createStore] of [
       );
       assert.equal(unbound.ok, true);
       assert.equal(unbound.status, "applied");
+      const rev2 = String((unbound.current as JsonObject).revision);
+
+      // Stale observation collected under rev1 is rejected rather than projected onto rev2.
+      const staleProjection = await executeDecisionContextHook(
+        baseRequest({
+          action: "project_turn_view",
+          expected_revision: rev1,
+          observation: {
+            status: "available",
+            observed_at: "2026-11-26T15:09:59Z",
+            source_count: 1,
+            enabled_source_count: 1,
+            p0_complete: false,
+            uncovered_p0_source_ids: ["ops:stale-a"],
+          },
+          commands: {},
+        }),
+        store,
+        "2026-11-26T15:10:00Z",
+      );
+      assert.equal(staleProjection.ok, false);
+      assert.equal(staleProjection.status, "revision_conflict");
+      assert.equal(staleProjection.error, "observed_binding_revision_mismatch");
+
       const retiredLocal = await executeDecisionContextHook(
         baseRequest({action: "resolve_local"}),
         store,
@@ -256,7 +282,11 @@ for (const [label, createStore] of [
       );
       assert.equal(retiredLocal.local_binding, null);
       const retiredTurn = await executeDecisionContextHook(
-        baseRequest({action: "project_turn_view", commands: {}}),
+        baseRequest({
+          action: "project_turn_view",
+          expected_revision: rev2,
+          commands: {},
+        }),
         store,
         "2026-11-26T15:10:00Z",
       );

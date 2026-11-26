@@ -450,3 +450,102 @@ def test_bind_rejects_disabled_or_mismatched_agent_profile(tmp_path: Path) -> No
     payload = json.loads(rejected.stdout)
     assert payload["ok"] is False
     assert "agent_not_enabled" in payload["error"]
+
+
+def test_turn_context_re_reads_when_binding_revision_changes_mid_observation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import loopx.capabilities.decision_context.turn_start_hook as hook_mod
+
+    registry_path, runtime_root, profile_a, _doc_a = _setup_goal_fixture(tmp_path)
+    doc_b = profile_a.parent / "owner-b.md"
+    doc_b.write_text("# Profile B Fresh Fact\n", encoding="utf-8")
+    profile_b = profile_a.parent / "profile-b.json"
+    profile_b_data = json.loads(profile_a.read_text(encoding="utf-8"))
+    source_b = dict(profile_b_data["sources"][0])
+    source_b["source_id"] = "ops:doc-b-only"
+    source_b["private_locator"] = str(doc_b)
+    profile_b_data["sources"] = [source_b]
+    profile_b.write_text(json.dumps(profile_b_data, indent=2), encoding="utf-8")
+
+    bind_a = _run_cli(
+        "--registry",
+        str(registry_path),
+        "--runtime-root",
+        str(runtime_root),
+        "decision-context",
+        "hook",
+        "bind",
+        "--goal-id",
+        "ops-goal",
+        "--agent-id",
+        "operations",
+        "--profile",
+        str(profile_a),
+        "--expected-revision",
+        "none",
+        "--operation-id",
+        "bind-profile-a",
+        "--execute",
+        "--format",
+        "json",
+    )
+    assert bind_a.returncode == 0, bind_a.stderr
+    rev_a = json.loads(bind_a.stdout)["current"]["revision"]
+    ref_a = json.loads(bind_a.stdout)["current"]["binding"]["profile_ref"]
+
+    real_collect = hook_mod._collect_public_safe_observation
+    swapped = False
+    rev_b_holder: dict[str, str] = {}
+
+    def collect_with_concurrent_rebind(**kwargs: object) -> dict[str, object]:
+        nonlocal swapped
+        obs = real_collect(**kwargs)  # type: ignore[arg-type]
+        if not swapped:
+            swapped = True
+            rebind = _run_cli(
+                "--registry",
+                str(registry_path),
+                "--runtime-root",
+                str(runtime_root),
+                "decision-context",
+                "hook",
+                "bind",
+                "--goal-id",
+                "ops-goal",
+                "--agent-id",
+                "operations",
+                "--profile",
+                str(profile_b),
+                "--expected-revision",
+                rev_a,
+                "--operation-id",
+                "rebind-profile-b-mid-flight",
+                "--execute",
+                "--format",
+                "json",
+            )
+            assert rebind.returncode == 0, rebind.stderr
+            rebind_payload = json.loads(rebind.stdout)
+            rev_b_holder["revision"] = rebind_payload["current"]["revision"]
+            rev_b_holder["profile_ref"] = rebind_payload["current"]["binding"]["profile_ref"]
+        return obs
+
+    monkeypatch.setattr(hook_mod, "_collect_public_safe_observation", collect_with_concurrent_rebind)
+
+    turn_view = read_decision_context_turn_context(
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+        goal_id="ops-goal",
+        agent_id="operations",
+    )
+    assert swapped is True
+    assert turn_view["ok"] is True
+    assert turn_view["current"]["revision"] == rev_b_holder["revision"]
+    assert turn_view["current"]["binding"]["profile_ref"] == rev_b_holder["profile_ref"]
+    assert turn_view["current"]["binding"]["profile_ref"] != ref_a
+    # Must reflect profile B's source ("ops:doc-b-only"), NOT profile A's sources!
+    assert turn_view["current"]["observation"]["changed_source_ids"] == ["ops:doc-b-only"]
+    assert turn_view["current"]["observation"]["uncovered_p0_source_ids"] == []
+    assert turn_view["current"]["observation"]["p0_complete"] is True

@@ -493,6 +493,25 @@ export async function executeDecisionContextHook(
   }
 
   if (action === "project_turn_view") {
+    if (!("expected_revision" in request)) {
+      throw new TypeError("project_turn_view requires expected_revision");
+    }
+    const expectedRevision =
+      request.expected_revision === null
+        ? null
+        : text(request.expected_revision, "expected_revision", 256);
+    if (expectedRevision !== actualRevision) {
+      return {
+        ok: false,
+        status: "revision_conflict",
+        error: "observed_binding_revision_mismatch",
+        goal_id: scope.goal_id,
+        agent_id: scope.agent_id,
+        expected_revision: expectedRevision,
+        actual_revision: actualRevision,
+        current: view,
+      };
+    }
     if (record === null) {
       return {
         ok: true,
