@@ -5,6 +5,9 @@ import shlex
 
 from .zcode_goal_mode import native_goal_activation
 from .agent_registry import normalize_registered_agents
+from .hosts.codex_capabilities import (
+    CODEX_APP_HOST_CAPABILITIES as CODEX_APP_HOST_CAPABILITIES,
+)
 from .agy_goal_mode import (
     AGY_ACCEPTED_INPUTS,
     ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,

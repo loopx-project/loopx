@@ -41,6 +41,7 @@ TS_CONTRACT_PATH = (
     REPO_ROOT / "loopx" / "control_plane" / "hosts" / "host_harness_capabilities.ts"
 )
 PY_CONTRACT_PATH = REPO_ROOT / "loopx" / "hosts" / "capabilities.py"
+PY_CODEX_CAPABILITIES_PATH = REPO_ROOT / "loopx" / "hosts" / "codex_capabilities.py"
 
 
 def _load_ts_contract_snapshot() -> dict[str, object]:
@@ -73,18 +74,19 @@ def _load_ts_contract_snapshot() -> dict[str, object]:
 
 
 def test_python_mirror_contains_zero_any() -> None:
-    tree = ast.parse(PY_CONTRACT_PATH.read_text(encoding="utf-8"))
-    any_names = [
-        node.lineno
-        for node in ast.walk(tree)
-        if (isinstance(node, ast.Name) and node.id == "Any")
-        or (isinstance(node, ast.Attribute) and node.attr == "Any")
-        or (
-            isinstance(node, ast.ImportFrom)
-            and any(alias.name == "Any" for alias in node.names)
-        )
-    ]
-    assert not any_names, f"unexpected Any references in {PY_CONTRACT_PATH}: {any_names}"
+    for path in (PY_CONTRACT_PATH, PY_CODEX_CAPABILITIES_PATH):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        any_names = [
+            node.lineno
+            for node in ast.walk(tree)
+            if (isinstance(node, ast.Name) and node.id == "Any")
+            or (isinstance(node, ast.Attribute) and node.attr == "Any")
+            or (
+                isinstance(node, ast.ImportFrom)
+                and any(alias.name == "Any" for alias in node.names)
+            )
+        ]
+        assert not any_names, f"unexpected Any references in {path}: {any_names}"
 
 
 def test_python_and_typescript_vocabulary_and_canonical_descriptors_match() -> None:
@@ -108,17 +110,56 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     from loopx.agy_goal_mode.host_runtime import (
         AGY_HOST_CAPABILITIES as RUNTIME_AGY_HOST_CAPABILITIES,
     )
+    from loopx.capabilities.native_chat.codex_adapter import (
+        CODEX_APP_SERVER_HOST_CAPABILITIES as CHAT_ADAPTER_CODEX_APP_SERVER_CAPABILITIES,
+    )
     from loopx.claude_goal_mode import CLAUDE_HOST_CAPABILITIES
+    from loopx.codex_app_thread_activity import (
+        CODEX_APP_HOST_CAPABILITIES as THREAD_ACTIVITY_CODEX_APP_CAPABILITIES,
+    )
+    from loopx.control_plane.turn_driver.codex_cli import (
+        CODEX_CLI_HOST_CAPABILITIES as DRIVER_CODEX_CLI_CAPABILITIES,
+    )
+    from loopx.control_plane.turn_driver.codex_context import (
+        CODEX_CLI_HOOKS_HOST_CAPABILITIES as CONTEXT_CODEX_CLI_HOOKS_CAPABILITIES,
+        CONTEXT_LIFECYCLE_HOOKS,
+    )
+    from loopx.control_plane.turn_driver.codex_operation_host import (
+        CODEX_APP_SERVER_HOST_CAPABILITIES as OPERATION_CODEX_APP_SERVER_CAPABILITIES,
+    )
+    from loopx.control_plane.turn_driver.semantic_unit_hook import (
+        CODEX_CLI_HOOKS_HOST_CAPABILITIES as SEMANTIC_HOOK_CODEX_CLI_HOOKS_CAPABILITIES,
+    )
     from loopx.dsh_goal_mode import DSH_HOST_CAPABILITIES
     from loopx.dsh_goal_mode.turn_host_adapter import (
         DSH_HOST_CAPABILITIES as ADAPTER_DSH_HOST_CAPABILITIES,
     )
+    from loopx.host_loop_activation import (
+        CODEX_APP_HOST_CAPABILITIES as ACTIVATION_CODEX_APP_CAPABILITIES,
+    )
+    from loopx.hosts.codex_capabilities import (
+        CODEX_APP_HOST_CAPABILITIES,
+        CODEX_APP_SERVER_HOST_CAPABILITIES,
+        CODEX_CLI_HOST_CAPABILITIES,
+        CODEX_CLI_HOOKS_HOST_CAPABILITIES,
+    )
 
     assert AGY_HOST_CAPABILITIES is RUNTIME_AGY_HOST_CAPABILITIES
     assert DSH_HOST_CAPABILITIES is ADAPTER_DSH_HOST_CAPABILITIES
+    assert CODEX_APP_HOST_CAPABILITIES is THREAD_ACTIVITY_CODEX_APP_CAPABILITIES
+    assert CODEX_APP_HOST_CAPABILITIES is ACTIVATION_CODEX_APP_CAPABILITIES
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES is OPERATION_CODEX_APP_SERVER_CAPABILITIES
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES is CHAT_ADAPTER_CODEX_APP_SERVER_CAPABILITIES
+    assert CODEX_CLI_HOST_CAPABILITIES is DRIVER_CODEX_CLI_CAPABILITIES
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES is CONTEXT_CODEX_CLI_HOOKS_CAPABILITIES
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES is SEMANTIC_HOOK_CODEX_CLI_HOOKS_CAPABILITIES
 
     assert get_host_capabilities("agy") == AGY_HOST_CAPABILITIES
     assert get_host_capabilities("claude") == CLAUDE_HOST_CAPABILITIES
+    assert get_host_capabilities("codex-app") == CODEX_APP_HOST_CAPABILITIES
+    assert get_host_capabilities("codex-app-server") == CODEX_APP_SERVER_HOST_CAPABILITIES
+    assert get_host_capabilities("codex-cli") == CODEX_CLI_HOST_CAPABILITIES
+    assert get_host_capabilities("codex-cli-hooks") == CODEX_CLI_HOOKS_HOST_CAPABILITIES
     assert get_host_capabilities("dsh") == DSH_HOST_CAPABILITIES
 
     assert AGY_HOST_CAPABILITIES.integration_tier == "orchestrated_app"
@@ -133,6 +174,48 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     assert CLAUDE_HOST_CAPABILITIES.native_goal_primitive is False
     assert CLAUDE_HOST_CAPABILITIES.native_scheduler_primitive is True
 
+    assert CODEX_APP_HOST_CAPABILITIES.integration_tier == "orchestrated_app"
+    assert CODEX_APP_HOST_CAPABILITIES.supported_capabilities == ()
+    assert CODEX_APP_HOST_CAPABILITIES.hook_events == ()
+    assert CODEX_APP_HOST_CAPABILITIES.requires_utf8_stdio is True
+    assert CODEX_APP_HOST_CAPABILITIES.native_goal_primitive is False
+    assert CODEX_APP_HOST_CAPABILITIES.native_scheduler_primitive is True
+
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.integration_tier == "orchestrated_app"
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.supported_capabilities == (
+        "session_fork",
+        "managed_thread_resume",
+    )
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.hook_events == ()
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.requires_utf8_stdio is True
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.native_goal_primitive is False
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES.native_scheduler_primitive is False
+
+    assert CODEX_CLI_HOST_CAPABILITIES.integration_tier == "boundary_cli"
+    assert CODEX_CLI_HOST_CAPABILITIES.supported_capabilities == (
+        "epoch_reset",
+        "fold_and_prefetch",
+        "quiet_turn",
+        "managed_thread_resume",
+    )
+    assert CODEX_CLI_HOST_CAPABILITIES.hook_events == ()
+    assert CODEX_CLI_HOST_CAPABILITIES.requires_utf8_stdio is True
+    assert CODEX_CLI_HOST_CAPABILITIES.native_goal_primitive is False
+    assert CODEX_CLI_HOST_CAPABILITIES.native_scheduler_primitive is False
+
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.integration_tier == "boundary_cli"
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.supported_capabilities == (
+        "epoch_reset",
+        "fold_and_prefetch",
+        "quiet_turn",
+        "compact_hook",
+    )
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.hook_events == CONTEXT_LIFECYCLE_HOOKS
+    assert "Stop" not in CODEX_CLI_HOOKS_HOST_CAPABILITIES.hook_events
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.requires_utf8_stdio is True
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.native_goal_primitive is False
+    assert CODEX_CLI_HOOKS_HOST_CAPABILITIES.native_scheduler_primitive is False
+
     assert DSH_HOST_CAPABILITIES.integration_tier == "in_tree_codesigned"
     assert DSH_HOST_CAPABILITIES.supported_capabilities == ()
     assert DSH_HOST_CAPABILITIES.hook_events == ()
@@ -141,17 +224,34 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
 
     assert host_supports_capability("claude", "verifier_hook") is True
     assert host_supports_capability("claude", "compact_hook") is False
+    assert host_supports_capability("codex-app", "native_context_budget") is False
+    assert host_supports_capability("codex-app-server", "session_fork") is True
+    assert host_supports_capability("codex-app-server", "managed_thread_resume") is True
+    assert host_supports_capability("codex-cli", "epoch_reset") is True
+    assert host_supports_capability("codex-cli", "fold_and_prefetch") is True
+    assert host_supports_capability("codex-cli", "quiet_turn") is True
+    assert host_supports_capability("codex-cli", "managed_thread_resume") is True
+    assert host_supports_capability("codex-cli", "compact_hook") is False
+    assert host_supports_capability("codex-cli-hooks", "compact_hook") is True
+    assert host_supports_capability("codex-cli-hooks", "verifier_hook") is False
     assert host_supports_capability("dsh", "native_context_budget") is False
     assert host_supports_capability("dsh", "managed_thread_resume") is False
     assert host_supports_capability("agy", "quiet_turn") is False
     assert [entry.host_id for entry in list_host_capabilities()] == [
         "agy",
         "claude",
+        "codex-app",
+        "codex-app-server",
+        "codex-cli",
+        "codex-cli-hooks",
         "dsh",
     ]
     assert [
         entry.host_id for entry in list_host_capabilities(tier="boundary_cli")
-    ] == ["claude"]
+    ] == ["claude", "codex-cli", "codex-cli-hooks"]
+    assert [
+        entry.host_id for entry in list_host_capabilities(tier="orchestrated_app")
+    ] == ["agy", "codex-app", "codex-app-server"]
     assert [
         entry.host_id
         for entry in list_host_capabilities(tier="in_tree_codesigned")
@@ -160,6 +260,20 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
         entry.host_id
         for entry in list_host_capabilities(capability="native_context_budget")
     ] == []
+    isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
+    assert [entry.host_id for entry in isolated.list()] == [
+        "agy",
+        "claude",
+        "codex-app",
+        "codex-app-server",
+        "codex-cli",
+        "codex-cli-hooks",
+        "dsh",
+    ]
+    assert isolated.get("codex-cli") == CODEX_CLI_HOST_CAPABILITIES
+    assert isolated.get("codex-cli-hooks") == CODEX_CLI_HOOKS_HOST_CAPABILITIES
+    assert isolated.get("codex-app") == CODEX_APP_HOST_CAPABILITIES
+    assert isolated.get("codex-app-server") == CODEX_APP_SERVER_HOST_CAPABILITIES
 
 
 def test_capabilities_lookup_loads_flagship_adapters_lazily_without_cold_import_leak() -> None:
@@ -170,10 +284,62 @@ assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.codex_capabilities' not in sys.modules
 agy = get_host_capabilities('agy')
 assert agy is not None and agy.integration_tier == 'orchestrated_app'
 assert 'loopx.agy_goal_mode' in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.codex_capabilities' not in sys.modules
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_codex_capabilities_lookup_avoids_heavy_runtime_imports() -> None:
+    script = """
+import sys
+from loopx.hosts.capabilities import get_host_capabilities, host_supports_capability
+
+heavy_modules = (
+    'loopx.hosts.codex_capabilities',
+    'loopx.control_plane.turn_driver.codex_cli',
+    'loopx.control_plane.turn_driver.codex_context',
+    'loopx.control_plane.turn_driver.semantic_unit_hook',
+    'loopx.control_plane.turn_driver.codex_operation_host',
+    'loopx.codex_app_thread_activity',
+    'loopx.host_loop_activation',
+    'loopx.capabilities.native_chat.codex_adapter',
+    'loopx.cli',
+    'loopx.chat',
+    'sqlite3',
+    'subprocess',
+)
+for mod in heavy_modules:
+    assert mod not in sys.modules, f"cold import leaked {mod}"
+
+codex_cli = get_host_capabilities('codex-cli')
+codex_hooks = get_host_capabilities('codex-cli-hooks')
+codex_app = get_host_capabilities('codex-app')
+codex_app_server = get_host_capabilities('codex-app-server')
+assert codex_cli is not None and codex_cli.integration_tier == 'boundary_cli'
+assert codex_hooks is not None and codex_hooks.hook_events == (
+    'SessionStart', 'PreCompact', 'PostCompact', 'PostToolUse', 'Interrupt'
+)
+assert codex_app is not None and codex_app.native_scheduler_primitive is True
+assert codex_app_server is not None and codex_app_server.native_scheduler_primitive is False
+assert host_supports_capability('codex-app-server', 'session_fork') is True
+assert 'loopx.hosts.codex_capabilities' in sys.modules
+for mod in heavy_modules[1:]:
+    assert mod not in sys.modules, f"codex descriptor lookup pulled heavy module {mod}"
+assert 'loopx.agy_goal_mode' not in sys.modules
+assert 'loopx.claude_goal_mode' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 """
     completed = subprocess.run(
@@ -181,6 +347,27 @@ assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_concurrent_shared_codex_module_lookup_avoids_deadlock() -> None:
+    script = """
+from concurrent.futures import ThreadPoolExecutor
+from loopx.hosts.capabilities import get_host_capabilities
+
+targets = ('codex-app', 'codex-app-server', 'codex-cli', 'codex-cli-hooks') * 4
+with ThreadPoolExecutor(max_workers=8) as pool:
+    results = list(pool.map(get_host_capabilities, targets))
+assert [item.host_id for item in results if item is not None] == list(targets)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=15,
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
@@ -843,6 +1030,7 @@ from loopx.hosts.capabilities import (
 
 assert 'loopx.agy_goal_mode' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.codex_capabilities' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 
 isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
@@ -851,6 +1039,7 @@ assert agy is not None and agy.host_id == 'agy'
 assert 'loopx.agy_goal_mode' in sys.modules
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
+assert 'loopx.hosts.codex_capabilities' not in sys.modules
 assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
 assert get_host_capabilities('agy') == agy
 
@@ -869,8 +1058,18 @@ with pytest.raises(ValueError, match='conflicting host capabilities registration
     isolated.register(conflicting_claude, replace=False)
 
 entries = isolated.list()
-assert [entry.host_id for entry in entries] == ['agy', 'claude', 'dsh']
+assert [entry.host_id for entry in entries] == [
+    'agy',
+    'claude',
+    'codex-app',
+    'codex-app-server',
+    'codex-cli',
+    'codex-cli-hooks',
+    'dsh',
+]
 assert isolated.get('claude') is not None
+assert isolated.get('codex-cli') is not None
+assert isolated.get('codex-app') is not None
 assert isolated.get('dsh') is not None
 assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 """
@@ -878,6 +1077,7 @@ assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
 import sys
 import loopx.agy_goal_mode as agy_mod
 import loopx.claude_goal_mode as claude_mod
+import loopx.hosts.codex_capabilities as codex_mod
 import loopx.dsh_goal_mode.turn_host_adapter as dsh_mod
 from loopx.hosts.capabilities import (
     BUILTIN_HOST_ADAPTER_MODULES,
@@ -904,11 +1104,27 @@ assert get_host_capabilities('claude') == override_claude
 isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
 assert isolated.get('agy') == agy_mod.AGY_HOST_CAPABILITIES
 assert isolated.get('claude') == claude_mod.CLAUDE_HOST_CAPABILITIES
+assert isolated.get('codex-app') == codex_mod.CODEX_APP_HOST_CAPABILITIES
+assert isolated.get('codex-app-server') == codex_mod.CODEX_APP_SERVER_HOST_CAPABILITIES
+assert isolated.get('codex-cli') == codex_mod.CODEX_CLI_HOST_CAPABILITIES
+assert isolated.get('codex-cli-hooks') == codex_mod.CODEX_CLI_HOOKS_HOST_CAPABILITIES
 assert isolated.get('dsh') == dsh_mod.DSH_HOST_CAPABILITIES
-assert [entry.host_id for entry in isolated.list()] == ['agy', 'claude', 'dsh']
+assert [entry.host_id for entry in isolated.list()] == [
+    'agy',
+    'claude',
+    'codex-app',
+    'codex-app-server',
+    'codex-cli',
+    'codex-cli-hooks',
+    'dsh',
+]
 assert isolated.list() == (
     agy_mod.AGY_HOST_CAPABILITIES,
     claude_mod.CLAUDE_HOST_CAPABILITIES,
+    codex_mod.CODEX_APP_HOST_CAPABILITIES,
+    codex_mod.CODEX_APP_SERVER_HOST_CAPABILITIES,
+    codex_mod.CODEX_CLI_HOST_CAPABILITIES,
+    codex_mod.CODEX_CLI_HOOKS_HOST_CAPABILITIES,
     dsh_mod.DSH_HOST_CAPABILITIES,
 )
 """
@@ -924,7 +1140,15 @@ assert isolated.list() == (
 
     # Warm in-process verification plus subset & non-matching / explicit protection.
     warm_isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
-    assert [entry.host_id for entry in warm_isolated.list()] == ["agy", "claude", "dsh"]
+    assert [entry.host_id for entry in warm_isolated.list()] == [
+        "agy",
+        "claude",
+        "codex-app",
+        "codex-app-server",
+        "codex-cli",
+        "codex-cli-hooks",
+        "dsh",
+    ]
 
     partial = HostCapabilitiesRegistry(
         builtin_modules={"claude": BUILTIN_HOST_ADAPTER_MODULES["claude"]}

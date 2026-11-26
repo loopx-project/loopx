@@ -401,6 +401,78 @@ export const CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities =
       "Claude Code boundary CLI adapter driven by native /loop, MCP control-plane tools, and opt-in PreToolUse should_run/write_scope policy verification.",
   });
 
+export const CODEX_APP_HOST_CAPABILITIES: HostHarnessCapabilities =
+  defineHostHarnessCapabilities({
+    host_id: "codex-app",
+    integration_tier: "orchestrated_app",
+    adapter_module: "loopx.codex_app_thread_activity",
+    supported_capabilities: [],
+    hook_events: [],
+    requires_utf8_stdio: true,
+    native_goal_primitive: false,
+    native_scheduler_primitive: true,
+    description:
+      "Codex App orchestrated host surface using native automation.toml RRULE heartbeat scheduling and local thread activity inspection; Goal admission stays outer-driven via skills and CLI.",
+  });
+
+export const CODEX_APP_SERVER_HOST_CAPABILITIES: HostHarnessCapabilities =
+  defineHostHarnessCapabilities({
+    host_id: "codex-app-server",
+    integration_tier: "orchestrated_app",
+    adapter_module: "loopx.control_plane.turn_driver.codex_operation_host",
+    supported_capabilities: ["session_fork", "managed_thread_resume"],
+    hook_events: [],
+    requires_utf8_stdio: true,
+    native_goal_primitive: false,
+    native_scheduler_primitive: false,
+    description:
+      "Long-lived Codex app-server JSON-RPC stdio runner orchestrated by LoopX Turn/Steward controllers with managed thread resume and native thread/fork support; outer scheduler and Goals remain external.",
+  });
+
+export const CODEX_CLI_HOST_CAPABILITIES: HostHarnessCapabilities =
+  defineHostHarnessCapabilities({
+    host_id: "codex-cli",
+    integration_tier: "boundary_cli",
+    adapter_module: "loopx.control_plane.turn_driver.codex_cli",
+    supported_capabilities: [
+      "epoch_reset",
+      "fold_and_prefetch",
+      "quiet_turn",
+      "managed_thread_resume",
+    ],
+    hook_events: [],
+    requires_utf8_stdio: true,
+    native_goal_primitive: false,
+    native_scheduler_primitive: false,
+    description:
+      "Outer-driven Codex CLI (codex exec) boundary Turn runner with UTF-8 stdio, managed thread resume, Quiet-Turn pre-admission skips, EpochReset transitions, and bounded epoch prefetch delivery.",
+  });
+
+export const CODEX_CLI_HOOKS_HOST_CAPABILITIES: HostHarnessCapabilities =
+  defineHostHarnessCapabilities({
+    host_id: "codex-cli-hooks",
+    integration_tier: "boundary_cli",
+    adapter_module: "loopx.control_plane.turn_driver.codex_context",
+    supported_capabilities: [
+      "epoch_reset",
+      "fold_and_prefetch",
+      "quiet_turn",
+      "compact_hook",
+    ],
+    hook_events: [
+      "SessionStart",
+      "PreCompact",
+      "PostCompact",
+      "PostToolUse",
+      "Interrupt",
+    ],
+    requires_utf8_stdio: true,
+    native_goal_primitive: false,
+    native_scheduler_primitive: false,
+    description:
+      "Codex CLI native lifecycle hook runner wired through loopx quota context-hook, handling SessionStart, PreCompact, PostCompact, PostToolUse, and Interrupt with semantic-unit folding, Quiet-Turn, and EpochReset.",
+  });
+
 export const DSH_HOST_CAPABILITIES: HostHarnessCapabilities =
   defineHostHarnessCapabilities({
     host_id: "dsh",
@@ -419,6 +491,10 @@ export const CANONICAL_HOST_HARNESS_CAPABILITIES: readonly HostHarnessCapabiliti
   Object.freeze([
     AGY_HOST_CAPABILITIES,
     CLAUDE_HOST_CAPABILITIES,
+    CODEX_APP_HOST_CAPABILITIES,
+    CODEX_APP_SERVER_HOST_CAPABILITIES,
+    CODEX_CLI_HOST_CAPABILITIES,
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES,
     DSH_HOST_CAPABILITIES,
   ]);
 

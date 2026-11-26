@@ -8,6 +8,9 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 import json
 
+from ...hosts.codex_capabilities import (
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES as CODEX_CLI_HOOKS_HOST_CAPABILITIES,
+)
 from ..effect_runtime import EffectRuntimeRejected, EffectRuntimeRemoteError, EffectRuntimeStartupError
 from ..quota.turn_envelope import (
     build_semantic_unit_fold_swap,

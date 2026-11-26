@@ -5,6 +5,10 @@ import {
   AGY_HOST_CAPABILITIES,
   CANONICAL_HOST_HARNESS_CAPABILITIES,
   CLAUDE_HOST_CAPABILITIES,
+  CODEX_APP_HOST_CAPABILITIES,
+  CODEX_APP_SERVER_HOST_CAPABILITIES,
+  CODEX_CLI_HOST_CAPABILITIES,
+  CODEX_CLI_HOOKS_HOST_CAPABILITIES,
   DEFAULT_HOST_CAPABILITIES_REGISTRY,
   DSH_HOST_CAPABILITIES,
   HOST_HARNESS_CAPABILITIES_SCHEMA_VERSION,
@@ -46,10 +50,18 @@ test("integration tiers and capability flags define the closed contract vocabula
 });
 
 test("canonical flagship descriptors cover all three integration tiers truthfully", () => {
-  assert.equal(CANONICAL_HOST_HARNESS_CAPABILITIES.length, 3);
+  assert.equal(CANONICAL_HOST_HARNESS_CAPABILITIES.length, 7);
   assert.deepEqual(
     listHostCapabilities().map((item) => item.host_id),
-    ["agy", "claude", "dsh"],
+    [
+      "agy",
+      "claude",
+      "codex-app",
+      "codex-app-server",
+      "codex-cli",
+      "codex-cli-hooks",
+      "dsh",
+    ],
   );
 
   assert.equal(AGY_HOST_CAPABILITIES.integration_tier, "orchestrated_app");
@@ -64,6 +76,61 @@ test("canonical flagship descriptors cover all three integration tiers truthfull
   assert.equal(CLAUDE_HOST_CAPABILITIES.native_goal_primitive, false);
   assert.equal(CLAUDE_HOST_CAPABILITIES.native_scheduler_primitive, true);
 
+  assert.equal(CODEX_APP_HOST_CAPABILITIES.integration_tier, "orchestrated_app");
+  assert.deepEqual(CODEX_APP_HOST_CAPABILITIES.supported_capabilities, []);
+  assert.deepEqual(CODEX_APP_HOST_CAPABILITIES.hook_events, []);
+  assert.equal(CODEX_APP_HOST_CAPABILITIES.native_goal_primitive, false);
+  assert.equal(CODEX_APP_HOST_CAPABILITIES.native_scheduler_primitive, true);
+
+  assert.equal(
+    CODEX_APP_SERVER_HOST_CAPABILITIES.integration_tier,
+    "orchestrated_app",
+  );
+  assert.deepEqual(CODEX_APP_SERVER_HOST_CAPABILITIES.supported_capabilities, [
+    "session_fork",
+    "managed_thread_resume",
+  ]);
+  assert.deepEqual(CODEX_APP_SERVER_HOST_CAPABILITIES.hook_events, []);
+  assert.equal(CODEX_APP_SERVER_HOST_CAPABILITIES.native_goal_primitive, false);
+  assert.equal(
+    CODEX_APP_SERVER_HOST_CAPABILITIES.native_scheduler_primitive,
+    false,
+  );
+
+  assert.equal(CODEX_CLI_HOST_CAPABILITIES.integration_tier, "boundary_cli");
+  assert.deepEqual(CODEX_CLI_HOST_CAPABILITIES.supported_capabilities, [
+    "epoch_reset",
+    "fold_and_prefetch",
+    "quiet_turn",
+    "managed_thread_resume",
+  ]);
+  assert.deepEqual(CODEX_CLI_HOST_CAPABILITIES.hook_events, []);
+  assert.equal(CODEX_CLI_HOST_CAPABILITIES.native_goal_primitive, false);
+  assert.equal(CODEX_CLI_HOST_CAPABILITIES.native_scheduler_primitive, false);
+
+  assert.equal(
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES.integration_tier,
+    "boundary_cli",
+  );
+  assert.deepEqual(CODEX_CLI_HOOKS_HOST_CAPABILITIES.supported_capabilities, [
+    "epoch_reset",
+    "fold_and_prefetch",
+    "quiet_turn",
+    "compact_hook",
+  ]);
+  assert.deepEqual(CODEX_CLI_HOOKS_HOST_CAPABILITIES.hook_events, [
+    "SessionStart",
+    "PreCompact",
+    "PostCompact",
+    "PostToolUse",
+    "Interrupt",
+  ]);
+  assert.equal(CODEX_CLI_HOOKS_HOST_CAPABILITIES.native_goal_primitive, false);
+  assert.equal(
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES.native_scheduler_primitive,
+    false,
+  );
+
   assert.equal(DSH_HOST_CAPABILITIES.integration_tier, "in_tree_codesigned");
   assert.deepEqual(DSH_HOST_CAPABILITIES.supported_capabilities, []);
   assert.deepEqual(DSH_HOST_CAPABILITIES.hook_events, []);
@@ -72,25 +139,56 @@ test("canonical flagship descriptors cover all three integration tiers truthfull
 
   assert.deepEqual(getHostCapabilities("agy"), AGY_HOST_CAPABILITIES);
   assert.deepEqual(getHostCapabilities("claude"), CLAUDE_HOST_CAPABILITIES);
+  assert.deepEqual(getHostCapabilities("codex-app"), CODEX_APP_HOST_CAPABILITIES);
+  assert.deepEqual(
+    getHostCapabilities("codex-app-server"),
+    CODEX_APP_SERVER_HOST_CAPABILITIES,
+  );
+  assert.deepEqual(getHostCapabilities("codex-cli"), CODEX_CLI_HOST_CAPABILITIES);
+  assert.deepEqual(
+    getHostCapabilities("codex-cli-hooks"),
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES,
+  );
   assert.deepEqual(getHostCapabilities("dsh"), DSH_HOST_CAPABILITIES);
   assert.equal(Object.isFrozen(AGY_HOST_CAPABILITIES), true);
   assert.equal(Object.isFrozen(CLAUDE_HOST_CAPABILITIES.supported_capabilities), true);
+  assert.equal(
+    Object.isFrozen(CODEX_CLI_HOOKS_HOST_CAPABILITIES.hook_events),
+    true,
+  );
 });
 
 test("capability lookup and tier/capability list filters behave deterministically", () => {
   assert.equal(hostSupportsCapability("claude", "verifier_hook"), true);
   assert.equal(hostSupportsCapability("claude", "compact_hook"), false);
+  assert.equal(hostSupportsCapability("codex-app", "native_context_budget"), false);
+  assert.equal(hostSupportsCapability("codex-app-server", "session_fork"), true);
+  assert.equal(
+    hostSupportsCapability("codex-app-server", "managed_thread_resume"),
+    true,
+  );
+  assert.equal(hostSupportsCapability("codex-cli", "epoch_reset"), true);
+  assert.equal(hostSupportsCapability("codex-cli", "fold_and_prefetch"), true);
+  assert.equal(hostSupportsCapability("codex-cli", "quiet_turn"), true);
+  assert.equal(hostSupportsCapability("codex-cli", "managed_thread_resume"), true);
+  assert.equal(hostSupportsCapability("codex-cli", "compact_hook"), false);
+  assert.equal(hostSupportsCapability("codex-cli-hooks", "compact_hook"), true);
+  assert.equal(hostSupportsCapability("codex-cli-hooks", "verifier_hook"), false);
+  assert.equal(
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES.hook_events.includes("Stop"),
+    false,
+  );
   assert.equal(hostSupportsCapability("dsh", "native_context_budget"), false);
   assert.equal(hostSupportsCapability("dsh", "managed_thread_resume"), false);
   assert.equal(hostSupportsCapability("agy", "quiet_turn"), false);
 
   assert.deepEqual(
     listHostCapabilities({ tier: "boundary_cli" }).map((item) => item.host_id),
-    ["claude"],
+    ["claude", "codex-cli", "codex-cli-hooks"],
   );
   assert.deepEqual(
     listHostCapabilities({ tier: "orchestrated_app" }).map((item) => item.host_id),
-    ["agy"],
+    ["agy", "codex-app", "codex-app-server"],
   );
   assert.deepEqual(
     listHostCapabilities({ tier: "in_tree_codesigned" }).map((item) => item.host_id),
@@ -99,6 +197,24 @@ test("capability lookup and tier/capability list filters behave deterministicall
   assert.deepEqual(
     listHostCapabilities({ capability: "verifier_hook" }).map((item) => item.host_id),
     ["claude"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "session_fork" }).map((item) => item.host_id),
+    ["codex-app-server"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "managed_thread_resume" }).map(
+      (item) => item.host_id,
+    ),
+    ["codex-app-server", "codex-cli"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "epoch_reset" }).map((item) => item.host_id),
+    ["codex-cli", "codex-cli-hooks"],
+  );
+  assert.deepEqual(
+    listHostCapabilities({ capability: "compact_hook" }).map((item) => item.host_id),
+    ["codex-cli-hooks"],
   );
   assert.deepEqual(
     listHostCapabilities({ capability: "native_context_budget" }).map((item) => item.host_id),

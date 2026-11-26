@@ -94,6 +94,10 @@ _DESCRIPTOR_KEYS: frozenset[str] = frozenset(
 BUILTIN_HOST_ADAPTER_MODULES: Mapping[str, str] = {
     "agy": "loopx.agy_goal_mode",
     "claude": "loopx.claude_goal_mode",
+    "codex-app": "loopx.hosts.codex_capabilities",
+    "codex-app-server": "loopx.hosts.codex_capabilities",
+    "codex-cli": "loopx.hosts.codex_capabilities",
+    "codex-cli-hooks": "loopx.hosts.codex_capabilities",
     "dsh": "loopx.dsh_goal_mode.turn_host_adapter",
 }
 _BUILTIN_DESCRIPTORS_LOCK = threading.Lock()
