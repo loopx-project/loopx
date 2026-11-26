@@ -6,15 +6,27 @@ import ast
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 import io
+import json
 from pathlib import Path
+import subprocess
+import sys
 import tokenize
+from typing import get_args
 
 import pytest
 
+from loopx import status as status_module
 from loopx.control_plane.coordination.local_authority import (
     LocalCoordinationAuthorityUnavailable,
 )
 from loopx.control_plane.goals.legacy_event_source import RetiredTodoEventSourceError
+from loopx.control_plane.status import attention_projection as ap
+from loopx.control_plane.status.goal_attention_projection import (
+    REGISTRY_WAITING_ON_OVERRIDES,
+)
+from loopx.control_plane.status.monitor_display_projection import (
+    MONITOR_SIGNAL_WAITING_ON,
+)
 from loopx.control_plane.work_items import attention_queue as aq
 from loopx.control_plane.work_items import attention_queue_types as aqt
 
@@ -283,41 +295,68 @@ def _build_context(
 def test_attention_queue_static_hygiene_and_exports() -> None:
     aq_path = REPO_ROOT / "loopx/control_plane/work_items/attention_queue.py"
     types_path = REPO_ROOT / "loopx/control_plane/work_items/attention_queue_types.py"
+    status_path = REPO_ROOT / "loopx/status.py"
     test_path = Path(__file__).resolve()
 
     aq_src = aq_path.read_text(encoding="utf-8")
     types_src = types_path.read_text(encoding="utf-8")
+    status_src = status_path.read_text(encoding="utf-8")
     test_src = test_path.read_text(encoding="utf-8")
 
     assert len(aq_src.splitlines()) <= 550
     assert len(types_src.splitlines()) < 750
-    assert len(test_src.splitlines()) < 600
-    for src in (aq_src, types_src, test_src):
+    assert len(test_src.splitlines()) < 750
+    for src in (aq_src, types_src, status_src, test_src):
         assert _any_count(src) == 0
         assert _comment_type_ignore_count(src) == 0
 
     assert aq.AttentionQueueContext is aqt.AttentionQueueContext
     assert aq.AttentionQueueProjection is aqt.AttentionQueueProjection
+    assert aq.AttentionQueueItem is aqt.AttentionQueueItem
+    assert aq.AttentionWaitingOn is aqt.AttentionWaitingOn
+    assert aq.ATTENTION_WAITING_ON_VALUES is aqt.ATTENTION_WAITING_ON_VALUES
     assert aq.USER_OR_CONTROLLER_WAIT_STATES is aqt.USER_OR_CONTROLLER_WAIT_STATES
     assert aq.ACTIONABLE_REGISTRY_SEVERITIES is aqt.ACTIONABLE_REGISTRY_SEVERITIES
+    assert not hasattr(aq, "GlobalRegistryFindingSeverity")
+    assert not hasattr(aqt, "GlobalRegistryFindingSeverity")
+    assert not hasattr(aq, "AttentionQueueCounts")
+    assert not hasattr(aqt, "AttentionQueueCounts")
+    assert set(get_args(aq.AttentionWaitingOn)) == (
+        set(REGISTRY_WAITING_ON_OVERRIDES) | {MONITOR_SIGNAL_WAITING_ON}
+    )
 
 
 def test_build_attention_queue_projection_counts_and_optional_keys() -> None:
-    items: list[dict[str, object]] = [
+    monitor_waiting: aq.AttentionWaitingOn = MONITOR_SIGNAL_WAITING_ON
+    items: list[aq.AttentionQueueItem] = [
         {"goal_id": "g1", "waiting_on": "user_or_controller"},
         {"goal_id": "g2", "waiting_on": "controller"},
         {"goal_id": "g3", "waiting_on": "codex"},
         {"goal_id": "g4", "waiting_on": "external_evidence"},
-        {"goal_id": "g5", "waiting_on": "other"},
+        {"goal_id": "g5", "waiting_on": monitor_waiting},
     ]
-    projection = aq.build_attention_queue_projection(
+    projection: aq.AttentionQueueProjection = aq.build_attention_queue_projection(
         items=items,
         goal_id_filter=None,
         autonomous_backlog_candidates={},
         autonomous_monitor_candidates=None,
-        monitor_signal_waiting_on="codex",
+        monitor_signal_waiting_on=monitor_waiting,
     )
-    assert projection == {
+    ap_projection: aq.AttentionQueueProjection = ap.build_attention_queue_projection(
+        items=items,
+        goal_id_filter=None,
+        autonomous_backlog_candidates={},
+        autonomous_monitor_candidates=None,
+    )
+    status_projection: aq.AttentionQueueProjection = (
+        status_module.build_attention_queue_projection(
+            items=items,
+            goal_id_filter=None,
+            autonomous_backlog_candidates={},
+            autonomous_monitor_candidates=None,
+        )
+    )
+    expected: aq.AttentionQueueProjection = {
         "available": True,
         "item_count": 5,
         "needs_user_or_controller": 2,
@@ -327,17 +366,111 @@ def test_build_attention_queue_projection_counts_and_optional_keys() -> None:
         "watching_monitor": 1,
         "items": items,
     }
+    assert projection == expected
+    assert ap_projection == expected
+    assert status_projection == expected
     assert "goal_filter" not in projection
     assert "autonomous_backlog_candidates" not in projection
 
+    codex_monitor = aq.build_attention_queue_projection(
+        items=items,
+        goal_id_filter=None,
+        autonomous_backlog_candidates=None,
+        autonomous_monitor_candidates=None,
+        monitor_signal_waiting_on="codex",
+    )
+    assert codex_monitor["needs_codex"] == 1
+    assert codex_monitor["watching_monitor"] == 1
+
+    malformed_raw = json.loads('[{"goal_id": "missing"}]')
     with pytest.raises(KeyError):
         aq.build_attention_queue_projection(
-            items=[{"goal_id": "missing"}],
+            items=malformed_raw,
             goal_id_filter=None,
             autonomous_backlog_candidates=None,
             autonomous_monitor_candidates=None,
-            monitor_signal_waiting_on="external_evidence",
+            monitor_signal_waiting_on=monitor_waiting,
         )
+
+    bad_ctx = _build_context(
+        _FakeRecorder(),
+        goal_items={
+            "g-bad": {"goal_id": "g-bad", "status": "ready", "waiting_on": "bogus_wait"}
+        },
+    )
+    with pytest.raises(ValueError, match="unsupported attention queue waiting_on"):
+        aq.build_attention_queue(
+            contract={"ok": True},
+            history={"goals": [{"id": "g-bad", "registry_member": False}]},
+            global_registry={"findings": []},
+            context=bad_ctx,
+        )
+
+
+def test_mypy_strict_accepts_monitor_signal_and_rejects_waitng_on_typo(
+    tmp_path: Path,
+) -> None:
+    positive = tmp_path / "positive_consumer.py"
+    positive.write_text(
+        "\n".join((
+            "from pathlib import Path",
+            "from loopx import status as status_module",
+            "from loopx.control_plane.status import attention_projection as ap",
+            "from loopx.control_plane.status.monitor_display_projection import MONITOR_SIGNAL_WAITING_ON",
+            "from loopx.control_plane.work_items import attention_queue as aq",
+            "waiting: aq.AttentionWaitingOn = MONITOR_SIGNAL_WAITING_ON",
+            "item: aq.AttentionQueueItem = {'goal_id': 'g-mon', 'waiting_on': waiting}",
+            "p1: aq.AttentionQueueProjection = aq.build_attention_queue_projection("
+            "items=[item], goal_id_filter=None, autonomous_backlog_candidates=None, "
+            "autonomous_monitor_candidates=None, monitor_signal_waiting_on=waiting)",
+            "p2: aq.AttentionQueueProjection = ap.build_attention_queue_projection("
+            "items=[item], goal_id_filter=None, autonomous_backlog_candidates=None, "
+            "autonomous_monitor_candidates=None)",
+            "p3: aq.AttentionQueueProjection = status_module.build_attention_queue_projection("
+            "items=[item], goal_id_filter=None, autonomous_backlog_candidates=None, "
+            "autonomous_monitor_candidates=None)",
+            "p4: aq.AttentionQueueProjection = status_module.build_attention_queue("
+            "contract={}, history={}, global_registry={}, runtime_root=Path('.'))",
+        )),
+        encoding="utf-8",
+    )
+    negative = tmp_path / "negative_typo_consumer.py"
+    negative.write_text(
+        "\n".join((
+            "from loopx import status as status_module",
+            "from loopx.control_plane.status import attention_projection as ap",
+            "from loopx.control_plane.work_items import attention_queue as aq",
+            "aq.build_attention_queue_projection("
+            "items=[{'goal_id': 'g1', 'waitng_on': 'codex'}], goal_id_filter=None, "
+            "autonomous_backlog_candidates=None, autonomous_monitor_candidates=None, "
+            "monitor_signal_waiting_on='monitor_signal')",
+            "ap.build_attention_queue_projection("
+            "items=[{'goal_id': 'g1', 'waitng_on': 'codex'}], goal_id_filter=None, "
+            "autonomous_backlog_candidates=None, autonomous_monitor_candidates=None)",
+            "status_module.build_attention_queue_projection("
+            "items=[{'goal_id': 'g1', 'waitng_on': 'codex'}], goal_id_filter=None, "
+            "autonomous_backlog_candidates=None, autonomous_monitor_candidates=None)",
+        )),
+        encoding="utf-8",
+    )
+    shared = [
+        sys.executable, "-m", "mypy", "--strict", "--explicit-package-bases",
+        "--cache-dir", str(tmp_path / ".mypy_cache"),
+        "--follow-imports=silent", "--config-file", str(REPO_ROOT / "pyproject.toml"),
+        "loopx/control_plane/status/monitor_display_projection.py",
+        "loopx/control_plane/work_items/attention_queue_types.py",
+        "loopx/control_plane/work_items/attention_queue.py",
+        "loopx/control_plane/status/attention_projection.py",
+        "loopx/status.py",
+    ]
+    pos_res = subprocess.run([*shared, str(positive)], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    assert pos_res.returncode == 0, pos_res.stdout + pos_res.stderr
+
+    neg_res = subprocess.run([*shared, str(negative)], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    neg_lines = [line for line in neg_res.stdout.splitlines() if str(negative) in line and ": error:" in line]
+    assert neg_res.returncode != 0 and len(neg_lines) >= 6, neg_res.stdout
+    assert any("typeddict-item" in line and "waiting_on" in line for line in neg_lines), neg_res.stdout
+    assert any("typeddict-unknown-key" in line and "waitng_on" in line for line in neg_lines), neg_res.stdout
 
 
 def test_merge_global_registry_findings_shadow_filter_and_validation() -> None:
