@@ -116,8 +116,8 @@ Apache-2.0. In particular:
   `loopx-project/loopx-cloud` repository (unauthenticated public GitHub access
   returns HTTP 404; migrated base files preserve full Apache-2.0 `LICENSE` and
   `NOTICE` attributions). The pre-split Apache-2.0 self-hosted PostgreSQL
-  baseline stays publicly readable at the frozen `v2.4.0` (`5037daecee`) tag in
-  `loopx-project/loopx`.
+  baseline stays publicly readable at the frozen `v2.4.0` release (tag
+  `5037daecee`, commit `a6ffb3be6e`) in `loopx-project/loopx`.
 
 A separately delivered Managed Control Plane (`loopx-project/loopx-cloud`,
 private/separately licensed), enterprise-only modules, hosted operations, or

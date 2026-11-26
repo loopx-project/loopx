@@ -259,7 +259,7 @@ SQLite 存储）、`npm run test:remote-authority`（校验服务端 TLS 证书�
 隔离临时实例的 `LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`
 与 `npm run test:postgresql-authority-service`，并记录精确 commit、后端版本、验证行为与
 失败或局限；`loopx-cloud` 的 `PostgreSQL Integration` workflow 会在临时实例上验证服务端
-存储与 admission 套件（公开拆分前的旧自托管路径继续保留在冻结标签 `v2.4.0` / `5037daecee`）。
+存储与 admission 套件（公开拆分前的旧自托管路径继续保留在冻结 `v2.4.0` 发布：tag `5037daecee`、commit `a6ffb3be6e`）。
 
 ### 隔离是这条门的前提
 

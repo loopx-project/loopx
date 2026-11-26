@@ -472,8 +472,10 @@ PENDING_ROWS: tuple[PendingRow, ...] = (
         stage="2b",
         pending_until=(
             "private/licensed loopx-project/loopx-cloud "
-            "(npm run test:postgresql-authority-store); "
-            "public self-hosted baseline frozen at v2.4.0 (5037daecee)"
+            "(npm run test:postgresql-authority-store / "
+            "npm run test:postgresql-authority-service); "
+            "public self-hosted baseline frozen at v2.4.0 "
+            "(tag 5037daecee, commit a6ffb3be6e)"
         ),
     ),
 )

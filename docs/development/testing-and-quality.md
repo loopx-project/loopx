@@ -357,7 +357,7 @@ HTTP 404) and run `npm run test:postgresql-authority-store` plus
 not a pass. Record the exact commit, backend version, tested behavior, and
 failures or limits. The `PostgreSQL Integration` workflow in `loopx-cloud`
 qualifies those suites against a disposable server, while public pre-split
-self-hosted installations stay on the frozen `v2.4.0` (`5037daecee`) tag
+self-hosted installations stay on the frozen `v2.4.0` (tag `5037daecee`, commit `a6ffb3be6e`) release
 (`loopx postgres`, Compose bundle, and legacy test runner). If no safe real
 environment is available, hold delivery.
 
@@ -373,7 +373,7 @@ HTTPS 客户端契约）以及
 `npm run test:postgresql-authority-service`；跳过不算通过。记录精确 commit、
 后端版本、验证行为与失败或局限；`loopx-cloud` 的 `PostgreSQL Integration`
 workflow 会在临时实例上验证这些套件，而公开拆分前的自托管部署可继续保留冻结标签
-`v2.4.0`（`5037daecee`、`loopx postgres`、Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
+`v2.4.0`（tag `5037daecee`、commit `a6ffb3be6e`、`loopx postgres`、Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
 
 #### Default-Provider Performance Qualification / 默认 Provider 性能资格
 
@@ -416,19 +416,22 @@ profile 的 PR，仍须验证相应 profile，才能宣称该结果。
 新范围资格；性能阈值及冻结 benchmark／评分、资源、时限和晋升合同均不改变。
 
 When one semantic owner fronts multiple authority providers, use a three-arm
-refactor comparison: the immutable legacy baseline, the file provider, and a
-real PostgreSQL provider. All three arms must start from the same
-production-complex snapshot and execute the same public operations. Compare
-the two provider heads exactly, then compare the baseline semantically after
-the declared compatibility projection. The allowed archive normalization is
-narrow: omit provider-retained `archive_state=archive` records from the legacy
-hot view, omit their historical leases from that hot view, and ignore absolute
-imported `index` values only after separately proving identical per-role
-relative order. Provider provenance may also differ. No domain field, archive
-selection, relative order, active lease, or non-target record may be normalized.
-File/PostgreSQL agreement alone is not compatibility evidence because both
-providers execute the same new rule. Verify that every non-target record and
-the source snapshot are unchanged.
+refactor comparison: the immutable legacy baseline, the file provider, and the
+affected real transactional provider (`SqliteAuthorityStore` in
+`loopx-project/loopx`, or `PostgreSqlAuthorityStore` in
+`loopx-project/loopx-cloud` when server-side PostgreSQL authority is
+affected). All three arms must start from the same production-complex snapshot
+and execute the same public operations. Compare the two provider heads
+exactly, then compare the baseline semantically after the declared
+compatibility projection. The allowed archive normalization is narrow: omit
+provider-retained `archive_state=archive` records from the legacy hot view, omit
+their historical leases from that hot view, and ignore absolute imported
+`index` values only after separately proving identical per-role relative order.
+Provider provenance may also differ. No domain field, archive selection,
+relative order, active lease, or non-target record may be normalized.
+Agreement between two native providers (`File`/`SQLite` or `File`/`PostgreSQL`)
+alone is not compatibility evidence because both execute the same new rule.
+Verify that every non-target record and the source snapshot are unchanged.
 
 The source snapshot's `lease_inventory` is byte-level audit evidence for every
 legacy lease file observed under the source locks. It is intentionally broader
@@ -437,14 +440,17 @@ present in the current canonical graph. Historical orphan lease files remain in
 the source inventory and never enter the canonical head.
 
 当同一个 semantic owner 服务多个 authority provider 时，重构对照必须包含三臂：
-不可变 legacy baseline、file provider、真实 PostgreSQL provider。三臂从同一份生产
-复杂度快照出发，执行相同 public operation；两个 provider head 要精确相等，baseline
-按显式 compatibility projection 比较。归档场景只允许三项窄归一化：legacy hot view
-不包含 provider 保留的 `archive_state=archive` 记录、不包含这些记录的历史 lease；并且
-只有先单独证明每个 role 的相对顺序完全一致，才可忽略导入 `index` 的绝对值。provider
-provenance 也可不同。domain 字段、归档选择、相对顺序、active lease 和非目标记录均
-不得归一化。File/PostgreSQL 一致不能单独证明兼容，因为它们执行的是同一套新规则。
-还要验证所有非目标记录与源快照保持不变。
+不可变 legacy baseline、file provider、以及受影响的真实事务性 provider
+（`loopx-project/loopx` 中的 `SqliteAuthorityStore`，或在涉及服务端 PostgreSQL
+authority 时为 `loopx-project/loopx-cloud` 中的 `PostgreSqlAuthorityStore`）。
+三臂从同一份生产复杂度快照出发，执行相同 public operation；两个 provider head
+要精确相等，baseline 按显式 compatibility projection 比较。归档场景只允许三项窄归一化：
+legacy hot view 不包含 provider 保留的 `archive_state=archive` 记录、不包含这些记录的
+历史 lease；并且只有先单独证明每个 role 的相对顺序完全一致，才可忽略导入 `index` 的
+绝对值。provider provenance 也可不同。domain 字段、归档选择、相对顺序、active lease 和
+非目标记录均不得归一化。任意两个原生 provider（`File`/`SQLite` 或 `File`/`PostgreSQL`）
+一致不能单独证明兼容，因为它们执行的是同一套新规则。还要验证所有非目标记录与源快照
+保持不变。
 
 源快照中的 `lease_inventory` 是在 source lock 下观察到的全部 legacy lease 文件的
 字节级审计证据；它有意比 canonical `projection.leases` 更宽。后者只包含当前 canonical
