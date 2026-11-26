@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from ...history import load_registry
 from ...paths import resolve_runtime_root
@@ -193,6 +194,8 @@ def reconcile_issue_fix_pr_review(
     fetch_timeout_seconds: int = 10,
     execute: bool = False,
     generated_at: str | None = None,
+    prefetched_todos: Sequence[Mapping[str, Any]] | None = None,
+    on_todo_mutation: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     context = resolve_issue_fix_pr_review_context(
         registry_path=registry_path,
@@ -202,6 +205,7 @@ def reconcile_issue_fix_pr_review(
         project=project,
         url=url,
         ack_receipt=ack_receipt,
+        prefetched_todos=prefetched_todos,
     )
     context_status = str(context.get("status") or "ack_receipt_invalid")
     if context_status == "current" and ack_receipt is None:
@@ -256,6 +260,7 @@ def reconcile_issue_fix_pr_review(
         project=project,
         url=url,
         ack_receipt=ack_receipt,
+        prefetched_todos=None if fetch_metadata else prefetched_todos,
     )
     ack_status = str(current.get("status") or "ack_receipt_invalid")
     ack_valid = ack_status == "matched"
@@ -335,6 +340,8 @@ def reconcile_issue_fix_pr_review(
             project=project,
         )
         receipt["write_performed"] = bool(completion.get("changed"))
+        if receipt["write_performed"] and on_todo_mutation is not None:
+            on_todo_mutation()
         receipt["todo_completion"] = {
             "completed": completion.get("completed"),
             "status": completion.get("status"),
@@ -364,6 +371,8 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
     fetch_timeout_seconds: int = 10,
     execute: bool = False,
     generated_at: str | None = None,
+    todo_loader: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
+    on_todo_mutation: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Reconcile current review todos from their persisted acknowledgement bindings."""
 
@@ -377,6 +386,14 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
         goal_id=goal_id,
         agent_id=agent_id,
     )
+    prefetched_todos: Sequence[Mapping[str, Any]] | None = None
+    if receipts and todo_loader is not None and any(
+        isinstance(receipt.get("binding"), Mapping)
+        and str(receipt["binding"].get("todo_id") or "").strip()
+        and str(receipt["binding"].get("permalink") or "").strip()
+        for receipt in receipts
+    ):
+        prefetched_todos = todo_loader()
     results: list[dict[str, Any]] = []
     for ack_receipt in receipts:
         binding = ack_receipt.get("binding")
@@ -419,6 +436,8 @@ def reconcile_acknowledged_issue_fix_pr_reviews(
                 fetch_timeout_seconds=fetch_timeout_seconds,
                 execute=execute,
                 generated_at=generated_at,
+                prefetched_todos=prefetched_todos,
+                on_todo_mutation=on_todo_mutation,
             )
         except ValueError:
             result = {

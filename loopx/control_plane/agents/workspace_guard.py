@@ -237,6 +237,7 @@ def observe_goal_delivery_workspace_isolation(
     selected_todo: dict[str, Any],
     *,
     project_asset: Mapping[str, Any] | None = None,
+    captured_local_workspace: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Preview settlement's typed policy, without granting workspace admission.
 
@@ -265,9 +266,16 @@ def observe_goal_delivery_workspace_isolation(
     if repo and goal_id and not selected_todo.get("task_repository"):
         root = Path(str(repo)).expanduser()
         if root.is_absolute():
-            workspace = capture_delivery_workspace(
-                root, local_goal_id=str(goal_id), local_project_root=root,
-            )
+            if (
+                isinstance(captured_local_workspace, Mapping)
+                and captured_local_workspace.get("goal_id") == str(goal_id)
+                and captured_local_workspace.get("root") == str(root)
+            ):
+                workspace = captured_local_workspace.get("workspace")
+            else:
+                workspace = capture_delivery_workspace(
+                    root, local_goal_id=str(goal_id), local_project_root=root,
+                )
     policy = goal.get("workspace_guard_policy")
     policy = policy if isinstance(policy, dict) else {}
     explicit_requirement = policy.get("peer_independent_worktree_required")
@@ -435,6 +443,8 @@ def observe_goal_local_workspace(
     goal: dict[str, Any],
     selected_todo: dict[str, Any] | None,
     allowed_write_scopes: list[str] | None = None,
+    *,
+    captured_out: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reuse the registered workspace identity and project its existing grants."""
     empty: dict[str, Any] = {}
@@ -450,6 +460,13 @@ def observe_goal_local_workspace(
     snapshot = capture_delivery_workspace(
         root, local_goal_id=str(goal_id), local_project_root=root
     )
+    if captured_out is not None:
+        captured_out.clear()
+        captured_out.update({
+            "root": str(root),
+            "goal_id": str(goal_id),
+            "workspace": snapshot,
+        })
     if not snapshot or snapshot.get("identity_kind") != "local_goal":
         return empty
     boundary = goal.get("coordination") or {}
