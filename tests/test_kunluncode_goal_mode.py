@@ -1829,3 +1829,89 @@ def test_mcp_pin_has_one_source_of_truth() -> None:
     assert cli.MCP_REQUIREMENT.startswith("mcp==")
     assert cli.MCP_SDK_VERSION not in probe_source
     assert "MCP_SDK_VERSION" in probe_source
+
+
+@pytest.mark.parametrize(
+    "legacy_script",
+    (
+        "/opt/loopx/loopx/kunluncode_goal_mode/server.py",
+        r"C:\loopx\loopx\kunluncode_goal_mode\server.py",
+    ),
+)
+def test_install_connect_and_uninstall_accept_legacy_kunluncode_goal_mode_server(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    legacy_script: str,
+) -> None:
+    registry = _registry(tmp_path)
+    calls: list[list[str]] = []
+    configured = [
+        {
+            "name": cli.MCP_SERVER_NAME,
+            "command": "/old/python",
+            "args": [legacy_script],
+        }
+    ]
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli, "_compatible_python", lambda _python: True)
+    monkeypatch.setattr(cli, "_configured_mcp_servers", lambda _binary: configured)
+    monkeypatch.setattr(cli, "_loopx_prefix", lambda: ["loopx"])
+
+    def capture(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, '{"ok": true}', "")
+
+    monkeypatch.setattr(cli, "_run", capture)
+
+    selected = cli.install_mcp(
+        python="/managed/.venv/bin/python",
+        dry_run=False,
+        replace=False,
+    )
+    assert selected == "/managed/.venv/bin/python"
+    assert calls[0] == ["/usr/bin/kunluncode", "mcp", "remove", cli.MCP_SERVER_NAME]
+    assert calls[1][-1] == str(cli.MCP_SCRIPT)
+
+    calls.clear()
+    connected = cli.connect_project(
+        project=tmp_path,
+        goal_id="shared-goal",
+        agent_id="kunlun",
+        objective=None,
+        python="/managed/.venv/bin/python",
+        skip_mcp=False,
+        replace=False,
+        dry_run=False,
+    )
+    assert connected["mcp_python"] == "/managed/.venv/bin/python"
+    assert any(
+        cmd[:3] == ["/usr/bin/kunluncode", "mcp", "remove"] for cmd in calls
+    )
+    assert json.loads(registry.read_text(encoding="utf-8"))["agent_backends"] == [
+        "kunluncode"
+    ]
+
+    calls.clear()
+    removed = cli.uninstall_mcp(dry_run=False)
+    assert removed is True
+    assert calls == [["/usr/bin/kunluncode", "mcp", "remove", cli.MCP_SERVER_NAME]]
+
+
+def test_uninstall_mcp_still_refuses_user_owned_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        cli,
+        "_configured_mcp_servers",
+        lambda _binary: [
+            {
+                "name": cli.MCP_SERVER_NAME,
+                "command": "/usr/bin/python3",
+                "args": ["/home/user/custom/server.py"],
+            }
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="user-owned"):
+        cli.uninstall_mcp(dry_run=False)

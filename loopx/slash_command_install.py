@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import sys
 from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
+from typing import cast
 
 from .hosts.agy import (
     ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
@@ -650,6 +652,138 @@ def _loopx_mcp_command() -> tuple[str, str] | None:
     return _mcp_command_for_script(Path(claude_install._p("mcp", "loopx_mcp.py")))
 
 
+def _is_within(path: Path, parent: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(parent.expanduser().resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _projects_from_registry_file(registry_file: Path) -> list[Path]:
+    """Read project directories from one registry JSON file without creating or mutating state."""
+    if not registry_file.is_file():
+        return []
+    try:
+        payload_obj: object = json.loads(registry_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    if not isinstance(payload_obj, dict):
+        return []
+    goals_obj = cast(dict[str, object], payload_obj).get("goals")
+    if not isinstance(goals_obj, list):
+        return []
+    projects: list[Path] = []
+    for item in goals_obj:
+        if not isinstance(item, dict):
+            continue
+        goal = cast(dict[str, object], item)
+        repo_val = goal.get("repo")
+        if isinstance(repo_val, str) and repo_val.strip():
+            projects.append(Path(repo_val).expanduser())
+        source_val = goal.get("source_registry")
+        if isinstance(source_val, str) and source_val.strip():
+            src_path = Path(source_val).expanduser()
+            if src_path.parent.name in {".loopx", ".goal-harness"}:
+                projects.append(src_path.parent.parent)
+    return projects
+
+
+def _discover_claude_migration_targets(
+    *,
+    claude_root: Path,
+    claude_home_overridden: bool,
+    registry_path: str | None,
+    runtime_root: str | None,
+) -> list[tuple[Path, Path | None]]:
+    """Return unique `(claude_dir, project_dir)` targets to inspect for legacy migration."""
+    targets: list[tuple[Path, Path | None]] = [(claude_root, None)]
+    env_config_dir = os.environ.get("CLAUDE_CONFIG_DIR") if not claude_home_overridden else None
+    if env_config_dir and env_config_dir.strip():
+        targets.append((Path(env_config_dir).expanduser(), None))
+
+    project_roots: list[Path] = []
+    cwd = Path.cwd()
+    project_roots.append(cwd)
+    for parent in (cwd, *cwd.parents):
+        if any((parent / marker / "registry.json").is_file() for marker in (".loopx", ".goal-harness")):
+            project_roots.append(parent)
+            break
+
+    registry_files: list[Path] = []
+    if registry_path and registry_path.strip():
+        registry_files.append(Path(registry_path).expanduser())
+    for marker in (".loopx", ".goal-harness"):
+        local_reg = cwd / marker / "registry.json"
+        if local_reg.is_file():
+            registry_files.append(local_reg)
+
+    explicit_runtime = runtime_root or os.environ.get("LOOPX_RUNTIME_ROOT")
+    if explicit_runtime and explicit_runtime.strip():
+        rt = Path(explicit_runtime).expanduser()
+        registry_files.extend([rt / "registry.global.json", rt / "registry.json"])
+    if not claude_home_overridden or _is_within(claude_root, Path.home()):
+        home = Path.home()
+        for rt in (home / ".loopx", home / ".codex" / "loopx"):
+            registry_files.extend([rt / "registry.global.json", rt / "registry.json"])
+
+    for reg_file in registry_files:
+        project_roots.extend(_projects_from_registry_file(reg_file))
+
+    for proj in project_roots:
+        targets.append((proj / ".claude", proj))
+
+    deduped: list[tuple[Path, Path | None]] = []
+    seen_dirs: set[Path] = set()
+    for claude_dir, proj_dir in targets:
+        try:
+            key = claude_dir.expanduser().resolve()
+        except OSError:
+            key = claude_dir
+        if key in seen_dirs:
+            continue
+        seen_dirs.add(key)
+        if claude_dir.is_dir() or (proj_dir is not None and (proj_dir / ".mcp.json").is_file()):
+            deduped.append((claude_dir, proj_dir))
+    return deduped
+
+
+def _migrate_legacy_claude_configs(
+    *,
+    installed: list[dict[str, object]],
+    claude_root: Path,
+    claude_home_overridden: bool,
+    registry_path: str | None,
+    runtime_root: str | None,
+    execute: bool,
+) -> None:
+    try:
+        from loopx.hosts.claude.scripts import install as claude_install
+    except ImportError:
+        return
+    for claude_dir, proj_dir in _discover_claude_migration_targets(
+        claude_root=claude_root,
+        claude_home_overridden=claude_home_overridden,
+        registry_path=registry_path,
+        runtime_root=runtime_root,
+    ):
+        for row in claude_install.migrate_legacy_claude_dir(
+            claude_dir,
+            project_dir=proj_dir,
+            execute=execute,
+        ):
+            installed.append(
+                _installed_entry(
+                    surface="claude-code",
+                    host_surfaces=["claude-code"],
+                    mechanism="claude_goal_mode_legacy_migration",
+                    command="/loopx",
+                    path=Path(row["path"]),
+                    status=row["status"],
+                )
+            )
+
+
 def _kiro_cli_mcp_command() -> tuple[str, str] | None:
     """The Kiro CLI server: same control plane, Kiro runtime profile and
     session-bound identity."""
@@ -858,6 +992,8 @@ def install_slash_commands(
     pi_project: str | None = None,
     pi_scope: str = "project",
     pi_user_home: str | None = None,
+    registry_path: str | None = None,
+    runtime_root: str | None = None,
 ) -> dict[str, object]:
     facade_specs = _command_prompt_specs(cli_bin=cli_bin, include_legacy_aliases=True)
     agy_facade_specs = _command_prompt_specs(
@@ -928,6 +1064,15 @@ def install_slash_commands(
             uninstall=uninstall,
             invoke_prefix="/",
         )
+        if not uninstall:
+            _migrate_legacy_claude_configs(
+                installed=installed,
+                claude_root=claude_root,
+                claude_home_overridden=claude_home is not None,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                execute=execute,
+            )
 
     if "gemini" in effective_surfaces:
         # Gemini CLI discovers user skills from GEMINI_HOME/skills. Files are

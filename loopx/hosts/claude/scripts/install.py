@@ -24,6 +24,7 @@ from typing import Any
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -39,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.file_lock import write_json_atomic  # noqa: E402
+from loopx.file_lock import write_bytes_atomic, write_json_atomic  # noqa: E402
 
 
 def _p(*parts: str) -> str:
@@ -519,6 +520,220 @@ def main() -> int:
     if dry:
         print("(dry-run: nothing written)")
     return 0
+
+
+_LEGACY_COMMAND_SCRIPT_SUFFIX = "/loopx/claude_goal_mode/scripts/goalmode_cmd.py"
+_LEGACY_POLICY_HOOK_SUFFIX = "/loopx/claude_goal_mode/hooks/goal_policy.py"
+_LEGACY_STATUSLINE_SCRIPT_SUFFIX = "/loopx/claude_goal_mode/statusline/goal_status.py"
+_LEGACY_MCP_SCRIPT_SUFFIX = "/loopx/claude_goal_mode/mcp/loopx_mcp.py"
+_LEGACY_COMMAND_LINE_RE = re.compile(
+    r"^!`[^`\r\n]*/loopx/claude_goal_mode/scripts/goalmode_cmd\.py[^`\r\n]*`\s*$"
+)
+_ALLOWED_TOOLS_BASH_RE = re.compile(r"^allowed-tools:\s*Bash\([^\r\n]*\)\s*$")
+
+
+def _migration_python_cmd() -> str:
+    """Prefer the running LoopX Python interpreter so upgraded venv commands resolve `loopx`."""
+    if sys.executable and _launches_python(sys.executable):
+        return sys.executable
+    return _python_cmd()
+
+
+def _migrated_command_md_text(raw: str, *, py_exe: str) -> str | None:
+    if _LEGACY_COMMAND_SCRIPT_SUFFIX not in raw.replace("\\", "/"):
+        return None
+    if "description: loopx goal-mode setup" not in raw:
+        return None
+    lines = raw.splitlines(keepends=True)
+    command_index: int | None = None
+    allowed_index: int | None = None
+    for index, line in enumerate(lines):
+        bare = line.rstrip("\r\n")
+        if _LEGACY_COMMAND_LINE_RE.match(bare.replace("\\", "/")):
+            command_index = index
+        elif allowed_index is None and _ALLOWED_TOOLS_BASH_RE.match(bare):
+            allowed_index = index
+    if command_index is None:
+        return None
+    py = _shell_literal(py_exe, powershell=False)
+    entry = _shell_literal(_p("scripts", "goalmode_cmd.py"), powershell=False)
+    cmd_nl = "\r\n" if lines[command_index].endswith("\r\n") else "\n"
+    lines[command_index] = f"!`{py} {entry} $ARGUMENTS`{cmd_nl}"
+    if allowed_index is not None:
+        allowed_nl = "\r\n" if lines[allowed_index].endswith("\r\n") else "\n"
+        lines[allowed_index] = f"allowed-tools: Bash({py}:*){allowed_nl}"
+    updated = "".join(lines)
+    return updated if updated != raw else None
+
+
+def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict[str, Any] | None:
+    powershell = _uses_powershell()
+    py_cmd = _shell_command(py_exe, powershell=powershell)
+    gate_literal = _shell_literal(_p("hooks", "goal_policy.py"), powershell=powershell)
+    status_literal = _shell_literal(_p("statusline", "goal_status.py"), powershell=powershell)
+    updated: dict[str, Any] = dict(raw_data)
+    changed = False
+
+    hooks_obj = raw_data.get("hooks")
+    if isinstance(hooks_obj, dict):
+        pre_obj = hooks_obj.get("PreToolUse")
+        if isinstance(pre_obj, list):
+            new_pre: list[Any] = []
+            pre_changed = False
+            for group in pre_obj:
+                if not isinstance(group, dict):
+                    new_pre.append(group)
+                    continue
+                group_hooks = group.get("hooks")
+                if not isinstance(group_hooks, list):
+                    new_pre.append(group)
+                    continue
+                new_group_hooks: list[Any] = []
+                group_changed = False
+                for item in group_hooks:
+                    if (
+                        isinstance(item, dict)
+                        and _LEGACY_POLICY_HOOK_SUFFIX
+                        in str(item.get("command", "")).replace("\\", "/")
+                    ):
+                        new_item = dict(item)
+                        new_item["command"] = f"{py_cmd} {gate_literal}"
+                        new_group_hooks.append(new_item)
+                        group_changed = True
+                    else:
+                        new_group_hooks.append(item)
+                if group_changed:
+                    new_group = dict(group)
+                    new_group["hooks"] = new_group_hooks
+                    new_pre.append(new_group)
+                    pre_changed = True
+                else:
+                    new_pre.append(group)
+            if pre_changed:
+                new_hooks = dict(hooks_obj)
+                new_hooks["PreToolUse"] = new_pre
+                updated["hooks"] = new_hooks
+                changed = True
+
+    sl_obj = raw_data.get("statusLine")
+    if (
+        isinstance(sl_obj, dict)
+        and _LEGACY_STATUSLINE_SCRIPT_SUFFIX
+        in str(sl_obj.get("command", "")).replace("\\", "/")
+    ):
+        new_sl = dict(sl_obj)
+        new_sl["command"] = f"{py_cmd} {status_literal}"
+        updated["statusLine"] = new_sl
+        changed = True
+
+    return updated if changed else None
+
+
+def _migrated_mcp_json_payload(raw_data: dict[str, Any]) -> dict[str, Any] | None:
+    servers = raw_data.get("mcpServers")
+    if not isinstance(servers, dict):
+        return None
+    loopx_entry = servers.get("loopx")
+    if not isinstance(loopx_entry, dict):
+        return None
+    args = loopx_entry.get("args")
+    if not isinstance(args, list):
+        return None
+    new_mcp_script = _p("mcp", "loopx_mcp.py")
+    updated_args: list[Any] = []
+    changed = False
+    for arg in args:
+        if isinstance(arg, str) and _LEGACY_MCP_SCRIPT_SUFFIX in arg.replace("\\", "/"):
+            updated_args.append(new_mcp_script)
+            changed = True
+        else:
+            updated_args.append(arg)
+    if not changed:
+        return None
+    updated_entry = dict(loopx_entry)
+    updated_entry["args"] = updated_args
+    updated_servers = dict(servers)
+    updated_servers["loopx"] = updated_entry
+    updated = dict(raw_data)
+    updated["mcpServers"] = updated_servers
+    return updated
+
+
+def _read_json_dict_fail_closed(path: Path) -> dict[str, Any] | None:
+    try:
+        raw_obj: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return raw_obj if isinstance(raw_obj, dict) else None
+
+
+def migrate_legacy_claude_dir(
+    claude_dir: Path,
+    *,
+    project_dir: Path | None = None,
+    execute: bool,
+) -> list[dict[str, str]]:
+    """Migrate provably LoopX-owned legacy `loopx/claude_goal_mode/` entries in `claude_dir`.
+
+    Leaves user-owned rules/hooks/statusline/commands and unreadable JSON/non-UTF-8 files untouched.
+    """
+    results: list[dict[str, str]] = []
+    py_exe: str | None = None
+
+    def resolve_py() -> str:
+        nonlocal py_exe
+        if py_exe is None:
+            py_exe = _migration_python_cmd()
+        return py_exe
+
+    cmd_path = claude_dir / "commands" / "loopx.md"
+    if cmd_path.is_file():
+        try:
+            raw_cmd = cmd_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            raw_cmd = ""
+        updated_cmd = _migrated_command_md_text(raw_cmd, py_exe=resolve_py()) if raw_cmd else None
+        if updated_cmd is not None:
+            if execute:
+                write_bytes_atomic(
+                    cmd_path.resolve(),
+                    updated_cmd.encode("utf-8"),
+                    preserve_mode=True,
+                )
+            results.append({"path": str(cmd_path), "status": "updated" if execute else "would_write"})
+
+    settings_path = claude_dir / "settings.json"
+    if settings_path.is_file():
+        raw_settings = _read_json_dict_fail_closed(settings_path)
+        updated_settings = (
+            _migrated_settings_payload(raw_settings, py_exe=resolve_py())
+            if raw_settings is not None
+            else None
+        )
+        if updated_settings is not None:
+            if execute:
+                write_json_atomic(
+                    settings_path.resolve(),
+                    updated_settings,
+                    preserve_mode=True,
+                )
+            results.append({"path": str(settings_path), "status": "updated" if execute else "would_write"})
+
+    if project_dir is not None:
+        mcp_path = project_dir / ".mcp.json"
+        if mcp_path.is_file():
+            raw_mcp = _read_json_dict_fail_closed(mcp_path)
+            updated_mcp = _migrated_mcp_json_payload(raw_mcp) if raw_mcp is not None else None
+            if updated_mcp is not None:
+                if execute:
+                    write_json_atomic(
+                        mcp_path.resolve(),
+                        updated_mcp,
+                        preserve_mode=True,
+                    )
+                results.append({"path": str(mcp_path), "status": "updated" if execute else "would_write"})
+
+    return results
 
 
 if __name__ == "__main__":

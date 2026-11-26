@@ -76,6 +76,7 @@ class ImpactTests(unittest.TestCase):
                      "packages/loopx-core/prepare.py", "unknown"):
             with self.subTest(full_path=path):
                 self.assertEqual(candidate([Change("M", path)])[0], "full")
+                self.assertEqual(candidate([Change("M", "loopx/web/chat/index.html"), Change("M", path)])[0], "full")
 
     def test_invalid_empty_and_non_pr_are_full(self):
         for changes in ([], [Change("T", "docs/a.md")], [Change("M", "docs/../code.md")],

@@ -219,6 +219,11 @@ def handle_slash_commands_command(
             if agy_goal_id and getattr(args, "runtime_root", None)
             else None
         )
+        resolved_runtime_root = (
+            str(Path(args.runtime_root).expanduser().resolve())
+            if getattr(args, "runtime_root", None)
+            else None
+        )
         payload = install_slash_commands(
             execute=bool((args.install or args.uninstall) and not args.dry_run),
             uninstall=bool(args.uninstall),
@@ -242,6 +247,8 @@ def handle_slash_commands_command(
             agy_registry=agy_registry,
             pi_project=args.pi_project,
             pi_scope=args.pi_scope,
+            registry_path=str(resolved_registry.resolve()) if resolved_registry is not None else None,
+            runtime_root=resolved_runtime_root,
         )
         print_payload(payload, output_format(args), render_slash_command_install_markdown)
         return 0 if payload.get("ok") is True else 1

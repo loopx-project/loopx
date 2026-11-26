@@ -144,6 +144,12 @@ def _configured_mcp_servers(kunluncode: str) -> list[dict[str, Any]]:
     return [item for item in payload if isinstance(item, dict)]
 
 
+_MANAGED_MCP_SCRIPT_SUFFIXES = (
+    "/loopx/hosts/kunluncode/server.py",
+    "/loopx/kunluncode_goal_mode/server.py",
+)
+
+
 def _is_managed_server(entry: dict[str, Any]) -> bool:
     args = list(entry.get("args") or [])
     return (
@@ -151,7 +157,7 @@ def _is_managed_server(entry: dict[str, Any]) -> bool:
         and len(args) == 1
         and str(args[0])
         .replace("\\", "/")
-        .endswith("/loopx/hosts/kunluncode/server.py")
+        .endswith(_MANAGED_MCP_SCRIPT_SUFFIXES)
     )
 
 

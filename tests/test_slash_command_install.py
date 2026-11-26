@@ -1388,3 +1388,292 @@ def test_antigravity_resident_guidance_is_isolated_to_antigravity_surfaces(tmp_p
     codex_text = (codex_home / "skills" / "loopx" / "SKILL.md").read_text(encoding="utf-8")
     assert "Antigravity App fixed resident session" not in codex_text
     assert "--with-agy-hooks" not in codex_text
+
+
+def _seed_legacy_claude_dir(
+    claude_dir: Path,
+    *,
+    legacy_root: str = "/opt/old-loopx/loopx/claude_goal_mode",
+    include_custom_statusline: bool = False,
+) -> tuple[Path, Path]:
+    cmd_dir = claude_dir / "commands"
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    cmd_path = cmd_dir / "loopx.md"
+    cmd_path.write_text(
+        "---\n"
+        "description: loopx goal-mode setup. `/loopx <task>` sets up a goal + writes .claude/loop.md; "
+        "drive the loop with native /loop. bare /loopx = arm; off | status.\n"
+        "argument-hint: <task to do>  |  (no args = arm)  |  off  |  status\n"
+        "allowed-tools: Bash('/old/python3':*)\n"
+        "---\n\n"
+        "Run the loopx setup helper and read its output:\n\n"
+        f"!`'/old/python3' '{legacy_root}/scripts/goalmode_cmd.py' $ARGUMENTS`\n\n"
+        "Show it to the user VERBATIM and STOP.\n",
+        encoding="utf-8",
+    )
+    settings_path = claude_dir / "settings.json"
+    settings_payload: dict[str, object] = {
+        "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]},
+        "env": {"CUSTOM_FLAG": "keep"},
+        "model": "sonnet",
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "echo user-owned-hook"}],
+                },
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"/old/python3 '{legacy_root}/hooks/goal_policy.py'",
+                            "timeout": 10,
+                        }
+                    ],
+                },
+            ]
+        },
+        "statusLine": (
+            {"type": "command", "command": "custom-user-statusline.sh"}
+            if include_custom_statusline
+            else {
+                "type": "command",
+                "command": f"/old/python3 '{legacy_root}/statusline/goal_status.py'",
+            }
+        ),
+    }
+    settings_path.write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+    return cmd_path, settings_path
+
+
+def test_default_install_migrates_legacy_claude_project_and_user_preserving_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    proj = tmp_path / "proj"
+    proj_claude = proj / ".claude"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-proj",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-proj",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    user_cmd, user_settings = _seed_legacy_claude_dir(user_claude, include_custom_statusline=True)
+    proj_cmd, proj_settings = _seed_legacy_claude_dir(proj_claude, include_custom_statusline=False)
+    proj_mcp = proj / ".mcp.json"
+    proj_mcp.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "other": {"command": "other-bin", "args": ["--serve"]},
+                    "loopx": {
+                        "command": "/old/python3",
+                        "args": ["/opt/old-loopx/loopx/claude_goal_mode/mcp/loopx_mcp.py"],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Dry-run reports planned migrations without writing any file.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    before_proj_cmd = proj_cmd.read_text(encoding="utf-8")
+    before_proj_settings = proj_settings.read_text(encoding="utf-8")
+    dry_payload = install_slash_commands(
+        execute=False,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert dry_payload["ok"] is True
+    assert proj_cmd.read_text(encoding="utf-8") == before_proj_cmd
+    assert proj_settings.read_text(encoding="utf-8") == before_proj_settings
+    migrated_dry = [
+        row
+        for row in dry_payload["installed"]  # type: ignore[attr-defined]
+        if isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+    ]
+    assert {row["status"] for row in migrated_dry} == {"would_write"}
+    assert len(migrated_dry) == 5
+
+    # Default install migrates both user and project entries cleanly while preserving user config.
+    applied = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert applied["ok"] is True
+    migrated = [
+        row
+        for row in applied["installed"]  # type: ignore[attr-defined]
+        if isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+    ]
+    assert {row["status"] for row in migrated} == {"updated"}
+    assert len(migrated) == 5
+
+    # Idempotent on repeated default install.
+    second = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert not any(
+        isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+        for row in second["installed"]  # type: ignore[attr-defined]
+    )
+
+    user_settings_data = json.loads(user_settings.read_text(encoding="utf-8"))
+    assert user_settings_data["statusLine"] == {"type": "command", "command": "custom-user-statusline.sh"}
+    assert "/loopx/hosts/claude/commands/" not in user_cmd.read_text(encoding="utf-8")
+    assert "/loopx/hosts/claude/scripts/goalmode_cmd.py" in user_cmd.read_text(encoding="utf-8")
+
+    proj_settings_data = json.loads(proj_settings.read_text(encoding="utf-8"))
+    assert proj_settings_data["permissions"] == {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]}
+    assert proj_settings_data["env"] == {"CUSTOM_FLAG": "keep"}
+    assert proj_settings_data["model"] == "sonnet"
+    hooks_cmds = [
+        h["command"]
+        for g in proj_settings_data["hooks"]["PreToolUse"]
+        for h in g["hooks"]
+    ]
+    assert "echo user-owned-hook" in hooks_cmds
+    assert any("/loopx/hosts/claude/hooks/goal_policy.py" in c for c in hooks_cmds)
+    assert "/loopx/hosts/claude/statusline/goal_status.py" in proj_settings_data["statusLine"]["command"]
+
+    mcp_data = json.loads(proj_mcp.read_text(encoding="utf-8"))
+    assert mcp_data["mcpServers"]["other"] == {"command": "other-bin", "args": ["--serve"]}
+    assert mcp_data["mcpServers"]["loopx"]["args"][0].endswith("/loopx/hosts/claude/mcp/loopx_mcp.py")
+
+    # Execute the migrated /loopx status command and statusLine command verbatim against proj.
+    cmd_lines = [
+        line.strip()
+        for line in proj_cmd.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("!`") and line.strip().endswith("`")
+    ]
+    assert len(cmd_lines) == 1
+    status_tokens = shlex.split(cmd_lines[0][2:-1].replace("$ARGUMENTS", "status"))
+    status_run = subprocess.run(
+        status_tokens,
+        cwd=str(proj),
+        capture_output=True,
+        text=True,
+        env={**slash_command_install.os.environ, "HOME": str(home), "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        check=False,
+    )
+    assert status_run.returncode == 0, status_run.stderr + status_run.stdout
+    assert "goal      : cc-proj" in status_run.stdout
+
+    sl_tokens = shlex.split(proj_settings_data["statusLine"]["command"])
+    sl_run = subprocess.run(
+        sl_tokens,
+        input=json.dumps({"cwd": str(proj)}),
+        capture_output=True,
+        text=True,
+        env={**slash_command_install.os.environ, "HOME": str(home), "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        check=False,
+    )
+    assert sl_run.returncode == 0, sl_run.stderr + sl_run.stdout
+    assert sys.executable
+
+
+def test_claude_legacy_migration_skips_targeted_uninstall_and_unowned_or_corrupt_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    _seed_legacy_claude_dir(user_claude)
+    user_cmd = user_claude / "commands" / "loopx.md"
+    user_settings = user_claude / "settings.json"
+    before_cmd = user_cmd.read_bytes()
+    before_settings = user_settings.read_bytes()
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.chdir(tmp_path)
+
+    # 1. Explicit --surface codex never probes or modifies Claude configs.
+    monkeypatch.setattr(
+        slash_command_install,
+        "_migrate_legacy_claude_configs",
+        lambda **_kw: pytest.fail("explicit --surface codex must not probe legacy Claude configs"),
+    )
+    codex_payload = install_slash_commands(
+        execute=True,
+        surfaces=["codex"],
+        codex_home=str(home / ".codex"),
+    )
+    assert codex_payload["ok"] is True
+    assert user_cmd.read_bytes() == before_cmd
+    assert user_settings.read_bytes() == before_settings
+
+    # 2. --uninstall never migrates legacy Claude configs.
+    monkeypatch.undo()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.chdir(tmp_path)
+    uninstall_payload = install_slash_commands(
+        execute=True,
+        uninstall=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert uninstall_payload["ok"] is True
+    assert user_cmd.read_bytes() == before_cmd
+    assert user_settings.read_bytes() == before_settings
+
+    # 3. Unowned commands/loopx.md and non-UTF-8 settings.json / global registry fail closed cleanly.
+    user_cmd.write_text("---\ndescription: user custom loopx\n---\n!`echo custom`\n", encoding="utf-8")
+    custom_cmd_bytes = user_cmd.read_bytes()
+    user_settings.write_bytes(b"\xff\xfe\x00not-utf8-settings")
+    corrupt_settings_bytes = user_settings.read_bytes()
+    (home / ".loopx").mkdir(parents=True, exist_ok=True)
+    (home / ".loopx" / "registry.global.json").write_bytes(b"\xff\xfe\x00bad-registry")
+
+    default_payload = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert default_payload["ok"] is True
+    assert user_cmd.read_bytes() == custom_cmd_bytes
+    assert user_settings.read_bytes() == corrupt_settings_bytes
