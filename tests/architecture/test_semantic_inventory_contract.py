@@ -5,8 +5,10 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tokenize
 
 import pytest
@@ -146,7 +148,19 @@ def test_python_and_typescript_facts_handle_boundaries_and_invalid_syntax() -> N
 
 
 def test_reports_handle_malformed_containers_non_word_tokens_and_roundtrip() -> None:
-    assert inventory.registered_owner_symbol_sets({"vocabularies": "not-a-map"}) == set()
+    with pytest.raises(ValueError, match="vocabularies must be a mapping"):
+        inventory.registered_owner_symbol_sets({"vocabularies": "not-a-map"})
+    with pytest.raises(ValueError, match="vocabulary entry must be a mapping"):
+        inventory.registered_owner_symbol_sets({"vocabularies": {"broken": "not-a-map"}})
+    with pytest.raises(ValueError, match="owners must be a mapping"):
+        inventory.registered_owner_symbol_sets(
+            {"vocabularies": {"broken": {"owners": "not-a-map"}}}
+        )
+    assert inventory.registered_owner_symbol_sets({"vocabularies": {"no_owners": {}}}) == set()
+    assert (
+        inventory.registered_owner_symbol_sets({"vocabularies": {"none_owners": {"owners": None}}})
+        == set()
+    )
     with pytest.raises(KeyError):
         inventory.registered_owner_symbol_sets({})
 
@@ -194,3 +208,73 @@ def test_reports_handle_malformed_containers_non_word_tokens_and_roundtrip() -> 
     rendered = inventory.render_inventory(inv)
     assert json.loads(rendered) == inv
     assert rendered.endswith("\n")
+
+
+_REPORT_CLI_FILES = (
+    "scripts/generate_semantic_inventory.py",
+    "loopx/__init__.py",
+    "loopx/semantics/__init__.py",
+    "loopx/semantics/inventory.py",
+    "loopx/semantics/inventory_reports.py",
+    "loopx/semantics/development_probe.py",
+    "loopx/semantics/consumer_report.py",
+    "loopx/semantics/field_use.py",
+    "loopx/semantics/production.py",
+    "loopx/semantics/python_production.py",
+)
+
+
+def _run_report_cli(repo_root: Path) -> subprocess.CompletedProcess[str]:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("COV_CORE_", "COVERAGE_"))
+    }
+    return subprocess.run(
+        [sys.executable, "scripts/generate_semantic_inventory.py", "--report"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_report_cli_fails_closed_on_malformed_registry(tmp_path: Path) -> None:
+    for relative in _REPORT_CLI_FILES:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((REPO_ROOT / relative).read_bytes())
+
+    sample = tmp_path / "loopx" / "sample_vocab.py"
+    sample.write_text('SAMPLE_STATES = ("alpha", "beta")\n', encoding="utf-8")
+    registry_path = tmp_path / "loopx" / "semantics" / "vocabulary_v0.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "vocabularies": {
+                    "sample_state": {
+                        "owners": {"python": "loopx/sample_vocab.py::SAMPLE_STATES"}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "--quiet"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+
+    valid = _run_report_cli(tmp_path)
+    assert valid.returncode == 0, valid.stderr
+    assert "merge candidates (advisory, never auto-merged):" in valid.stdout
+
+    for payload, expected_diagnostic in (
+        ({"vocabularies": "not-a-map"}, "vocabularies map"),
+        ({"vocabularies": {"broken": "not-a-map"}}, "vocabulary entry must be a mapping"),
+        ({"vocabularies": {"broken": {"owners": "not-a-map"}}}, "owners must be a mapping"),
+    ):
+        registry_path.write_text(json.dumps(payload), encoding="utf-8")
+        failed = _run_report_cli(tmp_path)
+        assert failed.returncode != 0
+        assert "0 explained" not in failed.stdout
+        assert expected_diagnostic in failed.stderr

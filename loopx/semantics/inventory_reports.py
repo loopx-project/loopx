@@ -182,12 +182,14 @@ def registered_owner_symbol_sets(registry: Mapping[str, object]) -> set[frozense
     sets: set[frozenset[str]] = set()
     vocabularies = registry["vocabularies"]
     if not isinstance(vocabularies, Mapping):
-        return sets
+        raise ValueError("semantic registry vocabularies must be a mapping")
     for vocabulary in vocabularies.values():
         if not isinstance(vocabulary, Mapping):
-            continue
+            raise ValueError("semantic registry vocabulary entry must be a mapping")
         owners_obj = vocabulary.get("owners")
-        owners = owners_obj if isinstance(owners_obj, Mapping) else {}
+        owners = {} if owners_obj is None else owners_obj
+        if not isinstance(owners, Mapping):
+            raise ValueError("semantic registry vocabulary owners must be a mapping")
         symbols = frozenset(
             str(owner).split("::")[-1] for owner in owners.values() if owner
         )
