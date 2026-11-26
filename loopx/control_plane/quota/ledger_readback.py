@@ -93,6 +93,19 @@ def _slot_count(value: Any) -> int | None:
     return None
 
 
+def _expanded_stored_path(stored_path: str) -> Path | None:
+    """Expand ``~`` when that account can be resolved.
+
+    An unknown ``~user`` raises ``RuntimeError``. The path is then not a
+    copied run file, and callers keep the stored-path observation.
+    """
+
+    try:
+        return Path(stored_path).expanduser()
+    except (OSError, RuntimeError):
+        return None
+
+
 def _lexical_absolute(path: Path) -> Path:
     """Collapse ``.`` and ``..`` without resolving symlinks.
 
@@ -106,14 +119,15 @@ def _lexical_absolute(path: Path) -> Path:
 def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -> str | None:
     """File name when ``stored_path`` is ``<any>/goals/<goalId>/runs/<file>``.
 
-    A runtime copy leaves the old absolute path in the index row. Only that
-    same-goal runs file may be opened from the current runs directory.
+    ``extension`` is ``.json`` or ``.md``. A runtime copy leaves the old
+    absolute path in the index row. Only that same-goal runs file may be
+    opened from the current runs directory.
     """
 
     if not goal_id:
         return None
-    raw = Path(stored_path).expanduser()
-    if not raw.is_absolute():
+    raw = _expanded_stored_path(stored_path)
+    if raw is None or not raw.is_absolute():
         return None
     normalized = _lexical_absolute(raw)
     file_name = normalized.name
@@ -132,15 +146,31 @@ def _copied_goal_run_file_name(stored_path: str, goal_id: str, extension: str) -
     return file_name
 
 
+def _relative_to_runs_dir(path: Path, runs_real: Path) -> str | None:
+    """Path relative to ``runs_real``, or None when the volumes differ.
+
+    Windows ``os.path.relpath`` raises ``ValueError`` across drives. A
+    different volume is not inside the runs directory.
+    """
+
+    try:
+        return os.path.relpath(path, runs_real)
+    except ValueError:
+        return None
+
+
 def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
     """True when the stored path is already lexically inside ``runs_dir``."""
 
     try:
         runs_real = Path(runs_dir).expanduser().resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return False
-    resolved = _lexical_absolute(Path(stored_path).expanduser())
-    relative = os.path.relpath(resolved, runs_real)
+    expanded = _expanded_stored_path(stored_path)
+    if expanded is None:
+        return False
+    resolved = _lexical_absolute(expanded)
+    relative = _relative_to_runs_dir(resolved, runs_real)
     return bool(
         relative
         and relative != "."
@@ -150,16 +180,28 @@ def _stays_inside_runs_dir(runs_dir: Path, stored_path: str) -> bool:
     )
 
 
+def _exclusive_regular_file(path: Path) -> bool:
+    """True when ``path`` is one regular file with no other directory entry.
+
+    ``lstat`` does not follow a symlink. A hard link is still a regular file,
+    and ``resolve`` stays on the in-directory name, so ``st_nlink == 1`` is
+    the exclusive artifact the quota reader can open.
+    """
+
+    info = path.lstat()
+    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+
+
 def _relocated_run_artifact_path(
     runs_dir: Path,
     goal_id: str,
     stored_path: str,
     extension: str,
 ) -> Path | None:
-    """Same-named regular file in the current runs directory, or None.
+    """Same-named exclusive regular file in the current runs directory, or None.
 
-    Symlinks, directories, and files whose real path leaves the runs directory
-    are not substitutes for the stored artifact.
+    Symlinks, hard links, directories, and files whose real path leaves the
+    runs directory are not substitutes for the stored artifact.
     """
 
     file_name = _copied_goal_run_file_name(stored_path, goal_id, extension)
@@ -167,21 +209,72 @@ def _relocated_run_artifact_path(
         return None
     try:
         runs_real = Path(runs_dir).expanduser().resolve(strict=True)
-    except OSError:
+    except (OSError, RuntimeError):
         return None
     if not runs_real.is_dir():
         return None
     candidate = runs_real / file_name
     try:
-        if not stat.S_ISREG(candidate.lstat().st_mode):
+        if not _exclusive_regular_file(candidate):
             return None
         target = candidate.resolve(strict=True)
     except OSError:
         return None
-    relative = os.path.relpath(target, runs_real)
+    relative = _relative_to_runs_dir(target, runs_real)
     if relative != file_name:
         return None
     return target
+
+
+def relocated_run_artifact_path(
+    runs_dir: Path,
+    goal_id: str,
+    stored_path: str,
+    extension: str,
+) -> Path | None:
+    """Same-named exclusive regular ``.json`` or ``.md`` file inside ``runs_dir``.
+
+    Symlinks, hard links, directories, and files whose real path leaves the
+    runs directory are not substitutes. A stored path that is already inside
+    ``runs_dir``, or that does not name this goal's runs file, returns None so
+    the caller keeps the stored path.
+    """
+
+    return _relocated_run_artifact_path(runs_dir, goal_id, stored_path, extension)
+
+
+def _regular_artifact_inside_runs_dir(runs_dir: Path, stored_path: str) -> str | None:
+    """Real path of an exclusive regular file that stays inside ``runs_dir``.
+
+    Lexical containment is not enough. ``Path.read_bytes`` follows a symlink,
+    and a hard link is a regular file whose real path stays inside the runs
+    directory. Symlinks, hard links, directories, and files whose real path
+    leaves the runs directory are not the stored artifact.
+    """
+
+    try:
+        runs_real = Path(runs_dir).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    expanded = _expanded_stored_path(stored_path)
+    if expanded is None:
+        return None
+    try:
+        if not _exclusive_regular_file(expanded):
+            return None
+        target = expanded.resolve(strict=True)
+    except OSError:
+        return None
+    relative = _relative_to_runs_dir(target, runs_real)
+    if not (
+        relative
+        and relative != "."
+        and relative != ".."
+        and not relative.startswith(".." + os.sep)
+        and not os.path.isabs(relative)
+    ):
+        return None
+    return str(target)
 
 
 def _quota_event_artifact_path(
@@ -193,14 +286,15 @@ def _quota_event_artifact_path(
     """Path to open, or None when a known runs directory must not leave itself.
 
     Callers that do not know the current runs directory keep the stored path.
-    Callers that do keep a path already inside that directory, or the same-named
-    regular file copied into it. Every other absolute location stays unread.
+    Callers that do open an exclusive regular file already inside that
+    directory, or the same-named exclusive regular file copied into it, only
+    when its real path stays there. Every other absolute location stays unread.
     """
 
     if runs_dir is None:
         return raw_json_path
     if _stays_inside_runs_dir(runs_dir, raw_json_path):
-        return raw_json_path
+        return _regular_artifact_inside_runs_dir(runs_dir, raw_json_path)
     relocated = _relocated_run_artifact_path(runs_dir, goal_id, raw_json_path, ".json")
     if relocated is None:
         return None

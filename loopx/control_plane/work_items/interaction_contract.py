@@ -21,6 +21,7 @@ from ..agents.workspace_guard import (
     workspace_guard_missing_task_repository,
 )
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
+from ..goals.goal_vision_read_model import cli_vision_audit_view
 from ..goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..quota.settlement import (
     SettlementIdentity,
@@ -865,6 +866,9 @@ def _admitted_interaction_next_cli_actions(
     registry_path: str | None = None,
     recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> list[str]:
+    progress = _as_mapping(payload.get("settlement_progress"))
+    if isinstance(command := progress.get("checkpoint_context_command"), str):
+        return [command]
     goal_id = str(payload.get("goal_id") or "<GOAL_ID>")
     command_prefix = selection.render_cli_command_prefix(runtime_root=runtime_root, registry_path=registry_path)
     agent_identity = _as_mapping(payload.get("agent_identity"))
@@ -1396,6 +1400,14 @@ def _build_interaction_cli_channel(
     registry_path: str | None = None,
     recovery_lease_proof: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    progress = _as_mapping(payload.get("settlement_progress"))
+    if isinstance(command := progress.get("checkpoint_context_command"), str):
+        return {
+            "next_cli_actions": [command],
+            "spend_allowed_now": False,
+            "spend_after_validation": False,
+            "spend_policy": "Recover the original blocked checkpoint before settlement.",
+        }
     if selection_recovery_required:
         return selection.action_selection_recovery_cli_channel(_selection_recovery_command(
             payload, available_capabilities=available_capabilities,
@@ -1616,30 +1628,6 @@ def _attach_interaction_post_writeback_actions(
     actions = _as_mapping(payload.get("goal_boundary")).get("post_writeback_actions")
     if isinstance(actions, list) and actions:
         cli_channel["post_writeback_actions"] = actions
-
-
-def cli_vision_audit_view(vision_continuation_audit: Mapping[str, object]) -> dict[str, object]:
-    """Return the CLI-owned view of the complete Vision audit."""
-    cli_audit: dict[str, object] = {
-        "required": True,
-        "required_before_closeout": vision_continuation_audit.get("required_before_closeout") or [],
-        "recommended_action": vision_continuation_audit.get("recommended_action"),
-    }
-    vision_gap_judge = _as_mapping(vision_continuation_audit.get("vision_gap_judge"))
-    if vision_gap_judge:
-        cli_audit["vision_gap_judge"] = {
-            **{
-                key: vision_gap_judge.get(key)
-                for key in (
-                    "done", "decision", "reason", "agent_judge_instruction",
-                    "evidence_read_instruction", "registry_read_instruction",
-                )
-            },
-            "done_only_when": vision_gap_judge.get("done_only_when") or [],
-            "continue_when": vision_gap_judge.get("continue_when") or [],
-            "otherwise": vision_gap_judge.get("otherwise"),
-        }
-    return cli_audit
 
 
 def _attach_interaction_vision_continuation_audit(

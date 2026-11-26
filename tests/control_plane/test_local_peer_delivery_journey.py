@@ -201,7 +201,9 @@ def test_local_receipt_cannot_satisfy_an_explicit_git_task(tmp_path, monkeypatch
     data["goals"][0]["coordination"]["registered_agents"].append("peer-researcher")
     registry.write_text(json.dumps(data))
     code, guard = journey._guard(project, runtime, registry)
-    assert code == 0 and guard["decision"] == "run", guard
+    assert code == 0 and guard["decision"] == "workspace_guard", guard
+    assert guard["workspace_guard"]["required_workspace"] == "independent_git_worktree"
+    assert guard["normal_delivery_allowed"] is False
     code, rejected = cli._run_cli(
         registry, runtime, "refresh-state", "--goal-id", cli.GOAL_ID,
         "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,

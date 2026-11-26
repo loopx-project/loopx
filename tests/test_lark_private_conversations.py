@@ -162,7 +162,7 @@ def test_private_steward_holds_original_request_during_executor_adoption(tmp_pat
                                     "source_unavailable", "source_changed"])
 def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_path, monkeypatch, change):
     from test_native_steward_private import finish, steward
-    from loopx import chat_ingress
+    from loopx.chat import ingress
     from loopx.capabilities.native_chat import conversation_bindings
     from loopx.file_lock import exclusive_file_lock
 
@@ -219,7 +219,7 @@ def test_private_steward_admission_rechecks_same_owner_executor_publication(tmp_
                     assert runtime.close_session(sid)
             return exclusive_file_lock(path, **kwargs)
 
-        monkeypatch.setattr(chat_ingress, "exclusive_file_lock", publish_at_scope_fence)
+        monkeypatch.setattr(ingress, "exclusive_file_lock", publish_at_scope_fence)
         monkeypatch.setattr(conversation_bindings, "exclusive_file_lock", publish_at_scope_fence)
         pending_ref = identity_ref(binding["provider_ref"], pending_id)
         pending_path = transport.root / f"{pending_ref}.json"
@@ -6011,7 +6011,7 @@ def test_http_group_setup_observes_membership_reads_back_selection_and_rejects_w
 ):
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
     from loopx.extensions.lark.cli_resolution import LarkCliResolution
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     store, runtime, provider, transport = connect(ordinary)
     monkeypatch.setattr(api, "build_lark_goal_topic_runtime_snapshot", lambda **_: {"goals": []})
@@ -8360,7 +8360,7 @@ def test_rendered_cli_text_is_preserved_and_source_type_must_agree(ordinary):  #
 
 
 def test_private_app_alias_guard_rejects_unknown_or_unverified_identity():
-    from loopx.chat_lark_api import _app_identity_for_private_guard
+    from loopx.chat.lark_api import _app_identity_for_private_guard
     provider = Provider()
     assert _app_identity_for_private_guard("notes-app", provider, "lark-cli") == "cli_notes_app"
     for data in [{}, {"appId": "cli_notes_app"}, {"appId": "malformed", "identities": {"bot": {
@@ -8792,6 +8792,8 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
         "turn_id": "failed", "event": {"chat_type": "p2p", "text": "private-body-marker" * 10000},
         "deliveries": {"terminal": {"text": "private-body-marker" * 10000}}})
     _atomic_write_json(pending, {"status": "pending"})
+    cached_after = old.stat().st_ctime_ns + 3_000_000_000
+    monkeypatch.setattr("loopx.extensions.lark.private_delivery_discovery.time_ns", lambda: cached_after)
     assert transport.pending_delivery_paths() == [pending]
     reads.clear()
     assert transport.pending_delivery_paths() == [pending] and reads == [pending]
@@ -8814,6 +8816,7 @@ def test_private_discovery_skips_unchanged_bodies_but_not_new_work_or_core_check
 def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_path, monkeypatch, replace):
     import os
     from loopx.chat_store import _atomic_write_json
+    from loopx.extensions.lark import private_delivery_discovery as discovery
 
     transport = LarkPrivateConversations.__new__(LarkPrivateConversations)
     transport.root = tmp_path
@@ -8823,8 +8826,13 @@ def test_private_discovery_detects_same_size_updates_with_preserved_mtime(tmp_pa
     transport.core = SimpleNamespace(context_recovery_observer=lambda: lambda _: False)
     path = tmp_path / "original.json"
     _atomic_write_json(path, {"status": "delivered"})
-    assert transport.pending_delivery_paths() == []
     before = path.stat()
+    if not replace:
+        # A filesystem may give multiple writes an identical change time.
+        observed = (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns, before.st_size)
+        monkeypatch.setattr(discovery, "file_change_fingerprint", lambda _path: observed)
+        monkeypatch.setattr(discovery, "time_ns", lambda: before.st_ctime_ns + 1)
+    assert transport.pending_delivery_paths() == []
     body = path.read_bytes().replace(b'delivered', b'uncertain')
     if replace:
         other = tmp_path / "replacement.tmp"

@@ -298,6 +298,11 @@ export function projectReceiptBoundWait(value: unknown): JsonObject {
   const completedSettlement = todo.status === "done" && todo.task_class === "advancement_task" &&
       request.replay_phase === "settlement_pending" &&
       progress?.schema_version === "quota_settlement_progress_v0";
+  if (request.replay_phase === "settlement_pending" && writebackRequired &&
+      progress.state === "writeback_receipt_required") {
+    return boundRecovery(request, "durable_writeback",
+      "The original Run has committed. Retry its refresh-state command with the original delivery fields and external-sink options to repair the missing receipt. Settle that same Turn and leave the Todo and its work unchanged.");
+  }
   if (completedSettlement && writebackRequired) {
     const reason = "The original Todo's completion is verified, but its Turn still owes durable writeback and settlement. Inspect existing effects before retrying. Use the returned command to record only the validated original result and settle that same identity. Do not repeat completed work, invent a successor, or rebind this Turn.";
     return boundRecovery(request, "durable_writeback", reason);

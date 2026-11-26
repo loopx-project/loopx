@@ -7,7 +7,7 @@ import {visionAuthoringContract} from "../goals/vision_checkpoint.ts";
 import {completeGoalNarrative} from "../work_items/goal_context_source.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {jsonObject, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
-import {GOAL_OUTCOMES_SCHEMA, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
+import {GOAL_OUTCOMES_SCHEMA, isGoalOutcomeIdentifier, OUTCOME_CONTEXT_NAVIGATION_SCHEMA} from "../goals/outcome_requirements.ts";
 import {FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE, hasUnboundActionSelection, selectedWorkTodoId}
   from "../work_items/interaction_contract.ts";
 import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
@@ -546,7 +546,8 @@ export function progressiveContextPlan(request: JsonObject,
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
     declaration.outcomes.forEach((value, i) => {
       const row = jsonObject(value);
-      if (!row || !known(row, ["id", "owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+      if (!row || !known(row, ["id", "owner_agent_id", "declaration_owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
+          || (row.declaration_owner_agent_id !== undefined && !isGoalOutcomeIdentifier(row.declaration_owner_agent_id))
           || typeof row.id !== "string" || typeof row.objective !== "string" || !Array.isArray(row.requirements)
           || !Array.isArray(row.sources) || row.sources.some(value => {
             const source = jsonObject(value);
@@ -559,7 +560,8 @@ export function progressiveContextPlan(request: JsonObject,
             || typeof requirement.id !== "string" || typeof requirement.description !== "string") return;
         if (requirement.agent_review === undefined) continue;
         const review = jsonObject(requirement.agent_review);
-        if (!review || !known(review, ["id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+            || (review.recorded_for_agent_id !== undefined && !isGoalOutcomeIdentifier(review.recorded_for_agent_id))
             || typeof review.note !== "string" || !Array.isArray(review.evidence_refs)
             || review.evidence_refs.some(ref => typeof ref !== "string")
             || !["met", "unmet", "uncertain"].includes(String(review.conclusion))
@@ -893,8 +895,9 @@ function deferredOutcomesInstruction(context: JsonObject, deferredOutcomes: read
   if (!instruction) return undefined;
   const notice =
     "This opening omits full requirement bodies for large suggested outcomes, delivering only their id, objective and revision. "
-    + "Before dependent work, read each applicable complete outcome from recovery.command "
-    + `(--select <pointer>): ${deferredOutcomes.join(", ")}. `
+    + "Before dependent work, read each applicable complete outcome. Select its parent from recovery.command for requirements and current checks, "
+    + "or select the same parent once with context_details.command_template for the requirements, current checks and their original supporting material together. "
+    + `Outcome parents (--select <pointer>): ${deferredOutcomes.join(", ")}. `
     + "Supporting material below still comes from the original capture in context_details. ";
   return instruction.includes(COMPLETE_REQUIREMENTS_CLAUSE)
     ? instruction.replace(COMPLETE_REQUIREMENTS_CLAUSE, notice)
@@ -1060,11 +1063,21 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   const replanRequired = context.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
     && replan?.schema_version === "replan_action_packet_v0" && replan.decision === "replan_required"
     && replan.settlement_only !== true;
+  const stagedReview = typeof replan?.review === "string" && replan.review.length > 0;
+  const inlineReplan = replanRequired && !stagedReview && context.schema_version === "loopx_turn_envelope_v1";
+  const inlineVision = inlineReplan
+    && object(replan?.writeback_contract)?.preferred_input === "evidence_linked_vision_path";
   let replanReversal: ReturnType<typeof scopedReplanYardstickReversal>;
-  if (replanRequired && typeof replan.review === "string" && replan.review) {
+  if (replanRequired && stagedReview) {
     include("replan_action_packet", "review");
     include("replan_action_packet", "guidance");
-  } else if (replanRequired && context.schema_version === "loopx_turn_envelope_v1") {
+  } else if (inlineReplan) {
+    if (inlineVision) {
+      // An inline replan has no later writer read to supply these inputs.
+      include("replan_action_packet", "writeback_contract");
+      for (const field of ["attachment", "required_fields", "minimal_example"])
+        include("replan_action_packet", "stride_control", field);
+    }
     // The complete contract already carries the review facts: use its own
     // obligations and the indexed outcome paths below, without another writer.
     for (const field of ["planning_guidance", "required_outcome", "allowed_terminal"])
@@ -1298,7 +1311,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
         include("interaction_contract", "cli_channel", field);
         // A task-facing operation and its declared continuation belong in the
         // same opening. Keep the existing exact settlement deduplication.
-        if (field === "next_cli_actions" && object(channel?.next_task_action) && pointers.length > before)
+        if (field === "next_cli_actions" && (inlineVision || object(channel?.next_task_action)) && pointers.length > before)
           opening.push(pointers.pop()!);
       }
   // Explicit selection clears next_cli_actions. Deliver the owner's discovery

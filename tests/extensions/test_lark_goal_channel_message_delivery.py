@@ -7,6 +7,9 @@ from loopx.extensions.lark.goal_channel_message_delivery import (
     message_card_matches,
     normalized_card_text,
 )
+from loopx.extensions.lark.presentation.message_card import (
+    build_lark_markdown_reply_card,
+)
 
 
 def confirmation_card():
@@ -107,3 +110,26 @@ def test_unsupported_confirmation_and_plain_text_are_not_silently_normalized():
         "body": {"elements": [{"tag": "plain_text", "content": "a &amp; b"}]},
     }
     assert normalized_card_text(plain) == '<card title="Title">\na &amp; b\n</card>'
+
+
+def test_legacy_report_readback_matches_all_visible_paragraphs_in_order():
+    card = build_lark_markdown_reply_card("First", title="Report", footer="Details")
+    card["elements"][1:1] = [
+        {"tag": "div", "text": {"tag": "lark_md", "content": text}}
+        for text in ("Second", "Third")
+    ]
+    rendered = '<card title="Report">\nFirst\nSecond\nThird\n---\n📝 Details\n</card>'
+    assert message_card_matches({"content": rendered}, card)
+    assert not message_card_matches({"content": rendered.replace("Second\n", "")}, card)
+    assert not message_card_matches(
+        {"content": rendered.replace("Second\nThird", "Third\nSecond")}, card
+    )
+    assert not message_card_matches({"content": rendered}, card, allow_normalized=False)
+
+    del card["elements"][-2:]
+    assert (
+        normalized_card_text(card)
+        == '<card title="Report">\nFirst\nSecond\nThird\n</card>'
+    )
+    card["elements"].append({"tag": "img", "img_key": "example"})
+    assert normalized_card_text(card) is None

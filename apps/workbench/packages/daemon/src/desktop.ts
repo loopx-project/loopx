@@ -16,6 +16,11 @@ export interface DesktopTarget {
   port: number;
 }
 
+export interface ListeningPorts {
+  ipv4: Set<number>;
+  ipv6: Set<number>;
+}
+
 /** Where VNC servers listen by convention: 5900 + display number. Displays :0 to :9 are looked at. */
 const DEFAULT_PORTS = Array.from({ length: 10 }, (_, i) => 5900 + i);
 /** A status check and the connection right after it should not probe twice. */
@@ -29,7 +34,7 @@ export const DESKTOP_TICKET_S = 60;
 /** `LOOCHAT_DESKTOP_VNC`: unset looks on this machine, `off` turns the desktop off, `host:port` names the server. */
 export function parseDesktopSetting(value: string | undefined): DesktopTarget[] | null {
   const v = value?.trim();
-  if (!v) return DEFAULT_PORTS.map((port) => ({ host: '127.0.0.1', port }));
+  if (!v) return DEFAULT_PORTS.flatMap((port) => [{ host: '127.0.0.1', port }, { host: '::1', port }]);
   if (v === 'off') return null;
   const m = /^(?:\[([^\]]+)\]|([^:]+)):(\d{1,5})$/.exec(v);
   if (!m || Number(m[3]) > 65535) throw new Error(`LOOCHAT_DESKTOP_VNC must be host:port or off, not ${v}`);
@@ -39,12 +44,12 @@ export function parseDesktopSetting(value: string | undefined): DesktopTarget[] 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 
 /**
- * The TCP ports something listens on here, read from /proc; null where there is no /proc. The VNC
+ * The TCP ports reachable on each loopback address, read from /proc; null without /proc. The VNC
  * server is never connected to just to look: TigerVNC counts a connection that leaves before
  * signing in as a failed attempt, and after five it turns every client from that address away.
  */
-export function listeningPorts(files = ['/proc/net/tcp', '/proc/net/tcp6']): Set<number> | null {
-  const ports = new Set<number>();
+export function listeningPorts(files = ['/proc/net/tcp', '/proc/net/tcp6']): ListeningPorts | null {
+  const ports: ListeningPorts = { ipv4: new Set(), ipv6: new Set() };
   let read = false;
   for (const file of files) {
     let text: string;
@@ -56,8 +61,15 @@ export function listeningPorts(files = ['/proc/net/tcp', '/proc/net/tcp6']): Set
     read = true;
     for (const line of text.split('\n').slice(1)) {
       const [, local, , state] = line.trim().split(/\s+/);
-      // State 0A is LISTEN; the local address ends in the port, in hex.
-      if (state === '0A' && local) ports.add(parseInt(local.slice(local.lastIndexOf(':') + 1), 16));
+      if (state !== '0A' || !local) continue;
+      const [address, port] = local.split(':');
+      // /proc writes each 32-bit address word in host byte order. Only wildcard and loopback
+      // binds are reachable here; an IPv6 listener does not imply an IPv4 listener.
+      if (address === '00000000' || address === '0100007F' || address === '0000000000000000FFFF00000100007F') {
+        ports.ipv4.add(parseInt(port, 16));
+      } else if (address === '00000000000000000000000000000000' || address === '00000000000000000000000001000000') {
+        ports.ipv6.add(parseInt(port, 16));
+      }
     }
   }
   return read ? ports : null;
@@ -75,7 +87,7 @@ export class Desktop {
   private readonly spent = new Map<string, number>();
   private readonly sockets = new Set<Socket>();
 
-  constructor(opts: { targets: DesktopTarget[] | null; now?: () => number; listening?: () => Set<number> | null }) {
+  constructor(opts: { targets: DesktopTarget[] | null; now?: () => number; listening?: () => ListeningPorts | null }) {
     this.targets = opts.targets;
     if (opts.now) this.now = opts.now;
     if (opts.listening) this.listening = opts.listening;
@@ -93,8 +105,11 @@ export class Desktop {
     if (!this.targets) return null;
     if (this.cached && this.now() - this.cached.at < CACHE_MS) return this.cached.target;
     const ports = this.listening();
-    const target =
-      this.targets.find((t) => !LOOPBACK.has(t.host) || (ports ? ports.has(t.port) : this.targets!.length === 1)) ?? null;
+    const target = this.targets.find((t) => {
+      if (!LOOPBACK.has(t.host)) return true;
+      if (!ports) return this.targets?.length === 1;
+      return (t.host !== '::1' && ports.ipv4.has(t.port)) || (t.host !== '127.0.0.1' && ports.ipv6.has(t.port));
+    }) ?? null;
     this.cached = { at: this.now(), target };
     return target;
   }

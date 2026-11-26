@@ -14,7 +14,6 @@ import tarfile
 import pytest
 import yaml
 from loopx.cli_commands.update_artifact import (
-    HISTORICAL_DEFAULT_CONTRACT,
     PUBLIC_DEFAULT_CONTRACT,
     QUALIFIED_DEFAULT_CONTRACT_FIELD,
     RUNTIME_ARTIFACT_SCHEMA_VERSION,
@@ -133,20 +132,12 @@ def write_state(root, state):
     (root / "github.json").write_text(json.dumps(state), encoding="utf-8")
 
 
-def publish(root, *, channel_qualified=True):
+def publish(root):
     # The production workflow uses python from setup-python. Bind the same
     # interpreter as pytest without requiring a particular host PATH alias.
     functions = f"gh() {{ {shlex.quote(sys.executable)} github.py \"$@\"; }}\n"
     interpreter = shlex.quote(sys.executable)
-    if channel_qualified:
-        qualify_channel = (
-            "import sys; from loopx.cli_commands import update_artifact; "
-            "update_artifact._ARTIFACT_DEFAULT_CONTRACTS['public_channel'] = 'current'; "
-            "exec(compile(sys.stdin.read(), '<publisher>', 'exec'))"
-        )
-        functions += f"python() {{ {interpreter} -c {shlex.quote(qualify_channel)}; }}\n"
-    else:
-        functions += f"python() {{ {interpreter} \"$@\"; }}\n"
+    functions += f'python() {{ {interpreter} "$@"; }}\n'
     return subprocess.run(["bash", "-c", functions + PUBLISH], cwd=root,
         env={**os.environ, "PYTHONPATH": str(ROOT), "GITHUB_REPOSITORY": "example/loopx", "FAKE_GITHUB_STATE": str(root / "github.json")},
         capture_output=True, text=True, encoding="utf-8", timeout=30, check=False)
@@ -178,7 +169,8 @@ def test_unqualified_runtime_never_changes_remote_state(publication, failure):
         elif failure == "ambiguous_contract":
             data["default_contract"] = dict(PUBLIC_DEFAULT_CONTRACT)
         else:
-            profile = (HISTORICAL_DEFAULT_CONTRACT
+            profile = ({"surface": "quota_packet", "schema_version": None,
+                        "interaction_schema_version": "loopx_interaction_contract_v0"}
                        if failure == "historical_default" else {"surface": "future"})
             data[QUALIFIED_DEFAULT_CONTRACT_FIELD] = record["default_contract"] = profile
         # All engineering checks, identities and frozen bytes still agree.
@@ -212,21 +204,6 @@ def test_unqualified_runtime_never_changes_remote_state(publication, failure):
     result = publish(publication)
     assert result.returncode != 0
     assert read_state(publication) == before
-
-
-@pytest.mark.parametrize("channel_exists", [True, False])
-def test_c1_candidate_keeps_unqualified_channel_unchanged(publication, channel_exists):
-    before = read_state(publication)
-    if not channel_exists:
-        del before["releases"]["runtime-main"]
-        write_state(publication, before)
-    result = publish(publication, channel_qualified=False)
-    assert result.returncode == 0, result.stderr
-    state = read_state(publication)
-    assert state["releases"].get("runtime-main") == before["releases"].get("runtime-main")
-    assert len(state["releases"][SNAPSHOT]["assets"]) == 5
-    assert not any(call[:2] == ["release", "upload"] and call[2] == "runtime-main" for call in state["calls"])
-    assert not any("PATCH" in call for call in state["calls"])
 
 
 def test_full_legacy_release_keeps_history_and_publishes_then_retries(publication):
@@ -374,7 +351,8 @@ def test_builder_qualifies_committed_default_before_writing_artifacts(tmp_path, 
         assert (source / "loopx/fixture.txt").read_text(encoding="utf-8") == "public fixture"
         if supported:
             return dict(PUBLIC_DEFAULT_CONTRACT)
-        return dict(HISTORICAL_DEFAULT_CONTRACT)
+        return {"surface": "quota_packet", "schema_version": None,
+                "interaction_schema_version": "loopx_interaction_contract_v0"}
 
     monkeypatch.setattr(builder, "observe_default_contract", observe)
     output = tmp_path / "runtime"

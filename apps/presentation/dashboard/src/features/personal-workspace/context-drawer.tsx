@@ -53,6 +53,48 @@ import { MarkdownText } from "./markdown";
 import { formatMonitorDate } from "./monitor-readback";
 import { parseTodoCompletionProof } from "./todo-completion-feedback";
 import { useDrawerOverlay } from "./workspace-shell";
+import {
+  deriveGoalWorkerRoster,
+  formatProgressCounter,
+  sanitizeFocusLine,
+  type CollaborationLocale,
+  type WorkerRosterState,
+} from "./collaboration-status";
+import {
+  GoalWorkerRosterStrip,
+  WorkerProgressBadge,
+  WorkerStateBadge,
+} from "./worker-roster";
+
+function GoalDrawerWorkerRoster({
+  goal,
+  runs,
+  attentionHistory,
+  locale,
+}: {
+  goal: WorkspaceGoal;
+  runs: WorkspaceRun[];
+  attentionHistory: WorkspaceAttention[];
+  locale: CollaborationLocale;
+}) {
+  const roster = deriveGoalWorkerRoster({
+    goal,
+    items: runs.map((run) => ({ id: run.runId, kind: "run" as const, run })),
+    userTodos: attentionHistory,
+    locale,
+  });
+  return roster.workers.length > 0 ? (
+    <GoalWorkerRosterStrip roster={roster} locale={locale} compact />
+  ) : null;
+}
+
+function runRosterState(run: WorkspaceRun): WorkerRosterState {
+  if (run.status === "running") return "working";
+  if (run.status === "failed" || run.status === "interrupted" || run.sessionStatus === "resume_failed") {
+    return "lease_expired";
+  }
+  return "waiting";
+}
 
 import { GoalStrategyDocument } from "./goal-source-strategies";
 
@@ -873,6 +915,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
               <small>{localizedGoalState(selection.item.state, locale)}</small>
               <h3>{selection.item.title}</h3>
               <p>{selection.item.agentSentence}</p>
+              <GoalDrawerWorkerRoster goal={selection.item} runs={runs} attentionHistory={attentionHistory} locale={locale} />
             </section>
             <GoalAcceptanceObservationCard goal={selection.item} />
             <section className="personal-detail-card personal-goal-detail-usage">
@@ -1136,7 +1179,11 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 <section className="personal-detail-card personal-session-summary">
                   <small>{selection.item.agentLabel} · {localizedSessionStatus(selection.item.sessionStatus ?? selection.item.status, t)}</small>
                   <h3>{selection.item.title}</h3>
-                  <p>{selection.item.latestActivity}</p>
+                  <div className="pw-roster-counts">
+                    <WorkerStateBadge state={runRosterState(selection.item)} locale={locale} />
+                    <WorkerProgressBadge progress={formatProgressCounter(selection.item.completedSteps, selection.item.totalSteps, null, locale)} />
+                  </div>
+                  <p>{sanitizeFocusLine(selection.item.latestActivity, 140) || selection.item.latestActivity}</p>
                   <dl>
                     <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
                     <div><dt>{t("drawer.progress")}</dt><dd>{selection.item.completedSteps}/{selection.item.totalSteps}</dd></div>
@@ -1177,7 +1224,7 @@ export function ContextDrawer({ agents, attentionHistory = [], onSelectAttention
                 <section className="personal-detail-card">
                   <small>{selection.item.agentLabel} · {localizedSessionStatus(selection.item.status, t)}</small>
                   <h3>{selection.item.title}</h3>
-                  <p>{selection.item.latestActivity}</p>
+                  <p>{sanitizeFocusLine(selection.item.latestActivity, 140) || selection.item.latestActivity}</p>
                   <dl>
                     <div><dt>Goal</dt><dd>{selection.item.goalTitle}</dd></div>
                     <div><dt>{t("drawer.progress")}</dt><dd>{selection.item.completedSteps}/{selection.item.totalSteps}</dd></div>

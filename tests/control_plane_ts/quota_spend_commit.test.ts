@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
   cp,
+  link,
+  lstat,
   readFile,
   mkdir,
   mkdtemp,
   readdir,
+  rename,
   rm,
   symlink,
   unlink,
@@ -668,6 +671,48 @@ test("native replay validates legacy rows by goal and agent", async (t) => {
     assert.equal(rejected.payload.replay_found, true);
     assert.match(rejected.reason, /same valid agent identity/);
   }
+});
+
+test("read-only replay returns the digest of the index that supplied its record", async (t) => {
+  const root = await tempRuntime(t);
+  const runsDir = join(root, "goals", goalId, "runs");
+  await mkdir(runsDir, { recursive: true });
+  const index = join(runsDir, "index.jsonl");
+  const effect = "replayed-effect";
+  const revisions = ["first", "second"].map((revision) => {
+    const row = {
+      classification: "quota_slot_spent",
+      goal_id: goalId,
+      agent_id: "codex-main-control",
+      effect_ref: effect,
+      revision,
+    };
+    const content = JSON.stringify(row) + "\r\n";
+    const digest = "sha256:" + createHash("sha256").update(content).digest("hex");
+    return { revision, content, digest };
+  });
+  await writeFile(index, revisions[0].content);
+  const publish = async () => {
+    for (let i = 1; i <= 32; i++) {
+      await writeFile(index + ".next", revisions[i % 2].content);
+      await rename(index + ".next", index);
+    }
+  };
+  const replay = async () => {
+    for (let i = 0; i < 32; i++) {
+      const result = await evaluateQuotaSpendCommit({
+        ...replayRequest(root, effect), read_only: true,
+      });
+      assert.equal(result.status, "replayed");
+      const observed = revisions.find((entry) => entry.revision === result.record?.revision);
+      assert.ok(observed);
+      assert.equal(result.index_digest, observed.digest);
+    }
+  };
+  // Finish both filesystem users before the fixture is removed, even on failure.
+  const [writer, reader] = await Promise.allSettled([publish(), replay()]);
+  if (writer.status === "rejected") throw writer.reason;
+  if (reader.status === "rejected") throw reader.reason;
 });
 
 test("native replay rejects incomplete transaction metadata", async (t) => {
@@ -1374,4 +1419,147 @@ test("copied spend receipts still reject other goals, outside paths, symlinks, a
     },
   );
   assert.deepEqual(await readFile(originalJson), originalJsonBytes);
+});
+
+const spendCommit = {
+  schema_version: "quota_spend_commit_receipt_v0",
+  effect_id: "effect-spend",
+  request_digest: "digest-spend-original",
+};
+
+function quotaSpendRecord(slots: number): Record<string, unknown> {
+  return {
+    generated_at: "2026-08-25T12:00:00Z",
+    goal_id: goalId,
+    classification: "quota_slot_spent",
+    quota_event: {
+      event_type: "quota_slot_spent",
+      slots,
+      run_generated_at: "2026-08-25T12:00:00Z",
+    },
+    quota_spend_commit: spendCommit,
+  };
+}
+
+function quotaSpendIndexRow(jsonPath: string): Record<string, unknown> {
+  return {
+    generated_at: "2026-08-25T12:00:00Z",
+    goal_id: goalId,
+    classification: "quota_slot_spent",
+    json_path: jsonPath,
+    quota_spend_commit: spendCommit,
+  };
+}
+
+async function assertSharedHardLink(artifact: string, outside: string): Promise<void> {
+  const linked = await lstat(artifact);
+  const target = await lstat(outside);
+  assert.equal(linked.isSymbolicLink(), false);
+  assert.equal(linked.isFile(), true);
+  assert.equal(linked.nlink, 2);
+  assert.equal(linked.ino, target.ino);
+}
+
+test("readQuotaSpendEventFromRun does not accept an in-directory hard link as a zero spend", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const runsDir = join(runtimeRoot, "goals", goalId, "runs");
+  await mkdir(runsDir, { recursive: true });
+  const artifact = join(runsDir, "spend.json");
+  const record = quotaSpendRecord(2);
+  await writeFile(artifact, JSON.stringify(record), "utf8");
+  const row = quotaSpendIndexRow(artifact);
+
+  const counted = await readQuotaSpendEventFromRun(runsDir, row, goalId);
+  assert.equal(counted?.slots, 2);
+
+  const outside = join(runtimeRoot, "outside-zero.json");
+  const outsideBytes = Buffer.from(JSON.stringify(quotaSpendRecord(0)));
+  await writeFile(outside, outsideBytes);
+  await unlink(artifact);
+  await link(outside, artifact);
+
+  assert.equal(await readQuotaSpendEventFromRun(runsDir, row, goalId), null);
+  assert.deepEqual(await readFile(outside), outsideBytes);
+  await assertSharedHardLink(artifact, outside);
+});
+
+test("readQuotaSpendEventFromRun does not accept a relocated hard link as a zero spend", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const relocatedRoot = await tempRuntime(t);
+  const fileName = "spend.json";
+  const originalRunsDir = join(originalRoot, "goals", goalId, "runs");
+  const relocatedRunsDir = join(relocatedRoot, "goals", goalId, "runs");
+  await mkdir(originalRunsDir, { recursive: true });
+  await mkdir(relocatedRunsDir, { recursive: true });
+  const originalJson = join(originalRunsDir, fileName);
+  const originalBytes = Buffer.from(JSON.stringify(quotaSpendRecord(2)));
+  await writeFile(originalJson, originalBytes);
+  const outside = join(relocatedRoot, "outside-zero.json");
+  const outsideBytes = Buffer.from(JSON.stringify(quotaSpendRecord(0)));
+  await writeFile(outside, outsideBytes);
+  const relocatedJson = join(relocatedRunsDir, fileName);
+  await link(outside, relocatedJson);
+
+  assert.equal(
+    await readQuotaSpendEventFromRun(relocatedRunsDir, quotaSpendIndexRow(originalJson), goalId),
+    null,
+  );
+  assert.deepEqual(await readFile(outside), outsideBytes);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  await assertSharedHardLink(relocatedJson, outside);
+});
+
+test("spend receipt replay rejects an in-directory hard link to an outside alias", async (t) => {
+  const runtimeRoot = await tempRuntime(t);
+  const params = request(runtimeRoot, { effect_id: "quota-spend-effect-hardlink" });
+  const written = await evaluateQuotaSpendCommit(params);
+  assert.equal(written.status, "written");
+  const artifact = String(written.payload.json_path);
+  const artifactBytes = await readFile(artifact);
+  const outside = join(runtimeRoot, "outside-quota-spend.json");
+  await writeFile(outside, artifactBytes);
+  await unlink(artifact);
+  await link(outside, artifact);
+
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(params),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      assert.match(error.message, /must not be a hard link/);
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(outside), artifactBytes);
+  await assertSharedHardLink(artifact, outside);
+});
+
+test("spend receipt replay does not adopt a relocated hard link to an outside alias", async (t) => {
+  const originalRoot = await tempRuntime(t);
+  const copiedRoot = await tempRuntime(t);
+  const params = request(originalRoot, { effect_id: "quota-spend-effect-relocated-hardlink" });
+  const written = await evaluateQuotaSpendCommit(params);
+  assert.equal(written.status, "written");
+  const originalJson = String(written.payload.json_path);
+  const originalBytes = await readFile(originalJson);
+  const copiedRuns = spendRunsDir(copiedRoot);
+  await cp(spendRunsDir(originalRoot), copiedRuns, { recursive: true });
+  const copiedJson = join(copiedRuns, basename(originalJson));
+  const outside = join(copiedRoot, "outside-quota-spend.json");
+  await writeFile(outside, originalBytes);
+  await unlink(copiedJson);
+  await link(outside, copiedJson);
+
+  await assert.rejects(
+    () => evaluateQuotaSpendCommit(request(copiedRoot, { effect_id: params.effect_id })),
+    (error: unknown) => {
+      assert.ok(error instanceof EffectRuntimeRequestError);
+      assert.equal(error.code, "malformed_transaction_receipt");
+      assert.match(error.message, /outside its run directory/);
+      return true;
+    },
+  );
+  assert.deepEqual(await readFile(outside), originalBytes);
+  assert.deepEqual(await readFile(originalJson), originalBytes);
+  await assertSharedHardLink(copiedJson, outside);
 });

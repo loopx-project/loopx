@@ -20,21 +20,32 @@ const rows = (value: unknown): JsonObject[] => {
 };
 const text = (value: unknown): string | null => typeof value === "string" && value ? value : null;
 
-export function decisionScopeCovers(gate: unknown, required: unknown): boolean {
-  if (!object(gate) || !object(required)) return false;
-  const valid = (scope: JsonObject) => TODO_DECISION_SCOPE_KIND_SET.has(String(scope.kind)) &&
+type ValidDecisionScope = JsonObject & {scope_key: string};
+
+function validDecisionScope(scope: JsonObject): scope is ValidDecisionScope {
+  return TODO_DECISION_SCOPE_KIND_SET.has(String(scope.kind)) &&
     TODO_DECISION_SCOPE_GRANULARITY_SET.has(String(scope.granularity)) &&
     Object.hasOwn(RANK, String(scope.granularity)) && typeof scope.scope_key === "string" &&
     TODO_DECISION_SCOPE_KEY_PATTERN.test(scope.scope_key);
-  return valid(gate) && valid(required) && gate.kind === required.kind &&
+}
+
+function validScopeCovers(gate: ValidDecisionScope, required: ValidDecisionScope): boolean {
+  return gate.kind === required.kind &&
     (gate.scope_key === "*" || gate.scope_key === required.scope_key) && RANK[String(gate.granularity)] >= RANK[String(required.granularity)];
+}
+
+export function decisionScopeCovers(gate: unknown, required: unknown): boolean {
+  if (!object(gate) || !object(required)) return false;
+  return validDecisionScope(gate) && validDecisionScope(required) && validScopeCovers(gate, required);
 }
 
 function addressed(gate: JsonObject, agent: string | null): boolean {
   return gateAddressesAgent({global: gate.global_gate === true, blocks: text(gate.blocks_agent), claim: text(gate.claimed_by)}, agent);
 }
 
-export function scopeStandingAuthority(value: unknown, agent: string | null): JsonObject | null {
+type ScopedStandingAuthority = JsonObject & {entries: JsonObject[]; conflicts?: JsonObject[]};
+
+export function scopeStandingAuthority(value: unknown, agent: string | null): ScopedStandingAuthority | null {
   if (!object(value) || !Array.isArray(value.entries)) return null;
   const entries = rows(value.entries).filter(item => addressed(item, agent));
   const conflicts = rows(value.conflicts ?? []).filter(item => addressed(item, agent));
@@ -147,6 +158,49 @@ function open(items: JsonObject[]): JsonObject[] {
 }
 function scopeId(scope: JsonObject): string { return `${scope.kind}:${scope.granularity}:${scope.scope_key}`; }
 
+type ScopedRow = {row: JsonObject; scope: ValidDecisionScope};
+type ScopeIndex = Map<string, ScopedRow[]> | JsonObject[];
+
+function parseDecisionScope(value: unknown): ValidDecisionScope | null {
+  return object(value) && validDecisionScope(value) ? value : null;
+}
+
+function indexDecisionScopes(source: JsonObject[]): ScopeIndex {
+  const byKind = new Map<string, ScopedRow[]>();
+  for (const row of source) {
+    let scope: ValidDecisionScope | null;
+    try {
+      scope = parseDecisionScope(row.decision_scope);
+    } catch (error) {
+      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
+      // Keep coercion errors in source order, including when an earlier approval short-circuits.
+      return source;
+    }
+    if (!scope) continue;
+    const kind = String(scope.kind);
+    const bucket = byKind.get(kind);
+    if (bucket) bucket.push({row, scope});
+    else byKind.set(kind, [{row, scope}]);
+  }
+  return byKind;
+}
+
+type RequiredScope = {raw: JsonObject; parsed?: ValidDecisionScope | null};
+
+function* coveringRows(index: ScopeIndex, required: RequiredScope): Generator<JsonObject> {
+  if (Array.isArray(index)) {
+    for (const row of index) if (decisionScopeCovers(row.decision_scope, required.raw)) yield row;
+    return;
+  }
+  if (!index.size) return;
+  if (required.parsed === undefined) required.parsed = parseDecisionScope(required.raw);
+  const scope = required.parsed;
+  if (!scope) return;
+  for (const {row, scope: candidate} of index.get(String(scope.kind)) ?? []) {
+    if (validScopeCovers(candidate, scope)) yield row;
+  }
+}
+
 export function decisionScopeConsistency(request: JsonObject): JsonObject {
   const agent = optionalNonEmptyString(request.agent_id, "agent_id");
   const agents = rows(request.agent_items), users = open(rows(request.user_items));
@@ -160,25 +214,37 @@ export function decisionScopeConsistency(request: JsonObject): JsonObject {
     if (gate.global_gate !== true && !gate.blocks_agent) errors.push({reason_code: "multi_agent_user_gate_missing_scope",
       user_todo_id: gate.todo_id ?? null, registered_agent_ids: registered});
   }
+  let gateIndex: ScopeIndex | undefined, actionIndex: ScopeIndex | undefined;
+  const standingByOwner = new Map<string | null, {activeEntries: ScopeIndex; conflicts: ScopeIndex}>();
   let checked = 0, terminals = 0, approvals = 0;
   for (const item of items) {
     const claim = text(item.claimed_by);
     if (claim && agent && claim !== agent) continue;
     const owner = agent || claim;
-    const authority = scopeStandingAuthority(request.standing_authority, owner);
+    let standing = standingByOwner.get(owner);
+    if (!standing) {
+      const authority = scopeStandingAuthority(request.standing_authority, owner);
+      standing = {
+        activeEntries: indexDecisionScopes(authority?.entries.filter(entry => entry.active === true) ?? []),
+        conflicts: indexDecisionScopes(authority?.conflicts ?? []),
+      };
+      standingByOwner.set(owner, standing);
+    }
     for (const scope of rows(item.required_decision_scopes ?? [])) {
       checked++;
-      const matching = gates.filter(gate => decisionScopeCovers(gate.decision_scope, scope));
+      const required: RequiredScope = {raw: scope};
+      gateIndex ??= indexDecisionScopes(gates);
+      const matching = [...coveringRows(gateIndex, required)];
       const compatible = matching.filter(gate => addressed(gate, owner));
-      // Exact targeting is a restriction, not a hint that a broad scope can erase.
-      const conflicting = compatible.filter(gate => todoGateRelation(gate, item)?.state === "projection_repair_required");
+      // These gates already cover this requirement, so a different exact target is a conflict.
+      const conflicting = compatible.filter(gate => exactTodoGateRelation(gate, item)?.state === "independent");
       if (conflicting.length) {
         errors.push({reason_code: "required_decision_scope_target_mismatch", agent_todo_id: item.todo_id ?? null,
           required_scope: scopeId(scope), related_user_todo_ids: conflicting.map(g => g.todo_id).filter(Boolean)});
         continue;
       }
       if (compatible.length) continue;
-      if (rows(authority?.entries ?? []).some(entry => entry.active === true && decisionScopeCovers(entry.decision_scope, scope))) {
+      if (!coveringRows(standing.activeEntries, required).next().done) {
         approvals++; continue;
       }
       const outcomes = rows(item.decision_scope_outcomes ?? []).filter(outcome => ["reject", "cancel"].includes(String(outcome.outcome)) &&
@@ -189,8 +255,9 @@ export function decisionScopeConsistency(request: JsonObject): JsonObject {
           agent_todo_id: item.todo_id ?? null, required_scope: scopeId(scope), related_user_todo_ids: outcomes.map(o => o.source_todo_id)});
         continue;
       }
-      const conflicts = rows(authority?.conflicts ?? []).filter(entry => decisionScopeCovers(entry.decision_scope, scope));
-      const matchingActions = actions.filter(action => decisionScopeCovers(action.decision_scope, scope));
+      const conflicts = [...coveringRows(standing.conflicts, required)];
+      actionIndex ??= indexDecisionScopes(actions);
+      const matchingActions = [...coveringRows(actionIndex, required)];
       let reason = "dangling_required_decision_scope", related: unknown[] = [];
       if (conflicts.length) {
         reason = "standing_decision_order_unresolved";
@@ -208,6 +275,53 @@ export function decisionScopeConsistency(request: JsonObject): JsonObject {
     status: errors.length ? "projection_repair_required" : "consistent", agent_id: agent,
     checked_agent_todo_count: items.length, checked_required_scope_count: checked,
     terminal_outcome_count: terminals, standing_authority_match_count: approvals, errors};
+}
+
+function projectDecisionScopeRepairPlan(reasonCodes: readonly string[]): JsonObject {
+  const common = {schema_version: "todo_decision_scope_repair_plan_v0", allowed: true, notify: "DONT_NOTIFY"};
+  if (reasonCodes.includes("multi_agent_user_gate_missing_scope")) return {
+    ...common,
+    trigger: "user_gate_scope_projection_drift",
+    recommended_mode: "repair_user_gate_scope_projection",
+    blocked_action_scope: "todo_user_gate_scope_projection",
+    reason: "a multi-agent user_gate lacks blocks_agent or explicit global_gate=true, so its blocking authority is ambiguous",
+    repair_focus: "set blocks_agent to one registered agent, set global_gate=true for " +
+      "intentional goal-wide authority, or downgrade the item to user_action",
+    spend_policy: "spend once only after the gate-scope projection repair is validated and written back",
+  };
+
+  const requiredScope = {
+    ...common,
+    trigger: "required_decision_scope_projection_drift",
+    recommended_mode: "repair_required_decision_scope_projection",
+    blocked_action_scope: "todo_decision_scope_projection",
+    spend_policy: "spend once only after the todo/gate projection repair is validated and written back",
+  };
+  if (reasonCodes.includes("standing_decision_order_unresolved")) return {
+    ...requiredScope,
+    reason: "contradictory standing decisions have no established chronological winner",
+    repair_focus: "reconcile decision chronology against explicit owner evidence; do not remove " +
+      "required_decision_scopes or invent approval merely to clear this conflict",
+  };
+  if (reasonCodes.includes("required_decision_scope_target_mismatch")) return {
+    ...requiredScope,
+    reason: "a scope-covering user gate explicitly targets a different Todo",
+    repair_focus: "reconcile the exact target and required scope against owner intent; do not " +
+      "remove the requirement, retarget the gate, or invent approval merely to clear the conflict",
+  };
+  return {
+    ...requiredScope,
+    reason: "an agent todo requires a decision scope that does not resolve to a compatible open user_gate",
+    repair_focus: "remove stale required_decision_scopes, create the explicit blocking " +
+      "user_gate, or correct its agent ownership; user_action remains non-blocking",
+  };
+}
+
+function consistencyRepairPlan(consistency: JsonObject): JsonObject | null {
+  if (consistency.ok !== false) return null;
+  const errors = Array.isArray(consistency.errors) ? consistency.errors : [];
+  return projectDecisionScopeRepairPlan(errors.flatMap(error =>
+    object(error) && typeof error.reason_code === "string" ? [error.reason_code] : []));
 }
 
 type TodoGateScopeState = "clear" | "independent" | "blocked";
@@ -231,10 +345,24 @@ export function evaluateDecisionScope(value: unknown): JsonObject {
   const request = requireJsonObject(value, "decision scope request");
   if (request.schema_version !== DECISION_SCOPE_REQUEST_SCHEMA) throw new TypeError("decision scope request schema mismatch");
   let result: JsonObject | null | (JsonObject | null)[][];
+  let repairPlan: JsonObject | null | undefined;
   switch (request.operation) {
     case "fallback": result = selectScopedGateFallback(request); break;
     case "gate_scopes": result = projectTodoGateScopes(request); break;
-    case "consistency": result = decisionScopeConsistency(request); break;
+    case "consistency": {
+      result = decisionScopeConsistency(request);
+      repairPlan = consistencyRepairPlan(result) ?? undefined;
+      break;
+    }
+    case "repair_hint": {
+      const {consistency, reason_codes} = request;
+      result = null;
+      if (object(consistency)) repairPlan = consistencyRepairPlan(consistency);
+      else if (consistency === undefined && Array.isArray(reason_codes)) {
+        repairPlan = projectDecisionScopeRepairPlan(reason_codes.filter(code => typeof code === "string"));
+      } else repairPlan = null;
+      break;
+    }
     case "standing": result = scopeStandingAuthority(request.authority, optionalNonEmptyString(request.agent_id, "agent_id")); break;
     case "relations": {
       const items = rows(request.items);
@@ -243,7 +371,8 @@ export function evaluateDecisionScope(value: unknown): JsonObject {
     }
     default: throw new EffectRuntimeRequestError("unsupported decision scope operation");
   }
-  return {schema_version: "todo_decision_scope_result_v0", result};
+  return {schema_version: "todo_decision_scope_result_v0", result,
+    ...(repairPlan === undefined ? {} : {repair_plan: repairPlan})};
 }
 
 /** One complete readiness projection; normal_delivery_allowed is a read signal,

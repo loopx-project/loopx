@@ -7,8 +7,8 @@ export interface NoteMark {
   range: Range;
 }
 
-/** The highlight registered with the browser for noted passages; styled with ::highlight(loochat-note). */
-const HIGHLIGHT = 'loochat-note';
+/** The highlight registered with the browser for noted passages; styled with ::highlight(calli-note). */
+const HIGHLIGHT = 'calli-note';
 
 interface Spot {
   id: string;
@@ -38,14 +38,15 @@ export function NoteMarks({ marks, scrollerRef }: { marks: NoteMark[]; scrollerR
     const place = () => {
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => {
-        const scroller = scrollerRef.current;
-        const view = scroller?.getBoundingClientRect();
-        // The scroller runs behind the glass top bar and composer; a number must not float over them.
-        const style = scroller ? getComputedStyle(scroller) : undefined;
-        const top = view ? view.top + Math.max(0, -parseFloat(style?.marginTop ?? '0') || 0) : 0;
-        const bottom = view ? view.bottom - Math.max(0, -parseFloat(style?.marginBottom ?? '0') || 0) : 0;
         setSpots(
           live.flatMap((m) => {
+            const startEl = m.range.startContainer instanceof Element ? m.range.startContainer : m.range.startContainer.parentElement;
+            const scroller = startEl?.closest<HTMLElement>('.chat-flow, .agent-panel-body, .thread-peek-body, .scroller') ?? scrollerRef.current;
+            const view = scroller?.getBoundingClientRect();
+            // The scroller runs behind the glass top bar and composer; a number must not float over them.
+            const style = scroller ? getComputedStyle(scroller) : undefined;
+            const top = view ? view.top + Math.max(0, -parseFloat(style?.marginTop ?? '0') || 0) : 0;
+            const bottom = view ? view.bottom - Math.max(0, -parseFloat(style?.marginBottom ?? '0') || 0) : 0;
             const rects = m.range.getClientRects();
             const last = rects[rects.length - 1];
             const mid = last ? last.top + last.height / 2 : 0;

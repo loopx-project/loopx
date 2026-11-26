@@ -206,6 +206,7 @@ export class Scheduler {
     await this.followUps();
     await this.reviews();
     await this.autoArchive(now);
+    await this.wakeSnoozed(now);
     this.manager.briefs.tick(now, this.push);
     void this.manager.personal.prep.tick(now).catch(error => console.error('meeting prep failed:', error));
     await this.manager.personal.proactive.tick(now);
@@ -221,6 +222,13 @@ export class Scheduler {
     this.lastAutoArchiveDays = days;
     this.lastAutoArchiveAt = now.getTime();
     await this.manager.autoArchiveOldThreads(now);
+  }
+
+  /** The threads whose snooze ran out come back: into the list's attention and onto the phone. */
+  private async wakeSnoozed(now: Date): Promise<void> {
+    for (const thread of await this.manager.wakeSnoozedThreads(now)) {
+      this.push?.snoozeWake(thread.id, thread.snoozedUntil ?? '');
+    }
   }
 
   /** Reviews own their schedule in hub settings, while their conversations remain ordinary threads. */

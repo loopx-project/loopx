@@ -273,7 +273,7 @@ def test_existing_scanner_automatically_continues_legacy_failure_and_returns_ori
     elif fault == "steered":
         store.append_event(row["session_id"], row["turn_id"], kind="turn.steered", payload={"client_ingress_id": "correction"})
     elif fault == "native-goal":
-        from loopx.chat_codex_goal import UPSTREAM_MODE
+        from loopx.chat.codex_goal import UPSTREAM_MODE
         store.update_session(row["session_id"], upstream_mode=UPSTREAM_MODE)
     elif fault == "current-context":
         store.update_session(row["session_id"], manager_context_version=MANAGER_CONTEXT_VERSION)

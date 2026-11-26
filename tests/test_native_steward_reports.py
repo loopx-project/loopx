@@ -944,7 +944,15 @@ def test_report_pump_replans_only_proven_refusals_and_retains_unknown_work(stewa
         "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
         "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
         "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
-        "        return " + repr(json.dumps(replan)) + "\n"
+        "        result = json.loads(" + repr(json.dumps(replan)) + ")\n"
+        "        if result['result_kind'] == 'replan_required':\n"
+        "            context = json.JSONDecoder().raw_decode(prompt.split('Steward governance replan context (data):', 1)[1].lstrip())[0]\n"
+        "            stride = context['writeback']['stride_control']\n"
+        "            if stride['required_on_periodic_review']:\n"
+        "                vision = json.loads(result['agent_vision_json'])\n"
+        "                vision['stride_decision'] = stride['minimal_example']\n"
+        "                result['agent_vision_json'] = json.dumps(vision)\n"
+        "        return json.dumps(result)\n"
         "    return report_only(params)\n")
     calls, writes = capture.read_bytes(), list(bot.writes)
     runtime._steward_monitor_next_check.clear()
@@ -1463,10 +1471,14 @@ def test_report_collects_evidence_before_capturing_native_launch_authority(stewa
 def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_unknown_work(steward, tmp_path, monkeypatch, provider, reject_recovery):
     from loopx.chat_agent import CodexChatAgentSession
     from loopx.control_plane.turn_driver.journal_store import turn_journal_path
+    from loopx.capabilities.native_chat.steward_commands import native_command
     store, runtime, bot, transport, binding, capture, _ = steward
     sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, provider)
     install_model(steward, tmp_path, sid)
     history, calls = store.messages(sid), capture.read_bytes()
+
+    def inspect_lease(todo_id):
+        return native_command(runtime, ["task-lease", "inspect", "--goal-id", actor["goal_id"], "--todo-id", todo_id])
     write = CodexChatAgentSession._write
 
     def concurrent_registry_update(self, payload, **kwargs):
@@ -1480,6 +1492,10 @@ def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_
         fault.setattr(CodexChatAgentSession, "_write", concurrent_registry_update)
         first = pump_steward_monitors(runtime)[0]
         rejected = finish(runtime, first)
+    todo_id = first["loopx_request"]["todo_id"]
+    lease = inspect_lease(todo_id)
+    assert lease["active"] is True
+    assert lease["lease"]["idempotency_key"] == first["loopx_request"]["turn_instance_id"]
     failure = rejected["response"]["native_loopx"]
     assert failure["status"] == "failed" and failure["result_kind"] == "host_failure", rejected
     assert failure["host_failure"] == {"schema_version": "loopx_turn_host_failure_v0",
@@ -1504,6 +1520,9 @@ def test_original_pump_resumes_exact_prelaunch_rejection_once_without_replaying_
         assert retry["loopx_request"]["resume_turn_key"] == failure["resume_turn_key"]
         completed = finish(runtime, retry)
     assert completed["status"] == "completed", {key: completed.get(key) for key in ("status", "error", "error_code", "response")}
+    after_lease = inspect_lease(todo_id)
+    assert after_lease["active"] is False
+    assert after_lease["lease"]["lease_epoch"] == lease["lease"]["lease_epoch"]
     if reject_recovery:
         assert completed["response"]["native_loopx"]["host_failure"]["kind"] == "contract_rejected"
         assert completed["response"]["native_loopx"]["host_failure"]["attempt"] == 2

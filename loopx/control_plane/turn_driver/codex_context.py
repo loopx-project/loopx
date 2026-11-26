@@ -27,7 +27,7 @@ from .native_context_profile import (
     native_context_page_budget,
 )
 from ..content_digest import BARE_SHA256_PATTERN
-from .codex_execution_preparation import compact_execution_preparation_request
+from .codex_execution_preparation import compact_execution_preparation_request, native_preparation_workspace
 
 # Native adapter activation reuses scheduler-owned host declarations. These
 # settings are presentation opt-ins, never host authentication or authority.
@@ -210,6 +210,14 @@ def _save(root: Path, state: dict[str, Any]) -> None:
     write_decision_capture(root / "session.json", state, publish=os.replace)
 
 
+def _write_native_claim_source(root: Path, session: str | None, digest: str) -> None:
+    # Only a live guard records its process workdir. Projecting a saved
+    # capture, including from another checkout, cannot select it again.
+    write_decision_capture(root / "claim-source.json", {
+        "session_id": session, "sha256": digest, "workspace": native_preparation_workspace(Path.cwd()),
+    }, publish=os.replace)
+
+
 def record_native_claim_source(
     payload: Mapping[str, Any], digest: str, *, directory: str | None, context_root: str | None,
 ) -> None:
@@ -227,27 +235,27 @@ def record_native_claim_source(
             return
         # A caller outside the Host can explicitly select its private directory.
         # The journal identifies that session even without an ambient thread ID.
-        write_decision_capture(root / "claim-source.json",
-            {"session_id": session or active_session, "sha256": digest}, publish=os.replace)
+        _write_native_claim_source(root, session or active_session, digest)
 
 
 def _original_native_claim_source(
     root: Path, session: str, digest: object, *, bind_unattached: bool = False,
-) -> bool:
+) -> dict[str, Any] | None:
     if not isinstance(digest, str):
-        return False
+        return None
     try:
         path = root / "claim-source.json"
         saved = _read(path)
     except (OSError, ValueError):
-        return False
-    bound = {"session_id": session, "sha256": digest}
+        return None
+    bound: dict[str, Any] = {"session_id": session, "sha256": digest}
+    if "workspace" in saved:
+        bound["workspace"] = saved["workspace"]
     if bind_unattached and saved == {**bound, "session_id": None}:
-        # An explicit private directory can receive a guard before startup.
-        # Adopt it once from the live session while holding its journal lock.
+        # Adopt a guard captured before startup, retaining its actual workdir.
         write_decision_capture(path, bound, publish=os.replace)
-        return True
-    return saved == bound
+        return bound
+    return bound if saved == bound else None
 
 
 def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_id: str | None) -> tuple[str, str]:
@@ -522,12 +530,16 @@ def native_execution_preparation_request(
             if readback_for is not None and readback_for != source_sha256:
                 return None
             action = {**request, "source_sha256": source_sha256}
+            action.pop("claim_workspace", None)  # Only the live guard marker supplies the workdir.
             claim_source_sha256 = action.get("claim_source_sha256")
-            if not _original_native_claim_source(root, session, claim_source_sha256):
+            marker = _original_native_claim_source(root, session, claim_source_sha256)
+            if marker is None:
                 action.pop("claim_source_sha256", None)
                 if readback_for is not None:
                     return None
                 return action
+            if "workspace" in marker:
+                action["claim_workspace"] = marker["workspace"]
             previous = state.get("host_execution_preparation")
             if isinstance(previous, dict) and (
                 previous.get("source_sha256") == source_sha256
@@ -872,8 +884,7 @@ def _commit_native_context_recovery(
             claim_source = capture_id
         elif not saved_capture and preparation.get("turn_instance_id"):
             claim_source = capture_id if BARE_SHA256_PATTERN.fullmatch(capture_id) else reference["sha256"]
-            write_decision_capture(root / "claim-source.json",
-                {"session_id": session, "sha256": claim_source}, publish=os.replace)
+            _write_native_claim_source(root, session, claim_source)
         if claim_source is not None:
             preparation = compact_execution_preparation_request(payload, claim_source_sha256=claim_source)
     page_bytes, output_bytes = page_budget

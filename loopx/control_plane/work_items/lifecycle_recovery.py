@@ -49,7 +49,7 @@ def attach_receipt_replan_context(
     todo_items: Iterable[Mapping[str, Any]] | None = None,
     receipt_bound_replan_obligation_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Contextualize pending receipt actions without borrowing a new frontier."""
+    """Build the context for the current review and the exact lifecycle source."""
     from .progress_observation import build_replan_context
 
     current = dict(current) if current else None
@@ -64,9 +64,8 @@ def attach_receipt_replan_context(
             "replay_phase": "open", "agent_id": agent_id,
         })["obligation"]
     obligations = [current] if current else []
-    pending = lifecycle_candidate if lifecycle_candidate and not lifecycle_candidate["lifecycle_settled"] else None
-    if pending:
-        obligations.append(pending["source_obligation"])
+    if lifecycle_candidate:
+        obligations.append(lifecycle_candidate["source_obligation"])
     if not obligations:
         return current
     todos = list(todo_items) if todo_items is not None else None
@@ -78,6 +77,6 @@ def attach_receipt_replan_context(
             explore_context=explore_context, goal_acceptance_contract=goal_acceptance_contract,
             todo_items=todos,
         )
-    if pending:
-        pending["obligation"]["replan_context"] = pending["source_obligation"]["replan_context"]
+    if lifecycle_candidate:
+        lifecycle_candidate["obligation"]["replan_context"] = lifecycle_candidate["source_obligation"]["replan_context"]
     return current

@@ -17,7 +17,7 @@ import time
 from typing import Any, Callable
 
 from .agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from .chat_codex_goal import CodexGoalDriver, validate_goal_chat
+from .chat.codex_goal import CodexGoalDriver, validate_goal_chat
 from .control_plane.collaboration.goal_instance_scope import (
     goal_accepts_collaboration,
 )

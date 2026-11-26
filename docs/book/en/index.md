@@ -78,7 +78,7 @@ versioned or optional functionality.
 - Source format: Markdown
 - Site generator: MkDocs Material
 - Hosting: GitHub Pages
-- LoopX release anchor: `v2.4.0`
+- LoopX release anchor: `v2.4.1`
 - Runtime prerequisites: Python 3.11+ and Node.js 22.22.3+
 
 The official public protocols remain authoritative for protocol facts. Commands that change across

@@ -141,10 +141,14 @@ def _private_return_authority(
 
 
 def _private_message_link(link: object, chat_id: str) -> bool:
-    return bool(chat_id) and isinstance(link, str) and re.fullmatch(
-        r"https://applink\.(?:feishu\.cn|larksuite\.com)/client/chat/open"
-        r"\?openChatId=" + re.escape(chat_id) + r"&position=-?[0-9]+", link,
-    ) is not None
+    if not chat_id or not isinstance(link, str):
+        return False
+    target, _, position = link.rpartition("&position=")
+    chat_path = f"/client/chat/open?openChatId={chat_id}"
+    return target in (
+        f"https://applink.feishu.cn{chat_path}",
+        f"https://applink.larksuite.com{chat_path}",
+    ) and re.fullmatch(r"-?[0-9]+", position) is not None
 
 
 def _app_mirror_text(message: PayloadView, phase: PayloadView, chat_id: str) -> str:

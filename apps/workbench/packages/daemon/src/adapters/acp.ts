@@ -275,6 +275,9 @@ export class AcpSession implements AgentSession {
    */
   private background: { id: string; hooks: TurnHooks } | null = null;
   private backgroundTurns = 0;
+  private readonly backgroundTools = new Set<string>();
+  private backgroundPendingRequests = 0;
+  private backgroundIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private workMode: WorkMode = 'execute';
   private permissionMode: PermissionMode = 'ask';
   onWorkMode?: (mode: WorkMode) => void;
@@ -284,6 +287,9 @@ export class AcpSession implements AgentSession {
   /** The latest snapshot of each tool call, so a permission request that names only the call id
    * (DeepSeek Harness does) can still show what is being approved. Bounded; the oldest drops out. */
   private readonly toolCalls = new Map<string, { title?: string; kind?: string; rawInput?: unknown; content?: unknown }>();
+  private activeLive: LiveUsage | null = null;
+  private nativeThinking = false;
+  private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(
     readonly agentSessionId: string,
@@ -294,8 +300,13 @@ export class AcpSession implements AgentSession {
     private readonly offeredModes: readonly string[],
     /** The config option this agent uses for effort ("effort", "reasoning_effort"). */
     private readonly effortConfigId: string = 'effort',
-    private readonly liveUsage?: (emit: (sample: UsageSample) => void) => LiveUsage | undefined,
+    private readonly liveUsage?: (emit: (sample: UsageSample) => void, onThinking?: (text: string) => void) => LiveUsage | undefined,
     private configOptions: ConfigOption[] = [],
+    /** For ACP agents that do not emit a costed usage_update (e.g. agy), settle an autonomous
+     *  background turn after this much silence once no tool call or human request is still open. */
+    private readonly backgroundIdleMs: number = 0,
+    /** Poll transcript-tailed thinking before tool calls when the agent does not stream thoughts over ACP. */
+    private readonly syncThinking: boolean = false,
   ) {}
 
   setSessionHooks(hooks: SessionHooks): void { this.sessionHooks = hooks; }
@@ -303,7 +314,29 @@ export class AcpSession implements AgentSession {
   /** The hooks of whichever turn is running: the prompted one, or work the agent started itself. */
   private get turnHooks(): TurnHooks | null { return this.hooks ?? this.background?.hooks ?? null; }
 
+  private clearBackgroundIdle(): void {
+    if (this.backgroundIdleTimer) {
+      clearTimeout(this.backgroundIdleTimer);
+      this.backgroundIdleTimer = null;
+    }
+  }
+
+  private scheduleBackgroundIdle(): void {
+    this.clearBackgroundIdle();
+    if (!this.backgroundIdleMs || this.hooks || !this.background) return;
+    if (this.backgroundTools.size > 0 || this.backgroundPendingRequests > 0) return;
+    this.backgroundIdleTimer = setTimeout(() => {
+      this.backgroundIdleTimer = null;
+      if (!this.hooks && this.background && this.backgroundTools.size === 0 && this.backgroundPendingRequests === 0) {
+        this.finishBackground('end_turn');
+      }
+    }, this.backgroundIdleMs);
+    this.backgroundIdleTimer.unref?.();
+  }
+
   private finishBackground(stopReason: string): void {
+    this.clearBackgroundIdle();
+    this.backgroundTools.clear();
     const turn = this.background;
     if (!turn) return;
     this.background = null;
@@ -312,7 +345,25 @@ export class AcpSession implements AgentSession {
 
   /** Called by the peer for every session/update notification. */
   onUpdate(update: unknown): void {
+    if (this.syncThinking && this.activeLive && this.hooks) {
+      const live = this.activeLive;
+      const hooks = this.hooks;
+      this.updateQueue = this.updateQueue.then(async () => {
+        const value = update as any;
+        if (value?.sessionUpdate === 'agent_thought_chunk') this.nativeThinking = true;
+        if (value?.sessionUpdate === 'tool_call' && !this.nativeThinking && this.activeLive === live && this.hooks === hooks) {
+          await live.poll();
+        }
+        this.applyUpdate(update);
+      }).catch(() => undefined);
+      return;
+    }
+    this.applyUpdate(update);
+  }
+
+  private applyUpdate(update: unknown): void {
     const value = update as any;
+    if (value?.sessionUpdate === 'agent_thought_chunk' && this.hooks) this.nativeThinking = true;
     // The account's plan usage, told as the agent answers: account-level, so it counts even during
     // replay or background work, when no turn hooks would carry it anywhere.
     if (value?.sessionUpdate === 'usage_update' && value._meta?.['_claude/rateLimit'] !== undefined) {
@@ -338,14 +389,24 @@ export class AcpSession implements AgentSession {
     }
     // Output with no prompt open is the agent working on its own. A finished background task
     // only updates its tool call; the model speaking or calling a tool starts a cycle, which
-    // always ends with a costed usage report. Hooks are set after session/load, so replay is not this.
+    // ends on a costed usage report (Claude) or after quiet time with no open tools (agy).
+    // Hooks are set after session/load, so replay is not this.
     if (!this.hooks && !this.background && this.sessionHooks
       && ['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'plan'].includes(value?.sessionUpdate)) {
       const id = `background-${++this.backgroundTurns}`;
+      this.backgroundTools.clear();
       this.background = { id, hooks: this.sessionHooks.turnStarted(id, { background: true }) };
     }
     const hooks = this.turnHooks;
     if (!hooks) return; // replay during session/load, or stray updates
+    if (!this.hooks && this.background && typeof value?.toolCallId === 'string') {
+      if (value.sessionUpdate === 'tool_call') {
+        if (value.status === 'completed' || value.status === 'failed') this.backgroundTools.delete(value.toolCallId);
+        else this.backgroundTools.add(value.toolCallId);
+      } else if (value.sessionUpdate === 'tool_call_update' && (value.status === 'completed' || value.status === 'failed')) {
+        this.backgroundTools.delete(value.toolCallId);
+      }
+    }
     const costed = value?.sessionUpdate === 'usage_update' && typeof value.cost?.amount === 'number' && Number.isFinite(value.cost.amount) && value.cost.amount >= 0;
     if (costed) {
       this.costReported = true;
@@ -358,55 +419,81 @@ export class AcpSession implements AgentSession {
     }
     if (ev) hooks.emit(ev);
     if (costed && !this.hooks) this.finishBackground('end_turn');
+    else if (!this.hooks && this.background) this.scheduleBackgroundIdle();
   }
 
   /** Called by the peer for session/request_permission. */
   async onPermission(params: any): Promise<unknown> {
+    if (this.syncThinking) await this.updateQueue;
     const hooks = this.turnHooks;
     if (!hooks) return { outcome: { outcome: 'cancelled' } };
-    // An agent may name only the call; the card then borrows what the call's own update showed.
-    const toolCall = { ...params?.toolCall };
-    if (toolCall && toolCall.title === undefined && toolCall.rawInput === undefined) {
-      const known = this.toolCalls.get(String(toolCall.toolCallId));
-      if (known) Object.assign(toolCall, known);
+    const inBackground = !this.hooks && Boolean(this.background);
+    if (inBackground) {
+      this.backgroundPendingRequests++;
+      this.clearBackgroundIdle();
     }
-    const plan = toolCall?.rawInput?.plan;
-    if (typeof plan === 'string' && this.workMode === 'plan' && hooks.requestInput) {
-      const preferred = this.permissionMode === 'ask' ? ['exit-plan-default'] : this.permissionMode === 'full_access' ? ['exit-plan-bypass'] : ['exit-plan-auto', 'exit-plan-accept-edits'];
-      const option = preferred.map(id => params.options?.find((o: any) => o.optionId === id)).find(Boolean);
-      if (option) {
-        // Full access stands by its word on the plan gate too: the plan is recorded and carried
-        // out without waiting for a person. Every lesser level still reads it before deciding.
-        const auto = this.permissionMode === 'full_access' ? { answers: { approval: [option.optionId] } } : undefined;
-        const answer = await hooks.requestInput({ id: params.toolCall.toolCallId, title: '计划已准备好', kind: 'plan', plan, ...(auto ? { auto } : {}), questions: [{ id: 'approval', question: '是否按此计划开始执行？', options: [{ value: option.optionId, label: '开始执行' }] }] });
-        return 'answers' in answer ? { outcome: { outcome: 'selected', optionId: answer.answers.approval[0] } } : { outcome: { outcome: 'cancelled' } };
+    try {
+      // An agent may name only the call; the card then borrows what the call's own update showed.
+      const toolCall = { ...params?.toolCall };
+      if (toolCall && toolCall.title === undefined && toolCall.rawInput === undefined) {
+        const known = this.toolCalls.get(String(toolCall.toolCallId));
+        if (known) Object.assign(toolCall, known);
+      }
+      const plan = toolCall?.rawInput?.plan;
+      if (typeof plan === 'string' && this.workMode === 'plan' && hooks.requestInput) {
+        const preferred = this.permissionMode === 'ask' ? ['exit-plan-default'] : this.permissionMode === 'full_access' ? ['exit-plan-bypass'] : ['exit-plan-auto', 'exit-plan-accept-edits'];
+        const option = preferred.map(id => params.options?.find((o: any) => o.optionId === id)).find(Boolean);
+        if (option) {
+          // Full access stands by its word on the plan gate too: the plan is recorded and carried
+          // out without waiting for a person. Every lesser level still reads it before deciding.
+          const auto = this.permissionMode === 'full_access' ? { answers: { approval: [option.optionId] } } : undefined;
+          const answer = await hooks.requestInput({ id: params.toolCall.toolCallId, title: '计划已准备好', kind: 'plan', plan, ...(auto ? { auto } : {}), questions: [{ id: 'approval', question: '是否按此计划开始执行？', options: [{ value: option.optionId, label: '开始执行' }] }] });
+          return 'answers' in answer ? { outcome: { outcome: 'selected', optionId: answer.answers.approval[0] } } : { outcome: { outcome: 'cancelled' } };
+        }
+      }
+      const decision: ApprovalDecision = await hooks.requestApproval({
+        title: (typeof toolCall?.title === 'string' && toolCall.title) || 'Permission requested',
+        options: (params?.options ?? []).map((o: any) => ({
+          optionId: o.optionId,
+          name: o.name,
+          kind: o.kind,
+        })),
+        toolCall,
+      });
+      if ('cancelled' in decision) return { outcome: { outcome: 'cancelled' } };
+      return { outcome: { outcome: 'selected', optionId: decision.optionId } };
+    } finally {
+      if (inBackground) {
+        this.backgroundPendingRequests = Math.max(0, this.backgroundPendingRequests - 1);
+        this.scheduleBackgroundIdle();
       }
     }
-    const decision: ApprovalDecision = await hooks.requestApproval({
-      title: (typeof toolCall?.title === 'string' && toolCall.title) || 'Permission requested',
-      options: (params?.options ?? []).map((o: any) => ({
-        optionId: o.optionId,
-        name: o.name,
-        kind: o.kind,
-      })),
-      toolCall,
-    });
-    if ('cancelled' in decision) return { outcome: { outcome: 'cancelled' } };
-    return { outcome: { outcome: 'selected', optionId: decision.optionId } };
   }
 
   async onElicitation(params: any): Promise<unknown> {
     const questions = params.mode === 'form' ? formQuestions(params.requestedSchema, params.message) : null;
     const hooks = this.turnHooks;
     if (!questions?.length || !hooks?.requestInput) return { action: 'cancel' };
-    const answer = await hooks.requestInput({ id: params.toolCallId, title: params.message || '需要你的意见', questions });
-    if ('cancelled' in answer) return { action: 'cancel' };
-    const content = Object.fromEntries(questions.filter(q => answer.answers[q.id]?.length).map(q => {
-      const a = answer.answers[q.id];
-      const type = params.requestedSchema.properties[q.id].type;
-      return [q.id, type === 'array' ? a : type === 'boolean' ? a[0] === 'true' : a[0]];
-    }));
-    return { action: 'accept', content };
+    const inBackground = !this.hooks && Boolean(this.background);
+    if (inBackground) {
+      this.backgroundPendingRequests++;
+      this.clearBackgroundIdle();
+    }
+    try {
+      const answer = await hooks.requestInput({ id: params.toolCallId, title: params.message || '需要你的意见', questions });
+      if ('cancelled' in answer) return { action: 'cancel' };
+      const content = Object.fromEntries(questions.filter(q => answer.answers[q.id]?.length).map(q => {
+        const a = answer.answers[q.id];
+        const type = params.requestedSchema.properties[q.id].type;
+        return [q.id, type === 'array' ? a : type === 'boolean' ? a[0] === 'true' : a[0]];
+      }));
+      return { action: 'accept', content };
+    } finally {
+      if (inBackground) {
+        this.backgroundPendingRequests = Math.max(0, this.backgroundPendingRequests - 1);
+        this.scheduleBackgroundIdle();
+      }
+    }
   }
 
   async setWorkMode(mode: WorkMode): Promise<void> {
@@ -485,6 +572,8 @@ export class AcpSession implements AgentSession {
     return true;
   }
 
+  isAlive(): boolean { return !this.peer.isClosed; }
+
   async prompt(input: TurnInput, hooks: TurnHooks): Promise<TurnResult> {
     this.manualCompaction = isCompaction(input.text);
     try {
@@ -494,14 +583,19 @@ export class AcpSession implements AgentSession {
 
   private async promptInternal(input: TurnInput, hooks: TurnHooks): Promise<TurnResult> {
     const start = Date.now();
+    this.nativeThinking = false;
     const emit = (sample: UsageSample) => hooks.emit({ type: 'usage.sample', data: { ...sample } });
-    const live = this.liveUsage?.(emit);
+    const onThinking = this.syncThinking
+      ? (text: string) => { if (!this.nativeThinking) hooks.emit({ type: 'reasoning.delta', data: { text } }); }
+      : undefined;
+    const live = this.liveUsage?.(emit, onThinking);
     let submitted!: () => void;
     this.submission = new Promise(resolve => { submitted = resolve; });
     let samples: UsageSample[] = [];
     // The hub holds prompts until the agent's own work ends; if one gets through, it owns what follows.
     this.finishBackground('end_turn');
     this.hooks = hooks;
+    this.activeLive = live ?? null;
     this.costBefore = this.costReading;
     this.costReported = false;
     try {
@@ -525,6 +619,8 @@ export class AcpSession implements AgentSession {
       return { stopReason: 'error', error: err instanceof Error ? err.message : String(err) };
     } finally {
       submitted();
+      if (this.syncThinking) await this.updateQueue;
+      this.activeLive = null;
       await live?.stop();
       for (const sample of samples) {
         const remainder = live ? live.ledger.remainder(sample) : sample;
@@ -545,12 +641,20 @@ export class AcpSession implements AgentSession {
     this.finishBackground('cancelled');
     this.peer.close();
   }
+
+  onPeerClosed(): void {
+    this.finishBackground('cancelled');
+  }
 }
 
 /** Everything an ACP agent has in common. The agent-specific parts are the abstract members. */
 export abstract class AcpAdapter implements AgentAdapter {
   readonly reportsPromptSent = true;
-  protected liveUsage(_id: string, _cwd: string, _emit: (sample: UsageSample) => void): LiveUsage | undefined { return undefined; }
+  protected liveUsage(_id: string, _cwd: string, _emit: (sample: UsageSample) => void, _onThinking?: (text: string) => void): LiveUsage | undefined { return undefined; }
+  /** Quiet-time settlement for ACP agents whose autonomous background turns never report cost. */
+  protected backgroundIdleMs = 0;
+  /** When true, AcpSession tails transcript thinking via liveUsage unless native agent_thought_chunk arrives. */
+  protected syncThinking = false;
   /** Plan usage observed in-band, as the agent answers; wired by whoever owns the adapter. */
   onQuotaObserved?: (quota: PlanQuota) => void;
   /** Optional protocol extensions supplied by a concrete adapter. */
@@ -753,6 +857,7 @@ export abstract class AcpAdapter implements AgentAdapter {
           if (method === 'elicitation/create') return holder.session?.onElicitation(params);
           return undefined; // fs/* and terminal/* are not advertised, so the agent should not call them
         },
+        onClosed: () => holder.session?.onPeerClosed(),
       },
       `${this.id}-acp`,
     );
@@ -780,7 +885,7 @@ export abstract class AcpAdapter implements AgentAdapter {
       const offeredModes: string[] = (info?.modes?.availableModes ?? []).map((m: any) => m.id);
       const configOptions: ConfigOption[] = info?.configOptions ?? [];
 
-      const session = new AcpSession(sessionId, peer, this.modeIds, offeredModes, effortConfigIdOf(configOptions), emit => this.liveUsage(sessionId, opts.cwd, emit), configOptions);
+      const session = new AcpSession(sessionId, peer, this.modeIds, offeredModes, effortConfigIdOf(configOptions), (emit, onThinking) => this.liveUsage(sessionId, opts.cwd, emit, onThinking), configOptions, this.backgroundIdleMs, this.syncThinking);
       session.onQuota = quota => this.onQuotaObserved?.(quota);
       this.configureSession(session, peer);
       holder.session = session;

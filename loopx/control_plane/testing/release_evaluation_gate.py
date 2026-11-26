@@ -380,6 +380,7 @@ def _verify_git_tag_objects(
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
         if proc.returncode != 0 or proc.stdout.strip().lower() != expected:
             issues.append(code)

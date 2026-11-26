@@ -37,6 +37,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - name: Require a merged, published release with matching package identity
         run: |
           git fetch origin main
@@ -85,11 +87,25 @@ jobs:
       - name: Publish the same bytes with npm trusted publishing
         if: env.DSH_ALREADY_PUBLISHED != 'true'
         run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error title=GitHub OIDC unavailable::The hosted runner did not provide a GitHub OIDC request. Check the publish job's id-token permission."
+            exit 1
+          fi
+          publish_log="$(mktemp)"
+          trap 'rm -f "$publish_log"' EXIT
           set +e
-          npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance
+          npm publish "$DSH_ARTIFACT" --access public --tag latest --ignore-scripts --provenance --loglevel=verbose > "$publish_log" 2>&1
           rc=$?
           set -e
           if [ "$rc" -ne 0 ]; then
+            # Describe the stage without printing the trace, which can include an OIDC request URL.
+            if grep -Fq 'Successfully retrieved and set token' "$publish_log"; then
+              echo "::notice title=npm publish stage::npm accepted the workflow identity. Publishing the immutable archive failed afterward."
+            elif grep -Fq 'Failed token exchange request' "$publish_log"; then
+              echo "::notice title=npm publish stage::GitHub supplied an identity but npm rejected its token exchange."
+            elif grep -Fq 'Failed to fetch id_token from GitHub' "$publish_log"; then
+              echo "::notice title=npm publish stage::GitHub did not return an OIDC identity to npm."
+            fi
             if [ "${DSH_NPM_PACKAGE_MISSING:-false}" = "true" ]; then
               echo "::error title=npm package bootstrap required::dsh-loopx-plugin returns HTTP 404 on registry.npmjs.org. npm OIDC Trusted Publishing cannot create a brand-new package: enable 2FA (auth-and-writes), run one-time web-auth 'npm publish <release.tgz> --access public --tag latest --ignore-scripts', run 'npm logout', then bind Trusted Publisher (loopx-project / loopx / dsh-plugin-publish.yml / blank Environment name / Allow npm publish checked)."
             elif [ "${DSH_NPM_STAGING_PLACEHOLDER:-false}" = "true" ]; then
@@ -99,9 +115,14 @@ jobs:
             fi
             exit "$rc"
           fi
+          echo "Published the immutable GitHub archive to npm."
       - name: Read back npm bytes, latest, and marketplace repository discovery
         run: |
           if git cat-file -e origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs 2>/dev/null; then
             git show origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs > scripts/verify-distribution.mjs
           fi
-          node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"
+          propagation_timeout=0
+          if [ "$DSH_ALREADY_PUBLISHED" = false ]; then
+            propagation_timeout=180000
+          fi
+          node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT" --registry-propagation-timeout-ms "$propagation_timeout"

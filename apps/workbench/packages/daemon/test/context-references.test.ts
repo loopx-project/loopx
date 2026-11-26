@@ -31,6 +31,12 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (body: unknown, auth = true) => fetch(base + '/api/context-references', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: 'Bearer dummy-references-token' } : {}) }, body: JSON.stringify(body) });
+  const send = async (threadId: string, text: string, references: string[]) => {
+    const response = await fetch(`${base}/api/threads/${threadId}/turns`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer dummy-references-token' }, body: JSON.stringify({ text, references }) });
+    assert.ok(response.ok, await response.clone().text());
+    for (let i = 0; i < 300 && manager.getThread(threadId).status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.notEqual(manager.getThread(threadId).status, 'running');
+  };
   try {
     const source = await manager.createThread({ agent: 'pi', cwd: dir, title: 'Design discussion' });
     const recipient = await manager.createThread({ agent: 'pi', cwd: dir });
@@ -53,11 +59,12 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     assert.equal(reference.title, 'Design discussion');
     assert.ok(!JSON.stringify(reference).includes('question'));
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /not attached/);
-    assert.throws(() => manager.references.prepare(recipient.id, wire(reference), false), /cannot read/);
-    const prepared = manager.references.prepare(recipient.id, wire(reference), true);
+    assert.throws(() => manager.references.prepare(recipient.id, wire(reference), false), /separate attachment/);
+    assert.throws(() => manager.references.prepare(recipient.id, wire(reference), true), /separate attachment/, 'human-looking wire alone has no authority');
+    const prepared = manager.references.prepare(recipient.id, wire(reference), true, undefined, [reference.id]);
     assert.match(prepared.text, /loochat references/);
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /not attached/, 'validation does not grant a rejected send');
-    manager.references.grant(recipient.id, prepared.references);
+    await send(recipient.id, wire(reference), [reference.id]);
     const env = tools.environment(recipient.id)!;
     const cli = (...args: string[]) => new Promise<any>((resolve, reject) => execFile(process.execPath, [join(here, '../bin/loochat'), 'references', reference.id, ...args], { env: sessionEnvironment({}, env) }, (err, stdout, stderr) => err ? reject(new Error(stderr)) : resolve(JSON.parse(stdout))));
     store.appendEvent(source.id, 'turn-new', 'turn.started', { text: 'must not enter the snapshot' });
@@ -83,7 +90,9 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     assert.equal(first.text + second.text, long);
     assert.equal(second.command, null);
     assert.throws(() => manager.references.read(other.id, { id: reference.id }), /not attached/);
-    assert.throws(() => manager.references.read(recipient.id, { id: reference.id, turn: 'turn-new' }), /snapshot/);
+    assert.throws(() => manager.references.read(recipient.id, { id: reference.id, turn: 'turn-new' }), error =>
+      error instanceof Error && 'status' in error && error.status === 404 && /authorized history/.test(error.message),
+    'a turn added after a fixed snapshot remains outside the authorized range');
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id, turns: 51 }), /pagination/);
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id, offset: 1 }), /requires/);
     assert.deepEqual(store.listEvents(source.id, 0, -1).slice(0, snapshot.length), snapshot);
@@ -91,7 +100,7 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     const folder = join(dir, 'folder with spaces'); mkdirSync(folder);
     const directory = await (await post({ kind: 'directory', path: folder })).json();
     assert.equal(directory.path, folder);
-    const combined = manager.references.prepare(recipient.id, wire(reference) + '\n\n' + wire(directory), true);
+    const combined = manager.references.prepare(recipient.id, wire(reference) + '\n\n' + wire(directory), true, undefined, [reference.id, directory.id]);
     assert.deepEqual(combined.references.map(item => item.id), [reference.id, directory.id]);
     assert.equal(manager.references.prepare(recipient.id, wire(reference) + '\n\n' + wire(reference), true).references.length, 1);
     const snapshotResponse = await post({ kind: 'message', title: 'Selected reply', path: 'other-machine/project', text: long, sourceId: 'not-a-local-thread', turnId: 'external-turn' });
@@ -99,7 +108,8 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     const message = await snapshotResponse.json();
     assert.ok(!JSON.stringify(message).includes(long.slice(0, 100)), 'the browser gets metadata, not a duplicate message body');
     assert.throws(() => manager.references.read(recipient.id, { id: message.id }), /not attached/);
-    manager.references.grant(recipient.id, manager.references.prepare(recipient.id, wire(message), true).references);
+    assert.throws(() => manager.references.prepare(recipient.id, wire(message), true), /separate attachment/);
+    await send(recipient.id, wire(message), [message.id]);
     const messageFirst = manager.references.read(recipient.id, { id: message.id }) as { text: string; nextOffset: number };
     const messageSecond = manager.references.read(recipient.id, { id: message.id, offset: messageFirst.nextOffset }) as { text: string };
     assert.equal(messageFirst.text + messageSecond.text, long);
@@ -113,7 +123,7 @@ test('reference API and CLI: explicit scope, fixed history, pagination, long ans
     store.appendEvent(source.id, null, 'thread.historyChanged', {});
     assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /history changed/);
     store.db.prepare('DELETE FROM threads WHERE id=?').run(source.id);
-    assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /not found/);
+    assert.throws(() => manager.references.read(recipient.id, { id: reference.id }), /no longer exists/);
   } finally {
     await tools.dispose(); await manager.shutdown();
     await Promise.all([new Promise<void>(resolve => server.close(() => resolve())), new Promise<void>(resolve => ipc.close(() => resolve()))]);

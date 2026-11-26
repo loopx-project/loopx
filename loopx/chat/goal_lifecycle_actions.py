@@ -6,7 +6,11 @@ from typing import Any
 
 from ..control_plane.goals.activation import GoalActivationState, goal_activation_state
 from ..control_plane.goals.activation_service import set_goal_activation_state
-from ..control_plane.goals.deletion_service import delete_stopped_goal
+from ..control_plane.goals.deletion_service import (
+    DeletionResult,
+    delete_stopped_goal as delete_stopped_goal,
+    deletion_readback,
+)
 
 
 GOAL_LIFECYCLE_SOURCE_BASIS_SCHEMA_VERSION = "loopx_goal_lifecycle_source_basis_v1"
@@ -21,21 +25,21 @@ class ChatGoalLifecycleActionMixin:
     ) -> dict[str, Any]:
         operation = str(parameters["operation"])
         if operation == "delete":
-            preview = delete_stopped_goal(
+            deletion_preview: DeletionResult = delete_stopped_goal(
                 registry_path=self.registry_path,
                 goal_id=str(parameters["goal_id"]),
                 execute=False,
             )
-            fingerprint = str(preview.get("observed_state_fingerprint") or "")
-            source_basis = preview.get("source_basis")
+            fingerprint = str(deletion_preview.get("observed_state_fingerprint") or "")
+            source_basis = deletion_preview.get("source_basis")
             if (
-                not preview.get("ok")
+                not deletion_preview.get("ok")
                 or not fingerprint
                 or not isinstance(source_basis, dict)
             ):
                 raise ValueError(
                     str(
-                        preview.get("error")
+                        deletion_preview.get("error")
                         or "Goal deletion source basis is unavailable"
                     )
                 )
@@ -111,7 +115,7 @@ class ChatGoalLifecycleActionMixin:
             )
             return {"proposal": stale, "turn": None}
 
-        result = delete_stopped_goal(
+        result: DeletionResult = delete_stopped_goal(
             registry_path=self.registry_path,
             goal_id=goal_id,
             execute=True,
@@ -138,7 +142,8 @@ class ChatGoalLifecycleActionMixin:
             if not result.get("written") and not result.get("partial_write"):
                 return self._goal_delete_failed(proposal_id, error)
             raise error
-        if not (result.get("readback") or {}).get("verified"):
+        readback = deletion_readback(result)
+        if readback is None or not readback["verified"]:
             raise ValueError("Goal deletion did not verify")
         receipt = {
             "receipt_id": _digest(
@@ -189,7 +194,7 @@ class ChatGoalLifecycleActionMixin:
                 else None
             )
             try:
-                current = delete_stopped_goal(
+                deletion_current: DeletionResult = delete_stopped_goal(
                     registry_path=self.registry_path,
                     goal_id=goal_id,
                     execute=False,
@@ -198,9 +203,11 @@ class ChatGoalLifecycleActionMixin:
                 )
             except (OSError, ValueError) as exc:
                 return self._goal_delete_failed(proposal_id, exc)
-            current_fingerprint = str(current.get("observed_state_fingerprint") or "")
-            if not current.get("ok") or not current_fingerprint:
-                if current.get("stale") and current_fingerprint:
+            current_fingerprint = str(
+                deletion_current.get("observed_state_fingerprint") or ""
+            )
+            if not deletion_current.get("ok") or not current_fingerprint:
+                if deletion_current.get("stale") and current_fingerprint:
                     stale = self.store.apply(
                         proposal_id,
                         current_state_fingerprint=current_fingerprint,
@@ -211,7 +218,7 @@ class ChatGoalLifecycleActionMixin:
                     proposal_id,
                     ValueError(
                         str(
-                            current.get("error")
+                            deletion_current.get("error")
                             or "Goal deletion source basis is unavailable"
                         )
                     ),

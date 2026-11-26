@@ -171,6 +171,59 @@ project state. The legacy `codex-ide` value remains an accepted compatibility
 alias but is no longer advertised. This prevents an upgrade from silently
 routing an IDE plugin or terminal start to a desktop-app heartbeat.
 
+## Find Goals in the selected registry
+
+Use `registry` to discover Goal IDs before choosing a Goal-specific command:
+
+```bash
+loopx registry --query research --limit 10
+loopx --format json registry --query research --limit 10 --offset 10
+loopx registry --goal-id <goal-id>
+```
+
+The query is a case-insensitive, Unicode-normalized literal substring of the
+Goal ID, repository path, domain, status, or adapter kind. Exact `--goal-id` and
+`--query` filters compose. Filtering happens before pagination, in registry
+declaration order. Any selection option enables a default page size of 20;
+`--limit` must be positive and `--offset` non-negative. JSON `selection` reports
+matching and returned counts and `next_offset` (null at the end). Offsets apply
+to the current registry snapshot; edits between requests can change pages.
+
+Without selection options, `registry` keeps its complete existing output.
+Selection only narrows displayed Goal rows: registry-wide totals, status counts,
+diagnostics, and failure exit status remain complete. An unknown exact Goal ID
+fails, while a query with no matches returns an empty selection. Inspection still
+reads and validates the whole selected registry; pagination does not bound scan
+work or follow entries into their source registries.
+
+## Inspect an earlier run-history window
+
+To investigate an earlier day without dumping all newer runs, select a time
+window before applying the display limit:
+
+```bash
+loopx --format json history --goal-id <goal-id> --agent-id <agent-id> \
+  --since 2026-06-01T00:00:00Z --until 2026-06-02T00:00:00Z --limit 10
+```
+
+`--since` includes its boundary; `--until` excludes it, so adjacent windows do
+not overlap. Either bound may be omitted. ISO offsets are compared as instants;
+dates and timestamps without an offset use UTC. The default unfiltered read is
+unchanged. The selected window applies to run rows and retained semantic-history
+references, while quota accounting still uses the complete Goal history.
+Active retry status also uses complete relevant retained evidence: a later
+progress record outside the window can supersede an older blocker. The older
+Run stays readable in the window, but is not reported as an active retry.
+`run_count` counts matching runs before `--limit`; `time_filter` reports the
+normalized bounds and the number of excluded rows with missing or invalid times.
+Malformed/reversed bounds and combinations with history repair/audit actions or
+exact `--evidence-ref` reads are rejected.
+
+This is a read-only CLI investigation view over the retained local run indexes,
+not an archive restore or a bounded-cost index query. It reads those indexes;
+it cannot recover pruned or externally archived events. The research workspace
+retains its separate source-record browser and day-group navigation.
+
 ## Local State Backup
 
 Before risky migrations, local scheduler changes, or release-install repair,

@@ -6,6 +6,7 @@ export interface NativeOutcomePoint {
   submission_index: number; result_id: string; candidate_ref: string;
   submitted_at: string | null; observed_at: string; value: number; citation: AssessmentCitation;
 }
+export type NativeOutcomeSample = NativeOutcomePoint | (Omit<NativeOutcomePoint, "value"> & {value: null});
 export interface TrajectoryNativeOutcomes {
   method: "source_bound_native_outcomes_v1";
   scope: TrajectoryInput["scope"]; start: string; end: string; complete: boolean;
@@ -58,7 +59,9 @@ function boundCitation(value: unknown, input: TrajectoryInput): AssessmentCitati
 
 /** The provider declares validity/retention. This owner checks binding and ranks
  * valid measurements within that declared capture, never certifying a study. */
-export function projectTrajectoryNativeOutcomes(value: unknown, input: TrajectoryInput): TrajectoryNativeOutcomes {
+export function projectTrajectoryNativeCapture(value: unknown, input: TrajectoryInput): {
+  projection: TrajectoryNativeOutcomes; samples: NativeOutcomeSample[];
+} {
   const raw = object(value, "native outcomes"), scope = object(raw.scope, "native outcome scope");
   if (raw.schema_version !== "trajectory_native_outcomes_v1") fail("unsupported native outcomes schema");
   if (Object.keys(input.scope).some(key => scope[key] !== input.scope[key as keyof typeof input.scope])
@@ -69,7 +72,7 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
   const name = metricLabel(metric.name, "native metric name"), unit = metricLabel(metric.unit, "native metric unit");
   if (typeof metric.higher_is_better !== "boolean") fail("native metric direction must be explicit");
   if (!Array.isArray(raw.samples) || raw.samples.length > 10000) fail("native samples must be an array of at most 10000 records");
-  const valid: NativeOutcomePoint[] = [], seen = new Set<string>();
+  const samples: NativeOutcomeSample[] = [], valid: NativeOutcomePoint[] = [], seen = new Set<string>();
   let previous = 0;
   for (const value of raw.samples) {
     const sample = object(value, "native sample"), index = sample.submission_index;
@@ -86,9 +89,10 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
     if (typeof sample.valid !== "boolean" || sample.valid && (typeof sample.value !== "number" || !Number.isFinite(sample.value))
         || !sample.valid && sample.value !== null) fail("native validity and measured value must agree; missing/invalid is not zero");
     const citation = boundCitation(sample.citation, input);
-    if (sample.valid) valid.push({submission_index: Number(index), result_id: result, candidate_ref: candidate,
-      submitted_at: submitted, observed_at: observed, value: sample.value as number,
-      citation});
+    const point: NativeOutcomeSample = {submission_index: Number(index), result_id: result, candidate_ref: candidate,
+      submitted_at: submitted, observed_at: observed, value: sample.value as number | null, citation};
+    samples.push(point);
+    if (point.value !== null) valid.push(point);
   }
   let best: NativeOutcomePoint | null = null;
   for (const point of valid) if (!best || (metric.higher_is_better ? point.value > best.value : point.value < best.value)) best = point;
@@ -113,7 +117,7 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
     improvement = {baseline, retention_citation: retention, value: retention ? delta(retained) : null,
       final_candidate_delta: delta(valid.at(-1) ?? null)};
   }
-  return {method: "source_bound_native_outcomes_v1", scope: input.scope, start, end, complete: raw.complete,
+  return {samples, projection: {method: "source_bound_native_outcomes_v1", scope: input.scope, start, end, complete: raw.complete,
     metric: {name, unit, higher_is_better: metric.higher_is_better}, sample_count: raw.samples.length,
     valid_count: valid.length, initial: raw.complete ? valid.find(point => point.submission_index === 1) ?? null : null,
     best_valid: best, retained, final_valid: valid.at(-1) ?? null,
@@ -122,5 +126,9 @@ export function projectTrajectoryNativeOutcomes(value: unknown, input: Trajector
       "Validity and retained selection belong to the native provider, not model judgments or Todo status.",
       "Initial requires a complete prefix and a valid first submission; invalid or missing results are not zero.",
       "Submission order determines initial/final; delayed feedback does not make an older candidate current.",
-      "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."]};
+      "Costs retain their own measured windows; no monetary, whole-study or per-result cost is inferred."]}};
+}
+
+export function projectTrajectoryNativeOutcomes(value: unknown, input: TrajectoryInput): TrajectoryNativeOutcomes {
+  return projectTrajectoryNativeCapture(value, input).projection;
 }

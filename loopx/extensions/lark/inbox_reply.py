@@ -340,6 +340,11 @@ def _result(
 
 def _private_root_readback_matches(message: Mapping[str, Any], chat_id: str) -> bool:
     """A new private result must be visible in its authorized main chat."""
+    thread_id = str(message.get("thread_id") or "").strip()
+    raw_pos = message.get("thread_message_position")
+    position = "" if raw_pos is None else str(raw_pos).strip()
+    if thread_id and position != "-1":
+        return False
     return (message.get("chat_id") == chat_id and not message.get("parent_id")
         and message.get("root_id") in (None, "", message.get("message_id")))
 
@@ -360,6 +365,106 @@ def _captured_source_event(config: Mapping[str, Any], source_message_id: str) ->
     )
 
 
+def _source_thread_readback_matches(
+    message: Mapping[str, Any],
+    *,
+    chat_id: str,
+    source_message_id: str,
+    source_event: Mapping[str, Any] | None,
+    runner: CommandRunner | None = None,
+    base: Sequence[str] | None = None,
+) -> bool | None:
+    expected_root = str(
+        (source_event or {}).get("root_id")
+        or (source_event or {}).get("parent_id")
+        or source_message_id
+        or ""
+    ).strip()
+    if not expected_root or message.get("chat_id") != chat_id:
+        return False
+    expected_thread_id = str((source_event or {}).get("thread_id") or "").strip()
+    parent_id = str(message.get("parent_id") or "").strip()
+    root_id = str(message.get("root_id") or "").strip()
+    thread_id = str(message.get("thread_id") or "").strip()
+    if parent_id or root_id:
+        if expected_thread_id and thread_id and thread_id != expected_thread_id:
+            return False
+        return bool(parent_id) and root_id == expected_root
+    # Real `lark-cli im +messages-mget` omits `parent_id` and `root_id`,
+    # returning `thread_id`, `thread_message_position`, and `thread_replies`.
+    if not thread_id:
+        return False
+    msg_id = str(message.get("message_id") or "").strip()
+    raw_pos = message.get("thread_message_position")
+    position = "" if raw_pos is None else str(raw_pos).strip()
+    if msg_id == expected_root or position == "-1":
+        return False
+    if position and re.fullmatch(r"[0-9]{1,12}", position) is None:
+        return False
+    if expected_thread_id:
+        return thread_id == expected_thread_id
+    replies = message.get("thread_replies")
+    if isinstance(replies, list) and any(
+        isinstance(item, Mapping)
+        and item.get("chat_id") == chat_id
+        and str(item.get("thread_id") or "").strip() == thread_id
+        and str(item.get("message_id") or "").strip() == expected_root
+        for item in replies
+    ):
+        return True
+    if runner is not None and base:
+        root_readback = _call(
+            runner,
+            [
+                *base,
+                "im",
+                "+messages-mget",
+                "--message-ids",
+                expected_root,
+                "--as",
+                "bot",
+                "--no-reactions",
+                "--format",
+                "json",
+            ],
+        )
+        if root_readback.get("returncode") != 0:
+            return None
+        root_msg = _message(_json_object(root_readback.get("stdout")), expected_root)
+        return bool(
+            root_msg is not None
+            and root_msg.get("chat_id") == chat_id
+            and str(root_msg.get("thread_id") or "").strip() == thread_id
+        )
+    return False
+
+
+def _verify_explicit_placement_readback(
+    message: Mapping[str, Any],
+    *,
+    chat_id: str,
+    reply_placement: str | None,
+    source_message_id: str,
+    source_event: Mapping[str, Any] | None,
+    runner: CommandRunner | None = None,
+    base: Sequence[str] | None = None,
+) -> bool | None:
+    if reply_placement is None:
+        return True
+    if reply_placement == "chat_root":
+        return _private_root_readback_matches(message, chat_id)
+    if reply_placement == "source_thread":
+        return _source_thread_readback_matches(
+            message,
+            chat_id=chat_id,
+            source_message_id=source_message_id,
+            source_event=source_event,
+            runner=runner,
+            base=base,
+        )
+    return False
+
+
 def _explicit_placement_readback_matches(
     message: Mapping[str, Any],
     *,
@@ -368,22 +473,15 @@ def _explicit_placement_readback_matches(
     source_message_id: str,
     source_event: Mapping[str, Any] | None,
 ) -> bool:
-    if reply_placement is None:
-        return True
-    if reply_placement == "chat_root":
-        return _private_root_readback_matches(message, chat_id)
-    if reply_placement == "source_thread":
-        expected_root = str(
-            (source_event or {}).get("root_id")
-            or (source_event or {}).get("parent_id")
-            or source_message_id
+    return bool(
+        _verify_explicit_placement_readback(
+            message,
+            chat_id=chat_id,
+            reply_placement=reply_placement,
+            source_message_id=source_message_id,
+            source_event=source_event,
         )
-        return (
-            message.get("chat_id") == chat_id
-            and bool(message.get("parent_id"))
-            and message.get("root_id") == expected_root
-        )
-    return False
+    )
 
 
 def _deliver_lark_inbox_outbound(
@@ -826,16 +924,23 @@ def _deliver_lark_inbox_outbound(
     )
     readback_payload = _json_object(readback.get("stdout"))
     readback_message = _message(readback_payload, reply_message_id)
-    verified = bool(
-        readback.get("returncode") == 0
-        and readback_message is not None
-        and _explicit_placement_readback_matches(
+    placement_ok = (
+        _verify_explicit_placement_readback(
             readback_message,
             chat_id=chat_id,
             reply_placement=reply_placement,
             source_message_id=source_message_id,
             source_event=source_event,
+            runner=runner,
+            base=base,
         )
+        if readback.get("returncode") == 0 and readback_message is not None
+        else False
+    )
+    verified = bool(
+        readback.get("returncode") == 0
+        and readback_message is not None
+        and placement_ok is True
         and (lark_markdown_readback_matches(text=reply_text, message=readback_message, attachment_keys=attachment_keys,
                                           attachment_names=attachment_names, image_keys=image_keys)
              if markdown else lark_readback_matches_outbound(
@@ -1147,15 +1252,32 @@ def verify_lark_inbox_reply(
             verified_bot_aliases=bot_aliases or {},
         )
     )
+    if not verified:
+        return {
+            "ok": False,
+            "verification_performed": True,
+            "reply_verified": False,
+            "blocker": "provider_delivery_mismatch",
+        }
     source_message_id = str(message_id or "").strip()
     source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
-    if not verified or not _explicit_placement_readback_matches(
+    placement_ok = _verify_explicit_placement_readback(
         message,
         chat_id=chat_id,
         reply_placement=reply_placement,
         source_message_id=source_message_id,
         source_event=source_event,
-    ):
+        runner=runner,
+        base=base,
+    )
+    if placement_ok is None:
+        return {
+            "ok": False,
+            "verification_performed": False,
+            "reply_verified": False,
+            "blocker": "provider_verification_unavailable",
+        }
+    if placement_ok is not True:
         return {
             "ok": False,
             "verification_performed": True,
@@ -1259,14 +1381,20 @@ def update_lark_inbox_reply(
         return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
     source_message_id = str(message_id or "").strip()
     source_event = _captured_source_event(config, source_message_id) if reply_placement is not None else None
-    if (message.get("chat_id") != chat_id
-            or not _explicit_placement_readback_matches(
-                message,
-                chat_id=chat_id,
-                reply_placement=reply_placement,
-                source_message_id=source_message_id,
-                source_event=source_event,
-            )
+    if message.get("chat_id") != chat_id:
+        return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}
+    placement_ok = _verify_explicit_placement_readback(
+        message,
+        chat_id=chat_id,
+        reply_placement=reply_placement,
+        source_message_id=source_message_id,
+        source_event=source_event,
+        runner=runner,
+        base=base,
+    )
+    if placement_ok is None:
+        return {"ok": False, "reply_verified": False, "blocker": "provider_verification_unavailable"}
+    if (placement_ok is not True
             or not isinstance(message.get("sender"), Mapping)
             or message["sender"].get("sender_type") != "app"):
         return {"ok": False, "reply_verified": False, "blocker": "provider_delivery_intent_conflict"}

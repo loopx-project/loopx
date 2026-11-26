@@ -80,7 +80,7 @@
       "lines": 662
     },
     "loopx/control_plane/agents/agent_scope.py": {
-      "any_count": 107,
+      "any_count": 13,
       "dict_any_count": 0
     },
     "loopx/control_plane/agents/management_projection.py": {
@@ -156,7 +156,7 @@
     "loopx/history.py": {
       "any_count": 0,
       "dict_any_count": 0,
-      "lines": 1035
+      "lines": 1122
     },
     "loopx/pr_review.py": {
       "any_count": 49,

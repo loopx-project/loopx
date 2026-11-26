@@ -492,7 +492,7 @@ def test_shared_listener_drains_group_inbox_when_private_workspace_changes(
     monkeypatch.setattr(runtime, "stream_lark_goal_topic_profile", isolated_stream)
     monkeypatch.setattr(runtime, "answer_lark_goal_topic", answer)
     monkeypatch.setattr(transport, "admit", admit)
-    monkeypatch.setattr("loopx.chat_lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
+    monkeypatch.setattr("loopx.chat.lark_api.build_lark_goal_topic_runtime_snapshot", lambda **_: group_config)
     monkeypatch.setattr(ChatRequestHandler, "_lark_runner", lambda _: provider)
     service = runtime.LarkGoalTopicRuntimeService(
         snapshot_provider=snapshot, runtime_root=store.root.parent,

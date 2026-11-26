@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type ComponentType, type MouseEvent
 import { createPortal } from 'react-dom';
 import type { Api } from '../api';
 import { copyText } from '../clipboard';
-import { withReferences, type ContextReference } from '../context-references';
+import { type ContextReference } from '../context-references';
 import { t } from '../i18n';
 import { DialogSurface } from './Dialog';
 import { Popover } from './Popover';
@@ -106,7 +106,8 @@ export function HandToAssistant({ api, source, draftKey, onSent, onClose }: {
     setBusy(true); setError('');
     try {
       reference.current ??= await api.createReference({ kind: 'message', ...source });
-      const result = await api.petSay(withReferences([reference.current], text));
+      // The snapshot travels as a visible attachment id; wire text alone no longer grants a read.
+      const result = await api.petSay(text, [reference.current.id]);
       try { localStorage.removeItem(storageKey); } catch { /* Sending still succeeded. */ }
       onSent(result.threadId);
     } catch (e) { setError(e instanceof Error ? e.message : t('messageActions.failed')); }

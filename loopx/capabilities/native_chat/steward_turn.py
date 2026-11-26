@@ -7,7 +7,7 @@ read-only native control client. Chat retains its own execution fence.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, ExitStack, nullcontext
 from datetime import datetime, timezone
 import hashlib
@@ -21,7 +21,7 @@ from typing import Any
 from ...control_plane.effect_runtime import EffectRuntimeRejected
 from ...control_plane.goals.activation import goal_is_stopped
 from ...control_plane.goals.first_party_host_admission import FirstPartyHostRuntimeRejected
-from ...file_lock import exclusive_file_lock
+from ...file_lock import LOCK_ACQUIRE_TIMEOUT_ERROR_CODE, exclusive_file_lock
 from .report_failure_proof import (
     build_report_quota_request,
     build_report_timeout_request,
@@ -48,9 +48,12 @@ _WORKER_EXITED_ERROR = (
 )
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
+    "the portfolio scope changed after observation",
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })
+_FILE_LOCK_TIMEOUT_ERROR_RE = re.compile(
+    r"^file lock acquisition timed out \((?:recorded holder pid [1-9]\d*|lock busy, current holder unknown)\)$")
 _USER_ACTION_DEDUPE_KEY = re.compile(r"^[a-z0-9][a-z0-9._:@/-]{0,119}$")
 _REPORT_VALIDATOR_PREFIX = (
     "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
@@ -440,12 +443,14 @@ class StewardTurnHost:
         prior = original.get("loopx_request") or {}
         error = original.get("error_code")
         if (original.get("status") != "failed"
-                or error not in {"server_restarted", "runtime_error", "runtime_unavailable"}
+                or error not in {"server_restarted", "runtime_error", "runtime_unavailable", LOCK_ACQUIRE_TIMEOUT_ERROR_CODE}
                 or prior.get("work_kind") != "monitor"):
             return None
         if prior.get("monitor_restart_recovery") is not None and error != "server_restarted":
-            post_context_error = error == "runtime_unavailable" or (
-                error == "runtime_error" and original.get("error") in _POST_CONTEXT_WATCH_ERRORS
+            msg = original.get("error")
+            post_context_error = error in {"runtime_unavailable", LOCK_ACQUIRE_TIMEOUT_ERROR_CODE} or (
+                error == "runtime_error"
+                and (msg in _POST_CONTEXT_WATCH_ERRORS or (isinstance(msg, str) and _FILE_LOCK_TIMEOUT_ERROR_RE.fullmatch(msg) is not None))
             )
             completed_ts = _iso_timestamp_seconds(original.get("completed_at"))
             current_ts = time.time() if now is None else now
@@ -690,47 +695,31 @@ class StewardTurnHost:
 
     @contextmanager
     def _task_execution_lease(self, request: Mapping[str, Any], turn_id: str, *, recovery: bool = False,
-                              admission_retry: bool = False, claim_args: list[str] | None = None):
+                              admission_retry: bool = False, claim_args: list[str] | None = None,
+                              retain_for_retry: Callable[[], bool] | None = None):
         """Both generation and cached validation use the original Todo owner."""
-        from .steward_commands import native_command
+        from .steward_commands import acquire_steward_task_lease, native_command
+
         actor = request["actor"]
-        if claim_args is not None:
-            operation_id = f"todo-claim:native-turn:{turn_id}"
-            claim = native_command(self.controller, [*claim_args, "--claim-operation-id", operation_id])
-            if claim.get("claim_operation_id") != operation_id:
-                raise ValueError("native task preparation did not return its original claim")
-            receipts = native_command(self.controller, ["todo", "receipt", "--goal-id", actor["goal_id"],
-                "--operation-id", operation_id])["receipts"]
-            lease = receipts[0]["result"].get("lease") if len(receipts) == 1 else None
-            if not isinstance(lease, dict):
-                raise ValueError("native task preparation could not read back its original lease")
-        else:
-            retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"]]).get("lease")
-            version = retained["version"] if retained else 0
-            suffix = (".validation-recovery." + str(version) if recovery else
-                ".admission-retry." + turn_id if admission_retry else
-                ".admission-retry" if request.get("resume_turn_key") else "")
-            lease = native_command(self.controller, ["task-lease", "acquire", "--goal-id", actor["goal_id"],
-                "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
-                "--expected-version", str(version)])["lease"]
+        lease = acquire_steward_task_lease(self.controller, request, turn_id,
+            recovery=recovery, admission_retry=admission_retry, claim_args=claim_args)
         try:
             yield lease
         finally:
-            # Completion retires this lease. Never release a later owner's.
-            try:
-                retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
-                    "--todo-id", request["todo_id"]]).get("lease")
-                if retained and retained.get("status") == "active":
-                    proof = self._task_lease_proof(request, lease)
-                    native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
-                        "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
-                        "--idempotency-key", proof["task_lease_idempotency_key"],
-                        "--expected-version", str(proof["task_lease_expected_version"])])
-            except (OSError, ValueError, RuntimeError):
-                self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.task_lease_release_unconfirmed",
-                    payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
+            if retain_for_retry is None or not retain_for_retry():
+                # Completion retires this lease. Never release a later owner's.
+                try:
+                    retained = native_command(self.controller, ["task-lease", "inspect", "--goal-id", actor["goal_id"],
+                        "--todo-id", request["todo_id"]]).get("lease")
+                    if retained and retained.get("status") == "active":
+                        proof = self._task_lease_proof(request, lease)
+                        native_command(self.controller, ["task-lease", "release", "--goal-id", actor["goal_id"],
+                            "--todo-id", request["todo_id"], "--owner", actor["agent_id"],
+                            "--idempotency-key", proof["task_lease_idempotency_key"],
+                            "--expected-version", str(proof["task_lease_expected_version"])])
+                except (OSError, ValueError, RuntimeError):
+                    self.store.append_event(actor["session_id"], turn_id, kind="native_loopx.task_lease_release_unconfirmed",
+                        payload={"todo_id": request["todo_id"], "lease_epoch": lease["lease_epoch"]})
 
     def _frozen_report_contract_recovery(
         self,
@@ -1337,8 +1326,12 @@ class StewardTurnHost:
 
         model_input = authority.get("_model_input")
         detail_ref = model_input.get("detail_ref") if isinstance(model_input, Mapping) else None
-        packet = authority.get("replan_action_packet") or (
-            detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        detail_packet = detail_ref.get("replan_action_packet") if isinstance(detail_ref, Mapping) else None
+        auth_packet = authority.get("replan_action_packet")
+        packet = (
+            detail_packet
+            if isinstance(detail_packet, Mapping) and ("review" in detail_packet or "writeback" in detail_packet)
+            else auth_packet
         )
 
         def _read_stage(cmd_str: Any) -> dict[str, Any] | None:
@@ -1556,6 +1549,7 @@ class StewardTurnHost:
         reports, report_owner_key = report_service(self.controller, actor) if report_work else (None, None)
         report_context = ""
         governance_work = False
+        report_launch_rejected = False
         managed_answer = ""
         managed_lease, managed_lease_request = None, None
         preparation_status = None
@@ -1639,7 +1633,15 @@ class StewardTurnHost:
                 self._task_lease_proof(selected_request, managed_lease)
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
-            prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            if governance_work:
+                from .steward_monitor import governance_turn_prompt_authority
+                prompt = render_prompt(governance_turn_prompt_authority(authority), allow_completion=False)
+            elif report_work:
+                # Frozen report turns already freeze source.json and editorial-request.json; skip unfrozen manager context.
+                from ..periodic_report.private_generation import report_turn_prompt_authority
+                prompt = render_prompt(report_turn_prompt_authority(authority), allow_completion=True) + report_context
+            else:
+                prompt = render_prompt(authority, allow_completion=bool(managed_turn or steward_advancement)) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if governance_work:
                 gov_ctx = self._governance_replan_context(actor, authority)
                 prompt += (
@@ -1649,12 +1651,11 @@ class StewardTurnHost:
                     "Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 public-safe items, <=1200 chars total per field) with zero local file paths. "
                     "When `Steward governance replan context` supplies `writeback`: set `agent_vision_json` (JSON string of `goal_vision_replan_contract_v0`) keeping total counted text <=1400 chars (hard cap 1800; keep each `stride_decision` plan/reason/probe field <=60 chars), and omit `vision_unchanged_reason`. "
                     "If keeping `current_agent_vision.vision_patch` identical, set `path_delta_mode='unchanged'` and `path_delta.outcome='continue'` (or `'no_change'`); if updating any `vision_patch` field or creating an initial baseline, set `path_delta_mode='material_replan'` and `path_delta.outcome='replan'`. "
-                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null)."
+                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null). "
+                    "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts are already provided in Steward governance replan context below; return only the single typed JSON object directly without invoking periodic-report CLI commands or inspecting host source code."
                 )
                 if gov_ctx:
                     prompt += "\nSteward governance replan context (data):\n" + json.dumps(gov_ctx, ensure_ascii=False)
-            if report_work and not governance_work:
-                prompt += report_context
             if steward_advancement and not governance_work:
                 selected_todo_id = (authority.get("_work_identity") or {}).get("todo_id") or request.get("todo_id")
                 if selected_todo_id and managed_lease is None:
@@ -1687,6 +1688,7 @@ class StewardTurnHost:
 
             @contextmanager
             def launch():
+                nonlocal report_launch_rejected
                 # The existing app-server request owner holds this fence only
                 # through turn/start publication, never through model waiting.
                 observed = self._observe(actor)
@@ -1704,6 +1706,8 @@ class StewardTurnHost:
                         # Only guard entry is before publication. Let the
                         # existing native executor durably record its typed
                         # failure; exceptions after yield remain unknown.
+                        if not local_session and not governance_work and original and original["turn_id"] == turn_id:
+                            report_launch_rejected = True
                         from ...control_plane.turn_driver.host_failure import BuiltInHostError
                         raise BuiltInHostError(str(exc), failure_kind="contract_rejected") from exc
                     yield
@@ -1729,12 +1733,13 @@ class StewardTurnHost:
                         if (governance_work and event_sink is not None)
                         else event_sink
                     )
-                    if report_work and not governance_work and isinstance(adapter, AntigravityAdapter):
+                    if (report_work or steward_advancement or governance_work) and isinstance(adapter, AntigravityAdapter):
                         from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC
                         response = adapter.start_turn(
                             prompt,
                             invocation_sink,
                             isolated_cascade=True,
+                            raw_prompt=True,
                             idle_timeout_sec=(
                                 adapter.idle_timeout_sec
                                 if adapter.idle_timeout_sec is not None
@@ -1795,8 +1800,14 @@ class StewardTurnHost:
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
+
+        def retain_report_lease() -> bool:
+            failure = result.get("host_failure") or {}
+            return report_launch_rejected and failure.get("kind") == "contract_rejected" and failure.get("attempt") == 1
+
         with ExitStack() as managed_leases, (self._task_execution_lease(request, turn_id,
-                admission_retry=bool(selection_recovery)) if report_work else nullcontext(None)) as report_lease:
+                admission_retry=bool(selection_recovery), retain_for_retry=retain_report_lease)
+                if report_work else nullcontext(None)) as report_lease:
             if not report_work and request.get("todo_id") and not request.get("resume_turn_key"):
                 # The selected Task's existing lease must precede the kernel's
                 # delivery guard. Taking it in the model callback is too late:

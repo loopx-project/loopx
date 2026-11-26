@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from loopx.chat_agent import CodexChatAgentError, CodexChatAgentSession
-from loopx.chat_codex_goal import (
+from loopx.chat.codex_goal import (
     CodexGoalDriver,
     parse_native_goal_command,
     validate_goal_chat,

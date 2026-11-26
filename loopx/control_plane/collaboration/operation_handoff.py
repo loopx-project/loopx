@@ -96,8 +96,10 @@ def pending_operation_handoffs(
         return {"items": [], "pending_count": 0, "overflow": None, "next_cursor": None}
     result = []
     for proposal in store.list(goal_id=goal_id) if store is not None else []:
-        parameters = proposal.get("normalized_parameters") or {}
-        executor = parameters.get("executor") or {}
+        raw_parameters = proposal.get("normalized_parameters")
+        parameters = dict(raw_parameters) if isinstance(raw_parameters, Mapping) else {}
+        raw_executor = parameters.get("executor")
+        executor = dict(raw_executor) if isinstance(raw_executor, Mapping) else {}
         if (
             proposal.get("action_kind") != "operation.execute"
             or parameters.get("agent_id") != agent_id
@@ -193,7 +195,8 @@ def agent_operation_action(
     proposal = store.load(proposal_id)
     if proposal is None:
         raise ValueError("canonical operation was not found")
-    parameters = proposal.get("normalized_parameters") or {}
+    raw_parameters = proposal.get("normalized_parameters")
+    parameters = dict(raw_parameters) if isinstance(raw_parameters, Mapping) else {}
     if (parameters.get("goal_id"), parameters.get("agent_id")) != (
         actor.get("goal_id"),
         actor.get("agent_id"),
@@ -346,12 +349,13 @@ def _commit_agent_operation(
             agent_actor_binding_current=actor_current,
         )
         plan = store._agent_operation_plan(updated, action="project")
+        raw_operation = updated.get("operation")
+        operation = dict(raw_operation) if isinstance(raw_operation, Mapping) else {}
         return {
             "ok": True,
             **plan,
-            "outcome": updated["operation"].get("reconciliation")
-            or updated["operation"]["outcome"],
-            "outcome_report": updated["operation"].get("outcome_report"),
-            "reconciliation_report": updated["operation"].get("reconciliation_report"),
+            "outcome": operation.get("reconciliation") or operation.get("outcome"),
+            "outcome_report": operation.get("outcome_report"),
+            "reconciliation_report": operation.get("reconciliation_report"),
         }
     raise ValueError("unsupported agent operation action")

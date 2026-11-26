@@ -118,7 +118,11 @@ def test_complex_canonical_frontier_ack_tracks_only_selectable_material_changes(
     assert observe(next_ack)[1].acknowledged is (ack_scope == "owned")
     _commit_variant(paths, "owned-body-edit", "todo_zz_frontier_000")
     assert not observe(next_ack)[1].acknowledged
-    code, result = run_json_cli_result("quota", "should-run", "--goal-id", GOAL_ID,
-        "--agent-id", "agent-a", registry_path=paths["registry"])
-    assert code == 0, result
+    guard = ("quota", "should-run", "--goal-id", GOAL_ID, "--agent-id", "agent-a")
+    if display == "missing":
+        # Observation can inspect canonical work while the registered Goal
+        # narrative is unavailable. Complete Turn still requires it.
+        guard += ("--scheduler-observation",)
+    code, result = run_json_cli_result(*guard, registry_path=paths["registry"])
+    assert code == 0 and result["ok"] is True, result
     assert (paths["state_file"].read_bytes() if paths["state_file"].exists() else None) == before

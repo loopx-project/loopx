@@ -144,7 +144,8 @@ def test_public_quota_reads_revocation_from_full_history_without_mutating_displa
     # source and ID order. The displayed done list is not the authority source.
     scope = "write_scope:goal:release"
     rejection_time = "2026-09-10T01:00:00Z" if ambiguous else "2026-09-10T02:00:00Z"
-    source = "# Goal\n\n## Agent Todo\n\n- [ ] Deliver after authorization\n" + (
+    goal_source = "---\nstatus: active\n---\n# Goal\n## Objective\nDeliver after standing authorization.\n"
+    source = goal_source + "\n## Agent Todo\n\n- [ ] Deliver after authorization\n" + (
         f"  <!-- loopx:todo todo_id=todo_delivery role=agent status=open task_class=advancement_task claimed_by=agent-a required_decision_scopes={scope} -->\n\n"
         "## User Todo / Owner Review Reading Queue\n\n"
     )
@@ -209,7 +210,9 @@ def test_public_quota_reads_revocation_from_full_history_without_mutating_displa
                 ).hexdigest(),
             }
         initialize_canonical_authority(runtime, "goal-a", projection, state_path=state)
-        state.unlink()
+        # Goal source remains required. The approved and revoked rows now
+        # exist only in canonical authority, outside the display.
+        state.write_text(goal_source, encoding="utf-8")
     before = state.read_bytes() if state.exists() else None
     code, packet = run_json_cli_result(
         "quota",
