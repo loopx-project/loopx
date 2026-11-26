@@ -7,6 +7,10 @@ from .capabilities.issue_fix.pr_gate_reconcile import (
     reconcile_acknowledged_issue_fix_pr_reviews,
 )
 from .capabilities.turn_start import extend_turn_start_dispatch
+from .control_plane.capability_hooks import (
+    capability_hook_request_scope,
+    load_scoped_registry,
+)
 from .control_plane.effect_runtime import (
     EffectRuntimeRemoteError,
     EffectRuntimeStartupError,
@@ -83,9 +87,11 @@ def run_heartbeat_pre_quota(
     agent_id: str,
     fetch_timeout_seconds: int = 10,
 ) -> dict[str, Any]:
-    with effect_runtime_request_scope():
+    with effect_runtime_request_scope(), capability_hook_request_scope():
         runtime = resolve_runtime_root(
-            load_registry(registry_path), runtime_root_arg, registry_path=registry_path
+            load_scoped_registry(registry_path, loader=load_registry),
+            runtime_root_arg,
+            registry_path=registry_path,
         )
         shared_todo_cache: dict[str, Any] = {
             "todos": None,

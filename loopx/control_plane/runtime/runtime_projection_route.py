@@ -13,6 +13,10 @@ from ..goals.activation import (
     goal_activation_state,
     normalize_goal_activation_state,
 )
+from ..hook_runtime.request_scope import (
+    current_hook_request_scope,
+    load_scoped_registry,
+)
 from ..projects.registry_codec import load_registry
 from ... import paths
 from ...paths import global_registry_path, resolve_runtime_root
@@ -109,8 +113,20 @@ def resolve_goal_source_runtime_route(
     """
 
     invoked_registry = registry_path.expanduser().resolve()
-    registry_payload = registry if registry is not None else load_registry(
-        invoked_registry, source_snapshots=source_snapshots,
+    scope = current_hook_request_scope() if source_snapshots is None else None
+    active_snapshots = (
+        source_snapshots
+        if source_snapshots is not None
+        else (scope.registry_snapshots if scope is not None else None)
+    )
+    registry_payload = (
+        registry
+        if registry is not None
+        else (
+            load_scoped_registry(invoked_registry, loader=load_registry)
+            if scope is not None
+            else load_registry(invoked_registry, source_snapshots=active_snapshots)
+        )
     )
     if runtime_root_override:
         runtime_root = Path(runtime_root_override).expanduser().resolve()
@@ -176,7 +192,11 @@ def resolve_goal_source_runtime_route(
             f"goal {goal_id!r} source_registry is missing; refusing to use the shared runtime as source"
         )
     try:
-        source_payload = load_registry(source_registry, source_snapshots=source_snapshots)
+        source_payload = (
+            load_scoped_registry(source_registry, loader=load_registry)
+            if scope is not None
+            else load_registry(source_registry, source_snapshots=active_snapshots)
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(
             f"goal {goal_id!r} source_registry is unreadable; refusing to use the shared runtime as source"

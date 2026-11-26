@@ -8,6 +8,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
+from ..hook_runtime.request_scope import (
+    current_hook_registry_snapshots,
+    load_scoped_registry,
+)
 from ..projects.registry_codec import load_registry
 from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
 from ..goals.state_resolution import resolve_goal_state
@@ -56,8 +60,15 @@ def list_goal_todos(
         raise ValueError("agent_id must be a public-safe agent token such as codex-main-control")
     if limit is not None and limit < 1:
         raise ValueError("todo list --limit must be at least 1")
-    source_snapshots: dict[Path, bytes | None] = {}
-    registry = load_registry(registry_path, source_snapshots=source_snapshots)
+    scoped_snapshots = current_hook_registry_snapshots()
+    source_snapshots: dict[Path, bytes | None] | None = (
+        None if scoped_snapshots is not None else {}
+    )
+    registry = (
+        load_scoped_registry(registry_path, loader=load_registry)
+        if scoped_snapshots is not None
+        else load_registry(registry_path, source_snapshots=source_snapshots)
+    )
     route = resolve_goal_source_runtime_route(
         registry_path=registry_path, goal_id=goal_id,
         runtime_root_override=runtime_root_arg, registry=registry,
@@ -65,7 +76,11 @@ def list_goal_todos(
     )
     source_registry = Path(route["source_registry"])
     if route["routed_to_source_registry"]:
-        registry = load_registry(source_registry, source_snapshots=source_snapshots)
+        registry = (
+            load_scoped_registry(source_registry, loader=load_registry)
+            if scoped_snapshots is not None
+            else load_registry(source_registry, source_snapshots=source_snapshots)
+        )
     goal, resolved_project, resolved_state_file = resolve_goal_state(
         registry=registry,
         goal_id=goal_id,

@@ -71,85 +71,91 @@ def dispatch_quota_turn_start_hooks(
     preview = bool(getattr(args, "dry_run", False))
     if preview and not args.agent_id:
         return None, False
+    from ..control_plane.capability_hooks import (
+        capability_hook_request_scope,
+        dispatch_turn_start_hooks,
+        load_scoped_registry,
+    )
+
     dispatch: dict[str, object] = {}
-    if not preview and lark_turn_start_hook_dispatcher is not None:
-        dispatch = lark_turn_start_hook_dispatcher(
-            registry_path=registry_path,
-            runtime_root_arg=runtime_root_arg,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-        )
-    if args.agent_id:
-        from ..capabilities.manager_context import turn_start_hook
-        from ..capabilities.semantic_preference.agent_preferences import (
-            extend_turn_start_dispatch as extend_preferences,
-        )
-        from ..control_plane.capability_hooks import dispatch_turn_start_hooks
-        from ..history import load_registry
-        from ..paths import resolve_runtime_root
-
-        root = resolve_runtime_root(
-            load_registry(registry_path),
-            runtime_root_arg,
-            registry_path=registry_path,
-        )
-        if not preview:
-            from ..capabilities.turn_start import (
-                extend_turn_start_dispatch as extend_registered_capabilities,
-            )
-
-            dispatch = extend_registered_capabilities(
-                dispatch,
+    with capability_hook_request_scope():
+        if not preview and lark_turn_start_hook_dispatcher is not None:
+            dispatch = lark_turn_start_hook_dispatcher(
                 registry_path=registry_path,
-                runtime_root=root,
-                goal_id=args.goal_id,
-                agent_id=args.agent_id,
-                available=args.available_capabilities,
-            )
-        # A preview still needs the current local Inbox and preferences. These
-        # hooks observe existing context without recording reads or delivery.
-        model_read = not getattr(args, "scheduler_observation", False)
-        context_dispatch = dispatch_turn_start_hooks(
-            (
-                turn_start_hook(
-                    root,
-                    registry_path,
-                    args.goal_id,
-                    args.agent_id,
-                    model_read=model_read,
-                ),
-            )
-        )
-        context_dispatch = extend_preferences(
-            context_dispatch,
-            runtime_root=root,
-            registry_path=registry_path,
-            goal_id=args.goal_id,
-            agent_id=args.agent_id,
-        )
-        dispatch = dict(dispatch)
-        for key in ("results", "required_reads", "failures", "contexts"):
-            if key == "contexts" and not context_dispatch.get(key):
-                continue
-            dispatch[key] = list(dispatch.get(key) or []) + list(
-                context_dispatch.get(key) or []
-            )
-        for key in ("registered_count", "invoked_count"):
-            dispatch[key] = int(dispatch.get(key) or 0) + int(
-                context_dispatch.get(key) or 0
-            )
-        if not preview:
-            from ..capabilities.periodic_report.cadence_runtime import (
-                extend_cadence_turn_start_dispatch,
-            )
-
-            dispatch = extend_cadence_turn_start_dispatch(
-                dispatch,
-                registry_path=registry_path,
-                runtime_root=root,
+                runtime_root_arg=runtime_root_arg,
                 goal_id=args.goal_id,
                 agent_id=args.agent_id,
             )
+        if args.agent_id:
+            from ..capabilities.manager_context import turn_start_hook
+            from ..capabilities.semantic_preference.agent_preferences import (
+                extend_turn_start_dispatch as extend_preferences,
+            )
+            from ..history import load_registry
+            from ..paths import resolve_runtime_root
+
+            root = resolve_runtime_root(
+                load_scoped_registry(registry_path, loader=load_registry),
+                runtime_root_arg,
+                registry_path=registry_path,
+            )
+            if not preview:
+                from ..capabilities.turn_start import (
+                    extend_turn_start_dispatch as extend_registered_capabilities,
+                )
+
+                dispatch = extend_registered_capabilities(
+                    dispatch,
+                    registry_path=registry_path,
+                    runtime_root=root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                    available=args.available_capabilities,
+                )
+            # A preview still needs the current local Inbox and preferences. These
+            # hooks observe existing context without recording reads or delivery.
+            model_read = not getattr(args, "scheduler_observation", False)
+            context_dispatch = dispatch_turn_start_hooks(
+                (
+                    turn_start_hook(
+                        root,
+                        registry_path,
+                        args.goal_id,
+                        args.agent_id,
+                        model_read=model_read,
+                    ),
+                )
+            )
+            context_dispatch = extend_preferences(
+                context_dispatch,
+                runtime_root=root,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+            )
+            dispatch = dict(dispatch)
+            for key in ("results", "required_reads", "failures", "contexts"):
+                if key == "contexts" and not context_dispatch.get(key):
+                    continue
+                dispatch[key] = list(dispatch.get(key) or []) + list(
+                    context_dispatch.get(key) or []
+                )
+            for key in ("registered_count", "invoked_count"):
+                dispatch[key] = int(dispatch.get(key) or 0) + int(
+                    context_dispatch.get(key) or 0
+                )
+            if not preview:
+                from ..capabilities.periodic_report.cadence_runtime import (
+                    extend_cadence_turn_start_dispatch,
+                )
+
+                dispatch = extend_cadence_turn_start_dispatch(
+                    dispatch,
+                    registry_path=registry_path,
+                    runtime_root=root,
+                    goal_id=args.goal_id,
+                    agent_id=args.agent_id,
+                )
     local_private_state_mutated = bool(dispatch.get("uncertain_local_effects")) or any(
         isinstance(result, Mapping)
         and result.get("local_private_state_mutated") is not False
