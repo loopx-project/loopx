@@ -199,6 +199,22 @@ not an archive restore or a bounded-cost index query. It reads those indexes;
 it cannot recover pruned or externally archived events. The research workspace
 retains its separate source-record browser and day-group navigation.
 
+## Save a research record comparison
+
+In a Goal's Research history, search for a record, expand it, then open
+**Compare recorded versions**. Choose the comparison version and use
+**Download comparison (JSON)** or **Download comparison report (Markdown)**.
+Both files contain that exact pair, including a comparison version excluded
+by the search filters. The ordinary reading-report download still exports
+only matching records.
+
+The comparison preserves original text, record identities, evidence references,
+zero and unknown measurements, and the same field differences shown in the
+panel. It discloses incomplete history or a failed refresh; it does not certify
+a matched evaluation, acceptance, or research quality improvement. Source files
+behind references are not downloaded. Keep the report as private as its source
+research. If a download fails, retry without changing the records.
+
 ## Local State Backup
 
 Before risky migrations, local scheduler changes, or release-install repair,
