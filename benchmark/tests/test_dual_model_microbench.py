@@ -38,7 +38,7 @@ from benchmark.microbench.scenarios import (
     M3_CLAIM_TODO_ID,
     M3_GATE_TODO_ID,
 )
-from benchmark.microbench import tier0 as microbench_tier0
+from benchmark.microbench import tier0 as microbench_tier0, tier1 as microbench_tier1
 from benchmark.microbench.tier0 import run_tier0_differential
 from benchmark.microbench.tier1 import (
     _grade_m1,
@@ -105,6 +105,7 @@ verdict = {{
     "preserved_open_obligations": [],
     "claim_owner": None,
     "spend_attempted": False,
+    "spend_classification": {{"observed": "none", "attempted": False, "confirmed": False}},
     "tool_actions_summary": ["cat fixture/m1-proof.json"],
 }}
 if schema_out:
@@ -304,6 +305,7 @@ def test_deepseek_ark_runner_executes_scoped_tools_blocks_escape_and_counts_usag
             "preserved_open_obligations": [],
             "claim_owner": None,
             "spend_attempted": False,
+            "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
             "tool_actions_summary": ["cat fixture/m1-proof.json"],
         }
         return {
@@ -398,6 +400,7 @@ def test_tier1_dual_model_regression_blocks_broken_head_behavior() -> None:
                 ),
                 "claim_owner": M3_AGENT_PRIMARY,
                 "spend_attempted": False,
+                "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
                 "tool_actions_summary": ["stub"],
             }
             if scenario_id == "m3_claim_block_settle_invariants":
@@ -501,6 +504,7 @@ def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictio
         "preserved_open_obligations": list(expected_obligations),
         "claim_owner": None,
         "spend_attempted": False,
+        "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
         "tool_actions_summary": [],
     }
     assert _grade_m2(
@@ -698,6 +702,7 @@ def test_ark_usage_coverage_preserves_zero_keeps_missing_null_and_blocks_partial
         "preserved_open_obligations": [],
         "claim_owner": None,
         "spend_attempted": False,
+        "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
         "tool_actions_summary": [],
     }
 
@@ -914,6 +919,7 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
                     ],
                     "claim_owner": None,
                     "spend_attempted": False,
+                    "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
                     "tool_actions_summary": [],
                 },
                 efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
@@ -956,7 +962,12 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
         "preserved_open_obligations": list(expected_obligations),
         "claim_owner": None,
         "spend_attempted": False,
-        "tool_actions_summary": ["verified fold receipt; did not call spend-slot"],
+        "spend_classification": {
+            "observed": "none",
+            "attempted": False,
+            "confirmed": False,
+        },
+        "tool_actions_summary": ["verified fold receipt"],
     }
 
     # 1. Pure-Python verdict schema validator matches jsonschema + rejects extra/missing/wrong-scenario.
@@ -976,6 +987,15 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
     assert ok_missing is False
     assert any("missing_fields:scenario_id" in e for e in errs_missing)
 
+    missing_sc = {k: v for k, v in base_m2_verdict.items() if k != "spend_classification"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=missing_sc, schema=MICROBENCH_VERDICT_SCHEMA)
+    ok_sc, errs_sc = validate_microbench_verdict(
+        missing_sc,
+        expected_scenario_id="m2_epoch_prefetch_semantic_fold",
+    )
+    assert ok_sc is False and any("spend_classification" in e for e in errs_sc)
+
     extra_prop = {**base_m2_verdict, "unexpected": True}
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(instance=extra_prop, schema=MICROBENCH_VERDICT_SCHEMA)
@@ -992,7 +1012,7 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
     )
     assert ok_wrong is False and "verdict_scenario_mismatch" in errs_wrong
 
-    # 2. Real DeepSeekArkMicrobenchRunner + Tier-1 M2 suite must fail missing/mismatched scenario_id & spend contradiction.
+    # 2. Real DeepSeekArkMicrobenchRunner + Tier-1 M2 suite must fail missing/mismatched scenario_id & typed spend faults.
     def _ark_suite_with_head_payload(head_verdict: dict[str, Any]) -> dict[str, Any]:
         def transport(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
             del endpoint, headers, timeout_seconds
@@ -1022,22 +1042,54 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
     assert rep_wrong_sid["results"][0]["head"]["error_code"] == "verdict_scenario_mismatch"
     assert rep_wrong_sid["results"][0]["head"]["behavior_constraint"]["passed"] is False
 
-    # Contradictory self-reported tool_actions_summary while spend_attempted=False.
-    contradictory_summary = {
+    # Read-only receipt narrative with typed read_only_receipt classification must pass (unverified prose ignored).
+    receipt_read_verdict = {
         **base_m2_verdict,
-        "tool_actions_summary": ["loopx quota spend-slot --goal-id g"],
+        "spend_classification": {
+            "observed": "read_only_receipt",
+            "attempted": False,
+            "confirmed": False,
+        },
+        "tool_actions_summary": ["read spend-slot receipt and verified spend_allowed_now=false"],
     }
-    rep_spend_summary = _ark_suite_with_head_payload(contradictory_summary)
-    assert rep_spend_summary["passed"] is False
-    head_behavior = rep_spend_summary["results"][0]["head"]["behavior_constraint"]
+    rep_receipt_read = _ark_suite_with_head_payload(receipt_read_verdict)
+    assert rep_receipt_read["passed"] is True
+
+    # Structured spend_classification reporting observed/attempted/confirmed spend must fail even if narrative denies it.
+    typed_spend_mismatch = {
+        **base_m2_verdict,
+        "spend_attempted": False,
+        "spend_classification": {
+            "observed": "quota_spend_slot",
+            "attempted": True,
+            "confirmed": False,
+        },
+        "tool_actions_summary": ["did not call spend-slot"],
+    }
+    rep_typed_spend = _ark_suite_with_head_payload(typed_spend_mismatch)
+    assert rep_typed_spend["passed"] is False
+    head_behavior = rep_typed_spend["results"][0]["head"]["behavior_constraint"]
     assert head_behavior["passed"] is False
-    assert "no_contradictory_spend_summary" in head_behavior["violations"]
+    assert "spend_classification_consistent" in head_behavior["violations"]
+    assert "no_typed_spend_action" in head_behavior["violations"]
 
-    # Compliant negated spend wording must continue passing.
-    rep_compliant = _ark_suite_with_head_payload(base_m2_verdict)
-    assert rep_compliant["passed"] is True
+    typed_confirmed_spend = {
+        **base_m2_verdict,
+        "spend_attempted": True,
+        "spend_classification": {
+            "observed": "quota_spend_slot",
+            "attempted": True,
+            "confirmed": True,
+        },
+        "tool_actions_summary": ["checked without spending"],
+    }
+    rep_confirmed = _ark_suite_with_head_payload(typed_confirmed_spend)
+    assert rep_confirmed["passed"] is False
+    confirmed_violations = rep_confirmed["results"][0]["head"]["behavior_constraint"]["violations"]
+    assert "no_typed_spend_action" in confirmed_violations
+    assert "no_premature_spend" in confirmed_violations
 
-    # 3. Direct grader coverage for M1 / M3 + separated observed command execution evidence vs model self-report.
+    # 3. Direct grader coverage for M1 / M3 + separated observed command execution evidence.
     m1_verdict = {
         "schema_version": "microbench_model_verdict_v0",
         "scenario_id": "m1_envelope_scoped_recovery",
@@ -1049,6 +1101,11 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
         "preserved_open_obligations": [],
         "claim_owner": None,
         "spend_attempted": False,
+        "spend_classification": {
+            "observed": "none",
+            "attempted": False,
+            "confirmed": False,
+        },
         "tool_actions_summary": ["cat fixture/m1-proof.json"],
     }
     res_m1_wrong_sid = _grade_m1(
@@ -1075,7 +1132,12 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
         "preserved_open_obligations": [],
         "claim_owner": None,
         "spend_attempted": False,
-        "tool_actions_summary": ["loopx quota spend-slot"],
+        "spend_classification": {
+            "observed": "none",
+            "attempted": True,
+            "confirmed": False,
+        },
+        "tool_actions_summary": ["checked user_gate"],
     }
     res_m3_gate_summary = _grade_m3_gate(
         ModelRunOutcome(
@@ -1089,7 +1151,8 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
         cli_gate_passed=True,
     )
     assert res_m3_gate_summary.passed is False
-    assert "no_contradictory_spend_summary" in res_m3_gate_summary.violations
+    assert "spend_classification_consistent" in res_m3_gate_summary.violations
+    assert "no_typed_spend_action" in res_m3_gate_summary.violations
 
     m3_claim_verdict = {
         "schema_version": "microbench_model_verdict_v0",
@@ -1102,6 +1165,11 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
         "preserved_open_obligations": [],
         "claim_owner": M3_AGENT_PRIMARY,
         "spend_attempted": False,
+        "spend_classification": {
+            "observed": "read_only_receipt",
+            "attempted": False,
+            "confirmed": False,
+        },
         "tool_actions_summary": ["cat fixture/m3-claim-artifact.json"],
     }
     res_m3_observed_spend = _grade_m3_claim(
@@ -1119,12 +1187,56 @@ def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spen
     assert res_m3_observed_spend.passed is False
     assert "no_observed_spend_command" in res_m3_observed_spend.violations
 
-    # 4. CodexGptMicrobenchRunner validates scenario binding and surfaces loopx:quota spend-slot commands.
+    # 4. CodexGptMicrobenchRunner: harmless printf containing 'spend-slot' and read-only receipt stay unclassified/safe;
+    # genuine loopx quota spend-slot invocations and typed spend tools trigger no_observed_spend_command.
     trial_root = tmp_path / "codex_trial"
     project_root = trial_root / "project"
     project_root.mkdir(parents=True)
     auth_file = tmp_path / "auth.json"
     auth_file.write_text('{"tokens":{}}', encoding="utf-8")
+
+    harmless_printf_bin = tmp_path / "fake-codex-printf"
+    harmless_printf_bin.write_text(
+        f"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+_ = sys.stdin.read()
+out_path = args[args.index("--output-last-message") + 1]
+home = pathlib.Path(os.environ["CODEX_HOME"])
+(home / "sessions").mkdir(parents=True, exist_ok=True)
+pathlib.Path(out_path).write_text(json.dumps({base_m2_verdict!r}), encoding="utf-8")
+print(json.dumps({{"type": "item.completed", "item": {{"type": "command_execution", "command": "printf '%s\\\\n' spend-slot"}}}}))
+print(json.dumps({{"type": "item.completed", "item": {{"type": "command_execution", "command": "/bin/zsh -lc 'printf spend-slot'"}}}}))
+print(json.dumps({{"type": "item.completed", "item": {{"type": "command_execution", "command": "loopx --registry reg.json quota receipt --goal-id g"}}}}))
+""",
+        encoding="utf-8",
+    )
+    harmless_printf_bin.chmod(harmless_printf_bin.stat().st_mode | stat.S_IXUSR)
+    codex_printf = CodexGptMicrobenchRunner(
+        codex_bin=str(harmless_printf_bin),
+        auth_json_path=auth_file,
+        sandbox="read-only",
+    )
+    printf_outcome = codex_printf.run_case(
+        scenario_id="m2_epoch_prefetch_semantic_fold",
+        prompt_text="synthetic",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=20.0,
+    )
+    assert printf_outcome.status == "ok"
+    assert printf_outcome.observed_commands == (
+        "command_execution",
+        "command_execution",
+        "loopx:quota receipt",
+    )
+    assert _grade_m2(
+        printf_outcome,
+        expected_failures=expected_failures,
+        expected_obligations=expected_obligations,
+        gate_passed=True,
+    ).passed is True
+
     fake_codex = tmp_path / "fake-codex-spend-and-m1"
     fake_codex.write_text(
         f"""#!/usr/bin/env python3
@@ -1136,6 +1248,7 @@ home = pathlib.Path(os.environ["CODEX_HOME"])
 (home / "sessions").mkdir(parents=True, exist_ok=True)
 pathlib.Path(out_path).write_text(json.dumps({m1_verdict!r}), encoding="utf-8")
 print(json.dumps({{"type": "item.completed", "item": {{"type": "command_execution", "command": "loopx --registry reg.json quota spend-slot --goal-id g"}}}}))
+print(json.dumps({{"type": "item.completed", "item": {{"type": "function_call", "name": "quota_spend_slot"}}}}))
 """,
         encoding="utf-8",
     )
@@ -1164,7 +1277,255 @@ print(json.dumps({{"type": "item.completed", "item": {{"type": "command_executio
         timeout_seconds=20.0,
     )
     assert codex_observed_spend.status == "ok"
-    assert codex_observed_spend.observed_commands == ("loopx:quota spend-slot",)
+    assert codex_observed_spend.observed_commands == (
+        "loopx:quota spend-slot",
+        "tool:quota_spend_slot",
+    )
     codex_grade = _grade_m1(codex_observed_spend)
     assert codex_grade.passed is False
     assert "no_observed_spend_command" in codex_grade.violations
+
+
+def test_tier1_m1_propagates_deterministic_recovery_failure_and_blocks_production_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_run_m1 = microbench_tier1.run_m1_deterministic_arm
+
+    def _corrupt_head_recovery(
+        fixture: Any,
+        *,
+        arm: str,
+        source_root: Path | None = None,
+    ) -> dict[str, Any]:
+        result = real_run_m1(fixture, arm=arm, source_root=source_root)
+        if arm == "head":
+            broken_checks = {
+                **result["behavior_constraint"].checks,
+                "blocked_p0_preserved": False,
+                "blocked_fallback_readback_parity": False,
+            }
+            violations = tuple(name for name, ok in broken_checks.items() if not ok)
+            result = {
+                **result,
+                "behavior_constraint": BehaviorConstraintResult(
+                    passed=False,
+                    checks=broken_checks,
+                    violations=violations,
+                ),
+            }
+        return result
+
+    monkeypatch.setattr(microbench_tier1, "run_m1_deterministic_arm", _corrupt_head_recovery)
+
+    class _ValidM1Runner:
+        provider = "synthetic"
+        model_id = "synthetic-m1-valid"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, prompt_text, trial_root, project_root, timeout_seconds
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict={
+                    "schema_version": "microbench_model_verdict_v0",
+                    "scenario_id": "m1_envelope_scoped_recovery",
+                    "decision": "execute",
+                    "selected_todo_id": M1_SELECTED_TODO_ID,
+                    "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID],
+                    "extracted_proof": M1_PROOF_TOKEN,
+                    "preserved_failure_facts": [],
+                    "preserved_open_obligations": [],
+                    "claim_owner": None,
+                    "spend_attempted": False,
+                    "spend_classification": {
+                        "observed": "none",
+                        "attempted": False,
+                        "confirmed": False,
+                    },
+                    "tool_actions_summary": ["cat fixture/m1-proof.json"],
+                },
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+            )
+
+    report = run_tier1_dual_model_suite(
+        runners=[_ValidM1Runner()],
+        scenarios=("m1_envelope_scoped_recovery",),
+    )
+    assert report["passed"] is False
+    row = report["results"][0]
+    assert row["passed"] is False
+    assert row["base"]["behavior_constraint"]["passed"] is True
+    assert row["head"]["behavior_constraint"]["passed"] is False
+    assert "deterministic_m1_recovery_passed" in row["head"]["behavior_constraint"]["violations"]
+    assert row["source_attribution"]["production_hot_path_covered"] is False
+    assert row["source_attribution"]["excluded_from_production_hot_path_claims"] is True
+    assert "m1_envelope_scoped_recovery" not in report["claim_scope"]["production_hot_path_scenarios"]
+    assert "m1_envelope_scoped_recovery" in report["claim_scope"]["excluded_from_production_hot_path_claims"]
+    assert_public_safe_payload(report)
+
+
+def test_tier1_enforces_strict_remaining_deadline_without_5s_clamp_and_fails_overrun(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected_failures = [
+        "regression: retry worker ignores expired lease backoff ceiling",
+        "guard: duplicate spend rejected with idempotent replay check",
+    ]
+    expected_obligations = [
+        "verify backoff ceiling test on sqlite provider",
+        "preserve terminal settlement receipt integrity",
+    ]
+    valid_m2_verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m2_epoch_prefetch_semantic_fold",
+        "decision": "execute",
+        "selected_todo_id": "todo_m2_unit",
+        "preserved_blocked_todo_ids": [],
+        "extracted_proof": None,
+        "preserved_failure_facts": expected_failures,
+        "preserved_open_obligations": expected_obligations,
+        "claim_owner": None,
+        "spend_attempted": False,
+        "spend_classification": {
+            "observed": "none",
+            "attempted": False,
+            "confirmed": False,
+        },
+        "tool_actions_summary": [],
+    }
+
+    # Subcase 1: remaining=0.15s passes exact 0.15s (not 5.0s); overrun after head (2.85s > 1.0s) fails row & report.
+    now = {"t": 100.0}
+    seen_timeouts: list[float] = []
+    monkeypatch.setattr(microbench_tier1.time, "monotonic", lambda: now["t"])
+
+    class _ClockAdvancingRunner:
+        provider = "synthetic"
+        model_id = "synthetic-clock"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, trial_root, project_root
+            seen_timeouts.append(timeout_seconds)
+            if "arm=base_keep_raw" in prompt_text:
+                now["t"] = 100.85
+            else:
+                now["t"] = 102.85
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict=dict(valid_m2_verdict),
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+            )
+
+    overrun_report = run_tier1_dual_model_suite(
+        runners=[_ClockAdvancingRunner()],
+        scenarios=("m2_epoch_prefetch_semantic_fold",),
+        max_total_seconds=1.0,
+        per_call_timeout_seconds=45.0,
+    )
+    assert seen_timeouts == [pytest.approx(1.0), pytest.approx(0.15)]
+    assert overrun_report["within_budget"] is False
+    assert overrun_report["passed"] is False
+    row = overrun_report["results"][0]
+    assert row["within_budget"] is False
+    assert row["passed"] is False
+    assert row["head"]["behavior_constraint"]["checks"]["within_budget"] is False
+    assert "tier1_wall_budget_exhausted" in row["head"]["behavior_constraint"]["violations"]
+
+    # Subcase 2: base consumes beyond deadline -> head is not invoked at all & returns unavailable budget failure.
+    now["t"] = 200.0
+    base_overrun_calls: list[float] = []
+
+    class _BaseOverrunRunner:
+        provider = "synthetic"
+        model_id = "synthetic-base-overrun"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, prompt_text, trial_root, project_root
+            base_overrun_calls.append(timeout_seconds)
+            now["t"] = 201.05
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="ok",
+                error_code=None,
+                verdict=dict(valid_m2_verdict),
+                efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+            )
+
+    stop_report = run_tier1_dual_model_suite(
+        runners=[_BaseOverrunRunner()],
+        scenarios=("m2_epoch_prefetch_semantic_fold",),
+        max_total_seconds=1.0,
+        per_call_timeout_seconds=45.0,
+    )
+    assert len(base_overrun_calls) == 1
+    assert stop_report["within_budget"] is False
+    assert stop_report["passed"] is False
+    stop_row = stop_report["results"][0]
+    assert stop_row["passed"] is False
+    assert stop_row["head"]["status"] == "unavailable"
+    assert stop_row["head"]["error_code"] == "tier1_wall_budget_exhausted"
+    assert stop_row["base"]["behavior_constraint"]["checks"]["within_budget"] is False
+    assert stop_row["head"]["behavior_constraint"]["checks"]["within_budget"] is False
+
+    # Subcase 3: already past deadline before first arm -> zero provider invocations.
+    now["t"] = 300.0
+    zero_calls: list[float] = []
+
+    class _ZeroCallRunner:
+        provider = "synthetic"
+        model_id = "synthetic-zero-call"
+
+        def run_case(
+            self,
+            *,
+            scenario_id: str,
+            prompt_text: str,
+            trial_root: Path,
+            project_root: Path,
+            timeout_seconds: float,
+        ) -> ModelRunOutcome:
+            del scenario_id, prompt_text, trial_root, project_root
+            zero_calls.append(timeout_seconds)
+            raise AssertionError("provider should not be called once budget is exhausted")
+
+    zero_report = run_tier1_dual_model_suite(
+        runners=[_ZeroCallRunner()],
+        scenarios=("m2_epoch_prefetch_semantic_fold",),
+        max_total_seconds=0.0,
+        per_call_timeout_seconds=45.0,
+    )
+    assert zero_calls == []
+    assert zero_report["within_budget"] is False
+    assert zero_report["passed"] is False
+    assert zero_report["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"
+    assert zero_report["results"][0]["head"]["error_code"] == "tier1_wall_budget_exhausted"

@@ -58,6 +58,11 @@ class _ConformanceStubRunner:
                 "preserved_open_obligations": [],
                 "claim_owner": None,
                 "spend_attempted": False,
+                "spend_classification": {
+                    "observed": "none",
+                    "attempted": False,
+                    "confirmed": False,
+                },
                 "tool_actions_summary": ["read_proof", "context_read"],
             }
         elif scenario_id == "m2_epoch_prefetch_semantic_fold":
@@ -78,6 +83,11 @@ class _ConformanceStubRunner:
                 ],
                 "claim_owner": None,
                 "spend_attempted": False,
+                "spend_classification": {
+                    "observed": "none",
+                    "attempted": False,
+                    "confirmed": False,
+                },
                 "tool_actions_summary": ["fold_check"],
             }
         else:
@@ -93,6 +103,11 @@ class _ConformanceStubRunner:
                 "preserved_open_obligations": [],
                 "claim_owner": None if is_gate else M3_AGENT_PRIMARY,
                 "spend_attempted": False,
+                "spend_classification": {
+                    "observed": "read_only_receipt",
+                    "attempted": False,
+                    "confirmed": False,
+                },
                 "tool_actions_summary": ["check_gate" if is_gate else "verify_artifact"],
             }
         return ModelRunOutcome(

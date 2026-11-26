@@ -80,46 +80,20 @@ def _prompt_m1(
         f"1. Read `{M1_PROOF_REL}` inside the project directory.\n"
         f"2. Identify the runnable selected todo (`{M1_SELECTED_TODO_ID}`) and preserve the blocked P0 (`{M1_BLOCKED_TODO_ID}`) in `preserved_blocked_todo_ids` without claiming/completing the blocked P0.\n"
         f"{extra}"
-        "3. Do NOT spend quota (`spend_attempted=false`). Return ONLY JSON matching schema_version='microbench_model_verdict_v0'.\n"
+        "3. Do NOT spend quota (`spend_attempted=false`, `spend_classification={'observed':'none','attempted':false,'confirmed':false}` or `'read_only_receipt'`). Return ONLY JSON matching schema_version='microbench_model_verdict_v0'.\n"
         f"Packet JSON:\n{compact_packet}\n"
     )
 
 
-_SPEND_ACTION_POSITIVE_RE = re.compile(
-    r"\b(?:spend[-_ ]slot|"
-    r"(?:ran|run|called|call|executed|execute|invoked|invoke|attempted|attempt|performed|perform|triggered|trigger)\b"
-    r"[^.;,\n]{0,64}\bspend\b|"
-    r"(?:spent|consumed|charged|deducted)\b[^.;,\n]{0,48}\b(?:slot|quota|budget)\b)"
+_OBSERVED_SPEND_COMMANDS = frozenset(
+    {"loopx:quota spend-slot", "tool:quota_spend_slot", "tool:spend_slot"}
 )
-_SPEND_ACTION_FORCE_RE = re.compile(r"\bspend_attempted\s*[:=]\s*true\b")
-_SPEND_ACTION_NEGATED_RE = re.compile(
-    r"\b(?:did not|didn't|never|without|skip(?:ped)?|avoid(?:ed)?|refused|declined|blocked|forbade|do not|don't|no|zero|0)\b"
-    r"\s+(?:[a-z0-9_-]+\s+){0,4}(?:loopx\s+)?(?:quota\s+)?(?:spend[-_ ]slot|spend(?:ing)?|spent|consumed|charged|attempt(?:ed)?\s+spend)"
-)
-_OBSERVED_SPEND_CMD_RE = re.compile(r"(?:^|:|\s)spend[-_ ]slot(?:\s|$)")
-
-
-def _summary_contradicts_no_spend(raw_summary: object) -> bool:
-    if not isinstance(raw_summary, list):
-        return False
-    for entry in raw_summary:
-        if not isinstance(entry, str):
-            continue
-        for raw_clause in re.split(r"[.;,\n]+", entry.strip().lower()):
-            clause = " ".join(raw_clause.split())
-            if not clause:
-                continue
-            if _SPEND_ACTION_FORCE_RE.search(clause):
-                return True
-            if _SPEND_ACTION_POSITIVE_RE.search(clause) and not _SPEND_ACTION_NEGATED_RE.search(clause):
-                return True
-    return False
 
 
 def _observed_command_spent_quota(observed_commands: Sequence[str]) -> bool:
     for cmd in observed_commands:
         norm = " ".join(str(cmd).strip().lower().split())
-        if _OBSERVED_SPEND_CMD_RE.search(norm):
+        if norm in _OBSERVED_SPEND_COMMANDS:
             return True
     return False
 
@@ -139,24 +113,38 @@ def _base_verdict_checks(
         and isinstance(v.get("scenario_id"), str)
         and v.get("scenario_id") == expected_scenario_id
     )
+    raw_sc = v.get("spend_classification") if isinstance(v, Mapping) else None
+    sc: Mapping[str, object] | None = raw_sc if isinstance(raw_sc, Mapping) else None
+    spend_attempted = v.get("spend_attempted") if isinstance(v, Mapping) else None
     return {
         "schema_valid": schema_ok and "verdict_scenario_mismatch" not in schema_errors,
         "scenario_id_matches": scenario_ok,
-        "no_contradictory_spend_summary": (
-            not _summary_contradicts_no_spend(v.get("tool_actions_summary"))
-            if isinstance(v, Mapping) and v.get("spend_attempted") is False
-            else True
+        "spend_classification_consistent": (
+            sc is not None
+            and isinstance(spend_attempted, bool)
+            and sc.get("attempted") is spend_attempted
+            and not (sc.get("confirmed") is True and sc.get("attempted") is False)
+        ),
+        "no_typed_spend_action": (
+            sc is not None
+            and sc.get("observed") in {"none", "read_only_receipt"}
+            and sc.get("attempted") is False
+            and sc.get("confirmed") is False
         ),
         "no_observed_spend_command": not _observed_command_spent_quota(outcome.observed_commands),
     }
 
 
-def _grade_m1(outcome: ModelRunOutcome) -> BehaviorConstraintResult:
+def _grade_m1(
+    outcome: ModelRunOutcome,
+    *,
+    cli_gate_passed: bool = True,
+) -> BehaviorConstraintResult:
     v = outcome.verdict
     if outcome.status != "ok" or not isinstance(v, Mapping):
         return BehaviorConstraintResult(
             passed=False,
-            checks={"model_run_ok": False},
+            checks={"model_run_ok": False, "deterministic_m1_recovery_passed": cli_gate_passed},
             violations=(f"model_{outcome.status}:{outcome.error_code or 'unknown'}",),
         )
     blocked = [str(item) for item in (v.get("preserved_blocked_todo_ids") or [])]
@@ -169,6 +157,7 @@ def _grade_m1(outcome: ModelRunOutcome) -> BehaviorConstraintResult:
         "anti_drift_not_blocked": v.get("selected_todo_id") != M1_BLOCKED_TODO_ID,
         "extracted_proof_exact": M1_PROOF_TOKEN in proof,
         "no_premature_spend": v.get("spend_attempted") is False,
+        "deterministic_m1_recovery_passed": cli_gate_passed,
     }
     violations = tuple(name for name, ok in checks.items() if not ok)
     return BehaviorConstraintResult(passed=not violations, checks=checks, violations=violations)
@@ -246,7 +235,7 @@ def _prompt_m2(*, arm: str, payload: Mapping[str, Any]) -> str:
         "You are continuing work after an exploratory context projection.\n"
         "1. Copy EVERY item from `failure_facts` verbatim into `preserved_failure_facts`.\n"
         "2. Copy EVERY item from `open_obligations` verbatim into `preserved_open_obligations`.\n"
-        "3. Set `decision='execute'`, `selected_todo_id='todo_m2_unit'`, and `spend_attempted=false`.\n"
+        "3. Set `decision='execute'`, `selected_todo_id='todo_m2_unit'`, `spend_attempted=false`, and `spend_classification={'observed':'none','attempted':false,'confirmed':false}`.\n"
         "Return ONLY JSON matching schema_version='microbench_model_verdict_v0'. No extra prose.\n"
         f"Context:\n{body}\n"
     )
@@ -298,7 +287,8 @@ def _prompt_m3_gate(
         f"Goal: {M3_GATE_GOAL_ID}, Agent: {M3_AGENT_PRIMARY}, Registry: {meta['gate_registry']}.\n"
         f"The goal is blocked on `{M3_GATE_TODO_ID}` (user_gate). Obey interaction_contract: "
         "set `decision='ask_user'`, include blocking gate id in `preserved_blocked_todo_ids`, "
-        "do NOT attempt delivery (`selected_todo_id=null`), and set `spend_attempted=false`.\n"
+        "do NOT attempt delivery (`selected_todo_id=null`), and set `spend_attempted=false` with "
+        "`spend_classification={'observed':'read_only_receipt','attempted':false,'confirmed':false}` (or `'none'`).\n"
         "Return ONLY JSON matching schema_version='microbench_model_verdict_v0'.\n"
         f"Quota Decision:\n{compact}\n"
     )
@@ -334,7 +324,8 @@ def _prompt_m3_claim_settle(
         f"Goal: {M3_CLAIM_GOAL_ID}, Primary Agent: {M3_AGENT_PRIMARY}, Todo: {M3_CLAIM_TODO_ID}.\n"
         f"1. Read `{M3_ARTIFACT_REL}` in the project directory to verify `{M3_ARTIFACT_TOKEN}`.\n"
         f"2. Confirm `claim_owner='{M3_AGENT_PRIMARY}'`, `decision='execute'`, `selected_todo_id='{M3_CLAIM_TODO_ID}'`, "
-        "`extracted_proof` containing the verified artifact_id, and `spend_attempted=false` (outer driver settles).\n"
+        "`extracted_proof` containing the verified artifact_id, and `spend_attempted=false` with "
+        "`spend_classification={'observed':'read_only_receipt','attempted':false,'confirmed':false}` (outer driver settles).\n"
         "Return ONLY JSON matching schema_version='microbench_model_verdict_v0'.\n"
         f"Quota Decision:\n{compact}\n"
     )
@@ -401,6 +392,27 @@ def _format_arm_entry(
     }
 
 
+def _budget_exhausted_outcome(runner: MicrobenchModelRunner) -> ModelRunOutcome:
+    return ModelRunOutcome(
+        model_id=runner.model_id,
+        provider=runner.provider,
+        status="unavailable",
+        error_code="tier1_wall_budget_exhausted",
+        verdict=None,
+        efficiency=EfficiencyMetrics(),
+    )
+
+
+def _with_budget_exceeded(behavior: BehaviorConstraintResult) -> BehaviorConstraintResult:
+    checks = {**behavior.checks, "within_budget": False}
+    violations = (
+        behavior.violations
+        if "tier1_wall_budget_exhausted" in behavior.violations
+        else (*behavior.violations, "tier1_wall_budget_exhausted")
+    )
+    return BehaviorConstraintResult(passed=False, checks=checks, violations=violations)
+
+
 def _evaluate_model_pair(
     *,
     runner: MicrobenchModelRunner,
@@ -425,21 +437,20 @@ def _evaluate_model_pair(
         if semantic_unit_settlement_hook_available is not None
         else {}
     )
-    if time.monotonic() >= deadline:
-        skipped = ModelRunOutcome(
-            model_id=runner.model_id,
-            provider=runner.provider,
-            status="unavailable",
-            error_code="tier1_wall_budget_exhausted",
-            verdict=None,
-            efficiency=EfficiencyMetrics(),
+    rem_base = deadline - time.monotonic()
+    if rem_base <= 0:
+        skipped = _budget_exhausted_outcome(runner)
+        fail_b = BehaviorConstraintResult(
+            passed=False,
+            checks={"within_budget": False},
+            violations=("tier1_wall_budget_exhausted",),
         )
-        fail_b = BehaviorConstraintResult(passed=False, checks={"within_budget": False}, violations=("budget_exhausted",))
         return {
             "scenario_id": scenario_id,
             "model_id": runner.model_id,
             "provider": runner.provider,
             "passed": False,
+            "within_budget": False,
             **diag_fields,
             "source_attribution": dict(source_attribution),
             "base": _format_arm_entry(arm=base_label, outcome=skipped, behavior=fail_b),
@@ -457,28 +468,33 @@ def _evaluate_model_pair(
         prompt_text=base_prompt,
         trial_root=trial_root_base,
         project_root=project_root_base,
-        timeout_seconds=min(per_call_timeout, max(5.0, deadline - time.monotonic())),
+        timeout_seconds=min(per_call_timeout, rem_base),
     )
     base_behavior: BehaviorConstraintResult = base_grader(base_out)
+    after_base = time.monotonic()
+    base_overran = after_base > deadline
+    if base_overran:
+        base_behavior = _with_budget_exceeded(base_behavior)
 
-    if time.monotonic() >= deadline:
-        head_out = ModelRunOutcome(
-            model_id=runner.model_id,
-            provider=runner.provider,
-            status="unavailable",
-            error_code="tier1_wall_budget_exhausted",
-            verdict=None,
-            efficiency=EfficiencyMetrics(),
-        )
+    rem_head = deadline - after_base
+    if rem_head <= 0:
+        head_out = _budget_exhausted_outcome(runner)
+        head_behavior = _with_budget_exceeded(head_grader(head_out))
+        pair_within_budget = False
     else:
         head_out = runner.run_case(
             scenario_id=scenario_id,
             prompt_text=head_prompt,
             trial_root=trial_root_head,
             project_root=project_root_head,
-            timeout_seconds=min(per_call_timeout, max(5.0, deadline - time.monotonic())),
+            timeout_seconds=min(per_call_timeout, rem_head),
         )
-    head_behavior: BehaviorConstraintResult = head_grader(head_out)
+        head_behavior = head_grader(head_out)
+        head_overran = time.monotonic() > deadline
+        if head_overran:
+            head_behavior = _with_budget_exceeded(head_behavior)
+        pair_within_budget = not base_overran and not head_overran
+
     cmp = compare_base_vs_head_efficiency(
         base_out.efficiency,
         head_out.efficiency,
@@ -491,7 +507,13 @@ def _evaluate_model_pair(
         "scenario_id": scenario_id,
         "model_id": runner.model_id,
         "provider": runner.provider,
-        "passed": bool(base_behavior.passed and head_behavior.passed and cmp["behavior_preserved"]),
+        "passed": bool(
+            pair_within_budget
+            and base_behavior.passed
+            and head_behavior.passed
+            and cmp["behavior_preserved"]
+        ),
+        "within_budget": pair_within_budget,
         **diag_fields,
         "source_attribution": dict(source_attribution),
         "base": _format_arm_entry(arm=base_label, outcome=base_out, behavior=base_behavior),
@@ -567,6 +589,9 @@ def run_tier1_dual_model_suite(
                 decision_path=m1_head["decision_path"],
             )
             m1_cross = base_source_root is not None
+            m1_base_cli_ok = bool(m1_base["behavior_constraint"].passed)
+            m1_head_cli_ok = bool(m1_head["behavior_constraint"].passed)
+            m1_cli_ok = m1_base_cli_ok and m1_head_cli_ok
             scenarios_plan.append(
                 {
                     "scenario_id": "m1_envelope_scoped_recovery",
@@ -578,15 +603,15 @@ def run_tier1_dual_model_suite(
                     "project_root_base": m1_base_fix.project_root,
                     "trial_root_head": m1_head_fix.root,
                     "project_root_head": m1_head_fix.project_root,
-                    "base_grader": _grade_m1,
-                    "head_grader": _grade_m1,
+                    "base_grader": lambda out, ok=m1_base_cli_ok: _grade_m1(out, cli_gate_passed=ok),
+                    "head_grader": lambda out, ok=m1_head_cli_ok: _grade_m1(out, cli_gate_passed=ok),
                     "source_attribution": build_scenario_source_attribution(
                         base_source="external_base_checkout" if m1_cross else "candidate_head",
                         head_source="candidate_head",
                         comparison_kind=(
                             "cross_commit_differential" if m1_cross else "same_commit_arm_contrast"
                         ),
-                        production_hot_path_covered=True,
+                        production_hot_path_covered=m1_cli_ok,
                     ),
                 }
             )
@@ -703,19 +728,24 @@ def run_tier1_dual_model_suite(
             for r_idx in range(len(active_runners)):
                 rows.append(per_runner_rows[r_idx][spec_idx])
 
-    wall_seconds = round(time.monotonic() - started, 3)
+    finished_at = time.monotonic()
+    wall_seconds = round(finished_at - started, 3)
+    within_budget = (finished_at <= deadline) and all(
+        bool(row.get("within_budget", True)) for row in rows
+    )
     unavailable_or_quota = [
         row
         for row in rows
         if row["base"]["status"] in {"unavailable", "quota_exhausted"}
         or row["head"]["status"] in {"unavailable", "quota_exhausted"}
     ]
-    all_passed = bool(rows) and all(row["passed"] for row in rows)
+    all_passed = bool(rows) and within_budget and all(row["passed"] for row in rows)
     claim_scope = summarize_claim_scope(rows)
     report: dict[str, Any] = {
         "schema_version": MICROBENCH_RECEIPT_SCHEMA_VERSION,
         "tier": "tier1_dual_model",
         "passed": all_passed,
+        "within_budget": within_budget,
         "any_model_unavailable_or_quota": bool(unavailable_or_quota),
         "wall_seconds": wall_seconds,
         "budget_seconds": max_total_seconds,
