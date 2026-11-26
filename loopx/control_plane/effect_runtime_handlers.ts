@@ -392,6 +392,7 @@ export function createEffectRuntimeHandlers(
     ["quota.settlement.read", lazyHandler(() => import("./quota/settlement_readback.ts"), ({readQuotaSettlement}) => readQuotaSettlement)],
     ["quota.execution_loss_closeout.commit", lazyHandler(() => import("./quota/execution_loss_closeout.ts"), ({commitExecutionLossCloseout}) => commitExecutionLossCloseout)],
     ["quota.heartbeat_receipt.select", lazyHandler(() => import("./quota/heartbeat_receipt_identity.ts"), ({projectHeartbeatReceiptSelection}) => projectHeartbeatReceiptSelection)],
+    ["quota.semantic_replan_guard.validate", lazyHandler(() => import("./quota/semantic_replan_guard.ts"), ({validateSemanticReplanGuard}) => validateSemanticReplanGuard)],
     [
       "quota.prior_host_turn_closeout.preflight",
       lazyHandler(() => import("./quota/unsettled_host_turn_recovery.ts"), ({preflightPriorHostTurnCloseout}) => preflightPriorHostTurnCloseout),

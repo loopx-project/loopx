@@ -273,3 +273,32 @@ test("explicit Host retry is registered and requires a valid typed failure and i
     await assert.rejects(dispatchEffectRuntimeMethod(handlers, "host_failure.retry", params));
   }
 });
+
+test("runtime validates semantic replan guard stop clauses using UTF-16 code units", async () => {
+  const validBoundary = await dispatchEffectRuntimeMethod(
+    handlers,
+    "quota.semantic_replan_guard.validate",
+    {
+      details: {
+        semantic_replan_obligation_id: "replan-2222222222222222",
+        semantic_replan_review_kind: "goal_outcome_uncovered",
+        semantic_replan_review_stop_condition: "\u{20000}".repeat(120),
+      },
+    },
+  ) as Record<string, unknown>;
+  assert.equal(validBoundary.valid, true);
+
+  const rejectedBoundary = await dispatchEffectRuntimeMethod(
+    handlers,
+    "quota.semantic_replan_guard.validate",
+    {
+      details: {
+        semantic_replan_obligation_id: "replan-2222222222222222",
+        semantic_replan_review_kind: "goal_outcome_uncovered",
+        semantic_replan_review_stop_condition: "\u{20000}".repeat(121),
+      },
+    },
+  ) as Record<string, unknown>;
+  assert.equal(rejectedBoundary.valid, false);
+  assert.equal(rejectedBoundary.diagnostic_code, "malformed_settlement_state");
+});
