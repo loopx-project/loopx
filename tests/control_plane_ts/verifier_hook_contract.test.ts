@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import {createHash} from "node:crypto";
-import {mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 
@@ -161,12 +161,45 @@ test("readable evidence must match the recorded role, reference and exact work s
   })), { action: "KeepRaw" });
 });
 
-test("files missing from the receipt or evidence reader preserve the raw child scope", async (t) => {
+test("files missing, unreadable or wrong-kind at receipt or evidence readers preserve raw scope", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "loopx-verifier-hook-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const readMissingFile = (): never => {
-    readFileSync(join(directory, "unavailable.json"), "utf8");
-    return assert.fail("the verifier fixture unexpectedly found an unavailable file");
+  const protectedPaths: string[] = [];
+  t.after(() => {
+    for (const target of protectedPaths) {
+      try {
+        chmodSync(target, 0o600);
+      } catch {
+        // Best-effort restore before directory cleanup.
+      }
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const readJsonFile = <T>(filePath: string): T => JSON.parse(readFileSync(filePath, "utf8")) as T;
+  const readMissingFile = (): never => readJsonFile(join(directory, "unavailable.json"));
+  const subDir = join(directory, "record-dir");
+  mkdirSync(subDir);
+  const regularFile = join(directory, "regular-file.txt");
+  writeFileSync(regularFile, "not-a-directory", "utf8");
+  const wrongKindParentPath = join(regularFile, "entry.json");
+  const lockedReceiptFile = join(directory, "locked-receipt.json");
+  const lockedEvidenceFile = join(directory, "locked-evidence.json");
+  writeFileSync(lockedReceiptFile, JSON.stringify(passed), "utf8");
+  writeFileSync(lockedEvidenceFile, JSON.stringify(evidence.get(passed.source_ref)), "utf8");
+
+  const runReadBackCounterfactual = (label: string, path: string): void => {
+    assert.deepEqual(recommendVerifiedClose(request, {
+      readReceipt: () => readJsonFile<VerifierScopeReceipt>(path),
+      readEvidence: () => assert.fail(`evidence read after receipt became unavailable (${label})`),
+    }), { action: "KeepRaw" }, `receipt ${label}`);
+    for (const ref of [passed.oracle_evidence_ref, passed.source_ref, passed.summary_ref]) {
+      assert.deepEqual(recommendVerifiedClose(request, authority(passed, key =>
+        key === ref ? readJsonFile<VerifiedScopeEvidence>(path) : evidence.get(key),
+      )), { action: "KeepRaw" }, `evidence ${ref} (${label})`);
+    }
+    const failed = { ...source, verdict: "failed", counterexample_ref: "oracle:counterexample" } as const;
+    assert.deepEqual(recommendVerifiedClose(request, authority(failed, key =>
+      key === "oracle:counterexample" ? readJsonFile<VerifiedScopeEvidence>(path) : evidence.get(key),
+    )), { action: "KeepRaw" }, `counterexample ${label}`);
   };
 
   await t.test("a missing receipt short-circuits all evidence reads", () => {
@@ -184,17 +217,74 @@ test("files missing from the receipt or evidence reader preserve the raw child s
     const failed = { ...source, verdict: "failed", counterexample_ref: "oracle:counterexample" } as const;
     assert.deepEqual(recommendVerifiedClose(request, authority(failed, readMissingFile)), { action: "KeepRaw" });
   });
+  await t.test("wrong-kind directory and non-directory paths (EISDIR / ENOTDIR) keep raw scope", () => {
+    runReadBackCounterfactual("EISDIR", subDir);
+    runReadBackCounterfactual("ENOTDIR", wrongKindParentPath);
+  });
+  await t.test("permission-denied receipt and evidence files (EACCES) keep raw scope while readable files fold", () => {
+    const readableOracle = join(directory, "ok-oracle.json");
+    const readableSource = join(directory, "ok-source.json");
+    const readableSummary = join(directory, "ok-summary.json");
+    writeFileSync(readableOracle, JSON.stringify(evidence.get(passed.oracle_evidence_ref)), "utf8");
+    writeFileSync(readableSource, JSON.stringify(evidence.get(passed.source_ref)), "utf8");
+    writeFileSync(readableSummary, JSON.stringify(evidence.get(passed.summary_ref)), "utf8");
+    const fileBackedMap = new Map([
+      [passed.oracle_evidence_ref, readableOracle],
+      [passed.source_ref, readableSource],
+      [passed.summary_ref, readableSummary],
+    ]);
+    assert.deepEqual(recommendVerifiedClose(request, {
+      readReceipt: () => readJsonFile<VerifierScopeReceipt>(lockedReceiptFile),
+      readEvidence: ref => {
+        const target = fileBackedMap.get(ref);
+        return target ? readJsonFile<VerifiedScopeEvidence>(target) : undefined;
+      },
+    }), {
+      action: "FoldToReceipt",
+      receipt_ref: "receipt:21",
+      source_ref: passed.source_ref,
+      summary_ref: passed.summary_ref,
+    });
+
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      t.skip("root bypasses POSIX chmod 0o000 EACCES restrictions");
+      return;
+    }
+    chmodSync(lockedReceiptFile, 0o000);
+    chmodSync(lockedEvidenceFile, 0o000);
+    protectedPaths.push(lockedReceiptFile, lockedEvidenceFile);
+    assert.throws(
+      () => readFileSync(lockedReceiptFile, "utf8"),
+      error => error instanceof Error && "code" in error && error.code === "EACCES",
+    );
+    runReadBackCounterfactual("EACCES-receipt", lockedReceiptFile);
+    runReadBackCounterfactual("EACCES-evidence", lockedEvidenceFile);
+  });
 });
 
-test("unexpected authority reader errors remain observable", () => {
-  const failure = new TypeError("invalid authority record");
-  const fail = (): never => { throw failure; };
-  const readers = [
-    { readReceipt: fail, readEvidence: () => assert.fail("evidence read after unexpected failure") },
-    authority(passed, fail),
-  ];
-  for (const reader of readers) {
-    assert.throws(() => recommendVerifiedClose(request, reader), error => error === failure);
+test("unexpected authority reader and parse errors remain observable", () => {
+  const directory = mkdtempSync(join(tmpdir(), "loopx-verifier-parse-"));
+  try {
+    const corruptFile = join(directory, "corrupt.json");
+    writeFileSync(corruptFile, "{invalid-json", "utf8");
+    const readCorrupt = (): never => JSON.parse(readFileSync(corruptFile, "utf8")) as never;
+    for (const reader of [
+      { readReceipt: readCorrupt, readEvidence: () => assert.fail("evidence read after parse failure") },
+      authority(passed, readCorrupt),
+    ]) {
+      assert.throws(() => recommendVerifiedClose(request, reader), error => error instanceof SyntaxError);
+    }
+
+    const failure = new TypeError("invalid authority record");
+    const fail = (): never => { throw failure; };
+    for (const reader of [
+      { readReceipt: fail, readEvidence: () => assert.fail("evidence read after unexpected failure") },
+      authority(passed, fail),
+    ]) {
+      assert.throws(() => recommendVerifiedClose(request, reader), error => error === failure);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

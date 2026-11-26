@@ -32,11 +32,20 @@ function matchesScope(expected: VerifiedScopeIdentity, observed?: VerifiedScopeI
   return observed != null && scopeIdentityFields.every(field => observed[field] === expected[field]);
 }
 
+const unavailableFsCodes = new Set(["ENOENT", "EACCES", "EPERM", "EISDIR", "ENOTDIR"]);
+
 function readAvailable<T>(read: () => T | undefined): T | undefined {
   try {
     return read();
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    if (
+      error instanceof Error
+      && "code" in error
+      && typeof error.code === "string"
+      && unavailableFsCodes.has(error.code)
+    ) {
+      return undefined;
+    }
     throw error;
   }
 }
