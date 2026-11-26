@@ -54,6 +54,13 @@ RFC or claim formal D2. This checkpoint starts no cohort, soak or promotion.
 The dated checkpoints below retain source-specific implementation and validation
 history; instructions to remove still-live writers describe those baselines.
 
+The bounded NoKV helper transport repair preserves complete JSON-lines replies
+when process exit precedes stdout drain. Existing requests finish from buffered
+replies; new requests to an exited helper are refused. Real subprocess tests
+cover read, CAS publication, typed open refusal and incomplete replies. This
+qualifies the source transport boundary, not a live NoKV SDK stack, installed
+adoption, provider promotion or D2/D3.
+
 ## Historical 1.x implementation context
 
 Dated records through 2026-10-12 follow; they retain their original source boundaries.
