@@ -62,23 +62,37 @@ without pretending that the repository is fully qualified.
 ### Local-First Premerge Gate vs. Asynchronous CI / 本地优先门禁与异步 CI
 
 Remote CI stays asynchronous safety coverage, not a mandatory serial bottleneck
-when local deterministic verification is already complete. When a managed Goal
-sets `pull_request_review.wait_for_ci=false`, callers pass `--registry` and
-`--goal-id GOAL` to `loopx pr-review` and `--check-merge-readiness`, resolving
-`ci_policy="not_consulted"` so local `pytest`/`ruff`/`mypy` checks,
-`loopx canary premerge --from-git-diff --git-diff-base "$PR_BASE_REF"`, and
-exact-head review complete merge readiness without waiting on or polling remote CI
-once local gates pass. `ci_policy="not_consulted"` separates CI waiting from
-merge and self-merge authority: it never authorizes merging or auto-self-merging
-ready PRs, and the default remains leaving PRs open for maintainer/owner
-authorization. Standalone or unconfigured callers keep the safe default
-`wait_for_ci=true`.
+when local deterministic verification is already complete. Agents and subagents
+must not wait on, poll, or block on remote GitHub Actions CI during development,
+exact-head `loopx pr-review`, or `--check-merge-readiness` once local verification
+passes. When a managed Goal sets `pull_request_review.wait_for_ci=false`, callers
+pass `--registry` and `--goal-id GOAL` to `loopx pr-review` and
+`--check-merge-readiness`, resolving `ci_policy="not_consulted"` so local
+`pytest`/`ruff`/`mypy`/TypeScript checks, `loopx canary premerge --from-git-diff
+--git-diff-base "$PR_BASE_REF"`, and exact-head review complete merge readiness
+without waiting on or polling remote CI once local gates pass. Remote CI follows
+a [two-tier cadence](ci-impact-selection.md): normal PRs run lightweight static,
+contract, and TypeScript checks (plus browser lanes only when UI/frontend files
+change), while heavyweight cross-OS, 6-shard Python/coverage, Node
+compatibility, Stage 2C, and release/package dry-run matrices run on Nightly
+`schedule`, `push` to `main`, `merge_group`, `workflow_dispatch`, CI
+policy/manifest edits, and `ci:full`. `ci_policy="not_consulted"` separates CI
+waiting from merge and self-merge authority: it never authorizes merging or
+auto-self-merging ready PRs, and the default remains leaving PRs open for
+maintainer/owner authorization. Standalone or unconfigured callers keep the safe
+default `wait_for_ci=true`.
 
-当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。对于配置了
+当本地确定性验证已完整通过时，远端 CI 作为异步安全兜底，而不应成为串行阻塞点。
+在本地验证通过后，Agent 与子 Agent 在开发、精确头 `loopx pr-review` 与
+`--check-merge-readiness` 期间禁止等待、轮询或阻塞在远端 GitHub Actions CI 上。对于配置了
 `pull_request_review.wait_for_ci=false` 的受管 Goal，调用 `loopx pr-review` 与
 `--check-merge-readiness` 时须显式传入 `--registry` 与 `--goal-id GOAL`（解析为
 `ci_policy="not_consulted"`），在本地测试、`loopx canary premerge` 与精确头评审等本地
-门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。`ci_policy="not_consulted"` 仅控制
+门禁通过后即可完成就绪判断，不再等待或轮询远端 CI。远端 CI 采用[双层分层](ci-impact-selection.md)：
+普通 PR 只跑轻量静态、契约与 TypeScript 检查（仅在改动 UI／前端路径时加跑浏览器检查），
+跨系统 Windows、6 分片全量 Python 与覆盖率、Node 兼容、Stage 2C 及发布／安装包干跑矩阵
+集中到夜间 `schedule`、合入 `main` 的 `push`、`merge_group`、`workflow_dispatch`、
+CI 策略／依赖清单改动与 `ci:full` 运行。`ci_policy="not_consulted"` 仅控制
 CI 等待策略，合入与自合并授权仍保持独立：它不会自动批准或触发自合并，默认仍保持 PR 开启等待
 维护者或所有者授权；未配置 Goal 的独立调用保持默认 `wait_for_ci=true`。
 
@@ -141,13 +155,20 @@ shell；不能因为过滤了 `CI` 就恢复采集。不能按系统、安装渠
 
 ### Required Merge Check / 必需合并检查
 
-`python-tests.yml` publishes `merge-gate` for every open pull request. Code,
-workflow, policy and unknown paths require the existing `pytest` aggregate
-(including TypeScript checks and all six Python shards), Stage 2C correctness
-aggregate, and Windows tests to succeed. Failed, cancelled, missing or
-unexpectedly skipped results cannot pass the gate. The client-only exception
-below retains common checks and substitutes packaged Dashboard qualification
-for unrelated backend jobs.
+`python-tests.yml` publishes `merge-gate` for every open pull request under a
+fail-closed two-tier plan. Normal backend PRs (`backend`) run fast static,
+contract, and TypeScript checks (`kernel-static-checks`, `kernel-contracts`,
+`typescript-core`, `typescript-coverage`) and require explicit skips for
+untriggered browser and heavyweight lanes. Mixed backend+UI PRs (`mixed`) add
+the browser qualification lanes (`chat-bundle-browser`, `dashboard-browser`,
+`dashboard-acceptance`, `presentation`). Pure client-UI PRs (`presentation`) run
+built frontend and browser checks without backend Python/TS matrices. Nightly
+`schedule`, `push` to `main`, `merge_group`, `workflow_dispatch`, `ci:full` PRs,
+and PRs changing CI policy, packaging, dependency manifests, symlinks, or
+unknown paths require full qualification across all lanes including 6-shard
+`pytest`, `node-minimum-compatibility`, `stage2c-correctness-e2e`, and
+`windows-powershell`. Failed, cancelled, missing or unexpectedly skipped results
+cannot pass the gate.
 
 For a change limited to allowlisted root Markdown or `docs/**/*.md`, the
 classifier explicitly skips the expensive core jobs and the aggregate checks
@@ -170,11 +191,18 @@ merge method `merge`. The trigger is inert until the live ruleset enables a
 merge queue. Enabling the queue, and then relaxing the up-to-date-branch
 requirement, is a ruleset decision for the lead maintainer.
 
-每个开放 PR 都会收到 `merge-gate` 结果。代码、工作流、治理规则和未知路径必须通过
-原有核心测试；失败、取消、缺失或意外跳过均不能通过。仅白名单根目录 Markdown
-或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时 prompt、可执行文档、代码删除
-及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用 owner bypass
-必须留下版本、原因、验证和已知失败的记录。
+每个开放 PR 都会收到按双层分级策略计算的 `merge-gate` 结果。普通后端 PR（`backend`）
+运行轻量快速的静态、契约与 TypeScript 检查（`kernel-static-checks`、`kernel-contracts`、
+`typescript-core`、`typescript-coverage`），并要求未触发的浏览器与重型矩阵保持显式跳过；
+同时改动后端与 UI 的混合 PR（`mixed`）加跑浏览器验收通道（`chat-bundle-browser`、
+`dashboard-browser`、`dashboard-acceptance`、`presentation`）；纯前端 PR（`presentation`）
+仅验证编译后的前端与浏览器检查。夜间 `schedule`、合入 `main` 的 `push`、`merge_group`、
+`workflow_dispatch`、带 `ci:full` 标签的 PR，以及修改 CI 策略、打包清单、依赖锁文件或未知
+路径的 PR 一律执行完整全量门禁（含 6 分片 `pytest`、`node-minimum-compatibility`、
+`stage2c-correctness-e2e` 与 `windows-powershell`）。任何必需项失败、取消、缺失或意外跳过
+均不能通过门禁。仅白名单根目录 Markdown 或 `docs/**/*.md` 的修改可显式跳过昂贵测试；运行时
+prompt、可执行文档、代码删除及代码移入文档均不享受豁免。实际启用状态以在线规则为准，使用
+owner bypass 必须留下版本、原因、验证和已知失败的记录。
 两个必需工作流同样响应 `merge_group`，合并队列可在合入 `main` 前验证确切候选；
 队列候选一律全量验证、不享受豁免。队列合并方式应设为 `merge`，因为 `Sign-off`
 只豁免已验证的 GitHub 双父合并提交。在线规则启用合并队列前该触发不生效；启用
@@ -240,14 +268,23 @@ CI Maintenance 清理任务处理 closed 与 synchronize 事件（更新规则�
 触发清理。清理需要一个短 runner 任务；这会释放过期
 容量。
 
-The [job exemption policy](ci-impact-selection.md) additionally permits pure
-Dashboard-client changes to skip backend Python/Windows and Stage2c, while
-requiring frontend type-check/build, scoped coverage and real packaged Dashboard
-browser smoke. Backend-only TS/lint/minimum-Node jobs are also exempt.
-Mixed, prompt, dependency and unknown changes stay full. Full Python runs six
-complete shards and combines all six coverage files. The `ci:full` label forces
-full qualification; main stays full. No selected-only report impersonates full
-coverage. 新的前端豁免由目标分支已审阅的策略控制；CI 自身变更仍全量验证。
+The [job exemption policy](ci-impact-selection.md) tiers per-PR execution by
+changed surface while preserving fail-closed verification: documentation-only
+exempts all heavy jobs; client-only Dashboard PRs (`presentation`) skip
+backend checks and heavy matrices while requiring compiled frontend and browser
+smokes; normal backend PRs (`backend`) run fast static checks, kernel
+contracts, and sharded TypeScript unit/coverage checks while skipping unrelated
+browser suites and deferring 6-shard Python, Windows, Node compatibility, and
+Stage 2C matrices to Nightly `schedule`, `main`, `merge_group`, and `ci:full`;
+and `mixed` backend+UI PRs run both fast backend checks and frontend browser
+smokes. CI policy, packaging, dependency-lock, and unknown changes stay `full`.
+Agents and subagents rely on local deterministic verification plus Goal-bound
+exact-head review under `wait_for_ci=false` rather than blocking on remote CI.
+双层豁免策略按改动面分层门禁：纯文档跳过重型检查；纯前端仅验证前端与浏览器验收；
+普通后端 PR 只跑快速静态、契约与 TS 测试并把多机／长程矩阵移入夜间、主干、队列与
+`ci:full`；混合 PR 兼跑后端轻量项与前端浏览器检查；CI 策略、依赖锁与未知路径仍跑全量。
+Agent 与子 Agent 在本地确定性验证及 `wait_for_ci=false` 精确头评审完成后即可交付，
+不串行等待远端 CI。
 
 PRs opened before activation may need a branch update to produce the new
 required check; an old green suite alone does not supply a missing aggregate.
