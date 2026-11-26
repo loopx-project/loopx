@@ -291,6 +291,21 @@ test("preview finds an inline spend event and preserves the legacy payload witho
   assert.equal(await readFile(fixture.indexPath, "utf8"), fixture.indexContent);
 });
 
+test("void preview hashes the original bytes even when decoding replaces a byte", async (t) => {
+  const fixture = await targetFixture(t);
+  const bytes = Buffer.concat([
+    Buffer.from('{"annotation":"'),
+    Buffer.from([0xff]),
+    Buffer.from('"}\r\n' + fixture.indexContent),
+  ]);
+  await writeFile(fixture.indexPath, bytes);
+  const result = await evaluateQuotaVoidCommit(await request(fixture, { execute: false }));
+  assert.equal(result.status, "preview");
+  assert.equal(result.payload.slots, 2);
+  assert.equal(result.index_digest, "sha256:" + createHash("sha256").update(bytes).digest("hex"));
+  assert.deepEqual(await readFile(fixture.indexPath), bytes);
+});
+
 test("target lookup falls back to the bounded legacy JSON artifact", async (t) => {
   const fixture = await targetFixture(t, { inline: false, slots: 4 });
   const params = await request(fixture, { execute: false });

@@ -54,6 +54,78 @@ loopx --registry .loopx/registry.json register-authority-source \
 Use `--dry-run` first when the source classification or target project is not
 obvious.
 
+## Find Registered Materials
+
+Before registering a duplicate, inspect the target project's existing material
+metadata through the same local registry:
+
+```bash
+loopx --registry .loopx/registry.json --format json authority-sources \
+  --goal-id <goal-id> --query "<topic or revision terms>" --limit 20
+```
+
+The query matches all whitespace-separated terms across source IDs, registered
+topics and metadata, ignoring case and Unicode compatibility differences. Add
+`--topic <exact-topic-key>` to restrict a query to a topic. Results are ordered by
+source ID; repeat the same filters with the returned `next_offset` as `--offset`
+to continue. `source_count`, `matched_count` and `returned_count` distinguish an
+empty inventory, no matches and a partial page. The page limit bounds returned
+rows, not registry scan cost or bytes; the complete local registry is read.
+
+This read does not open documents, check current access, refresh freshness or
+grant authority. It displays the stored revision, gate and freshness labels as
+metadata, including `needs_access` and historical material. Register/update the
+source through its existing workflow when those facts change. The command
+reads the explicitly selected registry snapshot; select the project's source
+registry rather than a global summary when looking for its complete inventory.
+Summary-only snapshots return `authority_source_details_unavailable` with the
+recorded summary count and an explicit project-registry recovery instruction,
+even when that count is zero; unavailable details are not an empty inventory.
+Topic lookup uses the material frontier's existing string, object and list
+reference interpretation for displayed topics, exact filters and text search.
+Registration retains only a source-reference kind and digest, not its original
+URL/path. Use the original DOC_REGISTRY or authorized connector to locate and
+check the document, then reuse its listed source ID with
+`update-authority-source` to update the recorded metadata. An inventory match
+is not evidence that the document was read or is still accessible.
+
+## Maintain Existing Material Metadata
+
+After checking a material, preview a change to its recorded lifecycle metadata:
+
+```bash
+loopx --registry .loopx/registry.json update-authority-source \
+  --goal-id example-goal --source-id design-note \
+  --freshness stale --gate-status needs_access --dry-run
+```
+
+Remove `--dry-run` to apply and refresh the shared registry summary; use
+`--no-global-sync` to update only the project registry. Read back with
+`authority-sources --goal-id example-goal --topic design` (using the registered
+topic), or search for the source ID. Optional update fields are `--freshness`,
+`--owner-status`, `--gate-status`, `--revision` and `--conflict-rule`. At least one
+nonempty field is required. Omitted fields, original registration time, reference
+kind/digest, imported summary metadata and topic mappings remain unchanged.
+The source must already exist in the selected project registry. A shared summary
+is insufficient; select the authoritative project registry explicitly.
+
+This records observations, not proof of reading, current access or permission to
+access a source. No source is opened. Registration keeps its existing full-entry
+replacement semantics; use it for deliberate replacement, supplying the complete
+contract. Project writes use the existing registry transaction; shared-summary
+sync follows separately. If sync fails after the project update, the failure
+reports `ok: false` and `written: true`. Inspect the project readback; after
+restoring shared registry access, sync the current project snapshot with the same
+Goal and runtime root instead of replaying the metadata patch:
+
+```bash
+loopx --registry .loopx/registry.json --runtime-root /path/to/runtime \
+  sync-global --goal-id example-goal
+```
+
+Use the original resolved runtime root. Sync-only recovery preserves newer
+metadata observations recorded since the failure.
+
 ## Stop Conditions
 
 Stop and write a project-local todo or blocker instead of registering when:

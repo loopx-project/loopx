@@ -238,11 +238,20 @@ def test_known_blocker_does_not_become_new_under_another_work_item(
 def test_no_followup_writeback_requires_terminal_vision_and_path(
     agent_vision: dict[str, object] | None,
 ) -> None:
+    obligation = {
+        "obligation_id": "replan-0123456789abcdef",
+        "satisfying_semantic_outcomes": ["coverage_backed_no_followup"],
+    }
+    if agent_vision is not None and "vision_patch" in agent_vision:
+        # Supply current stride for an evidence-linked proposal so that the
+        # refusal independently tests the inconsistent terminal disposition.
+        obligation["replan_context"] = build_replan_context(
+            obligation, goal_id="goal-progress", agent_id=AGENT_ID, newest_first_runs=[],
+        )
+        stride = build_replan_action_packet(obligation)["stride_control"]["minimal_example"]
+        agent_vision = {**agent_vision, "stride_decision": stride}
     delta = semantic_delta_from_writeback(
-        obligation={
-            "obligation_id": "replan-terminal-consistency",
-            "satisfying_semantic_outcomes": ["coverage_backed_no_followup"],
-        },
+        obligation=obligation,
         progress_observation=_observation(
             result_class="no_followup",
             coverage_scope_id="scope-public-entrypoints",
@@ -308,6 +317,7 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         "writeback_contract",
         "allowed_terminal",
         "planning_guidance",
+        "stride_control",
     }
     assert 0 < len(packet["planning_guidance"]) <= 3
     assert all(
@@ -315,7 +325,9 @@ def test_host_projects_evidence_context_and_minimal_action_packet() -> None:
         for instruction in packet["planning_guidance"]
     )
     no_followup = packet["writeback_contract"]["no_followup_requirements"]
-    assert set(packet["writeback_contract"]) == {"no_followup_requirements"}
+    assert "agent_vision.stride_decision" in packet["writeback_contract"]["required_fields"]
+    assert packet["stride_control"]["reference_context_id"] == context["context_id"]
+    assert packet["stride_control"]["reference_obligation_id"] == obligation["obligation_id"]
     assert "--progress-result-class" in no_followup["cli_args"]
     assert no_followup["vision_fields"] == {
         "state": "no_followup",

@@ -246,7 +246,10 @@ CREDENTIAL_BEARER_KEYWORD_PATTERN = re.compile("Bear" + "er" + r"\s+", re.I)
 CREDENTIAL_ENVIRONMENT_REFERENCE_PATTERN = re.compile(
     "|".join(
         [
-            r"\$\{?[A-Za-z_]",
+            # Any interpolation template is a runtime expression, including
+            # `${(await issue()).token}` where the expression starts with a call.
+            r"\$\{",
+            r"\$[A-Za-z_]",
             r"\$\(",
             r"%[A-Za-z_][A-Za-z0-9_]*%",
             r"os\.environ",
@@ -376,7 +379,55 @@ def _credential_hits_are_all_references(line: str) -> bool:
     return all(_credential_match_is_reference(line, match) for match in matches)
 
 
-DEFAULT_SCAN_SUFFIXES = {".md", ".py", ".toml", ".json", ".yaml", ".yml", ".sh"}
+# A selected directory owns every file in it, so only paths whose suffix names
+# a binary media or container format are dropped before reading. A seven-suffix
+# allow-list used to make that decision silently: every other text file -- on
+# this repository the whole TypeScript control plane plus .mjs, .tsx, .html,
+# .txt, .svg and extensionless files -- was certified without ever being
+# opened. Selection is suffix-based, so a text payload under a media suffix
+# (for example `notes.png`) is skipped; this repository has no such file, and a
+# directory walk cannot learn otherwise without opening every binary.
+#
+# `public_safe_outbound.scan_cli.BINARY_SUFFIXES` is the closest existing list,
+# but the two answer different questions: that outbound candidate set also
+# prunes build output (.map, .tsbuildinfo) and opaque packages (.bin, .war),
+# while this publication boundary reads every file not listed here as UTF-8 and
+# reports a decode failure as unreadable. Keeping source maps and .tsbuildinfo
+# readable here means embedded source text is still examined, and .bin/.war
+# stay fail-closed instead of disappearing. The shared media/container suffixes
+# are common vocabulary, not a second authority: this list only decides whether
+# a selected file is opened, and every content verdict still comes from the
+# text rules above.
+BINARY_MEDIA_SUFFIXES = {
+    # images
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".avif",
+    ".tif", ".tiff", ".heic", ".psd",
+    # audio and video
+    ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus",
+    ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".wmv", ".flv",
+    # archives and packages
+    ".zip", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".tar",
+    ".whl", ".jar", ".egg", ".dmg", ".iso",
+    # document containers
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # fonts
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    # executables and compiled artifacts
+    ".so", ".dll", ".dylib", ".exe", ".pyd", ".pyc", ".pyo",
+    ".class", ".wasm", ".o", ".obj", ".a", ".lib",
+    # databases
+    ".db", ".sqlite", ".sqlite3", ".mdb",
+}
+# A normal checkout keeps Finder's .DS_Store and AppleDouble ._* files
+# untracked (often gitignored), and they are not publishable input. Only the
+# formats' own magic headers prove such a file is OS metadata rather than a
+# text file that happens to share the name, so a directory walk skips an
+# untracked file only when its header matches. A tracked file is repository
+# content and stays scanned even then.
+LOCAL_METADATA_HEADERS = {
+    ".DS_Store": (b"\x00\x00\x00\x01Bud1",),
+    "._": (b"\x00\x05\x16\x07",),
+}
 DEFAULT_SKIP_DIRS = {
     ".git",
     ".goal-harness",
@@ -1144,13 +1195,49 @@ def _goal_source_and_projection_diagnostics(
     return diagnostics, checks, warnings
 
 
+def _is_binary_media_path(path: Path) -> bool:
+    return path.suffix.lower() in BINARY_MEDIA_SUFFIXES
+
+
+def _local_metadata_headers(name: str) -> tuple[bytes, ...]:
+    """Return the magic headers a known OS metadata name may begin with."""
+
+    if name == ".DS_Store":
+        return LOCAL_METADATA_HEADERS[".DS_Store"]
+    if name.startswith("._") and len(name) > len("._"):
+        return LOCAL_METADATA_HEADERS["._"]
+    return ()
+
+
+def _has_local_metadata_header(path: Path) -> bool:
+    """Return whether the file's own bytes prove a known OS metadata format.
+
+    The name alone never decides: a text file named ``._README.md`` or
+    ``.DS_Store`` is scanned like any other text. An unreadable header also
+    keeps the file, so the scan reader reports it instead of dropping it.
+    """
+
+    headers = _local_metadata_headers(path.name)
+    if not headers:
+        return False
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return False
+    return header.startswith(headers)
+
+
 def _resolve_scannable_file(path: Path) -> Path | None:
-    if path.suffix not in DEFAULT_SCAN_SUFFIXES and not path.is_symlink():
+    # An alias name never decides eligibility: a text target stays readable
+    # behind a .png alias, and a binary target stays unreadable behind a .md
+    # alias. Only the resolved target suffix and local-state name decide.
+    if _is_binary_media_path(path) and not path.is_symlink():
         return None
     resolved = path.resolve()
     if resolved.name.endswith(".local.json") or not resolved.is_file():
         return None
-    return resolved if resolved.suffix in DEFAULT_SCAN_SUFFIXES else None
+    return None if _is_binary_media_path(resolved) else resolved
 
 
 def _is_skipped_dir_name(name: str) -> bool:
@@ -1276,6 +1363,7 @@ def iter_scan_files(
         if unavailable_git_probes is not None:
             unavailable_git_probes.append(str(scan_root))
         tracked_files = []
+    tracked_paths = set(tracked_files)
     # The root is probed even when dependency pruning skips the walk, so an
     # unreadable scan target cannot pass because of how it was named.
     try:
@@ -1302,8 +1390,15 @@ def iter_scan_files(
             and not os.path.isfile(current_dir / name / "pyvenv.cfg")
         ]
         for file_name in file_names:
-            if resolved := _resolve_scannable_file(current_dir / file_name):
-                files.append(resolved)
+            resolved = _resolve_scannable_file(current_dir / file_name)
+            if resolved is None:
+                continue
+            # A normal checkout keeps OS metadata such as .DS_Store untracked;
+            # Git ownership plus the format's own header separate checkout
+            # noise from a text file this repository would actually publish.
+            if resolved not in tracked_paths and _has_local_metadata_header(resolved):
+                continue
+            files.append(resolved)
     return sorted(set(files + tracked_files))
 
 

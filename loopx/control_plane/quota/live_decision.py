@@ -128,7 +128,8 @@ def _original_replan_settlement_required(
         and packet.get("decision") == readback.replay_phase.value
         and identity is not None and identity.replan_obligation_id is not None
         and identity.replan_obligation_id == packet.get("obligation_id")
-        and (readback.progress or {}).get("next_step") == "quota_spend"
+        and ((readback.progress or {}).get("next_step") == "quota_spend"
+             or (readback.progress or {}).get("checkpoint_recovery_required") is True)
         and payload.get("should_run") is True
         and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
     )
@@ -150,6 +151,18 @@ def _project_receipt_replan_settlement(
     if identity is None:
         raise ValueError("original replan settlement identity is unavailable")
     payload["heartbeat_receipt"] = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
+    if (readback.progress or {}).get("checkpoint_recovery_required") is True:
+        reason = (
+            "Read checkpoint-context for the original blocked writeback. Reassess its evidence and submit "
+            "only the original checkpoint supplement. Preserve its delivery fields and quota."
+        )
+        packet = {**payload["replan_action_packet"], "decision": "vision_outcome_checkpoint_required",
+                  "required_outcome": "durable_writeback_receipt",
+                  "writeback_contract": {"rule": reason}}
+        obligation = payload["autonomous_replan_obligation"]
+        payload["autonomous_replan_obligation"] = {**obligation, "recommended_action": reason,
+            "guidance_actions": [reason], "settlement_action_packet": packet}
+        payload.update(replan_action_packet=packet, recommended_action=reason)
     payload["interaction_contract"] = build_interaction_contract(payload,
         available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root))

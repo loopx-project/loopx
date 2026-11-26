@@ -457,9 +457,14 @@ def _latest_route_source_row(
     goal_id: str,
     route_id: str,
 ) -> dict[str, Any] | None:
-    from ...history import load_index
+    from ...history import load_index_snapshot
 
-    rows, _ = load_index(runtime_root / "goals" / goal_id / "runs" / "index.jsonl")
+    # Route selection matches index metadata only. Artifact existence is a
+    # separate observation used by history, doctor, and projection currency.
+    rows = load_index_snapshot(
+        runtime_root / "goals" / goal_id / "runs" / "index.jsonl",
+        include_artifact_status=False,
+    ).records
     for row in reversed(rows):
         marker = row.get("runtime_projection_route")
         if (

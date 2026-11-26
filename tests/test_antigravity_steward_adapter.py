@@ -138,6 +138,12 @@ def language_server(monkeypatch):
                     response = {}
             elif method == "StartCascade":
                 response = {"cascadeId": "synthetic-cascade"}
+            elif method == "GetAllCascadeTrajectories":
+                status = "CASCADE_RUN_STATUS_RUNNING" if state["active"] else "CASCADE_RUN_STATUS_IDLE"
+                summaries = {} if state.get("missing_resume") else {"synthetic-cascade": {
+                    "status": status, "stepCount": state["sent_count"] * 2,
+                }}
+                response = {"trajectorySummaries": summaries}
             elif method == "GetCascadeTrajectory":
                 if state.get("frames") is not None:
                     if state["active"]:
@@ -2095,6 +2101,104 @@ def test_isolated_cascade_preserves_main_cascade_and_pending_history(tmp_path, m
         assert main_resp["message"] == "Answer from cascade-1"
         assert "keep prior constraint" in state["prompts_by_cascade"]["cascade-1"][0]
         assert adapter._pending_history == []
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_raw_prompt_isolated_cascade_omits_chat_wrapper_and_preserves_default_parity(
+    tmp_path, monkeypatch,
+) -> None:
+    """raw_prompt=True sends exact Turn text without Chat wrapper; default raw_prompt=False stays wrapped."""
+    import hashlib
+    from loopx.chat import CHAT_REVIEW_OPEN_TAG
+
+    state: dict[str, Any] = {"cascade_seq": 0, "prompts_by_cascade": {}}
+    token = "synthetic-csrf-token"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            method = self.path.rsplit("/", 1)[-1]
+            if method == "GetCascadeModelConfigData":
+                resp = {"clientModelConfigs": [{"modelId": "gemini-4-argon-high", "modelOrAlias": {"model": "MODEL_PLACEHOLDER_M417"}}]}
+            elif method == "StartCascade":
+                state["cascade_seq"] += 1
+                resp = {"cascadeId": f"cascade-{state['cascade_seq']}"}
+            elif method == "GetCascadeTrajectory":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                resp = {"trajectory": {"cascadeId": cid}, "numTotalSteps": len(prompts) * 2, "status": "CASCADE_RUN_STATUS_IDLE"}
+            elif method == "SendUserCascadeMessage":
+                cid = body["cascadeId"]
+                state["prompts_by_cascade"].setdefault(cid, []).append(body["items"][0]["text"])
+                resp = {}
+            elif method == "GetCascadeTrajectorySteps":
+                cid = body["cascadeId"]
+                prompts = state["prompts_by_cascade"].get(cid, [])
+                plain_json = json.dumps({"result_kind": "validated_completion", "summary": "ok"})
+                steps = []
+                for idx, text in enumerate(prompts):
+                    meta = {"createdAt": "2026-11-22T01:00:00Z", "executionId": f"exec-{cid}-{idx}"}
+                    answer = plain_json if cid == "cascade-2" else f"{CHAT_REVIEW_OPEN_TAG}{{\"message\":\"wrapped\",\"proposals\":[],\"gate\":null}}</loopx-review-json>"
+                    steps.extend([
+                        {"type": "CORTEX_STEP_TYPE_USER_INPUT", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2}},
+                         "userInput": {"items": [{"text": text}]}},
+                        {"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE", "status": "CORTEX_STEP_STATUS_DONE",
+                         "metadata": {**meta, "sourceTrajectoryStepInfo": {"stepIndex": idx * 2 + 1}},
+                         "plannerResponse": {"response": answer, "stopReason": "STOP_REASON_STOP_PATTERN"}},
+                    ])
+                resp = {"steps": steps[body["startIndex"]:body["endIndex"]]}
+            elif method == "CancelCascadeInvocation":
+                resp = {}
+            else:
+                raise AssertionError(method)
+            payload = json.dumps(resp).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("ANTIGRAVITY_LS_URL", f"http://127.0.0.1:{server.server_port}")
+    monkeypatch.setenv("ANTIGRAVITY_CSRF_TOKEN", token)
+    try:
+        adapter = adapter_for(tmp_path, history=[{"role": "user", "content": "keep prior constraint"}])
+        events: list[tuple[str, dict[str, Any]]] = []
+        raw_message = "Turn request:\n{\"goal_id\":\"g1\"}\n\nThis Turn's task is to author the original steward's due report."
+        raw_resp = adapter.start_turn(
+            raw_message, lambda k, p: events.append((k, p)),
+            isolated_cascade=True, raw_prompt=True,
+        )
+        sent_raw = state["prompts_by_cascade"]["cascade-2"][0]
+        assert sent_raw == raw_message
+        assert "Act as LoopX Steward." not in sent_raw
+        assert CHAT_REVIEW_OPEN_TAG not in sent_raw
+        assert "keep prior constraint" not in sent_raw
+        started = next(p for k, p in events if k == "turn.started")
+        assert started["native_input"]["input_sha256"] == hashlib.sha256(raw_message.encode()).hexdigest()
+        assert json.loads(raw_resp["message"]) == {"result_kind": "validated_completion", "summary": "ok"}
+        assert adapter.cascade_id == "cascade-1"
+        assert adapter._pending_history == [{"role": "user", "content": "keep prior constraint"}]
+
+        # Default raw_prompt=False on isolated_cascade retains existing Chat objective and review envelope framing.
+        wrapped_resp = adapter.start_turn("Run isolated report", isolated_cascade=True)
+        sent_wrapped = state["prompts_by_cascade"]["cascade-3"][0]
+        assert "Act as LoopX Steward." in sent_wrapped
+        assert CHAT_REVIEW_OPEN_TAG in sent_wrapped
+        assert wrapped_resp["message"] == "wrapped"
+
+        # Fail closed when combining raw_prompt with read_only_review.
+        with pytest.raises(ValueError, match="raw_prompt cannot be combined with read_only_review"):
+            adapter.start_turn(raw_message, isolated_cascade=True, raw_prompt=True, read_only_review=True)
     finally:
         server.shutdown()
         server.server_close()

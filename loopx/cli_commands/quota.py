@@ -623,6 +623,8 @@ def _execute_quota_command(
             args,
             registry_path=registry_path,
             runtime_root_arg=runtime_root_arg,
+            resolved_runtime_root=context.runtime_root if context else None,
+            goal_ref=goal_ref,
             error=exc,
         )
     if should_run_state is not None:

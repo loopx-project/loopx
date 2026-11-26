@@ -26,6 +26,7 @@ from .control_plane.quota.host_poll_receipts import read_host_worker_observation
 from .control_plane.quota.ledger_readback import (
     QUOTA_SLOT_SPENT_CLASSIFICATION,
     QUOTA_SLOT_VOIDED_CLASSIFICATION,
+    relocated_run_artifact_path,
 )
 from .control_plane.projects.registry_codec import (
     decode_registry_snapshot as decode_registry_snapshot,
@@ -53,7 +54,7 @@ from .control_plane.runtime.run_index_rebuild import (
     split_index_lines,
     validate_reviewed_collision_plan,
 )
-from .control_plane.runtime.time import chronology_key, now_local_iso
+from .control_plane.runtime.time import chronology_key, now_local_iso, parse_timestamp
 from .doctor import PROMOTION_READINESS_CLASSIFICATIONS
 from .execution_profile import compact_execution_profile
 from .explore_graph import compact_explore_graph_policy
@@ -62,10 +63,11 @@ from .paths import (
     resolve_runtime_root,
     validate_goal_id_path_segment as validate_goal_id_path_segment,
 )
-from .presentation.markdown import (
-    markdown_code,
-    markdown_table_row,
-    markdown_table_separator,
+from .presentation.renderers.run_history import (
+    render_history_markdown as render_history_markdown,
+    render_index_collision_rebuild_markdown as render_index_collision_rebuild_markdown,
+    render_index_duplicate_inspection_markdown as render_index_duplicate_inspection_markdown,
+    render_index_duplicate_repair_markdown as render_index_duplicate_repair_markdown,
 )
 from .registry import registry_goals
 
@@ -147,19 +149,6 @@ def _group_index_lines(
         if isinstance(item, dict):
             grouped.setdefault(index_identity(item), []).append((line_number, item))
     return raw_count, grouped
-
-
-def _markdown_report_lines(
-    title: str, payload: Mapping[str, object], header_fields: Sequence[tuple[str, object]],
-    *, columns: Sequence[str] = (), rows: Iterable[Sequence[object]] = (),
-) -> list[str] | str:
-    if not payload.get("ok"):
-        return f"# {title}\n\n- ok: `False`\n- error: {payload.get('error')}"
-    lines = [f"# {title}", "", *(f"- {label}: `{value}`" for label, value in header_fields)]
-    if columns:
-        lines.extend(["", markdown_table_row(list(columns)), markdown_table_separator(len(columns))])
-        lines.extend(markdown_table_row(list(row)) for row in rows)
-    return lines
 
 
 def goal_registry_digest(goal: Mapping[str, object]) -> str:
@@ -360,33 +349,82 @@ def discover_goal_ids(
     return sorted(ids)
 
 
-def _indexed_artifact_exists(value: object, *, artifact_root: Path | None) -> bool:
+def _goal_run_index_context(index_path: Path) -> tuple[Path, str] | None:
+    """Runs directory and goal id for ``goals/<goalId>/runs/index.jsonl``."""
+
+    if index_path.name != "index.jsonl":
+        return None
+    runs_dir = index_path.parent
+    goal_dir = runs_dir.parent
+    if runs_dir.name != "runs" or goal_dir.parent.name != "goals":
+        return None
+    goal_id = goal_dir.name
+    if not goal_id or goal_id in {".", ".."}:
+        return None
+    return runs_dir, goal_id
+
+
+def _indexed_artifact_exists(
+    value: object,
+    *,
+    artifact_root: Path | None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
+    extension: str | None = None,
+) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
-    path = Path(text).expanduser()
+    try:
+        path = Path(text).expanduser()
+    except (OSError, RuntimeError):
+        # An unknown ``~user`` cannot be observed. Keep the run and report
+        # the artifact missing instead of aborting the history read.
+        return False
     if not path.is_absolute() and artifact_root is not None:
         path = artifact_root / path
     try:
-        return path.exists()
+        if path.exists():
+            return True
     except OSError:
         # Availability is a best-effort observation, not run-index authority.
         # Match pathlib's Python 3.14 behavior on older supported interpreters:
         # inaccessible or invalid artifact paths must not hide durable history.
         return False
+    if runs_dir is None or not goal_id or not extension:
+        return False
+    # Read-time only: a copied same-named regular file stands in for the
+    # absolute path the index still records. The index bytes stay unchanged.
+    return (
+        relocated_run_artifact_path(runs_dir, goal_id, text, extension) is not None
+    )
 
 
 def _observe_run_artifacts(
-    records: Iterable[dict[str, object]], *, artifact_root: Path | None,
+    records: Iterable[dict[str, object]],
+    *,
+    artifact_root: Path | None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> None:
     """Fresh request-local observations, shared by full and selected reads."""
-    observed: dict[str, bool] = {}
+    observed: dict[tuple[str, str], bool] = {}
     for record in records:
-        for source, target in (("json_path", "json_exists"), ("markdown_path", "markdown_exists")):
+        for source, target, extension in (
+            ("json_path", "json_exists", ".json"),
+            ("markdown_path", "markdown_exists", ".md"),
+        ):
             path = str(record.get(source) or "").strip()
-            if path not in observed:
-                observed[path] = _indexed_artifact_exists(path, artifact_root=artifact_root)
-            record[target] = observed[path]
+            key = (path, extension)
+            if key not in observed:
+                observed[key] = _indexed_artifact_exists(
+                    path,
+                    artifact_root=artifact_root,
+                    runs_dir=runs_dir,
+                    goal_id=goal_id,
+                    extension=extension,
+                )
+            record[target] = observed[key]
 
 
 def load_index_snapshot(
@@ -396,6 +434,8 @@ def load_index_snapshot(
     include_artifact_status: bool = True,
     tolerate_undecodable: bool = False,
     skip_invalid_encoding: bool = False,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> RunIndexSnapshot:
     """Decode the complete index; derived artifact status is optional internally.
 
@@ -460,7 +500,21 @@ def load_index_snapshot(
                 positions[key] = len(records)
                 records.append(item)
     if include_artifact_status:
-        _observe_run_artifacts(records, artifact_root=artifact_root)
+        observed_runs = runs_dir
+        observed_goal = goal_id
+        if observed_runs is None or not observed_goal:
+            inferred = _goal_run_index_context(path)
+            if inferred is not None:
+                if observed_runs is None:
+                    observed_runs = inferred[0]
+                if not observed_goal:
+                    observed_goal = inferred[1]
+        _observe_run_artifacts(
+            records,
+            artifact_root=artifact_root,
+            runs_dir=observed_runs,
+            goal_id=observed_goal,
+        )
     return RunIndexSnapshot(
         records=records,
         raw_count=raw_count,
@@ -474,8 +528,15 @@ def load_index(
     path: Path,
     *,
     artifact_root: Path | None = None,
+    runs_dir: Path | None = None,
+    goal_id: str | None = None,
 ) -> tuple[list[dict[str, object]], int]:
-    snapshot = load_index_snapshot(path, artifact_root=artifact_root)
+    snapshot = load_index_snapshot(
+        path,
+        artifact_root=artifact_root,
+        runs_dir=runs_dir,
+        goal_id=goal_id,
+    )
     return snapshot.records, snapshot.raw_count
 
 
@@ -499,6 +560,8 @@ def collect_history(
     activation_state_filter: GoalActivationState | str | None = None,
     agent_lane_id: str | None = None,
     scoped_agent_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
     registry: Mapping[str, object] | None = None,
     tolerate_undecodable: bool = False,
 ) -> dict[str, object]:
@@ -507,6 +570,15 @@ def collect_history(
         project_goal_with_builtin_machine_configuration,
     )
     from .quota import goal_quota_with_spend_ledger, quota_with_unreadable_index_rows
+
+    start, end = parse_timestamp(since), parse_timestamp(until)
+    for label, value, parsed in (("since", since, start), ("until", until, end)):
+        if value is not None and parsed is None:
+            raise ValueError(f"--{label} must be an ISO timestamp")
+    if start is not None and end is not None and start >= end:
+        raise ValueError("--since must be earlier than --until")
+    time_filtered = since is not None or until is not None
+    undated_run_count = 0
 
     resolved_registry = (
         load_registry(registry_path) if registry is None
@@ -557,6 +629,12 @@ def collect_history(
         goal_runs = runs
         if scoped_agent_id:
             runs = [run for run in goal_runs if run.get("agent_id") == scoped_agent_id]
+        retry_evidence = runs
+        if time_filtered:
+            dated_runs = [(run, parse_timestamp(run.get("generated_at"))) for run in runs]
+            undated_run_count += sum(stamp is None for _, stamp in dated_runs)
+            runs = [run for run, stamp in dated_runs if stamp is not None
+                    and (start is None or stamp >= start) and (end is None or stamp < end)]
         run_count += len(runs)
         recent_runs = list(islice(
             merge(recent_runs, runs, key=lambda item: _chronology_key(item.get("generated_at")), reverse=True),
@@ -580,6 +658,16 @@ def collect_history(
             agent_lane_id=None if scoped_agent_id else agent_lane_id,
         )
         semantic_history = goal_semantic_history_from_runs(runs)
+        if time_filtered:
+            # Active retry is a current fact, not an as-of-window state. Later
+            # progress outside the display range must still supersede an old
+            # blocker. Qualify the complete relevant lane before filtering its
+            # references; keep the old row itself available for investigation.
+            visible_runs = {id(run) for run in runs}
+            current_retries = goal_semantic_history_from_runs(retry_evidence)["active_blocked_retry_runs"]
+            semantic_history["active_blocked_retry_runs"] = [
+                run for run in current_retries if id(run) in visible_runs
+            ]
         goal_record: dict[str, object] = {
             "id": current_goal_id,
             **goal_parent_fields(meta),
@@ -639,6 +727,8 @@ def collect_history(
                 iter_goal_semantic_history_runs(semantic_history),
             ),
             artifact_root=registry_project_root(registry_path),
+            runs_dir=index_path.parent,
+            goal_id=current_goal_id,
         )
         if registry_member:
             for field in REGISTRY_STATUS_FIELDS:
@@ -651,6 +741,12 @@ def collect_history(
         "registry": str(registry_path),
         "runtime_root": str(runtime_root),
         "goal_filter": goal_id,
+        **({"time_filter": {
+            "since_inclusive": start.isoformat() if start is not None else None,
+            "until_exclusive": end.isoformat() if end is not None else None,
+            "excluded_undated_runs": undated_run_count,
+            "quota_scope": "all_goal_runs",
+        }} if time_filtered else {}),
         "goal_count": len(goals),
         "run_count": run_count,
         "goals": goals,
@@ -755,8 +851,20 @@ def inspect_index_duplicates(
                 "generated_at": generated_at,
                 "json_path": json_path,
                 "markdown_path": markdown_path,
-                "json_exists": _indexed_artifact_exists(json_path, artifact_root=artifact_root),
-                "markdown_exists": _indexed_artifact_exists(markdown_path, artifact_root=artifact_root),
+                "json_exists": _indexed_artifact_exists(
+                    json_path,
+                    artifact_root=artifact_root,
+                    runs_dir=index_path.parent,
+                    goal_id=current_goal_id,
+                    extension=".json",
+                ),
+                "markdown_exists": _indexed_artifact_exists(
+                    markdown_path,
+                    artifact_root=artifact_root,
+                    runs_dir=index_path.parent,
+                    goal_id=current_goal_id,
+                    extension=".md",
+                ),
                 "line_numbers": [line_number for line_number, _ in records],
                 "raw_rows": len(records),
                 "duplicate_rows": len(records) - 1,
@@ -903,133 +1011,3 @@ def rebuild_index_artifact_collisions(
         review_plan=current_plan, rebuilt_indexes=rebuilt_indexes,
         destructive_row_deletion=False,
     )
-
-
-def render_index_collision_rebuild_markdown(payload: Mapping[str, object]) -> str:
-    plan = _as_mapping(payload.get("review_plan"))
-    lines = _markdown_report_lines(
-        "LoopX Artifact Collision Rebuild",
-        payload,
-        [
-            ("dry_run", payload.get("dry_run")),
-            ("rebuilt", payload.get("rebuilt")),
-            ("collision_groups", payload.get("collision_group_count")),
-            ("total_collision_groups", payload.get("total_collision_group_count")),
-            ("truncated", payload.get("truncated")),
-            ("review_required", payload.get("review_required")),
-            ("plan_sha256", plan.get("plan_sha256")),
-            ("destructive_row_deletion", False),
-            ("contract", "review the exact plan, then execute with --review-plan-json"),
-        ],
-    )
-    return lines if isinstance(lines, str) else "\n".join(lines)
-
-
-def render_index_duplicate_repair_markdown(payload: Mapping[str, object]) -> str:
-    rendered = _markdown_report_lines(
-        "LoopX Index Duplicate Repair",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("dry_run", "dry_run"), ("repaired", "repaired"), ("runtime_root", "runtime_root"),
-                ("registry", "registry"), ("goal_filter", "goal_filter"), ("checked_goals", "checked_goal_count"),
-                ("raw_index_records", "raw_index_records"), ("removed_rows", "removed_row_count"),
-                ("preserved_reward_overlay_rows", "preserved_reward_overlay_rows"),
-                ("unrepaired_groups", "unrepaired_group_count"), ("truncated", "truncated"),
-            )
-        ],
-        columns=("goal", "generated_at", "action", "repairable", "kept", "removed", "reason"),
-        rows=(
-            (
-                markdown_code(group.get("goal_id")), markdown_code(group.get("generated_at")),
-                markdown_code(group.get("action")), markdown_code(group.get("repairable")),
-                markdown_code(group.get("kept_line_numbers")), markdown_code(group.get("removed_line_numbers")),
-                group.get("reason"),
-            )
-            for group in _mapping_list(payload.get("groups"))
-        ),
-    )
-    return rendered if isinstance(rendered, str) else "\n".join(rendered)
-
-
-def render_history_markdown(payload: Mapping[str, object]) -> str:
-    goals = _mapping_list(payload.get("goals"))
-    unreadable = sum(_int_field(goal, "unreadable_index_rows") for goal in goals)
-    lines = _markdown_report_lines(
-        "LoopX Run History",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("runtime_root", "runtime_root"), ("registry", "registry"),
-                ("goal_filter", "goal_filter"), ("goals", "goal_count"), ("unique_runs", "run_count"),
-            )
-        ],
-        columns=("generated_at", "goal", "classification", "files", "action"),
-        rows=(
-            (
-                markdown_code(run.get("generated_at")), markdown_code(run.get("goal_id")),
-                markdown_code(run.get("classification")),
-                f"{run.get('json_exists')}/{run.get('markdown_exists')}", run.get("recommended_action"),
-            )
-            for run in _mapping_list(payload.get("runs"))
-        ),
-    )
-    if isinstance(lines, str):
-        return lines
-    if unreadable:
-        lines.insert(
-            7,
-            f"- WARNING unreadable_index_rows: `{unreadable}` "
-            "(rows that could not be decoded were skipped; the listing below is incomplete)",
-        )
-    lines.extend(["", "## Goals"])
-    for goal in goals:
-        unreadable_suffix = (
-            f", unreadable_index_rows=`{goal.get('unreadable_index_rows')}`"
-            if goal.get("unreadable_index_rows") else ""
-        )
-        lines.append(
-            f"- `{goal.get('id')}`: status=`{goal.get('status')}`, "
-            f"registry_member=`{goal.get('registry_member')}`, "
-            f"adapter=`{goal.get('adapter_kind')}:{goal.get('adapter_status')}`, "
-            f"index_exists=`{goal.get('index_exists')}`, "
-            f"records=`{goal.get('raw_index_records')}`, "
-            f"unique_runs=`{goal.get('unique_runs')}`{unreadable_suffix}"
-        )
-    return "\n".join(lines)
-
-
-def render_index_duplicate_inspection_markdown(payload: Mapping[str, object]) -> str:
-    def row(group: Mapping[str, object]) -> tuple[object, ...]:
-        raw_classes = group.get("classifications")
-        class_items = (
-            raw_classes
-            if isinstance(raw_classes, Sequence) and not isinstance(raw_classes, (str, bytes))
-            else []
-        )
-        return (
-            markdown_code(group.get("goal_id")), markdown_code(group.get("generated_at")),
-            markdown_code(group.get("duplicate_kind")), markdown_code(group.get("severity")),
-            markdown_code(group.get("line_numbers")),
-            markdown_code(", ".join(str(item) for item in class_items)),
-            group.get("repair_hint"),
-        )
-
-    rendered = _markdown_report_lines(
-        "LoopX Index Duplicate Inspection",
-        payload,
-        [
-            (label, payload.get(key))
-            for label, key in (
-                ("runtime_root", "runtime_root"), ("registry", "registry"), ("goal_filter", "goal_filter"),
-                ("checked_goals", "checked_goal_count"), ("raw_index_records", "raw_index_records"),
-                ("duplicate_groups", "duplicate_group_count"), ("duplicate_rows", "duplicate_row_count"),
-                ("truncated", "truncated"),
-            )
-        ],
-        columns=("goal", "generated_at", "kind", "severity", "rows", "classifications", "repair_hint"),
-        rows=(row(group) for group in _mapping_list(payload.get("groups"))),
-    )
-    return rendered if isinstance(rendered, str) else "\n".join(rendered)

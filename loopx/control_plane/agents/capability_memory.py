@@ -243,6 +243,32 @@ def extend_turn_start_dispatch(
     return result
 
 
+def heartbeat_evidence_poll_possible(
+    runtime_root: Path, *, goal: Mapping[str, Any], available: Any,
+) -> bool:
+    """Only a possible pre-quota poll needs the typed availability read."""
+    from .capability_probe import host_network_sandbox_disabled, probe_host_runtime_capabilities
+    from ..quota.goal_boundary import declared_available_capabilities
+
+    if host_network_sandbox_disabled():
+        return False
+    if "external_evidence_poll" in (
+        *normalize_required_capabilities(available),
+        *declared_available_capabilities(goal),
+        *probe_host_runtime_capabilities(),
+    ):
+        return True
+    # A missing capability store rules out remembered observations. When it
+    # exists or cannot be inspected, the typed owner resolves the Agent scope.
+    try:
+        (runtime_root / "agent-runtime-capabilities").stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        pass
+    return True
+
+
 def resolve_agent_capabilities(
     status_payload: dict[str, Any], *, goal_id: str, agent_identity: dict[str, Any] | None,
     item: dict[str, Any], project_asset: dict[str, Any], available: Any,

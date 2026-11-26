@@ -1770,7 +1770,7 @@ def test_http_revoked_stop_recovery_survives_refresh_and_reopen_without_restorin
     import threading
     from types import SimpleNamespace
     from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
-    import loopx.chat_lark_api as api
+    import loopx.chat.lark_api as api
 
     store, runtime, contexts, _, _, _, workspace = ordinary
     bindings, args, binding, session, turn = _bound_project(ordinary)

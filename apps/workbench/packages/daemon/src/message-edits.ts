@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import type { ToolHistory } from './tool-history.js';
 
 export interface MessageEdit {
   threadId: string;
@@ -15,7 +16,7 @@ export interface MessageEdit {
 
 /** Hidden recovery records, never represented as another user-visible thread. */
 export class MessageEdits {
-  constructor(private readonly db: DatabaseSync) {
+  constructor(private readonly db: DatabaseSync, private readonly tools: ToolHistory) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS event_sequences (
         thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
@@ -60,6 +61,7 @@ export class MessageEdits {
     this.db.prepare(`INSERT INTO event_sequences VALUES (?, (SELECT COALESCE(MAX(seq),0) FROM events WHERE thread_id=?))
       ON CONFLICT(thread_id) DO UPDATE SET last_seq=MAX(last_seq, excluded.last_seq)`).run(thread, thread);
     this.db.prepare('INSERT INTO edited_events SELECT thread_id, ?, seq, turn_id, type, ts, data FROM events WHERE thread_id=? AND seq>=?').run(request, thread, from);
+    this.tools.archive(thread, from);
     this.db.prepare('DELETE FROM turn_text WHERE thread_id=? AND turn_id IN (SELECT turn_id FROM events WHERE thread_id=? AND seq>=?)').run(thread, thread, from);
     this.db.prepare('DELETE FROM events WHERE thread_id=? AND seq>=?').run(thread, from);
     this.db.prepare('DELETE FROM history_rows WHERE thread_id=? AND seq>=?').run(thread, from);

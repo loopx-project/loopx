@@ -125,6 +125,48 @@ def native_command(controller: Any, argv: list[str]) -> dict[str, Any]:
     return result
 
 
+def acquire_steward_task_lease(
+    controller: Any,
+    request: Mapping[str, Any],
+    turn_id: str,
+    *,
+    recovery: bool,
+    admission_retry: bool,
+    claim_args: list[str] | None,
+) -> dict[str, Any]:
+    """Use the original claim or lease for native Steward work."""
+    actor = request["actor"]
+    goal_args = ["--goal-id", actor["goal_id"]]
+    todo_args = [*goal_args, "--todo-id", request["todo_id"]]
+    if claim_args is not None:
+        operation_id = f"todo-claim:native-turn:{turn_id}"
+        claim = native_command(controller, [*claim_args, "--claim-operation-id", operation_id])
+        if claim.get("claim_operation_id") != operation_id:
+            raise ValueError("native task preparation did not return its original claim")
+        receipts = native_command(controller, ["todo", "receipt", *goal_args, "--operation-id", operation_id])["receipts"]
+        lease = receipts[0]["result"].get("lease") if len(receipts) == 1 else None
+        if not isinstance(lease, dict):
+            raise ValueError("native task preparation could not read back its original lease")
+        return lease
+
+    observed = native_command(controller, ["task-lease", "inspect", *todo_args])
+    retained = observed.get("lease")
+    if request.get("resume_turn_key") and not recovery:
+        # The launch guard independently verifies the original generation.
+        if (observed.get("active") is not True or not isinstance(retained, dict)
+                or retained.get("owner") != actor["agent_id"]
+                or retained.get("idempotency_key") != request["turn_instance_id"]):
+            raise ValueError("the original report launch lease is no longer active")
+        return retained
+
+    version = retained["version"] if retained else 0
+    suffix = (".validation-recovery." + str(version) if recovery else
+        ".admission-retry." + turn_id if admission_retry else "")
+    return native_command(controller, ["task-lease", "acquire", *todo_args, "--owner", actor["agent_id"],
+        "--idempotency-key", request["turn_instance_id"] + suffix, "--ttl-seconds", "3600",
+        "--expected-version", str(version)])["lease"]
+
+
 _AUDIENCE_KEYS = ("binding_id", "source_ref", "provider_ref", "operator_ref", "project_ref")
 
 

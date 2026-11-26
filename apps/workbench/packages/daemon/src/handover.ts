@@ -135,3 +135,52 @@ export function synthesizeBrief(events: StoredEvent[]): string {
   ];
   return lines.length ? ['## 进度（hub 从记录整理，可能不全）', ...lines].join('\n') : '';
 }
+
+export interface ChainSegment {
+  id: string;
+  title: string;
+  updatedAt: string;
+  archived: boolean;
+  preview?: string | null;
+  part?: 'before' | 'after';
+  /** Exclusive lower and inclusive upper event boundaries for this stretch of conversation. */
+  lowerSeq?: number;
+  upperSeq?: number;
+}
+
+/**
+ * Walks a thread's handover links oldest-first, ending at the thread itself.
+ * Each thread is visited at most once so a cycle ends cleanly.
+ */
+export function chainSegments<M extends { id: string; title: string; updatedAt: string; createdAt?: string; archivedAt?: string | null; preview?: string | null; handover?: { sourceId: string; detached?: boolean; sourceSeq?: number; segments?: ChainSegment[] } | null }>(
+  thread: M,
+  byId: (id: string) => M | undefined,
+  latest?: (id: string) => number,
+  legacyBoundary?: (id: string, at: string) => number,
+): ChainSegment[] {
+  const segments: ChainSegment[] = [];
+  const seen = new Set<string>();
+  let upper = latest?.(thread.id);
+  for (let at: M | undefined = thread; at !== undefined;) {
+    if (seen.has(at.id)) break;
+    seen.add(at.id);
+    segments.unshift({
+      id: at.id,
+      title: at.title,
+      updatedAt: at.updatedAt,
+      archived: Boolean(at.archivedAt),
+      preview: at.preview ?? null,
+      ...(latest ? { lowerSeq: 0, upperSeq: upper ?? latest(at.id) } : {}),
+    });
+    const link = at.handover && !at.handover.detached ? at.handover : null;
+    if (!link) break;
+    if (link.segments) {
+      const frozen = link.segments.filter(segment => byId(segment.id));
+      return [...frozen, ...segments];
+    }
+    const next = byId(link.sourceId);
+    upper = link.sourceSeq ?? (next && legacyBoundary && at.createdAt ? legacyBoundary(next.id, at.createdAt) : latest?.(link.sourceId));
+    at = next;
+  }
+  return segments;
+}

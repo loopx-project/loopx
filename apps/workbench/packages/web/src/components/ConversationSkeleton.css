@@ -1,0 +1,142 @@
+/* Bubble + prose shimmer skeleton for loading conversations (separate from styles.css to respect UI budgets). */
+
+@keyframes chat-skeleton-shimmer {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+@keyframes chat-skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-skeleton {
+  width: min(var(--content-w), 100%);
+  margin: auto auto 0;
+  padding: 20px 20px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  animation: chat-skeleton-in 160ms ease-out;
+}
+
+.chat-reading > .chat-skeleton {
+  width: 100%;
+  padding: 18px 0 12px;
+}
+
+.chat-skeleton.compact {
+  width: 100%;
+  padding: 18px 16px 24px;
+  gap: 16px;
+}
+
+.chat-skeleton-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-skeleton-turn.prior {
+  opacity: 0.78;
+}
+
+.chat-skeleton-user {
+  align-self: flex-end;
+  width: min(52%, 270px);
+  padding: 11px 15px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  background: linear-gradient(
+    90deg,
+    var(--user-bg) 20%,
+    color-mix(in srgb, var(--border-strong) 45%, var(--user-bg)) 50%,
+    var(--user-bg) 80%
+  );
+  background-size: 240% 100%;
+  animation: chat-skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+.chat-skeleton-user.wide {
+  width: min(68%, 360px);
+}
+
+.chat-skeleton.compact .chat-skeleton-user {
+  width: min(76%, 300px);
+}
+
+.chat-skeleton-user-line {
+  height: 12px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--border-strong) 62%, transparent);
+}
+
+.chat-skeleton-user-line.l1 {
+  width: 90%;
+}
+
+.chat-skeleton-user-line.l2 {
+  width: 56%;
+}
+
+.chat-skeleton-work,
+.chat-skeleton-line {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--border-strong) 40%, var(--active)) 20%,
+    color-mix(in srgb, var(--border-strong) 85%, var(--surface)) 50%,
+    color-mix(in srgb, var(--border-strong) 40%, var(--active)) 80%
+  );
+  background-size: 240% 100%;
+  animation: chat-skeleton-shimmer 1.55s ease-in-out infinite;
+}
+
+.chat-skeleton-work {
+  width: 118px;
+  height: 11px;
+  border-radius: var(--radius-pill);
+}
+
+.chat-skeleton-prose {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.chat-skeleton-line {
+  height: 13px;
+  border-radius: var(--radius-xs);
+}
+
+.chat-skeleton-line.w94 { width: 94%; }
+.chat-skeleton-line.w90 { width: 90%; }
+.chat-skeleton-line.w86 { width: 86%; }
+.chat-skeleton-line.w74 { width: 74%; }
+.chat-skeleton-line.w62 { width: 62%; }
+
+@media (max-width: 640px) {
+  .chat-skeleton {
+    padding: 14px 14px 20px;
+    gap: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-skeleton,
+  .chat-skeleton-user,
+  .chat-skeleton-work,
+  .chat-skeleton-line {
+    animation: none;
+  }
+}

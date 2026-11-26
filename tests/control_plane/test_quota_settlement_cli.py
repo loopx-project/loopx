@@ -3156,7 +3156,11 @@ def test_unterminated_prior_guard_is_not_a_recovery_precondition(
 def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
 ) -> None:
+    from contextlib import redirect_stdout
+    from io import StringIO
+
     from canonical_authority_fixture import isolate_sqlite_runtime
+    from loopx.entrypoint import main as cli_main
 
     if provider == "sqlite":
         isolate_sqlite_runtime(tmp_path, monkeypatch)
@@ -3184,15 +3188,27 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
     assert prior_rc == 0, prior
     assert prior["heartbeat_receipt"]["closeout_required"] is True
 
+    # Only the setup mutations share this process. Each quota guard still reads
+    # their persisted effects from a fresh CLI process.
+    def mutate_replan_todo(action: str, *args: str) -> dict[str, Any]:
+        output = StringIO()
+        with redirect_stdout(output):
+            rc = cli_main([
+                "--registry", str(registry_path), "--runtime-root", str(runtime),
+                "--format", "json", "todo", action, "--goal-id", GOAL_ID, *args,
+            ])
+        result = json.loads(output.getvalue())
+        assert rc == 0, result
+        return result
+
     replan_todo_ids = []
     for index in range(15):
-        added_rc, added = _run_cli(
-            registry_path, runtime, "todo", "add", "--goal-id", GOAL_ID,
+        added = mutate_replan_todo(
+            "add",
             "--role", "agent", "--text", f"Review recovery breadth {index}.",
             "--priority", "P1", "--task-class", "advancement_task",
             "--action-kind", "validate", "--claimed-by", AGENT_ID,
         )
-        assert added_rc == 0, added
         replan_todo_ids.append(added["todo_id"])
 
     recovery_rc, recovery = _run_cli(
@@ -3243,13 +3259,12 @@ def test_recovery_does_not_bind_current_replan_and_reenters_same_turn(
     # append-only heartbeat receipt.  The same recovery Turn must then be able
     # to bind an independent successor instead of preserving an obsolete replan.
     for todo_id in replan_todo_ids:
-        retired_rc, retired = _run_cli(
-            registry_path, runtime, "todo", "supersede", "--goal-id", GOAL_ID,
+        mutate_replan_todo(
+            "supersede",
             "--agent-id", AGENT_ID, "--todo-id", todo_id,
             "--successor-todo-id", ALTERNATIVE_TODO_ID,
             "--reason", "Temporary review breadth was resolved by the separate replan scenario.",
         )
-        assert retired_rc == 0, retired
 
     wait_rc, wait = _run_cli(
         registry_path,

@@ -136,7 +136,8 @@ class StewardReports:
                 or native.get("status") == "failed"))
 
     def _failed_without_generation(
-        self, actor: dict[str, Any], window: dict[str, Any], *, generation_locked: bool = False,
+        self, actor: dict[str, Any], window: dict[str, Any], *,
+        generation_locked: bool = False, require_recovery_exhausted: bool = False,
     ) -> bool:
         """Read a terminal report failure under the original execution fence.
 
@@ -179,11 +180,16 @@ class StewardReports:
             operation = "report." + window["window_id"]
             if actor.get("schema_version") == "loopx_managed_session_actor_v0":
                 operation = ManagedSessionTurn(self.controller)._request(sid, actor["agent_id"], operation)["turn_instance_id"]
+            allowed_instances = (
+                {operation + ".quota-recovery", operation + ".timeout-recovery"}
+                if require_recovery_exhausted
+                else {operation, operation + ".quota-recovery", operation + ".timeout-recovery"}
+            )
             if (turn.get("origin") != "native_loopx" or turn.get("loopx_execution") is not True
                     or turn.get("session_id") != sid or request.get("actor") != actor
                     or request.get("work_kind") != "report" or request.get("report_window_id") != window["window_id"]
                     or request.get("report_subscription_revision") != window["subscription_revision"]
-                    or request.get("turn_instance_id") not in {operation, operation + ".quota-recovery", operation + ".timeout-recovery"}
+                    or request.get("turn_instance_id") not in allowed_instances
                     or not request.get("todo_id") or result.get("status") != "failed"
                     or result.get("result_kind") != "host_failure" or failure.get("retryable") is not False
                     or receipt.get("ok") is not True or receipt.get("failed_phase") != "host_execute"
@@ -413,6 +419,9 @@ class StewardReports:
             subscription_resolver=lambda: self.subscription(owner_key, expected_actor=actor),
             can_replace_failed_window=lambda window: self._failed_without_generation(
                 actor, window, generation_locked=True,
+            ),
+            can_replace_exhausted_failed_window=lambda window: self._failed_without_generation(
+                actor, window, generation_locked=True, require_recovery_exhausted=True,
             ))
         if admitted["status"] != "pending":
             return None, False

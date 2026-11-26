@@ -115,7 +115,18 @@ def test_successor_repair_preserves_projected_candidate_precedence(repair):
     "vision_successor_required",
 ])
 def test_vision_obligations_project_the_input_the_validator_accepts(trigger: str) -> None:
-    obligation = {"obligation_id": "replan-example", "triggers": [{"kind": trigger}]}
+    from loopx.control_plane.work_items.progress_observation import (
+        build_replan_action_packet,
+        build_replan_context,
+    )
+
+    obligation_id = "replan-1111111111111111"
+    obligation = {"obligation_id": obligation_id, "triggers": [{"kind": trigger}]}
+    obligation["replan_context"] = build_replan_context(
+        obligation, goal_id="example", agent_id="agent-example", newest_first_runs=[],
+    )
+    packet = build_replan_action_packet(obligation)
+    assert "agent_vision.stride_decision" in packet["writeback_contract"]["required_fields"]
     novel_probe = {
         "result_class": "advanced", "surface_id": "surface-new",
         "evidence_ids": ["evidence-new"],
@@ -124,14 +135,18 @@ def test_vision_obligations_project_the_input_the_validator_accepts(trigger: str
     assert semantic_delta_from_writeback(
         obligation=obligation, progress_observation=novel_probe,
     )["accepted"] is False
+    vision = {"vision_patch": {"acceptance_summary": "Verified boundary"},
+              "path_delta": {"outcome": "continue", "evidence_refs": ["evidence-new"]}}
     assert semantic_delta_from_writeback(
-        obligation=obligation, progress_observation=None,
-        agent_vision={"vision_patch": {"acceptance_summary": "Verified boundary"},
-                      "path_delta": {"outcome": "continue", "evidence_refs": ["evidence-new"]}},
+        obligation=obligation, progress_observation=None, agent_vision=vision,
+    )["reason_code"] == "stride_decision_required"
+    vision["stride_decision"] = packet["stride_control"]["minimal_example"]
+    assert semantic_delta_from_writeback(
+        obligation=obligation, progress_observation=None, agent_vision=vision,
     )["accepted"] is True
     for payload in (obligation, {"autonomous_replan_obligation": obligation}):
         actions = build_autonomous_replan_cli_actions(
-            payload, goal_id="example", settlement_args=" --replan-obligation-id replan-example",
+            payload, goal_id="example", settlement_args=f" --replan-obligation-id {obligation_id}",
             scoped_cli_args=" --agent-id agent-example", quota_spend_action="spend-bound-turn",
             settlement_chain_ready=True,
         )

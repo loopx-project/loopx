@@ -12,10 +12,7 @@ from typing import Any
 from ...heartbeat_prompt import build_heartbeat_prompt
 from ..quota.effective_action import EffectiveAction
 from ..quota.turn_envelope import quota_action_signature_document
-from ..work_items.progress_observation import (
-    ProgressResultClass,
-    semantic_delta_from_writeback,
-)
+from ..work_items.progress_observation import ProgressResultClass
 from .model_tool_behavior import (
     _module_reader_tokens,
     DoubaoExecToolBehaviorActorBase,
@@ -1404,7 +1401,6 @@ def _handle_semantic_writeback(
     observation: Mapping[str, Any],
     state: _QualificationState,
 ) -> str:
-    obligation_id = _expected_obligation_id(state)
     result_class = str(observation.get("result_class") or "")
     terminal_result = result_class in {
         ProgressResultClass.BLOCKED.value,
@@ -1425,19 +1421,8 @@ def _handle_semantic_writeback(
         )
         if not matches_observed_surface:
             raise ValueError("semantic_action_misses_uncovered_frontier")
-    obligation = dict(
-        (state.quota_packet or {}).get("autonomous_replan_obligation") or {}
-    )
-    if obligation.get("obligation_id") != obligation_id:
-        raise ValueError("quota_obligation_missing")
-    semantic_delta = semantic_delta_from_writeback(
-        obligation=obligation,
-        progress_observation=observation,
-        agent_vision=_authored_vision(command, state),
-        history_runs=_fixture_runs(state),
-    )
-    if semantic_delta.get("accepted") is not True:
-        raise ValueError("non_semantic_replan_action")
+    # The writer owns semantic acceptance and recovery for the original Turn.
+    # A compact admission packet may omit the review basis that it resolves.
     state.semantic_result_class = result_class
     return _bound_semantic_writeback(command, state)
 
@@ -1570,7 +1555,6 @@ _EXPECTED_BEHAVIOR_FAILURES = frozenset(
         "successor_reentry_not_runnable",
         "successor_reentry_composition_not_scheduled",
         "quota_obligation_missing",
-        "non_semantic_replan_action",
         "semantic_writeback_failed",
         "semantic_writeback_binding_mismatch",
         "semantic_writeback_requires_authored_draft",

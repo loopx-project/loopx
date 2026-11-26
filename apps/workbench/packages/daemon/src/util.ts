@@ -48,7 +48,7 @@ export function askedText(text: string): string {
     else if (line.startsWith('>')) quoted.push(line.replace(/^>\s?/, '').trim());
     else if (inNote && line.startsWith('评论：')) comments.push(line.slice('评论：'.length).trim());
     // A note on a file names it on its own line; the passage and comment are what was asked.
-    else if (inNote && line.startsWith('文件：')) continue;
+    else if (inNote && (line.startsWith('文件：') || /^来源：(交接前的会话|另一个会话)，原文和上下文用 (?:loochat|calli) history \S+ --turn \S+ 读$/.test(line))) continue;
     else break;
   }
   const body = lines.slice(i).join('\n').trim();

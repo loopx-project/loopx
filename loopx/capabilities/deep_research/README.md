@@ -70,3 +70,9 @@ Recorded claims carry caller-declared provenance: `--tool` records the tool the
 caller says produced the evidence. The CLI records that provenance; it does not
 attest that the tool actually ran — execution receipts belong to a future
 host/harness bridge, not this ledger.
+
+For HTTP(S) source deduplication, scheme and host are case-insensitive, and an
+empty path is equivalent to `/`. Paths, queries, fragments, user information
+and non-root trailing slashes remain significant. The recorded locator is never
+rewritten. Local and opaque references keep their existing comparison behavior;
+receipt-backed sources keep their exact-locator and evidence-replay rules.

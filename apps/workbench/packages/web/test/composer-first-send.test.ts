@@ -30,10 +30,12 @@ for (const streamed of [false, true]) test(`a new conversation keeps ownership o
     await act(async () => { renderer = create(createElement(Composer, props), { createNodeMock: () => ({ style: {}, focus() {}, contains: () => false, getBoundingClientRect: () => ({ height: 0 }) }) }); });
     await act(async () => { renderer!.root.findByProps({ className: 'send-btn' }).props.onClick({ detail: 0, preventDefault() {} }); });
     await act(async () => { onCreated(draftKey); renderer!.update(createElement(Composer, { ...props, draftKey })); });
-    assert.equal(renderer!.root.findByType('textarea').props.value, text, 'the pending upload retains its first-message draft');
+    assert.equal(renderer!.root.findByType('textarea').props.value, '', 'optimistic send clears the visible composer immediately');
+    assert.equal(readDrafts(storage).new, undefined);
+    assert.equal(readDrafts(storage)[draftKey]?.text, text, 'the pending upload retains its durable first-message draft');
     if (streamed) {
       await act(async () => { renderer!.update(createElement(Composer, { ...props, draftKey, lastSent: { turnId: 'first-turn', text } })); });
-      assert.equal(renderer!.root.findByType('textarea').props.value, '', 'streamed acceptance reconciles the carried draft');
+      assert.equal(renderer!.root.findByType('textarea').props.value, '', 'streamed acceptance keeps the composer clear');
     }
     await act(async () => { resolve(); await sending; });
     assert.equal(renderer!.root.findByType('textarea').props.value, '', 'successful first send is not left as an unsent draft');

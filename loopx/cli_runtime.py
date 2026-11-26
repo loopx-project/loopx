@@ -203,6 +203,15 @@ def resolve_cli_registry(
 		# native-session scope; machine defaults keep their separate route owner.
 		if args.quota_command in {"context-project", "replan-view"} or has_explicit_context_read_source(args):
 			return registry_path, registry_was_configured
+	if (
+		args.command == "todo"
+		and getattr(args, "todo_command", None) == "plan-batch"
+		and getattr(args, "schema", False)
+		and getattr(args, "text", None) is None
+	):
+		# Static plan-batch schema reads no Goal or runtime-root state;
+		# option validation still runs in handle_todo_command.
+		return registry_path, registry_was_configured
 	if str(args.registry) == HOST_GLOBAL_REGISTRY_SELECTOR:
 		try:
 			runtime_root = (
@@ -337,9 +346,13 @@ def cli_invocation_route(argv: list[str]):
 
 def _register_registry_inspection_commands(subparsers: argparse._SubParsersAction) -> None:
 	"""Share the existing registry grammar with the complete support parser."""
-	subparsers.add_parser(
+	registry_parser = subparsers.add_parser(
 		"registry", help="Inspect registry goals and adapter declarations."
 	)
+	registry_parser.add_argument("--goal-id", help="Show one exact Goal id; keep registry-wide diagnostics.")
+	registry_parser.add_argument("--query", help="Case-insensitive literal search in Goal id, repo, domain, status or adapter kind.")
+	registry_parser.add_argument("--limit", type=int, help="Maximum matching Goal rows (default 20 when selecting).")
+	registry_parser.add_argument("--offset", type=int, help="Skip this many matches in registry order (default 0).")
 	registry_boundary_parser = subparsers.add_parser(
 		"registry-boundary",
 		help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
@@ -376,6 +389,13 @@ def _handle_registry_inspection_command(
 	"""Keep one inspection adapter and the full CLI's existing patch points."""
 	if args.command == "registry":
 		payload = inspect_registry(registry_path)
+		from .cli_commands.registry_inspection import select_registry_goals
+
+		try:
+			payload = select_registry_goals(payload, goal_id=args.goal_id, query=args.query,
+				limit=args.limit, offset=args.offset)
+		except ValueError as exc:
+			payload = {**payload, "ok": False, "error": str(exc), "goals": []}
 		print_payload(payload, args.format, render_registry_markdown)
 		return 0 if payload.get("ok") else 1
 

@@ -139,13 +139,18 @@ def _upstream(*, hold_body=False, hold_response=False):
     if not hold_response:
         state.respond.set()
 
+    class UpstreamServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # Negotiate the small window during the TCP handshake so large
+            # loopback segments cannot stall the fixture after reading resumes.
+            if hold_body:
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024)
+            super().server_bind()
+
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.0"
 
         def setup(self):
-            # Small receive windows plus a multi-megabyte body establish real
-            # backpressure; a 128 KiB write can fit entirely in kernel buffers.
-            self.request.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024)
             self.request.settimeout(5)
             super().setup()
 
@@ -172,7 +177,7 @@ def _upstream(*, hold_body=False, hold_response=False):
                 row["transport_error"] = type(error).__name__
                 state.body.set()
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = UpstreamServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
     state.base_url = f"http://127.0.0.1:{server.server_port}/v1"
     thread = threading.Thread(target=server.serve_forever, daemon=True)

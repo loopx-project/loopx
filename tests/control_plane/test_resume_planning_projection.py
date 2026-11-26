@@ -264,7 +264,15 @@ def test_public_quota_replans_completion_cycles_without_reassigning_work(
         return
     assert code == 0, packet
     summary = packet["agent_todo_summary"]
-    blocked = next(row for row in summary["resume_blocked_items"] if row["todo_id"] == "todo_alpha")
+    # Equal diagnostic lanes can share one row list in the same CLI response.
+    if "resume_blocked_items" in summary:
+        blocked_items = summary["resume_blocked_items"]
+    else:
+        parent, lane = summary["resume_blocked_items_ref"].rsplit(".", 1)
+        assert parent == "$.agent_todo_summary"
+        blocked_items = summary[lane]
+    assert {row["todo_id"] for row in blocked_items} == {"todo_alpha", "todo_bravo"}
+    blocked = next(row for row in blocked_items if row["todo_id"] == "todo_alpha")
     assert blocked["resume_condition"]["invalid_state"] == "dependency_cycle"
     if independent:
         assert packet["selected_todo"]["todo_id"] == "todo_independent"

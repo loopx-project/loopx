@@ -219,6 +219,12 @@ function isNodeErrorCode(error: unknown, code: string): boolean {
   return error instanceof Error && "code" in error && error.code === code;
 }
 
+function isExclusiveRegularFile(stats: { isFile(): boolean; nlink: number }): boolean {
+  // lstat().isFile() is true for a hard link, and realpath stays on the
+  // in-directory name. nlink === 1 is the exclusive runs-directory entry.
+  return stats.isFile() && stats.nlink === 1;
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -302,6 +308,17 @@ export function parseQuotaAccountingIndex(content: string | null): JsonObject[] 
     records.push(requiredObject(value, `quota run index line ${index + 1}`));
   }
   return records;
+}
+
+export async function readQuotaAccountingIndex(indexPath: string): Promise<{
+  records: JsonObject[];
+  indexDigest: string | null;
+}> {
+  const bytes = await readOptionalBytes(indexPath);
+  return {
+    records: parseQuotaAccountingIndex(bytes?.toString("utf8") ?? null),
+    indexDigest: bytes === null ? null : sha256Bytes(bytes),
+  };
 }
 
 function pyValue(value: unknown): string {
@@ -573,7 +590,7 @@ async function relocatedRunArtifactPath(
   }
   const candidate = join(runsDirReal, fileName);
   try {
-    if (!(await lstat(candidate)).isFile()) return null;
+    if (!isExclusiveRegularFile(await lstat(candidate))) return null;
     const targetPath = await realpath(candidate);
     if (relative(runsDirReal, targetPath) !== fileName) return null;
   } catch (error) {
@@ -707,13 +724,18 @@ export async function readQuotaSpendEventFromRun(
   const candidatePath = staysInsideInitial || relocatedCandidate === null
     ? resolve(rawPath)
     : relocatedCandidate;
+  let candidateStat;
+  try {
+    candidateStat = await lstat(candidatePath);
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) return null;
+    throw error;
+  }
   let targetPath: string;
   try {
     targetPath = await realpath(candidatePath);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return null;
-    }
+    if (isNodeErrorCode(error, "ENOENT")) return null;
     throw error;
   }
   const relativePath = relative(runsDirReal, targetPath);
@@ -727,6 +749,7 @@ export async function readQuotaSpendEventFromRun(
       "quota spend json_path must stay inside the goal runs directory",
     );
   }
+  if (!isExclusiveRegularFile(candidateStat)) return null;
   let content: string;
   try {
     content = await readFile(targetPath, "utf8");
@@ -779,15 +802,10 @@ export async function lookupQuotaAccountingReplay(
   indexDigest: string | null;
 }> {
   const lookup = async () => {
-    const content = await readOptionalText(indexPath);
+    const { records, indexDigest } = await readQuotaAccountingIndex(indexPath);
     return {
-      resolution: resolveQuotaAccountingEffect(
-        kind,
-        parseQuotaAccountingIndex(content),
-        effectId,
-        goalRef,
-      ),
-      indexDigest: await quotaAccountingIndexDigest(indexPath),
+      resolution: resolveQuotaAccountingEffect(kind, records, effectId, goalRef),
+      indexDigest,
     };
   };
   return readOnly || indexLockHeld
@@ -952,16 +970,24 @@ function validateReceiptPaths(
 }
 
 async function rejectSymlinkPath(path: string, label: string): Promise<void> {
+  let stats;
   try {
-    if ((await lstat(path)).isSymbolicLink()) {
-      throw new EffectRuntimeRequestError(
-        `${label} must not be a symbolic link`,
-        "malformed_transaction_receipt",
-      );
-    }
+    stats = await lstat(path);
   } catch (error) {
     if (isNodeErrorCode(error, "ENOENT")) return;
     throw error;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new EffectRuntimeRequestError(
+      `${label} must not be a symbolic link`,
+      "malformed_transaction_receipt",
+    );
+  }
+  if (stats.isFile() && !isExclusiveRegularFile(stats)) {
+    throw new EffectRuntimeRequestError(
+      `${label} must not be a hard link`,
+      "malformed_transaction_receipt",
+    );
   }
 }
 
@@ -1226,9 +1252,6 @@ export async function commitQuotaAccountingArtifactTransaction(
     }
 
     const currentIndexBytes = await readOptionalBytes(indexPath);
-    const currentIndexContent = currentIndexBytes === null
-      ? null
-      : currentIndexBytes.toString("utf8");
     const currentDigest = currentIndexBytes === null
       ? null
       : sha256Bytes(currentIndexBytes);
@@ -1240,7 +1263,9 @@ export async function commitQuotaAccountingArtifactTransaction(
         indexDigest: currentDigest,
       };
     }
-    const currentRecords = parseQuotaAccountingIndex(currentIndexContent);
+    const currentRecords = parseQuotaAccountingIndex(
+      currentIndexBytes?.toString("utf8") ?? null,
+    );
     const duplicateResolution = resolveQuotaAccountingEffect(
       request.kind,
       currentRecords,

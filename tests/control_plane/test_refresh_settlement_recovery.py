@@ -166,6 +166,37 @@ def test_rejected_write_and_upgrade_state_recover_original_turn_once(
     assert rc == 0 and "settlement_recovery" not in after_settlement, after_settlement
 
 
+def test_busy_run_index_returns_recorded_incident_and_original_turn_recovery(tmp_path, monkeypatch):
+    from loopx.file_lock import exclusive_run_index_lock, lock_incident_path
+    from loopx.state_refresh import render_state_refresh_markdown
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID, "--todo-id", TODO_ID,
+               "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0 and guard["normal_delivery_allowed"]
+    index = runtime / "goals" / GOAL_ID / "runs" / "index.jsonl"
+    with exclusive_run_index_lock(index, operation="test_busy_index"):
+        rc, refused = _run_cli(registry, runtime, "refresh-state", *binding,
+            "--classification", "verified_delivery", "--delivery-outcome", "outcome_progress",
+            "--settle-turn", "--settlement-receipt", "--no-global-sync", "--suppress-external-sinks", cwd=project)
+
+    assert rc != 0 and refused["error_code"] == "lock_acquire_timeout" and not refused["appended"]
+    recovery = refused["settlement_recovery"]
+    assert recovery["settlement_identity"] == guard["heartbeat_receipt"]["settlement_identity"]
+    assert recovery["settlement_progress"]["state"] == "writeback_required"
+    assert _spend_run_count(runtime) == 0
+    journal = lock_incident_path(index)
+    incident = json.loads(journal.read_text().splitlines()[-1])
+    assert refused["lock_timeout"] == incident and refused["incident_recorded"]
+    assert refused["incident_channel"] == journal.name
+    assert refused["operator_action"] == incident["operator_action"]
+    markdown = render_state_refresh_markdown(refused)
+    assert journal.name in markdown and incident["operator_action"]["retry_mode"] in markdown
+
+
 def test_unavailable_recovery_read_preserves_committed_state_result(tmp_path, monkeypatch):
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)

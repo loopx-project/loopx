@@ -28,6 +28,23 @@ test("only the provider-qualified native replay can retain a complete resume bas
   assert.equal(state.context_epoch, "original");
 });
 
+test("native lifecycle returns only changed fields when the journal caller requests edits", () => {
+  const state = {session_id: "native", cwd: "/workspace", context_epoch: "initial",
+    recovery: {target: {context_epoch: "initial"}, path: "capture.json"}, pending: {read_sections: {"/budget": "digest"}}};
+  const request = {operation: "native_context_lifecycle", state, new_epoch: "next",
+    event: {hook_event_name: "PreCompact", session_id: "native", cwd: "/workspace"}};
+  const {pending, ...retained} = state;
+  assert.deepEqual(evaluateTurnEnvelope(request), {...retained, context_epoch: "next"});
+  const edits = evaluateTurnEnvelope({...request, source_edits: true});
+  assert.deepEqual(edits, {changes: [
+    {path: ["pending"], remove: true},
+    {path: ["context_epoch"], value: "next"},
+  ]});
+  assert.deepEqual(state.pending, pending);
+  assert.deepEqual(evaluateTurnEnvelope({...request, source_edits: true,
+    event: {...request.event, hook_event_name: "Stop"}}), {changes: []});
+});
+
 test("warm progressive edits copy only numbers present in the captured input", () => {
   const goalBody = "Keep the original requirements, recorded evidence and stop conditions. ".repeat(180);
   const original = {goal_id: "goal", goalBody, live_count: 7};
