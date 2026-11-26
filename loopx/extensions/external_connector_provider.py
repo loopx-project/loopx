@@ -164,20 +164,7 @@ def build_document_comment_connector_registration(
         authority_material_ref,
         field="authority_material_ref",
     )
-    normalized_materials: object = project_materials
-    if isinstance(project_materials, Mapping):
-        normalized_materials = {
-            str(key): dict(entry) if isinstance(entry, Mapping) else entry
-            for key, entry in project_materials.items()
-        }
-    elif isinstance(project_materials, Sequence) and not isinstance(
-        project_materials, (str, bytes)
-    ):
-        normalized_materials = [
-            dict(entry) if isinstance(entry, Mapping) else entry
-            for entry in project_materials
-        ]
-    materials = normalize_project_materials(normalized_materials)
+    materials = normalize_project_materials(project_materials)
     if material_ref not in materials:
         raise ValueError("authority material must be registered before its comments")
     specs = normalize_permission_requirement_specs(permission_requirements)

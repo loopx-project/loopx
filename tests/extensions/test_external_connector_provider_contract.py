@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 import pytest
 
+from loopx import authority
 from loopx.extensions import (
     external_connector_permissions as perms,
     external_connector_provider as provider,
@@ -200,11 +202,25 @@ def test_capture_and_settlement_validation_and_single_guidance_pass(
     reg = provider.build_document_comment_connector_registration(
         connector=conn,
         authority_material_ref="mat-1",
-        project_materials=MappingProxyType(
-            {"mat-1": MappingProxyType({"id": "mat-1"})}
-        ),
+        project_materials={"mat-1": {"id": "mat-1"}},
         permission_requirements=[MappingProxyType(r) for r in reqs],
     )
+
+    non_canonical: tuple[tuple[Mapping[str, object] | tuple[dict[str, object], ...] | list[Mapping[str, object]], str], ...] = (
+        (({"title": "doc"},), "source_1"),
+        (MappingProxyType({"mat-1": {"id": "mat-1"}}), "mat-1"),
+        (MappingProxyType({"mat-1": MappingProxyType({"id": "mat-1"})}), "mat-1"),
+        ([MappingProxyType({"id": "mat-1"})], "mat-1"),
+    )
+    for bad_materials, ref in non_canonical:
+        assert authority.normalize_project_materials(bad_materials) == {}
+        with pytest.raises(ValueError, match="must be registered before its comments"):
+            provider.build_document_comment_connector_registration(
+                connector=conn,
+                authority_material_ref=ref,
+                project_materials=bad_materials,
+                permission_requirements=reqs,
+            )
     guidance = provider.evaluate_external_connector_permissions(
         requirements=reqs,
         granted_scopes={
