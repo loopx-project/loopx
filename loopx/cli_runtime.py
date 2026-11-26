@@ -75,11 +75,12 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"goal-acceptance",
 	"goal-lifecycle",
 	"host-mode-plan",
-	"explore",
 	"capability",
 	"workbench",
 	"history",
 }
+# Fast-dispatched in ordinary installs; excluded from standalone Core support/commands.
+_FULL_INSTALL_SELECTED_COMMANDS = frozenset({"explore"})
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
 
@@ -1166,7 +1167,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command == "history" and "loopx.cli" in sys.modules:
 		# An explicitly loaded facade keeps its existing handler/renderer bindings.
 		return _run_full_cli(raw_argv)
-	if command in _SELECTED_COMMANDS:
+	if command in _SELECTED_COMMANDS or (command in _FULL_INSTALL_SELECTED_COMMANDS and not _standalone_core()):
 		try:
 			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:

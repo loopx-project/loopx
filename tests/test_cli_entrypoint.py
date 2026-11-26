@@ -2386,3 +2386,25 @@ def test_selected_explore_turn_context_and_heartbeat_prequota_match_full_cli_laz
     full_prequota = run_cli_main("loopx.cli", prequota_args)
     assert selected_prequota.returncode == full_prequota.returncode == 0, (selected_prequota.stderr, full_prequota.stderr)
     assert json.loads(selected_prequota.stdout) == json.loads(full_prequota.stdout)
+
+
+def test_standalone_core_excludes_explore_from_selected_commands_and_refuses_dispatch(monkeypatch, capsys):
+    import builtins
+    import loopx.cli_runtime as cli_runtime
+
+    monkeypatch.setattr(cli_runtime, "_standalone_core", lambda: True)
+    assert "explore" not in cli_runtime._available_selected_commands()
+
+    real_import = builtins.__import__
+
+    def _missing_full_cli(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "cli" and level == 1 and (globals or {}).get("__package__") == "loopx":
+            raise ModuleNotFoundError("No module named 'loopx.cli'", name="loopx.cli")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _missing_full_cli)
+    for argv in (["explore", "--help"], ["explore", "turn-context", "--goal-id", "g", "--agent-id", "a"]):
+        with pytest.raises(SystemExit) as exc:
+            cli_runtime.main(argv)
+        assert exc.value.code == 2
+        assert "unavailable in the standalone core" in capsys.readouterr().err
