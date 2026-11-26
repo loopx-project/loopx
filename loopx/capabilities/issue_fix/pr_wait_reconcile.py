@@ -14,7 +14,7 @@ from ...agent_registry import registered_agent_ids_from_registry
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.runtime.time import now_utc_iso
 from ...control_plane.todos.resume_condition import compact_todo_resume_items
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
@@ -67,6 +67,7 @@ def _reconcile_locked(
             runtime_root_arg=str(runtime),
             goal_id=goal_id,
             role="agent",
+            include_acceptance=False,
         )["todos"]
     )
     compact = compact_todo_resume_items(todos)

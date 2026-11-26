@@ -10,15 +10,6 @@ from ..agent_registry import (
     registered_agent_ids_from_registry,
     require_registered_agent_id,
 )
-from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
-from ..execution_profile import execution_profile_turn_granularity
-from ..heartbeat_prompt import (
-    build_heartbeat_prompt,
-    build_heartbeat_prompt_error_payload,
-    project_heartbeat_agent_input,
-    render_heartbeat_prompt_markdown,
-)
-from .support_control_registry import resolve_heartbeat_active_state
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -78,6 +69,16 @@ def handle_heartbeat_prompt_command(
     print_payload: PrintPayload,
     output_format: FormatSelector,
 ) -> int:
+    from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
+    from ..execution_profile import execution_profile_turn_granularity
+    from ..heartbeat_prompt import (
+        build_heartbeat_prompt,
+        build_heartbeat_prompt_error_payload,
+        project_heartbeat_agent_input,
+        render_heartbeat_prompt_markdown,
+    )
+    from .support_control_registry import resolve_heartbeat_active_state
+
     active_state = None
     resolved_active_state = None
     active_state_source = None
@@ -335,9 +336,11 @@ def _verified_codex_resume(args: argparse.Namespace, registry: Path, agent_id: s
     """Select the short wake only for the Host's existing scoped conversation."""
     session_id = getattr(args, "resume_codex_session_id", None)
     if not (session_id and args.thin and not args.bootstrap and args.turn_instance_id
-            and agent_id and args.runtime_root
-            and args.runtime_profile == SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value
-            and args.visible_goal_host is None):
+            and agent_id and args.runtime_root and args.visible_goal_host is None):
+        return False
+    from ..control_plane.scheduler.execution_context import SchedulerRuntimeProfile
+
+    if args.runtime_profile != SchedulerRuntimeProfile.GENERIC_CLI_AGENT_LOOP.value:
         return False
     from ..control_plane.goals.first_party_host_admission import (
         FirstPartyHostGoalAdmission, capture_first_party_host_goal_ref,

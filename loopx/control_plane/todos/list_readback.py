@@ -39,7 +39,10 @@ def list_goal_todos(
     include_archived: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
     json_references: bool = False,
+    include_acceptance: bool = True,
 ) -> dict[str, Any]:
+    if not isinstance(include_acceptance, bool):
+        raise ValueError("Todo include_acceptance must be a boolean")
     if full_text and (thin or json_references or summary):
         raise ValueError("Full Todo body reads cannot use compact presentation")
     if read_scope not in {"active", "completed_history"}:
@@ -110,6 +113,8 @@ def list_goal_todos(
             "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
     if summary:
         params["query"]["summary"] = True
+    if not include_acceptance:
+        params["query"]["include_acceptance"] = False
     result = project_todo_read(params)
     if "payload" not in result:
         failure = result["canonical"]
@@ -122,7 +127,7 @@ def list_goal_todos(
     payload = result["payload"]
     if full_text and payload.get("full_text") is not True:
         raise ValueError("Complete Todo body delivery is unsupported by this runtime")
-    if "canonical_acceptance" in result:
+    if include_acceptance and "canonical_acceptance" in result:
         from .goal_todo_projection import observe_todo_acceptance
         payload = observe_todo_acceptance(payload, result["canonical_acceptance"],
             registry_path=source_registry, goal_id=goal_id)

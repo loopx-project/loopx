@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..history import load_registry
+from ..control_plane.projects.registry_codec import load_registry
 from ..paths import global_registry_path, resolve_runtime_root, select_default_runtime_root
 from ..registry import registry_goals, resolve_state_file
 

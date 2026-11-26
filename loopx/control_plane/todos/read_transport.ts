@@ -59,7 +59,7 @@ export async function readTodoRuntime(value: unknown): Promise<JsonObject> {
   let bytes = decoded;
   if (input.kind === "quota_projection" && decoded.length > inlineBytes && decoded.length <= completeBytes) {
     bytes = gzipSync(decoded);
-  } else if (input.kind === "canonical_fields" && decoded.length >= 16 * 1024 && decoded.length <= 1024 * 1024) {
+  } else if (input.kind === "canonical_fields" && decoded.length >= 16 * 1024 && decoded.length <= completeBytes) {
     // Configured Goals expose the same acceptance document in both views.
     // Bound synchronous work and keep dense replies inline after base64 overhead.
     const acceptance = object(result.canonical).goal_acceptance_contract;

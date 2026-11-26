@@ -4,13 +4,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...control_plane.todos.contract import (
     normalize_todo_decision_scope,
 )
 from ...control_plane.todos.todo_semantics import todo_item_task_class
-from ...control_plane.todos.mutation_api import complete_goal_todo
 from ...control_plane.todos.list_readback import list_goal_todos
 from .pr_lifecycle_rollout import append_pr_merge_rollout_event
 from .pr_review_ack import (
@@ -53,6 +52,7 @@ def _pr_lifecycle_todo(
         role="user",
         todo_id=todo_id,
         project=project,
+        include_acceptance=False,
     )
     todo = todo_payload.get("todo")
     if not isinstance(todo, dict):
@@ -133,6 +133,8 @@ def reconcile_issue_fix_pr_gate(
         return receipt
 
     if not already_reconciled:
+        from ...control_plane.todos.mutation_api import complete_goal_todo
+
         permalink = str(observation.get("permalink") or url)
         terminal_at = str(
             observation.get("merged_at")
@@ -315,6 +317,8 @@ def reconcile_issue_fix_pr_review(
         return receipt
 
     if not already_reconciled:
+        from ...control_plane.todos.mutation_api import complete_goal_todo
+
         permalink = str(observation.get("permalink") or url)
         terminal_at = str(
             observation.get("merged_at")

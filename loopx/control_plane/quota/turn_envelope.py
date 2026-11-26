@@ -79,9 +79,9 @@ def pack_turn_source(
 ) -> dict[str, str] | None:
     """Use the lossless wire for bounded sources that compress well."""
     raw = _encode_rpc_json(source)
-    if 16 * 1024 <= len(raw) <= 1024 * 1024:
+    if 16 * 1024 <= len(raw) <= 16 * 1024 * 1024:
         data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
-        if len(data) + 128 < len(raw) * max_encoded_fraction:
+        if len(data) <= 2 * 1024 * 1024 and len(data) + 128 < len(raw) * max_encoded_fraction:
             return {"encoding": "deflate-base64-json-v0", "data": data}
     return None
 

@@ -11,7 +11,7 @@ from ...control_plane.todos.contract import (
     normalize_todo_bound_agent,
 )
 from ...control_plane.todos.todo_semantics import todo_item_task_class
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
     append_rollout_event_once,

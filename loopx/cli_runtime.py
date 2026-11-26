@@ -79,6 +79,8 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"workbench",
 	"history",
 }
+# Fast-dispatched in ordinary installs; excluded from standalone Core support/commands.
+_FULL_INSTALL_SELECTED_COMMANDS = frozenset({"explore"})
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
 
@@ -576,6 +578,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.history import register_history_command
 
 		register_history_command(subparsers)
+	elif command == "explore":
+		from .cli_commands.explore import register_explore_commands
+
+		register_explore_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -914,6 +920,16 @@ def _dispatch_common_command(
 			print_payload=print_payload,
 			append_cli_rollout_event=append_cli_rollout_event,
 		)
+	if args.command == "explore":
+		from .cli_commands.explore import handle_explore_command
+
+		return handle_explore_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			print_payload=print_payload,
+			output_format=output_format,
+		)
 	return None
 
 
@@ -1151,7 +1167,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command == "history" and "loopx.cli" in sys.modules:
 		# An explicitly loaded facade keeps its existing handler/renderer bindings.
 		return _run_full_cli(raw_argv)
-	if command in _SELECTED_COMMANDS:
+	if command in _SELECTED_COMMANDS or (command in _FULL_INSTALL_SELECTED_COMMANDS and not _standalone_core()):
 		try:
 			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:

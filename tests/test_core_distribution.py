@@ -254,13 +254,17 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     commands = [entry["command"] for group in reference["groups"] for entry in group["commands"]]
     assert "loopx configure-goal --help" in commands
-    assert not any(command.startswith(("loopx dashboard", "loopx chat", "loopx canary")) for command in commands)
+    assert not any(
+        command.startswith(("loopx dashboard", "loopx chat", "loopx canary", "loopx explore"))
+        for command in commands
+    )
     _run(core_python, ["--version"], tmp_path, environment={"PATH": str(tmp_path)})
     _run(core_python, ["--format", "json", "--version"], tmp_path)
     invalid = _run(core_python, ["--format", "invalid", "--version"], tmp_path, expected=2)
     assert "invalid choice" in invalid.stderr
-    refusal = _run(core_python, ["dashboard"], tmp_path, expected=2)
-    assert "unavailable in the standalone core" in refusal.stderr
+    for blocked in (["dashboard"], ["explore", "--help"], ["explore", "turn-context", "--goal-id", GOAL, "--agent-id", AGENT]):
+        refusal = _run(core_python, blocked, tmp_path, expected=2)
+        assert "unavailable in the standalone core" in refusal.stderr
     assert not list(tmp_path.iterdir())
 
 

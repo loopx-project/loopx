@@ -25,10 +25,7 @@ from .result_log import (
     explore_result_log_path,
     load_explore_result_events_strict,
 )
-from .todo_branch_plan import (
-    build_explore_todo_branch_plan,
-    resolve_todo_branch_plan_gate,
-)
+from .harness_gate import resolve_todo_branch_plan_gate
 
 
 def _policy(registry_path: Path, goal_id: str, runtime_root: Path | None = None) -> tuple[dict[str, Any], Any, dict[str, Any]]:
@@ -146,8 +143,11 @@ def explore_turn_context(
             status="open",
             agent_id=agent_id,
             runtime_root_arg=str(runtime_root),
+            include_acceptance=False,
         )
     if gate["enabled"]:
+        from .todo_branch_plan import build_explore_todo_branch_plan
+
         plan = build_explore_todo_branch_plan(
             goal_id=goal_id,
             agent_id=agent_id,
