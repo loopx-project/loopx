@@ -353,11 +353,23 @@ authority, configure `LOOPX_TEST_POSTGRES_URL` (for store tests) and
 `LOOPX_TEST_POSTGRES_SERVICE_URL` (for real service admission integration) to
 an isolated disposable server inside authorized access to the private/separately
 licensed `loopx-project/loopx-cloud` repository (unauthenticated public fetches
-return HTTP 404) and run `npm run test:postgresql-authority-store` plus
+return HTTP 404). Because `npm run test:postgresql-authority-store` also runs
+Core Python consumer conformance tests and `loopx-cloud` does not carry Core's
+fallback POSIX launcher, first prepare a Core validation environment following
+[Local Validation Environment](#local-validation-environment--本地验证环境) (for
+example, `uv sync --extra test` in the Core checkout), select that Core
+interpreter explicitly with `LOOPX_TEST_PYTHON=/path/to/loopx/.venv/bin/python`
+(also accepting `LOOPX_PYTHON_BIN` or `LOOPX_PYTHON`), and set
+`PYTHONSAFEPATH=1` so a directory named `loopx/` in the caller working tree
+never shadows Core's installed/editable `loopx` package. Verify the selected
+interpreter and imported source path with
+`PYTHONSAFEPATH=1 "$LOOPX_TEST_PYTHON" -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"`,
+then run `npm run test:postgresql-authority-store` plus
 `npm run test:postgresql-authority-service`. Verify both suites report zero
-skipped tests (`0 skipped`, including the service suite, rather than relying on
-exit code `0` alone); a skipped suite or skipped service integration case is an
-evidence gap, not a pass. Record the exact commit, backend version, tested
+failures and zero skipped tests (`0 failed, 0 skipped`, including the Core
+Python conformance cases and service integration suite, rather than relying on
+exit code `0` alone); any failure or skipped case is an evidence gap, not a
+pass. Record the exact commit, backend version, tested
 behavior, and failures or limits. The `PostgreSQL Integration` workflow in
 `loopx-cloud` qualifies those suites against a disposable server, while public
 pre-split self-hosted installations stay on the frozen `v2.4.0` (tag
@@ -374,10 +386,19 @@ HTTPS 客户端契约）以及
 调度器网关）。影响服务端 PostgreSQL authority 时，请在经授权访问的私有／独立许可
 仓库 `loopx-project/loopx-cloud`（未登录匿名公开访问会返回 HTTP 404）中为隔离
 临时实例同时配置 `LOOPX_TEST_POSTGRES_URL`（store 套件）与
-`LOOPX_TEST_POSTGRES_SERVICE_URL`（真实服务接入集成），运行
-`npm run test:postgresql-authority-store` 与
-`npm run test:postgresql-authority-service`，并明确以两套测试（含服务套件 `0 skipped`）
-零跳过作为回读标准；不能仅凭退出码 `0` 判定通过，存在被跳过的套件或服务集成用例即
+`LOOPX_TEST_POSTGRES_SERVICE_URL`（真实服务接入集成）。由于
+`npm run test:postgresql-authority-store` 还包含 Core Python consumer conformance
+测试且 `loopx-cloud` 源码树不带 Core 的 POSIX 回退启动器，请先按
+[Local Validation Environment / 本地验证环境](#local-validation-environment--本地验证环境)
+中的可执行步骤准备 Core 测试环境（例如在 Core 检出目录运行 `uv sync --extra test`），
+通过 `LOOPX_TEST_PYTHON=/path/to/loopx/.venv/bin/python`（或
+`LOOPX_PYTHON_BIN` / `LOOPX_PYTHON`）显式指定该 Core 解释器，并设置
+`PYTHONSAFEPATH=1` 避免调用方工作目录下的同名 `loopx/` 目录遮蔽 Core 导入；运行
+`PYTHONSAFEPATH=1 "$LOOPX_TEST_PYTHON" -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"`
+核实解释器与实际导入源码路径后，再执行 `npm run test:postgresql-authority-store` 与
+`npm run test:postgresql-authority-service`，并明确以两套测试零失败、零跳过
+（`0 failed, 0 skipped`，涵盖 store 中的 Core Python consumer 用例与服务套件）
+作为回读标准；不能仅凭退出码 `0` 判定通过，任何失败或被跳过的用例即
 视为证据缺口而非通过。记录精确 commit、后端版本、验证行为与失败或局限；`loopx-cloud`
 的 `PostgreSQL Integration` workflow 会在临时实例上验证这些套件，而公开拆分前的自托管
 部署可继续保留冻结标签 `v2.4.0`（tag `5037daecee`、commit `a6ffb3be6e`、`loopx postgres`、

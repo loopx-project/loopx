@@ -377,7 +377,7 @@ def test_daily_smokes_keep_every_shard_and_verify_one_shared_source_artifact() -
 
 
 def test_nightly_schedules_exist_and_release_publication_never_fires_on_schedule() -> None:
-    for name in ("python-tests", "release-artifacts", "package-smoke", "postgresql-integration"):
+    for name in ("python-tests", "release-artifacts", "package-smoke"):
         triggers = workflow(name)[True]
         assert "schedule" in triggers and triggers["schedule"], name
 
