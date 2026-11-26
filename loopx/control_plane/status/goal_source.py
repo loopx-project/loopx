@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import os
@@ -25,6 +26,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..content_digest import BARE_SHA256_PATTERN
 from ..quota.ledger_readback import _copied_goal_run_file_name
+from ..runtime.time import parse_timestamp
 from ...chat.completed_todos import CompletedTodoPages
 from ...status_server import is_loopback_host
 from .ssh_host_catalog import configured_ssh_host_aliases
@@ -112,7 +114,7 @@ def _source_execution_ref(namespace, goal_id, run):
             or not isinstance(run.get("generated_at"), str) or not run["generated_at"]):
         return None
     # The normal status projection drops file paths. Match the same stable
-    # identity against full native history and reject ambiguous matches there.
+    # identity against the native history window and reject ambiguous matches.
     identity = [namespace, *(run.get(field) for field in _RUN_IDENTITY)]
     return sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
 
@@ -313,15 +315,19 @@ class GoalSource:
         ] if isinstance(goal.get("authority_sources"), list) else None}
             for goal in payload["goals"] if isinstance(goal, dict) and goal.get("id") == selected]}
 
-    def read_run_history(self, goal_id):
+    def read_run_history(self, goal_id, *, window: tuple[datetime, datetime] | None = None):
         self.check_access(goal_id)
-        # Native history owns index reduction. Its returned coverage is checked
-        # by the TS projection; the existing byte/time limits fail explicitly.
-        return json.loads(self._execute([
+        # Native history owns index reduction and applies the time window before
+        # its display limit. Whole-history callers retain their existing query.
+        args = [
             self.cli, "--format", "json", "--registry", self.registry,
             "--runtime-root", self.runtime_root, "history", "--goal-id", goal_id,
             "--limit", "1000000",
-        ]))
+        ]
+        if window is not None:
+            start, end = (stamp.isoformat() for stamp in window)
+            args.extend(["--since", start, "--until", end])
+        return json.loads(self._execute(args))
 
     def read_execution(self, goal_id, indexed_run):
         self.check_access(goal_id)
@@ -468,18 +474,33 @@ class GoalSourceReader:
         self.registered_status(goal_id, fresh=True)
         return {"ok": True, "goal_id": goal_id, "source": self.source.describe(), **projected}
 
-    def execution(self, goal_id, execution_ref):
-        if not BARE_SHA256_PATTERN.fullmatch(execution_ref):
+    def execution(self, goal_id, execution_ref, generated_at):
+        if not BARE_SHA256_PATTERN.fullmatch(execution_ref) or len(generated_at) > 128:
             raise SourceScopeError("Choose one recorded source execution")
+        start = parse_timestamp(generated_at)
+        if start is None:
+            raise SourceScopeError("Choose one recorded source execution")
+        try:
+            end = start + timedelta(microseconds=1)
+        except OverflowError as exc:
+            raise SourceScopeError("The recorded execution timestamp is outside the history range") from exc
         self.registered_status(goal_id, fresh=True)
         source = self.source
-        history = source.read_run_history(goal_id)
+        # The timestamp narrows the lookup. The ref still binds the exact
+        # source, Goal, original timestamp text and execution identity.
+        history = source.read_run_history(goal_id, window=(start, end))
         native, = history["goals"]
         if (history.get("ok") is not True or history.get("goal_filter") != goal_id
                 or native.get("id") != goal_id or native.get("registry_member") is not True):
             raise SourceScopeError("The original Goal is no longer registered")
-        matches = [run for run in native["latest_runs"]
-                   if _source_execution_ref(source.namespace, goal_id, run) == execution_ref]
+        candidates = native["latest_runs"]
+        filter_used = history["time_filter"]
+        if (filter_used["since_inclusive"] != start.isoformat()
+                or filter_used["until_exclusive"] != end.isoformat()
+                or native["unique_runs"] != len(candidates)):
+            raise ValueError("Incomplete native execution history window")
+        matches = [run for run in candidates if run.get("generated_at") == generated_at
+                   and _source_execution_ref(source.namespace, goal_id, run) == execution_ref]
         if len(matches) != 1:
             raise SourceScopeError("The selected execution is unavailable in the original source")
         detail = source.read_execution(goal_id, matches[0])

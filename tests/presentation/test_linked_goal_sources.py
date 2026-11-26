@@ -5,9 +5,11 @@ solver, model account or installed App is changed by this regression suite.
 """
 import copy
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from threading import Event
 import time
@@ -206,11 +208,12 @@ def test_execution_detail_reads_the_original_archive_only_in_its_source(workspac
         (status,) = request('/status.json?' + urlencode({'goal_id': alias}))['run_history']['goals']
         (summary,) = status['latest_runs']
         assert summary['goal_id'] == alias and 'agent_vision' not in summary
-        params = {'goal_id': alias, 'source_namespace': namespace, 'execution_ref': summary['execution_ref']}
-        cases.append((params, record, artifact, protected))
+        params = {'goal_id': alias, 'source_namespace': namespace, 'execution_ref': summary['execution_ref'],
+                  'generated_at': summary['generated_at']}
+        cases.append((params, record, index, artifact, protected))
 
     endpoint = '/api/chat/goal-source-execution?'
-    for (params, record, artifact, protected), (other, *_unused) in (cases, cases[::-1]):
+    for (params, record, index, artifact, protected), (other, *_unused) in (cases, cases[::-1]):
         url = endpoint + urlencode(params)
         detail = request(url)
         assert detail['goal_id'] == detail['record']['goal_id'] == 'solver-goal'
@@ -222,6 +225,19 @@ def test_execution_detail_reads_the_original_archive_only_in_its_source(workspac
             with pytest.raises(HTTPError) as rejected:
                 request(endpoint + urlencode({**params, field: other[field]}))
             assert rejected.value.code == 409
+        for timestamp in ('2026-01-02T10:00:00.000001Z', '2026-01-02T10:00:00+00:00'):
+            with pytest.raises(HTTPError) as wrong_timestamp:
+                request(endpoint + urlencode({**params, 'generated_at': timestamp}))
+            assert wrong_timestamp.value.code == 409
+
+        duplicate = json.loads(protected[index])
+        duplicate['json_path'] = '/retired/goals/solver-goal/runs/duplicate.json'
+        index.write_bytes(protected[index] + (json.dumps(duplicate) + '\n').encode())
+        with pytest.raises(HTTPError) as ambiguous:
+            request(url)
+        assert ambiguous.value.code == 409
+        index.write_bytes(protected[index])
+
         artifact.unlink()
         with pytest.raises(HTTPError) as missing:
             request(url)
@@ -233,6 +249,56 @@ def test_execution_detail_reads_the_original_archive_only_in_its_source(workspac
         artifact.write_bytes(protected[artifact])
         assert request(url) == detail
         assert all(path.read_bytes() == content for path, content in protected.items())
+
+
+def test_execution_detail_survives_a_large_native_history(workspace):
+    raw, request, protected = native_source(workspace)
+    runs = Path(raw['runtime_root']) / 'goals' / 'solver-goal' / 'runs'
+    runs.mkdir(parents=True)
+    index = runs / 'index.jsonl'
+    timestamp = datetime.fromisoformat('2026-01-02T10:00:00.123456+08:00')
+    original = {
+        'goal_id': 'solver-goal', 'agent_id': 'source-worker', 'generated_at': timestamp.isoformat(),
+        'classification': 'state_recorded', 'turn_instance_id': 'original-turn',
+        'json_path': '/retired/goals/solver-goal/runs/execution.json',
+    }
+    artifact = runs / 'execution.json'
+    artifact.write_text(json.dumps(original) + '\n')
+    index.write_bytes(artifact.read_bytes())
+    request('/api/chat/goal-sources', {'parent_goal_id': 'research-owner', 'source': raw,
+            'workspace_goal_id': 'archive'})
+    status = '/status.json?goal_id=archive'
+    (summary,) = request(status)['run_history']['goals'][0]['latest_runs']
+    endpoint = '/api/chat/goal-source-execution?' + urlencode({
+        'goal_id': 'archive', 'source_namespace': GoalSource.parse(raw).namespace,
+        'execution_ref': summary['execution_ref'], 'generated_at': summary['generated_at'],
+    })
+    short_archive_detail = request(endpoint)
+    assert short_archive_detail['sha256'] == sha256(artifact.read_bytes()).hexdigest()
+
+    # Newer runs move the selected row outside status's recent window. The
+    # unfiltered native response exceeds the linked source transport budget.
+    with index.open('a') as stream:
+        for position in range(1, 257):
+            item = {
+                **original,
+                'generated_at': (timestamp + timedelta(minutes=position)).isoformat(),
+                'turn_instance_id': f'later-turn-{position}',
+                'json_path': f'/retired/goals/solver-goal/runs/later-{position}.json',
+                'source_diagnostics': 'a' * (36 * 1024),
+            }
+            stream.write(json.dumps(item) + '\n')
+    full_history = subprocess.run([
+        raw['cli'], '--format', 'json', '--registry', raw['registry'],
+        '--runtime-root', raw['runtime_root'], 'history', '--goal-id', 'solver-goal',
+        '--limit', '1000000',
+    ], capture_output=True, check=True, timeout=25)
+    assert len(full_history.stdout) > 16 * 1024 * 1024
+    (fresh_goal,) = GoalSource.parse(raw).read_status('solver-goal')['run_history']['goals']
+    assert all(row['turn_instance_id'] != original['turn_instance_id'] for row in fresh_goal['latest_runs'])
+    protected.update({index: index.read_bytes(), artifact: artifact.read_bytes()})
+    assert request(endpoint) == short_archive_detail
+    assert all(path.read_bytes() == content for path, content in protected.items())
 
 
 def test_strategy_history_rechecks_source_after_unlink_without_blocking_status(workspace, monkeypatch):

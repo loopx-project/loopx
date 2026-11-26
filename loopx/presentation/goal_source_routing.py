@@ -49,9 +49,8 @@ class GoalSourceRequestMixin:
         if not self._require_loopback_origin():
             return
         query = parse_qs(urlparse(self.path).query, keep_blank_values=True)
-        fields = {"goal_id", "source_namespace"}
-        if operation == "execution":
-            fields.add("execution_ref")
+        execution_fields = ("execution_ref", "generated_at") if operation == "execution" else ()
+        fields = {"goal_id", "source_namespace", *execution_fields}
         if (set(query) != fields
                 or any(len(values) != 1 for values in query.values())):
             self._send_error("Choose one original Goal and source.", status=400)
@@ -66,7 +65,7 @@ class GoalSourceRequestMixin:
             self._send_error("Source identity changed; refresh the Goal.", status=409)
             return
         try:
-            parameters = query.get("execution_ref", [])
+            parameters = [query[field][0] for field in execution_fields]
             result = getattr(reader, operation)(reader.source.goal_id, *parameters)
             latest = linked_goal_source(self.server, goal_id)
             if (latest is None or latest[1].source.namespace != reader.source.namespace

@@ -35,24 +35,28 @@ function SourceRun({goal, run}: {goal: WorkspaceGoal; run: Run}) {
   const namespace = goal.sourceAccess?.namespace;
   const originalGoal = goal.sourceAccess?.original_goal_id ?? goalId;
   const ref = run.execution_ref;
+  const generatedAt = run.generated_at;
 
   useEffect(() => {
     if (!expanded || !ref || !namespace) return;
     const controller = new AbortController();
     setResult(null);
-    const query = new URLSearchParams({goal_id: goalId, source_namespace: namespace, execution_ref: ref});
+    const query = new URLSearchParams({
+      goal_id: goalId, source_namespace: namespace, execution_ref: ref, generated_at: generatedAt,
+    });
     void requestJson<unknown>(`/api/chat/goal-source-execution?${query}`, {signal: controller.signal})
       .then(payload => {
         const detail = executionResponse.parse(payload);
         if (detail.goal_id !== originalGoal || detail.record.goal_id !== originalGoal
-            || detail.source.namespace !== namespace || detail.execution_ref !== ref) {
+            || detail.source.namespace !== namespace || detail.execution_ref !== ref
+            || detail.record.generated_at !== generatedAt) {
           throw new Error("Inconsistent execution source");
         }
         if (!controller.signal.aborted) setResult(detail);
       })
       .catch(() => {if (!controller.signal.aborted) setResult("unavailable");});
     return () => controller.abort();
-  }, [expanded, ref, namespace, originalGoal, goalId, retry]);
+  }, [expanded, ref, generatedAt, namespace, originalGoal, goalId, retry]);
 
   const execution = result && result !== "unavailable" ? result : null;
   const record = execution?.record ?? run;
