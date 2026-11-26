@@ -691,15 +691,24 @@ def test_private_delivery_discovery_caches_retired_triage_captures(tmp_path, mon
 
     monkeypatch.setattr(pdd_mod, "_read_json", counted_read)
 
+    now_ns = max(path.stat().st_ctime_ns for path in (retired_path, active_path))
+    monkeypatch.setattr(pdd_mod, "time_ns", lambda: now_ns)
     discovery = PrivateDeliveryDiscovery(tmp_path)
-    first = {path: row for path, row, _ in discovery.rows()}
-    assert set(first) == {retired_path, active_path}
+    for _ in range(2):
+        reads.clear()
+        fresh = {path: row for path, row, _ in discovery.rows()}
+        assert set(fresh) == {retired_path, active_path}
+        assert fresh[retired_path]["triage"]["retired"] == "card_delivery_expired"
+        assert sorted(reads) == sorted([retired_path, active_path])
+
+    now_ns += 3_000_000_000
+    reads.clear()
+    assert {path: row for path, row, _ in discovery.rows()} == fresh
     assert sorted(reads) == sorted([retired_path, active_path])
 
     reads.clear()
-    second = {path: row for path, row, _ in discovery.rows()}
-    assert second[retired_path]["triage"]["retired"] == "card_delivery_expired"
-    assert reads == [active_path], "retired triage capture must stay cached while active capture stays fresh"
+    assert {path: row for path, row, _ in discovery.rows()} == fresh
+    assert reads == [active_path], "settled retired captures can be cached while active captures stay fresh"
 
 
 def _seed_backlog_health_store(tmp_path: Path, *, failed_count: int = 20, completed_count: int = 20):

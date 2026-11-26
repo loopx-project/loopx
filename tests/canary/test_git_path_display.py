@@ -680,7 +680,7 @@ def test_an_inherited_pathspec_mode_cannot_empty_the_selection(
     plain = _tracked_scan_files(pruned)
     monkeypatch.setenv("GIT_GLOB_PATHSPECS", "1")
     inherited = _tracked_scan_files(pruned)
-    assert plain == inherited == [leak.resolve()]
+    assert plain == inherited == sorted([leak.resolve(), (pruned / "pyvenv.cfg").resolve()])
 
     boundary = scan_public_boundary([pruned], registry={})
     assert boundary["ok"] is False

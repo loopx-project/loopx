@@ -564,3 +564,51 @@ test('a delayed session open from the prior token never sends into the new owner
     if (oldLocation) Object.defineProperty(globalThis, 'location', oldLocation); else Reflect.deleteProperty(globalThis, 'location');
   }
 });
+
+test('pending waiting Goals float in a quiet orb chip above the steward composer and open a bounded tray on demand', async () => {
+  let renderer: ReactTestRenderer | undefined;
+  const openedGoals: string[] = [];
+  const openedThreads: string[] = [];
+  let overviewClicks = 0;
+  const waitingGoals = Array.from({ length: 6 }, (_, i) => ({
+    goalId: `g-${i + 1}`,
+    title: `Waiting Goal ${i + 1}`,
+    summary: `Action ${i + 1}`,
+    threadId: i === 0 ? 'thread-bound-1' : null,
+  }));
+  try {
+    await act(async () => {
+      renderer = create(createElement(StewardConversation, {
+        token: 'orb-token',
+        failure: null,
+        deferSessionOpen: true,
+        waitingGoals,
+        onOpenGoal: (id: string) => { openedGoals.push(id); },
+        onOpenThread: (id: string) => { openedThreads.push(id); },
+        onOpenGoalsOverview: () => { overviewClicks++; },
+      }), { createNodeMock: () => ({ scrollIntoView() {} }) });
+    });
+    const orb = renderer!.root.findByProps({ className: 'steward-ask-orb' });
+    assert.equal(orb.props['aria-expanded'], false);
+    assert.equal(renderer!.root.findAllByProps({ className: 'steward-tray' }).length, 0, 'tray stays closed until tapped');
+
+    await act(async () => orb.props.onClick());
+    assert.equal(renderer!.root.findByProps({ className: 'steward-ask-orb' }).props['aria-expanded'], true);
+    const rows = renderer!.root.findAllByProps({ className: 'steward-tray-row' });
+    assert.equal(rows.length, 5, 'tray caps visible items at 5 with an overview overflow button');
+
+    await act(async () => rows[0]!.props.onClick());
+    assert.deepEqual(openedThreads, ['thread-bound-1']);
+    assert.equal(renderer!.root.findAllByProps({ className: 'steward-tray' }).length, 0, 'clicking a row closes the tray');
+
+    await act(async () => renderer!.root.findByProps({ className: 'steward-ask-orb' }).props.onClick());
+    await act(async () => renderer!.root.findAllByProps({ className: 'steward-tray-row' })[1]!.props.onClick());
+    assert.deepEqual(openedGoals, ['g-2']);
+
+    await act(async () => renderer!.root.findByProps({ className: 'steward-ask-orb' }).props.onClick());
+    await act(async () => renderer!.root.findByProps({ className: 'steward-tray-more' }).props.onClick());
+    assert.equal(overviewClicks, 1);
+  } finally {
+    await act(async () => renderer?.unmount());
+  }
+});

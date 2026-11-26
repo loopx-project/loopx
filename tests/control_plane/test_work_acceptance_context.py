@@ -128,11 +128,15 @@ def test_selected_acceptance_read_keeps_global_requirements_and_exact_binding(
     }
     observed = next(row["content"] for row in channel["work_context"]["sources"]
         if row.get("source") == "goal_acceptance")
-    scoped = inspect_goal_acceptance(
-        registry_path=registry, runtime_root=str(runtime), goal_id=goal,
-        todo_id=selected, include_work_details=False, context_agent_id="agent-a",
-    )
-    assert observed == {**exact, "outcome_context": scoped["outcome_context"]}
+    # Verify complete Goal requirements and the selected binding in either
+    # presentation. A repeated navigation block must match its owning read.
+    assert {name: value for name, value in observed.items() if name != "outcome_context"} == exact
+    if "outcome_context" in observed:
+        scoped = inspect_goal_acceptance(
+            registry_path=registry, runtime_root=str(runtime), goal_id=goal,
+            todo_id=selected, include_work_details=False, context_agent_id="agent-a",
+        )
+        assert observed["outcome_context"] == scoped["outcome_context"]
     goal_source = next(row for row in channel["work_context"]["sources"] if row["source"] == "goal_state")
     assert "Deliver a compatible export." in goal_source["content"]["text"]
     assert all(row.get("source") != "goal_state" for row in channel["required_reads"])

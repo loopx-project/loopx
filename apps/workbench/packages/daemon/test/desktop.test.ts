@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { createServer, type AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { AttachmentStore } from '../src/attachments.js';
 import { writeFileSync } from 'node:fs';
@@ -65,8 +65,9 @@ function nextMessage(ws: WebSocket): Promise<string> {
 
 test('LOOCHAT_DESKTOP_VNC: unset looks at displays :0 to :9 here, off turns it off, host:port names one', () => {
   const unset = parseDesktopSetting(undefined)!;
-  assert.equal(unset.length, 10);
-  assert.deepEqual(unset[1], { host: '127.0.0.1', port: 5901 });
+  assert.equal(unset.length, 20);
+  assert.deepEqual(unset[1], { host: '::1', port: 5900 });
+  assert.deepEqual(unset[2], { host: '127.0.0.1', port: 5901 });
   assert.equal(parseDesktopSetting('off'), null);
   assert.deepEqual(parseDesktopSetting('localhost:5905'), [{ host: 'localhost', port: 5905 }]);
   assert.deepEqual(parseDesktopSetting('[::1]:5901'), [{ host: '::1', port: 5901 }]);
@@ -76,7 +77,7 @@ test('LOOCHAT_DESKTOP_VNC: unset looks at displays :0 to :9 here, off turns it o
 
 test('a desktop is found from the ports listening here, without connecting to it', async () => {
   const ports = listeningPorts()!;
-  assert.ok(ports.has(vnc.port), 'the fake server is seen listening');
+  assert.ok(ports.ipv4.has(vnc.port), 'the fake server is seen listening');
   let connections = 0;
   vnc.server.on('connection', () => connections++);
   const seen = new Desktop({ targets: [{ host: '127.0.0.1', port: vnc.port + 1 }, { host: '127.0.0.1', port: vnc.port }] });
@@ -87,7 +88,7 @@ test('a desktop is found from the ports listening here, without connecting to it
   // /proc as Linux writes it: a header, then rows; 0A is LISTEN and the port is hex.
   const file = join(dataDir, 'tcp');
   writeFileSync(file, '  sl  local_address rem_address   st\n   0: 0100007F:170D 00000000:0000 0A\n   1: 0100007F:170E 0100007F:9C40 01\n');
-  assert.deepEqual([...listeningPorts([file])!], [5901]);
+  assert.deepEqual([...listeningPorts([file])!.ipv4], [5901]);
   assert.equal(listeningPorts([join(dataDir, 'nope')]), null);
 
   // Without /proc: a server named outright is taken as given, the ports guessed at are not.
@@ -96,9 +97,21 @@ test('a desktop is found from the ports listening here, without connecting to it
   const guessed = new Desktop({ targets: parseDesktopSetting(undefined), listening: () => null });
   assert.equal(await guessed.find(), null);
   // Another host is never looked at here.
-  const remote = new Desktop({ targets: [{ host: 'desk.example', port: 5901 }], listening: () => new Set() });
+  const remote = new Desktop({ targets: [{ host: 'desk.example', port: 5901 }], listening: () => ({ ipv4: new Set(), ipv6: new Set() }) });
   assert.deepEqual(await remote.find(), { host: 'desk.example', port: 5901 });
   for (const d of [named, guessed, remote]) d.dispose();
+});
+
+test('an IPv6-only desktop is found at its IPv6 address, never at IPv4', async (t) => {
+  let connections = 0;
+  const server = createServer(() => connections++);
+  await new Promise<void>((resolve) => server.listen({ host: '::1', port: 0, ipv6Only: true }, resolve));
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const { port } = server.address() as AddressInfo;
+  const seen = new Desktop({ targets: [{ host: '127.0.0.1', port }, { host: '::1', port }] });
+  t.after(() => seen.dispose());
+  assert.deepEqual(await seen.find(), { host: '::1', port });
+  assert.equal(connections, 0);
 });
 
 test('the page learns whether there is a desktop, behind the token', async () => {

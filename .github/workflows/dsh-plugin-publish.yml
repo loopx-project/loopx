@@ -121,4 +121,8 @@ jobs:
           if git cat-file -e origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs 2>/dev/null; then
             git show origin/main:packages/dsh-loopx-plugin/scripts/verify-distribution.mjs > scripts/verify-distribution.mjs
           fi
-          node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT"
+          propagation_timeout=0
+          if [ "$DSH_ALREADY_PUBLISHED" = false ]; then
+            propagation_timeout=180000
+          fi
+          node scripts/verify-distribution.mjs --tarball "$DSH_ARTIFACT" --registry-propagation-timeout-ms "$propagation_timeout"

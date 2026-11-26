@@ -57,6 +57,16 @@ from `a2504cc`, and the historical read boundary from `4d5a108` adapted to the
 existing Workbench history reader. LoopX retains its Goal group, shell sizing,
 preview isolation and adaptive overview behavior.
 
+Workbench stability fixes, One Context pointers, grouped/lightweight fork
+sub-conversations, sidebar snooze/done fold/draft indicators, ThreadPeek
+composer alignment, docked terminal, Markdown allowlisted HTML, recent history
+cache skeleton, floating side-card/note scoping, and Liquid Glass chrome are
+adapted from Calli (`cb2b6d6..68cffdb`, including `8aa0b7e`, `0a0f65c`,
+`3ceb7c0`, `66ef16e`, `e081081`, `a0df5bb`, `a6ae44f`, `78213cf`, `68f558d`,
+`4a64ae9`, `8c8e66f`, `438b490`, `af054cf`, `7496298`, `f9cef93`, `5fddb74`,
+`dc49405`, `68cffdb`). LoopX keeps its `loochat` protocol/CLI naming, Control
+Plane Steward/Goal workflows, and Composer draft-ownership semantics.
+
 MIT License
 
 Copyright (c) 2026 Calli contributors

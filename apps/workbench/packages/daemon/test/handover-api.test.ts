@@ -127,7 +127,11 @@ test('handover-thread creates an unsent conversation in the same worktree, inclu
     assert.equal(next.sectionId,source.sectionId);
     assert.equal(next.agentSessionId,null);
     assert.equal(next.forkedFrom,null,'handover does not copy the native session');
-    assert.deepEqual(next.handover,{sourceId:source.id,title:source.title,agent:source.agent,mode:'branch',automatic:false,sourceMoved:false,sourceSeq:eventsBefore.at(-1)?.seq ?? 0});
+    const { segments, ...plainLink } = next.handover as typeof next.handover & { segments: Array<{ id: string; upperSeq: number }> };
+    assert.deepEqual(plainLink,{sourceId:source.id,title:source.title,agent:source.agent,mode:'branch',automatic:false,sourceMoved:false,sourceSeq:eventsBefore.at(-1)?.seq ?? 0});
+    assert.equal(segments.length,1);
+    assert.equal(segments[0].id,source.id);
+    assert.equal(segments[0].upperSeq,eventsBefore.at(-1)?.seq ?? 0);
     const { automatic, sourceMoved, ...storedLink } = next.handover;
     assert.equal(automatic, false);
     assert.equal(sourceMoved, false);

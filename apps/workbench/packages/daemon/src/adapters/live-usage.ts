@@ -54,6 +54,7 @@ export class LiveUsage {
     private readonly paths: () => Promise<string[]>,
     private readonly parse: (line: string) => NativeUsage | null,
     private readonly emit: (sample: UsageSample) => void,
+    private readonly onLine?: (line: string, minAt: number) => void,
   ) {}
 
   async start(): Promise<void> {
@@ -116,9 +117,13 @@ export class LiveUsage {
   }
 
   private line(line: string, path: string): void {
+    const minAt = Math.floor(this.startedAt / 1000) * 1000;
+    if (this.onLine) {
+      try { this.onLine(line, minAt); } catch { /* Ignore malformed transcript lines. */ }
+    }
     let record;
     try { record = this.parse(line); } catch { return; }
-    if (!record || !Number.isFinite(record.at) || record.at < Math.floor(this.startedAt / 1000) * 1000) return;
+    if (!record || !Number.isFinite(record.at) || record.at < minAt) return;
     const { sample } = record;
     const prior = this.seen.get(sample.id);
     const delta = { ...sample };

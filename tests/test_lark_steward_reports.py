@@ -14,6 +14,35 @@ from loopx.extensions.lark.steward_reports import LarkStewardReports
 steward = steward_fixture
 
 
+def admit_historical_threaded_lobby(steward, monkeypatch, text):
+    from loopx.extensions.lark import private_conversations, private_topic_lanes
+    from loopx.extensions.lark.conversation_identity import identity_ref
+
+    store, runtime, provider, transport, binding, _, _ = steward
+    parent = provider.event("steward-app", "earlier-question", "An unrelated earlier question")
+    event = provider.event("steward-app", "original", text)
+    thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_earlier")
+    event.update(thread)
+    provider.messages[event["message_id"]].update(thread)
+    # Keep the provider thread in the original record and restore the Lobby
+    # as its saved Session, as it was before topic lanes were introduced.
+    resolve_lane = private_conversations.resolve_private_steward_lane
+
+    def resolve_historical_lane(**kwargs):
+        lane_event = {key: value for key, value in kwargs["event"].items() if key not in thread}
+        return resolve_lane(**{**kwargs, "event": lane_event})
+
+    with monkeypatch.context() as historical:
+        historical.setattr(private_conversations, "resolve_private_steward_lane", resolve_historical_lane)
+        historical.setattr(private_topic_lanes, "resolve_private_steward_lane", resolve_historical_lane)
+        transport.admit("steward-app", event)
+    row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
+    assert finish(runtime, row)["status"] == "completed"
+    session = store.load_session(row["session_id"])
+    assert not session["steward_context"].get("topic_ref")
+    return row["session_id"], transport.managed_steward
+
+
 @pytest.mark.parametrize("provider_kind", ["file", "sqlite"])
 @pytest.mark.parametrize("legacy", [False, True], ids=["new-report", "retained-attempt"])
 def test_periodic_result_has_its_own_private_message_without_retargeting_history(
@@ -22,18 +51,7 @@ def test_periodic_result_has_its_own_private_message_without_retargeting_history
     _, _, provider, transport, _, capture, _ = steward
 
     def threaded_original(fixture):
-        from loopx.extensions.lark.conversation_identity import identity_ref
-        _, runtime, source, adapter, binding, _, _ = fixture
-        parent = source.event("steward-app", "earlier-question", "An unrelated earlier question")
-        event = source.event("steward-app", "original", "Retain the original private conversation")
-        thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_earlier")
-        event.update(thread)
-        source.messages[event["message_id"]].update(thread)
-        adapter.admit("steward-app", event)
-        # Referenced-source context changes the admitted text, not its identity.
-        row = adapter.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
-        assert finish(runtime, row)["status"] == "completed"
-        return row["session_id"], adapter.managed_steward
+        return admit_historical_threaded_lobby(fixture, monkeypatch, "Retain the original private conversation")
 
     monkeypatch.setattr("test_native_steward_reports.original", threaded_original)
     actor, reports, window, folder, _ = generated(steward, tmp_path, monkeypatch, provider_kind)
@@ -390,7 +408,6 @@ def test_monitor_report_reconciles_to_chat_root_without_periodic_subscription(st
     import loopx.capabilities.native_chat.steward_monitor as monitor_mod
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor, steward_monitor_delivery_dir
     from loopx.capabilities.native_chat.steward_reports import StewardReports
-    from loopx.extensions.lark.conversation_identity import identity_ref
     from test_native_steward_managed_mode import storage
     from test_native_steward_monitor import edit_local_watch
     from test_steward_generic_monitor_todo import _configure_codex_response
@@ -400,15 +417,7 @@ def test_monitor_report_reconciles_to_chat_root_without_periodic_subscription(st
     _, runtime, provider, transport, binding, _, _ = steward
     storage(runtime, "sqlite")
 
-    parent = provider.event("steward-app", "earlier-thread-parent", "Earlier threaded question")
-    event = provider.event("steward-app", "threaded-origin", "Keep steward monitor reports on chat root")
-    thread = dict(root_id=parent["message_id"], parent_id=parent["message_id"], thread_id="omt_steward")
-    event.update(thread)
-    provider.messages[event["message_id"]].update(thread)
-    transport.admit("steward-app", event)
-    row = transport.core.read_request(identity_ref(binding["provider_ref"], event["message_id"]))
-    assert finish(runtime, row)["status"] == "completed"
-    sid = row["session_id"]
+    sid, _ = admit_historical_threaded_lobby(steward, monkeypatch, "Keep steward monitor reports on chat root")
 
     plan = transport.managed_steward.prepare(binding["binding_id"], session_id=sid)["plan"]
     actor = transport.managed_steward.prepare(

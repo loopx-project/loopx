@@ -50,6 +50,32 @@ def steward_background_channel_id(binding_id: str) -> str:
     return f"{STEWARD_BACKGROUND_CHANNEL_PREFIX}{binding_id}"
 
 
+_GOVERNANCE_TASK_CONTEXT_KEYS = frozenset({
+    "goal_id",
+    "agent_identity",
+    "execution_profile",
+    "task_scope",
+    "mode",
+    "state",
+})
+
+
+def governance_turn_prompt_authority(authority: Mapping[str, Any]) -> dict[str, Any]:
+    """Project Turn authority to governance-relevant fields without mutating authority."""
+    compact = dict(authority)
+    compact.pop("vision_continuation_audit", None)
+    model_input = compact.get("_model_input")
+    if isinstance(model_input, Mapping):
+        trimmed_input = dict(model_input)
+        task_context = trimmed_input.get("task_context")
+        if isinstance(task_context, Mapping):
+            trimmed_input["task_context"] = {
+                k: v for k, v in task_context.items() if k in _GOVERNANCE_TASK_CONTEXT_KEYS
+            }
+        compact["_model_input"] = trimmed_input
+    return compact
+
+
 def actor_steward_binding_id(actor: Mapping[str, Any]) -> str | None:
     if actor.get("schema_version") != "loopx_steward_managed_actor_v0":
         return None
@@ -855,9 +881,17 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             parent_session = controller.store.load_session(actor["session_id"])
             if not parent_session or parent_session.get("status") == "closed":
                 continue
-            human_idle = (
-                not parent_session.get("active_turn_id")
-                and not controller.store.queued_turns(actor["session_id"])
+            active_fg_id = parent_session.get("active_turn_id")
+            queued_fg = controller.store.queued_turns(actor["session_id"])
+            human_idle = not active_fg_id and not queued_fg
+            active_fg_turn = (
+                controller.store.load_turn(actor["session_id"], active_fg_id)
+                if active_fg_id
+                else None
+            )
+            fg_native_active = bool(
+                (isinstance(active_fg_turn, dict) and active_fg_turn.get("origin") == "native_loopx")
+                or any(isinstance(row, dict) and row.get("origin") == "native_loopx" for row in queued_fg)
             )
             binding_id = binding["binding_id"]
             bg_session_id = StewardTurnHost.background_session_id(binding_id)
@@ -871,19 +905,28 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                 bg_session = controller.store.load_session(bg_session_id)
             if bg_session is not None and bg_session.get("status") == "closed":
                 bg_idle = False
+                bg_active = False
             else:
-                bg_idle = (
-                    bg_session is None
-                    or (
-                        not bg_session.get("active_turn_id")
-                        and not controller.store.queued_turns(bg_session_id)
+                bg_active = bool(
+                    bg_session is not None
+                    and (
+                        bg_session.get("active_turn_id")
+                        or controller.store.queued_turns(bg_session_id)
                     )
                 )
-            if not human_idle and not bg_idle:
+                bg_idle = not bg_active
+            # Background monitor polls and foreground native turns share the same
+            # steward Goal's runs/ ledger; serialize them against each other while
+            # keeping human conversations parallel with steward.background.
+            fg_can_dispatch = human_idle and not bg_active
+            bg_can_dispatch = bg_idle and not fg_native_active
+            if not fg_can_dispatch and not bg_can_dispatch:
+                if human_idle and binding_id in cache:
+                    fg_checked[binding_id] = False
                 continue
             now_mono = time.monotonic()
             bypass_fg_throttle = (
-                human_idle
+                fg_can_dispatch
                 and binding_id in cache
                 and fg_checked.get(binding_id) is False
             )
@@ -893,11 +936,11 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
             # it immediately; external edits are observed within a minute. Every
             # actual dispatch rechecks native state, original grant and provider.
             cache[binding_id] = now_mono + 60
-            fg_checked[binding_id] = human_idle
+            fg_checked[binding_id] = fg_can_dispatch
             # The existing pump also observes the optional report frontier.
             # No second consumer/timer is installed. Closed/not-due calendars
             # never invoke a model, and original user work wins the idle check.
-            if human_idle:
+            if fg_can_dispatch:
                 goal = load_goal_from_registry(controller.registry_path, actor["goal_id"])
                 report_config = (goal or {}).get("control_plane", {}).get("periodic_report", {})
                 if report_config.get("enabled") is True and report_config.get("profile_preset") == "portfolio-progress":
@@ -911,7 +954,7 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                             continue
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError):
                         _LOG.warning("An original steward report is unavailable; its window and other work are retained")
-            if bg_idle:
+            if bg_can_dispatch:
                 due = service.due_monitors(actor)
                 if due:
                     dispatched = False
@@ -937,11 +980,11 @@ def pump_steward_monitors(controller: Any, *, cancelled=lambda: False) -> list[d
                             dispatched = True
                             break
                     if dispatched:
-                        if human_idle:
+                        if fg_can_dispatch:
                             fg_checked[binding_id] = False
                         continue
             advancement_dispatched = False
-            if human_idle:
+            if fg_can_dispatch:
                 for adv in service.runnable_advancement_todos(actor):
                     turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
                     if turn_id_token is None:

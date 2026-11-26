@@ -42,6 +42,31 @@ test('each machine keeps its own agents, draft and models, in memory whole', t =
   assert.equal(cachedModels(null), null);
 });
 
+test('the exact beside directory and worktree survive a cold start per machine without granting a reference', t => {
+  const data = storage(t);
+  const beside = { threadId: 'source-A', cwd: '/project/.worktrees/branch', project: '/project', worktree: 'branch' };
+  const draft = { agent: 'pi', cwd: beside.cwd, scratch: false, worktree: false, beside };
+  data.set('calli.host.v1', JSON.stringify({ remote: { at: 1, draft, agents: [], models: {} } }));
+  assert.deepEqual(cachedDraft('remote'), draft);
+  assert.equal(cachedDraft(null), null);
+  rememberDraft(null, { agent: 'pi', cwd: '/another', scratch: false, worktree: true } as typeof draft);
+  assert.deepEqual(cachedDraft(null), { agent: 'pi', cwd: '/another', scratch: false, worktree: true });
+  assert.deepEqual(cachedDraft('remote'), draft);
+  assert.ok(!data.get('calli.host.v1')!.includes('references'), 'workspace restoration is not read authority');
+});
+
+test('malformed or mismatched beside state is discarded without changing the chosen directory', t => {
+  const data = storage(t);
+  for (const [id, beside] of Object.entries({
+    malformed: { threadId: 12, cwd: '/project', project: '/root', worktree: 'branch' },
+    mismatched: { threadId: 'source', cwd: '/elsewhere', project: '/root', worktree: null },
+    missingProject: { threadId: 'source', cwd: '/project', worktree: null },
+  })) {
+    data.set('calli.host.v1', JSON.stringify({ [id]: { at: 1, draft: { agent: 'pi', cwd: '/project', scratch: false, beside }, agents: [], models: {} } }));
+    assert.deepEqual(cachedDraft(id), { agent: 'pi', cwd: '/project', scratch: false });
+  }
+});
+
 test('a draft without an agent is not remembered, and a models answer without models is not either', t => {
   storage(t);
   rememberDraft(null, { agent: '', cwd: '/x', scratch: false });

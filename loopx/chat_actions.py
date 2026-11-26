@@ -1577,7 +1577,7 @@ class ChatActionService(
                 "proposal": proposal,
                 "turn": self._turn_from_receipt(proposal.get("receipt")),
             }
-        if (proposal.get("context") or {}).get("binding_id"):
+        if _as_dict(proposal.get("context")).get("binding_id"):
             if steward_context is None:
                 raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
                     "summary": "Confirm this proposal from its original owner private conversation.",

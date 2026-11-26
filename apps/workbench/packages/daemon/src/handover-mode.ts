@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { ChainSegment } from './handover.js';
 
 export type HandoverMode = 'continue' | 'branch';
 export interface HandoverLink {
@@ -12,6 +13,8 @@ export interface HandoverLink {
   sourceSeq?: number;
   /** How the work was carried over: the source's session copied as it was, or a written summary. */
   method?: 'resume' | 'summary';
+  /** Frozen route at this edge: later changes on the source cannot add another branch. */
+  segments?: ChainSegment[];
 }
 
 /** Whether the source started a turn after the handover: from then on the two go their own ways. */

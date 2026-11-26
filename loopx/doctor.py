@@ -1045,6 +1045,11 @@ def collect_doctor(
         ),
     }
     default_global_registry = global_registry_path(selected_runtime_root)
+    # The caller may have selected its registry explicitly; every diagnostic
+    # below reads that same file, so a moved registry is not reported empty.
+    diagnostic_registry_path = (
+        registry_path if registry_path is not None else default_global_registry
+    )
     global_registry_writability = (
         probe_registry_write_path(default_global_registry, create_parent=True)
         if local_state_route["status"] not in {"conflict", "invalid"}
@@ -1052,13 +1057,14 @@ def collect_doctor(
     )
     runtime_projection_routes = (
         collect_runtime_projection_route_diagnostics(
-            registry_path=default_global_registry,
+            registry_path=diagnostic_registry_path,
             runtime_root=selected_runtime_root,
         )
-        if default_global_registry.exists() and local_state_route["status"] not in {"conflict", "invalid"}
+        if diagnostic_registry_path.exists()
+        and local_state_route["status"] not in {"conflict", "invalid"}
         else {
             "schema_version": "runtime_projection_route_diagnostics_v0",
-            "registry": str(default_global_registry.resolve()),
+            "registry": str(diagnostic_registry_path.resolve()),
             "runtime_root": str(selected_runtime_root.resolve()),
             "goal_filter": None,
             "activation_state_filter": None,
@@ -1072,6 +1078,15 @@ def collect_doctor(
     from .capabilities.decision_context.freshness import (
         capture_host_diagnostics_detail,
         collect_capture_host_diagnostics,
+    )
+    from .control_plane.agents.host_delivery_diagnosis import (
+        collect_host_delivery_diagnosis_route,
+        host_delivery_diagnosis_check,
+    )
+
+    host_delivery_diagnosis = collect_host_delivery_diagnosis_route(
+        registry_path=diagnostic_registry_path,
+        route_status=str(local_state_route["status"]),
     )
 
     decision_context_capture = collect_capture_host_diagnostics(selected_runtime_root)
@@ -1221,6 +1236,7 @@ def collect_doctor(
                 sort_keys=True,
             ),
         },
+        host_delivery_diagnosis_check(host_delivery_diagnosis),
         {
             "id": "decision_context_capture_hosts_healthy",
             "required": False,
@@ -1289,6 +1305,7 @@ def collect_doctor(
         "global_registry_writability": global_registry_writability,
         "runtime_projection_routes": runtime_projection_routes,
         "decision_context_capture": decision_context_capture,
+        "host_prompt_delivery": host_delivery_diagnosis,
         "typescript_control_plane": typescript_control_plane,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
@@ -1454,6 +1471,28 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
         else {}
     )
+    # Installation-only scope never reads host state, so the section is absent
+    # there rather than rendered as an empty value a reader would misread.
+    host_prompt_delivery = (
+        payload.get("host_prompt_delivery")
+        if isinstance(payload.get("host_prompt_delivery"), dict)
+        else None
+    )
+    host_prompt_delivery_lines: list[str] = []
+    if host_prompt_delivery:
+        stale_ticks = [
+            str(lane.get("last_observed_at"))
+            for lane in host_prompt_delivery.get("lanes") or []
+            if isinstance(lane, dict) and lane.get("window_state") == "stale"
+        ]
+        host_prompt_delivery_lines = [
+            f"- host_prompt_delivery: `{host_prompt_delivery.get('status')}`"
+            f" (reason=`{host_prompt_delivery.get('reason')}`,"
+            f" lanes=`{host_prompt_delivery.get('lane_count')}`,"
+            f" stale=`{(host_prompt_delivery.get('counts') or {}).get('stale')}`)"
+            f" last_ticks=`{','.join(stale_ticks) or 'none'}`"
+            f" labels_withheld=`{bool(host_prompt_delivery.get('labels_withheld'))}`"
+        ]
     lines = [
         "# LoopX Doctor",
         "",
@@ -1479,6 +1518,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         f" (registry=`{(payload.get('runtime_projection_routes') or {}).get('registry')}`,"
         f" goals=`{(payload.get('runtime_projection_routes') or {}).get('goal_count')}`,"
         f" counts=`{json.dumps((payload.get('runtime_projection_routes') or {}).get('counts') or {}, sort_keys=True)}`)",
+        *host_prompt_delivery_lines,
         f"- decision_context_capture_hosts_healthy: `{(payload.get('decision_context_capture') or {}).get('healthy')}`"
         f" (hosts=`{(payload.get('decision_context_capture') or {}).get('host_count')}`,"
         f" unhealthy=`{(payload.get('decision_context_capture') or {}).get('unhealthy_count')}`)",
