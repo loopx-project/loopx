@@ -299,7 +299,7 @@ def _record_epoch_outcomes(
     started: float,
     run_root: Path,
     arm_key: str,
-) -> None:
+) -> float:
     epoch_raw = 0.0
     epoch_novel = 0.0
     records: list[dict[str, object]] = []
@@ -372,6 +372,7 @@ def _record_epoch_outcomes(
             "lanes": lanes,
         }
     )
+    return elapsed_after
 
 
 def run_budget_arm(
@@ -534,7 +535,7 @@ def run_budget_arm(
             stagger_seconds=stagger_seconds,
             item_failure_policy=failure_policy,
         )
-        _record_epoch_outcomes(
+        elapsed_after = _record_epoch_outcomes(
             state=state,
             lanes=lanes,
             seed_items=seed_items,
@@ -558,7 +559,7 @@ def run_budget_arm(
                     arm_key=arm_key,
                     runtime_signature=runtime_signature,
                     next_epoch=epoch + 1,
-                    elapsed_minutes=state.checkpoints[-1]["elapsed_minutes"],
+                    elapsed_minutes=elapsed_after,
                     epochs=state.epochs,
                     checkpoints=state.checkpoints,
                     novelty_seen=sorted(ledger.seen),

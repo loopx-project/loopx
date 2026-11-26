@@ -651,3 +651,71 @@ def test_cross_family_duplicate_spec_id_executes_once_and_counts_exact_remaining
     assert len(variant_ids) == 2
     assert "v-uniq-2-gamma" in variant_ids
     assert sum(1 for vid in variant_ids if str(vid).startswith("v-dup-1-")) == 1
+
+
+@pytest.mark.parametrize(
+    ("first_min", "resume_min", "budget_min", "curve_min", "expect_stop", "expect_epochs"),
+    [
+        (0.0004, 0.0004, 0.0007, 0.0, "budget_exhausted", 1),
+        (0.0006, 0.0001, 0.001, 0.001, "max_epochs", 2),
+    ],
+)
+def test_checkpoint_resume_preserves_unrounded_elapsed_minutes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    first_min: float,
+    resume_min: float,
+    budget_min: float,
+    curve_min: float,
+    expect_stop: str,
+    expect_epochs: int,
+) -> None:
+    ran_epoch = False
+    pre_resume = 0.0
+    epoch_min = first_min
+
+    class TinySeedAdapter:
+        def list_seed_items(self) -> list[dict[str, object]]:
+            return [{"item_id": "s1", "family": "fam", "text": "x", "concurrency_key": "k"}]
+
+        def execute(self, item: Mapping[str, object], **_: object) -> dict[str, object]:
+            nonlocal ran_epoch
+            ran_epoch = True
+            return {"item_id": item["item_id"], "family": "fam", "observation_keys": ["o1"], "weighted_flags": {}, "accepted": True, "duration_minutes": 0.0}
+
+    def fake_perf_minutes(_start: float) -> float:
+        return pre_resume + (epoch_min if ran_epoch else 0.0)
+
+    monkeypatch.setattr(harness_runtime, "_now_perf_minutes", fake_perf_minutes)
+    run1 = run_budget_arm(
+        TinySeedAdapter(),
+        arm_key="clk",
+        run_root=tmp_path,
+        budget_minutes=budget_min,
+        worker_count=1,
+        max_epochs=1,
+        use_router=False,
+        resumable=True,
+        duration_guard_factor=0.0,
+    )
+    assert run1["checkpoints"][0]["elapsed_minutes"] == curve_min
+    saved = _read_json(tmp_path / "arm_checkpoint_clk.json")
+    assert isinstance(saved, dict) and isinstance(saved["state"], dict)
+    assert saved["state"]["elapsed_minutes"] == pytest.approx(first_min, abs=1e-9)
+
+    ran_epoch = False
+    pre_resume = resume_min
+    epoch_min = 0.0
+    run2 = run_budget_arm(
+        TinySeedAdapter(),
+        arm_key="clk",
+        run_root=tmp_path,
+        budget_minutes=budget_min,
+        worker_count=1,
+        max_epochs=2,
+        use_router=False,
+        resume=True,
+        duration_guard_factor=0.0,
+    )
+    assert run2["stop_reason"] == expect_stop
+    assert run2["epoch_count"] == expect_epochs
