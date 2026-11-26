@@ -13,6 +13,7 @@ Three contracts matter and each is exercised for real rather than mocked:
 
 from __future__ import annotations
 
+from typing import cast
 import json
 import subprocess
 import sys
@@ -382,3 +383,201 @@ def test_install_reports_a_malformed_config_instead_of_rewriting_it(
     )
     assert _mcp_row(payload)["status"] == "blocked_invalid_kiro_cli_mcp_json"
     assert config.read_text(encoding="utf-8") == '{"mcpServers": ["not", "a", "map"]}'
+
+
+def test_default_install_migrates_stale_managed_kiro_mcp_and_preserves_other_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default `slash-commands --install` (`surfaces=all`, what `self-update` runs)
+    migrates a sidecar-verified Kiro MCP registration whose server path moved."""
+    from loopx.claude_goal_mode.scripts import install as claude_install
+
+    provision_calls = 0
+
+    def fake_provision(*, dry: bool = False) -> Path:
+        nonlocal provision_calls
+        if not dry:
+            provision_calls += 1
+        return Path(sys.executable)
+
+    monkeypatch.setattr(claude_install, "provision_mcp_python", fake_provision)
+    monkeypatch.setattr(claude_install, "_has_mcp", lambda _interp: True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    kiro_home = tmp_path / "kiro-home"
+    config = kiro_home / KIRO_CLI_MCP_CONFIG_SUBPATH
+    marker = config.parent / slash_command_install.CURSOR_MCP_MARKER_NAME
+    config.parent.mkdir(parents=True)
+    stale_script = tmp_path / "removed-wheel" / "loopx" / "kiro_cli_goal_mode" / "mcp_server.py"
+    stale_entry = {"command": "/stale/mcp-venv/bin/python", "args": [str(stale_script)]}
+    other = {"command": "codegraph", "args": ["serve", "--mcp"]}
+    config.write_text(json.dumps({"mcpServers": {"codegraph": other, "loopx": stale_entry}}), encoding="utf-8")
+    marker.write_text(
+        json.dumps(
+            {
+                "schema_version": slash_command_install.KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+                "servers": {"loopx": stale_entry},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    codex_home = str(tmp_path / "codex")
+    claude_home = str(tmp_path / "claude")
+    opencode_home = str(tmp_path / "opencode")
+    kiro_home_arg = str(kiro_home)
+
+    preview = install_slash_commands(
+        execute=False,
+        codex_home=codex_home,
+        claude_home=claude_home,
+        opencode_home=opencode_home,
+        kiro_home=kiro_home_arg,
+    )
+    assert preview["effective_surfaces"] == ["codex", "claude-code", "opencode"]
+    assert provision_calls == 0
+    assert _mcp_row(preview)["status"] == "would_write"
+    assert json.loads(config.read_text(encoding="utf-8"))["mcpServers"]["loopx"] == stale_entry
+    assert not (kiro_home / "skills").exists()
+
+    # The stale removed script fails before migration.
+    stale_run = subprocess.run([sys.executable, str(stale_script)], capture_output=True, text=True, check=False)
+    assert stale_run.returncode == 2
+
+    migrated = install_slash_commands(
+        execute=True,
+        codex_home=codex_home,
+        claude_home=claude_home,
+        opencode_home=opencode_home,
+        kiro_home=kiro_home_arg,
+    )
+    assert provision_calls == 1
+    assert _mcp_row(migrated)["status"] == "written"
+    migrated_summary = cast(dict[str, object], migrated["summary"])
+    assert migrated_summary["kiro_cli_mcp_path"] == str(config)
+    assert migrated_summary["kiro_cli_skill_dir"] is None
+    assert not (kiro_home / "skills").exists()
+
+    expected_entry = {"command": sys.executable, "args": [str(mcp_server_script())]}
+    assert json.loads(config.read_text(encoding="utf-8")) == {
+        "mcpServers": {"codegraph": other, "loopx": expected_entry}
+    }
+    assert json.loads(marker.read_text(encoding="utf-8")) == {
+        "schema_version": slash_command_install.KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+        "servers": {"loopx": expected_entry},
+    }
+
+    # Verify the migrated entry imports cleanly as a standalone script.
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import runpy; ns = runpy.run_path(__import__('sys').argv[1], run_name='probe'); print(ns['CONFIG'].runtime_profile)",
+            str(mcp_server_script()),
+        ],
+        capture_output=True,
+        text=True,
+        cwd="/",
+        check=False,
+    )
+    assert probe.returncode == 0, probe.stderr
+    assert probe.stdout.strip() == "kiro_cli"
+
+    # Re-running default install is a clean no-op with zero extra provisioning.
+    second = install_slash_commands(
+        execute=True,
+        codex_home=codex_home,
+        claude_home=claude_home,
+        opencode_home=opencode_home,
+        kiro_home=kiro_home_arg,
+    )
+    assert provision_calls == 1
+    second_summary = cast(dict[str, object], second["summary"])
+    second_installed = cast(list[dict[str, object]], second["installed"])
+    assert second_summary["kiro_cli_mcp_path"] is None
+    assert all(row["surface"] != "kiro-cli" for row in second_installed)
+
+    # Explicit kiro-cli uninstall still retires only the migrated LoopX entry.
+    default_uninstall = install_slash_commands(
+        execute=True,
+        uninstall=True,
+        codex_home=codex_home,
+        claude_home=claude_home,
+        opencode_home=opencode_home,
+        kiro_home=kiro_home_arg,
+    )
+    default_uninstall_rows = cast(list[dict[str, object]], default_uninstall["installed"])
+    assert all(row["surface"] != "kiro-cli" for row in default_uninstall_rows)
+    assert "loopx" in json.loads(config.read_text(encoding="utf-8"))["mcpServers"]
+
+    kiro_uninstall = install_slash_commands(
+        execute=True, uninstall=True, surfaces=["kiro-cli"], kiro_home=str(kiro_home)
+    )
+    assert _mcp_row(kiro_uninstall)["status"] == "retired"
+    assert json.loads(config.read_text(encoding="utf-8")) == {"mcpServers": {"codegraph": other}}
+
+
+@pytest.mark.parametrize("case", ("no_sidecar", "user_edited_entry", "wrong_schema", "malformed_config"))
+def test_default_install_leaves_unverified_or_user_owned_kiro_mcp_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    monkeypatch.setattr(
+        slash_command_install,
+        "_kiro_cli_mcp_command",
+        lambda: pytest.fail("must not provision or rewrite unverified Kiro MCP"),
+    )
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    kiro_home = tmp_path / "kiro-home"
+    config = kiro_home / KIRO_CLI_MCP_CONFIG_SUBPATH
+    marker = config.parent / slash_command_install.CURSOR_MCP_MARKER_NAME
+    config.parent.mkdir(parents=True)
+
+    mine = {"command": "my-custom-loopx", "args": ["--custom"]}
+    other = {"command": "codegraph", "args": ["serve"]}
+    if case == "malformed_config":
+        raw_config = "{not-valid-json"
+        config.write_text(raw_config, encoding="utf-8")
+        marker.write_text(
+            json.dumps(
+                {
+                    "schema_version": slash_command_install.KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+                    "servers": {"loopx": {"command": "/old/python", "args": ["/old/mcp_server.py"]}},
+                }
+            ),
+            encoding="utf-8",
+        )
+    else:
+        raw_config = json.dumps({"mcpServers": {"other": other, "loopx": mine}})
+        config.write_text(raw_config, encoding="utf-8")
+        if case == "user_edited_entry":
+            marker.write_text(
+                json.dumps(
+                    {
+                        "schema_version": slash_command_install.KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+                        "servers": {"loopx": {"command": "/old/python", "args": ["/old/mcp_server.py"]}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        elif case == "wrong_schema":
+            marker.write_text(
+                json.dumps({"schema_version": "other_schema_v0", "servers": {"loopx": mine}}),
+                encoding="utf-8",
+            )
+
+    payload = install_slash_commands(
+        execute=True,
+        codex_home=str(tmp_path / "codex"),
+        claude_home=str(tmp_path / "claude"),
+        opencode_home=str(tmp_path / "opencode"),
+        kiro_home=str(kiro_home),
+    )
+    assert payload["ok"] is True
+    payload_summary = cast(dict[str, object], payload["summary"])
+    payload_installed = cast(list[dict[str, object]], payload["installed"])
+    assert payload_summary["kiro_cli_mcp_path"] is None
+    assert all(row["surface"] != "kiro-cli" for row in payload_installed)
+    assert config.read_text(encoding="utf-8") == raw_config
