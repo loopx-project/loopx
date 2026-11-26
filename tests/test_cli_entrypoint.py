@@ -2293,7 +2293,9 @@ def test_cli_commands_package_loads_submodules_lazily():
 import sys
 import loopx.cli_commands as cmds
 
-assert len(cmds.__all__) == 100
+assert len(cmds.__all__) == 98
+assert "handle_postgres_command" not in cmds.__all__
+assert "register_postgres_commands" not in cmds.__all__
 for mod in ("loopx.cli_commands.benchmark_dispatch", "loopx.cli_commands.quota", "loopx.cli_commands.explore"):
     assert mod not in sys.modules, f"eager import leaked {mod}"
 
