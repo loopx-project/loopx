@@ -12,12 +12,34 @@ from __future__ import annotations
 
 import ast
 from collections import defaultdict
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 import re
 import subprocess
-from typing import Any
+from typing import TypeVar
+
+from .inventory_reports import (
+    CarrierDefinition,
+    CarrierEntry,
+    ConsumerRankingEntry as ConsumerRankingEntry,
+    DivergentValueSetEntry as DivergentValueSetEntry,
+    FactEntry,
+    MergeCandidateGroup as MergeCandidateGroup,
+    MultiValueDuplicateEntry,
+    SourceFile as SourceFile,
+    StringConstantEntry as StringConstantEntry,
+    StringDefinition,
+    StringDuplicateEntry,
+    _str_list,
+    _word_token,
+    _word_token_mentions as _word_token_mentions,
+    consumer_ranking as consumer_ranking,
+    divergent_value_sets as divergent_value_sets,
+    merge_candidate_groups as merge_candidate_groups,
+    registered_owner_symbol_sets as registered_owner_symbol_sets,
+    render_inventory as render_inventory,
+)
 
 INVENTORY_SCHEMA_VERSION = "loopx_semantic_inventory_v0"
 DEFAULT_ROOT = "loopx"
@@ -44,13 +66,9 @@ TS_STRING_CONST = re.compile(
     re.MULTILINE,
 )
 QUOTED = re.compile(r'''["']([^"']*)["']''')
+_WORD_TOKEN = _word_token
 
-
-@dataclass(frozen=True)
-class SourceFile:
-    path: str
-    suffix: str
-    text: str
+_EntryT = TypeVar("_EntryT", bound=Mapping[str, object])
 
 
 def load_sources(repo_root: Path, root: str = DEFAULT_ROOT) -> list[SourceFile]:
@@ -59,7 +77,9 @@ def load_sources(repo_root: Path, root: str = DEFAULT_ROOT) -> list[SourceFile]:
     # policy. Untracked work and ignored local notes must never enter the map.
     tracked = subprocess.run(
         ["git", "ls-files", "--cached", "-z", "--", root],
-        cwd=repo_root, check=True, stdout=subprocess.PIPE,
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.PIPE,
     ).stdout.decode("utf-8").split("\0")
     for relative in sorted(set(tracked) - {""}):
         path = repo_root / relative
@@ -82,7 +102,7 @@ def load_sources(repo_root: Path, root: str = DEFAULT_ROOT) -> list[SourceFile]:
 def _is_enum_class(node: ast.ClassDef) -> bool:
     for base in node.bases:
         name = base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
-        if name.endswith("Enum"):
+        if isinstance(name, str) and name.endswith("Enum"):
             return True
     return False
 
@@ -128,11 +148,13 @@ def parse_python(source: SourceFile) -> ast.Module:
     try:
         return ast.parse(source.text)
     except SyntaxError as error:
-        raise ValueError(f"cannot inventory invalid Python source: {source.path}:{error.lineno}") from None
+        raise ValueError(
+            f"cannot inventory invalid Python source: {source.path}:{error.lineno}"
+        ) from None
 
 
 @lru_cache(maxsize=4096)
-def python_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
+def python_facts(source: SourceFile) -> dict[str, list[FactEntry]]:
     """Inventory the Python facts of one source file.
 
     The cache is keyed by the frozen SourceFile (path, suffix, text), so a
@@ -140,7 +162,7 @@ def python_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
     scans of the same tree (owner_values plus build_inventory in the drift
     smoke) parse each file once instead of once per caller.
     """
-    facts: dict[str, list[dict[str, Any]]] = {
+    facts: dict[str, list[FactEntry]] = {
         "enums": [],
         "closed_sets": [],
         "literal_aliases": [],
@@ -163,7 +185,9 @@ def python_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
                 else:
                     string_valued = False
             if values and string_valued:
-                facts["enums"].append({"name": node.name, "module": source.path, "values": values})
+                facts["enums"].append(
+                    {"name": node.name, "module": source.path, "values": values}
+                )
             continue
         assigned = _assigned_name(node)
         if assigned is None:
@@ -174,12 +198,16 @@ def python_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
             if elements is None and isinstance(value.slice, ast.Constant) and isinstance(value.slice.value, str):
                 elements = [value.slice.value]
             if elements:
-                facts["literal_aliases"].append({"name": name, "module": source.path, "values": elements})
+                facts["literal_aliases"].append(
+                    {"name": name, "module": source.path, "values": elements}
+                )
             continue
         if not UPPER_NAME.match(name):
             continue
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            facts["string_constants"].append({"name": name, "module": source.path, "value": value.value})
+            facts["string_constants"].append(
+                {"name": name, "module": source.path, "value": value.value}
+            )
             continue
         elements = _string_elements(value)
         if elements is not None and len(elements) >= 2:
@@ -194,8 +222,8 @@ def python_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
     return facts
 
 
-def typescript_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
-    facts: dict[str, list[dict[str, Any]]] = {"const_arrays": [], "string_constants": []}
+def typescript_facts(source: SourceFile) -> dict[str, list[FactEntry]]:
+    facts: dict[str, list[FactEntry]] = {"const_arrays": [], "string_constants": []}
     for match in TS_CONST_ARRAY.finditer(source.text):
         values = QUOTED.findall(match.group("body"))
         if values:
@@ -204,7 +232,11 @@ def typescript_facts(source: SourceFile) -> dict[str, list[dict[str, Any]]]:
             )
     for match in TS_STRING_CONST.finditer(source.text):
         facts["string_constants"].append(
-            {"name": match.group("name"), "module": source.path, "value": match.group("value")}
+            {
+                "name": match.group("name"),
+                "module": source.path,
+                "value": match.group("value"),
+            }
         )
     return facts
 
@@ -217,19 +249,28 @@ def _duplicate_kind(modules: list[str]) -> str:
 
 def multi_value_carriers(
     *,
-    enums: list[dict[str, Any]],
-    closed_sets: list[dict[str, Any]],
-    literal_aliases: list[dict[str, Any]],
-    const_arrays: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+    enums: Sequence[FactEntry],
+    closed_sets: Sequence[FactEntry],
+    literal_aliases: Sequence[FactEntry],
+    const_arrays: Sequence[FactEntry],
+) -> list[CarrierEntry]:
     """Tag each scan section with the carrier kind the collision report prints."""
-    carriers: list[dict[str, Any]] = []
+    carriers: list[CarrierEntry] = []
     for kind, entries in zip(
         ("python_enum", "python_closed_set", "python_literal_alias", "typescript_const_array"),
         (enums, closed_sets, literal_aliases, const_arrays),
         strict=True,
     ):
-        carriers.extend({**entry, "kind": kind} for entry in entries)
+        for entry in entries:
+            tagged: CarrierEntry = {
+                "kind": kind,
+                "name": entry["name"],
+                "module": entry["module"],
+                "values": list(entry.get("values") or []),
+            }
+            if "container" in entry:
+                tagged["container"] = entry["container"]
+            carriers.append(tagged)
     return carriers
 
 
@@ -242,7 +283,9 @@ def multi_value_carriers(
 UNORDERED_CONTAINERS = frozenset({"set", "frozenset"})
 
 
-def _collision_keys(carriers_for_name: list[dict[str, Any]]) -> set[tuple[str, ...]]:
+def _collision_keys(
+    carriers_for_name: Sequence[Mapping[str, object]],
+) -> set[tuple[str, ...]]:
     """The distinct value sets one name carries; one key means the name agrees.
 
     Membership decides identity only when *every* definition of the name is an
@@ -257,13 +300,16 @@ def _collision_keys(carriers_for_name: list[dict[str, Any]]) -> set[tuple[str, .
     semantics are unestablished here.
     """
     if all(item.get("container") in UNORDERED_CONTAINERS for item in carriers_for_name):
-        return {tuple(sorted(set(item["values"]))) for item in carriers_for_name}
-    return {tuple(item["values"]) for item in carriers_for_name}
+        return {
+            tuple(sorted(set(_str_list(item["values"]))))
+            for item in carriers_for_name
+        }
+    return {tuple(_str_list(item["values"])) for item in carriers_for_name}
 
 
 def multi_value_name_collisions(
-    carriers: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    carriers: Sequence[Mapping[str, object]],
+) -> tuple[list[MultiValueDuplicateEntry], list[MultiValueDuplicateEntry]]:
     """Group multi-value carriers by name to find collisions between modules.
 
     A string constant is ``NAME = "value"``; a multi-value carrier is an enum, a
@@ -273,22 +319,26 @@ def multi_value_name_collisions(
     fork. Each entry keeps every defining module and its value set, so a reviewer
     sees the divergence rather than a count.
     """
-    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_name: dict[str, list[Mapping[str, object]]] = defaultdict(list)
     for carrier in carriers:
-        by_name[carrier["name"]].append(carrier)
-    twins: list[dict[str, Any]] = []
-    forks: list[dict[str, Any]] = []
+        by_name[str(carrier["name"])].append(carrier)
+    twins: list[MultiValueDuplicateEntry] = []
+    forks: list[MultiValueDuplicateEntry] = []
     for name, carriers_for_name in sorted(by_name.items()):
         if len(carriers_for_name) < 2:
             continue
-        definitions = sorted(
+        definitions: list[CarrierDefinition] = sorted(
             (
-                {"kind": item["kind"], "module": item["module"], "values": list(item["values"])}
+                {
+                    "kind": str(item["kind"]),
+                    "module": str(item["module"]),
+                    "values": _str_list(item["values"]),
+                }
                 for item in carriers_for_name
             ),
             key=lambda item: item["module"],
         )
-        entry: dict[str, Any] = {"name": name, "definitions": definitions}
+        entry: MultiValueDuplicateEntry = {"name": name, "definitions": definitions}
         # Keyed off the raw carriers, which still carry ``container``; the
         # ``definitions`` entries keep their source order for review.
         if len(_collision_keys(carriers_for_name)) == 1:
@@ -300,21 +350,25 @@ def multi_value_name_collisions(
     return twins, forks
 
 
-def _sorted_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(entries, key=lambda entry: (entry["module"], entry["name"]))
+def _sorted_entries(entries: Sequence[_EntryT]) -> list[_EntryT]:
+    return sorted(
+        entries,
+        key=lambda entry: (str(entry["module"]), str(entry["name"])),
+    )
 
 
 def build_inventory(
-    repo_root: Path, root: str = DEFAULT_ROOT, sources: list[SourceFile] | None = None
-) -> dict[str, Any]:
-    if sources is None:
-        sources = load_sources(repo_root, root)
-    enums: list[dict[str, Any]] = []
-    closed_sets: list[dict[str, Any]] = []
-    literal_aliases: list[dict[str, Any]] = []
-    const_arrays: list[dict[str, Any]] = []
-    string_constants: list[dict[str, Any]] = []
-    for source in sources:
+    repo_root: Path,
+    root: str = DEFAULT_ROOT,
+    sources: Sequence[SourceFile] | None = None,
+) -> dict[str, object]:
+    resolved_sources = load_sources(repo_root, root) if sources is None else list(sources)
+    enums: list[FactEntry] = []
+    closed_sets: list[FactEntry] = []
+    literal_aliases: list[FactEntry] = []
+    const_arrays: list[FactEntry] = []
+    string_constants: list[FactEntry] = []
+    for source in resolved_sources:
         if source.suffix == ".py":
             facts = python_facts(source)
             enums.extend(facts["enums"])
@@ -335,17 +389,23 @@ def build_inventory(
     multi_twins, multi_forks = multi_value_name_collisions(multi_value)
 
     definitions = string_constant_definitions(string_constants)
-    twins: list[dict[str, Any]] = []
-    forks: list[dict[str, Any]] = []
-    conflicting: list[dict[str, Any]] = []
+    twins: list[StringDuplicateEntry] = []
+    forks: list[StringDuplicateEntry] = []
+    conflicting: list[StringDuplicateEntry] = []
     for name, defs in sorted(definitions.items()):
         if len(defs) < 2:
             continue
         modules = [item["module"] for item in defs]
-        entry: dict[str, Any] = {"name": name, "is_schema_version": bool(SCHEMA_VERSION_NAME.search(name))}
+        entry: StringDuplicateEntry = {
+            "name": name,
+            "is_schema_version": bool(SCHEMA_VERSION_NAME.search(name)),
+        }
         if len({item["value"] for item in defs}) == 1:
-            entry.update({"value": defs[0]["value"], "modules": modules})
-            (twins if _duplicate_kind(modules) == "cross_runtime_twin" else forks).append(entry)
+            entry["value"] = defs[0]["value"]
+            entry["modules"] = modules
+            (twins if _duplicate_kind(modules) == "cross_runtime_twin" else forks).append(
+                entry
+            )
         else:
             entry["definitions"] = defs
             conflicting.append(entry)
@@ -370,249 +430,71 @@ def build_inventory(
             "multi_value_forks": multi_forks,
         },
         "summary": {
-            "source_files": len(sources),
+            "source_files": len(resolved_sources),
             "python_enums": len(enums),
             "python_closed_sets": len(closed_sets),
             "python_literal_aliases": len(literal_aliases),
             "typescript_const_arrays": len(const_arrays),
             "named_string_constants": len(string_constants),
-            "schema_version_names": sum(1 for name in definitions if SCHEMA_VERSION_NAME.search(name)),
-            "schema_version_same_runtime_forks": sum(1 for item in forks if item["is_schema_version"]),
+            "schema_version_names": sum(
+                1 for name in definitions if SCHEMA_VERSION_NAME.search(name)
+            ),
+            "schema_version_same_runtime_forks": sum(
+                1 for item in forks if item["is_schema_version"]
+            ),
             "cross_runtime_twins": len(twins),
             "same_runtime_forks": len(forks),
-            "same_runtime_fork_definitions": sum(len(item["modules"]) for item in forks),
+            "same_runtime_fork_definitions": sum(
+                len(item.get("modules") or []) for item in forks
+            ),
             "conflicting_values": len(conflicting),
-            "conflicting_definitions": sum(len(item["definitions"]) for item in conflicting),
+            "conflicting_definitions": sum(
+                len(item.get("definitions") or []) for item in conflicting
+            ),
             "multi_value_twins": len(multi_twins),
             "multi_value_forks": len(multi_forks),
-            "multi_value_fork_definitions": sum(len(item["definitions"]) for item in multi_forks),
+            "multi_value_fork_definitions": sum(
+                len(item["definitions"]) for item in multi_forks
+            ),
             "same_runtime_forks_semantic": sum(
                 1 for item in forks if not MODULE_LOCAL_CONVENTION.match(item["name"])
             ),
             "conflicting_values_semantic": sum(
-                1 for item in conflicting if not MODULE_LOCAL_CONVENTION.match(item["name"])
+                1
+                for item in conflicting
+                if not MODULE_LOCAL_CONVENTION.match(item["name"])
             ),
         },
     }
 
 
-def string_constant_definitions(string_constants: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+def string_constant_definitions(
+    string_constants: Sequence[Mapping[str, object]],
+) -> dict[str, list[StringDefinition]]:
     """Group ``NAME = "value"`` definitions by constant name, modules sorted."""
-    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_name: dict[str, list[StringDefinition]] = defaultdict(list)
     for entry in string_constants:
-        by_name[entry["name"]].append({"module": entry["module"], "value": entry["value"]})
-    return {name: sorted(defs, key=lambda item: item["module"]) for name, defs in by_name.items()}
+        by_name[str(entry["name"])].append(
+            {"module": str(entry["module"]), "value": str(entry["value"])}
+        )
+    return {
+        name: sorted(defs, key=lambda item: item["module"])
+        for name, defs in by_name.items()
+    }
 
 
-def collect_string_constants(sources: list[SourceFile]) -> list[dict[str, Any]]:
-    constants: list[dict[str, Any]] = []
+def collect_string_constants(
+    sources: Sequence[SourceFile],
+) -> list[StringConstantEntry]:
+    constants: list[StringConstantEntry] = []
     for source in sources:
         facts = python_facts(source) if source.suffix == ".py" else typescript_facts(source)
-        constants.extend(facts["string_constants"])
-    return constants
-
-
-def render_inventory(inventory: dict[str, Any]) -> str:
-    """Two-space indented JSON with one line per inventory entry for readable diffs."""
-    import json
-
-    def one_line(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, separators=(", ", ": "))
-
-    lines = ["{"]
-    keys = list(inventory)
-    for index, key in enumerate(keys):
-        value = inventory[key]
-        comma = "," if index < len(keys) - 1 else ""
-        if isinstance(value, list):
-            if not value:
-                lines.append(f'  "{key}": []{comma}')
-                continue
-            lines.append(f'  "{key}": [')
-            for position, entry in enumerate(value):
-                lines.append("    " + one_line(entry) + ("," if position < len(value) - 1 else ""))
-            lines.append(f"  ]{comma}")
-        elif isinstance(value, dict) and value and all(isinstance(item, list) for item in value.values()):
-            lines.append(f'  "{key}": {{')
-            inner_keys = list(value)
-            for inner_index, inner_key in enumerate(inner_keys):
-                entries = value[inner_key]
-                inner_comma = "," if inner_index < len(inner_keys) - 1 else ""
-                if not entries:
-                    lines.append(f'    "{inner_key}": []{inner_comma}')
-                    continue
-                lines.append(f'    "{inner_key}": [')
-                for position, entry in enumerate(entries):
-                    lines.append("      " + one_line(entry) + ("," if position < len(entries) - 1 else ""))
-                lines.append(f"    ]{inner_comma}")
-            lines.append(f"  }}{comma}")
-        else:
-            rendered = json.dumps(value, ensure_ascii=False, indent=2)
-            rendered = "\n".join(("  " + line) if i else line for i, line in enumerate(rendered.splitlines()))
-            lines.append(f'  "{key}": {rendered}{comma}')
-    lines.append("}")
-    return "\n".join(lines) + "\n"
-
-
-def registered_owner_symbol_sets(registry: dict[str, Any]) -> set[frozenset[str]]:
-    """Symbol sets that one registered vocabulary already binds into one concept.
-
-    A cross-runtime vocabulary names its owner twice because the runtimes spell
-    it differently: ``EffectiveAction`` in Python and ``EFFECTIVE_ACTIONS`` in
-    TypeScript are the registered owners of ``effective_action``. The registry
-    entry is the decision that the two spellings are one vocabulary, so their
-    equal value sets carry no review question. Only sets with more than one
-    distinct symbol are returned; a vocabulary with a single owner, or with the
-    same symbol on both sides, explains nothing.
-    """
-    sets: set[frozenset[str]] = set()
-    for vocabulary in registry["vocabularies"].values():
-        symbols = frozenset(
-            owner.split("::")[-1] for owner in (vocabulary.get("owners") or {}).values() if owner
-        )
-        if len(symbols) > 1:
-            sets.add(symbols)
-    return sets
-
-
-def merge_candidate_groups(
-    inventory: dict[str, Any], registry: dict[str, Any] | None = None
-) -> list[dict[str, Any]]:
-    """Advisory: distinct names carrying an identical multi-value set.
-
-    Value-set equality is a candidate signal, not proof of one concept:
-    ``CONFIDENCE_LEVELS`` and ``EDGE_CASE_COMPLEXITIES`` share ``high/low/medium``
-    while meaning different things. Each group is for review, never auto-merged,
-    and is printed on demand rather than committed so it cannot be mistaken for a
-    ratified decision.
-
-    ``registry`` drops the groups whose names are exactly the owner symbols of
-    one registered vocabulary. Those are a naming convention, not duplication:
-    the registry has already ruled the two spellings one concept, and leaving
-    them in the list buries the groups that nobody has ruled on. Passing
-    ``None`` keeps the unfiltered list, which is what an audit of the raw
-    value-set collisions wants. Filtering removes noise from a review list; it
-    retires nothing and settles no group that stays.
-
-    ``cross_runtime`` marks a group whose modules span both runtimes. Such a
-    group is a registry gap by construction, because a value set living in
-    Python and TypeScript with no vocabulary binding them is exactly what the
-    registry exists to record.
-    """
-    explained = registered_owner_symbol_sets(registry) if registry is not None else set()
-    by_values: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
-    for section in ("python_enums", "python_closed_sets", "python_literal_aliases", "typescript_const_arrays"):
-        for entry in inventory[section]:
-            if len(entry["values"]) >= 2:
-                by_values[tuple(sorted(entry["values"]))].append(entry)
-    groups: list[dict[str, Any]] = []
-    for values, entries in by_values.items():
-        names = sorted({entry["name"] for entry in entries})
-        if len(names) < 2 or frozenset(names) in explained:
-            continue
-        modules = sorted({entry["module"] for entry in entries})
-        groups.append(
-            {
-                "names": names,
-                "values": list(values),
-                "modules": modules,
-                "cross_runtime": any(module.endswith(".py") for module in modules)
-                and any(module.endswith(".ts") for module in modules),
-            }
-        )
-    return sorted(groups, key=lambda group: (-len(group["names"]), group["names"]))
-
-
-def divergent_value_sets(inventory: dict[str, Any]) -> list[dict[str, Any]]:
-    """Advisory: forks, keyed by name, with how many value sets each carries.
-
-    Complements ``merge_candidate_groups``, which groups *different* names with
-    *identical* value sets and therefore never lists a fork at all: a fork is
-    *one* name whose modules disagree, so the two reports answer different
-    questions and the merge-candidate grouping cannot substitute for this one.
-
-    What this does **not** do is detect a rename. Renaming one side of a fork
-    leaves that name with a single definition, so it stops being a fork and
-    drops out of this report exactly as it drops out of the budget -- measured,
-    not assumed. The RFC Section 9 limit therefore stands unclosed; this report
-    only makes the *surviving* forks visible by name, with the count of
-    disagreeing value sets, where before they were visible only as a number.
-    A rename of one side is still caught when the name is declared, because the
-    declaration names every defining module and the renamed side no longer
-    matches.
-
-    Nothing here is a second authority: advisory output over the same computed
-    inventory, never committed, never a budget input.
-    """
-    entries: list[dict[str, Any]] = []
-    for entry in inventory["duplicate_definitions"]["multi_value_forks"]:
-        value_sets = {tuple(sorted(item["values"])) for item in entry["definitions"]}
-        if len(value_sets) < 2:
-            continue
-        entries.append(
-            {
-                "name": entry["name"],
-                "value_sets": len(value_sets),
-                "definition_modules": sorted({item["module"] for item in entry["definitions"]}),
-            }
-        )
-    return sorted(entries, key=lambda item: (-item["value_sets"], item["name"]))
-
-
-_WORD_TOKEN = re.compile(r"\w+")
-
-
-def _word_token_mentions(sources: list[SourceFile]) -> dict[str, set[int]]:
-    """Map each word token to the source positions whose text contains it.
-
-    Tokenising is deliberately lexical, over the raw text: comments and string
-    contents counted as mentions before and still do. The value is a set of
-    positions in ``sources`` so a repeated occurrence inside one file counts
-    once, exactly as a single ``search`` did.
-    """
-    mentions: dict[str, set[int]] = {}
-    for position, source in enumerate(sources):
-        for token in set(_WORD_TOKEN.findall(source.text)):
-            mentions.setdefault(token, set()).add(position)
-    return mentions
-
-
-def consumer_ranking(inventory: dict[str, Any], sources: list[SourceFile]) -> list[dict[str, Any]]:
-    """Advisory ranking: modules outside the definer that mention each symbol.
-
-    Not stored in the committed inventory because it changes with every consumer
-    edit; the generator prints it on demand so retirement work can be ordered.
-    """
-    # One lexical pass over the corpus instead of one search per symbol. A name
-    # made only of word characters matches ``\bNAME\b`` exactly when it appears
-    # as a whole ``\w+`` token, so the index answers the same question the
-    # per-symbol regex did. Anything else -- a name carrying a non-word
-    # character, where the boundary assertions no longer line up with token
-    # edges -- keeps the original search rather than assume the equivalence.
-    mentions = _word_token_mentions(sources)
-    ranking: list[dict[str, Any]] = []
-    for section in ("python_enums", "typescript_const_arrays", "python_closed_sets", "python_literal_aliases"):
-        for entry in inventory[section]:
-            name = entry["name"]
-            if _WORD_TOKEN.fullmatch(name):
-                # Positions, not paths: a corpus that lists the same path twice
-                # still contributes twice, as the per-source search did.
-                consumers = sum(
-                    1 for position in mentions.get(name, ())
-                    if sources[position].path != entry["module"]
-                )
-            else:
-                token = re.compile(rf"\b{re.escape(name)}\b")
-                consumers = sum(
-                    1 for source in sources if source.path != entry["module"] and token.search(source.text)
-                )
-            ranking.append(
+        for item in facts["string_constants"]:
+            constants.append(
                 {
-                    "kind": section,
-                    "name": entry["name"],
-                    "module": entry["module"],
-                    "values": len(entry["values"]),
-                    "external_consumer_modules": consumers,
+                    "name": item["name"],
+                    "module": item["module"],
+                    "value": item["value"],
                 }
             )
-    return sorted(ranking, key=lambda item: (-item["external_consumer_modules"], item["module"], item["name"]))
+    return constants

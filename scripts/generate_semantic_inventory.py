@@ -145,8 +145,8 @@ def main() -> int:
         divergent = divergent_value_sets(inventory)[: args.top]
         print()
         print("value_sets  name  definition_modules")
-        for row in divergent:
-            print(f"{row['value_sets']:>10}  {row['name']}  {', '.join(row['definition_modules'])}")
+        for entry in divergent:
+            print(f"{entry['value_sets']:>10}  {entry['name']}  {', '.join(entry['definition_modules'])}")
         print()
         print_merge_candidates(inventory)
         if args.consumer_evidence:
