@@ -17,6 +17,7 @@ import type {
   TodoUnitObsRunner,
 } from '../src/driver.ts'
 import { deriveMessagesPrefixDigest } from '../src/todo-unit-fold.ts'
+import type { TodoUnitFoldOutcome } from '../src/todo-unit-fold.ts'
 
 async function createRealSessionHarness(cwd: string) {
   const ctx = new Context()
@@ -1338,6 +1339,92 @@ describe('dsh-loopx-plugin Todo semantic-unit FoldAndPrefetch', () => {
 
       const replay = await driver.foldAndPrefetch(harness.agent, req)
       expect(replay).toEqual(ok1)
+      expect(obsRunner).toHaveBeenCalledTimes(3)
+    } finally {
+      await harness.dispose()
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('coalesces synchronous re-entrant calls inside obsRunner before the outer promise returns', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'dsh-fold-reentrant-'))
+    const harness = await createRealSessionHarness(cwd)
+    try {
+      appendPrefixQ(harness.session)
+
+      let driver!: LoopXContinuationDriver
+      let reentrantPromise: Promise<TodoUnitFoldOutcome> | undefined
+      let mode: 'throw' | 'error_code' | 'ok' = 'throw'
+
+      const req = {
+        todoId: VALID_RECEIPT.todoId,
+        turnInstanceId: 'turn-reentrant-1',
+        contextEpoch: 'epoch-reentrant-1',
+        nowStepIndex: 5,
+        completionReceipt: VALID_RECEIPT,
+        obsNextCmd: { command: ['git', 'status', '--short'] as const },
+      }
+
+      const obsRunner = vi.fn<TodoUnitObsRunner>(() => {
+        // Trigger a synchronous re-entrant settlement before obsRunner even returns a Promise.
+        if (reentrantPromise === undefined) {
+          reentrantPromise = driver.foldAndPrefetch(harness.agent, req)
+        }
+        if (mode === 'throw') {
+          return Promise.reject(new Error('transient reentrant failure'))
+        }
+        if (mode === 'error_code') {
+          return Promise.resolve({ exitCode: 2, output: 'reentrant obs exit 2' })
+        }
+        return Promise.resolve({ exitCode: 0, output: 'NEXT_REENTRANT_OK' })
+      })
+
+      driver = new LoopXContinuationDriver({
+        isLiveAgent: () => true,
+        todoUnitFold: { enabled: true, minNetSavingsTokens: 64 },
+        runObsCommand: obsRunner,
+      })
+
+      driver.anchorTodoUnit(harness.agent, {
+        todoId: VALID_RECEIPT.todoId,
+        turnInstanceId: 'turn-reentrant-1',
+        contextEpoch: 'epoch-reentrant-1',
+        anchorStepIndex: 2,
+      })
+      appendTodoExploratorySuffix(harness.session, 'reentrant', 2)
+
+      // 1. Synchronous re-entry on a failing observation rejects both callers once and cleans up for retry.
+      const errOuter = driver.onTodoUnitSettled(harness.agent, req)
+      expect(reentrantPromise).toBe(errOuter)
+      const [errRes1, errRes2] = await Promise.allSettled([errOuter, reentrantPromise!])
+      expect(obsRunner).toHaveBeenCalledTimes(1)
+      expect([errRes1.status, errRes2.status]).toEqual(['rejected', 'rejected'])
+
+      // 2. Synchronous re-entry on KeepRaw (exitCode != 0) runs obsRunner once, returns identical KeepRaw, and allows retry.
+      reentrantPromise = undefined
+      mode = 'error_code'
+      const krOuter = driver.onTodoUnitSettled(harness.agent, req)
+      expect(reentrantPromise).toBe(krOuter)
+      const [krOuterRes, krInnerRes] = await Promise.all([krOuter, reentrantPromise!])
+      expect(obsRunner).toHaveBeenCalledTimes(2)
+      expect(krOuterRes.operator).toBe('KeepRaw')
+      expect(krInnerRes).toEqual(krOuterRes)
+
+      // 3. Retry with synchronous re-entry invokes obsRunner once and yields identical FoldToReceipt to both callers.
+      reentrantPromise = undefined
+      mode = 'ok'
+      const okOuter = driver.onTodoUnitSettled(harness.agent, req)
+      expect(reentrantPromise).toBe(okOuter)
+      const [okOuterRes, okInnerRes] = await Promise.all([okOuter, reentrantPromise!])
+      expect(obsRunner).toHaveBeenCalledTimes(3)
+      expect(okOuterRes.operator).toBe('FoldToReceipt')
+      expect(okInnerRes).toEqual(okOuterRes)
+      expect(
+        harness.session.deriveMessages().filter(m => m.role === 'user' && m.source.kind === 'loopx-todo-fold'),
+      ).toHaveLength(1)
+
+      const replay = await driver.foldAndPrefetch(harness.agent, req)
+      expect(replay).toEqual(okOuterRes)
       expect(obsRunner).toHaveBeenCalledTimes(3)
     } finally {
       await harness.dispose()

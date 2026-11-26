@@ -1053,17 +1053,29 @@ export class LoopXContinuationDriver {
         return inFlight
       }
       const inFlightMap = retained.todoUnitFoldsInFlight ??= new Map()
-      let execution!: Promise<TodoUnitFoldOutcome>
-      execution = (async (): Promise<TodoUnitFoldOutcome> => {
-        try {
-          return await this.executeTodoUnitSettled(agent, state, retained, policy, request, foldKey)
-        } finally {
+      let resolveExecution!: (outcome: TodoUnitFoldOutcome) => void
+      let rejectExecution!: (reason: unknown) => void
+      const execution = new Promise<TodoUnitFoldOutcome>((resolve, reject) => {
+        resolveExecution = resolve
+        rejectExecution = reject
+      })
+      // Register before invoking executeTodoUnitSettled so synchronous re-entry
+      // inside runObsCommand joins the single in-flight observation execution.
+      inFlightMap.set(foldKey, execution)
+      void this.executeTodoUnitSettled(agent, state, retained, policy, request, foldKey).then(
+        outcome => {
           if (inFlightMap.get(foldKey) === execution) {
             inFlightMap.delete(foldKey)
           }
-        }
-      })()
-      inFlightMap.set(foldKey, execution)
+          resolveExecution(outcome)
+        },
+        reason => {
+          if (inFlightMap.get(foldKey) === execution) {
+            inFlightMap.delete(foldKey)
+          }
+          rejectExecution(reason)
+        },
+      )
       return execution
     }
     return this.executeTodoUnitSettled(agent, state, retained, policy, request, undefined)
