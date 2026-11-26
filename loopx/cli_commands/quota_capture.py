@@ -337,7 +337,8 @@ def project_native_quota_context(payload: dict[str, Any], args: argparse.Namespa
         progressive_enabled=progressive_enabled,
         captured_decision=decision_ref,
         max_page_output_bytes=getattr(args, "max_page_output_bytes", None),
-        include_goal_acceptance_detail="goal_acceptance" in detail_sections)
+        include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+        include_agent_todos_detail="agent-todos" in detail_sections)
     recovery = prepared.delivery.get("recovery")
     view = native_context_capture_view(prepared.delivery, capture_directory, context_directory=directory,
         progressive_enabled=progressive_enabled, initial_read_plan=prepared.initial_read_plan,
@@ -397,7 +398,8 @@ def progressive_context_capture_view(payload: dict[str, Any], args: argparse.Nam
     required, reference = capture_progressive_context(payload, directory=directory, surface=surface,
         selection_command_args_template=transport, captured_decision=captured_decision,
         replan_reader_argv=reader_argv if stage_from_projection else None,
-        include_goal_acceptance_detail="goal_acceptance" in detail_sections)
+        include_goal_acceptance_detail="goal_acceptance" in detail_sections,
+        include_agent_todos_detail="agent-todos" in detail_sections)
     view = native_context_capture_view(required, directory, captured_recovery=reference,
         metadata={"context_delivery": native_context_activation(args),
             **({"capture_sha256": args.capture_sha256} if getattr(args, "capture_sha256", None) else {})},

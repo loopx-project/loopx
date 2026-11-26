@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shlex
@@ -28,6 +29,7 @@ def _seed_mature_goal(
     goal_id: str = "mature-scoped-goal",
     objective_prefix: str = "Historical outcome",
     explore_graph_enabled: bool = False,
+    leading_todos: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
     project = tmp_path / "project"
@@ -38,7 +40,10 @@ def _seed_mature_goal(
     registry.parent.mkdir(parents=True)
 
     agent_id = "worker"
+    prefix_todos = copy.deepcopy(leading_todos) if leading_todos else []
+    offset = len(prefix_todos)
     todos = [
+        *prefix_todos,
         {
             "schema_version": "todo_item_v0",
             "todo_id": "todo_current",
@@ -48,7 +53,7 @@ def _seed_mature_goal(
             "done": False,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": 1,
+            "index": 1 + offset,
             "source_section": "Agent Todo",
             "archive_state": "active",
             "claimed_by": agent_id,
@@ -62,7 +67,7 @@ def _seed_mature_goal(
             "done": False,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": 2,
+            "index": 2 + offset,
             "source_section": "Agent Todo",
             "archive_state": "active",
             "claimed_by": "peer-0",
@@ -78,7 +83,7 @@ def _seed_mature_goal(
             "done": True,
             "task_class": "advancement_task",
             "action_kind": "implement",
-            "index": i + 3,
+            "index": i + 3 + offset,
             "source_section": "Completed Work Archive",
             "archive_state": "archive",
             "claimed_by": f"peer-{i % 4}",
@@ -1215,3 +1220,126 @@ def test_explicit_goal_acceptance_detail_retains_historical_requirements_directl
         hist_rows = [row for row in wc_ga["outcomes"] if row["id"].startswith("outcome-hist-")]
         assert len(hist_rows) == 8
         assert all(isinstance(row.get("requirements"), list) and len(row["requirements"]) == 8 for row in hist_rows)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_explicit_agent_todos_detail_preserves_full_blocked_priority_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str,
+) -> None:
+    blocked_leading = [{
+        "schema_version": "todo_item_v0",
+        "todo_id": "todo_primary_blocked",
+        "role": "agent",
+        "text": "Wait for external dependency clearance before core implementation.",
+        "status": "blocked",
+        "done": False,
+        "task_class": "advancement_task",
+        "action_kind": "implement",
+        "index": 1,
+        "source_section": "Agent Todo",
+        "archive_state": "active",
+        "claimed_by": "worker",
+    }]
+    env = _seed_mature_goal(
+        tmp_path, monkeypatch, provider=provider, outcome_count=9,
+        goal_id=f"fallback-detail-{provider}", leading_todos=blocked_leading,
+    )
+    _claim_current_todo(env)
+    cli = env["cli"]
+    goal_id = str(env["goal_id"])
+    agent_id = str(env["agent_id"])
+
+    def _run_case(
+        case_name: str,
+        *,
+        context_delivery: str,
+        include_detail: str | None = None,
+        with_native_dir: bool = True,
+    ) -> tuple[dict, dict, Path, dict, dict | None]:
+        case_root = tmp_path / f"case_{case_name}"
+        captures = case_root / "captures"
+        captures.mkdir(parents=True, mode=0o700)
+        args = [
+            "quota", "should-run", "--codex-app",
+            "--context-delivery", context_delivery,
+            "--goal-id", goal_id, "--agent-id", agent_id, "--todo-id", "todo_current",
+            "--turn-instance-id", "turn-fallback",
+            "--decision-output-root", str(captures.resolve()),
+        ]
+        if context_delivery == "on":
+            args.extend(["--delta-delivery", "auto"])
+        if with_native_dir:
+            native = case_root / "native"
+            native.mkdir(mode=0o700)
+            monkeypatch.setenv("CODEX_THREAD_ID", f"{case_name}-{provider}")
+            codex_context_hook(
+                str(native),
+                {"hook_event_name": "SessionStart", "session_id": f"{case_name}-{provider}",
+                 "cwd": str(env["project"]), "source": "startup"},
+            )
+            args.extend(["--codex-context-dir", str(native)])
+        else:
+            monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+        if include_detail is not None:
+            args.extend(["--include-detail", include_detail])
+
+        _, view = cli(*args)
+        decision_path = next(captures.rglob("decision.json"))
+        decision = json.loads(decision_path.read_text())
+        if "recovery" in view:
+            delivered = json.loads(Path(read_context_read_reference(view["recovery"]["reference_file"])[1]["path"]).read_bytes())
+        else:
+            delivered = view
+        required_path = next(captures.rglob("required-context.json"), None)
+        return view, delivered, decision_path, decision, (json.loads(required_path.read_text()) if required_path else None)
+
+    cases: list[tuple[str, str, str | None, bool]] = [
+        ("ordinary_on_native", "on", None, True),
+        ("ordinary_on_stateless", "on", None, False),
+        ("agent_todos_on_native", "on", "agent-todos", True),
+        ("agent_todos_on_stateless", "on", "agent-todos", False),
+        ("all_on_native", "on", "all", True),
+        ("all_on_stateless", "on", "all", False),
+        ("ordinary_off", "off", None, True),
+        ("agent_todos_off", "off", "agent-todos", True),
+        ("all_off", "off", "all", True),
+    ]
+
+    expected_fallback: dict | None = None
+    for case_name, delivery_mode, detail, use_native in cases:
+        view, delivered, decision_path, decision, required_copy = _run_case(
+            case_name, context_delivery=delivery_mode, include_detail=detail, with_native_dir=use_native,
+        )
+        assert decision["effective_action"] == "normal_run"
+        assert delivered["effective_action"] == "normal_run"
+        root_fallback = decision["blocked_priority_fallback"]
+        assert root_fallback["kind"] == "blocked_priority_fallback"
+        assert [row["todo_id"] for row in root_fallback["blocked_items"]] == ["todo_primary_blocked"]
+        assert root_fallback["selected_executable"]["todo_id"] == "todo_current"
+        assert decision["heartbeat_recommendation"]["blocked_priority_fallback"] == root_fallback
+        if expected_fallback is None:
+            expected_fallback = root_fallback
+        else:
+            assert root_fallback == expected_fallback
+
+        # Verify digest-bound selection read on saved decision.json returns both complete fallback objects.
+        decision_sha = hashlib.sha256(decision_path.read_bytes()).hexdigest()
+        _, read_back = cli(
+            "quota", "context-read",
+            "--capture-file", str(decision_path),
+            "--capture-sha256", decision_sha,
+            "--select", "/blocked_priority_fallback",
+            "--select", "/heartbeat_recommendation/blocked_priority_fallback",
+        )
+        selections = json.loads(read_back["content"])["selections"]
+        assert [row["value"] for row in selections] == [expected_fallback, expected_fallback]
+
+        for target in [delivered, *([required_copy] if required_copy is not None else [])]:
+            assert target["blocked_priority_fallback"] == expected_fallback
+            rec = target["heartbeat_recommendation"]
+            if detail in {"agent-todos", "all"} or delivery_mode == "off":
+                assert rec["blocked_priority_fallback"] == expected_fallback
+                assert "blocked_priority_fallback_ref" not in rec
+            else:
+                assert rec["blocked_priority_fallback"] == {"context_ref": "/blocked_priority_fallback"}
+                assert "blocked_priority_fallback_ref" not in rec

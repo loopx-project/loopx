@@ -1000,6 +1000,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                           saved_capture: bool = False,
                           publication_guard: Callable[[], AbstractContextManager[None]] = nullcontext,
                           include_goal_acceptance_detail: bool = False,
+                          include_agent_todos_detail: bool = False,
                           ) -> NativeContextPreparation:
     """Commit current recovery before optional projection or candidate updates.
 
@@ -1026,6 +1027,7 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
             selection_command_args_template=selection_command_args_template,
             captured_decision=captured_decision,
             include_goal_acceptance_detail=include_goal_acceptance_detail,
+            include_agent_todos_detail=include_agent_todos_detail,
         )[0])
     try:
         with _locked(directory) as root:
@@ -1104,7 +1106,8 @@ def prepare_codex_context(payload: dict[str, Any], *, directory: str | None, cap
                             "command_template": recovery["command"] + " --select '<pointer>'",
                         } if presentation else None, consumed_pointers=state.get("consumed_pointers"),
                         observe_first_read=progressive,
-                        include_goal_acceptance_detail=include_goal_acceptance_detail)
+                        include_goal_acceptance_detail=include_goal_acceptance_detail,
+                        include_agent_todos_detail=include_agent_todos_detail)
                 except (EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
                     if check_saved_source and isinstance(exc, EffectRuntimeRejected):
                         raise QuotaDecisionTransportError(str(exc)) from exc

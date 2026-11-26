@@ -523,6 +523,9 @@ export function progressiveContextPlan(request: JsonObject,
     extraReferences: readonly JsonObject[] = []): JsonObject {
   const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
     : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
+  if (request.include_agent_todos_detail !== undefined) {
+    requireBoolean(request.include_agent_todos_detail, "include_agent_todos_detail");
+  }
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -668,6 +671,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       payload: request.context,
       surface: request.surface,
       ...(request.include_goal_acceptance_detail === undefined ? {} : {include_goal_acceptance_detail: request.include_goal_acceptance_detail}),
+      ...(request.include_agent_todos_detail === undefined ? {} : {include_agent_todos_detail: request.include_agent_todos_detail}),
     })):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const original = requireJsonObject(request.context, "current projection");

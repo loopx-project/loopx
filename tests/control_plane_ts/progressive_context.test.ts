@@ -483,6 +483,96 @@ test("progressiveContextPlan defers large unscoped historical requirements and d
   assert.equal(explicitChanges.some(edit => edit.path[0] === "context" && edit.path.at(-1) === "requirements" && edit.remove === true), false);
 });
 
+test("explicit include_agent_todos_detail preserves full fallback mirror across delivery surfaces", () => {
+  const fallback = {
+    schema_version: "blocked_priority_fallback_v0",
+    kind: "blocked_priority_fallback",
+    notify_user: true,
+    reason: "Higher-priority work is blocked while fallback continues. ".repeat(12),
+    blocked_items: [{todo_id: "todo-blocked", status: "blocked"}],
+    selected_executable: {todo_id: "todo-fallback", text: "Continue executable fallback."},
+  };
+  const makeOutcome = (id: string) => ({
+    id,
+    objective: `Deliver ${id}.`,
+    revision: 2,
+    owner_agent_id: "a1",
+    todo_ids: ["todo-other"],
+    sources: [{ref: `${id}:doc`, summary: "Supporting evidence summary. ".repeat(25)}],
+    requirements: [{
+      id: `${id}-req`,
+      description: `Acceptance criterion for ${id}. `.repeat(20),
+      status: "unverified",
+      planning_satisfied: false,
+    }],
+  });
+  const payload = {
+    ok: true,
+    goal_id: "goal-fallback",
+    selected_todo: {todo_id: "todo-fallback"},
+    blocked_priority_fallback: fallback,
+    heartbeat_recommendation: {action: "retry", blocked_priority_fallback: structuredClone(fallback)},
+    planning_horizon: {
+      core_goal: {
+        acceptance_contract: {
+          outcome_requirements: {
+            schema_version: "loopx_goal_outcomes_v0",
+            outcomes: Array.from({length: 7}, (_, i) => makeOutcome(`o-${i}`)),
+          },
+        },
+      },
+    },
+  };
+  const nativeProjection = {
+    path: "projection.json",
+    sha256: "f".repeat(64),
+    command_template: "loopx --format json quota context-read --capture-file projection.json --capture-sha256 " + "f".repeat(64) + " --select '<pointer>'",
+  };
+  const baseDelivery = {
+    operation: "context_delivery",
+    scope: {goal_id: "goal-fallback", agent_id: "a1", session_id: "s1", context_epoch: "e1"},
+    capture_id: "cap-fallback",
+    surface: "quota_packet",
+    context: payload,
+    native_projection: nativeProjection,
+  };
+
+  // Ordinary context delivery continues deduplicating confirmed-equal fallback mirrors.
+  const ordinary = evaluateTurnEnvelope(baseDelivery) as {
+    changes: {path: (string | number)[]; value?: unknown}[];
+  };
+  assert.ok(ordinary.changes.some(edit => edit.path.join("/") === "context/heartbeat_recommendation/blocked_priority_fallback"
+    && (edit.value as {context_ref?: string} | undefined)?.context_ref === "/blocked_priority_fallback"));
+
+  // Explicit include_agent_todos_detail retains the complete fallback mirror even when other fields project.
+  for (const request of [
+    {...baseDelivery, include_agent_todos_detail: true},
+    {
+      operation: "progressive_context_delivery",
+      surface: "quota_packet",
+      context: payload,
+      native_projection: nativeProjection,
+      include_agent_todos_detail: true,
+    },
+  ]) {
+    const explicit = evaluateTurnEnvelope(request) as {
+      changes: {path: (string | number)[]; value?: unknown}[];
+    };
+    assert.ok(explicit.changes.some(edit => edit.path.join("/") === "projected" && edit.value === true));
+    assert.equal(explicit.changes.some(edit =>
+      edit.path.join("/") === "context/heartbeat_recommendation/blocked_priority_fallback"), false);
+  }
+
+  assert.throws(
+    () => evaluateTurnEnvelope({...baseDelivery, include_agent_todos_detail: "yes"}),
+    /include_agent_todos_detail/,
+  );
+  assert.throws(
+    () => progressiveContextPlan({payload, surface: "quota_packet", include_agent_todos_detail: 1}),
+    /include_agent_todos_detail/,
+  );
+});
+
 test("initial read omits redundant summary_only outcome rows when container read commands exist", () => {
   const identity = {schema_version: "quota_settlement_identity_v0", effect_id: "eff-1",
     goal_id: "goal-scoped", agent_id: "agent-1", todo_id: "todo-1", turn_instance_id: "turn-1"};
