@@ -1633,7 +1633,15 @@ class StewardTurnHost:
                 self._task_lease_proof(selected_request, managed_lease)
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
-            prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            if governance_work:
+                from .steward_monitor import governance_turn_prompt_authority
+                prompt = render_prompt(governance_turn_prompt_authority(authority), allow_completion=False)
+            elif report_work:
+                # Frozen report turns already freeze source.json and editorial-request.json; skip unfrozen manager context.
+                from ..periodic_report.private_generation import report_turn_prompt_authority
+                prompt = render_prompt(report_turn_prompt_authority(authority), allow_completion=True) + report_context
+            else:
+                prompt = render_prompt(authority, allow_completion=bool(managed_turn or steward_advancement)) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if governance_work:
                 gov_ctx = self._governance_replan_context(actor, authority)
                 prompt += (
@@ -1643,12 +1651,11 @@ class StewardTurnHost:
                     "Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 public-safe items, <=1200 chars total per field) with zero local file paths. "
                     "When `Steward governance replan context` supplies `writeback`: set `agent_vision_json` (JSON string of `goal_vision_replan_contract_v0`) keeping total counted text <=1400 chars (hard cap 1800; keep each `stride_decision` plan/reason/probe field <=60 chars), and omit `vision_unchanged_reason`. "
                     "If keeping `current_agent_vision.vision_patch` identical, set `path_delta_mode='unchanged'` and `path_delta.outcome='continue'` (or `'no_change'`); if updating any `vision_patch` field or creating an initial baseline, set `path_delta_mode='material_replan'` and `path_delta.outcome='replan'`. "
-                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null)."
+                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null). "
+                    "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts are already provided in Steward governance replan context below; return only the single typed JSON object directly without invoking periodic-report CLI commands or inspecting host source code."
                 )
                 if gov_ctx:
                     prompt += "\nSteward governance replan context (data):\n" + json.dumps(gov_ctx, ensure_ascii=False)
-            if report_work and not governance_work:
-                prompt += report_context
             if steward_advancement and not governance_work:
                 selected_todo_id = (authority.get("_work_identity") or {}).get("todo_id") or request.get("todo_id")
                 if selected_todo_id and managed_lease is None:
@@ -1732,6 +1739,7 @@ class StewardTurnHost:
                             prompt,
                             invocation_sink,
                             isolated_cascade=True,
+                            raw_prompt=True,
                             idle_timeout_sec=(
                                 adapter.idle_timeout_sec
                                 if adapter.idle_timeout_sec is not None
