@@ -1,8 +1,10 @@
 """Fresh CLI reads retain provider, filter, error and presentation semantics."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -13,9 +15,11 @@ from canonical_authority_fixture import (
     isolate_sqlite_runtime,
 )
 
+from loopx.chat.manager_details import read_manager_goal_details
 from loopx.control_plane.coordination.runtime_shadow import (
     build_todo_runtime_shadow_projection,
 )
+from loopx.control_plane.todos.list_readback import list_goal_todos
 
 REPO = Path(__file__).resolve().parents[2]
 GOAL = "read-transport"
@@ -206,3 +210,149 @@ def test_todo_help_does_not_load_mutation_owners():
     result = subprocess.run([sys.executable, "-c", script], cwd=REPO,
                             capture_output=True, text=True, timeout=45, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Frozen from the public LoopX v1.3.1 wheel (tag 7445ae360aaf).
+# Its canonical declaration has 70 fields and its domain form has 68.
+_RELEASE_131_TODO_FIELDS = (
+    "index done text schema_version todo_id role status priority title archive_state source_section "
+    "task_class action_kind task_domain capability_binding_ref task_repository continuation_policy "
+    "removed_continuation_policy required_write_scopes required_capabilities target_capabilities "
+    "explore_result_node_refs decision_scope required_decision_scopes decision_outcome "
+    "decision_scope_outcomes claimed_by created_by last_actor_agent_id bound_agent goal_bound "
+    "blocks_agent excluded_agents global_gate unblocks_todo_id resume_when resume_monitor_generation "
+    "resume_condition resume_ready no_followup successor_todo_ids completion_continuation "
+    "completion_recovery completion_receipt_id replan_obligation_id target_key cadence next_due_at "
+    "expires_at watch_only last_checked_at result_hash consecutive_no_change material_change "
+    "material_change_generation max_no_change_before_replan monitor_effect_id note evidence reason "
+    "completed_at completion_turn_key completion_result updated_at superseded_by "
+    "completion_validation_required completion_validation_sha256 completion_validation_revision "
+    "completion_validation_revision_history handoff_note"
+).split()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("record_kind", ["canonical", "domain"])
+def test_list_preserves_v131_records_without_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str, record_kind: str,
+) -> None:
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_USAGE_PING", "0")
+    runtime = tmp_path / "runtime"
+    state = tmp_path / "state.md"
+    registry = tmp_path / "registry.json"
+    state.write_text("# Synthetic historical Goal\n\n## Agent Todo\n\n- [ ] Display decoy\n")
+    registry.write_text(json.dumps({
+        "common_runtime_root": str(runtime),
+        "goals": [{"id": GOAL, "repo": str(tmp_path), "state_file": state.name,
+                   "coordination": {"registered_agents": ["agent-a"]}}],
+    }))
+    records = [
+        {
+            "schema_version": "todo_item_v0", "todo_id": "todo_archive",
+            "role": "agent", "status": "done", "done": True,
+            "text": "[P2] Preserve the historical acceptance receipt.",
+            "priority": "P2", "title": "Original archive title",
+            "archive_state": "archive", "source_section": "Completed Work Archive", "index": 1,
+            "completion_receipt_id": "synthetic-completion-receipt",
+            "evidence": "Synthetic acceptance evidence; never a live Goal.",
+            "no_followup": True,
+        },
+        {
+            "schema_version": "todo_item_v0", "todo_id": "todo_pending",
+            "role": "agent", "status": "open", "done": False,
+            "text": "[P0] Retain the active task body.",
+            "priority": "P0", "title": "Original active title",
+            "archive_state": "active", "source_section": "Agent Todo", "index": 1,
+            "task_class": "advancement_task", "claimed_by": "agent-a",
+            "note": "Reading this requirement does not authorize execution.",
+        },
+    ]
+    fields = _RELEASE_131_TODO_FIELDS
+    if record_kind == "domain":
+        fields = [field for field in fields if field not in ("index", "source_section")]
+        for record in records:
+            record["schema_version"] = "todo_domain_record_v0"
+            del record["index"]
+            del record["source_section"]
+    # Only encoding is shared with the persisted protocol, never expected output.
+    records_digest = hashlib.sha256(json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    initialized = initialize_canonical_authority(runtime, GOAL, {
+        "schema_version": "loopx_coordination_runtime_shadow_projection_v0",
+        "goal_id": GOAL, "handoff_mode": "soft_claim", "todos": records, "leases": [],
+        "todo_read_model": {
+            "schema_version": f"loopx_todo_{record_kind}_read_record_v0",
+            "contract_fields": fields, "todo_count": 2, "records_sha256": records_digest,
+        },
+    }, state_path=state, provider=provider)
+
+    def authority_contents() -> dict[str, bytes | tuple[str, ...]]:
+        contents = {}
+        for path in sorted(runtime.rglob("*")):
+            if not path.is_file() or path.name.endswith(("-wal", "-shm")):
+                continue
+            data = path.read_bytes()
+            if data.startswith(b"SQLite format 3\0"):
+                # Compare every logical table, including receipts/events and head.
+                # WAL checkpointing is storage maintenance, not authority mutation.
+                connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+                try:
+                    contents[str(path.relative_to(runtime))] = tuple(connection.iterdump())
+                finally:
+                    connection.close()
+            else:
+                contents[str(path.relative_to(runtime))] = data
+        return contents
+
+    original_authority = authority_contents()
+    original_state = state.read_bytes()
+
+    def list_todos(todo_id: str) -> dict:
+        result = subprocess.run(
+            [sys.executable, "-m", "loopx.cli", "--registry", str(registry),
+             "--runtime-root", str(runtime), "--format", "json", "todo", "list",
+             "--goal-id", GOAL, "--todo-id", todo_id],
+            cwd=REPO, capture_output=True, text=True, timeout=45,
+            env={**os.environ, "PYTHONPATH": str(REPO)}, check=False,
+        )
+        # Check non-mutation even on refusal, before demanding compatibility.
+        assert state.read_bytes() == original_state
+        assert authority_contents() == original_authority
+        assert result.returncode == 0, result.stdout + result.stderr
+        listed = json.loads(result.stdout)
+        assert listed["ok"] and listed["read_only"] and listed["dry_run"]
+        assert listed["authority_read"]["source_authority"] == f"{provider}_v0"
+        assert listed["authority_read"]["provider_revision"] == initialized["provider_revision"]
+        assert listed["authority_read"]["legacy_fallback_used"] is False
+        return listed
+
+    try:
+        for expected in records:
+            exact = list_todos(expected["todo_id"])
+            full_exact = list_goal_todos(
+                registry_path=registry, runtime_root_arg=str(runtime),
+                goal_id=GOAL, todo_id=expected["todo_id"], full_text=True,
+            )
+            assert full_exact["authority_read"] == exact["authority_read"]
+            for listed in (exact, full_exact):
+                assert listed["todo_detail_projection"]["source_complete"] is True
+                for field, value in expected.items():
+                    assert listed["todo"][field] == value, field
+
+        searched = read_manager_goal_details(
+            registry, runtime, GOAL, owner_scope=True, query="Original active title",
+        )
+        assert searched["status"] == "read"
+        assert searched["authority_revision"] == initialized["provider_revision"]
+        assert [row["todo_id"] for row in searched["todos"]] == ["todo_pending"]
+        assert state.read_bytes() == original_state
+        assert authority_contents() == original_authority
+    finally:
+        subprocess.run(
+            [sys.executable, "-c",
+             "from loopx.control_plane.effect_runtime import effect_runtime_result;"
+             "effect_runtime_result('runtime.shutdown', {}, retry_safe=False)"],
+            cwd=REPO, capture_output=True, text=True, timeout=30, check=True,
+        )

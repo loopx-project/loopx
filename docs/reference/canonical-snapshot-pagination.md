@@ -102,6 +102,14 @@ standalone wire-only endpoint retains its previous rejection behavior.
 Projection confirmation remains tied to
 the snapshot read; pending delivery must not trigger a second business mutation.
 
+### Reading historical Todo records
+
+For supported historical declarations, including the v1.3.1 canonical and
+domain forms, an exact `todo list --todo-id` read preserves the stored fields
+of the selected active or archived record. Full-text lists used by Manager
+search preserve stored titles. Both use the provider revision that selected
+the records and leave the stored data intact.
+
 ## Cost and qualification boundary
 
 This implementation bounds **transport responses**, not the whole collection's
