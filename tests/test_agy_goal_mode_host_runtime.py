@@ -7,6 +7,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import platform
 import plistlib
 import shutil
 import subprocess
@@ -583,6 +584,77 @@ def test_install_launchd_uninstall_verifies_launchd_readback_across_all_paths(
     assert ambiguous["uninstalled"] is False
     assert ambiguous["error_kind"] == "launchctl_bootout_failed"
     assert plist_path.is_file()
+
+    # 2b. Bootout succeeds (or claims absent) while print fails ambiguously ->
+    # plist preserved and launchctl_readback_failed returned (both direct + subprocess CLI).
+    for bootout_rc, bootout_stderr in ((0, ""), (3, "Boot-out failed: 3: No such process")):
+        def ambiguous_readback(
+            argv: list[str], *, _rc: int = bootout_rc, _err: str = bootout_stderr
+        ) -> subprocess.CompletedProcess[str]:
+            if argv[0] == "bootout":
+                return subprocess.CompletedProcess(argv, _rc, "", _err)
+            return subprocess.CompletedProcess(argv, 1, "", "launchd ipc error")
+
+        monkeypatch.setattr(launchd_watchdog, "_run_launchctl", ambiguous_readback)
+        assert host_runtime.main() == 1
+        unreadable = json.loads(capsys.readouterr().out)
+        assert unreadable["ok"] is False
+        assert unreadable["uninstalled"] is False
+        assert unreadable["loaded"] is None
+        assert unreadable["error_kind"] == "launchctl_readback_failed"
+        assert plist_path.is_file()
+
+    if platform.system() == "Darwin":
+        shim_dir = tmp_path / "shim-bin"
+        shim_dir.mkdir()
+        shim_launchctl = shim_dir / "launchctl"
+        shim_launchctl.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "bootout" ]; then\n'
+            "  exit 0\n"
+            "fi\n"
+            'echo "launchd ipc error" >&2\n'
+            "exit 1\n",
+            encoding="utf-8",
+        )
+        shim_launchctl.chmod(0o755)
+        shim_env = {
+            **os.environ,
+            "LOOPX_USAGE_PING": "0",
+            "PATH": f"{shim_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        }
+        shim_proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "loopx.agy_goal_mode.host_runtime",
+                "install-launchd",
+                "--goal-id",
+                "g-uninst",
+                "--agent-id",
+                "a-uninst",
+                "--conversation-id",
+                "c-uninst",
+                "--launch-agents-dir",
+                str(agents_dir),
+                "--state-dir",
+                str(state_dir),
+                "--uninstall",
+                "--execute",
+            ],
+            capture_output=True,
+            text=True,
+            env=shim_env,
+            timeout=30,
+            check=False,
+        )
+        assert shim_proc.returncode == 1, shim_proc.stderr
+        shim_payload = json.loads(shim_proc.stdout)
+        assert shim_payload["ok"] is False
+        assert shim_payload["uninstalled"] is False
+        assert shim_payload["loaded"] is None
+        assert shim_payload["error_kind"] == "launchctl_readback_failed"
+        assert plist_path.is_file()
 
     # 3. Successful unload (bootout=0, print=113) -> uninstalled=True, plist removed.
     def clean_bootout(argv: list[str]) -> subprocess.CompletedProcess[str]:

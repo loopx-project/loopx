@@ -208,17 +208,20 @@ def _uninstall_launchd_agent(label: str) -> tuple[bool, bool | None, str | None]
     bootout_text = f"{bootout.stdout}\n{bootout.stderr}".lower()
     absent_confirmed = (
         readback.returncode == 113
-        or bootout.returncode == 0
         or "could not find service" in readback_text
-        or "no such process" in bootout_text
     )
     if not absent_confirmed:
+        bootout_absent_claim = (
+            bootout.returncode == 0
+            or "no such process" in bootout_text
+            or "could not find service" in bootout_text
+        )
         return (
             False,
             None,
-            "launchctl_bootout_failed"
-            if bootout.returncode != 0
-            else "launchctl_readback_failed",
+            "launchctl_readback_failed"
+            if bootout_absent_claim
+            else "launchctl_bootout_failed",
         )
     return True, False, None
 
