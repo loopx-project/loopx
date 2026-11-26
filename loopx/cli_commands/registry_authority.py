@@ -11,6 +11,7 @@ from ..authority import (
     render_doc_registry_authority_import_markdown,
     render_authority_source_markdown,
 )
+from .registry_authority_metadata import update_authority_source
 from ..global_registry import sync_project_registry_to_global
 
 
@@ -22,6 +23,7 @@ PrintPayload = Callable[
 REGISTRY_AUTHORITY_COMMANDS = {
     "authority-sources",
     "register-authority-source",
+    "update-authority-source",
     "import-doc-registry-authority",
 }
 
@@ -35,6 +37,15 @@ def register_registry_authority_commands(subparsers: argparse._SubParsersAction)
     sources.add_argument("--topic", help="Exact registered topic key.")
     sources.add_argument("--offset", type=int, default=0, help="Skip this many matches in stable source-id order.")
     sources.add_argument("--limit", type=int, default=20, help="Maximum matches to return (1–100).")
+    update = subparsers.add_parser(
+        "update-authority-source", help="Update existing material metadata while preserving source provenance and topics.",
+    )
+    update.add_argument("--goal-id", required=True)
+    update.add_argument("--source-id", required=True)
+    for field in ("freshness", "owner-status", "gate-status", "revision", "conflict-rule"):
+        update.add_argument(f"--{field}", help="Recorded metadata only; omitted fields are preserved.")
+    update.add_argument("--dry-run", action="store_true", help="Preview without writing or syncing.")
+    update.add_argument("--no-global-sync", action="store_true", help="Skip shared registry summary refresh.")
     authority_parser = subparsers.add_parser(
         "register-authority-source",
         help="Register a redacted local authority/material source for a goal.",
@@ -147,34 +158,50 @@ def handle_registry_authority_command(
         print_payload(payload, args.format, render_authority_sources_markdown)
         return 0 if payload["ok"] else 1
 
-    if args.command == "register-authority-source":
+    if args.command in {"register-authority-source", "update-authority-source"}:
+        local_written = False
         try:
-            payload = register_authority_source(
-                registry_path=registry_path,
-                goal_id=args.goal_id,
-                source_id=args.source_id,
-                source_ref=args.source_ref,
-                source_kind=args.source_kind,
-                role=args.role,
-                freshness=args.freshness,
-                owner_status=args.owner_status,
-                gate_status=args.gate_status,
-                boundary=args.boundary,
-                revision=args.revision,
-                conflict_rule=args.conflict_rule,
-                topic=args.topic,
-                dry_run=bool(args.dry_run),
-            )
+            if args.command == "update-authority-source":
+                payload = update_authority_source(
+                    registry_path=registry_path, goal_id=args.goal_id, source_id=args.source_id,
+                    freshness=args.freshness, owner_status=args.owner_status, gate_status=args.gate_status,
+                    revision=args.revision, conflict_rule=args.conflict_rule, dry_run=bool(args.dry_run),
+                )
+            else:
+                payload = register_authority_source(
+                    registry_path=registry_path,
+                    goal_id=args.goal_id,
+                    source_id=args.source_id,
+                    source_ref=args.source_ref,
+                    source_kind=args.source_kind,
+                    role=args.role,
+                    freshness=args.freshness,
+                    owner_status=args.owner_status,
+                    gate_status=args.gate_status,
+                    boundary=args.boundary,
+                    revision=args.revision,
+                    conflict_rule=args.conflict_rule,
+                    topic=args.topic,
+                    dry_run=bool(args.dry_run),
+                )
+            local_written = bool(payload.get("written"))
             if not bool(args.no_global_sync):
                 if args.dry_run:
                     payload["global_sync"] = {"enabled": True, "dry_run": True, "wrote": False}
                 else:
-                    payload["global_sync"] = sync_project_registry_to_global(
+                    sync_result = sync_project_registry_to_global(
                         registry_path=registry_path,
                         runtime_root_override=args.runtime_root,
                         goal_id=args.goal_id,
                         dry_run=False,
                     )
+                    payload["global_sync"] = sync_result
+                    if args.command == "update-authority-source" and sync_result.get("ok") is False:
+                        payload["ok"] = False
+                        payload["error"] = (
+                            "Project metadata was written, but shared registry synchronization failed: "
+                            + str(sync_result.get("error") or "shared registry rejected the update")
+                        )
             else:
                 payload["global_sync"] = {"enabled": False}
         except Exception as exc:
@@ -184,7 +211,8 @@ def handle_registry_authority_command(
                 "runtime_root": args.runtime_root,
                 "goal_id": args.goal_id,
                 "source_id": getattr(args, "source_id", None),
-                "written": False,
+                "written": local_written,
+                "operation": "update" if args.command == "update-authority-source" else "register",
                 "dry_run": bool(getattr(args, "dry_run", False)),
                 "error": str(exc),
             }

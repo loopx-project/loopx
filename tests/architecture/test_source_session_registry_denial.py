@@ -28,6 +28,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/cli_runtime.py",
     "loopx/cli_commands/coordination_shadow.py",
     "loopx/cli_commands/manager_inbox.py",
+    "loopx/cli_commands/registry_authority_metadata.py",
     "loopx/cli_commands/registry_authority_read.py",
     "loopx/configure_goal.py",
     "loopx/control_plane/collaboration/goal_instance_scope.py",
