@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import json
 import os
@@ -94,6 +94,105 @@ MICROBENCH_VERDICT_SCHEMA: dict[str, Any] = {
     },
 }
 
+_MICROBENCH_REQUIRED_FIELDS = tuple(MICROBENCH_VERDICT_SCHEMA["required"])
+_MICROBENCH_ALLOWED_FIELDS = frozenset(MICROBENCH_VERDICT_SCHEMA["properties"].keys())
+_MICROBENCH_VALID_DECISIONS = frozenset({"execute", "ask_user", "stop"})
+_LOOPX_GLOBAL_VALUE_FLAGS = frozenset({"--registry", "--runtime-root", "--format", "--cli-bin"})
+
+
+def validate_microbench_verdict(
+    verdict: object,
+    *,
+    expected_scenario_id: str | None = None,
+) -> tuple[bool, tuple[str, ...]]:
+    """Validate parsed verdict against ``MICROBENCH_VERDICT_SCHEMA`` and current scenario."""
+    if not isinstance(verdict, Mapping):
+        return False, ("verdict_not_object",)
+    errors: list[str] = []
+    keys = set(verdict.keys())
+    missing = [key for key in _MICROBENCH_REQUIRED_FIELDS if key not in keys]
+    if missing:
+        errors.append(f"missing_fields:{','.join(missing)}")
+    extra = sorted(keys - _MICROBENCH_ALLOWED_FIELDS)
+    if extra:
+        errors.append(f"unexpected_fields:{','.join(extra)}")
+
+    if verdict.get("schema_version") != "microbench_model_verdict_v0":
+        errors.append("invalid_schema_version")
+
+    sid = verdict.get("scenario_id")
+    if not isinstance(sid, str) or not sid:
+        errors.append("invalid_scenario_id")
+    elif expected_scenario_id is not None and sid != expected_scenario_id:
+        errors.append("verdict_scenario_mismatch")
+
+    decision = verdict.get("decision")
+    if not isinstance(decision, str) or decision not in _MICROBENCH_VALID_DECISIONS:
+        errors.append("invalid_decision")
+
+    for nullable_key in ("selected_todo_id", "extracted_proof", "claim_owner"):
+        if nullable_key in verdict:
+            val = verdict[nullable_key]
+            if val is not None and not isinstance(val, str):
+                errors.append(f"invalid_type:{nullable_key}")
+
+    for list_key in (
+        "preserved_blocked_todo_ids",
+        "preserved_failure_facts",
+        "preserved_open_obligations",
+        "tool_actions_summary",
+    ):
+        if list_key in verdict:
+            val = verdict[list_key]
+            if not isinstance(val, list) or any(not isinstance(item, str) for item in val):
+                errors.append(f"invalid_type:{list_key}")
+
+    if "spend_attempted" in verdict and not isinstance(verdict["spend_attempted"], bool):
+        errors.append("invalid_type:spend_attempted")
+
+    return not errors, tuple(errors)
+
+
+def _validate_adapter_verdict(
+    parsed: dict[str, Any] | None,
+    *,
+    expected_scenario_id: str,
+) -> tuple[dict[str, Any] | None, str, str | None]:
+    if parsed is None:
+        return None, "error", "invalid_verdict_json"
+    ok, errors = validate_microbench_verdict(parsed, expected_scenario_id=expected_scenario_id)
+    if not ok:
+        code = (
+            "verdict_scenario_mismatch"
+            if "verdict_scenario_mismatch" in errors
+            else "invalid_verdict_schema"
+        )
+        return None, "error", code
+    return parsed, "ok", None
+
+
+def _summarize_loopx_command(tokens: Sequence[str]) -> str:
+    positional: list[str] = []
+    idx = 1
+    while idx < len(tokens):
+        tok = tokens[idx]
+        if tok in _LOOPX_GLOBAL_VALUE_FLAGS:
+            idx += 2
+            continue
+        if any(tok.startswith(f"{flag}=") for flag in _LOOPX_GLOBAL_VALUE_FLAGS):
+            idx += 1
+            continue
+        if tok.startswith("-"):
+            idx += 1
+            continue
+        positional.append(tok)
+        if len(positional) >= 2:
+            break
+        idx += 1
+    if positional:
+        return f"loopx:{' '.join(positional)}"
+    return f"loopx:{' '.join(tokens[1:3])}"
+
 
 @dataclass(frozen=True)
 class ModelRunOutcome:
@@ -161,7 +260,7 @@ def _execute_scoped_command(
             )
         except Exception as exc:  # noqa: BLE001
             return "loopx_cli_error", json.dumps({"ok": False, "error": type(exc).__name__})
-        label = f"loopx:{' '.join(tokens[1:3])}"
+        label = _summarize_loopx_command(tokens)
         return label, stdout[:8192]
 
     try:
@@ -459,7 +558,11 @@ class DeepSeekArkMicrobenchRunner:
                 telemetry_coverage=coverage,
             )
 
-        verdict = _extract_verdict(final_content)
+        parsed_verdict = _extract_verdict(final_content)
+        verdict, status, error_code = _validate_adapter_verdict(
+            parsed_verdict,
+            expected_scenario_id=scenario_id,
+        )
         wall = round(time.monotonic() - started, 3)
         resolved_usage, coverage = _aggregate_ark_usage_coverage(
             usage_totals, usage_reported_steps, round_trips
@@ -478,8 +581,8 @@ class DeepSeekArkMicrobenchRunner:
         return ModelRunOutcome(
             model_id=self.model_id,
             provider=self.provider,
-            status="ok" if verdict is not None else "error",
-            error_code=None if verdict is not None else "invalid_verdict_json",
+            status=status,
+            error_code=error_code,
             verdict=verdict,
             efficiency=eff,
             observed_commands=tuple(observed_commands),
@@ -512,6 +615,19 @@ def _count_codex_tool_events(stdout_text: str) -> tuple[int, list[str]]:
                 item_type = str(item.get("type") or "")
                 if item_type in {"command_execution", "local_shell_call", "function_call", "custom_tool_call"}:
                     tool_calls += 1
+                    cmd = item.get("command")
+                    if isinstance(cmd, str) and cmd.strip():
+                        tokens = loopx_command_tokens(cmd)
+                        if tokens is not None:
+                            observed.append(_summarize_loopx_command(tokens))
+                            continue
+                        try:
+                            parts = shlex.split(cmd)
+                        except ValueError:
+                            parts = cmd.split()
+                        if any(tok == "spend-slot" for tok in parts):
+                            observed.append("shell:spend-slot")
+                            continue
                     observed.append(item_type)
     return tool_calls, observed
 
@@ -685,9 +801,11 @@ class CodexGptMicrobenchRunner:
             tool_calls, observed_cmds = _count_codex_tool_events(completed.stdout)
             wall = round(time.monotonic() - started, 3)
 
-            verdict: dict[str, Any] | None = None
+            parsed_verdict: dict[str, Any] | None = None
             if output_path.is_file():
-                verdict = _extract_verdict(output_path.read_text(encoding="utf-8", errors="replace"))
+                parsed_verdict = _extract_verdict(
+                    output_path.read_text(encoding="utf-8", errors="replace")
+                )
 
             failure_kind = (
                 failure_obs.failure_kind(complete=complete_stream)
@@ -696,12 +814,15 @@ class CodexGptMicrobenchRunner:
             )
             status = "ok"
             error_code: str | None = None
+            verdict: dict[str, Any] | None = None
             if completed.returncode != 0:
                 status = "quota_exhausted" if failure_kind == "quota_exhausted" else "error"
                 error_code = failure_kind or "codex_exec_failed"
-            elif verdict is None:
-                status = "error"
-                error_code = "invalid_verdict_json"
+            else:
+                verdict, status, error_code = _validate_adapter_verdict(
+                    parsed_verdict,
+                    expected_scenario_id=scenario_id,
+                )
 
             rec_count = _opt_int(rollout_metrics, "complete_record_count")
             eff = EfficiencyMetrics(

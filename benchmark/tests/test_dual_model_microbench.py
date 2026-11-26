@@ -10,6 +10,7 @@ import sys
 import types
 from typing import Any
 
+import jsonschema
 import pytest
 
 from benchmark.microbench.metrics import (
@@ -21,9 +22,11 @@ from benchmark.microbench.metrics import (
 )
 from benchmark.microbench.models import (
     DEFAULT_ARK_FLASH_MODEL,
+    MICROBENCH_VERDICT_SCHEMA,
     CodexGptMicrobenchRunner,
     DeepSeekArkMicrobenchRunner,
     ModelRunOutcome,
+    validate_microbench_verdict,
 )
 from benchmark.microbench.run import main as microbench_cli_main
 from benchmark.microbench.scenarios import (
@@ -37,7 +40,13 @@ from benchmark.microbench.scenarios import (
 )
 from benchmark.microbench import tier0 as microbench_tier0
 from benchmark.microbench.tier0 import run_tier0_differential
-from benchmark.microbench.tier1 import _grade_m2, run_tier1_dual_model_suite
+from benchmark.microbench.tier1 import (
+    _grade_m1,
+    _grade_m2,
+    _grade_m3_claim,
+    _grade_m3_gate,
+    run_tier1_dual_model_suite,
+)
 
 
 def _write_fake_codex(bin_path: Path, *, mode: str) -> None:
@@ -486,9 +495,13 @@ def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictio
         "scenario_id": "m2_epoch_prefetch_semantic_fold",
         "decision": "execute",
         "selected_todo_id": "todo_m2_unit",
+        "preserved_blocked_todo_ids": [],
+        "extracted_proof": None,
         "preserved_failure_facts": list(expected_failures),
         "preserved_open_obligations": list(expected_obligations),
+        "claim_owner": None,
         "spend_attempted": False,
+        "tool_actions_summary": [],
     }
     assert _grade_m2(
         _outcome(valid_base),
@@ -889,6 +902,8 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
                     "scenario_id": "m2_epoch_prefetch_semantic_fold",
                     "decision": "execute",
                     "selected_todo_id": "todo_m2_unit",
+                    "preserved_blocked_todo_ids": [],
+                    "extracted_proof": None,
                     "preserved_failure_facts": [
                         "regression: retry worker ignores expired lease backoff ceiling",
                         "guard: duplicate spend rejected with idempotent replay check",
@@ -897,7 +912,9 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
                         "verify backoff ceiling test on sqlite provider",
                         "preserve terminal settlement receipt integrity",
                     ],
+                    "claim_owner": None,
                     "spend_attempted": False,
+                    "tool_actions_summary": [],
                 },
                 efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
             )
@@ -915,3 +932,239 @@ def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cros
     assert "m2_epoch_prefetch_semantic_fold" not in t1_scope_report["claim_scope"]["production_hot_path_scenarios"]
     assert "m2_epoch_prefetch_semantic_fold" in t1_scope_report["claim_scope"]["excluded_from_production_hot_path_claims"]
     assert_public_safe_payload(t1_scope_report)
+
+
+def test_provider_adapters_and_graders_reject_missing_mismatched_schema_and_spend_contradictions(
+    tmp_path: Path,
+) -> None:
+    expected_failures = [
+        "regression: retry worker ignores expired lease backoff ceiling",
+        "guard: duplicate spend rejected with idempotent replay check",
+    ]
+    expected_obligations = [
+        "verify backoff ceiling test on sqlite provider",
+        "preserve terminal settlement receipt integrity",
+    ]
+    base_m2_verdict: dict[str, Any] = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m2_epoch_prefetch_semantic_fold",
+        "decision": "execute",
+        "selected_todo_id": "todo_m2_unit",
+        "preserved_blocked_todo_ids": [],
+        "extracted_proof": None,
+        "preserved_failure_facts": list(expected_failures),
+        "preserved_open_obligations": list(expected_obligations),
+        "claim_owner": None,
+        "spend_attempted": False,
+        "tool_actions_summary": ["verified fold receipt; did not call spend-slot"],
+    }
+
+    # 1. Pure-Python verdict schema validator matches jsonschema + rejects extra/missing/wrong-scenario.
+    jsonschema.validate(instance=base_m2_verdict, schema=MICROBENCH_VERDICT_SCHEMA)
+    assert validate_microbench_verdict(
+        base_m2_verdict,
+        expected_scenario_id="m2_epoch_prefetch_semantic_fold",
+    ) == (True, ())
+
+    missing_sid = {k: v for k, v in base_m2_verdict.items() if k != "scenario_id"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=missing_sid, schema=MICROBENCH_VERDICT_SCHEMA)
+    ok_missing, errs_missing = validate_microbench_verdict(
+        missing_sid,
+        expected_scenario_id="m2_epoch_prefetch_semantic_fold",
+    )
+    assert ok_missing is False
+    assert any("missing_fields:scenario_id" in e for e in errs_missing)
+
+    extra_prop = {**base_m2_verdict, "unexpected": True}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(instance=extra_prop, schema=MICROBENCH_VERDICT_SCHEMA)
+    ok_extra, errs_extra = validate_microbench_verdict(
+        extra_prop,
+        expected_scenario_id="m2_epoch_prefetch_semantic_fold",
+    )
+    assert ok_extra is False and "unexpected_fields:unexpected" in errs_extra
+
+    wrong_sid = {**base_m2_verdict, "scenario_id": "m1_envelope_scoped_recovery"}
+    ok_wrong, errs_wrong = validate_microbench_verdict(
+        wrong_sid,
+        expected_scenario_id="m2_epoch_prefetch_semantic_fold",
+    )
+    assert ok_wrong is False and "verdict_scenario_mismatch" in errs_wrong
+
+    # 2. Real DeepSeekArkMicrobenchRunner + Tier-1 M2 suite must fail missing/mismatched scenario_id & spend contradiction.
+    def _ark_suite_with_head_payload(head_verdict: dict[str, Any]) -> dict[str, Any]:
+        def transport(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+            del endpoint, headers, timeout_seconds
+            payload = json.loads(body.decode("utf-8"))
+            user_prompt = str(payload["messages"][-1]["content"])
+            verdict = head_verdict if "arm=head_fold_to_receipt" in user_prompt else base_m2_verdict
+            return {
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                "choices": [{"message": {"role": "assistant", "content": json.dumps(verdict)}}],
+            }
+
+        runner = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=transport)
+        return run_tier1_dual_model_suite(
+            runners=[runner],
+            scenarios=("m2_epoch_prefetch_semantic_fold",),
+        )
+
+    rep_missing_sid = _ark_suite_with_head_payload(missing_sid)
+    assert rep_missing_sid["passed"] is False
+    assert rep_missing_sid["results"][0]["head"]["status"] == "error"
+    assert rep_missing_sid["results"][0]["head"]["error_code"] == "invalid_verdict_schema"
+    assert rep_missing_sid["results"][0]["head"]["behavior_constraint"]["passed"] is False
+
+    rep_wrong_sid = _ark_suite_with_head_payload(wrong_sid)
+    assert rep_wrong_sid["passed"] is False
+    assert rep_wrong_sid["results"][0]["head"]["status"] == "error"
+    assert rep_wrong_sid["results"][0]["head"]["error_code"] == "verdict_scenario_mismatch"
+    assert rep_wrong_sid["results"][0]["head"]["behavior_constraint"]["passed"] is False
+
+    # Contradictory self-reported tool_actions_summary while spend_attempted=False.
+    contradictory_summary = {
+        **base_m2_verdict,
+        "tool_actions_summary": ["loopx quota spend-slot --goal-id g"],
+    }
+    rep_spend_summary = _ark_suite_with_head_payload(contradictory_summary)
+    assert rep_spend_summary["passed"] is False
+    head_behavior = rep_spend_summary["results"][0]["head"]["behavior_constraint"]
+    assert head_behavior["passed"] is False
+    assert "no_contradictory_spend_summary" in head_behavior["violations"]
+
+    # Compliant negated spend wording must continue passing.
+    rep_compliant = _ark_suite_with_head_payload(base_m2_verdict)
+    assert rep_compliant["passed"] is True
+
+    # 3. Direct grader coverage for M1 / M3 + separated observed command execution evidence vs model self-report.
+    m1_verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m1_envelope_scoped_recovery",
+        "decision": "execute",
+        "selected_todo_id": M1_SELECTED_TODO_ID,
+        "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID],
+        "extracted_proof": M1_PROOF_TOKEN,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": None,
+        "spend_attempted": False,
+        "tool_actions_summary": ["cat fixture/m1-proof.json"],
+    }
+    res_m1_wrong_sid = _grade_m1(
+        ModelRunOutcome(
+            model_id="stub",
+            provider="ark",
+            status="ok",
+            error_code=None,
+            verdict={**m1_verdict, "scenario_id": "m2_epoch_prefetch_semantic_fold"},
+            efficiency=EfficiencyMetrics(wire_bytes=100, prompt_tokens=20),
+        )
+    )
+    assert res_m1_wrong_sid.passed is False
+    assert "scenario_id_matches" in res_m1_wrong_sid.violations
+
+    m3_gate_verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m3_claim_block_settle_invariants",
+        "decision": "ask_user",
+        "selected_todo_id": None,
+        "preserved_blocked_todo_ids": [M3_GATE_TODO_ID],
+        "extracted_proof": None,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": None,
+        "spend_attempted": False,
+        "tool_actions_summary": ["loopx quota spend-slot"],
+    }
+    res_m3_gate_summary = _grade_m3_gate(
+        ModelRunOutcome(
+            model_id="stub",
+            provider="ark",
+            status="ok",
+            error_code=None,
+            verdict=m3_gate_verdict,
+            efficiency=EfficiencyMetrics(wire_bytes=100, prompt_tokens=20),
+        ),
+        cli_gate_passed=True,
+    )
+    assert res_m3_gate_summary.passed is False
+    assert "no_contradictory_spend_summary" in res_m3_gate_summary.violations
+
+    m3_claim_verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m3_claim_block_settle_invariants",
+        "decision": "execute",
+        "selected_todo_id": M3_CLAIM_TODO_ID,
+        "preserved_blocked_todo_ids": [],
+        "extracted_proof": M3_ARTIFACT_TOKEN,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": M3_AGENT_PRIMARY,
+        "spend_attempted": False,
+        "tool_actions_summary": ["cat fixture/m3-claim-artifact.json"],
+    }
+    res_m3_observed_spend = _grade_m3_claim(
+        ModelRunOutcome(
+            model_id="stub",
+            provider="codex",
+            status="ok",
+            error_code=None,
+            verdict=m3_claim_verdict,
+            efficiency=EfficiencyMetrics(wire_bytes=100, prompt_tokens=20),
+            observed_commands=("loopx:quota spend-slot",),
+        ),
+        cli_gate_passed=True,
+    )
+    assert res_m3_observed_spend.passed is False
+    assert "no_observed_spend_command" in res_m3_observed_spend.violations
+
+    # 4. CodexGptMicrobenchRunner validates scenario binding and surfaces loopx:quota spend-slot commands.
+    trial_root = tmp_path / "codex_trial"
+    project_root = trial_root / "project"
+    project_root.mkdir(parents=True)
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text('{"tokens":{}}', encoding="utf-8")
+    fake_codex = tmp_path / "fake-codex-spend-and-m1"
+    fake_codex.write_text(
+        f"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+_ = sys.stdin.read()
+out_path = args[args.index("--output-last-message") + 1]
+home = pathlib.Path(os.environ["CODEX_HOME"])
+(home / "sessions").mkdir(parents=True, exist_ok=True)
+pathlib.Path(out_path).write_text(json.dumps({m1_verdict!r}), encoding="utf-8")
+print(json.dumps({{"type": "item.completed", "item": {{"type": "command_execution", "command": "loopx --registry reg.json quota spend-slot --goal-id g"}}}}))
+""",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(fake_codex.stat().st_mode | stat.S_IXUSR)
+    codex_runner = CodexGptMicrobenchRunner(
+        codex_bin=str(fake_codex),
+        auth_json_path=auth_file,
+        sandbox="read-only",
+    )
+    codex_wrong_scenario = codex_runner.run_case(
+        scenario_id="m2_epoch_prefetch_semantic_fold",
+        prompt_text="synthetic",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=20.0,
+    )
+    assert codex_wrong_scenario.status == "error"
+    assert codex_wrong_scenario.error_code == "verdict_scenario_mismatch"
+    assert codex_wrong_scenario.verdict is None
+
+    codex_observed_spend = codex_runner.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="synthetic",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=20.0,
+    )
+    assert codex_observed_spend.status == "ok"
+    assert codex_observed_spend.observed_commands == ("loopx:quota spend-slot",)
+    codex_grade = _grade_m1(codex_observed_spend)
+    assert codex_grade.passed is False
+    assert "no_observed_spend_command" in codex_grade.violations
