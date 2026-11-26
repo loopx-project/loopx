@@ -955,6 +955,7 @@ jobs:
           tests/control_plane/test_refresh_settle_turn.py::test_wrong_or_missing_child_workspace_retains_owed_command_for_exact_recovery
           tests/control_plane/test_refresh_settle_turn.py::test_legacy_posix_quoted_powershell_launcher_fails_before_settlement
           tests/control_plane/test_refresh_settle_turn.py::test_pinned_powershell_launcher_settles_original_turn_once
+          tests/control_plane/test_refresh_settle_turn.py::test_composed_settlement_keeps_commit_when_private_capture_is_unsupported
 
       - name: Restore the primary Windows Node runtime
         uses: actions/setup-node@v6

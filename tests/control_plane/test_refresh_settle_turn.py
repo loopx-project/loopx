@@ -459,6 +459,12 @@ def test_composed_settlement_keeps_commit_when_private_capture_is_unsupported(
     assert replay["result_delivery_error"]["error_code"] == "quota_decision_capture_unsupported"
     assert _spend_run_count(runtime) == 1
 
+    if not decision_capture.private_capture_supported():
+        # This host cannot establish private capture privacy at all, so there is
+        # no bounded receipt to compare against. The unsupported-path assertions
+        # above are the cross-platform contract; only POSIX continues below.
+        return
+
     # POSIX keeps the bounded receipt it already had on the same Turn.
     private = runtime / "context-delivery"
     private.mkdir(mode=0o700, exist_ok=True)
