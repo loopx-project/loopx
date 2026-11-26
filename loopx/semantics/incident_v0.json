@@ -98,7 +98,7 @@
       "defect": "When a document widens its scope faster than the code, the two must be reconciled; a scope claim the scanner does not implement is a false invariant.",
       "expected_rule": "The scan's implemented reach is measured at check time and compared with the declared claim.",
       "probe": "scan_reach_disclosed",
-      "expectation": "uncovered"
+      "expectation": "caught"
     },
     {
       "id": "E13",
@@ -159,7 +159,7 @@
   ],
   "caught_baseline": {
     "meaning": "Frozen at authoring time so the retrodiction cannot silently regress; it records what the guard caught then, not a target.",
-    "would_have_caught": 12,
+    "would_have_caught": 13,
     "total": 15,
     "negative_control_false_positives": 0
   }
