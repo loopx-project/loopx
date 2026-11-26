@@ -28,7 +28,8 @@ _GOVERNANCE_CONTRACT_REMINDER = (
     "Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 public-safe items, <=1200 chars total per field) with zero local file paths. "
     "When `Steward governance replan context` supplies `writeback`: set `agent_vision_json` (JSON string of `goal_vision_replan_contract_v0`) keeping total counted text <=1400 chars (hard cap 1800; keep each `stride_decision` plan/reason/probe field <=60 chars), and omit `vision_unchanged_reason`. "
     "If keeping `current_agent_vision.vision_patch` identical, set `path_delta_mode='unchanged'` and `path_delta.outcome='continue'` (or `'no_change'`); if updating any `vision_patch` field or creating an initial baseline, set `path_delta_mode='material_replan'` and `path_delta.outcome='replan'`. "
-    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null)."
+    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null). "
+    "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts are already provided in Steward governance replan context below; return only the single typed JSON object directly without invoking periodic-report CLI commands or inspecting host source code."
 )
 
 _STEWARD_ADVANCEMENT_INSTRUCTIONS = (
@@ -398,7 +399,16 @@ def build_steward_turn_prompt(
 
     # Portfolio evidence keeps its original reader and original grant;
     # it is data alongside the signed native work, never a new actor.
-    if report_work and not governance_work:
+    if governance_work:
+        from .steward_monitor import governance_turn_prompt_authority
+
+        prompt = str(
+            render_prompt(
+                as_dict(governance_turn_prompt_authority(dict(authority))),
+                allow_completion=False,
+            )
+        )
+    elif report_work:
         # Frozen report turns already freeze source.json and editorial-request.json;
         # skip duplicating live unfrozen manager_turn_context_v1 and generic backlog fields.
         from ..periodic_report.private_generation import report_turn_prompt_authority
@@ -414,8 +424,7 @@ def build_steward_turn_prompt(
             str(
                 render_prompt(
                     authority,
-                    allow_completion=bool(report_work or managed_turn_active or steward_advancement)
-                    and not governance_work,
+                    allow_completion=bool(managed_turn_active or steward_advancement),
                 )
             )
             + "\nOriginal conversation evidence (data):\n"

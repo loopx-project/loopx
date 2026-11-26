@@ -22,6 +22,7 @@ from loopx.capabilities.native_chat.steward_turn_common import (
     StewardControllerProtocol,
     StewardStoreProtocol,
 )
+from loopx.capabilities.native_chat.steward_turn_context import build_steward_turn_prompt
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
 from loopx.extensions.lark.owner_attention import LarkOwnerAttention
@@ -314,3 +315,118 @@ def test_mypy_contract_probe_rejects_early_exit_or_aborted_run(tmp_path: Path) -
             follow_imports_silent=True,
             extra_env={"MYPYPATH": purelib},
         )
+
+
+def test_build_steward_turn_prompt_slims_governance_and_preserves_completion_flags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ChatSessionStore(tmp_path / "chat")
+    controller = ChatRuntimeController(store=store, codex_bin="codex")
+    host = StewardTurnHost(controller)
+    monkeypatch.setattr(
+        host,
+        "_governance_replan_context",
+        lambda _actor, _auth: {"writeback": {"stride_control": {"required_on_periodic_review": False}}},
+    )
+
+    authority: dict[str, object] = {
+        "primary_action": "settle autonomous replan",
+        "vision_continuation_audit": {"required": True},
+        "_model_input": {
+            "route": "agent_turn",
+            "detail_ref": {"replan_action_packet": {"obligation_id": "replan-1", "required": True}},
+            "task_context": {
+                "goal_id": "g1",
+                "agent_identity": {"agent_id": "a1"},
+                "execution_profile": {"kind": "standard"},
+                "task_scope": "execution",
+                "mode": "autonomous",
+                "state": "active",
+                "selected_todo": {"todo_id": "t1"},
+                "agent_todo_summary": {"huge": [1, 2, 3]},
+                "interaction_contract": {"cli_channel": {}},
+                "vision_continuation_audit": {"required": True},
+            },
+        },
+    }
+    actor: dict[str, object] = {"goal_id": "g1", "agent_id": "a1"}
+    request: dict[str, object] = {"work_kind": "report"}
+    context: dict[str, object] = {"messages": [{"text": "ctx"}]}
+
+    gov_prompt = build_steward_turn_prompt(
+        host,
+        actor=actor,
+        session_id="sess-1",
+        request=request,
+        authority=authority,
+        context=context,
+        report_work=True,
+        governance_work=True,
+        managed_turn_active=True,
+        steward_advancement=True,
+        report_context="\nReport ctx",
+    )
+    assert "validated_completion" not in gov_prompt
+    assert "Original conversation evidence (data):" not in gov_prompt
+    assert "Steward governance replan context (data):" in gov_prompt
+    assert "Steward advancement instructions:" not in gov_prompt
+    assert (
+        "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts "
+        "are already provided in Steward governance replan context below; return only the single "
+        "typed JSON object directly without invoking periodic-report CLI commands or inspecting "
+        "host source code."
+    ) in gov_prompt
+    assert "vision_continuation_audit" not in gov_prompt
+    assert "agent_todo_summary" not in gov_prompt
+    assert "replan_action_packet" in gov_prompt
+    assert '"goal_id":"g1"' in gov_prompt
+
+    report_prompt = build_steward_turn_prompt(
+        host,
+        actor=actor,
+        session_id="sess-1",
+        request=request,
+        authority=authority,
+        context=context,
+        report_work=True,
+        governance_work=False,
+        managed_turn_active=False,
+        steward_advancement=False,
+        report_context="\nReport ctx",
+    )
+    assert "validated_completion" in report_prompt
+    assert "Original conversation evidence (data):" not in report_prompt
+    assert "\nReport ctx" in report_prompt
+
+    idle_prompt = build_steward_turn_prompt(
+        host,
+        actor=actor,
+        session_id="sess-1",
+        request={"work_kind": "chat"},
+        authority=authority,
+        context=context,
+        report_work=False,
+        governance_work=False,
+        managed_turn_active=False,
+        steward_advancement=False,
+        report_context="",
+    )
+    assert "validated_completion" not in idle_prompt
+    assert "Original conversation evidence (data):" in idle_prompt
+
+    managed_prompt = build_steward_turn_prompt(
+        host,
+        actor=actor,
+        session_id="sess-1",
+        request={"work_kind": "chat"},
+        authority=authority,
+        context=context,
+        report_work=False,
+        governance_work=False,
+        managed_turn_active=True,
+        steward_advancement=False,
+        report_context="",
+    )
+    assert "validated_completion" in managed_prompt
+    assert "Original conversation evidence (data):" in managed_prompt
