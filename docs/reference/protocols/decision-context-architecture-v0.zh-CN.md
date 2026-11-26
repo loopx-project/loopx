@@ -5,8 +5,9 @@
 ## 定位
 
 Decision Context 是 LoopX 内置、默认关闭、goal-scoped 的高层决策 capability。
-它运行在 LoopX Core 之上，消费 Core truth，但不进入
-`loopx/control_plane/`，也不改变 todo、gate、quota、authority 的语义。
+它运行在 LoopX Core 之上，消费 Core truth，不改变 Core 的 todo、gate、quota 准入或
+authority 语义；其可选本机回合起始钩子绑定遵循 TypeScript 控制面迁移契约，落在
+`loopx/control_plane/capabilities/decision_context_hook.ts` 能力钩子边界内，不把领域打分、信源适配器或决策建议下沉进 Core。
 
 ```mermaid
 flowchart TD

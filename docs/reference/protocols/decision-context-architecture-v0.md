@@ -5,8 +5,11 @@ Status: experimental contract
 ## Position
 
 Decision Context is a built-in, default-off, goal-scoped LoopX capability. It
-runs above LoopX Core, consumes Core truth, and does not enter
-`loopx/control_plane/` or alter todo, gate, quota, or authority semantics.
+runs above LoopX Core, consumes Core truth, and does not alter Core todo, gate,
+quota eligibility, or authority semantics; its optional host-local turn-start
+hook binding uses the TypeScript capability-hook owner seam under
+`loopx/control_plane/capabilities/decision_context_hook.ts` without moving
+domain scoring, source adapters, or decision recommendations into Core.
 
 ```mermaid
 flowchart TD
