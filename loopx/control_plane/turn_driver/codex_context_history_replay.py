@@ -1,7 +1,7 @@
 """Replay verification and interval digestion helpers for native Codex history."""
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 import hashlib
 import json
 from pathlib import Path
@@ -236,8 +236,8 @@ def _replayed_output_groups(
     observed_bytes = snapshot["observed_bytes"]
     if not isinstance(reader_start, int) or not isinstance(observed_bytes, int):
         raise TypeError("replay bounds must be integers")
-    native_calls: dict[str, tuple[int, str]] = {}
-    closed_calls: set[str] = set()
+    native_calls: dict[Hashable, tuple[int, str]] = {}
+    closed_calls: set[Hashable] = set()
     for offset, record in _records(stream, reader_start, observed_bytes):
         if not _append_only(record, event):
             raise ValueError("unsupported native replay continuation")
@@ -251,16 +251,18 @@ def _replayed_output_groups(
         if record["type"] != "response_item":
             continue
         kind, call = payload.get("type"), payload.get("call_id")
-        if kind in {"function_call", "custom_tool_call"} and isinstance(call, str):
+        if kind in {"function_call", "custom_tool_call"}:
+            if not isinstance(call, Hashable):
+                raise TypeError("native tool call_id must be hashable")
             # Call IDs can repeat in later Turns. Match the exact call
             # occurrence observed by the hook.
             native_calls.pop(call, None)
             closed_calls.discard(call)
             if offset in call_offsets and call_offsets[offset] == _digest(record):
                 native_calls[call] = offset, str(kind)
-        elif kind in {"function_call_output", "custom_tool_call_output"} and isinstance(
-            call, str
-        ):
+        elif kind in {"function_call_output", "custom_tool_call_output"}:
+            if not isinstance(call, Hashable):
+                raise TypeError("native tool call_id must be hashable")
             opened = native_calls.pop(call, None)
             if opened is None:
                 if call in closed_calls:

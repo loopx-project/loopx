@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import argparse
 import ast
 import io
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from types import MappingProxyType
 import pytest
+
+from loopx.cli_commands.quota_capture import native_context_capture_view
+from loopx.cli_commands.quota_context_reader import read_context_capture
+from loopx.control_plane.turn_driver import codex_context as context
 
 from loopx.control_plane.turn_driver import (
     codex_context_history as history_io,
@@ -316,3 +323,195 @@ def test_public_entrypoints_preserve_mapping_proxy_and_fail_closed_boundaries(
     checkpoint_native_read({"candidate": None}, mutated, event, pages)
     checkpoint_native_selection({}, mutated, event, pages, pages)
     assert mutated["consumed_pointers"] == {}
+
+
+def _project_context(
+    work: Path,
+    capture_id: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    capture_dir = work / capture_id
+    capture_dir.mkdir(mode=0o700)
+    return context.prepare_codex_context(
+        dict(payload),
+        directory=str(work),
+        capture_directory=capture_dir,
+        goal_id="fixture",
+        agent_id="agent",
+        surface="quota_packet",
+        capture_id=capture_id,
+    ).delivery
+
+
+def _read_capture_pages(work: Path, wire: dict[str, object]) -> list[dict[str, object]]:
+    recovery = wire["recovery"]
+    assert isinstance(recovery, dict)
+    view = native_context_capture_view(
+        dict(wire),
+        Path(str(recovery["path"])).parent,
+        context_directory=str(work),
+    )
+    pages: list[dict[str, object]] = []
+    offset = 0
+    while True:
+        page = read_context_capture(
+            argparse.Namespace(
+                capture_file=view["path"],
+                capture_sha256=view["sha256"],
+                offset=offset,
+                page_bytes=3072,
+            )
+        )
+        assert page["ok"]
+        pages.append(page)
+        if page["eof"]:
+            break
+        offset = int(page["next_offset"])
+    return pages
+
+
+@pytest.mark.parametrize(
+    ("item_kind", "call_id", "expect_candidate", "expect_guidance", "expect_mode"),
+    [
+        ("function_call", ["bad"], False, True, "full"),
+        ("function_call", {"bad": 1}, False, True, "full"),
+        ("function_call_output", ["bad"], False, True, "full"),
+        ("custom_tool_call_output", {"bad": 1}, False, True, "full"),
+        ("function_call", "call-valid", True, False, "delta"),
+        ("unknown_item_kind", ["bad"], True, False, "delta"),
+    ],
+)
+def test_quota_context_hook_malformed_call_id_revokes_native_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    item_kind: str,
+    call_id: object,
+    expect_candidate: bool,
+    expect_guidance: bool,
+    expect_mode: str,
+) -> None:
+    base = tmp_path.resolve()
+    home = base / "home"
+    home.mkdir(mode=0o700)
+    work = base / "work"
+    work.mkdir(mode=0o700)
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("CODEX_THREAD_ID", "session")
+    monkeypatch.delenv("CODEX_ROLLOUT_TRACE_ROOT", raising=False)
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "loopx.entrypoint",
+        "--format",
+        "json",
+        "quota",
+        "context-hook",
+        "--context-delivery",
+        "on",
+        "--codex-app",
+        "--codex-context-dir",
+        str(work),
+    ]
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "PYTHONPATH": str(_repo_root()),
+        "CODEX_THREAD_ID": "session",
+    }
+    env.pop("CODEX_ROLLOUT_TRACE_ROOT", None)
+    env.pop("LOOPX_RUNTIME_ROOT", None)
+    env.pop("LOOPX_REGISTRY", None)
+
+    history = work / "rollout.jsonl"
+
+    def append(kind: str, payload: dict[str, object]) -> None:
+        with history.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": kind, "payload": payload}) + "\n")
+
+    append(
+        "session_meta",
+        {
+            "id": "session",
+            "cwd": str(work),
+            "cli_version": "0.162.1",
+            "history_mode": "paginated",
+        },
+    )
+    os.chmod(history, 0o600)
+    event: dict[str, object] = {
+        "session_id": "session",
+        "cwd": str(work),
+        "hook_event_name": "SessionStart",
+        "source": "startup",
+        "transcript_path": str(history),
+        "model": "fixture",
+        "permission_mode": "bypassPermissions",
+        "turn_id": "read-turn",
+    }
+    started = subprocess.run(
+        cmd, input=json.dumps(event), capture_output=True, text=True, cwd=work, env=env, timeout=20, check=False
+    )
+    assert started.returncode == 0, started.stderr
+
+    append("event_msg", {"type": "task_started", "turn_id": "read-turn"})
+    append("turn_context", {"cwd": str(work), "model": "fixture"})
+    payload: dict[str, object] = {
+        "ok": True,
+        "plan_summary": {"requirements": "Keep original evidence. " * 1000},
+        "heartbeat_receipt": {"turn_instance_id": "first"},
+    }
+    first = _project_context(work, "one", payload)
+    first_recovery = first["recovery"]
+    assert isinstance(first_recovery, dict)
+    capture_bytes_before = Path(str(first_recovery["path"])).read_bytes()
+
+    for index, page in enumerate(_read_capture_pages(work, first)):
+        cid = f"reader-{index}"
+        body = json.dumps(page)
+        append("response_item", {"type": "function_call_output", "call_id": cid, "output": body})
+        hooked = subprocess.run(
+            cmd,
+            input=json.dumps(
+                {**event, "hook_event_name": "PostToolUse", "tool_use_id": cid, "tool_response": body}
+            ),
+            capture_output=True,
+            text=True,
+            cwd=work,
+            env=env,
+            timeout=20,
+            check=False,
+        )
+        assert hooked.returncode == 0, hooked.stderr
+
+    pre_resume = context._state(work)
+    assert "native_resume" in pre_resume.get("candidate", {})
+
+    append("response_item", {"type": item_kind, "call_id": call_id})
+    resumed = subprocess.run(
+        cmd,
+        input=json.dumps({**event, "source": "resume"}),
+        capture_output=True,
+        text=True,
+        cwd=work,
+        env=env,
+        timeout=20,
+        check=False,
+    )
+    assert resumed.returncode == 0, resumed.stderr
+    hook_out = json.loads(resumed.stdout or "{}")
+    post_resume = context._state(work)
+    second = _project_context(
+        work,
+        "second",
+        {**payload, "heartbeat_receipt": {"turn_instance_id": "second"}},
+    )
+
+    assert ("candidate" in post_resume) is expect_candidate
+    if expect_guidance:
+        additional = hook_out["hookSpecificOutput"]["additionalContext"]
+        assert "quota context-read" in additional
+    else:
+        assert hook_out == {}
+    assert second["mode"] == expect_mode
+    assert Path(str(first_recovery["path"])).read_bytes() == capture_bytes_before
