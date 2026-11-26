@@ -36,6 +36,7 @@ def update_authority_source(
         raise ValueError("specify at least one metadata field to update")
 
     def reduce(registry: Payload) -> tuple[Payload, Payload]:
+        require_runtime_compatible_project_registry(registry, operation="authority metadata update")
         index = find_goal_index(registry, goal_id)
         goal = cast(list[Payload], registry["goals"])[index]
         authority = _dict_view(goal.get("authority_registry"))
@@ -53,7 +54,6 @@ def update_authority_source(
 
     if dry_run:
         registry = load_project_registry(registry_path)
-        require_runtime_compatible_project_registry(registry, operation="authority metadata update")
         entry, summary = reduce(copy.deepcopy(registry))
     else:
         entry, summary = mutate_project_registry(

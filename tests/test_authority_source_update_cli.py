@@ -35,6 +35,26 @@ def update(path: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return cli(path, 'update-authority-source', '--goal-id', 'demo', '--source-id', 'guide', *args)
 
 
+@pytest.mark.parametrize('preview', [False, True])
+def test_source_session_update_rejected_without_writes(material: Path, preview: bool):
+    from loopx.control_plane.projects.registry_codec import SOURCE_SESSION_PROFILE_ID
+
+    registry = json.loads(material.read_text())
+    registry['profile_id'] = SOURCE_SESSION_PROFILE_ID
+    material.write_text(json.dumps(registry))
+    before = material.read_bytes()
+    runtime = material.parent / 'denied-runtime'
+    result = cli(material, '--runtime-root', str(runtime), 'update-authority-source',
+                 '--goal-id', 'demo', '--source-id', 'guide', '--freshness', 'stale',
+                 *(['--dry-run'] if preview else []))
+    assert result.returncode == 1, result.stdout + result.stderr
+    payload = json.loads(result.stdout)
+    assert payload['ok'] is False and payload['written'] is False
+    assert SOURCE_SESSION_PROFILE_ID in payload['error']
+    assert material.read_bytes() == before
+    assert not runtime.exists()
+
+
 def test_preview_apply_readback_preserves_reference_topics_and_omitted_fields(material: Path):
     before = material.read_bytes()
     original = json.loads(before)['goals'][0]['authority_registry']['project_materials']['guide']
