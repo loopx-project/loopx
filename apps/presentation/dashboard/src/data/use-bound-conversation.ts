@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { resolveBoundConversation,
+import { CHAT_HISTORY_READ_TIMEOUT_MS, resolveBoundConversation,
   type BoundConversationTarget, type ChatSessionSummary, type BoundConversationSource } from "./chat";
 
 /** Reads the source's title and executor. Admission remains with the Core owner. */
@@ -12,7 +12,7 @@ export function useBoundConversation(target: BoundConversationTarget | null, ena
     if (!enabled || bindingId === undefined || sessionId === undefined) return;
     let active = true;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeout = setTimeout(() => controller.abort(), CHAT_HISTORY_READ_TIMEOUT_MS);
     resolveBoundConversation({ bindingId, sessionId }, controller.signal)
       .then(({session, source}) => {
         if (!active) return;

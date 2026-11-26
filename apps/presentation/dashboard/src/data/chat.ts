@@ -1095,10 +1095,10 @@ const chatMessagePageSchema = z.object({
   visible_page_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
-// A long original transcript can outlive the interactive request budget even
-// when each verified page succeeds. Apply the same bounded read deadline to
-// its pages and fresh source checks; caller cancellation still takes priority.
-const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+// Apply one bounded read deadline to transcript pages and fresh source checks.
+export const CHAT_HISTORY_READ_TIMEOUT_MS = 30_000;
+const MAX_VERIFIED_HISTORY_MESSAGES = 50_000;
+const MAX_VERIFIED_HISTORY_BASIS_CHARS = 6 + Math.ceil(MAX_VERIFIED_HISTORY_MESSAGES / 200) * 64;
 
 type ChatHistoryReadProgress = {
   first: ChatSessionSnapshot;
@@ -1213,14 +1213,13 @@ async function readChatSessionHistory(session: ChatSessionSummary | string, sign
 }
 
 function historyBasisMatches(basis: string, count: number) {
-  const match = /^([1-9][0-9]{0,3}):([a-f0-9]+)$/.exec(basis);
-  return match !== null && count >= 1 && count <= 5000 && Number(match[1]) === count
+  const match = /^([1-9][0-9]{0,4}):([a-f0-9]+)$/.exec(basis);
+  return match !== null && count >= 1 && count <= MAX_VERIFIED_HISTORY_MESSAGES && Number(match[1]) === count
     && match[2].length === Math.ceil(count / 200) * 64;
 }
 
 function historyImageHeaders(linkImages: boolean): HeadersInit | undefined {
-  // The linked bytes are same-origin resources. A separately configured Chat
-  // server still uses the compatible inline representation.
+  // The linked bytes are same-origin resources; a separate Chat origin stays inline.
   return linkImages && !configuredChatOrigin ? {"X-LoopX-History-Images": "linked"} : undefined;
 }
 
@@ -1240,7 +1239,7 @@ async function tryResumeChatSessionHistory(session: ChatSessionSummary, saved: C
   }
   if (!snapshot || snapshot.history_resume === undefined) return null; // Restart or older service.
   const proof = z.object({schema_version: z.literal("loopx_chat_history_resume_v1"),
-    base: z.literal(basis), next: z.string().max(1605)}).safeParse(snapshot.history_resume);
+    base: z.literal(basis), next: z.string().max(MAX_VERIFIED_HISTORY_BASIS_CHARS)}).safeParse(snapshot.history_resume);
   if (!proof.success || snapshot.ok !== true || snapshot.schema_version !== "loopx_chat_store_v1"
     || !snapshot.session || !sameHistorySource(snapshot.session, session) || Object.hasOwn(snapshot, "message_page")
     || !Array.isArray(snapshot.messages) || snapshot.messages.length > 200

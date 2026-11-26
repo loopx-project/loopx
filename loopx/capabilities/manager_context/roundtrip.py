@@ -16,6 +16,7 @@ from itertools import islice
 from os import scandir
 from pathlib import Path
 from contextlib import contextmanager, ExitStack, nullcontext
+from copy import deepcopy
 from urllib.parse import quote
 from datetime import datetime, timezone
 
@@ -465,8 +466,11 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     strict = message_limit is not None or resume_from is not None or report_message_id is not None
     # Read the status first: terminal completion persists its answer before
     # publishing completed. An older message prefix must not appear final.
-    snapshot = (store.session_snapshot(session_id, strict_messages=True) if strict
-                else store.session_snapshot(session_id))
+    snapshot = (
+        store.session_snapshot(session_id, strict_messages=True, copy_messages=False)
+        if strict and hasattr(store, "_paged_history_messages")
+        else store.session_snapshot(session_id, strict_messages=True) if strict else store.session_snapshot(session_id)
+    )
     report_context = None
     if report_message_id is not None:
         snapshot["messages"], report_context = _saved_answer_rows(snapshot["messages"], report_message_id, turn_id)
@@ -475,17 +479,12 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
     elif turn is not None:
         status = turn["status"]
         snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
-        # Failure records persist the reason with the status, before appending the message.
         error = turn.get("error")
         if include_turn_error and status in {"failed", "timed_out"} and isinstance(error, str) and error.strip():
             snapshot["selected_turn"]["error"] = error
         snapshot["active_turn"] = None
-        # OriginalRequest already displays only this Turn. Select it before
-        # paging/projection, retaining every message and the strict journal read.
         snapshot["messages"] = [row for row in snapshot["messages"] if row.get("turn_id") == turn_id]
     elif project_history_messages is not None:
-        # Extension-owned, presentation-only rows must join the frozen page
-        # prefix. A selected Turn only reads its canonical messages.
         snapshot["messages"] = project_history_messages(snapshot["messages"])
     if resume_from is not None and not 0 <= len(snapshot["messages"]) - resume_from <= 200:
         return None  # Bound the complete visible stream, including provider-only notices.
@@ -500,19 +499,12 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         root, session_id, snapshot["messages"], source_store=store, registry=registry
     )
     from .presentation import project_collaboration
-    # Use the frozen context to choose the carrier, projecting only this page.
-    # A question and answer can straddle pages without duplicating a commitment
-    # or re-reading every off-page Turn for each page.
     projected = project_collaboration(store, root, session_id, snapshot["messages"],
         registry=registry, context_messages=context_messages)
     if report_message_id is not None:
-        # Collaboration may include the original receipt carrier. The saved
-        # answer only exposes its precise answer and the question it displays.
         visible_ids = {row.get("message_id") for row in snapshot["messages"]}
         projected = [row for row in projected if row.get("message_id") in visible_ids]
-    snapshot["messages"] = projected
-    # Provider-owned history joins the selected page at the composition root.
-    # Core capabilities never import an extension projection sink.
+    snapshot["messages"] = deepcopy(projected) if (page is not None or report_message_id is not None) else projected
     if page is not None:
         snapshot["message_page"] = page["message_page"]
     return snapshot
@@ -521,6 +513,7 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
 
 def parse_chat_history_selection(query):
     """Validate one HTTP history selection before any recovery observation."""
+    from .chat_history import MAX_KNOWN_HISTORY_MESSAGES
     keys = set(query)
     report = "report_message_id" in keys
     if (keys - {"message_limit", "message_cursor", "turn_id", "known_history",
@@ -543,10 +536,10 @@ def parse_chat_history_selection(query):
         if limit != 200 or "turn_id" in query or "message_cursor" in query:
             raise ValueError("invalid history resume arguments")
         count_text, _, proof = basis.partition(":")
-        if not re.fullmatch(r"[1-9][0-9]{0,3}", count_text):
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", count_text):
             raise ValueError("invalid known history proof")
         count = int(count_text)
-        if count > 5000 or len(proof) != ((count + 199) // 200) * 64 or not re.fullmatch(r"[a-f0-9]+", proof):
+        if count > MAX_KNOWN_HISTORY_MESSAGES or len(proof) != ((count + 199) // 200) * 64 or not re.fullmatch(r"[a-f0-9]+", proof):
             raise ValueError("invalid known history proof")
         parsed_basis = (basis, count, proof)
     return {"message_limit": limit, "message_cursor": query.get("message_cursor", [None])[0],
@@ -587,6 +580,7 @@ def _visible_history_page_digest(session_id, offset, messages):
 def read_chat_history_selection(root, store, session_id, *, registry, selection, project_provider,
                                 project_history_messages=None):
     """Compose the same provider projections for page reads and suffix proof."""
+    from .chat_history import MAX_KNOWN_HISTORY_MESSAGES
     basis = selection["known_history"]
     if basis is None:
         snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry,
@@ -597,7 +591,7 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
         snapshot["messages"] = project_provider(snapshot["messages"])
         if selection["message_limit"] == 200 and selection["turn_id"] is None:
             page = snapshot["message_page"]
-            if 1 <= page["total"] <= 5000:
+            if 1 <= page["total"] <= MAX_KNOWN_HISTORY_MESSAGES:
                 page["visible_page_sha256"] = _visible_history_page_digest(
                     session_id, page["offset"], snapshot["messages"])
         return snapshot
@@ -607,7 +601,7 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
     restart = {"ok": True, **resume, "status": "restart"}
     snapshot = project_chat_session_snapshot(root, store, session_id, registry=registry, resume_from=count,
         project_history_messages=project_history_messages)
-    if snapshot is None or len(snapshot["messages"]) > 5000:
+    if snapshot is None or len(snapshot["messages"]) > MAX_KNOWN_HISTORY_MESSAGES:
         return restart
     messages = project_provider(snapshot["messages"])
     current_prefix = "".join(
@@ -616,12 +610,11 @@ def read_chat_history_selection(root, store, session_id, *, registry, selection,
     if current_prefix != proof:
         return restart
     total = len(messages)
-    # The old last page may have been short; earlier pages were just verified.
     unchanged = count if total == count else count - count % 200
     next_proof = proof[:((unchanged + 199) // 200) * 64] + "".join(
         _visible_history_page_digest(session_id, offset, messages[offset:offset + 200])
         for offset in range(unchanged, total, 200))
-    return {**snapshot, "messages": messages[count:], "history_resume": {
+    return {**snapshot, "messages": deepcopy(messages[count:]), "history_resume": {
         **resume, "base": basis, "next": f"{total}:{next_proof}",
     }}
 
