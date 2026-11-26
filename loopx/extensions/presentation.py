@@ -5,16 +5,12 @@ from datetime import date, datetime, timezone
 import hashlib
 from importlib import import_module
 import json
-import math
 import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
 
 from ..control_plane.runtime.public_safety import SECRET_LIKE_SURFACE_PATTERN
-from urllib.parse import parse_qsl, urlparse
-
 from ..file_lock import exclusive_file_lock
 # Public extension presentation utility; keep path classification single-owned.
 from ..public_safe_text import (
@@ -36,6 +32,10 @@ from .readiness import (
 )
 from .manifest import validate_extension_id
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
+ViewValidator = Callable[[object], object]
+
 
 EXTENSION_PRESENTATION_PROJECTION_SCHEMA_VERSION = (
     "extension_presentation_projection_v0"
@@ -48,7 +48,6 @@ EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION = (
     "extension_projection_publish_receipt_v0"
 )
 
-_ANCHOR_RE = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MARKUP_RE = re.compile(r"<[^>]*>|javascript:", re.IGNORECASE)
 # Absolute, home-relative, drive/UNC, file:// and path:-prefixed local references
 # are decided once by the shared owner. This module keeps one separate policy:
@@ -126,7 +125,7 @@ sys.stdout.buffer.write(
 """
 
 
-def _is_forbidden_key_name(value: Any) -> bool:
+def _is_forbidden_key_name(value: object) -> bool:
     normalized = str(value).lower().replace("-", "_")
     return any(
         normalized == token
@@ -137,11 +136,11 @@ def _is_forbidden_key_name(value: Any) -> bool:
 
 
 def _record(
-    value: Any,
+    value: object,
     *,
     context: str,
     allowed: set[str],
-) -> Mapping[str, Any]:
+) -> PayloadView:
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object")
     unsupported = sorted(set(value) - allowed)
@@ -151,7 +150,7 @@ def _record(
 
 
 def _plain_text(
-    value: Any,
+    value: object,
     *,
     context: str,
     max_length: int = 600,
@@ -175,50 +174,21 @@ def _plain_text(
     return text
 
 
-def _required_text(
-    record: Mapping[str, Any],
-    key: str,
-    *,
-    context: str,
-    max_length: int = 600,
-) -> str:
-    return _plain_text(
-        record.get(key),
-        context=f"{context}.{key}",
-        max_length=max_length,
-    )
-
-
-def _identifier(value: Any, *, context: str) -> str:
+def _identifier(value: object, *, context: str) -> str:
     text = _plain_text(value, context=context, max_length=128)
     if not _ID_RE.fullmatch(text):
         raise ValueError(f"{context} must be a stable identifier")
     return text
 
 
-def _enum(value: Any, allowed: set[str], *, context: str) -> str:
+def _enum(value: object, allowed: set[str], *, context: str) -> str:
     text = _plain_text(value, context=context, max_length=64)
     if text not in allowed:
         raise ValueError(f"{context} must be one of {sorted(allowed)}")
     return text
 
 
-def _boolean(value: Any, *, context: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{context} must be a boolean")
-    return value
-
-
-def _number(value: Any, *, context: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{context} must be numeric")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"{context} must be finite")
-    return number
-
-
-def _iso_value(value: Any, *, context: str, date_only_allowed: bool = True) -> str:
+def _iso_value(value: object, *, context: str, date_only_allowed: bool = True) -> str:
     text = _plain_text(value, context=context, max_length=40)
     normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
     try:
@@ -236,12 +206,12 @@ def _iso_value(value: Any, *, context: str, date_only_allowed: bool = True) -> s
 
 
 def _bounded_list(
-    value: Any,
+    value: object,
     *,
     context: str,
     minimum: int = 0,
     maximum: int,
-) -> list[Any]:
+) -> list[object]:
     if not isinstance(value, list):
         raise ValueError(f"{context} must be an array")
     if len(value) < minimum:
@@ -251,32 +221,7 @@ def _bounded_list(
     return value
 
 
-def _text_list(
-    value: Any,
-    *,
-    context: str,
-    minimum: int = 0,
-    maximum: int,
-    item_limit: int = 600,
-) -> list[str]:
-    return [
-        _plain_text(
-            item,
-            context=f"{context}[{index}]",
-            max_length=item_limit,
-        )
-        for index, item in enumerate(
-            _bounded_list(
-                value,
-                context=context,
-                minimum=minimum,
-                maximum=maximum,
-            )
-        )
-    ]
-
-
-def _assert_allowed_keys_recursively(value: Any, *, context: str = "view") -> None:
+def _assert_allowed_keys_recursively(value: object, *, context: str = "view") -> None:
     if isinstance(value, Mapping):
         for key, child in value.items():
             normalized = str(key).lower().replace("-", "_")
@@ -294,42 +239,14 @@ def _assert_allowed_keys_recursively(value: Any, *, context: str = "view") -> No
         _plain_text(value, context=context, max_length=2_000, allow_empty=True)
 
 
-def _evidence_reference(value: Any, *, context: str) -> str:
-    reference = _plain_text(value, context=context, max_length=500)
-    if "://" not in reference:
-        if not _ID_RE.fullmatch(reference):
-            raise ValueError(f"{context} must be a compact evidence reference")
-        return reference
-    parsed = urlparse(reference)
-    hostname = (parsed.hostname or "").lower()
-    if (
-        parsed.scheme != "https"
-        or not hostname
-        or hostname in {"localhost", "127.0.0.1", "::1"}
-        or hostname.endswith((".internal", ".local"))
-        or hostname.startswith(("private.", "internal."))
-        or parsed.username
-        or parsed.password
-    ):
-        raise ValueError(f"{context} contains an unsafe evidence reference")
-    sensitive_url_fields = {
-        key.lower().replace("-", "_")
-        for component in (parsed.query, parsed.fragment)
-        for key, _value in parse_qsl(component, keep_blank_values=True)
-    }
-    if any(_is_forbidden_key_name(field) for field in sensitive_url_fields):
-        raise ValueError(f"{context} contains an unsafe evidence reference")
-    return reference
-
-
-def _sha256(value: Any, *, context: str) -> str:
+def _sha256(value: object, *, context: str) -> str:
     text = _plain_text(value, context=context, max_length=64)
     if not BARE_SHA256_PATTERN.fullmatch(text):
         raise ValueError(f"{context} must be a lowercase SHA-256")
     return text
 
 
-def validate_opaque_presentation_view(value: Any) -> Any:
+def validate_opaque_presentation_view(value: object) -> Payload:
     """Validate a provider-neutral object view with public-safe structure only."""
     if not isinstance(value, Mapping):
         raise ValueError("presentation_projection.view must be an object")
@@ -338,11 +255,11 @@ def validate_opaque_presentation_view(value: Any) -> Any:
 
 
 def load_presentation_view_validator(
-    declared_surface: Mapping[str, Any],
+    declared_surface: PayloadView,
     *,
     runtime_entrypoint: ResolvedRuntimeEntrypoint | None = None,
     timeout_seconds: int = 30,
-) -> Callable[[Any], Any]:
+) -> ViewValidator:
     """Load the exact validator declared by one active presentation surface."""
 
     reference = declared_surface.get("view_validator")
@@ -357,8 +274,8 @@ def load_presentation_view_validator(
             )
 
         def invoke_runtime_validator(
-            operation: str, *, value: Any = None
-        ) -> Mapping[str, Any]:
+            operation: str, *, value: object = None
+        ) -> PayloadView:
             try:
                 request = json.dumps(
                     {"operation": operation, "reference": reference, "view": value},
@@ -411,7 +328,7 @@ def load_presentation_view_validator(
                 f"presentation surface view_validator `{reference}` is unavailable"
             )
 
-        def validate_in_runtime(value: Any) -> Any:
+        def validate_in_runtime(value: object) -> object:
             response = invoke_runtime_validator("validate", value=value)
             if response.get("ok") is True:
                 return response.get("view")
@@ -438,7 +355,7 @@ def load_presentation_view_validator(
         raise ValueError(
             f"presentation surface view_validator `{reference}` is unavailable"
         ) from exc
-    validator = getattr(module, attribute_name, None)
+    validator: object = getattr(module, attribute_name, None)
     if not callable(validator):
         raise ValueError(
             f"presentation surface view_validator `{reference}` is not callable"
@@ -447,27 +364,30 @@ def load_presentation_view_validator(
 
 
 def _runtime_presentation_view_validator(
-    declared_surface: Mapping[str, Any],
+    declared_surface: PayloadView,
     *,
     runtime_entrypoint: ResolvedRuntimeEntrypoint,
-    manifest: Mapping[str, Any],
-) -> Callable[[Any], Any]:
+    manifest: PayloadView,
+) -> ViewValidator:
     runtime = manifest.get("runtime")
     if not isinstance(runtime, Mapping):
+        raise ValueError("extension active manifest is incomplete")
+    timeout_raw = runtime.get("timeout_seconds")
+    if isinstance(timeout_raw, bool) or not isinstance(timeout_raw, (int, float, str)):
         raise ValueError("extension active manifest is incomplete")
     return load_presentation_view_validator(
         declared_surface,
         runtime_entrypoint=runtime_entrypoint,
-        timeout_seconds=int(runtime["timeout_seconds"]),
+        timeout_seconds=int(timeout_raw),
     )
 
 
 def validate_provider_presentation_projection(
-    value: Mapping[str, Any],
+    value: object,
     *,
-    declared_surface: Mapping[str, Any],
-    view_validator: Callable[[Any], Any] | None = None,
-) -> dict[str, Any]:
+    declared_surface: PayloadView,
+    view_validator: ViewValidator | None = None,
+) -> Payload:
     """Validate provider-owned fields before Core binds lifecycle identity."""
 
     record = _record(
@@ -585,7 +505,7 @@ def validate_provider_presentation_projection(
     }
 
 
-def validate_projection_hash(value: Any, *, context: str) -> str:
+def validate_projection_hash(value: object, *, context: str) -> str:
     return _sha256(value, context=context)
 
 
@@ -611,11 +531,11 @@ def _extension_projection_path(
 
 
 def _declared_surface(
-    manifest: Mapping[str, Any],
+    manifest: PayloadView,
     *,
     extension_id: str,
     surface_id: str,
-) -> Mapping[str, Any]:
+) -> PayloadView:
     surfaces = manifest.get("presentation_surfaces")
     if not isinstance(surfaces, list):
         raise ValueError("extension active manifest has invalid presentation surfaces")
@@ -634,7 +554,7 @@ def _declared_surface(
     return matching[0]
 
 
-def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
+def _canonical_bytes(value: PayloadView) -> bytes:
     return json.dumps(
         dict(value),
         allow_nan=False,
@@ -644,19 +564,42 @@ def _canonical_bytes(value: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _envelope_hash(value: Mapping[str, Any]) -> str:
+def _envelope_hash(value: PayloadView) -> str:
     payload = {key: child for key, child in value.items() if key != "payload_sha256"}
     return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
 
 
-def _validate_persisted_envelope(
-    value: Any,
+def _projection_envelope(
     *,
     extension_id: str,
     revision: str,
-    declared_surface: Mapping[str, Any],
-    view_validator: Callable[[Any], Any] | None = None,
-) -> dict[str, Any]:
+    declared_surface: PayloadView,
+    provider_projection: PayloadView,
+) -> Payload:
+    return {
+        "schema_version": EXTENSION_PROJECTION_SURFACE_SCHEMA_VERSION,
+        "extension_id": extension_id,
+        "extension_revision": revision,
+        "surface_id": declared_surface.get("id"),
+        "surface_kind": declared_surface.get("kind"),
+        "view_schema": declared_surface.get("view_schema"),
+        "visibility": declared_surface.get("visibility"),
+        "goal_id": provider_projection["goal_id"],
+        "generated_at": provider_projection["generated_at"],
+        "review_due_at": provider_projection["review_due_at"],
+        "lineage": provider_projection["lineage"],
+        "view": provider_projection["view"],
+    }
+
+
+def _validate_persisted_envelope(
+    value: object,
+    *,
+    extension_id: str,
+    revision: str,
+    declared_surface: PayloadView,
+    view_validator: ViewValidator | None = None,
+) -> Payload:
     record = _record(
         value,
         context="projection_envelope",
@@ -703,15 +646,12 @@ def _validate_persisted_envelope(
         declared_surface=declared_surface,
         view_validator=view_validator,
     )
-    envelope = {
-        "schema_version": EXTENSION_PROJECTION_SURFACE_SCHEMA_VERSION,
-        **expected,
-        "goal_id": provider_projection["goal_id"],
-        "generated_at": provider_projection["generated_at"],
-        "review_due_at": provider_projection["review_due_at"],
-        "lineage": provider_projection["lineage"],
-        "view": provider_projection["view"],
-    }
+    envelope = _projection_envelope(
+        extension_id=extension_id,
+        revision=revision,
+        declared_surface=declared_surface,
+        provider_projection=provider_projection,
+    )
     payload_sha256 = validate_projection_hash(
         record.get("payload_sha256"),
         context="projection_envelope.payload_sha256",
@@ -722,7 +662,7 @@ def _validate_persisted_envelope(
     return envelope
 
 
-def _atomic_write_projection(path: Path, payload: Mapping[str, Any]) -> None:
+def _atomic_write_projection(path: Path, payload: PayloadView) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.tmp.",
@@ -756,14 +696,40 @@ def _atomic_write_projection(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _ensure_active_surface_unchanged(
+    extension_id: str,
+    *,
+    state_file: Path,
+    active_revision: str,
+    entrypoint_identity: str,
+    surface_id: str,
+    surface: PayloadView,
+    lifecycle_error: str,
+    surface_error: str | None = None,
+) -> None:
+    revision, entrypoint, manifest = _resolved_active_extension(
+        extension_id,
+        state_file=state_file,
+    )
+    if revision != active_revision or entrypoint.identity != entrypoint_identity:
+        raise ValueError(lifecycle_error)
+    confirmed_surface = _declared_surface(
+        manifest,
+        extension_id=extension_id,
+        surface_id=surface_id,
+    )
+    if dict(confirmed_surface) != dict(surface):
+        raise ValueError(surface_error or lifecycle_error)
+
+
 def publish_extension_projection(
     extension_id: str,
     surface_id: str,
     *,
     state_file: str | Path,
-    request: Mapping[str, Any],
+    request: PayloadView,
     execute: bool = False,
-) -> dict[str, Any]:
+) -> Payload:
     """Run one ready standalone provider and atomically publish its declared view."""
 
     state_path = Path(state_file).expanduser()
@@ -777,7 +743,7 @@ def publish_extension_projection(
         extension_id=safe_extension_id,
         surface_id=surface_id,
     )
-    receipt: dict[str, Any] = {
+    receipt: Payload = {
         "ok": True,
         "schema_version": EXTENSION_PROJECTION_PUBLISH_RECEIPT_SCHEMA_VERSION,
         "operation": "publish_projection",
@@ -815,40 +781,27 @@ def publish_extension_projection(
         view_validator=view_validator,
     )
 
-    confirmed_revision, confirmed_entrypoint, confirmed_manifest = (
-        _resolved_active_extension(safe_extension_id, state_file=state_path)
-    )
-    if (
-        confirmed_revision != active_revision
-        or confirmed_entrypoint.identity != verified_entrypoint.identity
-    ):
-        raise ValueError(
-            f"extension `{safe_extension_id}` lifecycle changed during projection publication"
-        )
-    confirmed_surface = _declared_surface(
-        confirmed_manifest,
-        extension_id=safe_extension_id,
+    _ensure_active_surface_unchanged(
+        safe_extension_id,
+        state_file=state_path,
+        active_revision=active_revision,
+        entrypoint_identity=verified_entrypoint.identity,
         surface_id=surface_id,
-    )
-    if dict(confirmed_surface) != dict(surface):
-        raise ValueError(
+        surface=surface,
+        lifecycle_error=(
+            f"extension `{safe_extension_id}` lifecycle changed during projection publication"
+        ),
+        surface_error=(
             f"extension `{safe_extension_id}` surface changed during projection publication"
-        )
+        ),
+    )
 
-    envelope: dict[str, Any] = {
-        "schema_version": EXTENSION_PROJECTION_SURFACE_SCHEMA_VERSION,
-        "extension_id": safe_extension_id,
-        "extension_revision": active_revision,
-        "surface_id": surface_id,
-        "surface_kind": surface["kind"],
-        "view_schema": surface["view_schema"],
-        "visibility": surface["visibility"],
-        "goal_id": provider_projection["goal_id"],
-        "generated_at": provider_projection["generated_at"],
-        "review_due_at": provider_projection["review_due_at"],
-        "lineage": provider_projection["lineage"],
-        "view": provider_projection["view"],
-    }
+    envelope = _projection_envelope(
+        extension_id=safe_extension_id,
+        revision=active_revision,
+        declared_surface=surface,
+        provider_projection=provider_projection,
+    )
     envelope["payload_sha256"] = _envelope_hash(envelope)
     projection_path = _extension_projection_path(
         state_path,
@@ -856,25 +809,17 @@ def publish_extension_projection(
         surface_id=surface_id,
     )
     with exclusive_file_lock(projection_path):
-        final_revision, final_entrypoint, final_manifest = _resolved_active_extension(
+        _ensure_active_surface_unchanged(
             safe_extension_id,
             state_file=state_path,
-        )
-        if (
-            final_revision != active_revision
-            or final_entrypoint.identity != verified_entrypoint.identity
-            or dict(
-                _declared_surface(
-                    final_manifest,
-                    extension_id=safe_extension_id,
-                    surface_id=surface_id,
-                )
-            )
-            != dict(surface)
-        ):
-            raise ValueError(
+            active_revision=active_revision,
+            entrypoint_identity=verified_entrypoint.identity,
+            surface_id=surface_id,
+            surface=surface,
+            lifecycle_error=(
                 f"extension `{safe_extension_id}` lifecycle changed before projection write"
-            )
+            ),
+        )
         _atomic_write_projection(projection_path, envelope)
         try:
             readback_raw = json.loads(projection_path.read_text(encoding="utf-8"))
@@ -903,12 +848,12 @@ def _surface_status_item(
     *,
     extension_id: str,
     revision: str,
-    surface: Mapping[str, Any],
+    surface: PayloadView,
     state: str,
     diagnostic: str | None = None,
-    envelope: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    item: dict[str, Any] = {
+    envelope: PayloadView | None = None,
+) -> Payload:
+    item: Payload = {
         "extension_id": extension_id,
         "extension_revision": revision,
         "surface_id": surface["id"],
@@ -939,11 +884,11 @@ def _surface_status_item(
 
 
 def _review_due(
-    review_due_at: str | None,
+    review_due_at: object,
     *,
     now: datetime,
 ) -> bool:
-    if review_due_at is None:
+    if not isinstance(review_due_at, str):
         return False
     normalized = (
         review_due_at[:-1] + "+00:00"
@@ -969,14 +914,14 @@ def collect_active_extension_presentation_surfaces(
     *,
     state_file: str | Path,
     now: datetime | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Read active, doctor-ready surface declarations and revision-bound data."""
 
     state_path = Path(state_file).expanduser()
     observed_at = now or datetime.now(timezone.utc)
     if observed_at.tzinfo is None:
         raise ValueError("presentation surface collection `now` must be timezone-aware")
-    items: list[dict[str, Any]] = []
+    items: list[Payload] = []
     for manifest in extension_catalog_entries(state_file=state_path):
         provider = manifest.get("provider")
         if not isinstance(provider, Mapping) or provider.get("ready") is not True:
@@ -1099,7 +1044,7 @@ def read_extension_projection(
     surface_id: str,
     extension_revision: str,
     payload_sha256: str,
-) -> dict[str, Any]:
+) -> Payload:
     """Resolve one published projection by its compact status detail reference."""
 
     state_path = Path(state_file).expanduser()
