@@ -148,6 +148,11 @@
       "any_count": 62,
       "dict_any_count": 0
     },
+    "loopx/global_registry.py": {
+      "any_count": 0,
+      "dict_any_count": 0,
+      "lines": 1047
+    },
     "loopx/heartbeat_prompt.py": {
       "any_count": 0,
       "dict_any_count": 0,
