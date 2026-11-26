@@ -83,6 +83,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 _FULL_INSTALL_SELECTED_COMMANDS = frozenset({"explore"})
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
+_WORKSPACE_COMMANDS = frozenset({"chat", "chat-endpoint", "dashboard"})
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -779,14 +780,14 @@ def _dispatch_common_command(
 			build_command_reference_payload, render_command_reference_markdown,
 		)
 
-		print_payload(
-			build_command_reference_payload(
-				available_commands=(
-					_available_selected_commands() if _standalone_core() else None
-				),
-			), output_format(args),
-			render_command_reference_markdown,
-		)
+		available_commands: frozenset[str] | None = None
+		if _standalone_core():
+			selected = set(_available_selected_commands())
+			if _workspace_installed():
+				selected |= _WORKSPACE_COMMANDS
+			available_commands = frozenset(selected)
+		print_payload(build_command_reference_payload(available_commands=available_commands),
+			output_format(args), render_command_reference_markdown)
 		return 0
 	if args.command == "delegation":
 		from .cli_commands.delegation import handle_delegation
@@ -1031,6 +1032,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
 			runtime_root=effective_runtime_root(registry_path, args.runtime_root) if registry_path.exists() else None,
 		)
+	elif args.command in _WORKSPACE_COMMANDS:
+		from .cli_commands.support_control import handle_support_control_command
+
+		result = handle_support_control_command(
+			args, registry_path=registry_path,
+			registry_was_supplied=user_supplied_registry(raw_argv),
+			print_payload=print_payload, output_format=output_format,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -1078,6 +1087,39 @@ def _standalone_core() -> bool:
 		return False
 
 
+def _workspace_installed() -> bool:
+	from .python_install_owner import WORKSPACE_DISTRIBUTION, builtin_capability_installed
+
+	return builtin_capability_installed(
+		WORKSPACE_DISTRIBUTION,
+		(
+			"loopx.chat",
+			"loopx.chat_loopx_mode",
+			"loopx.chat_manager",
+			"loopx.chat_runtime",
+			"loopx.chat_server",
+			"loopx.chat_store",
+			"loopx.dashboard_launcher",
+			"loopx.cli_commands.support_control_chat",
+			"loopx.cli_commands.support_control_chat_endpoint",
+			"loopx.capabilities.native_chat.session_calendar_tasks",
+			"loopx.capabilities.native_chat.steward_managed_mode",
+			"loopx.capabilities.native_chat.steward_monitor",
+			"loopx.capabilities.native_chat.steward_reports",
+			"loopx.capabilities.native_chat.steward_turn",
+			"loopx.extensions.lark.steward_reports",
+			"loopx.presentation.research_analysis_api",
+			"loopx.presentation.runtime_workspace",
+		),
+		builtin_cli_present=False,
+		resources=(
+			"loopx/chat/endpoints.py",
+			"loopx/chat/lark_api.py",
+			"loopx/control_plane/collaboration/steward_reports.ts",
+		),
+	)
+
+
 def _run_full_cli(raw_argv: list[str]) -> int:
 	try:
 		from .cli import main as cli_main
@@ -1102,8 +1144,9 @@ def main(argv: list[str] | None = None) -> int:
 	from .help_surface import render_concise_help, top_level_help_requested
 
 	if top_level_help_requested(raw_argv):
+		standalone = _standalone_core()
 		print(render_concise_help(sys.argv[0] if argv is None else "loopx",
-			standalone_core=_standalone_core()), end="")
+			standalone_core=standalone, workspace_installed=standalone and _workspace_installed()), end="")
 		return 0
 	command = _top_level_command(raw_argv)
 	if command is None and _standalone_core():
@@ -1153,6 +1196,17 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 			from .capabilities.issue_fix.cli import register_issue_fix_commands as register
 
 		register(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
+	if command in _WORKSPACE_COMMANDS and _standalone_core():
+		parser, subparsers = build_cli_parser()
+		if not _workspace_installed():
+			parser.error(
+				"this command is unavailable in the standalone core; "
+				"install the matching loopx-workspace wheel in this environment"
+			)
+		from .cli_commands.support_control_chat import register_chat_and_dashboard_commands
+
+		register_chat_and_dashboard_commands(subparsers, add_subcommand_format)
 		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command == "version":
 		version_exports = sys.modules.get("loopx.cli_commands")

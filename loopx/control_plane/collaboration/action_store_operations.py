@@ -325,7 +325,7 @@ def agent_operation_plan(
     proposal: Mapping[str, object], **request: object
 ) -> JsonDict:
     """One typed decision, using the existing canonical JSON byte format."""
-    from ..control_plane.effect_runtime import (
+    from ..effect_runtime import (
         EffectRuntimeRemoteError,
         effect_runtime_result,
     )

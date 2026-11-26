@@ -122,32 +122,37 @@ def test_installed_lifecycle_review_recovers_a_late_dependent_successor(core_pyt
     assert (workspace / "host-invocations").read_text().splitlines() == ["called", "called"]
 
 
-def test_installed_empty_operation_inbox_keeps_the_workspace_provider_unloaded(core_python, tmp_path):
-    """No action store means no operation handoff; a present store needs its provider."""
+def test_installed_operation_inbox_reads_core_store_only_when_present(core_python, tmp_path):
+    """Keep the optional path lazy; a persisted store remains readable without Workspace."""
     script = '''
-import importlib.util, json, sys
+import importlib.util, sys
 from pathlib import Path
-assert importlib.util.find_spec("loopx.chat_action_store") is None
+assert importlib.util.find_spec("loopx.chat_store") is None
 from loopx.control_plane.collaboration.operation_handoff import pending_operation_handoffs
 root = Path(sys.argv[1])
-empty = pending_operation_handoffs(root, "synthetic-goal", "synthetic-agent", cursor_scope="synthetic-scope")
-assert empty == {"items": [], "pending_count": 0, "overflow": None, "next_cursor": None}
+expected = {"items": [], "pending_count": 0, "overflow": None, "next_cursor": None}
+
+def read():
+    return pending_operation_handoffs(root, "synthetic-goal", "synthetic-agent", cursor_scope="synthetic-scope")
+
+assert read() == expected
 assert "loopx.chat_action_store" not in sys.modules
-store = root / "chat/actions/actions.json"
-store.parent.mkdir(parents=True)
+from loopx.chat_action_store import ChatActionStore
+store = ChatActionStore(root / "chat" / "actions").path
+before = store.read_bytes()
+assert read() == expected and store.read_bytes() == before
 store.write_text("{}")
 try:
-    pending_operation_handoffs(root, "synthetic-goal", "synthetic-agent", cursor_scope="synthetic-scope")
-except ModuleNotFoundError as error:
-    assert error.name == "loopx.chat_action_store"
+    read()
+except ValueError as error:
+    assert "unsupported schema" in str(error)
 else:
-    raise AssertionError("a present operation store cannot silently disappear without its provider")
-print(json.dumps({"empty": empty, "present_store_requires_provider": True}))
+    raise AssertionError("a malformed operation store cannot silently disappear")
+assert store.read_text() == "{}"
 '''
     result = subprocess.run([str(core_python), "-I", "-c", script, str(tmp_path / "runtime")],
         env=_environment(core_python), cwd=tmp_path, capture_output=True, text=True, timeout=45)
     assert result.returncode == 0, (result.stdout, result.stderr)
-    assert json.loads(result.stdout)["present_store_requires_provider"] is True
 
 
 def test_installed_context_recovers_partial_delivery_revisions_and_compaction(core_python, tmp_path):

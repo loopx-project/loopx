@@ -274,7 +274,7 @@ class StewardMonitor:
 
     def _native_poll(self, argv: Sequence[str]) -> dict[str, object]:
         """Use the native poll owner; a Chat observation is no heartbeat task."""
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.lark_inbox import (
             build_lark_operator_inbox_urgency_projector,
         )
@@ -285,7 +285,7 @@ class StewardMonitor:
         from ...quota import record_quota_monitor_poll
         from ..explore.composition_frontier import project_live_explore_composition_frontier
 
-        args = build_parser().parse_args(["--format", "json", *argv])
+        args = _build_selected_parser("quota").parse_args(["--format", "json", *argv])
         admission = prepare_quota_command_context(
             args,
             registry_path=self.controller.registry_path,

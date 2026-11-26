@@ -4,13 +4,36 @@ The address locates evidence; source grants and Goal lifetime decisions remain
 with their existing typed owners. No model or peer supplies this address.
 """
 
-from collections.abc import Callable
-from pathlib import Path
-from typing import Any
+from __future__ import annotations
 
-from ...chat_store import (
-    CHAT_SESSION_SCHEMA_VERSION, CHAT_TURN_SCHEMA_VERSION, ChatSessionStore, _opaque_id, _read_json,
-)
+from collections.abc import Callable
+import json
+from pathlib import Path
+import re
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...chat_store import ChatSessionStore
+
+
+CHAT_SESSION_SCHEMA_VERSION = "loopx_chat_session_state_v1"
+CHAT_TURN_SCHEMA_VERSION = "loopx_chat_turn_state_v1"
+_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
+
+
+def _opaque_id(value: Any, *, field: str) -> str:
+    token = str(value or "").strip()
+    if not _OPAQUE_ID.fullmatch(token):
+        raise ValueError(f"{field} must be a compact opaque id")
+    return token
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _source_chat_root(coordination_root: Path, route: dict[str, Any]) -> Path:

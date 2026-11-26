@@ -11,7 +11,13 @@ from ..control_plane.coordination.local_authority import (
 from ..control_plane.todos.completion_validation import COMPLETION_VALIDATION_IN_PROGRESS
 from ..control_plane.todos.mutation_api import complete_goal_todo, update_goal_todo
 from ..control_plane.todos.provider_projection import projection_delivery_requires_ack
-from .action_store_common import ActionConflictError, _canonical_digest, _opaque_id, is_str_dict, require_str_dict
+from ..control_plane.collaboration.action_store_common import (
+    ActionConflictError,
+    _canonical_digest,
+    _opaque_id,
+    is_str_dict,
+    require_str_dict,
+)
 from .todo_action_contracts import (
     CANONICAL_TERMINAL_BASIS_SCHEMA_VERSION,
     CANONICAL_UPDATE_BASIS_SCHEMA_VERSION,

@@ -90,7 +90,7 @@ def dispatch_quota_turn_start_hooks(
             from ..capabilities.decision_context.turn_start_hook import (
                 extend_turn_start_dispatch as extend_decision_context,
             )
-            from ..capabilities.manager_context import turn_start_hook
+            from ..control_plane.collaboration.inbox_turn_start import turn_start_hook
             from ..capabilities.semantic_preference.agent_preferences import (
                 extend_turn_start_dispatch as extend_preferences,
             )

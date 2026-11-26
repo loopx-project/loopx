@@ -15,7 +15,7 @@ from ..control_plane.goals.activation import goal_is_stopped
 from ..control_plane.todos.mutation_api import update_goal_todo
 from ..control_plane.work_items.task_lease import lease_is_active
 from ..file_lock import exclusive_cross_runtime_file_lock
-from .action_store_common import _opaque_id, is_str_dict, require_str_dict
+from ..control_plane.collaboration.action_store_common import _opaque_id, is_str_dict, require_str_dict
 from .todo_action_contracts import (
     ChatTodoActionHost,
     GoalCommitSubmitController,

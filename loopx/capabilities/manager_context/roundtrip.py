@@ -52,8 +52,6 @@ from ...control_plane.collaboration.inbox import (
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
 from ...control_plane.collaboration.source_chat_observation import original_delivery_facts
 from ..native_chat.file_discovery import file_change_fingerprint
-from ...chat import ChatMessagePayloadConflictError
-from ...chat_store import TERMINAL_TURN_STATES
 
 class ReturnResolutionBlocked(ValueError, RuntimeError):
     """A return cannot be resolved; ``reason`` is the provider-neutral code.
@@ -477,6 +475,8 @@ def project_chat_session_snapshot(root, store, session_id, *, registry,
         snapshot["report_message_id"] = report_message_id
         snapshot["active_turn"] = None
     elif turn is not None:
+        from ...chat_store import TERMINAL_TURN_STATES
+
         status = turn["status"]
         snapshot["selected_turn"] = {"turn_id": turn_id, "status": status, "terminal": status in TERMINAL_TURN_STATES}
         error = turn.get("error")
@@ -758,6 +758,8 @@ class _ReturnAttemptRecorder:
 
 
 def _deliver_return(host, path, sender, frozen_route):
+    from ...chat import ChatMessagePayloadConflictError
+
     store, cancelled = host["store"], host["cancelled"]
     with _return_source(host, path, frozen_route) as facts:
         plan = _return_transaction(host, path, "prepare", {"facts": facts})
