@@ -24,6 +24,7 @@ from ...chat.ingress import (
     ensure_external_admission_scope,
     resolve_external_admission_source,
 )
+from ...chat.ingress_common import as_mapping as _as_mapping
 from ...chat_store import (
     ChatSessionStore,
     _atomic_write_json as _atomic_write_json,
@@ -1593,6 +1594,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
         controller = self.controller
         selected = ensure_external_admission_scope(self.bindings, selected, path, row,
             source_preflight=None if row.get("native_mention") else source_preflight)
+        binding = _as_mapping(selected["binding"])
         held_for_binding = row.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
         if held_for_binding:
             row.pop("response_code")
@@ -1610,8 +1612,8 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             # Observation must retain failed/closed originals. Admission still
             # uses the resumable selector and never resumes from this snapshot.
             candidates = (controller.store.list_sessions(channel_id=selected["channel_id"])
-                if selected["binding"]["context_kind"] == "steward" else controller.store.session_candidates(goal_id=None,
-                    agent_id=selected["binding"]["executor_endpoint_id"], channel_id=selected["channel_id"]))
+                if binding["context_kind"] == "steward" else controller.store.session_candidates(goal_id=None,
+                    agent_id=binding["executor_endpoint_id"], channel_id=selected["channel_id"]))
             snapshot = max(candidates, key=lambda candidate: str(candidate.get("updated_at") or ""), default=None)
             current = controller.store.load_session(snapshot["session_id"]) if snapshot else None
         if row.get("native_mention") and (row.get("mention_capture") or {}).get("session_id"):
@@ -1635,9 +1637,9 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             if held_for_binding and current.get("status") == "closed":
                 raise ValueError("the original steward Session is unavailable for admission")
             steward_candidate = current
-        observations = {}
-        if (row["command"] is None and steward_candidate and selected["binding"]["context_kind"] == "steward"
-                and steward_candidate.get("executor_endpoint_id") != selected["binding"]["executor_endpoint_id"]):
+        observations: dict[str, object] = {}
+        if (row["command"] is None and steward_candidate and binding["context_kind"] == "steward"
+                and steward_candidate.get("executor_endpoint_id") != binding["executor_endpoint_id"]):
             observations.update(steward_adoption_session=steward_candidate, context=selected["context"])
         if (row["command"] == "stop" and current and not current.get("active_turn_id")
                 and not row.get("target_recorded") and not target):
@@ -1669,9 +1671,10 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                 _atomic_write_json(path, row)
             return row
         if operation == "select_recipient":
-            if selected["binding"]["context_kind"] != "project":
+            if binding["context_kind"] != "project":
                 raise ValueError("Agent selection requires the project assistant")
-            granted = selected["binding"].get("agent_targets", [])
+            raw_targets = binding.get("agent_targets", [])
+            granted = [item for item in raw_targets if isinstance(item, dict)] if isinstance(raw_targets, list) else []
             choices = []
             for candidate in granted:
                 try:
@@ -1731,7 +1734,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
             # adapter. It never creates a Goal or waits for a terminal answer.
             if current is None:
                 current, _ = controller.open_session(goal_id=None,
-                    agent_id=selected["binding"]["executor_endpoint_id"], work_dir=Path("."), objective="",
+                    agent_id=binding["executor_endpoint_id"], work_dir=Path("."), objective="",
                     mode="resume_latest", conversation_binding_id=row["binding_id"], source_context=row["source"])
             row["session_id"] = current["session_id"]
             _atomic_write_json(path, row)
