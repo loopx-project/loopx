@@ -107,6 +107,7 @@ class ModelRunOutcome:
     efficiency: EfficiencyMetrics
     observed_commands: tuple[str, ...] = ()
     telemetry_source: str = "unknown"
+    telemetry_coverage: dict[str, Any] | None = None
 
 
 class MicrobenchModelRunner(Protocol):
@@ -204,6 +205,64 @@ def _execute_scoped_command(
     return f"read:{cmd_name}", (out or "")[:8192]
 
 
+_ARK_USAGE_METRICS = (
+    "prompt_tokens",
+    "cached_tokens",
+    "completion_tokens",
+    "reasoning_tokens",
+    "total_tokens",
+)
+
+
+def _aggregate_ark_usage_coverage(
+    step_totals: Mapping[str, int],
+    step_counts: Mapping[str, int],
+    total_steps: int,
+) -> tuple[dict[str, int | None], dict[str, Any]]:
+    """Aggregate Ark token usage per metric without coercing missing/partial coverage to 0."""
+    resolved: dict[str, int | None] = {}
+    metrics_cov: dict[str, dict[str, Any]] = {}
+    partial_metrics: list[str] = []
+    missing_metrics: list[str] = []
+
+    for metric in _ARK_USAGE_METRICS:
+        reported = int(step_counts.get(metric, 0))
+        total_val = int(step_totals.get(metric, 0))
+        if total_steps <= 0 or reported <= 0:
+            resolved[metric] = None
+            missing_metrics.append(metric)
+            metrics_cov[metric] = {
+                "status": "missing",
+                "reported_steps": 0,
+                "total_steps": total_steps,
+            }
+        elif reported < total_steps:
+            resolved[metric] = None
+            partial_metrics.append(metric)
+            metrics_cov[metric] = {
+                "status": "partial",
+                "reported_steps": reported,
+                "total_steps": total_steps,
+                "partial_total": total_val,
+            }
+        else:
+            resolved[metric] = total_val
+            metrics_cov[metric] = {
+                "status": "complete",
+                "reported_steps": reported,
+                "total_steps": total_steps,
+            }
+
+    return resolved, {
+        "schema_version": "microbench_telemetry_coverage_v0",
+        "total_steps": total_steps,
+        "has_partial_coverage": bool(partial_metrics),
+        "partial_metrics": partial_metrics,
+        "missing_metrics": missing_metrics,
+        "metrics": metrics_cov,
+    }
+
+
 def _extract_verdict(raw_text: str | None) -> dict[str, Any] | None:
     if not isinstance(raw_text, str) or not raw_text.strip():
         return None
@@ -278,15 +337,14 @@ class DeepSeekArkMicrobenchRunner:
                 telemetry_source="ark_usage",
             )
 
-        usage_totals = {
-            "prompt_tokens": 0,
-            "cached_tokens": 0,
-            "completion_tokens": 0,
-            "reasoning_tokens": 0,
-            "total_tokens": 0,
-            "saw_usage": False,
-        }
+        usage_totals = {metric: 0 for metric in _ARK_USAGE_METRICS}
+        usage_reported_steps = {metric: 0 for metric in _ARK_USAGE_METRICS}
         round_trips = 0
+
+        def _record_usage_metric(metric: str, value: object) -> None:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                usage_totals[metric] += value
+                usage_reported_steps[metric] += 1
 
         def tracked_transport(
             *,
@@ -305,25 +363,14 @@ class DeepSeekArkMicrobenchRunner:
             )
             usage = response.get("usage")
             if isinstance(usage, Mapping):
-                usage_totals["saw_usage"] = True
-                for src_key, dst_key in (
-                    ("prompt_tokens", "prompt_tokens"),
-                    ("completion_tokens", "completion_tokens"),
-                    ("total_tokens", "total_tokens"),
-                ):
-                    val = usage.get(src_key)
-                    if isinstance(val, int) and not isinstance(val, bool) and val >= 0:
-                        usage_totals[dst_key] += val
+                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                    _record_usage_metric(key, usage.get(key))
                 pt_details = usage.get("prompt_tokens_details")
                 if isinstance(pt_details, Mapping):
-                    c_val = pt_details.get("cached_tokens")
-                    if isinstance(c_val, int) and not isinstance(c_val, bool) and c_val >= 0:
-                        usage_totals["cached_tokens"] += c_val
+                    _record_usage_metric("cached_tokens", pt_details.get("cached_tokens"))
                 ct_details = usage.get("completion_tokens_details")
                 if isinstance(ct_details, Mapping):
-                    r_val = ct_details.get("reasoning_tokens")
-                    if isinstance(r_val, int) and not isinstance(r_val, bool) and r_val >= 0:
-                        usage_totals["reasoning_tokens"] += r_val
+                    _record_usage_metric("reasoning_tokens", ct_details.get("reasoning_tokens"))
             return response
 
         client = DoubaoExecToolClient(
@@ -386,6 +433,9 @@ class DeepSeekArkMicrobenchRunner:
                     ]
                 )
         except DoubaoActorTransportError as exc:
+            resolved_usage, coverage = _aggregate_ark_usage_coverage(
+                usage_totals, usage_reported_steps, round_trips
+            )
             status = "quota_exhausted" if exc.error_code == "provider_authentication_failed" else "error"
             return ModelRunOutcome(
                 model_id=self.model_id,
@@ -395,23 +445,32 @@ class DeepSeekArkMicrobenchRunner:
                 verdict=None,
                 efficiency=EfficiencyMetrics(
                     wire_bytes=len(prompt_text.encode("utf-8")),
+                    prompt_tokens=resolved_usage["prompt_tokens"],
+                    cached_tokens=resolved_usage["cached_tokens"],
+                    completion_tokens=resolved_usage["completion_tokens"],
+                    reasoning_tokens=resolved_usage["reasoning_tokens"],
+                    total_tokens=resolved_usage["total_tokens"],
                     tool_calls=len(observed_commands),
                     round_trips=round_trips,
                     wall_seconds=round(time.monotonic() - started, 3),
                 ),
                 observed_commands=tuple(observed_commands),
                 telemetry_source="ark_usage",
+                telemetry_coverage=coverage,
             )
 
         verdict = _extract_verdict(final_content)
         wall = round(time.monotonic() - started, 3)
+        resolved_usage, coverage = _aggregate_ark_usage_coverage(
+            usage_totals, usage_reported_steps, round_trips
+        )
         eff = EfficiencyMetrics(
             wire_bytes=len(prompt_text.encode("utf-8")),
-            prompt_tokens=usage_totals["prompt_tokens"] if usage_totals["saw_usage"] else None,
-            cached_tokens=usage_totals["cached_tokens"] if usage_totals["saw_usage"] else None,
-            completion_tokens=usage_totals["completion_tokens"] if usage_totals["saw_usage"] else None,
-            reasoning_tokens=usage_totals["reasoning_tokens"] if usage_totals["saw_usage"] else None,
-            total_tokens=usage_totals["total_tokens"] if usage_totals["saw_usage"] else None,
+            prompt_tokens=resolved_usage["prompt_tokens"],
+            cached_tokens=resolved_usage["cached_tokens"],
+            completion_tokens=resolved_usage["completion_tokens"],
+            reasoning_tokens=resolved_usage["reasoning_tokens"],
+            total_tokens=resolved_usage["total_tokens"],
             tool_calls=len(observed_commands),
             round_trips=round_trips,
             wall_seconds=wall,
@@ -425,6 +484,7 @@ class DeepSeekArkMicrobenchRunner:
             efficiency=eff,
             observed_commands=tuple(observed_commands),
             telemetry_source="ark_usage",
+            telemetry_coverage=coverage,
         )
 
 

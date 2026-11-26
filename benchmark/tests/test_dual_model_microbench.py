@@ -34,8 +34,9 @@ from benchmark.microbench.scenarios import (
     M3_CLAIM_TODO_ID,
     M3_GATE_TODO_ID,
 )
+from benchmark.microbench import tier0 as microbench_tier0
 from benchmark.microbench.tier0 import run_tier0_differential
-from benchmark.microbench.tier1 import run_tier1_dual_model_suite
+from benchmark.microbench.tier1 import _grade_m2, run_tier1_dual_model_suite
 
 
 def _write_fake_codex(bin_path: Path, *, mode: str) -> None:
@@ -255,7 +256,13 @@ def test_deepseek_ark_runner_executes_scoped_tools_blocks_escape_and_counts_usag
             seen_commands.append(last_tool_msg)
             assert "escapes trial workspace" in last_tool_msg
             return {
-                "usage": {"prompt_tokens": 140, "completion_tokens": 15, "total_tokens": 155},
+                "usage": {
+                    "prompt_tokens": 140,
+                    "completion_tokens": 15,
+                    "total_tokens": 155,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
                 "choices": [
                     {
                         "message": {
@@ -290,7 +297,13 @@ def test_deepseek_ark_runner_executes_scoped_tools_blocks_escape_and_counts_usag
             "tool_actions_summary": ["cat fixture/m1-proof.json"],
         }
         return {
-            "usage": {"prompt_tokens": 180, "completion_tokens": 40, "total_tokens": 220},
+            "usage": {
+                "prompt_tokens": 180,
+                "completion_tokens": 40,
+                "total_tokens": 220,
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            },
             "choices": [
                 {
                     "message": {
@@ -345,21 +358,34 @@ def test_tier1_dual_model_regression_blocks_broken_head_behavior() -> None:
             del trial_root, project_root, timeout_seconds
             is_head = "arm=head" in prompt_text or "head_fold_to_receipt" in prompt_text
             # Head uses fewer tokens, but whitewashes / drops required facts -> must fail!
+            is_m2 = scenario_id == "m2_epoch_prefetch_semantic_fold"
             verdict = {
                 "schema_version": "microbench_model_verdict_v0",
                 "scenario_id": scenario_id,
                 "decision": "execute",
-                "selected_todo_id": M1_SELECTED_TODO_ID if not is_head else M1_BLOCKED_TODO_ID,
+                "selected_todo_id": (
+                    ("todo_m2_unit" if is_m2 else M1_SELECTED_TODO_ID)
+                    if not is_head
+                    else M1_BLOCKED_TODO_ID
+                ),
                 "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID] if not is_head else [],
                 "extracted_proof": M1_PROOF_TOKEN if not is_head else None,
-                "preserved_failure_facts": [] if is_head else [
-                    "retry worker ignores expired lease backoff ceiling",
-                    "duplicate spend rejected with idempotent replay check",
-                ],
-                "preserved_open_obligations": [] if is_head else [
-                    "verify backoff ceiling test on sqlite provider",
-                    "preserve terminal settlement receipt integrity",
-                ],
+                "preserved_failure_facts": (
+                    ["lease retry duplicate spend"]
+                    if is_head
+                    else [
+                        "regression: retry worker ignores expired lease backoff ceiling",
+                        "guard: duplicate spend rejected with idempotent replay check",
+                    ]
+                ),
+                "preserved_open_obligations": (
+                    ["backoff settlement"]
+                    if is_head
+                    else [
+                        "verify backoff ceiling test on sqlite provider",
+                        "preserve terminal settlement receipt integrity",
+                    ]
+                ),
                 "claim_owner": M3_AGENT_PRIMARY,
                 "spend_attempted": False,
                 "tool_actions_summary": ["stub"],
@@ -432,3 +458,298 @@ def test_cli_dry_tier0_and_opt_in_smoke(capsys: pytest.CaptureFixture[str]) -> N
     )
     assert smoke.returncode == 0, smoke.stdout + smoke.stderr
     assert "benchmark-dual-model-microbench-smoke ok" in smoke.stdout
+
+
+def test_m2_grader_rejects_keyword_fragments_missing_wrong_todo_and_contradictions() -> None:
+    expected_failures = [
+        "regression: retry worker ignores expired lease backoff ceiling",
+        "guard: duplicate spend rejected with idempotent replay check",
+    ]
+    expected_obligations = [
+        "verify backoff ceiling test on sqlite provider",
+        "preserve terminal settlement receipt integrity",
+    ]
+
+    def _outcome(verdict: dict[str, Any]) -> ModelRunOutcome:
+        return ModelRunOutcome(
+            model_id=DEFAULT_ARK_FLASH_MODEL,
+            provider="ark",
+            status="ok",
+            error_code=None,
+            verdict=verdict,
+            efficiency=EfficiencyMetrics(wire_bytes=200, prompt_tokens=50),
+        )
+
+    valid_base = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m2_epoch_prefetch_semantic_fold",
+        "decision": "execute",
+        "selected_todo_id": "todo_m2_unit",
+        "preserved_failure_facts": list(expected_failures),
+        "preserved_open_obligations": list(expected_obligations),
+        "spend_attempted": False,
+    }
+    assert _grade_m2(
+        _outcome(valid_base),
+        expected_failures=expected_failures,
+        expected_obligations=expected_obligations,
+        gate_passed=True,
+    ).passed is True
+
+    negative_cases: list[tuple[dict[str, Any], str]] = [
+        (
+            {
+                **valid_base,
+                "preserved_failure_facts": ["lease retry duplicate spend idempotent"],
+                "preserved_open_obligations": ["backoff settlement receipt"],
+            },
+            "no_anti_whitewash_failure_facts",
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_failure_facts": [expected_failures[0]],
+            },
+            "no_anti_whitewash_failure_facts",
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_failure_facts": [expected_failures[0], expected_failures[0]],
+            },
+            "no_anti_whitewash_failure_facts",
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_open_obligations": [expected_obligations[0]],
+            },
+            "open_obligations_preserved",
+        ),
+        (
+            {
+                **valid_base,
+                "selected_todo_id": "todo_wrong_lane",
+            },
+            "selected_todo_matches_m2",
+        ),
+        (
+            {
+                **valid_base,
+                "selected_todo_id": None,
+            },
+            "selected_todo_matches_m2",
+        ),
+        (
+            {
+                **valid_base,
+                "preserved_failure_facts": [
+                    *expected_failures,
+                    "no regression found",
+                ],
+            },
+            "no_contradictory_claims",
+        ),
+        (
+            {
+                **valid_base,
+                "decision": "noop",
+            },
+            "decision_execute",
+        ),
+        (
+            {
+                **valid_base,
+                "spend_attempted": True,
+            },
+            "no_premature_spend",
+        ),
+    ]
+    for bad_verdict, expected_violation in negative_cases:
+        res = _grade_m2(
+            _outcome(bad_verdict),
+            expected_failures=expected_failures,
+            expected_obligations=expected_obligations,
+            gate_passed=True,
+        )
+        assert res.passed is False, bad_verdict
+        assert expected_violation in res.violations, (expected_violation, res)
+
+
+def test_ark_usage_coverage_preserves_zero_keeps_missing_null_and_blocks_partial_deltas(
+    tmp_path: Path,
+) -> None:
+    trial_root = tmp_path / "trial"
+    project_root = trial_root / "project"
+    project_root.mkdir(parents=True)
+    verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m1_envelope_scoped_recovery",
+        "decision": "execute",
+        "selected_todo_id": M1_SELECTED_TODO_ID,
+        "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID],
+        "extracted_proof": M1_PROOF_TOKEN,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": None,
+        "spend_attempted": False,
+        "tool_actions_summary": [],
+    }
+
+    # Case 1: Only prompt_tokens=7 returned -> missing fields remain None (never 0).
+    def missing_fields_transport(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+        del endpoint, headers, body, timeout_seconds
+        return {
+            "usage": {"prompt_tokens": 7},
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(verdict)}}],
+        }
+
+    r_missing = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=missing_fields_transport).run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="check",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=10.0,
+    )
+    assert r_missing.status == "ok"
+    assert r_missing.efficiency.prompt_tokens == 7
+    assert r_missing.efficiency.cached_tokens is None
+    assert r_missing.efficiency.completion_tokens is None
+    assert r_missing.efficiency.reasoning_tokens is None
+    assert r_missing.efficiency.total_tokens is None
+    assert r_missing.telemetry_coverage is not None
+    assert r_missing.telemetry_coverage["metrics"]["cached_tokens"]["status"] == "missing"
+
+    # Case 2: Genuine 0 reported cleanly stays 0, while partial multi-round cached_tokens becomes None.
+    call_idx = 0
+
+    def partial_transport(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+        nonlocal call_idx
+        del endpoint, headers, body, timeout_seconds
+        call_idx += 1
+        if call_idx == 1:
+            return {
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 5,
+                    "total_tokens": 25,
+                    "prompt_tokens_details": {"cached_tokens": 10},
+                    "completion_tokens_details": {"reasoning_tokens": 0},
+                },
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_ls",
+                                    "type": "function",
+                                    "function": {"name": "exec_command", "arguments": json.dumps({"cmd": "ls ."})},
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        # Round 2 explicitly reports reasoning_tokens=0, omits cached_tokens -> cached_tokens is partial!
+        return {
+            "usage": {
+                "prompt_tokens": 30,
+                "completion_tokens": 8,
+                "total_tokens": 38,
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            },
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(verdict)}}],
+        }
+
+    r_partial = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=partial_transport).run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="check",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=10.0,
+    )
+    assert r_partial.status == "ok"
+    assert r_partial.efficiency.prompt_tokens == 50
+    assert r_partial.efficiency.completion_tokens == 13
+    assert r_partial.efficiency.total_tokens == 63
+    assert r_partial.efficiency.reasoning_tokens == 0
+    assert r_partial.efficiency.cached_tokens is None
+    assert r_partial.telemetry_coverage is not None
+    assert r_partial.telemetry_coverage["has_partial_coverage"] is True
+    assert r_partial.telemetry_coverage["partial_metrics"] == ["cached_tokens"]
+    assert r_partial.telemetry_coverage["metrics"]["reasoning_tokens"]["status"] == "complete"
+
+    cmp = compare_base_vs_head_efficiency(
+        EfficiencyMetrics(wire_bytes=200, prompt_tokens=100, cached_tokens=40, completion_tokens=20),
+        r_partial.efficiency,
+        base_behavior=BehaviorConstraintResult(passed=True, checks={"ok": True}),
+        head_behavior=BehaviorConstraintResult(passed=True, checks={"ok": True}),
+        head_telemetry_coverage=r_partial.telemetry_coverage,
+    )
+    assert cmp["deltas"]["prompt_tokens"] == -50
+    assert cmp["deltas"]["cached_tokens"] is None
+    assert cmp["pct_changes"]["cached_tokens"] is None
+    assert "cached_tokens" in cmp["excluded_partial_metrics"]
+
+
+def test_tier0_and_tier1_attribute_m2_same_commit_mechanism_separately_from_cross_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head_sha = microbench_tier0._head_commit()
+    fake_base_sha = "0" * 40
+    assert fake_base_sha != head_sha
+
+    monkeypatch.setattr(microbench_tier0, "_resolve_pinned_base_ref", lambda base_ref, main_ref="origin/main": fake_base_sha)
+    monkeypatch.setattr(
+        microbench_tier0,
+        "_differential_smoke_helpers",
+        lambda: {
+            "_materialize_base_source": lambda sha, dst: dst.mkdir(parents=True, exist_ok=True),
+        },
+    )
+
+    def _stub_m1_arm(fix: Any, *, arm: str, source_root: Path | None = None) -> dict[str, Any]:
+        del fix, source_root
+        return {
+            "behavior_constraint": BehaviorConstraintResult(passed=True, checks={"ok": True}),
+            "efficiency": EfficiencyMetrics(wire_bytes=1000 if arm == "base" else 400, prompt_tokens=200 if arm == "base" else 80),
+        }
+
+    def _stub_m3_arm(fix: Any, *, arm: str = "head", source_root: Path | None = None) -> dict[str, Any]:
+        del fix, arm, source_root
+        return {
+            "behavior_constraint": BehaviorConstraintResult(passed=True, checks={"ok": True}),
+            "efficiency": EfficiencyMetrics(wire_bytes=500, prompt_tokens=100),
+        }
+
+    monkeypatch.setattr(microbench_tier0, "prepare_m1_fixture", lambda root, source_root=None: root)
+    monkeypatch.setattr(microbench_tier0, "run_m1_deterministic_arm", _stub_m1_arm)
+    monkeypatch.setattr(microbench_tier0, "prepare_m3_fixture", lambda root: root)
+    monkeypatch.setattr(microbench_tier0, "run_m3_deterministic_arm", _stub_m3_arm)
+
+    report = run_tier0_differential(base_ref="origin/main")
+    assert report["passed"] is True
+    assert report["external_base_checkout_used"] is True
+    by_id = {row["scenario_id"]: row for row in report["scenarios"]}
+
+    assert by_id["m1_envelope_scoped_recovery"]["source_attribution"]["comparison_kind"] == "cross_commit_differential"
+    assert by_id["m3_claim_block_settle_invariants"]["source_attribution"]["comparison_kind"] == "cross_commit_differential"
+
+    m2_attr = by_id["m2_epoch_prefetch_semantic_fold"]["source_attribution"]
+    assert m2_attr["base_source"] == "candidate_head"
+    assert m2_attr["head_source"] == "candidate_head"
+    assert m2_attr["comparison_kind"] == "same_commit_mechanism_verification"
+    assert m2_attr["excluded_from_cross_commit_claims"] is True
+    if not by_id["m2_epoch_prefetch_semantic_fold"]["semantic_unit_settlement_hook_available"]:
+        assert m2_attr["production_hot_path_covered"] is False
+        assert m2_attr["excluded_from_production_hot_path_claims"] is True
+
+    scope = report["claim_scope"]
+    assert set(scope["cross_commit_scenarios"]) == {
+        "m1_envelope_scoped_recovery",
+        "m3_claim_block_settle_invariants",
+    }
+    assert "m2_epoch_prefetch_semantic_fold" in scope["same_commit_mechanism_scenarios"]
+    assert "m2_epoch_prefetch_semantic_fold" in scope["excluded_from_cross_commit_claims"]
+    assert_public_safe_payload(report)

@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import re
 import tempfile
 import time
 from typing import Any
@@ -16,8 +17,10 @@ from .metrics import (
     BehaviorConstraintResult,
     EfficiencyMetrics,
     assert_public_safe_payload,
+    build_scenario_source_attribution,
     compare_base_vs_head_efficiency,
     summarize_artifact_boundary,
+    summarize_claim_scope,
 )
 from .models import (
     DEFAULT_ARK_FLASH_MODEL,
@@ -104,14 +107,71 @@ def _grade_m1(outcome: ModelRunOutcome) -> BehaviorConstraintResult:
     return BehaviorConstraintResult(passed=not violations, checks=checks, violations=violations)
 
 
+_LABEL_PREFIX_RE = re.compile(r"^[a-z0-9_-]{2,24}:\s+")
+_CONTRADICTION_MARKERS = (
+    "no failure",
+    "no regression",
+    "no open obligation",
+    "no obligations",
+    "0 failures",
+    "nothing failed",
+    "all obligations resolved",
+    "resolved all",
+)
+
+
+def _normalize_clause(text: object) -> str:
+    return " ".join(str(text).strip().lower().split())
+
+
+def _clause_variants(expected_text: str) -> set[str]:
+    norm = _normalize_clause(expected_text)
+    variants = {norm}
+    stripped = _LABEL_PREFIX_RE.sub("", norm, count=1).strip()
+    if stripped:
+        variants.add(stripped)
+    return variants
+
+
+def _match_expected_clauses(
+    raw_items: object,
+    expected: Sequence[str],
+) -> tuple[bool, bool]:
+    """Return (all_expected_matched_distinctly, contradiction_free)."""
+    if not isinstance(raw_items, list) or any(not isinstance(item, str) for item in raw_items):
+        return False, False
+    normalized_items = [_normalize_clause(item) for item in raw_items]
+    for item in normalized_items:
+        if item in {"", "none", "null", "n/a", "[]"}:
+            return False, False
+        if any(marker in item for marker in _CONTRADICTION_MARKERS):
+            return False, False
+
+    used_indices: set[int] = set()
+    for exp in expected:
+        accepted = _clause_variants(exp)
+        matched_idx = next(
+            (
+                idx
+                for idx, candidate in enumerate(normalized_items)
+                if idx not in used_indices and candidate in accepted
+            ),
+            None,
+        )
+        if matched_idx is None:
+            return False, True
+        used_indices.add(matched_idx)
+    return True, True
+
+
 def _prompt_m2(*, arm: str, payload: Mapping[str, Any]) -> str:
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return (
         f"Scenario: m2_epoch_prefetch_semantic_fold (arm={arm}).\n"
         "You are continuing work after an exploratory context projection.\n"
-        "1. Preserve ALL failure facts verbatim (or exact clauses) in `preserved_failure_facts`.\n"
-        "2. Preserve ALL open obligations in `preserved_open_obligations`.\n"
-        "3. Choose `decision='execute'`, `selected_todo_id='todo_m2_unit'`, and `spend_attempted=false`.\n"
+        "1. Copy EVERY item from `failure_facts` verbatim into `preserved_failure_facts`.\n"
+        "2. Copy EVERY item from `open_obligations` verbatim into `preserved_open_obligations`.\n"
+        "3. Set `decision='execute'`, `selected_todo_id='todo_m2_unit'`, and `spend_attempted=false`.\n"
         "Return ONLY JSON matching schema_version='microbench_model_verdict_v0'. No extra prose.\n"
         f"Context:\n{body}\n"
     )
@@ -131,19 +191,19 @@ def _grade_m2(
             checks={"model_run_ok": False, "deterministic_fold_gate_passed": gate_passed},
             violations=(f"model_{outcome.status}:{outcome.error_code or 'unknown'}",),
         )
-    got_failures = " | ".join(str(x).lower() for x in (v.get("preserved_failure_facts") or []))
-    got_obligations = " | ".join(str(x).lower() for x in (v.get("preserved_open_obligations") or []))
+    failures_ok, failures_uncontradicted = _match_expected_clauses(
+        v.get("preserved_failure_facts"), expected_failures
+    )
+    obligations_ok, obligations_uncontradicted = _match_expected_clauses(
+        v.get("preserved_open_obligations"), expected_obligations
+    )
     checks = {
         "schema_valid": v.get("schema_version") == "microbench_model_verdict_v0",
         "decision_execute": v.get("decision") == "execute",
-        "no_anti_whitewash_failure_facts": (
-            ("lease" in got_failures and "retry" in got_failures)
-            and ("duplicate spend" in got_failures or "idempotent" in got_failures)
-        ),
-        "open_obligations_preserved": (
-            "backoff" in got_obligations
-            and ("settlement" in got_obligations or "receipt" in got_obligations)
-        ),
+        "selected_todo_matches_m2": v.get("selected_todo_id") == "todo_m2_unit",
+        "no_contradictory_claims": failures_uncontradicted and obligations_uncontradicted,
+        "no_anti_whitewash_failure_facts": failures_ok,
+        "open_obligations_preserved": obligations_ok,
         "no_premature_spend": v.get("spend_attempted") is False,
         "deterministic_fold_gate_passed": gate_passed,
     }
@@ -259,6 +319,7 @@ def _format_arm_entry(
         "status": outcome.status,
         "error_code": outcome.error_code,
         "telemetry_source": outcome.telemetry_source,
+        "telemetry_coverage": outcome.telemetry_coverage,
         "observed_command_count": len(outcome.observed_commands),
         "behavior_constraint": behavior.to_dict(),
         "efficiency": outcome.efficiency.to_dict(),
@@ -279,6 +340,7 @@ def _evaluate_model_pair(
     project_root_head: Path,
     base_grader: Any,
     head_grader: Any,
+    source_attribution: Mapping[str, object],
     per_call_timeout: float,
     deadline: float,
 ) -> dict[str, Any]:
@@ -297,6 +359,7 @@ def _evaluate_model_pair(
             "model_id": runner.model_id,
             "provider": runner.provider,
             "passed": False,
+            "source_attribution": dict(source_attribution),
             "base": _format_arm_entry(arm=base_label, outcome=skipped, behavior=fail_b),
             "head": _format_arm_entry(arm=head_label, outcome=skipped, behavior=fail_b),
             "comparison": compare_base_vs_head_efficiency(
@@ -339,12 +402,15 @@ def _evaluate_model_pair(
         head_out.efficiency,
         base_behavior=base_behavior,
         head_behavior=head_behavior,
+        base_telemetry_coverage=base_out.telemetry_coverage,
+        head_telemetry_coverage=head_out.telemetry_coverage,
     )
     return {
         "scenario_id": scenario_id,
         "model_id": runner.model_id,
         "provider": runner.provider,
         "passed": bool(base_behavior.passed and head_behavior.passed and cmp["behavior_preserved"]),
+        "source_attribution": dict(source_attribution),
         "base": _format_arm_entry(arm=base_label, outcome=base_out, behavior=base_behavior),
         "head": _format_arm_entry(arm=head_label, outcome=head_out, behavior=head_behavior),
         "comparison": cmp,
@@ -417,6 +483,7 @@ def run_tier1_dual_model_suite(
                 delivered_payload=m1_head["delivered_payload"],
                 decision_path=m1_head["decision_path"],
             )
+            m1_cross = base_source_root is not None
             scenarios_plan.append(
                 {
                     "scenario_id": "m1_envelope_scoped_recovery",
@@ -430,6 +497,14 @@ def run_tier1_dual_model_suite(
                     "project_root_head": m1_head_fix.project_root,
                     "base_grader": _grade_m1,
                     "head_grader": _grade_m1,
+                    "source_attribution": build_scenario_source_attribution(
+                        base_source="external_base_checkout" if m1_cross else "candidate_head",
+                        head_source="candidate_head",
+                        comparison_kind=(
+                            "cross_commit_differential" if m1_cross else "same_commit_arm_contrast"
+                        ),
+                        production_hot_path_covered=True,
+                    ),
                 }
             )
 
@@ -443,6 +518,7 @@ def run_tier1_dual_model_suite(
             gate_passed = bool(
                 m2_base["behavior_constraint"].passed and m2_head["behavior_constraint"].passed
             )
+            m2_hook_ok = bool(m2_head.get("semantic_unit_settlement_hook_available"))
             m2_grader = lambda outcome, ef=meta["failure_facts"], eo=meta["open_obligations"], gp=gate_passed: _grade_m2(  # noqa: E731
                 outcome,
                 expected_failures=ef,
@@ -462,6 +538,17 @@ def run_tier1_dual_model_suite(
                     "project_root_head": m2_fix.project_root,
                     "base_grader": m2_grader,
                     "head_grader": m2_grader,
+                    "source_attribution": build_scenario_source_attribution(
+                        base_source="candidate_head",
+                        head_source="candidate_head",
+                        comparison_kind="same_commit_mechanism_verification",
+                        production_hot_path_covered=m2_hook_ok,
+                        note=(
+                            "Both M2 arms run on the candidate evaluator checkout; excluded from "
+                            "cross-commit claims and production settlement hot-path claims unless "
+                            "the production settlement hook is present."
+                        ),
+                    ),
                 }
             )
 
@@ -486,6 +573,12 @@ def run_tier1_dual_model_suite(
                     "project_root_head": claim_proj,
                     "base_grader": lambda out, ok=cli_ok: _grade_m3_gate(out, cli_gate_passed=ok),
                     "head_grader": lambda out, ok=cli_ok: _grade_m3_claim(out, cli_gate_passed=ok),
+                    "source_attribution": build_scenario_source_attribution(
+                        base_source="candidate_head",
+                        head_source="candidate_head",
+                        comparison_kind="same_commit_gate_vs_claim_contrast",
+                        production_hot_path_covered=cli_ok,
+                    ),
                 }
             )
 
@@ -504,6 +597,7 @@ def run_tier1_dual_model_suite(
                     project_root_head=spec["project_root_head"],
                     base_grader=spec["base_grader"],
                     head_grader=spec["head_grader"],
+                    source_attribution=spec["source_attribution"],
                     per_call_timeout=per_call_timeout_seconds,
                     deadline=deadline,
                 )
@@ -527,6 +621,7 @@ def run_tier1_dual_model_suite(
         or row["head"]["status"] in {"unavailable", "quota_exhausted"}
     ]
     all_passed = bool(rows) and all(row["passed"] for row in rows)
+    claim_scope = summarize_claim_scope(rows)
     report: dict[str, Any] = {
         "schema_version": MICROBENCH_RECEIPT_SCHEMA_VERSION,
         "tier": "tier1_dual_model",
@@ -536,7 +631,8 @@ def run_tier1_dual_model_suite(
         "budget_seconds": max_total_seconds,
         "head_commit": head_sha,
         "base_ref": resolved_base_sha or "local_arm_contrast",
-        "external_base_checkout_used": use_external_base,
+        "external_base_checkout_used": bool(claim_scope["cross_commit_scenarios"]),
+        "claim_scope": claim_scope,
         "models": [
             {"provider": runner.provider, "model_id": runner.model_id}
             for runner in active_runners

@@ -199,11 +199,23 @@ def collect_codex_rollout_metrics(
         "completion_tokens": completion_total,
         "cached_tokens": cached_total,
         "reasoning_tokens": reasoning_total,
-        "total_tokens": grand_total if grand_total is not None else (prompt_total + completion_total),
+        "total_tokens": grand_total,
         "rollout_count": len(rollouts),
         "complete_record_count": complete_records,
         "error": None,
     }
+
+
+def _incomplete_metrics_from_coverage(coverage: Mapping[str, object] | None) -> set[str]:
+    if not isinstance(coverage, Mapping):
+        return set()
+    incomplete: set[str] = set()
+    raw_metrics = coverage.get("metrics")
+    metric_map = raw_metrics if isinstance(raw_metrics, Mapping) else coverage
+    for metric, info in metric_map.items():
+        if isinstance(info, Mapping) and info.get("status") in {"partial", "missing"}:
+            incomplete.add(str(metric))
+    return incomplete
 
 
 def _numeric_delta(base_value: int | float | None, head_value: int | float | None) -> int | float | None:
@@ -225,8 +237,15 @@ def compare_base_vs_head_efficiency(
     *,
     base_behavior: BehaviorConstraintResult,
     head_behavior: BehaviorConstraintResult,
+    base_telemetry_coverage: Mapping[str, object] | None = None,
+    head_telemetry_coverage: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Compare Base vs Head on Behavior Constraint x Efficiency without masking regressions."""
+    excluded_partial = sorted(
+        _incomplete_metrics_from_coverage(base_telemetry_coverage)
+        | _incomplete_metrics_from_coverage(head_telemetry_coverage)
+    )
+    excluded_set = set(excluded_partial)
     deltas: dict[str, int | float | None] = {}
     pct_changes: dict[str, float | None] = {}
     for field_name in (
@@ -242,6 +261,10 @@ def compare_base_vs_head_efficiency(
     ):
         base_val = getattr(base_eff, field_name)
         head_val = getattr(head_eff, field_name)
+        if field_name in excluded_set:
+            deltas[field_name] = None
+            pct_changes[field_name] = None
+            continue
         delta = _numeric_delta(base_val, head_val)
         deltas[field_name] = delta
         if delta is not None and isinstance(base_val, (int, float)) and base_val > 0:
@@ -259,8 +282,77 @@ def compare_base_vs_head_efficiency(
         "base_pass_rate": base_behavior.pass_rate,
         "head_pass_rate": head_behavior.pass_rate,
         "head_violations": list(head_behavior.violations),
+        "excluded_partial_metrics": excluded_partial,
         "deltas": deltas,
         "pct_changes": pct_changes,
+    }
+
+
+def build_scenario_source_attribution(
+    *,
+    base_source: str,
+    head_source: str = "candidate_head",
+    comparison_kind: str,
+    production_hot_path_covered: bool,
+    note: str | None = None,
+) -> dict[str, object]:
+    """Record explicit source checkout & settlement attribution per scenario."""
+    cross_commit = base_source == "external_base_checkout" and head_source == "candidate_head"
+    return {
+        "schema_version": "microbench_source_attribution_v0",
+        "base_source": base_source,
+        "head_source": head_source,
+        "comparison_kind": comparison_kind,
+        "production_hot_path_covered": production_hot_path_covered,
+        "excluded_from_cross_commit_claims": not cross_commit,
+        "excluded_from_production_hot_path_claims": not production_hot_path_covered,
+        **({"note": note} if note else {}),
+    }
+
+
+def summarize_claim_scope(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """Summarize which scenarios support cross-commit or production hot-path conclusions."""
+    cross_commit: list[str] = []
+    same_commit_mechanism: list[str] = []
+    prod_covered: list[str] = []
+    excluded_cross: list[str] = []
+    excluded_prod: list[str] = []
+    seen_cross: set[str] = set()
+    seen_same: set[str] = set()
+    seen_prod: set[str] = set()
+    seen_ex_cross: set[str] = set()
+    seen_ex_prod: set[str] = set()
+
+    for row in rows:
+        sid = str(row.get("scenario_id") or "")
+        attr = row.get("source_attribution")
+        if not sid or not isinstance(attr, Mapping):
+            continue
+        if attr.get("excluded_from_cross_commit_claims") is True:
+            if sid not in seen_same:
+                same_commit_mechanism.append(sid)
+                seen_same.add(sid)
+            if sid not in seen_ex_cross:
+                excluded_cross.append(sid)
+                seen_ex_cross.add(sid)
+        elif sid not in seen_cross:
+            cross_commit.append(sid)
+            seen_cross.add(sid)
+        if attr.get("excluded_from_production_hot_path_claims") is True:
+            if sid not in seen_ex_prod:
+                excluded_prod.append(sid)
+                seen_ex_prod.add(sid)
+        elif sid not in seen_prod:
+            prod_covered.append(sid)
+            seen_prod.add(sid)
+
+    return {
+        "schema_version": "microbench_claim_scope_v0",
+        "cross_commit_scenarios": cross_commit,
+        "same_commit_mechanism_scenarios": same_commit_mechanism,
+        "production_hot_path_scenarios": prod_covered,
+        "excluded_from_cross_commit_claims": excluded_cross,
+        "excluded_from_production_hot_path_claims": excluded_prod,
     }
 
 

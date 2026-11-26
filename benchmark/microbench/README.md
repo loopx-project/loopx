@@ -49,4 +49,6 @@ uv run --extra test python -m benchmark.microbench.run \
 
 - All fixtures live inside disposable temporary directories created per run.
 - Credentials, local home paths, raw prompts, and raw provider responses are never serialized into emitted receipts or tests (`assert_public_safe_payload`).
-- Missing model usage counters remain `null` (`None`), never `0`; byte reductions cannot mask behavior constraint failures (`behavior_preserved` requires all constraint checks to pass).
+- Missing model usage counters remain `null` (`None`), never `0`; partial multi-round metric coverage is labeled explicitly in `telemetry_coverage` and excluded from whole-run efficiency deltas (`excluded_partial_metrics`).
+- Every scenario records explicit `source_attribution` (`external_base_checkout` vs `candidate_head`, `comparison_kind`, `production_hot_path_covered`) and top-level `claim_scope`; same-commit mechanism ablations (such as M2 before `todo_unit_settlement` production hooks land) remain excluded from cross-commit and production hot-path conclusions.
+- Byte reductions cannot mask behavior constraint failures (`behavior_preserved` requires all constraint checks and item-by-item M2 clauses/Todo ID matching to pass).

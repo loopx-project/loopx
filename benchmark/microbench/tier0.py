@@ -25,8 +25,10 @@ from .metrics import (
     BehaviorConstraintResult,
     EfficiencyMetrics,
     assert_public_safe_payload,
+    build_scenario_source_attribution,
     compare_base_vs_head_efficiency,
     summarize_artifact_boundary,
+    summarize_claim_scope,
 )
 from .scenarios import (
     MICROBENCH_SCENARIO_IDS,
@@ -145,11 +147,21 @@ def run_tier0_differential(
             m2_deltas = m2_cmp["deltas"]
             tok_delta = m2_deltas.get("prompt_tokens") if isinstance(m2_deltas, Mapping) else None
             head_ok = bool(m2_cmp["behavior_preserved"]) and isinstance(tok_delta, int) and tok_delta < 0
+            hook_available = bool(m2_head.get("semantic_unit_settlement_hook_available"))
             return {
                 "scenario_id": "m2_epoch_prefetch_semantic_fold",
                 "passed": head_ok,
-                "semantic_unit_settlement_hook_available": bool(
-                    m2_head.get("semantic_unit_settlement_hook_available")
+                "semantic_unit_settlement_hook_available": hook_available,
+                "source_attribution": build_scenario_source_attribution(
+                    base_source="candidate_head",
+                    head_source="candidate_head",
+                    comparison_kind="same_commit_mechanism_verification",
+                    production_hot_path_covered=hook_available,
+                    note=(
+                        "Both M2 arms run on the candidate evaluator checkout; excluded from "
+                        "cross-commit claims and production settlement hot-path claims unless "
+                        "the production settlement hook is present."
+                    ),
                 ),
                 "base": {
                     "behavior_constraint": m2_base["behavior_constraint"].to_dict(),
@@ -186,9 +198,18 @@ def run_tier0_differential(
                 base_behavior=m3_base["behavior_constraint"],
                 head_behavior=m3_head["behavior_constraint"],
             )
+            m3_cross = base_source_root is not None
             return {
                 "scenario_id": "m3_claim_block_settle_invariants",
                 "passed": bool(m3_cmp["behavior_preserved"]) and m3_head["behavior_constraint"].passed,
+                "source_attribution": build_scenario_source_attribution(
+                    base_source="external_base_checkout" if m3_cross else "candidate_head",
+                    head_source="candidate_head",
+                    comparison_kind=(
+                        "cross_commit_differential" if m3_cross else "same_commit_arm_contrast"
+                    ),
+                    production_hot_path_covered=True,
+                ),
                 "base": {
                     "behavior_constraint": m3_base["behavior_constraint"].to_dict(),
                     "efficiency": m3_base["efficiency"].to_dict(),
@@ -237,10 +258,19 @@ def run_tier0_differential(
             m1_deltas = m1_cmp["deltas"]
             wire_delta = m1_deltas.get("wire_bytes") if isinstance(m1_deltas, Mapping) else None
             head_ok = bool(m1_cmp["behavior_preserved"]) and isinstance(wire_delta, int) and wire_delta < 0
+            m1_cross = base_source_root is not None
             results.append(
                 {
                     "scenario_id": "m1_envelope_scoped_recovery",
                     "passed": head_ok,
+                    "source_attribution": build_scenario_source_attribution(
+                        base_source="external_base_checkout" if m1_cross else "candidate_head",
+                        head_source="candidate_head",
+                        comparison_kind=(
+                            "cross_commit_differential" if m1_cross else "same_commit_arm_contrast"
+                        ),
+                        production_hot_path_covered=True,
+                    ),
                     "base": {
                         "behavior_constraint": m1_base["behavior_constraint"].to_dict(),
                         "efficiency": m1_base["efficiency"].to_dict(),
@@ -319,6 +349,7 @@ def run_tier0_differential(
     overall_passed = all(row["passed"] for row in results) and (
         full_smoke_result["ok"] if full_smoke_result is not None else True
     )
+    claim_scope = summarize_claim_scope(results)
     payload: dict[str, Any] = {
         "schema_version": MICROBENCH_DIFF_SCHEMA_VERSION,
         "tier": "tier0_deterministic",
@@ -326,7 +357,8 @@ def run_tier0_differential(
         "wall_seconds": wall_seconds,
         "head_commit": head_sha,
         "base_ref": resolved_base_sha or "local_arm_contrast",
-        "external_base_checkout_used": use_external_base,
+        "external_base_checkout_used": bool(claim_scope["cross_commit_scenarios"]),
+        "claim_scope": claim_scope,
         "scenarios": results,
         "cli_output_differential": cli_diff_summary,
         **(

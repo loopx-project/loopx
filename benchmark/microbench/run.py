@@ -35,15 +35,17 @@ def render_microbench_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "| Scenario | Behavior Preserved | Wire Bytes Delta | Prompt Tokens Delta |",
-                "|---|---:|---:|---:|",
+                "| Scenario | Scope | Behavior Preserved | Wire Bytes Delta | Prompt Tokens Delta |",
+                "|---|---|---:|---:|---:|",
             ]
         )
         for row in tier0.get("scenarios", []):
             cmp = row["comparison"]
             d = cmp["deltas"]
+            attr = row.get("source_attribution") if isinstance(row.get("source_attribution"), dict) else {}
+            scope_lbl = str(attr.get("comparison_kind") or "unspecified")
             lines.append(
-                f"| `{row['scenario_id']}` | `{cmp['behavior_preserved']}` | "
+                f"| `{row['scenario_id']}` | `{scope_lbl}` | `{cmp['behavior_preserved']}` | "
                 f"`{d.get('wire_bytes')}` | `{d.get('prompt_tokens')}` |"
             )
         lines.append("")
@@ -57,15 +59,17 @@ def render_microbench_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "| Scenario | Model | Base Pass | Head Pass | Wire Delta | Prompt Tok Delta | Comp Tok Delta | Wall Delta(s) |",
-                "|---|---|---:|---:|---:|---:|---:|---:|",
+                "| Scenario | Model | Scope | Base Pass | Head Pass | Wire Delta | Prompt Tok Delta | Comp Tok Delta | Wall Delta(s) |",
+                "|---|---|---|---|---:|---:|---:|---:|---:|",
             ]
         )
         for row in tier1.get("results", []):
             cmp = row["comparison"]
             d = cmp["deltas"]
+            attr = row.get("source_attribution") if isinstance(row.get("source_attribution"), dict) else {}
+            scope_lbl = str(attr.get("comparison_kind") or "unspecified")
             lines.append(
-                f"| `{row['scenario_id']}` | `{row['model_id']}` | "
+                f"| `{row['scenario_id']}` | `{row['model_id']}` | `{scope_lbl}` | "
                 f"`{row['base']['behavior_constraint']['passed']} ({row['base']['status']})` | "
                 f"`{row['head']['behavior_constraint']['passed']} ({row['head']['status']})` | "
                 f"`{d.get('wire_bytes')}` | `{d.get('prompt_tokens')}` | "
