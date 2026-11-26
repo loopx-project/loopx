@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+import ast
+from collections.abc import Mapping
+import io
+from pathlib import Path
+import tokenize
+from types import MappingProxyType
+from typing import cast
+
 import pytest
 
+from loopx.canary.maintainability_ratchet import (
+    DECISION_POINT_LIMIT,
+    DECISION_STATEMENT_LIMIT,
+    _FunctionMetrics,
+    _iter_functions,
+)
 from loopx.control_plane.runtime.session_runtime import (
     compact_session_runtime_readonly_projection,
 )
 from loopx.session_runtime import (
+    KeyClassification,
     KeyState,
     RawMaterialCategory,
+    SOURCE_ID_KEYS,
     build_session_runtime_readonly_projection,
     classify_session_runtime_key,
 )
@@ -224,3 +240,126 @@ def test_compaction_keeps_typed_boundary_fields_bounded() -> None:
     assert boundary["raw_material_key_names"] == ["api_key", "raw_transcript"]
     assert boundary["raw_material_categories"] == ["credential", "transcript"]
     assert len(boundary["unclassified_key_names"]) == 8
+
+
+def _ast_any_count(source: str) -> int:
+    tree = ast.parse(source)
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Name) and node.id == "Any")
+        or (isinstance(node, ast.Attribute) and node.attr == "Any")
+        or (
+            isinstance(node, ast.ImportFrom)
+            and any(alias.name == "Any" for alias in node.names)
+        )
+    )
+
+
+def _comment_ignore_or_noqa_count(source: str) -> int:
+    tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+    return sum(
+        1
+        for tok in tokens
+        if tok.type == tokenize.COMMENT
+        and ("type: ignore" in tok.string or "noqa" in tok.string)
+    )
+
+
+def test_session_runtime_zero_any_size_and_complexity_contract() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    sr_path = repo_root / "loopx" / "session_runtime.py"
+    for path in (sr_path, Path(__file__)):
+        source = path.read_text(encoding="utf-8")
+        assert _ast_any_count(source) == 0, path
+        assert _comment_ignore_or_noqa_count(source) == 0, path
+
+    lines = sr_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= 550
+    assert "session_id" in SOURCE_ID_KEYS
+    assert classify_session_runtime_key("status") == KeyClassification(KeyState.COMPACT)
+
+    tree = ast.parse(sr_path.read_text(encoding="utf-8"))
+    for qname, fn in _iter_functions(tree.body):
+        metrics = _FunctionMetrics(fn)
+        metrics.visit(fn)
+        assert metrics.statement_count <= DECISION_STATEMENT_LIMIT, qname
+        assert metrics.decision_points <= DECISION_POINT_LIMIT, qname
+
+
+def test_projection_filters_non_mappings_reads_mappingproxy_and_dedups_repeated_keys() -> None:
+    proxy_session = MappingProxyType(
+        {
+            "session_id": "s1",
+            "created_at": "2026-01-01T00:00:00Z",
+            "next_action": "advance step",
+            "opaque_extra": "v1",
+        }
+    )
+    proxy_event_a = MappingProxyType(
+        {
+            "event_id": "e1",
+            "event_at": "2026-01-01T00:01:00Z",
+            "opaque_extra": "v2",
+        }
+    )
+    proxy_event_b = MappingProxyType(
+        {
+            "event_id": "e2",
+            "updated_at": "2026-01-01T00:02:00Z",
+            "opaque_extra": "v3",
+        }
+    )
+    payload = build_session_runtime_readonly_projection(
+        goal_id="g-proxy",
+        sessions=[cast(Mapping[str, object], "malformed-entry"), proxy_session],
+    )
+    assert payload["source"]["source_refs"]["sessions"] == [
+        {"kind": "session", "session_id": "s1"}
+    ]
+    assert payload["boundary"]["unclassified_key_names"] == ["opaque_extra"]
+    assert payload["first_screen"]["agent_can_continue"] is True
+
+    repeated = build_session_runtime_readonly_projection(
+        goal_id="g-repeat",
+        sessions=[proxy_session],
+        events=[proxy_event_a, proxy_event_b],
+    )
+    assert repeated["source"]["latest_fact_at"] == "2026-01-01T00:02:00Z"
+    assert repeated["boundary"]["unclassified_key_names"] == ["opaque_extra"]
+
+
+def test_gate_blocker_validation_and_empty_text_precedence() -> None:
+    blocked_without_todo = build_session_runtime_readonly_projection(
+        goal_id="g-blocker",
+        gates=[
+            {"gate_id": "g-adv", "status": "open", "actor": "human", "advisory": True},
+            {"gate_id": "g-nonblock", "status": "pending", "actor": "user", "blocking": False},
+            {"gate_id": "g-blocker", "kind": "blocker", "status": "failed", "blocker": "disk full"},
+        ],
+    )
+    assert blocked_without_todo["first_screen"]["waiting_on"] == "runtime"
+    assert blocked_without_todo["first_screen"]["user_action_required"] is False
+    assert blocked_without_todo["first_screen"]["latest_blocker"] == "disk full"
+    assert blocked_without_todo["work_lane_contract"]["lane"] == "blocker"
+    assert blocked_without_todo["attention_item"]["priority"] == "P0"
+
+    empty_text_gate = build_session_runtime_readonly_projection(
+        goal_id="g-empty-gate",
+        gates=[
+            {
+                "gate_id": "g-open",
+                "status": "pending",
+                "requires_human_decision": True,
+                "actor": "bot_router",
+            }
+        ],
+        decision_results=[{"recommended_action": "continue"}],
+    )
+    assert empty_text_gate["first_screen"]["waiting_on"] == "operator"
+    assert empty_text_gate["first_screen"]["user_action_required"] is True
+    assert empty_text_gate["first_screen"]["first_user_todo"] is None
+    assert empty_text_gate["first_screen"]["first_agent_todo"] is None
+    assert empty_text_gate["first_screen"]["recommended_action"] is None
+    assert empty_text_gate["attention_item"]["title"] is None
+    assert empty_text_gate["work_lane_contract"]["lane"] == "user_gate"
