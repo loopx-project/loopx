@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from loopx.extensions.external_connector_provider import (
+    DocumentCommentConnectorRegistration,
     build_document_comment_connector_registration,
     build_external_connector_permission_requirement,
     build_external_connector_provider_page,
@@ -71,7 +72,7 @@ def _requirements() -> list[dict[str, Any]]:
     ]
 
 
-def _registration() -> dict[str, Any]:
+def _registration() -> DocumentCommentConnectorRegistration:
     return build_document_comment_connector_registration(
         connector=_connector(),
         authority_material_ref="material-alpha",
