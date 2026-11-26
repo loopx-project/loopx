@@ -346,9 +346,13 @@ def cli_invocation_route(argv: list[str]):
 
 def _register_registry_inspection_commands(subparsers: argparse._SubParsersAction) -> None:
 	"""Share the existing registry grammar with the complete support parser."""
-	subparsers.add_parser(
+	registry_parser = subparsers.add_parser(
 		"registry", help="Inspect registry goals and adapter declarations."
 	)
+	registry_parser.add_argument("--goal-id", help="Show one exact Goal id; keep registry-wide diagnostics.")
+	registry_parser.add_argument("--query", help="Case-insensitive literal search in Goal id, repo, domain, status or adapter kind.")
+	registry_parser.add_argument("--limit", type=int, help="Maximum matching Goal rows (default 20 when selecting).")
+	registry_parser.add_argument("--offset", type=int, help="Skip this many matches in registry order (default 0).")
 	registry_boundary_parser = subparsers.add_parser(
 		"registry-boundary",
 		help="Classify a registry file as local-only, global-local, public projection, or public fixture.",
@@ -385,6 +389,13 @@ def _handle_registry_inspection_command(
 	"""Keep one inspection adapter and the full CLI's existing patch points."""
 	if args.command == "registry":
 		payload = inspect_registry(registry_path)
+		from .cli_commands.registry_inspection import select_registry_goals
+
+		try:
+			payload = select_registry_goals(payload, goal_id=args.goal_id, query=args.query,
+				limit=args.limit, offset=args.offset)
+		except ValueError as exc:
+			payload = {**payload, "ok": False, "error": str(exc), "goals": []}
 		print_payload(payload, args.format, render_registry_markdown)
 		return 0 if payload.get("ok") else 1
 
