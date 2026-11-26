@@ -2026,3 +2026,251 @@ def test_claude_legacy_migration_command_position_and_operator_boundaries(
             assert "cc-pos" in proc.stdout, (name, proc.stdout)
         # Idempotent on repeat run.
         assert claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True) == []
+
+
+def test_claude_legacy_migration_heredocs_compound_clauses_and_manual_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-compound"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-comp",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-comp",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_status = "/opt/old dir/loopx/claude_goal_mode/statusline/goal_status.py"
+    legacy_hook = "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py"
+    new_status = claude_install._p("statusline", "goal_status.py")
+    new_hook = claude_install._p("hooks", "goal_policy.py")
+
+    # 1. Quoted/tab-stripped here-document bodies remain byte-verbatim (even with unmatched quotes),
+    # while executable launchers on the header line or after the closing delimiter migrate.
+    heredoc_only = f"cat <<'EOF'\n{legacy_status}\nEOF"
+    assert claude_install._inspect_legacy_claude_command(
+        heredoc_only,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+
+    heredoc_and_post = (
+        f"cat <<'EOF'\n{legacy_status}\nit's raw text\nEOF\n"
+        f"/old/python3 {shlex.quote(legacy_status)}"
+    )
+    migrated_hd, hd_reason = claude_install._inspect_legacy_claude_command(
+        heredoc_and_post,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert hd_reason is None
+    assert migrated_hd is not None
+    hd_prefix, hd_tail = migrated_hd.split("\nEOF\n", 1)
+    assert hd_prefix == f"cat <<'EOF'\n{legacy_status}\nit's raw text"
+    assert "/old/python3" not in hd_tail
+    assert new_status in hd_tail
+
+    tab_heredoc = (
+        f"cat <<-EOF && echo ok\n\t{legacy_status}\n\tEOF\n"
+        f"{legacy_hook}"
+    )
+    migrated_tab = claude_install._rewrite_legacy_claude_command(
+        tab_heredoc,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_tab is not None
+    assert migrated_tab.startswith(f"cat <<-EOF && echo ok\n\t{legacy_status}\n\tEOF\n")
+    assert migrated_tab.endswith(shlex.quote(new_hook))
+
+    # 2. Compound POSIX control clauses migrate executed positions while skipping loop lists,
+    # case patterns, and quoted keyword literals.
+    if_cmd = f"if [ -n \"$HOME\" ]; then /old/python3 {shlex.quote(legacy_status)}; fi"
+    migrated_if = claude_install._rewrite_legacy_claude_command(
+        if_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_if is not None
+    assert migrated_if.startswith("if [ -n \"$HOME\" ]; then ")
+    assert migrated_if.endswith("; fi")
+    assert new_status in migrated_if and "/old/python3" not in migrated_if
+
+    elif_else_cmd = (
+        f"if {legacy_hook}; then echo a; elif {legacy_hook}; then echo b; "
+        f"else /old/python3 {legacy_hook}; fi"
+    )
+    migrated_branch = claude_install._rewrite_legacy_claude_command(
+        elif_else_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_branch is not None
+    assert "/claude_goal_mode/" not in migrated_branch
+    assert migrated_branch.count(new_hook) == 3
+
+    brace_subshell_while = (
+        f"while {legacy_hook}; do {{ /old/python3 {legacy_hook}; }}; done && ( {legacy_hook} )"
+    )
+    migrated_complex = claude_install._rewrite_legacy_claude_command(
+        brace_subshell_while,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_complex is not None
+    assert "/claude_goal_mode/" not in migrated_complex
+    assert migrated_complex.count(new_hook) == 3
+
+    # Non-command positions in for/case/quoted-'then' stay intact; case arm body updates.
+    for_non_exec = f"for s in {shlex.quote(legacy_status)}; do echo \"$s\"; done"
+    assert claude_install._rewrite_legacy_claude_command(
+        for_non_exec,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
+    assert claude_install._rewrite_legacy_claude_command(
+        f"'then' {shlex.quote(legacy_status)}",
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
+
+    case_cmd = (
+        f"case \"$MODE\" in {shlex.quote(legacy_status)}) echo pat;; "
+        f"run) /old/python3 {shlex.quote(legacy_status)};; esac"
+    )
+    migrated_case = claude_install._rewrite_legacy_claude_command(
+        case_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_case is not None
+    first_arm, second_arm = migrated_case.split(";;", 1)
+    assert shlex.quote(legacy_status) in first_arm
+    assert new_status in second_arm and "/old/python3" not in second_arm
+
+    # 3. Execute real migrated heredoc-then-launch and if/then statusLine commands via /bin/sh.
+    env_exec = {
+        **slash_command_install.os.environ,
+        "HOME": str(home),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "LOOPX_GOAL_FORCE": "1",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "PATH": f"{Path(sys.executable).parent}:{slash_command_install.os.environ.get('PATH', '')}",
+    }
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    (proj_claude / "loop.md").write_text("<!-- loopx:armed {\"goal_id\": \"cc-comp\"} -->\n", encoding="utf-8")
+    proj_settings = proj_claude / "settings.json"
+    for label, raw_cmd, expected_verbatim in (
+        ("heredoc_then_launch", heredoc_and_post, f"{legacy_status}\nit's raw text\n"),
+        ("if_then_branch", if_cmd, ""),
+    ):
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": raw_cmd}}),
+            encoding="utf-8",
+        )
+        mig = claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True)
+        assert mig == [{"path": str(proj_settings), "status": "updated"}], label
+        updated_cmd = json.loads(proj_settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+        proc = subprocess.run(
+            ["/bin/sh", "-c", updated_cmd],
+            input=json.dumps({"cwd": str(proj)}),
+            capture_output=True,
+            text=True,
+            env=env_exec,
+            check=False,
+        )
+        assert proc.returncode == 0, f"{label}: {proc.stderr} {proc.stdout}"
+        if expected_verbatim:
+            assert proc.stdout.startswith(expected_verbatim), (label, proc.stdout)
+        assert "cc-comp" in proc.stdout, (label, proc.stdout)
+
+    # 4. Uncertifiable dynamic syntax (`eval` / `env -S` / unterminated heredoc) stays untouched
+    # and reports `manual_migration_required` with explicit recovery guidance through install_slash_commands.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.chdir(tmp_path)
+
+    for bad_cmd in (
+        f"eval '/old/python3 {shlex.quote(legacy_status)}'",
+        f"env -S '/old/python3 {shlex.quote(legacy_status)}'",
+        f"cat <<EOF\n{legacy_status}",
+    ):
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": bad_cmd}}),
+            encoding="utf-8",
+        )
+        before_bytes = proj_settings.read_bytes()
+        payload = install_slash_commands(
+            execute=True,
+            registry_path=str(proj / ".loopx" / "registry.json"),
+            codex_home=str(home / ".codex"),
+            opencode_home=str(home / ".config" / "opencode"),
+        )
+        assert payload["ok"] is True
+        assert proj_settings.read_bytes() == before_bytes
+        manual_rows = [
+            row
+            for row in payload["installed"]  # type: ignore[attr-defined]
+            if isinstance(row, dict) and row.get("status") == "manual_migration_required"
+        ]
+        assert len(manual_rows) == 1, bad_cmd
+        assert "--harden" in str(manual_rows[0].get("recovery", ""))
+        assert any("--harden" in str(n) for n in payload["notes"])  # type: ignore[attr-defined]
+        md = slash_command_install.render_slash_command_install_markdown(payload)
+        assert "manual_migration_required" in md and "--harden" in md

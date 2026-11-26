@@ -759,6 +759,7 @@ def _migrate_legacy_claude_configs(
     registry_path: str | None,
     runtime_root: str | None,
     execute: bool,
+    extra_notes: list[str] | None = None,
 ) -> None:
     try:
         from loopx.hosts.claude.scripts import install as claude_install
@@ -775,16 +776,32 @@ def _migrate_legacy_claude_configs(
             project_dir=proj_dir,
             execute=execute,
         ):
-            installed.append(
-                _installed_entry(
-                    surface="claude-code",
-                    host_surfaces=["claude-code"],
-                    mechanism="claude_goal_mode_legacy_migration",
-                    command="/loopx",
-                    path=Path(row["path"]),
-                    status=row["status"],
+            if row.get("note") and extra_notes is not None:
+                extra_notes.append(str(row["note"]))
+            if row.get("reason") or row.get("recovery"):
+                installed.append(
+                    _installed_entry(
+                        surface="claude-code",
+                        host_surfaces=["claude-code"],
+                        mechanism="claude_goal_mode_legacy_migration",
+                        command="/loopx",
+                        path=Path(row["path"]),
+                        status=row["status"],
+                        reason=row.get("reason"),
+                        recovery=row.get("recovery"),
+                    )
                 )
-            )
+            else:
+                installed.append(
+                    _installed_entry(
+                        surface="claude-code",
+                        host_surfaces=["claude-code"],
+                        mechanism="claude_goal_mode_legacy_migration",
+                        command="/loopx",
+                        path=Path(row["path"]),
+                        status=row["status"],
+                    )
+                )
 
 
 def _kiro_cli_mcp_command() -> tuple[str, str] | None:
@@ -1024,6 +1041,7 @@ def install_slash_commands(
         pi_project_root, scope=pi_scope, agent_dir=_pi_agent_dir(pi_user_home)
     )
     installed: list[dict[str, object]] = []
+    migration_notes: list[str] = []
 
     if with_goal_bridge and "opencode" not in effective_surfaces:
         installed.append(
@@ -1075,6 +1093,7 @@ def install_slash_commands(
                 registry_path=registry_path,
                 runtime_root=runtime_root,
                 execute=execute,
+                extra_notes=migration_notes,
             )
 
     if "gemini" in effective_surfaces:
@@ -1387,6 +1406,7 @@ def install_slash_commands(
             "The OpenCode goal bridge uses Bun-managed config-directory dependencies and must replace any direct goal-plugin registration.",
             "OpenCode bridge uninstall preserves package.json dependencies because they may be shared by user-owned local plugins.",
             "Uninstall is fail-closed: it retires only files carrying the LoopX managed marker and leaves user-owned files in place.",
+            *migration_notes,
         ],
     }
 

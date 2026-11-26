@@ -604,6 +604,8 @@ _ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*")
 _ENV_VALUE_FLAGS = frozenset({"-u", "--unset", "-C", "--chdir", "-P", "-a", "--argv0"})
 _TIMEOUT_VALUE_FLAGS = frozenset({"-k", "--kill-after", "-s", "--signal"})
 _SHELL_NAMES = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
+_CLAUSE_STARTERS = frozenset({"if", "elif", "then", "else", "while", "until", "do", "{"})
+_CLAUSE_HEADERS_NON_COMMAND = frozenset({"for", "select", "case"})
 
 
 class _ShellToken(NamedTuple):
@@ -613,13 +615,37 @@ class _ShellToken(NamedTuple):
     is_operator: bool = False
 
 
+def _consume_heredoc_bodies(
+    raw_command: str, i: int, pending_heredocs: list[tuple[str, bool]]
+) -> int | None:
+    """Skip pending POSIX here-document bodies and delimiters starting after `\\n`."""
+    n = len(raw_command)
+    for delim, strip_tabs in pending_heredocs:
+        closed = False
+        while i < n:
+            line_end = raw_command.find("\n", i)
+            if line_end == -1:
+                line_end = n
+            line_text = raw_command[i:line_end].rstrip("\r")
+            candidate = line_text.lstrip("\t") if strip_tabs else line_text
+            i = line_end + 1 if line_end < n else n
+            if candidate == delim:
+                closed = True
+                break
+        if not closed:
+            return None
+    return i
+
+
 def _tokenize_shell_spans(
     raw_command: str, *, powershell: bool
-) -> list[_ShellToken]:
-    """Return word and operator tokens with original offsets intact."""
+) -> list[_ShellToken] | None:
+    """Return word/operator tokens with original offsets, or ``None`` on shell syntax failure."""
     n = len(raw_command)
     i = 0
     tokens: list[_ShellToken] = []
+    awaiting_heredoc: bool | None = None
+    pending_heredocs: list[tuple[str, bool]] = []
     while i < n:
         while i < n and raw_command[i] in " \t\r\v\f":
             i += 1
@@ -632,8 +658,18 @@ def _tokenize_shell_spans(
                     matched_op = candidate
                     break
         if matched_op is not None:
+            if awaiting_heredoc is not None:
+                return None
             tokens.append(_ShellToken(i, i + len(matched_op), matched_op, is_operator=True))
             i += len(matched_op)
+            if not powershell and matched_op in {"<<", "<<-"}:
+                awaiting_heredoc = matched_op == "<<-"
+            elif not powershell and matched_op == "\n" and pending_heredocs:
+                next_i = _consume_heredoc_bodies(raw_command, i, pending_heredocs)
+                if next_i is None:
+                    return None
+                pending_heredocs.clear()
+                i = next_i
             continue
 
         start = i
@@ -655,7 +691,7 @@ def _tokenize_shell_spans(
                     buf.append(raw_command[i])
                     i += 1
                 if not closed:
-                    return []
+                    return None
             elif ch == '"':
                 i += 1
                 while i < n and raw_command[i] != '"':
@@ -670,24 +706,33 @@ def _tokenize_shell_spans(
                     buf.append(raw_command[i])
                     i += 1
                 if i >= n:
-                    return []
+                    return None
                 i += 1
             elif (
                 ch == "\\"
                 and not powershell
                 and i + 1 < n
                 and (
-                    raw_command[i + 1].isspace()
+                    awaiting_heredoc is not None
+                    or raw_command[i + 1].isspace()
                     or raw_command[i + 1] in {"'", '"', "\\", "|", "&", ";", "(", ")", "<", ">"}
                 )
             ):
+                if awaiting_heredoc is not None and raw_command[i + 1] == "\n":
+                    return None
                 i += 1
                 buf.append(raw_command[i])
                 i += 1
             else:
                 buf.append(ch)
                 i += 1
-        tokens.append(_ShellToken(start, i, "".join(buf)))
+        unquoted_word = "".join(buf)
+        tokens.append(_ShellToken(start, i, unquoted_word))
+        if awaiting_heredoc is not None:
+            pending_heredocs.append((unquoted_word, awaiting_heredoc))
+            awaiting_heredoc = None
+    if awaiting_heredoc is not None or pending_heredocs:
+        return None
     return tokens
 
 
@@ -709,11 +754,14 @@ def _is_unquoted_env_assignment(token: _ShellToken, *, raw_command: str) -> bool
 
 
 def _split_command_segments(
-    tokens: list[_ShellToken], *, powershell: bool
+    tokens: list[_ShellToken], *, raw_command: str, powershell: bool
 ) -> list[tuple[list[_ShellToken], bool]]:
     segments: list[tuple[list[_ShellToken], bool]] = []
     words: list[_ShellToken] = []
     has_ps_call = False
+    in_case_header = False
+    case_depth = 0
+    expect_case_pattern = False
     idx = 0
     while idx < len(tokens):
         tok = tokens[idx]
@@ -730,15 +778,50 @@ def _split_command_segments(
                 has_ps_call = True
                 idx += 1
                 continue
+            if case_depth > 0 and expect_case_pattern:
+                if tok.unquoted == ")":
+                    expect_case_pattern = False
+                    words = []
+                    has_ps_call = False
+                idx += 1
+                continue
             if words:
                 segments.append((words, has_ps_call))
             words = []
             has_ps_call = False
+            in_case_header = False
+            if case_depth > 0 and tok.unquoted in {";;", ";&", ";;&"}:
+                expect_case_pattern = True
             idx += 1
             continue
+
+        raw_slice = raw_command[tok.start : tok.end]
+        if not powershell:
+            if case_depth > 0 and expect_case_pattern:
+                if not words and raw_slice == "esac":
+                    case_depth -= 1
+                    expect_case_pattern = False
+                    idx += 1
+                    continue
+                idx += 1
+                continue
+            if case_depth > 0 and not words and raw_slice == "esac":
+                case_depth -= 1
+                idx += 1
+                continue
+            if in_case_header and raw_slice == "in":
+                in_case_header = False
+                case_depth += 1
+                expect_case_pattern = True
+                words = []
+                idx += 1
+                continue
+            if not words and raw_slice == "case":
+                in_case_header = True
+
         words.append(tok)
         idx += 1
-    if words:
+    if words and not (case_depth > 0 and expect_case_pattern):
         segments.append((words, has_ps_call))
     return segments
 
@@ -749,24 +832,31 @@ def _advance_command_wrappers(
     raw_command: str,
     legacy_suffix: str,
     powershell: bool,
-) -> int | None:
+) -> tuple[int | None, str | None]:
     idx = 0
     while idx < len(words):
-        if not powershell and _is_unquoted_env_assignment(words[idx], raw_command=raw_command):
-            idx += 1
-            continue
-        if (
-            not powershell
-            and words[idx].unquoted == "!"
-            and raw_command[words[idx].start : words[idx].end] == "!"
-        ):
-            idx += 1
-            continue
+        if not powershell:
+            tok = words[idx]
+            raw_slice = raw_command[tok.start : tok.end]
+            if raw_slice == tok.unquoted and tok.unquoted in _CLAUSE_STARTERS:
+                idx += 1
+                continue
+            if raw_slice == tok.unquoted and tok.unquoted in _CLAUSE_HEADERS_NON_COMMAND:
+                return (None, None)
+            if _is_unquoted_env_assignment(tok, raw_command=raw_command):
+                idx += 1
+                continue
+            if tok.unquoted == "!" and raw_slice == "!":
+                idx += 1
+                continue
         if powershell:
             break
 
         cmd_word = words[idx].unquoted
         cmd_name = Path(cmd_word.replace("\\", "/")).name.lower()
+        has_legacy_tail = any(
+            legacy_suffix in w.unquoted.replace("\\", "/") for w in words[idx:]
+        )
         probe = idx + 1
         if cmd_name == "env":
             while probe < len(words):
@@ -775,7 +865,12 @@ def _advance_command_wrappers(
                     probe += 1
                     break
                 if arg in {"-S", "--split-string"} or arg.startswith(("-S", "--split-string=")):
-                    return None
+                    return (
+                        None,
+                        "unsupported `env -S` wrapper around legacy Claude command"
+                        if has_legacy_tail
+                        else None,
+                    )
                 if arg in _ENV_VALUE_FLAGS:
                     probe += 2
                     continue
@@ -784,14 +879,21 @@ def _advance_command_wrappers(
                     continue
                 break
             if probe > len(words):
-                return None
+                return (None, None)
             idx = probe
             continue
         if cmd_word == "command":
             while probe < len(words) and words[probe].unquoted.startswith("-") and words[probe].unquoted != "--":
                 flag = words[probe].unquoted
-                if "v" in flag or "V" in flag or flag != "-p":
-                    return None
+                if "v" in flag or "V" in flag:
+                    return (None, None)
+                if flag != "-p":
+                    return (
+                        None,
+                        f"unsupported `command {flag}` option around legacy Claude command"
+                        if has_legacy_tail
+                        else None,
+                    )
                 probe += 1
             if probe < len(words) and words[probe].unquoted == "--":
                 probe += 1
@@ -808,9 +910,14 @@ def _advance_command_wrappers(
                 elif len(flag) > 1 and set(flag[1:]) <= {"c", "l"}:
                     probe += 1
                 else:
-                    return None
+                    return (
+                        None,
+                        f"unsupported `exec {flag}` option around legacy Claude command"
+                        if has_legacy_tail
+                        else None,
+                    )
             if probe > len(words):
-                return None
+                return (None, None)
             idx = probe
             continue
         if cmd_word in {"nohup", "time"} or cmd_name == "nice":
@@ -825,7 +932,7 @@ def _advance_command_wrappers(
                 ):
                     probe += 1
             if probe > len(words):
-                return None
+                return (None, None)
             idx = probe
             continue
         if cmd_name == "timeout":
@@ -844,16 +951,21 @@ def _advance_command_wrappers(
                 }:
                     probe += 1
                 else:
-                    return None
+                    return (
+                        None,
+                        f"unsupported `timeout {arg}` option around legacy Claude command"
+                        if has_legacy_tail
+                        else None,
+                    )
             if probe >= len(words):
-                return None
+                return (None, None)
             dur = words[probe].unquoted
             if dur.startswith("-") or dur.replace("\\", "/").endswith(legacy_suffix):
-                return None
+                return (None, None)
             idx = probe + 1
             continue
         break
-    return idx if idx < len(words) else None
+    return (idx, None) if idx < len(words) else (None, None)
 
 
 def _segment_edits(
@@ -865,18 +977,23 @@ def _segment_edits(
     new_script: str,
     py_exe: str,
     powershell: bool,
-) -> list[tuple[int, int, str]]:
-    cmd_idx = _advance_command_wrappers(
+) -> tuple[list[tuple[int, int, str]], str | None]:
+    cmd_idx, wrapper_reason = _advance_command_wrappers(
         words,
         raw_command=raw_command,
         legacy_suffix=legacy_suffix,
         powershell=powershell,
     )
     if cmd_idx is None:
-        return []
+        return ([], wrapper_reason)
 
     cmd_tok = words[cmd_idx]
     cmd_name = Path(cmd_tok.unquoted.replace("\\", "/")).name.lower()
+    if not powershell and cmd_tok.unquoted == "eval":
+        if any(legacy_suffix in w.unquoted.replace("\\", "/") for w in words[cmd_idx + 1 :]):
+            return ([], "dynamic `eval` command references legacy Claude launcher")
+        return ([], None)
+
     if cmd_name.removesuffix(".exe") in _SHELL_NAMES and not cmd_tok.unquoted.startswith("-"):
         probe = cmd_idx + 1
         saw_dash_c = False
@@ -896,11 +1013,11 @@ def _segment_edits(
                 break
             probe += 1
         if not saw_dash_c or probe >= len(words):
-            return []
+            return ([], None)
         inner_tok = words[probe]
         if legacy_suffix not in inner_tok.unquoted.replace("\\", "/"):
-            return []
-        inner = _rewrite_legacy_claude_command(
+            return ([], None)
+        inner, inner_reason = _inspect_legacy_claude_command(
             inner_tok.unquoted,
             legacy_suffix=legacy_suffix,
             new_script=new_script,
@@ -908,8 +1025,8 @@ def _segment_edits(
             powershell=False,
         )
         if inner is None:
-            return []
-        return [(inner_tok.start, inner_tok.end, _shell_literal(inner, powershell=powershell))]
+            return ([], inner_reason)
+        return ([(inner_tok.start, inner_tok.end, _shell_literal(inner, powershell=powershell))], inner_reason)
 
     needs_ps_call = powershell and not (has_ps_call and cmd_idx == 0)
     py_replacement = (
@@ -924,11 +1041,11 @@ def _segment_edits(
         while probe < len(words):
             arg = words[probe].unquoted
             if arg in _PYTHON_TERMINAL_FLAGS or arg.startswith(("-c", "-m")):
-                return []
+                return ([], None)
             if arg in _PYTHON_VALUE_FLAGS:
                 probe += 2
                 if probe > len(words):
-                    return []
+                    return ([], None)
                 continue
             if arg.startswith(("-W", "-X", "--check-hash-based-pycs=")):
                 probe += 1
@@ -942,18 +1059,29 @@ def _segment_edits(
                 probe += 1
                 continue
             if arg.startswith("-"):
-                return []
+                has_legacy_tail = any(
+                    legacy_suffix in w.unquoted.replace("\\", "/") for w in words[probe + 1 :]
+                )
+                return (
+                    [],
+                    f"unsupported Python option `{arg}` around legacy Claude launcher"
+                    if has_legacy_tail
+                    else None,
+                )
             break
         if probe >= len(words):
-            return []
+            return ([], None)
         script_tok = words[probe]
         normalized = script_tok.unquoted.replace("\\", "/")
         if not normalized.startswith("-") and normalized.endswith(legacy_suffix):
-            return [
-                (script_tok.start, script_tok.end, script_literal),
-                (cmd_tok.start, cmd_tok.end, py_replacement),
-            ]
-        return []
+            return (
+                [
+                    (script_tok.start, script_tok.end, script_literal),
+                    (cmd_tok.start, cmd_tok.end, py_replacement),
+                ],
+                None,
+            )
+        return ([], None)
 
     normalized_cmd = cmd_tok.unquoted.replace("\\", "/")
     if (
@@ -961,8 +1089,57 @@ def _segment_edits(
         and not _ENV_ASSIGN_RE.fullmatch(normalized_cmd)
         and normalized_cmd.endswith(legacy_suffix)
     ):
-        return [(cmd_tok.start, cmd_tok.end, f"{py_replacement} {script_literal}")]
-    return []
+        return ([(cmd_tok.start, cmd_tok.end, f"{py_replacement} {script_literal}")], None)
+    return ([], None)
+
+
+def _inspect_legacy_claude_command(
+    raw_command: str,
+    *,
+    legacy_suffix: str,
+    new_script: str,
+    py_exe: str,
+    powershell: bool,
+) -> tuple[str | None, str | None]:
+    """Upgrade certified executed legacy commands and report uncertifiable dynamic legacy references."""
+    if legacy_suffix not in raw_command.replace("\\", "/"):
+        return (None, None)
+    tokens = _tokenize_shell_spans(raw_command, powershell=powershell)
+    if tokens is None:
+        return (None, "unterminated shell quote or here-document around legacy Claude command")
+    if not tokens:
+        return (None, None)
+
+    edits: list[tuple[int, int, str]] = []
+    manual_reasons: list[str] = []
+    for words, has_ps_call in _split_command_segments(
+        tokens, raw_command=raw_command, powershell=powershell
+    ):
+        seg_edits, seg_reason = _segment_edits(
+            words,
+            has_ps_call=has_ps_call,
+            raw_command=raw_command,
+            legacy_suffix=legacy_suffix,
+            new_script=new_script,
+            py_exe=py_exe,
+            powershell=powershell,
+        )
+        edits.extend(seg_edits)
+        if seg_reason and seg_reason not in manual_reasons:
+            manual_reasons.append(seg_reason)
+    manual_reason = "; ".join(manual_reasons) if manual_reasons else None
+    if not edits:
+        return (None, manual_reason)
+
+    edits.sort(key=lambda item: item[0], reverse=True)
+    updated = raw_command
+    last_start = len(raw_command) + 1
+    for start, end, replacement in edits:
+        if end > last_start:
+            return (None, "overlapping shell spans prevent safe automatic migration")
+        updated = updated[:start] + replacement + updated[end:]
+        last_start = start
+    return (updated if updated != raw_command else None, manual_reason)
 
 
 def _rewrite_legacy_claude_command(
@@ -974,45 +1151,25 @@ def _rewrite_legacy_claude_command(
     powershell: bool,
 ) -> str | None:
     """Upgrade executed legacy Claude hook/statusline commands while keeping wrappers and data args."""
-    if legacy_suffix not in raw_command.replace("\\", "/"):
-        return None
-    tokens = _tokenize_shell_spans(raw_command, powershell=powershell)
-    if not tokens:
-        return None
-
-    edits: list[tuple[int, int, str]] = []
-    for words, has_ps_call in _split_command_segments(tokens, powershell=powershell):
-        edits.extend(
-            _segment_edits(
-                words,
-                has_ps_call=has_ps_call,
-                raw_command=raw_command,
-                legacy_suffix=legacy_suffix,
-                new_script=new_script,
-                py_exe=py_exe,
-                powershell=powershell,
-            )
-        )
-    if not edits:
-        return None
-
-    edits.sort(key=lambda item: item[0], reverse=True)
-    updated = raw_command
-    last_start = len(raw_command) + 1
-    for start, end, replacement in edits:
-        if end > last_start:
-            return None
-        updated = updated[:start] + replacement + updated[end:]
-        last_start = start
-    return updated if updated != raw_command else None
+    updated, _ = _inspect_legacy_claude_command(
+        raw_command,
+        legacy_suffix=legacy_suffix,
+        new_script=new_script,
+        py_exe=py_exe,
+        powershell=powershell,
+    )
+    return updated
 
 
-def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict[str, Any] | None:
+def _inspect_settings_migration(
+    raw_data: dict[str, Any], *, py_exe: str
+) -> tuple[dict[str, Any] | None, list[str]]:
     powershell = _uses_powershell()
     gate_script = _p("hooks", "goal_policy.py")
     status_script = _p("statusline", "goal_status.py")
     updated: dict[str, Any] = dict(raw_data)
     changed = False
+    manual_reasons: list[str] = []
 
     hooks_obj = raw_data.get("hooks")
     if isinstance(hooks_obj, dict):
@@ -1032,13 +1189,15 @@ def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict
                 group_changed = False
                 for item in group_hooks:
                     if isinstance(item, dict) and isinstance(item.get("command"), str):
-                        migrated_cmd = _rewrite_legacy_claude_command(
+                        migrated_cmd, manual_reason = _inspect_legacy_claude_command(
                             item["command"],
                             legacy_suffix=_LEGACY_POLICY_HOOK_SUFFIX,
                             new_script=gate_script,
                             py_exe=py_exe,
                             powershell=powershell,
                         )
+                        if manual_reason and manual_reason not in manual_reasons:
+                            manual_reasons.append(manual_reason)
                         if migrated_cmd is not None:
                             new_item = dict(item)
                             new_item["command"] = migrated_cmd
@@ -1061,20 +1220,27 @@ def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict
 
     sl_obj = raw_data.get("statusLine")
     if isinstance(sl_obj, dict) and isinstance(sl_obj.get("command"), str):
-        migrated_sl = _rewrite_legacy_claude_command(
+        migrated_sl, sl_reason = _inspect_legacy_claude_command(
             sl_obj["command"],
             legacy_suffix=_LEGACY_STATUSLINE_SCRIPT_SUFFIX,
             new_script=status_script,
             py_exe=py_exe,
             powershell=powershell,
         )
+        if sl_reason and sl_reason not in manual_reasons:
+            manual_reasons.append(sl_reason)
         if migrated_sl is not None:
             new_sl = dict(sl_obj)
             new_sl["command"] = migrated_sl
             updated["statusLine"] = new_sl
             changed = True
 
-    return updated if changed else None
+    return (updated if changed else None, manual_reasons)
+
+
+def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict[str, Any] | None:
+    updated, _ = _inspect_settings_migration(raw_data, py_exe=py_exe)
+    return updated
 
 
 def _migrated_mcp_json_payload(raw_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -1153,10 +1319,10 @@ def migrate_legacy_claude_dir(
     settings_path = claude_dir / "settings.json"
     if settings_path.is_file():
         raw_settings = _read_json_dict_fail_closed(settings_path)
-        updated_settings = (
-            _migrated_settings_payload(raw_settings, py_exe=resolve_py())
+        updated_settings, manual_reasons = (
+            _inspect_settings_migration(raw_settings, py_exe=resolve_py())
             if raw_settings is not None
-            else None
+            else (None, [])
         )
         if updated_settings is not None:
             if execute:
@@ -1166,6 +1332,25 @@ def migrate_legacy_claude_dir(
                     preserve_mode=True,
                 )
             results.append({"path": str(settings_path), "status": "updated" if execute else "would_write"})
+        if manual_reasons:
+            scope_args = (
+                f"--scope project --project {shlex.quote(str(project_dir))} --harden"
+                if project_dir is not None
+                else "--scope user --harden"
+            )
+            recovery_cmd = f"{_shell_literal(resolve_py(), powershell=_uses_powershell())} {_shell_literal(str(Path(__file__).resolve()), powershell=_uses_powershell())} {scope_args}"
+            results.append(
+                {
+                    "path": str(settings_path),
+                    "status": "manual_migration_required",
+                    "reason": "; ".join(manual_reasons),
+                    "recovery": recovery_cmd,
+                    "note": (
+                        f"Manual Claude migration required for {settings_path} "
+                        f"({'; '.join(manual_reasons)}). Recover with: {recovery_cmd}"
+                    ),
+                }
+            )
 
     if project_dir is not None:
         mcp_path = project_dir / ".mcp.json"
