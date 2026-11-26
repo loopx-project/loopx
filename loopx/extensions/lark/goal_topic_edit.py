@@ -85,7 +85,8 @@ def resolve_existing_goal_topic(
         agents = registered_agent_ids_for_goal(goal)
         if len(agents) == 1:
             agent_id = next(iter(agents))
-    old_routing = editing.get("routing") or {}
+    raw_routing = editing.get("routing")
+    old_routing = raw_routing if isinstance(raw_routing, Mapping) else {}
     stored_scope = str(
         old_routing.get("capture_scope")
         or (

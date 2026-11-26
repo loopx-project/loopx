@@ -237,10 +237,11 @@ def _resolved_goal_channel_binding(
             raise ValueError("periodic report Goal Channel target is missing")
     resolution_payload = payload
     if binding_for_goal(payload, goal_id) is None:
+        raw_bindings = payload.get("bindings")
         resolution_payload = {
             **payload,
             "bindings": {
-                **dict(payload.get("bindings") or {}),
+                **(dict(raw_bindings) if isinstance(raw_bindings, Mapping) else {}),
                 goal_id: raw,
             },
         }

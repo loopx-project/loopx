@@ -27,7 +27,7 @@ def render_channel_notice(
     def scope_valid() -> bool:
         payload = read_goal_channel_binding(binding_path)
         raw = binding_for_goal(payload, goal_id)
-        target_ref = (raw or {}).get("target_ref")
+        target_ref = str((raw or {}).get("target_ref") or "")
         current_target = goal_channel_target_for_name(
             read_goal_channel_targets(default_goal_channel_target_path(runtime_root)), target_ref,
         ) if target_ref else None
@@ -35,8 +35,9 @@ def render_channel_notice(
             return False
         binding = binding_for_goal(read_goal_channel_binding(binding_path), goal_id,
                                    provider_target=current_target)
+        raw_channel = binding.get("channel") if isinstance(binding, Mapping) else None
         return bool(binding and binding.get("enabled") is True
-                    and (binding.get("channel") or {}).get("chat_id") == chat_id)
+                    and isinstance(raw_channel, Mapping) and raw_channel.get("chat_id") == chat_id)
 
     if cached_text:
         current_notice_revision(registry_path=registry_path, runtime_root=runtime_root,

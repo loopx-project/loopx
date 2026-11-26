@@ -462,8 +462,8 @@ def _resolved_binding(
             isinstance(default_binding, Mapping)
             and default_binding.get("enabled") is True
             and (
-                (default_binding.get("routing") or {}).get("conversation_kind")
-                == "manager"
+                isinstance((default_routing := default_binding.get("routing")), Mapping)
+                and default_routing.get("conversation_kind") == "manager"
             )
             is manager_audience
         ):
@@ -475,7 +475,8 @@ def _resolved_binding(
             for item in bindings_for_goal(payload, goal_id)
             if item.get("enabled") is True
             and (
-                (item.get("routing") or {}).get("conversation_kind") == "manager"
+                isinstance((item_routing := item.get("routing")), Mapping)
+                and item_routing.get("conversation_kind") == "manager"
             )
             is manager_audience
         ]
@@ -492,8 +493,9 @@ def _resolved_binding(
     )
     if raw is None:
         raise ValueError("team plan review audience binding is unavailable")
+    raw_routing = raw.get("routing")
     if (
-        ((raw.get("routing") or {}).get("conversation_kind") == "manager")
+        (isinstance(raw_routing, Mapping) and raw_routing.get("conversation_kind") == "manager")
         is not manager_audience
     ):
         raise ValueError("team plan review audience kind is unavailable")
