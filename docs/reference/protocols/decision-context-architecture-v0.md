@@ -267,6 +267,14 @@ registering a private adapter in the public package. Activation projects only
 private. Missing or mismatched runtime providers fail open without advancing a
 cursor.
 
+Host-local turn-start integration (`decision_context.turn_context`) follows the
+same default-off and read-only boundary: an explicit CAS-managed binding under
+`<runtime-root>/decision-context/agent-bindings/` opts one registered
+`(goal_id, agent_id)` into a public-safe `decision_context_hook_view_v1`
+observation on `quota should-run` and `turn run-once`, omitting private
+locators, cursors, and source bodies while leaving review settlement and cursor
+commits untouched.
+
 ### P1: first dogfood
 
 Use one private, redacted decision-assistant scenario. Let a domain adapter map

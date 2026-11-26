@@ -100,6 +100,7 @@ exact-read 完整度和未覆盖的 P0 source 投影为公开安全的回执。`
 | `capture.py` | opt-in 的 source-reference capture 与 `capture-status` |
 | `capture_recovery.py` | 保留引用的 capture 诊断与恢复 |
 | `extension_provider.py` | 由扩展交付的 advisory context provider（`decision_context_advisory_provider_v0`） |
+| `turn_start_hook.py` | 显式启用的本机 Agent turn-start 钩子绑定与公开安全的新鲜度/变更视图 |
 | `architecture.py` | 能力合同的 `architecture` 读回 |
 | `catalog_entry.py` | 能力 catalog 记录 |
 | `cli.py` | 所有 `loopx decision-context` 子命令及其渲染 |
@@ -454,6 +455,36 @@ provider 读取失败会更新 `last_checked_at` 并累加 `failure_streak`，�
 报告：已登记 host 超过 `max(2 × interval, interval + 600s)` 未 tick（例如调度器仍指向
 已删除的 checkout）、最后一次 tick 失败、spool 丢失，或记录中的来源陈旧／持续失败时告警。
 主动退役的 host 需删除其记录。
+
+### 显式绑定本机 Turn-Start Hook
+
+`quota should-run` 与 `turn run-once` 上的 Decision Context 钩子**默认关闭**：未绑定时不做任何
+provider 或 RPC 调用。操作者可通过 `<runtime-root>/decision-context/agent-bindings/`
+下的事务型本机绑定存储，为已注册的 `(goal_id, agent_id)` 显式绑定既有私有 profile：
+
+```bash
+loopx decision-context hook read \
+  --goal-id <goal-id> --agent-id <agent-id> --format json
+
+loopx decision-context hook bind \
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --profile <private-profile.json> \
+  [--cursor-state <reviewed-cursors.json>] \
+  [--spool <private-capture.sqlite>] \
+  [--mode prepare_evidence|source_manifest|capture_status] \
+  --expected-revision none --operation-id bind-ops-v1 \
+  --execute --format json
+```
+
+绑定生效后，`quota should-run` 与 `turn run-once` 会执行只读的
+`decision_context.turn_context` 钩子（`capability_id=decision-context`），向
+`work_context.sources` 注入公开安全的 `decision_context_hook_view_v1` 视图（包含
+`changed_source_ids`、`alerted_source_ids`、`uncovered_p0_source_ids`、
+`freshness_counts`、advisory recall 状态及有界后续命令）。私有路径、游标与信源正文
+绝不进入钩子回执或轮次数据包，且轮次启动观察绝不推进审阅游标。绑定处于激活态时，只读 CLI
+（`inspect-profile`、`source-manifest`、`prepare-evidence`、`recall-context`、
+`capture-status`）可省略 `--profile`（及 `--cursor-state` / `--spool`）并在进程内解析已绑定私有路径。
+停用时用当前 `--expected-revision` 执行 `hook unbind` 退役绑定并使旧缓存失效。
 
 ## 与其他能力的关系
 

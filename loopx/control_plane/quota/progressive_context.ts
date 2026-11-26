@@ -197,6 +197,9 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
     }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
+    if (source?.kind === "decision_context" && content.ok === true && content.status === "read"
+        && typeof jsonObject(content.current)?.instructions === "string")
+      return [{path: [...path, "current", "instructions"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
     const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
     const outcomes = at(context, outcomesPath);

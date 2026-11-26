@@ -87,6 +87,9 @@ def dispatch_quota_turn_start_hooks(
                 agent_id=args.agent_id,
             )
         if args.agent_id:
+            from ..capabilities.decision_context.turn_start_hook import (
+                extend_turn_start_dispatch as extend_decision_context,
+            )
             from ..capabilities.manager_context import turn_start_hook
             from ..capabilities.semantic_preference.agent_preferences import (
                 extend_turn_start_dispatch as extend_preferences,
@@ -127,6 +130,13 @@ def dispatch_quota_turn_start_hooks(
                 )
             )
             context_dispatch = extend_preferences(
+                context_dispatch,
+                runtime_root=root,
+                registry_path=registry_path,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+            )
+            context_dispatch = extend_decision_context(
                 context_dispatch,
                 runtime_root=root,
                 registry_path=registry_path,
