@@ -330,7 +330,13 @@ def test_build_attention_queue_projection_counts_and_optional_keys() -> None:
     monitor_waiting: aq.AttentionWaitingOn = MONITOR_SIGNAL_WAITING_ON
     items: list[aq.AttentionQueueItem] = [
         {"goal_id": "g1", "waiting_on": "user_or_controller"},
-        {"goal_id": "g2", "waiting_on": "controller"},
+        {
+            "goal_id": "g2",
+            "waiting_on": "controller",
+            "goal_channel_projection": {"schema_version": "goal_channel_projection_v0"},
+            "handoff_mode": "soft_claim",
+            "long_task_cadence_hint": {"state": "unknown"},
+        },
         {"goal_id": "g3", "waiting_on": "codex"},
         {"goal_id": "g4", "waiting_on": "external_evidence"},
         {"goal_id": "g5", "waiting_on": monitor_waiting},

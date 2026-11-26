@@ -64,6 +64,9 @@ class AttentionQueueItem(TypedDict):
     handoff_readiness: NotRequired[dict[str, object]]
     dependency_blockers: NotRequired[list[dict[str, object]]]
     agent_lane_id: NotRequired[str]
+    goal_channel_projection: NotRequired[dict[str, object]]
+    handoff_mode: NotRequired[str]
+    long_task_cadence_hint: NotRequired[dict[str, object]]
 
 
 class AttentionQueueProjection(TypedDict):
