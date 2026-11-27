@@ -792,7 +792,7 @@ def test_first_blocked_writeback_checks_original_lease(
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_todo_cli):
+def test_original_turn_requalifies_a_replacement_lease_before_writeback(hard_lease_todo_cli):
     project, runtime, registry, run = hard_lease_todo_cli
 
     code, claim = run("todo", "claim", "--agent-id", cli.AGENT_ID, "--claimed-by", cli.AGENT_ID)
@@ -813,37 +813,61 @@ def test_original_turn_refuses_readiness_from_a_replacement_lease(hard_lease_tod
     replacement_lease = inspection["lease"]
     assert replacement_lease["lease_epoch"] > admitted["execution_preparation"]["lease_epoch"]
     before_retry = journal.read_bytes()
-
-    code, recovery = _guard(project, runtime, registry)
-    assert code == 0 and recovery["ok"], recovery
-    assert recovery["normal_delivery_allowed"] is False
-    assert recovery["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
-    debt = recovery["unsettled_host_turn_recovery"]
-    assert debt["prior_turn_instance_id"] == cli.TURN_ID
-    assert debt["repair"] == "execution_loss_closeout"
-    assert debt["execution_loss"]["original_prepared_epoch"] == admitted["execution_preparation"]["lease_epoch"]
-    assert debt["execution_loss"]["current_lease_epoch"] == replacement_lease["lease_epoch"]
-    assert "settlement_owed" not in recovery
-    assert journal.read_bytes() == before_retry
-
-    code, refused = _refresh(
-        project, runtime, registry,
+    replacement_proof = (
         "--task-lease-idempotency-key", replacement_lease["idempotency_key"],
         "--task-lease-expected-version", str(replacement_lease["version"]),
     )
+    code, refused = _refresh(project, runtime, registry, *replacement_proof)
     assert code == 1 and refused["error_code"] == "refresh_task_lease_unavailable", refused
     assert not refused["appended"]
     assert journal.read_bytes() == before_retry
+
+    code, resumed = _guard(project, runtime, registry)
+    assert code == 0 and resumed["normal_delivery_allowed"], resumed
+    assert resumed["interaction_contract"]["cli_channel"]["spend_allowed_now"] is False
+    assert "settlement_owed" not in resumed
+    original_receipt = admitted["heartbeat_receipt"]
+    receipt = resumed["heartbeat_receipt"]
+    identity = original_receipt["settlement_identity"]
+    assert receipt["settlement_identity"] == identity
+    assert receipt["lease_takeover"]["original_receipt_event_id"] == original_receipt["event_id"]
+    assert receipt["lease_takeover"]["original_lease_epoch"] == admitted["execution_preparation"]["lease_epoch"]
+    assert receipt["lease_takeover"]["current_lease_epoch"] == replacement_lease["lease_epoch"]
+    after_takeover = journal.read_bytes()
+    assert after_takeover.startswith(before_retry)
+    assert len(after_takeover[len(before_retry):].splitlines()) == 1
+
     readback = read_heartbeat_settlement(
         runtime, goal_id=cli.GOAL_ID, agent_id=cli.AGENT_ID, todo_id=cli.TODO_ID,
         turn_instance_id=cli.TURN_ID, registry_path=registry,
     )
-    assert readback is not None and readback.heartbeat_receipt["event_id"] == admitted["heartbeat_receipt"]["event_id"]
+    assert readback is not None and readback.heartbeat_receipt["event_id"] == receipt["event_id"]
+    assert readback.prepared_lease["prepared_lease_epoch"] == replacement_lease["lease_epoch"]
+    assert readback.prepared_lease["prepared_lease_version"] == replacement_lease["version"]
     assert not readback.writeback.receipts and not readback.spend.receipts
     assert cli._spend_run_count(runtime) == 0
 
-    assert readback.prepared_lease["prepared_lease_epoch"] == admitted["execution_preparation"]["lease_epoch"]
-    assert readback.prepared_lease["prepared_lease_version"] == original_proof["expected_version"]
+    code, stale = _refresh(
+        project, runtime, registry,
+        "--task-lease-idempotency-key", original_proof["idempotency_key"],
+        "--task-lease-expected-version", str(original_proof["expected_version"]),
+    )
+    assert code == 1 and stale["error_code"] == "refresh_task_lease_unavailable", stale
+    assert not stale["appended"]
+    code, repeated_guard = _guard(project, runtime, registry)
+    assert code == 0 and repeated_guard["heartbeat_receipt"]["event_id"] == receipt["event_id"]
+    assert journal.read_bytes() == after_takeover
+
+    closeout = (*replacement_proof, "--settle-turn", "--settlement-receipt")
+    code, settled = _refresh(project, runtime, registry, *closeout)
+    assert code == 0 and settled["settlement_result"]["ok"], settled
+    assert settled["settlement_identity"] == identity
+    assert settled["settlement_progress"]["state"] == "settled"
+    code, replay = _refresh(project, runtime, registry, *closeout)
+    assert code == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert replay["settlement_result"] == settled["settlement_result"]
+    assert cli._classification_count(runtime, "validated_progress") == 1
+    assert cli._spend_run_count(runtime) == 1
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
