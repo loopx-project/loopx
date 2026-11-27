@@ -560,6 +560,24 @@ readback must also retain their existing distinct evidence.
 
 ### Product and benchmark execution
 
+For standalone Core, `loopx-capability-research` takes **Explore** as its
+primary optional workflow (moving heavy Explore orchestration, multi-branch/frontier
+planning, harness/episode replay, source reconciliation, and the `explore` CLI
+surface out of Core) together with the standalone `deepresearch` evidence ledger
+and `external-evidence` commands. Core retains only Explore's canonical
+result-event contract, lightweight projection, machine/goal configuration
+adapters, and Goal permission and settlement validation (`loopx-core` keeps
+ordinary turns lazy and independent of `loopx-capability-research`). Installing
+the wheel grants no extra Goal write authority. Parent-admitted
+`external-evidence` projects sanitized public-safe references into enabled same-goal
+Explore nodes without automatic provider execution, and `deepresearch` citation
+reports expose a one-way, idempotent, read-only export (`explore import-citations`)
+so local paths, private sources, and report prose stay inside
+`.loopx/deepresearch/` while standalone `deepresearch` commands continue reading
+existing ledgers unchanged. The Core catalog binds `explore`, `deep-research`,
+and `external-evidence-research` to `loopx-capability-research` and reports
+readiness, missing-file/version diagnostics, and install hints passively.
+
 Follow the [long-horizon research program](long-horizon-harness-benchmark-research-program-v0.md):
 native/plain controls, passive observation, governed execution and ablations
 have explicit identities. A native control receives no LoopX instructions or
@@ -653,6 +671,14 @@ lease. Rollback uses the same reconciliation and retains durable state.
 Any later irreversible data change needs a separate migration/export gate.
 
 Rollback of these structural/composition changes requires no data migration.
+For existing standalone `.loopx/deepresearch/` ledgers, active runs keep their
+existing read, continuation, close, archive, and rollback semantics in
+`loopx-capability-research`; open sessions can close in place or project
+sanitized citation references one-way into an enabled Goal's Explore graph
+without mutating `.loopx/deepresearch/`. Uninstalling
+`loopx-capability-research` preserves Goal Explore logs, Goal permissions, and
+standalone research ledgers so the environment can roll back to bare
+`loopx-core` cleanly or resume by reinstalling the matching wheel.
 Default changes need explicit owner decisions and release notes; this proposal
 changes no current default.
 

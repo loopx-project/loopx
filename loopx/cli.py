@@ -656,6 +656,7 @@ def _main(argv: list[str] | None = None) -> int:
 
     external_evidence_result = handle_external_evidence_command(
         args, output_format=output_format, print_payload=print_payload,
+        registry_path=registry_path,
     )
     if external_evidence_result is not None:
         return external_evidence_result

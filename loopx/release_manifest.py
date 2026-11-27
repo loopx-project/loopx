@@ -11,6 +11,7 @@ from typing import Any
 from . import __version__
 from .doctor_git import GitSourceState, git_source_metadata
 from .python_install_owner import (
+    RESEARCH_DISTRIBUTION,
     WORKSPACE_DISTRIBUTION,
     distribution_recorded_files,
     installed_loopx_distribution,
@@ -316,6 +317,7 @@ _CORE_COMPANION_DISTRIBUTIONS = (
     "loopx-capability-agent-turn-recall",
     "loopx-capability-pull-request-review",
     "loopx-capability-issue-fix",
+    RESEARCH_DISTRIBUTION,
 )
 
 

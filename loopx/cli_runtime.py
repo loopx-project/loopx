@@ -78,8 +78,8 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"workbench",
 	"history",
 }
-# Fast-dispatched in ordinary installs; excluded from standalone Core support/commands.
-_FULL_INSTALL_SELECTED_COMMANDS = frozenset({"explore"})
+# Retired from Core-only suppression once Explore CLI ships via RESEARCH_DISTRIBUTION.
+_FULL_INSTALL_SELECTED_COMMANDS: frozenset[str] = frozenset()
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
 _WORKSPACE_COMMANDS = frozenset({"chat", "chat-endpoint", "dashboard"})
@@ -1028,6 +1028,17 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			registry_was_supplied=user_supplied_registry(raw_argv),
 			print_payload=print_payload, output_format=output_format,
 		)
+	elif args.command == "deepresearch":
+		from .cli_commands.deepresearch import handle_deepresearch_command
+
+		result = handle_deepresearch_command(args, output_format=output_format, print_payload=print_payload)
+	elif args.command == "external-evidence":
+		from .capabilities.external_research.cli import handle_external_evidence_command
+
+		result = handle_external_evidence_command(
+			args, output_format=output_format, print_payload=print_payload,
+			registry_path=registry_path,
+		)
 	else:
 		result = dispatch_common_command(
 			args,
@@ -1042,6 +1053,7 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 def _available_selected_commands() -> frozenset[str]:
 	from .capabilities.agent_turn_recall.catalog_entry import agent_turn_recall_installed
+	from .capabilities.deep_research.catalog_entry import research_workflows_installed
 	from .capabilities.issue_fix.catalog_entry import issue_fix_workflow_installed
 	from .capabilities.pr_review_queue.catalog_entry import pull_request_review_installed
 
@@ -1052,6 +1064,8 @@ def _available_selected_commands() -> frozenset[str]:
 		commands.add("pr-review")
 	if issue_fix_workflow_installed(builtin_cli_present=False):
 		commands.add("issue-fix")
+	if research_workflows_installed(builtin_cli_present=False):
+		commands.update(("explore", "deepresearch", "external-evidence"))
 	return frozenset(commands)
 
 
@@ -1185,6 +1199,25 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 
 		register(subparsers, add_subcommand_format)
 		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
+	if command in {"explore", "deepresearch", "external-evidence"} and _standalone_core():
+		from .capabilities.deep_research.catalog_entry import RESEARCH_INSTALL_HINT, research_workflows_installed
+
+		parser, subparsers = build_cli_parser()
+		if not research_workflows_installed(builtin_cli_present=False):
+			parser.error(f"{command} is unavailable in the standalone core. {RESEARCH_INSTALL_HINT}")
+		if command == "explore":
+			from .cli_commands.explore import register_explore_commands
+
+			register_explore_commands(subparsers, add_subcommand_format)
+		elif command == "deepresearch":
+			from .cli_commands.deepresearch import register_deepresearch_command
+
+			register_deepresearch_command(subparsers, add_subcommand_format)
+		else:
+			from .capabilities.external_research.cli import register_external_evidence_commands
+
+			register_external_evidence_commands(subparsers, add_subcommand_format)
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command in _WORKSPACE_COMMANDS and _standalone_core():
 		parser, subparsers = build_cli_parser()
 		if not _workspace_installed():
@@ -1209,7 +1242,7 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command == "history" and "loopx.cli" in sys.modules:
 		# An explicitly loaded facade keeps its existing handler/renderer bindings.
 		return _run_full_cli(raw_argv)
-	if command in _SELECTED_COMMANDS or (command in _FULL_INSTALL_SELECTED_COMMANDS and not _standalone_core()):
+	if command in _SELECTED_COMMANDS or (command == "explore" and not _standalone_core()):
 		try:
 			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:

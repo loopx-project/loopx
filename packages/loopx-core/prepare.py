@@ -1,4 +1,4 @@
-"""Prepare split LoopX Core, Workspace, and built-in capability distributions.
+"""Prepare split LoopX Core, Workspace, Research, and built-in capability distributions.
 
 Build the returned directory with a PEP 517 frontend. No runtime code is copied
 back into the repository and the ordinary distribution remains unchanged.
@@ -38,6 +38,7 @@ SOURCE_SUFFIXES = {".py", ".ts", ".json", ".mjs", ".js", ".md", ".toml"}
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
 PR_REVIEW_DISTRIBUTION = "loopx-capability-pull-request-review"
 ISSUE_FIX_DISTRIBUTION = "loopx-capability-issue-fix"
+RESEARCH_DISTRIBUTION = "loopx-capability-research"
 STANDARD_CAPABILITY_DISTRIBUTIONS = (
     RECALL_DISTRIBUTION,
     PR_REVIEW_DISTRIBUTION,
@@ -58,6 +59,34 @@ ISSUE_FIX_CORE_FILES = {
     "pr_gate_reconcile.py", "pr_lifecycle.py", "pr_lifecycle_rollout.py",
     "pr_review_ack.py", "pr_wait_hook.py", "pr_wait_reconcile.py",
 }
+EXPLORE_DIRECTORY = Path("loopx/capabilities/explore")
+# Core retains Explore's result event schema, lightweight projection, machine/goal
+# configuration adapters, and Goal permission/settlement interfaces.
+EXPLORE_CORE_FILES = {
+    "__init__.py", "activation.py", "candidate_content.py", "catalog_entry.py",
+    "composition_frontier.py", "execution_observation.py", "harness_gate.py",
+    "machine_defaults.py", "measurements.py", "research_evidence.py",
+    "research_frontier.py", "result_log.py", "result_writeback.py",
+    "turn_context.py", "README.md", "README.zh-CN.md",
+}
+RESEARCH_FILES = {
+    Path("loopx/cli_commands/explore.py"),
+    Path("loopx/cli_commands/explore_planning_commands.py"),
+    Path("loopx/cli_commands/explore_feishu_commands.py"),
+    Path("loopx/capabilities/deep_research/runtime.py"),
+    Path("loopx/capabilities/external_research/cli.py"),
+    Path("loopx/capabilities/external_research/projection.py"),
+    Path("loopx/capabilities/external_research/provider_probe.py"),
+    Path("loopx/cli_commands/deepresearch.py"),
+    Path("loopx/control_plane/capabilities/external_evidence.ts"),
+    Path("loopx/extensions/public_github_research.py"),
+    EXPLORE_DIRECTORY / "harness_runtime.py",
+    EXPLORE_DIRECTORY / "harness_frontier.py",
+    EXPLORE_DIRECTORY / "replay_runtime.py",
+    EXPLORE_DIRECTORY / "research_bridge.py",
+    EXPLORE_DIRECTORY / "todo_branch_plan.py",
+    EXPLORE_DIRECTORY / "worker_branch_plan.py",
+}
 CAPABILITY_ENTRY_MODULES = {
     RECALL_DISTRIBUTION: {
         Path("loopx/capabilities/agent_turn_recall/cli.py"),
@@ -72,6 +101,7 @@ CAPABILITY_ENTRY_MODULES = {
     ISSUE_FIX_DISTRIBUTION: {
         ISSUE_FIX_DIRECTORY / name for name in ("cli.py", "candidate_preflight.py", "workflow_plan.py", "acceptance_loop.py")
     },
+    RESEARCH_DISTRIBUTION: RESEARCH_FILES,
 }
 
 
@@ -93,6 +123,10 @@ def _optional_capability_sources(sources: list[Path]) -> dict[str, set[Path]]:
             | (tracked & CAPABILITY_ENTRY_MODULES[PR_REVIEW_DISTRIBUTION])
         ),
         ISSUE_FIX_DISTRIBUTION: _implementation_paths(sources, ISSUE_FIX_DIRECTORY, ISSUE_FIX_CORE_FILES),
+        RESEARCH_DISTRIBUTION: (
+            _implementation_paths(sources, EXPLORE_DIRECTORY, EXPLORE_CORE_FILES)
+            | (tracked & RESEARCH_FILES)
+        ),
     }
 
 
@@ -194,6 +228,10 @@ def prepare_capability_source(
     (output / "VERSION").write_text(f"{version}\n", encoding="utf-8")
     (output / "requires-core.txt").write_text(f"loopx-core=={version}\n", encoding="utf-8")
     return output
+
+
+def prepare_research_source(output: Path, *, repository: Path = REPOSITORY) -> Path:
+    return prepare_capability_source(output, RESEARCH_DISTRIBUTION, repository=repository)
 
 
 def main() -> int:

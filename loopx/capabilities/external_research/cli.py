@@ -194,7 +194,11 @@ def register_external_evidence_commands(
     project.add_argument("--receipt-json", required=True, metavar="FILE", help="Path to a receipt JSON object.")
     project.add_argument("--admission-json", metavar="FILE", help="Path to a saved admission JSON object.")
     project.add_argument("--project", help="Existing deepresearch project; no implicit run is created.")
-    project.add_argument("--execute", action="store_true", help="Write explicitly admitted sources to the existing ledger.")
+    project.add_argument("--goal-id", help="Optional target enabled Explore Goal id for sanitized bridge projection.")
+    project.add_argument("--explore-node", help="Target node id in the Explore Goal when projecting with --goal-id.")
+    project.add_argument("--agent-id", help="Optional registered agent id for Explore bridge projection.")
+    project.add_argument("--expected-goal-id", help="Optional expected source Goal id; fails closed on mismatch.")
+    project.add_argument("--execute", action="store_true", help="Write explicitly admitted sources to the existing ledger or sanitized Explore findings.")
     add_subcommand_format(project)
 
     receipt = actions.add_parser(
@@ -228,6 +232,7 @@ def handle_external_evidence_command(
     *,
     output_format: FormatSelector,
     print_payload: PrintPayload,
+    registry_path: Path | None = None,
 ) -> int | None:
     if args.command != "external-evidence":
         return None
@@ -335,10 +340,62 @@ def handle_external_evidence_command(
             payload = execute_public_github(plan)
             payload["observation"] = validate_receipt(plan, payload["receipt"])
         elif args.external_evidence_action == "readback":
-            payload = readback(_load_object(args.plan_json, label="external evidence plan"),
-                _load_receipt(args.receipt_json),
-                _load_object(args.admission_json, label="external evidence admission") if args.admission_json else None,
-                project=Path(args.project).expanduser() if args.project else None, execute=args.execute)
+            plan_obj = _load_object(args.plan_json, label="external evidence plan")
+            receipt_obj = _load_receipt(args.receipt_json)
+            admission_obj = (
+                _load_object(args.admission_json, label="external evidence admission")
+                if args.admission_json
+                else None
+            )
+            goal_target = getattr(args, "goal_id", None)
+            explore_node = getattr(args, "explore_node", None)
+            if goal_target or explore_node:
+                if not (goal_target and explore_node):
+                    raise ValueError("Explore readback projection requires both --goal-id and --explore-node")
+                if admission_obj is None:
+                    raise ValueError("Explore readback projection requires --admission-json")
+                from ...paths import default_registry_path, resolve_runtime_root
+                from ...control_plane.projects.registry_codec import load_registry
+                from ..explore.research_bridge import project_external_evidence_to_explore
+
+                reg_arg = getattr(args, "registry", None)
+                reg_path = (
+                    registry_path
+                    if registry_path is not None
+                    else (Path(reg_arg).expanduser() if reg_arg else default_registry_path())
+                )
+                rt_root = resolve_runtime_root(
+                    load_registry(reg_path) if reg_path.exists() else {},
+                    getattr(args, "runtime_root", None),
+                )
+                explore_result = project_external_evidence_to_explore(
+                    registry_path=reg_path,
+                    runtime_root=rt_root,
+                    goal_id=goal_target,
+                    node_id=explore_node,
+                    plan=plan_obj,
+                    receipt=receipt_obj,
+                    admission=admission_obj,
+                    agent_id=getattr(args, "agent_id", None),
+                    expected_goal_id=getattr(args, "expected_goal_id", None),
+                    execute=bool(args.execute),
+                )
+                payload = readback(
+                    plan_obj,
+                    receipt_obj,
+                    admission_obj,
+                    project=Path(args.project).expanduser() if args.project else None,
+                    execute=False,
+                )
+                payload["explore_projection"] = explore_result
+            else:
+                payload = readback(
+                    plan_obj,
+                    receipt_obj,
+                    admission_obj,
+                    project=Path(args.project).expanduser() if args.project else None,
+                    execute=args.execute,
+                )
         elif args.external_evidence_action == "receipt":
             payload = effect_runtime_result(
                 "external_evidence.receipt",

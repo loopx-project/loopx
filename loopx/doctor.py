@@ -1262,10 +1262,17 @@ def collect_doctor(
         })
     if deep_validation:
         checks.extend(deep_validation["checks"])
+    from .release_candidate import collect_companion_distribution_diagnostics
+
+    runtime_identity = release_runtime_identity()
+    companions, companion_checks, companion_fix = collect_companion_distribution_diagnostics(
+        runtime_identity=runtime_identity,
+    )
+    checks.extend(companion_checks)
     payload: dict[str, Any] = {
         "ok": all(check["ok"] for check in checks if check["required"]),
         "mode": "deep" if deep else "standard",
-        "service_runtime_identity": release_runtime_identity(),
+        "service_runtime_identity": runtime_identity,
         "agent_type": canonical_agent_type,
         "python": {
             "executable": sys.executable,
@@ -1364,6 +1371,10 @@ def collect_doctor(
             )
         ),
     }
+    if companions:
+        payload["companion_distributions"] = companions
+    if companion_fix:
+        payload["fix"] = f"{companion_fix}\n{payload['fix']}"
     if canonical_agent_type == "zcode":
         from .zcode_goal_mode.diagnostics import collect_zcode_host_diagnostics
 
@@ -1537,6 +1548,17 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     for check in payload.get("checks") or []:
         required = "required" if check.get("required") else "optional"
         lines.append(f"- {check.get('id')} ({required}): `{check.get('ok')}` - {check.get('detail')}")
+    companions = payload.get("companion_distributions")
+    if isinstance(companions, list) and companions:
+        lines.extend(["", "## Companion Distributions"])
+        for item in companions:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('distribution')}: version=`{item.get('version')}`, "
+                f"core_version=`{item.get('core_version')}`, ready=`{item.get('ready')}`, "
+                f"reason=`{item.get('reason')}`"
+            )
     provenance = cast(dict[str, Any], payload.get("release_provenance")) if isinstance(payload.get("release_provenance"), dict) else {}
     if provenance:
         default_release = cast(dict[str, Any], provenance.get("default_release")) if isinstance(provenance.get("default_release"), dict) else {}

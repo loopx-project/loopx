@@ -130,6 +130,33 @@ def register_explore_commands(
     observe.add_argument("--observation-json", required=True, help="File containing a typed_research_observation_v0 envelope.")
     observe.add_argument("--agent-id")
 
+    observe_external = sub.add_parser(
+        "observe-external",
+        help="Project explicitly parent-admitted external evidence onto an existing same-goal Explore node; never executes providers automatically.",
+    )
+    add_subcommand_format(observe_external)
+    observe_external.add_argument("--goal-id", required=True)
+    observe_external.add_argument("--node", dest="node_id", required=True, help="Existing target node id inside the same Goal.")
+    observe_external.add_argument("--plan-json", required=True, metavar="FILE")
+    observe_external.add_argument("--receipt-json", required=True, metavar="FILE")
+    observe_external.add_argument("--admission-json", required=True, metavar="FILE")
+    observe_external.add_argument("--expected-goal-id", help="Optional expected source Goal id; fails closed on mismatch.")
+    observe_external.add_argument("--agent-id")
+    observe_external.add_argument("--execute", action="store_true", help="Write sanitized findings to the Goal Explore log (dry-run by default).")
+
+    import_citations = sub.add_parser(
+        "import-citations",
+        help="One-way read-only export of authorized answered citations from a deepresearch ledger into an enabled Goal Explore node.",
+    )
+    add_subcommand_format(import_citations)
+    import_citations.add_argument("--goal-id", required=True)
+    import_citations.add_argument("--node", dest="node_id", required=True, help="Existing target node id inside the same Goal.")
+    import_citations.add_argument("--project", required=True, help="Project directory holding .loopx/deepresearch/.")
+    import_citations.add_argument("--claim-id", dest="claim_ids", action="append", default=[], help="Optional authorized claim id to export; repeatable.")
+    import_citations.add_argument("--expected-goal-id", help="Optional expected source Goal id; fails closed on mismatch.")
+    import_citations.add_argument("--agent-id")
+    import_citations.add_argument("--execute", action="store_true", help="Write sanitized citation refs to the Goal Explore log (dry-run by default).")
+
     presentation = sub.add_parser(
         "presentation",
         help="Assess readability and derive same-source canonical/executive views.",
@@ -609,6 +636,41 @@ def handle_explore_command(
                 observation=observation, agent_id=args.agent_id,
                 registry_path=source_registry,
                 runtime_root=runtime_root,
+            )
+        elif args.explore_command == "observe-external":
+            from ..capabilities.explore.research_bridge import project_external_evidence_to_explore
+
+            plan = json.loads(Path(args.plan_json).expanduser().read_text(encoding="utf-8"))
+            receipt_raw = json.loads(Path(args.receipt_json).expanduser().read_text(encoding="utf-8"))
+            receipt = receipt_raw.get("receipt", receipt_raw) if isinstance(receipt_raw, dict) else receipt_raw
+            admission = json.loads(Path(args.admission_json).expanduser().read_text(encoding="utf-8"))
+            if not all(isinstance(item, dict) for item in (plan, receipt, admission)):
+                raise ValueError("plan, receipt, and admission must be JSON objects")
+            payload = project_external_evidence_to_explore(
+                registry_path=source_registry,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                plan=plan,
+                receipt=receipt,
+                admission=admission,
+                agent_id=args.agent_id,
+                expected_goal_id=args.expected_goal_id,
+                execute=bool(args.execute),
+            )
+        elif args.explore_command == "import-citations":
+            from ..capabilities.explore.research_bridge import export_deepresearch_citations_to_explore
+
+            payload = export_deepresearch_citations_to_explore(
+                project=Path(args.project).expanduser(),
+                registry_path=source_registry,
+                runtime_root=runtime_root,
+                goal_id=args.goal_id,
+                node_id=args.node_id,
+                agent_id=args.agent_id,
+                expected_goal_id=args.expected_goal_id,
+                claim_ids=args.claim_ids or None,
+                execute=bool(args.execute),
             )
         elif args.explore_command == "summary":
             payload = projection_for(args, runtime_root=runtime_root)
