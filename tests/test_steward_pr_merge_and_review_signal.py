@@ -537,7 +537,9 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
         if cursor is not None:
             backfilled.append(next(arg for arg in cmd if arg.startswith("number=")))
             comments = {"pageInfo": {"hasPreviousPage": True, "startCursor": cursor + "-older"}, "nodes": []}
-            payload = {"data": {"repository": {"pullRequest": {"comments": comments}}}}
+            payload = {"data": {"repository": {"pullRequest": {
+                "number": int(backfilled[-1].removeprefix("number=")), "headRefOid": head, "comments": comments,
+            }}}}
         else:
             size = int(next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("pageSize=")), "20"))
             limit = min(read_count + size, 101)
@@ -612,7 +614,9 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
             comment_timeouts.append(kwargs["timeout"])
             elapsed += comment_seconds
             comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "older"}, "nodes": []}
-            response = {"data": {"repository": {"pullRequest": {"comments": comments}}}}
+            response = {"data": {"repository": {"pullRequest": {
+                "number": 1, "headRefOid": head, "comments": comments,
+            }}}}
         else:
             list_pages += 1
             elapsed += 19
@@ -775,6 +779,82 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
         assert numbers == ([] if case == "author_excluded" else [42])
 
 
+@pytest.mark.parametrize("case", [
+    "same_head_author", "same_head_maintainer", "changed_head", "missing_head",
+    "wrong_number", "missing_number", "wrong_number_type", "draft",
+])
+def test_steward_requires_matching_pr_and_head_for_older_comments(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat.steward_monitor_signals import _read_repository_snapshot
+
+    head = "a" * 40
+    observed_at = datetime(2030, 1, 1, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor_signals.now_utc", lambda: observed_at)
+    review = {
+        "id": "review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+        "author": {"login": "maintainer"}, "commit": {"oid": head},
+    }
+    node = _graphql_node(_sample_pr(
+        number=42, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=[review],
+    ))
+    node["isDraft"] = case == "draft"
+    node["comments"] = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}}
+    scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {"effective_verdicts": ["REQUEST_CHANGES"], "exclude_drafts": True, "min_stalled_hours": 24,
+                      "author_mode": "exclude", "authors": ["maintainer"]},
+    }
+    reads = []
+
+    def runner(cmd, **kwargs):
+        if "before=recent" not in cmd:
+            payload = _graphql_page([node])
+        else:
+            query = next(arg for arg in cmd if arg.startswith("query="))
+            identity_fields = query.split("pullRequest(number: $number) {", 1)[1].split("comments(", 1)[0]
+            assert {"number", "headRefOid"}.issubset(identity_fields.split())
+            reads.append(kwargs["timeout"])
+            reply_login = "maintainer" if case == "same_head_maintainer" else "contributor"
+            pr_data = {
+                "number": 42, "headRefOid": head,
+                "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": [
+                    {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": reply_login},
+                     "authorAssociation": "MEMBER"},
+                ]},
+            }
+            if case == "changed_head":
+                pr_data["headRefOid"] = "b" * 40
+            elif case == "missing_head":
+                del pr_data["headRefOid"]
+            elif case == "wrong_number":
+                pr_data["number"] = 43
+            elif case == "missing_number":
+                del pr_data["number"]
+            elif case == "wrong_number_type":
+                pr_data["number"] = 42.0
+            payload = {"data": {"repository": {"pullRequest": pr_data}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    snapshot = _read_repository_snapshot(
+        {"task_repository": "git:github.com/org/repo"}, scope,
+        partial(observe_github_repository_prs, runner=runner), ChatConversationBindings._core,
+    )
+    assert snapshot is not None and snapshot["status"] == "ok"
+    assert reads == ([] if case == "draft" else [20])
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "signal_scope": scope,
+        "observed_at": observed_at.isoformat(), "previous_hash": "sha256:prior",
+    })
+    usable = case in {"same_head_author", "same_head_maintainer", "draft"}
+    assert observation["observation_incomplete"] is not usable
+    if usable:
+        numbers = [item["number"] for item in observation["scoped_repository_items"]]
+        assert numbers == ([42] if case == "same_head_author" else [])
+    else:
+        assert snapshot["items"][0]["author_replied_after_request_changes"] is False
+        assert observation["result_hash"] == "sha256:prior"
+        assert observation["material_change"] is False
+
+
 @pytest.mark.parametrize(
     ("page_kind", "page_info", "evidence", "expected_complete"),
     [
@@ -848,6 +928,7 @@ def test_steward_requires_readable_comment_page_for_coverage(
         else:
             requested_cursors.append(cursor)
             response = {"data": {"repository": {"pullRequest": {
+                "number": node["number"], "headRefOid": head,
                 "comments": response_page,
             }}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
@@ -944,7 +1025,9 @@ def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
             response = _graphql_page([node])
         else:
             requested_cursors.append(cursor)
-            response = {"data": {"repository": {"pullRequest": {"comments": finished}}}}
+            response = {"data": {"repository": {"pullRequest": {
+                "number": node["number"], "headRefOid": head, "comments": finished,
+            }}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
     snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=source == "older")
@@ -1643,6 +1726,8 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
                 "data": {
                     "repository": {
                         "pullRequest": {
+                            "number": snap2_node["number"],
+                            "headRefOid": head,
                             "comments": {
                                 "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
                                 "nodes": [author_comment],
@@ -1713,6 +1798,8 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
                 "data": {
                     "repository": {
                         "pullRequest": {
+                            "number": snap2_node["number"],
+                            "headRefOid": head,
                             "comments": {
                                 "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"},
                                 "nodes": [author_comment, maintainer_comment],
@@ -1756,6 +1843,8 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
                 "data": {
                     "repository": {
                         "pullRequest": {
+                            "number": snap2_node["number"],
+                            "headRefOid": head,
                             "comments": {
                                 "pageInfo": {"hasPreviousPage": True, "startCursor": next_cursor},
                                 "nodes": _visitor_comments(5, prefix_hour=hour),
@@ -2148,6 +2237,8 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
                         "data": {
                             "repository": {
                                 "pullRequest": {
+                                    "number": truncated_node["number"],
+                                    "headRefOid": head,
                                     "comments": {
                                         "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
                                         "nodes": [author_comment],

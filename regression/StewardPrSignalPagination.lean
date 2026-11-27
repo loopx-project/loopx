@@ -931,6 +931,44 @@ theorem review_and_comment_reads_share_both_budgets
   have remainingPr := Nat.le_trans allowed (Nat.min_le_right (scan - usedReviews) (3 - usedReviews))
   omega
 
+/- Before interpreting an older comment page, the shared reader decodes the
+   response's PR number and head. An absent or invalid field is none. The
+   reply decision below assumes the existing comment coverage checks passed. -/
+def bindOlderCommentEvidence (number head : Nat) (returnedNumber returnedHead : Option Nat)
+    (authorReply : Option Bool) : Option Bool :=
+  if returnedNumber = some number ∧ returnedHead = some head then authorReply else none
+
+theorem accepted_older_comments_have_exact_pr_and_head
+    (number head : Nat) (returnedNumber returnedHead : Option Nat) (reply : Bool)
+    (accepted : bindOlderCommentEvidence number head returnedNumber returnedHead (some reply) = some reply) :
+    returnedNumber = some number ∧ returnedHead = some head := by
+  by_cases bound : returnedNumber = some number ∧ returnedHead = some head
+  · exact bound
+  · simp [bindOlderCommentEvidence, bound] at accepted
+
+theorem unbound_older_comments_preserve_prior
+    (prior : List Nat) (number head : Nat) (returnedNumber returnedHead : Option Nat)
+    (reply : Option Bool) (unbound : ¬ (returnedNumber = some number ∧ returnedHead = some head)) :
+    observeStalledScope prior number (bindOlderCommentEvidence number head returnedNumber returnedHead reply) =
+      (prior, false) := by
+  simp [bindOlderCommentEvidence, unbound, observeStalledScope, observe]
+
+theorem verified_matching_older_comments_preserve_their_decision
+    (number head : Nat) (reply : Option Bool) :
+    bindOlderCommentEvidence number head (some number) (some head) reply = reply := by
+  simp [bindOlderCommentEvidence]
+
+theorem matching_maintainer_reply_keeps_a_verified_exclusion :
+    observeStalledScope [] 42 (bindOlderCommentEvidence 42 10 (some 42) (some 10) (some false)) =
+      ([], false) := by
+  decide
+
+theorem ignoring_comment_head_can_publish_a_false_author_bypass :
+    observeStalledScope [] 42 (some true) = ([42], true) ∧
+      observeStalledScope [] 42 (bindOlderCommentEvidence 42 10 (some 42) (some 11) (some true)) =
+        ([], false) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1028,5 +1066,10 @@ theorem review_and_comment_reads_share_both_budgets
 #print axioms repeated_older_review_cursor_cannot_replace_prior
 #print axioms one_verified_older_page_can_recover_review_twenty_one
 #print axioms review_and_comment_reads_share_both_budgets
+#print axioms accepted_older_comments_have_exact_pr_and_head
+#print axioms unbound_older_comments_preserve_prior
+#print axioms verified_matching_older_comments_preserve_their_decision
+#print axioms matching_maintainer_reply_keeps_a_verified_exclusion
+#print axioms ignoring_comment_head_can_publish_a_false_author_bypass
 
 end StewardPrSignalPagination

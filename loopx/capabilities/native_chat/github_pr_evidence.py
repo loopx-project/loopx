@@ -602,6 +602,8 @@ _GITHUB_PR_REVIEWS_PAGE_QUERY = """query($owner: String!, $name: String!, $numbe
 _GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      number
+      headRefOid
       comments(last: 50, before: $before) {
         pageInfo {
           hasPreviousPage
@@ -833,6 +835,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
 
 def _read_older_pr_page(
     number: int,
+    head_oid: str,
     query: str,
     cursor: str,
     remaining_seconds: float,
@@ -862,10 +865,15 @@ def _read_older_pr_page(
     data = payload.get("data")
     repo = data.get("repository") if isinstance(data, Mapping) else None
     pr_data = repo.get("pullRequest") if isinstance(repo, Mapping) else None
-    return pr_data if isinstance(pr_data, Mapping) else None
+    if not isinstance(pr_data, Mapping):
+        return None
+    returned_number = pr_data.get("number")
+    if type(returned_number) is not int or returned_number != number or pr_data.get("headRefOid") != head_oid:
+        return None
+    return pr_data
 
 
-_ReadOlderPage = Callable[[int, str, str, float], Mapping[str, Any] | None]
+_ReadOlderPage = Callable[[int, str, str, str, float], Mapping[str, Any] | None]
 
 
 def _backfill_pr_reviews(
@@ -889,10 +897,8 @@ def _backfill_pr_reviews(
             break
         seen_cursors.add(cursor)
         remaining_pages -= 1
-        pr_data = read_older_page(number, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
-        if pr_data is None or type(pr_data.get("number")) is not int or pr_data["number"] != number:
-            break
-        if pr_data.get("headRefOid") != head_oid:
+        pr_data = read_older_page(number, head_oid, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
+        if pr_data is None:
             break
         page = _read_graphql_review_page(pr_data.get("reviews"))
         if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:
@@ -917,6 +923,9 @@ def _backfill_pr_comments_if_needed(
     read_older_page: _ReadOlderPage,
 ) -> tuple[dict[str, Any], int]:
     """Backfill an incomplete PR and return the remaining allowance."""
+    head_oid = norm_node.get("headRefOid")
+    if not isinstance(head_oid, str) or not head_oid.strip():
+        return summary, remaining_pages
     for _ in range(remaining_pages):
         if summary.get("comments_coverage_incomplete") is not True:
             break
@@ -925,8 +934,10 @@ def _backfill_pr_comments_if_needed(
         if not comment_cursor or remaining_seconds <= 0:
             break
         remaining_pages -= 1
-        pr_data = read_older_page(number, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds)
-        comments_conn = pr_data.get("comments") if isinstance(pr_data, Mapping) else None
+        pr_data = read_older_page(number, head_oid, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds)
+        if pr_data is None:
+            break
+        comments_conn = pr_data.get("comments")
         older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
         page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
         older_comments = _read_graphql_comment_nodes(older_nodes)
