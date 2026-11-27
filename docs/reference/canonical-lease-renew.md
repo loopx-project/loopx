@@ -46,12 +46,35 @@ ignores ineligible holders. Standalone acquisition records explicitly requested
 scopes. New managed claims keep the Todo's declared paths in the Todo detail
 and acquire without a per-path list.
 
-If the original Turn already admitted execution, expiry or release enters
-execution-loss recovery. A new claim supplies only the control-writer proof
-needed to close that original Turn without spending quota; it cannot resume
-the old execution. Re-enter the original guard, follow its closeout preview,
-and require a fresh admitted Turn before more delivery. A first claim on a
-Turn that has not admitted execution still uses ordinary preparation.
+For an already admitted, unsettled Turn on canonical File/SQLite, the same
+Agent can recover an open advancement Todo through ordinary claim/acquire,
+then re-enter the original guard with the original Goal/Agent/Todo/Turn
+identity. The guard can qualify the new active lease for that Turn: its key
+must differ, its version and epoch must advance, and current provider state,
+claim ownership, repository and eligibility must all pass. A competing
+effective holder still blocks acquisition; old execution proof stays invalid.
+
+This [fenced takeover](../../loopx/control_plane/quota/heartbeat_receipt_identity.ts)
+preserves the original admission and lease lineage. It does not inherit old
+acceptance: inspect existing effects, validate the result against current
+requirements, and follow the returned settlement plan, which settles the
+original Turn only once. The [File/SQLite CLI tests](../../tests/control_plane/test_heartbeat_lease_takeover.py)
+cover progress, completion, current validation and replay. Cross-Agent and
+remote-provider takeover are outside this path. If takeover does not qualify,
+follow the guard's scoped execution-loss closeout instead of forcing delivery.
+A Turn that has not admitted execution still uses ordinary preparation.
+
+Recovery is separate from live renewal. The [leased CLI Host supervisor](local-delegation.md#use-an-existing-agent-conversation-through-its-shell)
+renews while it can prove current execution. Codex App has no integrated
+background live-renewal path; the three-hour default and same-Agent recovery
+do not provide one.
+
+中文：canonical File/SQLite 中，同一 Agent 可正常领取新租约，再用原
+Goal/Agent/Todo/Turn 重入 guard；新 key、递增 version/epoch、当前归属、仓库
+和执行资格都须核验，不能覆盖竞争持有人或复活旧 proof。接管保留原准入与代际
+来源，按当前要求重新验收已有成果，原轮次只结算一次。跨 Agent、远端 provider
+不在此路径内；未获准时遵循 guard 的失权收尾。可信 CLI Host 的存活续租与此
+恢复机制不同，Codex App 尚未接入后台自动续租。
 
 ## Repository-relative scope identity
 
