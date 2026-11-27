@@ -9,7 +9,8 @@ import os
 import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .selection_execution import normalize_fresh_audit_exact_heads
@@ -242,6 +243,156 @@ def fetch_complete_pr_reviews(*, repository: str, number: str, cwd: Path | None,
     return reviews
 
 
+def fetch_complete_pr_review_comments(*, repository: str, number: str, cwd: Path | None,
+                                      run_gh_json: GitHubJsonRunner) -> list[dict[str, Any]] | None:
+    """Read completely paginated PR inline comments; return None when incomplete."""
+    try:
+        pages = run_gh_json(["api", "--paginate", "--slurp",
+                             f"repos/{repository}/pulls/{number}/comments?per_page=100"],
+                            **({"cwd": cwd} if cwd is not None else {}))
+    except Exception:
+        return None
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        return None
+    comments = [row for page in pages for row in page]
+    if any(not isinstance(row, dict) for row in comments):
+        return None
+    return comments
+
+
+def _parse_review_epoch_ms(value: object) -> int | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(round(parsed.timestamp() * 1000))
+
+
+def _empty_commented_non_author_review_ids(
+    reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
+) -> set[int]:
+    if not isinstance(head_oid, str) or not head_oid.strip():
+        return set()
+    expected_head = head_oid.strip().casefold()
+    author_key = author.strip().casefold()
+    min_head_sort_key: dict[str, tuple[int, int]] = {}
+    unbounded_head_actors: set[str] = set()
+    for review in reviews:
+        review_id = review.get("id")
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        commit_id = review.get("commit_id")
+        state = str(review.get("state") or "").strip().upper()
+        if (
+            type(review_id) is int and review_id > 0
+            and isinstance(login, str) and login.strip()
+            and login.strip().casefold() != author_key
+            and isinstance(commit_id, str) and commit_id.strip().casefold() == expected_head
+            and state not in {"PENDING", "DISMISSED"}
+        ):
+            actor_key = login.strip().casefold()
+            epoch_ms = _parse_review_epoch_ms(review.get("submitted_at"))
+            if epoch_ms is None:
+                unbounded_head_actors.add(actor_key)
+            else:
+                sort_key = (epoch_ms, review_id)
+                existing = min_head_sort_key.get(actor_key)
+                if existing is None or sort_key < existing:
+                    min_head_sort_key[actor_key] = sort_key
+
+    candidate_ids: set[int] = set()
+    for review in reviews:
+        review_id = review.get("id")
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        commit_id = review.get("commit_id")
+        state = str(review.get("state") or "").strip().upper()
+        body = review.get("body")
+        body_text = body if isinstance(body, str) else str(body or "")
+        if not (
+            type(review_id) is int and review_id > 0
+            and isinstance(login, str) and login.strip()
+            and login.strip().casefold() != author_key
+            and isinstance(commit_id, str) and commit_id.strip()
+            and state == "COMMENTED" and not body_text.strip()
+        ):
+            continue
+        if commit_id.strip().casefold() == expected_head:
+            candidate_ids.add(review_id)
+            continue
+        # Only inspect older-head empty COMMENTED wrappers when the same reviewer
+        # has current-head activity that this later/tied review could displace.
+        actor_key = login.strip().casefold()
+        if actor_key in unbounded_head_actors:
+            candidate_ids.add(review_id)
+        elif actor_key in min_head_sort_key:
+            epoch_ms = _parse_review_epoch_ms(review.get("submitted_at"))
+            if epoch_ms is None or (epoch_ms, review_id) > min_head_sort_key[actor_key]:
+                candidate_ids.add(review_id)
+    return candidate_ids
+
+
+def _empty_commented_review_provenance(
+    reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
+    repository: str, number: str, cwd: Path | None, run_gh_json: GitHubJsonRunner,
+) -> dict[int, str]:
+    """Classify candidate empty non-author COMMENTED reviews into three states:
+
+    - ``reply_only``: >=1 attributed inline comments, all valid positive-int ``in_reply_to_id``.
+    - ``inline_root``: >=1 attributed inline root comment (missing or ``None`` ``in_reply_to_id``).
+    - ``unknown``: inline comments fetch failed/empty/malformed, contained an unattributable
+      entry without a valid ``pull_request_review_id``, had malformed reply links, or yielded
+      0 comments attributed to the candidate review.
+    """
+    candidate_ids = _empty_commented_non_author_review_ids(reviews, author=author, head_oid=head_oid)
+    if not candidate_ids:
+        return {}
+    comments = fetch_complete_pr_review_comments(
+        repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
+    )
+    if comments is None:
+        return {review_id: "unknown" for review_id in candidate_ids}
+    matched_counts: dict[int, int] = {}
+    root_ids: set[int] = set()
+    malformed_reply_ids: set[int] = set()
+    has_unattributable_comment = False
+    for comment in comments:
+        review_id = comment.get("pull_request_review_id")
+        if type(review_id) is not int or review_id <= 0:
+            has_unattributable_comment = True
+            continue
+        if review_id not in candidate_ids:
+            continue
+        matched_counts[review_id] = matched_counts.get(review_id, 0) + 1
+        if "in_reply_to_id" not in comment or comment.get("in_reply_to_id") is None:
+            root_ids.add(review_id)
+            continue
+        parent_id = comment.get("in_reply_to_id")
+        if type(parent_id) is not int or parent_id <= 0:
+            malformed_reply_ids.add(review_id)
+
+    provenance: dict[int, str] = {}
+    for review_id in candidate_ids:
+        if review_id in root_ids:
+            provenance[review_id] = "inline_root"
+        elif (
+            has_unattributable_comment
+            or review_id in malformed_reply_ids
+            or matched_counts.get(review_id, 0) == 0
+        ):
+            provenance[review_id] = "unknown"
+        else:
+            provenance[review_id] = "reply_only"
+    return provenance
+
+
 def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                               repository: str, number: str, cwd: Path | None,
                               run_gh_json: GitHubJsonRunner,
@@ -276,6 +427,16 @@ def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                 "authorAssociation": review.get("author_association"), "state": review.get("state"),
                 "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
                 "body": review.get("body")})
+        provenance_by_id = _empty_commented_review_provenance(
+            reviews, author=author, head_oid=row.get("headRefOid"),
+            repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
+        )
+        for item, review in zip(normalized, reviews, strict=True):
+            provenance = provenance_by_id.get(review["id"])
+            if provenance is not None:
+                item["comment_provenance"] = provenance
+                if provenance == "reply_only":
+                    item["thread_reply_only"] = True
         after = run_gh_json(["pr", "view", number, "--json", "headRefOid,baseRefOid",
                              "--repo", repository], cwd=cwd)
         if not isinstance(after, dict) or any(after.get(key) != row.get(key)

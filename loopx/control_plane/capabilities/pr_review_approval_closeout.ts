@@ -7,10 +7,12 @@ import {parseIsoTimestamp} from "../runtime_timestamp.ts";
 
 // GitHub owns these input states; closeout statuses are local to this read model.
 type ReviewState = "PENDING" | "COMMENTED" | "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED";
+type CommentProvenance = "reply_only" | "inline_root" | "unknown";
 type Opinion = {id: number; login: string; state: ReviewState; head: string; time: number};
 type Review = Opinion & {submittedAt: string | null; url: string};
 type ProviderOpinion = Opinion & {source: JsonObject; conclusion: JsonObject};
 const states = new Set<ReviewState>(["PENDING", "COMMENTED", "APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+const commentProvenances = new Set<CommentProvenance>(["reply_only", "inline_root", "unknown"]);
 // GitHub associations, not a reviewer-name allowlist or evidence of approval.
 const repositoryReviewers = new Set(["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]);
 function fail(message: string): never { throw new EffectRuntimeRequestError(message); }
@@ -35,7 +37,8 @@ function effectiveOpinions<T extends Opinion>(reviews: readonly T[], author: str
 
 /** Submitted review activity establishes account-level evidence. Model coverage
  * also requires a qualified conclusion. Comments here are formal review events;
- * issue comments do not enter this history. Dismissal retires only that actor. */
+ * inline thread replies and issue comments do not establish or retire activity.
+ * Dismissal retires only that actor. */
 function independentReviewEvidence(reviews: readonly ProviderOpinion[],
   complete: boolean, author: string | null, head: string, includeCoverage: boolean): JsonObject {
   if (!complete || !author) return {};
@@ -51,6 +54,28 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     if (row.state === "PENDING") continue;
     const submittedAt = typeof source.submitted_at === "string" ? parseIsoTimestamp(source.submitted_at) : null;
     if (!submittedAt || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(row.head)) return {};
+    const rawProvenance = source.comment_provenance;
+    if (rawProvenance !== undefined
+      && (typeof rawProvenance !== "string" || !commentProvenances.has(rawProvenance as CommentProvenance))) {
+      return {};
+    }
+    const provenance = rawProvenance as CommentProvenance | undefined;
+    if (provenance === "inline_root" && source.thread_reply_only === true) return {};
+    if (provenance === "reply_only" && source.thread_reply_only === false) return {};
+    // GraphQL thread-reply wrappers have no verified formal or inline-root review activity
+    // and must never establish or retire coverage. Unknown provenance on the current head
+    // cannot certify coverage; unknown provenance on an older head fails closed if newer.
+    if (
+      row.state === "COMMENTED"
+      && row.conclusion.valid !== true
+      && (
+        provenance === "reply_only"
+        || (provenance === undefined && source.thread_reply_only === true)
+        || (provenance === "unknown" && row.head === head)
+      )
+    ) {
+      continue;
+    }
     const candidate = {...row, id, time: submittedAt.getTime()};
     submitted?.push(candidate);
     const previous = latest.get(row.login);
