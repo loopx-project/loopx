@@ -1,7 +1,9 @@
+"""Project-asset normalization, active-state attachment, and handoff projection."""
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from functools import partial
-from typing import Any, Callable
+from typing import Literal
 
 from ..runtime.public_safety import (
     LOCAL_PATH_SURFACE_PATTERN,
@@ -9,21 +11,40 @@ from ..runtime.public_safety import (
     compact_text as _compact_text,
     public_safe_compact_text as _runtime_public_safe_compact_text,
 )
-from ..todos.todo_semantics import todo_blocker_reason
 from .autonomous_replan_obligation import run_history_agent_id
+from .project_asset_todo_summary import (
+    PROJECT_ASSET_TODO_DISPLAY_FIELDS as PROJECT_ASSET_TODO_DISPLAY_FIELDS,
+    PROJECT_ASSET_TODO_PROJECTION_GAP_SCHEMA_VERSION as PROJECT_ASSET_TODO_PROJECTION_GAP_SCHEMA_VERSION,
+    TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION as TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION,
+    TODO_PROJECTION_VIEW_SCHEMA_VERSION as TODO_PROJECTION_VIEW_SCHEMA_VERSION,
+    _optional_int as _optional_int,
+    _project_asset_display_todo_item as _project_asset_display_todo_item,
+    _project_asset_display_todo_items as _project_asset_display_todo_items,
+    build_project_asset_todo_summary as build_project_asset_todo_summary,
+    project_asset_todo_projection_gap as project_asset_todo_projection_gap,
+    project_asset_todo_projection_metadata as project_asset_todo_projection_metadata,
+)
 
 
-TODO_PROJECTION_VIEW_SCHEMA_VERSION = "todo_projection_view_v0"
-TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION = "todo_projection_detail_pointer_v0"
-PROJECT_ASSET_TODO_PROJECTION_GAP_SCHEMA_VERSION = "project_asset_todo_projection_gap_v0"
-PROJECT_ASSET_HANDOFF_STATE_TRACE_CHECK_KEYS = (
+PROJECT_ASSET_HANDOFF_STATE_TRACE_CHECK_KEYS: tuple[str, ...] = (
     "project_asset_backed",
     "same_source_should_run",
     "handoff_has_next_action",
     "handoff_has_stop_condition",
     "handoff_sanitized_surface",
 )
-def project_asset_public_safe_compact_text(value: Any, *, limit: int = 220) -> str | None:
+
+SupportMode = Literal["reward_capture", "decision_support", "read_only_observer", "selective_assist"]
+
+_ACTIVE_STATE_WARNING_KEYS: tuple[str, ...] = (
+    "backlog_hygiene_warning",
+    "state_projection_gap",
+    "completed_todo_archive_warning",
+    "state_incomplete",
+)
+
+
+def project_asset_public_safe_compact_text(value: object, *, limit: int = 220) -> str | None:
     return _runtime_public_safe_compact_text(value, limit=limit)
 
 
@@ -32,16 +53,10 @@ def project_asset_owner(
     *,
     monitor_signal_waiting_on: str,
 ) -> str:
-    if waiting_on == "codex":
-        return "codex"
-    if waiting_on == "external_evidence":
-        return "external_evidence"
+    if waiting_on in {"codex", "external_evidence", "controller", "user_or_controller"}:
+        return waiting_on
     if waiting_on == monitor_signal_waiting_on:
         return monitor_signal_waiting_on
-    if waiting_on == "controller":
-        return "controller"
-    if waiting_on == "user_or_controller":
-        return "user_or_controller"
     return waiting_on or "unknown"
 
 
@@ -98,7 +113,7 @@ def project_asset_support_mode(
     recommended_action: str,
     agent_command: str | None,
     monitor_signal_waiting_on: str,
-) -> str:
+) -> SupportMode:
     surface = " ".join(
         str(value or "")
         for value in (status, recommended_action, agent_command, " ".join(missing_gates or []))
@@ -114,10 +129,10 @@ def project_asset_support_mode(
     return "read_only_observer"
 
 
-def project_asset_quota_summary(quota: dict[str, Any] | None) -> dict[str, Any] | None:
+def project_asset_quota_summary(quota: dict[str, object] | None) -> dict[str, object] | None:
     if not isinstance(quota, dict):
         return None
-    summary: dict[str, Any] = {
+    summary: dict[str, object] = {
         "compute": quota.get("compute"),
         "state": quota.get("state"),
         "spent_slots": quota.get("spent_slots"),
@@ -128,42 +143,38 @@ def project_asset_quota_summary(quota: dict[str, Any] | None) -> dict[str, Any] 
     return summary
 
 
-def _optional_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def project_asset_quota_state(
     *,
-    quota: dict[str, Any] | None,
-    project_asset: dict[str, Any],
+    quota: dict[str, object] | None,
+    project_asset: dict[str, object],
 ) -> str | None:
     quota_state = ""
     if isinstance(quota, dict):
         quota_state = str(quota.get("state") or "").strip()
-    if not quota_state and isinstance(project_asset.get("quota"), dict):
-        quota_state = str(project_asset["quota"].get("state") or "").strip()
+    if not quota_state:
+        asset_quota = project_asset.get("quota")
+        if isinstance(asset_quota, dict):
+            quota_state = str(asset_quota.get("state") or "").strip()
     return quota_state or None
 
 
 def project_asset_user_todo_open_count(
     *,
-    user_todos: dict[str, Any] | None,
-    project_asset: dict[str, Any],
+    user_todos: dict[str, object] | None,
+    project_asset: dict[str, object],
 ) -> int | None:
     if isinstance(user_todos, dict):
         return _optional_int(user_todos.get("open_count"))
-    if isinstance(project_asset.get("user_todos"), dict):
-        return _optional_int(project_asset["user_todos"].get("open_count"))
+    asset_user_todos = project_asset.get("user_todos")
+    if isinstance(asset_user_todos, dict):
+        return _optional_int(asset_user_todos.get("open_count"))
     return None
 
 
-def project_asset_latest_validation(run: dict[str, Any] | None) -> dict[str, Any] | None:
+def project_asset_latest_validation(run: dict[str, object] | None) -> dict[str, object] | None:
     if not isinstance(run, dict):
         return None
-    signal: dict[str, Any] = {}
+    signal: dict[str, object] = {}
     for field in ("generated_at", "classification"):
         value = run.get(field)
         if value:
@@ -175,26 +186,26 @@ def project_asset_latest_validation(run: dict[str, Any] | None) -> dict[str, Any
 
 
 def enrich_project_asset(
-    item: dict[str, Any],
+    item: dict[str, object],
     *,
-    user_todos: dict[str, Any] | None,
-    agent_todos: dict[str, Any] | None,
-    quota: dict[str, Any] | None,
-    latest_validation: dict[str, Any] | None,
-    latest_runs: list[dict[str, Any]] | None,
-    execution_profile: dict[str, Any] | None,
-    orchestration: dict[str, Any] | None,
-    subagent_activity: dict[str, Any] | None,
-    interface_budget_cadence: dict[str, Any] | None,
-    project_asset_todo_summary: Callable[..., dict[str, Any] | None],
-    project_asset_todo_projection_gap: Callable[..., dict[str, Any] | None],
-    project_asset_quota_summary: Callable[[dict[str, Any] | None], dict[str, Any] | None],
-    compact_execution_profile: Callable[[dict[str, Any] | None], dict[str, Any]],
-    compact_orchestration_policy: Callable[[dict[str, Any]], dict[str, Any]],
-    project_asset_handoff_readiness: Callable[..., dict[str, Any] | None],
+    user_todos: dict[str, object] | None,
+    agent_todos: dict[str, object] | None,
+    quota: dict[str, object] | None,
+    latest_validation: dict[str, object] | None,
+    latest_runs: list[dict[str, object]] | None,
+    execution_profile: dict[str, object] | None,
+    orchestration: dict[str, object] | None,
+    subagent_activity: dict[str, object] | None,
+    interface_budget_cadence: dict[str, object] | None,
+    project_asset_todo_summary: Callable[..., dict[str, object] | None],
+    project_asset_todo_projection_gap: Callable[..., dict[str, object] | None],
+    project_asset_quota_summary: Callable[[dict[str, object] | None], dict[str, object] | None],
+    compact_execution_profile: Callable[[dict[str, object] | None], dict[str, object]],
+    compact_orchestration_policy: Callable[[dict[str, object]], dict[str, object]],
+    project_asset_handoff_readiness: Callable[..., dict[str, object] | None],
     project_asset_quota_state: Callable[..., str | None],
     project_asset_user_todo_open_count: Callable[..., int | None],
-    build_long_task_cadence_hint: Callable[..., dict[str, Any]],
+    build_long_task_cadence_hint: Callable[..., dict[str, object]],
 ) -> None:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
@@ -236,12 +247,9 @@ def enrich_project_asset(
         user_todos=user_todos,
         project_asset=project_asset,
     )
+    raw_profile = project_asset.get("execution_profile")
     cadence_hint = build_long_task_cadence_hint(
-        execution_profile=(
-            project_asset.get("execution_profile")
-            if isinstance(project_asset.get("execution_profile"), dict)
-            else None
-        ),
+        execution_profile=raw_profile if isinstance(raw_profile, dict) else None,
         latest_runs=latest_runs,
         handoff_readiness=readiness,
         quota_state=quota_state,
@@ -252,20 +260,20 @@ def enrich_project_asset(
 
 
 def attach_active_state_project_asset_fields(
-    item: dict[str, Any],
+    item: dict[str, object],
     *,
-    latest_runs: list[dict[str, Any]] | None = None,
-    next_action_projection_warning: Callable[..., dict[str, Any] | None] | None = None,
-    autonomous_replan_obligation_from_runs: Callable[..., dict[str, Any] | None] | None = None,
-    external_progress_review: dict[str, Any] | None = None,
-    effective_turn_cadence: dict[str, Any] | None = None,
+    latest_runs: list[dict[str, object]] | None = None,
+    next_action_projection_warning: Callable[..., dict[str, object] | None] | None = None,
+    autonomous_replan_obligation_from_runs: Callable[..., dict[str, object] | None] | None = None,
+    external_progress_review: dict[str, object] | None = None,
+    effective_turn_cadence: dict[str, object] | None = None,
     agent_lane_id: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
         return {}
 
-    attached: dict[str, Any] = {}
+    attached: dict[str, object] = {}
     if effective_turn_cadence is not None and autonomous_replan_obligation_from_runs is not None:
         autonomous_replan_obligation_from_runs = partial(
             autonomous_replan_obligation_from_runs, effective_turn_cadence=effective_turn_cadence,
@@ -286,12 +294,10 @@ def attach_active_state_project_asset_fields(
         project_asset["active_state_next_action"] = active_next_action
         attached["active_state_next_action"] = active_next_action
 
-    issue_meta_surface = (
-        item.get("issue_meta_surface") if isinstance(item.get("issue_meta_surface"), dict) else None
-    )
-    if issue_meta_surface:
-        project_asset["issue_meta_surface"] = issue_meta_surface
-        attached["issue_meta_surface"] = issue_meta_surface
+    raw_issue_meta = item.get("issue_meta_surface")
+    if isinstance(raw_issue_meta, dict) and raw_issue_meta:
+        project_asset["issue_meta_surface"] = raw_issue_meta
+        attached["issue_meta_surface"] = raw_issue_meta
 
     if next_action_projection_warning is not None:
         warning = next_action_projection_warning(
@@ -303,36 +309,33 @@ def attach_active_state_project_asset_fields(
             project_asset["next_action_projection_warning"] = warning
             attached["next_action_projection_warning"] = warning
 
-    for key in (
-        "backlog_hygiene_warning",
-        "state_projection_gap",
-        "completed_todo_archive_warning",
-        "state_incomplete",
-    ):
-        value = item.get(key) if isinstance(item.get(key), dict) else None
-        if value:
+    for key in _ACTIVE_STATE_WARNING_KEYS:
+        value = item.get(key)
+        if isinstance(value, dict) and value:
             project_asset[key] = value
             attached[key] = value
 
-    replan_obligation = (
-        item.get("autonomous_replan_obligation")
-        if isinstance(item.get("autonomous_replan_obligation"), dict)
-        else None
-    )
+    raw_replan = item.get("autonomous_replan_obligation")
+    replan_obligation: dict[str, object] | None = raw_replan if isinstance(raw_replan, dict) else None
     if replan_obligation is None and autonomous_replan_obligation_from_runs is not None:
         shared_todos = item.get("agent_todos")
-        monitor_todos = {"monitor_open_items":
-            shared_todos.get("monitor_open_items", []) if isinstance(shared_todos, dict) else []}
+        monitor_todos: dict[str, object] = {
+            "monitor_open_items": shared_todos.get("monitor_open_items", []) if isinstance(shared_todos, dict) else [],
+        }
         # Status retains shared Goal history for ownership and health checks.
         # A lane caller only needs that Agent's semantic review obligations;
         # peer receipts must not become a prerequisite for its settlement.
-        agent_ids = [agent_lane_id] if agent_lane_id is not None else sorted(
-            {
-                agent_id
-                for run in latest_runs or []
-                if isinstance(run, dict)
-                if (agent_id := run_history_agent_id(run)) is not None
-            }
+        agent_ids = (
+            [agent_lane_id]
+            if agent_lane_id is not None
+            else sorted(
+                {
+                    agent_id
+                    for run in latest_runs or []
+                    if isinstance(run, dict)
+                    if (agent_id := run_history_agent_id(run)) is not None
+                }
+            )
         )
         obligations_by_agent = {
             agent_id: obligation
@@ -354,7 +357,7 @@ def attach_active_state_project_asset_fields(
             attached["autonomous_replan_obligations_by_agent"] = obligations_by_agent
         replan_obligation = autonomous_replan_obligation_from_runs(
             latest_runs or [],
-            agent_todos=item.get("agent_todos") if isinstance(item.get("agent_todos"), dict) else None,
+            agent_todos=shared_todos if isinstance(shared_todos, dict) else None,
             agent_id=agent_lane_id,
         )
         if replan_obligation:
@@ -366,20 +369,22 @@ def attach_active_state_project_asset_fields(
     return attached
 
 
-def project_asset_summary_is_public_safe(project_asset: dict[str, Any]) -> bool:
+def project_asset_summary_is_public_safe(project_asset: Mapping[str, object]) -> bool:
     text = repr(project_asset)
     return not LOCAL_PATH_SURFACE_PATTERN.search(text) and not SECRET_LIKE_SURFACE_PATTERN.search(text)
 
 
-def project_asset_handoff_check_projection(item: dict[str, Any]) -> dict[str, Any] | None:
+def project_asset_handoff_check_projection(item: dict[str, object]) -> dict[str, object] | None:
     project_asset = item.get("project_asset")
     if not isinstance(project_asset, dict):
         return None
 
     raw_quota = project_asset.get("quota")
-    quota = raw_quota if isinstance(raw_quota, dict) else {}
-    if not quota and isinstance(item.get("quota"), dict):
-        quota = item["quota"]
+    quota: dict[str, object] = raw_quota if isinstance(raw_quota, dict) else {}
+    if not quota:
+        item_quota = item.get("quota")
+        if isinstance(item_quota, dict):
+            quota = item_quota
 
     next_action = str(project_asset.get("next_action") or "").strip()
     item_action = str(item.get("recommended_action") or "").strip()
@@ -387,7 +392,7 @@ def project_asset_handoff_check_projection(item: dict[str, Any]) -> dict[str, An
     quota_state = str(quota.get("state") or "").strip()
     waiting_on = str(item.get("waiting_on") or "").strip()
     codex_ready = waiting_on == "codex" and quota_state == "eligible"
-    checks = {
+    checks: dict[str, bool] = {
         "project_asset_backed": True,
         "same_source_should_run": bool(
             quota and next_action and (not item_action or item_action == next_action)
@@ -424,8 +429,8 @@ def build_project_asset(
     next_handoff_condition: str | None,
     monitor_signal_waiting_on: str,
     monitor_display_stop_condition: str,
-) -> dict[str, Any]:
-    asset = {
+) -> dict[str, object]:
+    asset: dict[str, object] = {
         "owner": project_asset_owner(
             waiting_on,
             monitor_signal_waiting_on=monitor_signal_waiting_on,
@@ -459,276 +464,3 @@ def build_project_asset(
     if next_safe_command:
         asset["next_safe_command"] = next_safe_command
     return asset
-
-
-def project_asset_todo_projection_metadata(
-    *,
-    role: str | None,
-    item_limit: int,
-    deferred_item_limit: int,
-) -> dict[str, dict[str, Any]]:
-    todo_role = str(role or "").strip().lower()
-    if todo_role == "user":
-        canonical_source = "attention_queue.items[].user_todos"
-    elif todo_role == "agent":
-        canonical_source = "attention_queue.items[].agent_todos"
-    else:
-        canonical_source = "attention_queue.items[].{user_todos,agent_todos}"
-    return {
-        "projection_view": {
-            "schema_version": TODO_PROJECTION_VIEW_SCHEMA_VERSION,
-            "view": "project_asset_overview",
-            "truth": "derived",
-            "canonical_source": canonical_source,
-            "item_limit": item_limit,
-            "deferred_item_limit": deferred_item_limit,
-        },
-        "detail_pointer": {
-            "schema_version": TODO_PROJECTION_DETAIL_POINTER_SCHEMA_VERSION,
-            "cold_path": "loopx status --format json",
-            "active_state_source": "registry goal state_file",
-            "full_list_included": False,
-        },
-    }
-
-
-def project_asset_todo_projection_gap(
-    *,
-    user_todos: dict[str, Any] | None,
-    agent_todos: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    missing_roles: list[str] = []
-    if not isinstance(user_todos, dict):
-        missing_roles.append("user")
-    if not isinstance(agent_todos, dict):
-        missing_roles.append("agent")
-    if not missing_roles:
-        return None
-    return {
-        "schema_version": PROJECT_ASSET_TODO_PROJECTION_GAP_SCHEMA_VERSION,
-        "kind": "project_asset_todo_projection_gap",
-        "missing_roles": missing_roles,
-        "source": "active_state_todo_projection",
-        "recommended_action": (
-            "add parseable User Todo / Agent Todo sections or repair the active state_file "
-            "before treating this project_asset as first-screen complete"
-        ),
-    }
-
-
-PROJECT_ASSET_TODO_DISPLAY_FIELDS = (
-    "index",
-    "done",
-    "schema_version",
-    "todo_id",
-    "role",
-    "status",
-    "priority",
-    "archive_state",
-    "source_section",
-    "task_class",
-    "action_kind",
-    "capability_binding_ref",
-    "task_domain",
-    "task_repository",
-    "required_write_scopes",
-    "required_capabilities",
-    "target_capabilities",
-    "decision_scope",
-    "required_decision_scopes",
-    "created_by",
-    "claimed_by",
-    "bound_agent",
-    "goal_bound",
-    "blocks_agent",
-    "excluded_agents",
-    "global_gate",
-    "unblocks_todo_id",
-    "resume_when",
-    "resume_monitor_generation",
-    "resume_condition",
-    "resume_ready",
-    "blocking_monitor_todo_id",
-    "no_followup",
-    "successor_todo_ids",
-    "target_key",
-    "cadence",
-    "next_due_at",
-    "expires_at",
-    "last_checked_at",
-    "result_hash",
-    "consecutive_no_change",
-    "material_change",
-    "material_change_generation",
-    "material_change_scope",
-    "material_change_scope_generations",
-    "max_no_change_before_replan",
-    "route_continuation_replan_required",
-    "route_continuation_reason",
-    "route_id",
-    "route_key",
-    "completed_at",
-    "updated_at",
-    "superseded_by",
-)
-
-
-def _project_asset_display_todo_item(item: dict[str, Any]) -> dict[str, Any]:
-    display = {
-        key: item.get(key)
-        for key in PROJECT_ASSET_TODO_DISPLAY_FIELDS
-        if item.get(key) is not None
-    }
-    text = _compact_text(str(item.get("text") or ""), limit=220)
-    if text:
-        display["text"] = text
-    title = _compact_text(str(item.get("title") or ""), limit=220)
-    if title:
-        display["title"] = title
-    reason = todo_blocker_reason(item)
-    if reason:
-        display["reason"] = reason
-    return display
-
-
-def _project_asset_display_todo_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        _project_asset_display_todo_item(item)
-        for item in items
-        if isinstance(item, dict)
-    ]
-
-
-def build_project_asset_todo_summary(
-    todos: dict[str, Any] | None,
-    *,
-    role: str | None = None,
-    item_limit: int,
-    deferred_item_limit: int,
-    advancement_task_class: str,
-    open_todo_items: Callable[..., list[dict[str, Any]]],
-    compact_todo_item: Callable[[dict[str, Any]], dict[str, Any]],
-    todo_lane_items: Callable[..., list[dict[str, Any]]],
-    todo_item_is_actionable_open: Callable[[dict[str, Any]], bool],
-    todo_item_task_class: Callable[[dict[str, Any]], str],
-) -> dict[str, Any] | None:
-    if not isinstance(todos, dict):
-        return None
-
-    def lane_count(lane: str) -> int:
-        items = todos.get(lane)
-        if not isinstance(items, list):
-            return 0
-        return sum(1 for item in items if isinstance(item, dict))
-
-    open_count = todos.get("open_count", 0)
-    done_count = todos.get("done_count", 0)
-    total_count = todos.get("total_count", 0)
-    todo_role = str(role or todos.get("role") or "").strip().lower()
-    metadata = project_asset_todo_projection_metadata(
-        role=todo_role,
-        item_limit=item_limit,
-        deferred_item_limit=deferred_item_limit,
-    )
-    summary: dict[str, Any] = {
-        "schema_version": todos.get("schema_version") or "todo_summary_v0",
-        "source_section": "project_asset",
-        "open": open_count,
-        "done": done_count,
-        "total": total_count,
-        **metadata,
-    }
-    capability_actions = todos.get("capability_actions")
-    if todo_role == "user" and isinstance(capability_actions, dict):
-        # Derived from the full canonical User Todo source before its generic
-        # display items are capped. This is a bounded projection, not another
-        # review or decision authority.
-        summary["capability_actions"] = dict(capability_actions)
-    if todos.get("advancement_done_count") is not None:
-        summary["advancement_done_count"] = todos.get("advancement_done_count")
-    open_items = open_todo_items(todos, limit=item_limit)
-    claimed_open_count = todos.get("claimed_open_count")
-    if claimed_open_count is None:
-        claimed_open_count = lane_count("claimed_open_items") or sum(
-            1 for item in open_items if item.get("claimed_by")
-        )
-    if claimed_open_count:
-        summary["claimed_open_count"] = claimed_open_count
-        summary["unclaimed_open_count"] = todos.get(
-            "unclaimed_open_count",
-            max(0, int(summary.get("open") or 0) - int(summary["claimed_open_count"] or 0)),
-        )
-    open_items = _project_asset_display_todo_items(open_items)
-    if open_items:
-        summary["items"] = open_items
-        summary["next"] = open_items[0]["text"]
-        if open_items[0].get("index") is not None:
-            summary["next_index"] = open_items[0].get("index")
-        if open_items[0].get("claimed_by"):
-            summary["next_claimed_by"] = open_items[0].get("claimed_by")
-    recent_completed_items = [
-        _project_asset_display_todo_item(dict(item))
-        for item in todos.get("recent_completed_advancement_items", [])
-        if isinstance(item, dict)
-    ][:item_limit]
-    if recent_completed_items:
-        summary["recent_completed_advancement_items"] = recent_completed_items
-    monitor_writeback = todos.get("monitor_writeback")
-    if isinstance(monitor_writeback, dict):
-        summary["monitor_writeback"] = dict(monitor_writeback)
-    deferred_items = [
-        _project_asset_display_todo_item(compact_todo_item(item))
-        for item in todos.get("deferred_items", [])
-        if isinstance(item, dict)
-    ][:deferred_item_limit]
-    deferred_resume_candidates = [
-        _project_asset_display_todo_item(compact_todo_item(item))
-        for item in todos.get("deferred_resume_candidates", [])
-        if isinstance(item, dict)
-    ][:deferred_item_limit]
-    if todos.get("deferred_count") is not None:
-        summary["deferred_count"] = todos.get("deferred_count")
-        summary["deferred_visibility_limit"] = deferred_item_limit
-    if deferred_items:
-        summary["deferred_items"] = deferred_items
-    if deferred_resume_candidates:
-        summary["deferred_resume_candidates"] = deferred_resume_candidates
-    executable_items = [
-        item
-        for item in open_todo_items(
-            todos,
-            limit=item_limit,
-            source_keys=("first_executable_items", "executable_backlog_items", "items"),
-        )
-        if todo_item_is_actionable_open(item)
-        if todo_item_task_class(item) == advancement_task_class
-    ]
-    if executable_items:
-        summary["first_executable_items"] = _project_asset_display_todo_items(
-            executable_items[:item_limit]
-        )
-    for lane in (
-        "gate_open_items",
-        "current_agent_claimed_open_items",
-        "active_next_action_items",
-        "active_next_action_executable_items",
-    ):
-        lane_items = todo_lane_items(
-            todos,
-            lane,
-            limit=item_limit,
-        )
-        if lane_items:
-            summary[lane] = _project_asset_display_todo_items(lane_items)
-    for count_key in (
-        "claimed_advancement_open_count",
-        "claimed_monitor_open_count",
-    ):
-        if todos.get(count_key) is not None:
-            summary[count_key] = todos.get(count_key)
-            continue
-        lane = count_key.removesuffix("_count") + "_items"
-        count = lane_count(lane)
-        if count:
-            summary[count_key] = count
-    return summary
