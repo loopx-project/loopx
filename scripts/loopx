@@ -2,6 +2,12 @@
 set -euo pipefail
 
 script_path="${BASH_SOURCE[0]}"
+if [[ "$script_path" == /* ]]; then
+  invoked_cli_path="$script_path"
+else
+  invoked_cli_path="$PWD/$script_path"
+fi
+export LOOPX_CLI_SHIM="$invoked_cli_path"
 while [[ -L "$script_path" ]]; do
   script_dir="$(cd -P "$(dirname "$script_path")" && pwd)"
   script_path="$(readlink "$script_path")"

@@ -7,9 +7,11 @@ Supports both:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -233,27 +235,391 @@ def build_antigravity_sidecar_template(
     }
 
 
-def _antigravity_provider_args(
+_HOST_RUNTIME_MODULE = "loopx.hosts.agy.host_runtime"
+_RELEASE_ROOT_BOOTSTRAP = (
+    "import os,runpy,shutil,sys;from pathlib import Path;"
+    "a=sys.argv[1:];"
+    'c=next((a[i+1] for i,v in enumerate(a) if v=="--cli-bin" and i+1<len(a)),'
+    'next((v[10:] for v in a if v.startswith("--cli-bin=")),None));'
+    'c=(shutil.which(c) or c) if c and os.sep not in c and (os.altsep is None or os.altsep not in c) and not c.startswith(".") else c;'
+    "p=Path(c).expanduser().resolve() if c else None;"
+    'ok=p is not None and p.is_file() and (os.name=="nt" or os.access(p,os.X_OK)) and len(p.parents)>1 and p.parent.name in ("scripts","bin") and (p.parents[1]/"loopx"/"__init__.py").is_file() and (p.parents[1]/"loopx"/"hosts"/"agy"/"__init__.py").is_file() and (p.parents[1]/"loopx"/"hosts"/"agy"/"host_runtime.py").is_file();'
+    'not ok and sys.exit("loopx release root not found from --cli-bin");'
+    "r=p.parents[1];"
+    'sys.path[:]=[str(r),*(x for x in sys.path if x not in ("",".",str(r)))];'
+    'os.environ["LOOPX_RELEASE_ROOT"]=str(r);'
+    f'sys.argv=["{_HOST_RUNTIME_MODULE}",*a];'
+    f'runpy.run_module("{_HOST_RUNTIME_MODULE}",run_name="__main__",alter_sys=True)'
+)
+_POSIX_RELEASE_SHELL_BOOTSTRAP = (
+    "set -eu\n"
+    'fallback_py="$1"\n'
+    'boot="$2"\n'
+    "shift 2\n"
+    'cli=""\n'
+    'prev=""\n'
+    'for arg in "$@"; do\n'
+    '  if [ "$prev" = "--cli-bin" ]; then\n'
+    '    cli="$arg"\n'
+    "    break\n"
+    "  fi\n"
+    '  case "$arg" in\n'
+    '    --cli-bin=*) cli="${arg#--cli-bin=}"; break ;;\n'
+    "  esac\n"
+    '  prev="$arg"\n'
+    "done\n"
+    'case "$cli" in\n'
+    '  "") p="" ;;\n'
+    '  */*) p="$cli" ;;\n'
+    '  *) p="$(command -v "$cli" 2>/dev/null || printf \'%s\' "$cli")" ;;\n'
+    "esac\n"
+    'while [ -n "$p" ] && [ -L "$p" ]; do\n'
+    '  case "$p" in\n'
+    '    */*) p_dir="${p%/*}"; [ -n "$p_dir" ] || p_dir="/" ;;\n'
+    '    *) p_dir="." ;;\n'
+    "  esac\n"
+    '  d="$(cd -P "$p_dir" && pwd)"\n'
+    '  t="$(readlink "$p")"\n'
+    '  case "$t" in\n'
+    '    /*) p="$t" ;;\n'
+    '    *) p="$d/$t" ;;\n'
+    "  esac\n"
+    "done\n"
+    'if [ -z "$p" ] || [ ! -f "$p" ] || [ ! -x "$p" ]; then\n'
+    '  printf \'loopx release root not found from --cli-bin\\n\' >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'case "$p" in\n'
+    '  */*) p_dir="${p%/*}"; [ -n "$p_dir" ] || p_dir="/" ;;\n'
+    '  *) p_dir="." ;;\n'
+    "esac\n"
+    'p_dir="$(cd -P "$p_dir" && pwd)"\n'
+    'parent_name="${p_dir##*/}"\n'
+    'r="$(cd -P "$p_dir/.." && pwd)"\n'
+    'if { [ "$parent_name" != "scripts" ] && [ "$parent_name" != "bin" ]; } \\\n'
+    '   || [ ! -f "$r/loopx/__init__.py" ] \\\n'
+    '   || [ ! -f "$r/loopx/hosts/agy/__init__.py" ] \\\n'
+    '   || [ ! -f "$r/loopx/hosts/agy/host_runtime.py" ]; then\n'
+    '  printf \'loopx release root not found from --cli-bin\\n\' >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'py=""\n'
+    'if [ -n "${LOOPX_PYTHON:-}" ]; then\n'
+    '  case "$LOOPX_PYTHON" in\n'
+    '    */*) py="$LOOPX_PYTHON" ;;\n'
+    '    *) py="$(command -v "$LOOPX_PYTHON" 2>/dev/null || true)" ;;\n'
+    "  esac\n"
+    '  if [ -z "$py" ] || [ ! -f "$py" ] || [ ! -x "$py" ]; then\n'
+    '    printf \'loopx configured LOOPX_PYTHON not found: %s\\n\' "$LOOPX_PYTHON" >&2\n'
+    "    exit 1\n"
+    "  fi\n"
+    'elif [ -f "$r/.loopx-python" ]; then\n'
+    '  if [ -f "$r/scripts/loopx-python.sh" ]; then\n'
+    '    py="$(bash "$r/scripts/loopx-python.sh" 2>/dev/null || true)"\n'
+    "  else\n"
+    '    IFS= read -r py <"$r/.loopx-python" || true\n'
+    "    cr=\"$(printf '\\r')\"\n"
+    '    case "$py" in\n'
+    '      *"$cr") py="${py%"$cr"}" ;;\n'
+    "    esac\n"
+    "  fi\n"
+    "fi\n"
+    'if [ -z "$py" ] || [ ! -f "$py" ] || [ ! -x "$py" ]; then\n'
+    '  if [ -n "$fallback_py" ] && [ -f "$fallback_py" ] && [ -x "$fallback_py" ]; then\n'
+    '    py="$fallback_py"\n'
+    '  elif [ -f "$r/scripts/loopx-python.sh" ]; then\n'
+    '    py="$(bash "$r/scripts/loopx-python.sh" 2>/dev/null || true)"\n'
+    "  else\n"
+    '    py=""\n'
+    "  fi\n"
+    "fi\n"
+    'if [ -z "$py" ] || [ ! -f "$py" ] || [ ! -x "$py" ]; then\n'
+    '  py="$(command -v python3 2>/dev/null || true)"\n'
+    "fi\n"
+    'if [ -z "$py" ] || [ ! -f "$py" ] || [ ! -x "$py" ]; then\n'
+    '  printf \'loopx python interpreter not found for release root: %s\\n\' "$r" >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'exec "$py" -E -P -c "$boot" "$@"\n'
+)
+
+
+def _resolved_executable_path(binary: str) -> str:
+    # Keep symlinked CLI paths (e.g. ~/.local/bin/loopx) un-dereferenced so
+    # hooks and plists track future `loopx upgrade` targets instead of pinning one release.
+    return os.path.abspath(os.path.expanduser(binary))
+
+
+def _is_explicit_cli_path(cli_bin: str) -> bool:
+    return (
+        os.sep in cli_bin
+        or (os.altsep is not None and os.altsep in cli_bin)
+        or cli_bin.startswith((".", "~"))
+    )
+
+
+def _find_dangling_path_symlink(cli_bin: str) -> str | None:
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        candidate = Path(entry) / cli_bin
+        if os.path.islink(candidate) and not candidate.exists():
+            return str(candidate)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return None
+    return None
+
+
+def _has_host_runtime_files(release_root: Path) -> bool:
+    return (
+        (release_root / "loopx" / "__init__.py").is_file()
+        and (release_root / "loopx" / "hosts" / "agy" / "__init__.py").is_file()
+        and (release_root / "loopx" / "hosts" / "agy" / "host_runtime.py").is_file()
+    )
+
+
+def _is_release_tree_launcher(path: Path) -> bool:
+    return (
+        path.is_file()
+        and (os.name == "nt" or os.access(path, os.X_OK))
+        and len(path.parents) > 1
+        and path.parent.name in ("scripts", "bin")
+        and (
+            (path.parents[1] / "loopx").is_dir()
+            or (path.parents[1] / "release.json").is_file()
+        )
+    )
+
+
+def _is_valid_release_launcher(path: Path) -> bool:
+    return _is_release_tree_launcher(path) and _has_host_runtime_files(path.parents[1])
+
+
+def _validate_cli_launcher(
+    resolved_cli_bin: str, *, require_release_layout: bool
+) -> Path | None:
+    if _is_explicit_cli_path(resolved_cli_bin):
+        target = Path(resolved_cli_bin).expanduser().resolve()
+        if not (target.is_file() and (os.name == "nt" or os.access(target, os.X_OK))):
+            raise FileNotFoundError(
+                f"LoopX CLI launcher not found or not executable: {resolved_cli_bin}"
+            )
+        if require_release_layout and not _is_valid_release_launcher(target):
+            detail = (
+                "host_runtime missing"
+                if _is_release_tree_launcher(target)
+                else "layout invalid"
+            )
+            raise FileNotFoundError(
+                f"LoopX release snapshot launcher {detail}: {resolved_cli_bin}"
+            )
+        return target
+    if require_release_layout:
+        raise FileNotFoundError(
+            f"LoopX release snapshot launcher not found for --cli-bin: {resolved_cli_bin}"
+        )
+    return None
+
+
+def _validated_release_shim_candidate(
+    raw_path: str, *, expected_root: Path | None
+) -> tuple[str, bool] | None:
+    """Validate a candidate release CLI path, preserving symlinks lexically."""
+    stripped = raw_path.strip()
+    if not stripped:
+        return None
+    normalized = _resolved_executable_path(stripped)
+    shim_path = Path(normalized)
+    try:
+        target = shim_path.resolve()
+    except (OSError, RuntimeError):
+        return None
+    if not _is_release_tree_launcher(target):
+        return None
+    if expected_root is not None:
+        try:
+            if not target.is_relative_to(expected_root):
+                return None
+        except (OSError, RuntimeError):
+            return None
+    return normalized, shim_path.is_symlink()
+
+
+def _find_path_release_shim_candidate(
+    cli_bin: str, *, expected_root: Path
+) -> tuple[str, bool] | None:
+    """Scan all PATH entries for a launcher resolving inside ``expected_root``."""
+    first_regular: tuple[str, bool] | None = None
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        which_raw = shutil.which(cli_bin, path=entry)
+        if which_raw is None:
+            continue
+        candidate = _validated_release_shim_candidate(
+            which_raw, expected_root=expected_root
+        )
+        if candidate is None:
+            continue
+        if candidate[1]:
+            return candidate
+        if first_regular is None:
+            first_regular = candidate
+    return first_regular
+
+
+def _resolve_release_cli_shim(cli_bin: str) -> str | None:
+    release_root_raw = os.environ.get("LOOPX_RELEASE_ROOT", "").strip()
+    shim_raw = os.environ.get("LOOPX_CLI_SHIM", "").strip()
+    if cli_bin != "loopx" or (not release_root_raw and not shim_raw):
+        return None
+    expected_root: Path | None = None
+    if release_root_raw:
+        try:
+            expected_root = Path(release_root_raw).expanduser().resolve()
+        except (OSError, RuntimeError):
+            expected_root = None
+
+    shim_candidate = (
+        _validated_release_shim_candidate(shim_raw, expected_root=expected_root)
+        if shim_raw
+        else None
+    )
+    if shim_candidate is not None and shim_candidate[1]:
+        return shim_candidate[0]
+
+    launcher_name = "loopx.ps1" if os.name == "nt" else "loopx"
+    if expected_root is not None:
+        which_candidate = _find_path_release_shim_candidate(
+            cli_bin, expected_root=expected_root
+        )
+        if which_candidate is not None and which_candidate[1]:
+            return which_candidate[0]
+
+        default_shim = Path.home() / ".local" / "bin" / launcher_name
+        if default_shim.is_symlink():
+            default_candidate = _validated_release_shim_candidate(
+                str(default_shim), expected_root=expected_root
+            )
+            if default_candidate is not None:
+                return default_candidate[0]
+
+        if which_candidate is not None:
+            return which_candidate[0]
+        if shim_candidate is not None:
+            return shim_candidate[0]
+
+        root_launcher = expected_root / "scripts" / launcher_name
+        if _is_release_tree_launcher(root_launcher):
+            return str(root_launcher)
+        return None
+
+    if shim_candidate is not None:
+        return shim_candidate[0]
+    return None
+
+
+def resolve_antigravity_runtime_bins(
+    cli_bin: str, *, resolve_local_executable: bool = True
+) -> tuple[str, str]:
+    """Resolve ``(python_bin, cli_bin)`` while preserving symlinked CLI shims."""
+    if not resolve_local_executable:
+        return "python3", cli_bin
+    python_bin = _resolved_executable_path(sys.executable)
+    if _is_explicit_cli_path(cli_bin):
+        return python_bin, _resolved_executable_path(cli_bin)
+    found_cli = _resolve_release_cli_shim(cli_bin)
+    if found_cli is None:
+        dangling = _find_dangling_path_symlink(cli_bin)
+        found_cli = dangling if dangling is not None else shutil.which(cli_bin)
+    resolved_cli_bin = (
+        _resolved_executable_path(found_cli) if found_cli is not None else cli_bin
+    )
+    return python_bin, resolved_cli_bin
+
+
+def _python_supports_isolated_module(
+    python_bin: str, *, expected_root: Path | None = None
+) -> bool:
+    """Check whether ``python_bin -E -P`` imports ``host_runtime`` (and matches ``expected_root`` if given)."""
+    probe_code = (
+        "import importlib.util, sys; from pathlib import Path; "
+        'top = importlib.util.find_spec("loopx"); '
+        f'mod = importlib.util.find_spec("{_HOST_RUNTIME_MODULE}") if top else None; '
+        "ok = mod is not None; "
+        "origin = getattr(mod, 'origin', None) if ok else None; "
+        "ok = ok and ("
+        "len(sys.argv) <= 1 or ("
+        "isinstance(origin, str) and origin not in ('frozen', 'built-in') "
+        "and Path(origin).is_file() "
+        "and Path(origin).resolve().is_relative_to(Path(sys.argv[1]).resolve())"
+        ")); "
+        "raise SystemExit(0 if ok else 1)"
+    )
+    cmd = [python_bin, "-E", "-P", "-c", probe_code]
+    if expected_root is not None:
+        cmd.append(str(expected_root.resolve()))
+    try:
+        probe = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return expected_root is None
+    return probe.returncode == 0
+
+
+def _use_isolated_host_module(python_bin: str, resolved_cli_bin: str) -> bool:
+    """Decide between ``-m`` and ``-c _RELEASE_ROOT_BOOTSTRAP`` without editable shadowing."""
+    target = _validate_cli_launcher(resolved_cli_bin, require_release_layout=False)
+    if target is not None and _is_release_tree_launcher(target):
+        if not _has_host_runtime_files(target.parents[1]):
+            raise FileNotFoundError(
+                f"LoopX release snapshot host_runtime missing: {resolved_cli_bin}"
+            )
+        cli_path = Path(resolved_cli_bin).expanduser()
+        if cli_path.is_symlink() or (target.parents[1] / "release.json").is_file():
+            # Symlinked release shims or packaged snapshots always bootstrap from the
+            # CLI launcher so older .pth installs cannot shadow upgrades.
+            return False
+        return _python_supports_isolated_module(
+            python_bin, expected_root=target.parents[1]
+        )
+    if _python_supports_isolated_module(python_bin):
+        return True
+    _validate_cli_launcher(resolved_cli_bin, require_release_layout=True)
+    return False
+
+
+def build_antigravity_host_runtime_args(
     operation: str,
     *,
     cli_bin: str,
     goal_id: str | None,
     agent_id: str | None,
     conversation_id: str | None,
-    runtime_root: str | None,
+    runtime_root: str | None = None,
     registry: str | None = None,
     resolve_local_executable: bool = True,
+    extra_args: Sequence[str] = (),
+    resolved_bins: tuple[str, str] | None = None,
 ) -> list[str]:
-    python_bin = sys.executable if resolve_local_executable else "python3"
-    resolved_cli_bin = (
-        (shutil.which(cli_bin) or cli_bin) if resolve_local_executable else cli_bin
+    """Build argv to launch ``loopx.hosts.agy.host_runtime`` across venv and release snapshots."""
+    python_bin, resolved_cli_bin = (
+        resolved_bins
+        if resolved_bins is not None
+        else resolve_antigravity_runtime_bins(
+            cli_bin, resolve_local_executable=resolve_local_executable
+        )
     )
-    args = [
-        python_bin,
-        "-E",
-        "-P",
-        "-m",
-        "loopx.hosts.agy.host_runtime",
+    uses_isolated_module = (
+        not resolve_local_executable
+        or _use_isolated_host_module(python_bin, resolved_cli_bin)
+    )
+    operation_tail = [
         operation,
         "--cli-bin",
         resolved_cli_bin,
@@ -263,12 +629,34 @@ def _antigravity_provider_args(
         agent_id or "<agent-id>",
         "--conversation-id",
         conversation_id or "<native-conversation-id>",
+        *extra_args,
     ]
     if runtime_root:
-        args.extend(["--runtime-root", runtime_root])
+        operation_tail.extend(["--runtime-root", runtime_root])
     if registry:
-        args.extend(["--registry", registry])
-    return args
+        operation_tail.extend(["--registry", registry])
+    if not uses_isolated_module and os.name != "nt":
+        return [
+            "/bin/sh",
+            "-c",
+            _POSIX_RELEASE_SHELL_BOOTSTRAP,
+            "loopx-agy-host-runtime",
+            python_bin,
+            _RELEASE_ROOT_BOOTSTRAP,
+            *operation_tail,
+        ]
+    launcher_prefix = (
+        ["-m", _HOST_RUNTIME_MODULE]
+        if uses_isolated_module
+        else ["-c", _RELEASE_ROOT_BOOTSTRAP]
+    )
+    return [
+        python_bin,
+        "-E",
+        "-P",
+        *launcher_prefix,
+        *operation_tail,
+    ]
 
 
 def cron_for_interval_minutes(interval_minutes: int) -> str:
@@ -291,7 +679,7 @@ def build_antigravity_hooks_template(
 ) -> dict[str, Any]:
     """Native Stop hook; installation alone never binds an arbitrary chat."""
     conversation_id = conversation_id or os.environ.get(ANTIGRAVITY_CONVERSATION_ID_ENV)
-    args = _antigravity_provider_args(
+    args = build_antigravity_host_runtime_args(
         "stop-hook",
         cli_bin=cli_bin,
         goal_id=goal_id,
@@ -323,7 +711,7 @@ def build_antigravity_launchd_command(
 ) -> list[str]:
     """Return argv to preview or install the reboot-surviving LaunchAgent watchdog."""
     conversation_id = conversation_id or os.environ.get(ANTIGRAVITY_CONVERSATION_ID_ENV)
-    return _antigravity_provider_args(
+    return build_antigravity_host_runtime_args(
         "install-launchd",
         cli_bin=cli_bin,
         goal_id=goal_id,
@@ -418,7 +806,7 @@ def antigravity_app_activation_extras(
         agent_id=agent_id,
         runtime_root=runtime_root,
         registry=registry,
-        resolve_local_executable=False,
+        resolve_local_executable=True,
     )
     launchd_command = build_antigravity_launchd_command(
         cli_bin=cli_bin,
@@ -426,7 +814,7 @@ def antigravity_app_activation_extras(
         agent_id=agent_id,
         runtime_root=runtime_root,
         registry=registry,
-        resolve_local_executable=False,
+        resolve_local_executable=True,
     )
     wake_prompt = sidecar_template["sidecar"]["loopx-heartbeat"]["bootstrap_prompt"]
     return {
