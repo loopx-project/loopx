@@ -93,7 +93,7 @@
 ### 命令与协同生命周期
 
 - **M0（已随本 PR 落地）：** 通过 `loopx shared-goal-alignment --goal-id <g> --agent-id <a>`（及 amendment/plan 快照读取）在 `file_v0`/`sqlite_v0` 上按需计算完整的 `peer_frontiers` 与 `collaboration_opportunities`（含 `shared_domain_synergy`）。
-- **M1（已随本 PR 落地 — 条件式默认开启）：** 普通 `loopx quota should-run` Turn 无需手动开启，自动调用 TS `peer_coordination_digest.ts`。仅当同 Goal 注册活跃 Agent `>= 2` 且相对接收者实盘 Turn 游标（`peer-coordination-cursors/<agent_id>.json`）出现新 `opportunity_id` 时，`TurnEnvelope`（`v0`/`v1`）才会嵌入 `peer_coordination_digest`（`schema: "peer_digest_v0"`、`read_only: true`、`grants_authority: false`），含 `,"peer_coordination_digest":` 字段键在内的序列化增量严格 `<=300 B`。繁忙 Turn 仅注入 `shared_target_collision_risk`（`"collision"`）与 `peer_verification_needed`（`"verify"`）；空闲 Turn（`caller_lanes` 为空）注入 `peer_verification_needed`（`"verify"`）与高优 `peer_unleased_lane_attention`（`"unleased"`）。单 Agent、无合格新机会、游标未变、`--dry-run`、调度器跳过状态或显式配置 `off`（`coordination.peer_coordination_digest: "off"` / `LOOPX_PEER_COORDINATION_DIGEST=off`）均整字段省略（`0 B`）。实盘非预览且未被跳过的 Turn 会自动提交并清理已消解的游标条目。
+- **M1（已随本 PR 落地 — 条件式默认开启）：** 普通 `loopx quota should-run` Turn 无需手动开启，自动调用 TS `peer_coordination_digest.ts`。仅当同 Goal 注册活跃 Agent `>= 2` 且相对接收者实盘 Turn 游标（`peer-coordination-cursors/<agent_id>.json`）出现新 `opportunity_id` 时，`TurnEnvelope`（`v0`/`v1`）才会嵌入 `peer_coordination_digest`（`schema: "peer_digest_v0"`、`read_only: true`、`grants_authority: false`），含 `,"peer_coordination_digest":` 字段键在内的序列化增量严格 `<=300 B`。繁忙 Turn 仅注入 `shared_target_collision_risk`（`"collision"`）与 `peer_verification_needed`（`"verify"`）；空闲 Turn（`caller_lanes` 为空）注入 `peer_verification_needed`（`"verify"`）与高优 `peer_unleased_lane_attention`（`"unleased"`）。只读 `--dry-run` 预览在有合格信号时可显示该摘要，但绝不创建或推进持久游标；单 Agent、无合格新机会、游标未变、调度器跳过/观察状态或显式配置 `off`（`coordination.peer_coordination_digest: "off"` / `LOOPX_PEER_COORDINATION_DIGEST=off`）均整字段省略（`0 B`）。实盘非预览且未被跳过的 Turn 仅将本次**实际展示**的条目 ID 与仍然活跃的历史已读 ID 写入游标（被 `omitted` 截断的条目保留未读以便后续 Turn 继续透出，已消解条目自动清理）。
 - **M2（后续可选）：** 基于 `(opportunity_id, basis_digest)` 通过 `manager-inbox` 完成带冷却窗的 `offer` / `accept` / `decline` 握手，防止对拒绝或暂不可达 Peer 重复打扰。
 
 ### 扩展与宿主契约
@@ -141,7 +141,7 @@ M0 仅扩展只读投影输出，不改动磁盘持久化 schema 或迁移流程
 
 ## 12. 未决决策
 
-1. **D1（已拍板 — 2026-11-27，M1 默认触发路径与信封暴露面）：** 普通产品路径（`loopx quota should-run` -> `TurnEnvelope`）**无需手动开启** M1。当同一 Goal 注册活跃 Agent `>= 2` 且存在相对游标的新增合格 `opportunity_id` 时自动注入 `<=300 B`（含字段键）的 `peer_coordination_digest`：繁忙 Turn 仅纳入 `shared_target_collision_risk` 与 `peer_verification_needed`；空闲 Turn 纳入 `peer_verification_needed` 与高优 `peer_unleased_lane_attention`；单 Agent、无新合格信号、游标未变、跳过/`dry-run` 模式与显式 `off` 关闭配置均整字段省略（`0 B`）；`shared_domain_synergy` 保留通过 `shared-goal-alignment` / `goal-alignment` 按需拉取。控制面上下文开销 `<5%` 仍以端到端实测验收为准（序列化省略 `0 B` 不替代实测认证）。
+1. **D1（已拍板 — 2026-11-27，M1 默认触发路径与信封暴露面）：** 普通产品路径（`loopx quota should-run` -> `TurnEnvelope`）**无需手动开启** M1。当同一 Goal 注册活跃 Agent `>= 2` 且存在相对游标的新增合格 `opportunity_id` 时自动注入 `<=300 B`（含字段键）的 `peer_coordination_digest`：繁忙 Turn 仅纳入 `shared_target_collision_risk` 与 `peer_verification_needed`；空闲 Turn 纳入 `peer_verification_needed` 与高优 `peer_unleased_lane_attention`；只读 `--dry-run` 预览可显示摘要但不写入游标，实盘非预览且非跳过 Turn 仅确认实际展示条目及仍活跃历史条目（使截断省略条目可在后续 Turn 透出并自动清理已消解条目）；单 Agent、无新合格信号、游标未变、跳过/调度观察模式与显式 `off` 关闭配置均整字段省略（`0 B`）；`shared_domain_synergy` 保留通过 `shared-goal-alignment` / `goal-alignment` 按需拉取。控制面上下文开销 `<5%` 仍以端到端实测验收为准（序列化省略 `0 B` 不替代实测认证）。
 2. **D2（M2 拒绝冷却窗策略）：** `decline` 后的默认冷却时长/revision 绑定规则应如何设定以避免同质打扰？**负责人：** `manager-inbox` owner。
 3. **D3（M3 Antigravity 宿主观测来源）：** 应由签名本地守护进程端点还是应用侧租约文件提供存活观测？**负责人：** desktop/host owners。
 

@@ -18,7 +18,11 @@ from canonical_authority_fixture import (
 )
 from loopx.cli import main as cli_main
 from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
-from loopx.control_plane.goals.peer_coordination_digest import peer_coordination_cursor_path
+from loopx.control_plane.goals.peer_coordination_digest_source import (
+    commit_displayed_peer_coordination_cursor,
+    peer_coordination_cursor_path,
+    read_peer_coordination_cursor,
+)
 from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
 
@@ -293,21 +297,35 @@ def test_automatic_turn_digest_cursor_lifecycle_and_prune(
     )
     assert wire_bytes <= 300
 
-    # Live Turn #1 emits digest and commits cursor.
+    # Live Turn #1 emits collision digest (with 1 omitted verify opp) and records only Turn 1's ID.
     code1, live1 = _run_should_run(
         registry=paths["registry"], runtime=paths["runtime"], agent_id="agent-a"
     )
     assert code1 == 0 and live1["ok"] is True
     assert_complete_turn_decision(live1)
     assert live1["peer_coordination_digest"] == digest
+    assert digest.get("omitted") == 1
     assert cursor.is_file()
+    cursor_after_t1 = json.loads(cursor.read_text(encoding="utf-8"))
+    assert len(cursor_after_t1["seen_opportunity_ids"]) == 1
 
-    # Live Turn #2 (unchanged canonical frontier) omits field completely (0 B).
+    # Live Turn #2 surfaces the previously omitted verify opportunity without losing it.
     code2, live2 = _run_should_run(
         registry=paths["registry"], runtime=paths["runtime"], agent_id="agent-a"
     )
     assert code2 == 0 and live2["ok"] is True
-    assert "peer_coordination_digest" not in live2
+    digest2 = live2["peer_coordination_digest"]
+    assert [item["kind"] for item in digest2["items"]] == ["verify"]
+    assert "omitted" not in digest2
+    cursor_after_t2 = json.loads(cursor.read_text(encoding="utf-8"))
+    assert len(cursor_after_t2["seen_opportunity_ids"]) == 2
+
+    # Live Turn #3 (unchanged canonical frontier, all ops seen) omits field completely (0 B).
+    code2_quiet, live2_quiet = _run_should_run(
+        registry=paths["registry"], runtime=paths["runtime"], agent_id="agent-a"
+    )
+    assert code2_quiet == 0 and live2_quiet["ok"] is True
+    assert "peer_coordination_digest" not in live2_quiet
 
     # Newly added peer verification opportunity immediately surfaces ONLY the new item.
     updated_projection = build_todo_runtime_shadow_projection(
@@ -380,3 +398,135 @@ def test_explicit_off_escape_hatch_suppresses_digest(
     )
     assert code == 0 and payload["ok"] is True
     assert "peer_coordination_digest" not in payload
+
+
+def test_commit_displayed_cursor_records_only_displayed_and_active_seen(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    active = ["opp:1", "opp:2", "opp:3"]
+    assert (
+        commit_displayed_peer_coordination_cursor(
+            runtime,
+            goal_id=GOAL_ID,
+            agent_id="agent-a",
+            active_opportunity_ids=active,
+            displayed_opportunity_ids=["opp:1"],
+        )
+        is True
+    )
+    assert read_peer_coordination_cursor(runtime, goal_id=GOAL_ID, agent_id="agent-a") == [
+        "opp:1"
+    ]
+
+    # When opp:2 becomes inactive while opp:1 was previously seen and opp:3 is displayed next,
+    # opp:2 is pruned and opp:1 + opp:3 remain recorded.
+    commit_displayed_peer_coordination_cursor(
+        runtime,
+        goal_id=GOAL_ID,
+        agent_id="agent-a",
+        active_opportunity_ids=["opp:1", "opp:3", "opp:4"],
+        displayed_opportunity_ids=["opp:3"],
+    )
+    assert read_peer_coordination_cursor(runtime, goal_id=GOAL_ID, agent_id="agent-a") == [
+        "opp:1",
+        "opp:3",
+    ]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_dry_run_non_mutating_and_omitted_opportunities_surface_across_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    todos: list[dict[str, object]] = [
+        _canonical_record(
+            todo_id="todo_a_verifier",
+            text="[P0] Verify peer slices cleanly",
+            status="open",
+            task_class="advancement_task",
+            action_kind="verify",
+            task_domain="control_plane",
+            task_repository="https://github.com/loopx-project/loopx.git",
+            target_key="peer-target",
+            required_write_scopes=["loopx/control_plane/goals/"],
+            claimed_by="agent-a",
+            priority="P0",
+            index=1,
+        )
+    ]
+    long_todo_ids = [
+        f"todo_overflow_{idx}_" + ("x" * 12)
+        for idx in range(3)
+    ]
+    for offset, todo_id in enumerate(long_todo_ids, start=2):
+        todos.append(
+            _canonical_record(
+                todo_id=todo_id,
+                text=f"[P0] Peer slice {offset} needing review",
+                status="open",
+                task_class="advancement_task",
+                action_kind="refactor",
+                task_domain="control_plane",
+                task_repository="git:github.com/loopx-project/loopx",
+                target_key=f"module-{offset}",
+                required_write_scopes=[f"loopx/control_plane/mod_{offset}/"],
+                completion_validation_required=True,
+                claimed_by="agent-b",
+                priority="P0",
+                index=offset,
+            )
+        )
+
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=todos,
+        provider=provider,
+    )
+    cursor_path = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    # Preview (--dry-run) may display the digest without creating or advancing the cursor.
+    dry_code, dry_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--dry-run",),
+    )
+    assert dry_code == 0 and dry_payload["ok"] is True
+    assert "peer_coordination_digest" in dry_payload
+    assert not cursor_path.exists()
+
+    seen_todo_ids: list[str] = []
+    omitted_seen_on_first_turn = False
+    for turn in range(6):
+        code, payload = _run_should_run(
+            registry=paths["registry"], runtime=paths["runtime"], agent_id="agent-a"
+        )
+        assert code == 0 and payload["ok"] is True
+        digest = payload.get("peer_coordination_digest")
+        if digest is None:
+            break
+        serialized_bytes = len(
+            json.dumps(digest, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        assert serialized_bytes <= 300
+        if turn == 0:
+            omitted_seen_on_first_turn = int(digest.get("omitted", 0)) >= 1
+        turn_todos = [str(item["todo"]) for item in digest["items"]]
+        assert set(turn_todos).isdisjoint(set(seen_todo_ids))
+        seen_todo_ids.extend(turn_todos)
+        recorded = read_peer_coordination_cursor(
+            paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+        )
+        assert len(recorded) == len(seen_todo_ids)
+
+    assert omitted_seen_on_first_turn
+    assert set(long_todo_ids).issubset(set(seen_todo_ids))
+
+    quiet_code, quiet_payload = _run_should_run(
+        registry=paths["registry"], runtime=paths["runtime"], agent_id="agent-a"
+    )
+    assert quiet_code == 0 and quiet_payload["ok"] is True
+    assert "peer_coordination_digest" not in quiet_payload

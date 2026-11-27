@@ -250,6 +250,70 @@ test("strict <= 300 B cap emits omitted count without breaking budget even on lo
   assert.ok(digest !== null);
   assert.ok((result.serialized_delta_bytes as number) <= PEER_COORDINATION_DIGEST_MAX_BYTES);
   assert.ok(typeof digest.omitted === "number" && (digest.omitted as number) >= 1);
+  const digestItems = digest.items as JsonObject[];
+  assert.deepEqual(
+    result.displayed_opportunity_ids,
+    digestItems.map((item) => item.id as string),
+  );
+});
+
+test("omitted overflowing opportunities are not marked seen and surface on follow-up turns", () => {
+  const workItems = [0, 1, 2].map((idx) => ({
+    todo_id: `todo_overflow_${idx}_` + "x".repeat(12),
+    status: "open",
+    done: false,
+    task_class: "advancement_task",
+    claimed_by: "agent-b",
+    bound_agent: null,
+    priority: "P0",
+    action_kind: "refactor",
+    task_domain: "control_plane",
+    task_repository: "git:github.com/loopx-project/loopx",
+    target_key: `module-${idx}`,
+    required_write_scopes: [`loopx/control_plane/mod_${idx}/`],
+    completion_validation_required: true,
+    excluded_agents: [],
+    lease: null,
+  }));
+
+  const seen: string[] = [];
+  const displayedAll: string[] = [];
+  let expectedActiveIds: string[] = [];
+  let sawOmitted = false;
+  for (let turn = 0; turn < 10; turn += 1) {
+    const step = projectPeerCoordinationDigest({
+      schema_version: PEER_COORDINATION_DIGEST_REQUEST_SCHEMA_VERSION,
+      goal_id: "goal-overflow",
+      agent_id: "agent-a",
+      registered_agent_count: 2,
+      work_items: workItems,
+      seen_opportunity_ids: seen,
+      observed_at: OBSERVED_AT,
+    });
+    if (step.digest === null) break;
+    assert.ok((step.serialized_delta_bytes as number) <= PEER_COORDINATION_DIGEST_MAX_BYTES);
+    const stepDigest = step.digest as JsonObject;
+    const stepItems = stepDigest.items as JsonObject[];
+    const stepDisplayed = step.displayed_opportunity_ids as string[];
+    assert.deepEqual(
+      stepDisplayed,
+      stepItems.map((item) => item.id as string),
+    );
+    assert.ok(stepDisplayed.length >= 1);
+    if (turn === 0) {
+      expectedActiveIds = [...(step.active_opportunity_ids as string[])];
+      sawOmitted = typeof stepDigest.omitted === "number" && (stepDigest.omitted as number) >= 1;
+      assert.ok(stepDisplayed.length < expectedActiveIds.length);
+    }
+    for (const id of stepDisplayed) {
+      assert.ok(!seen.includes(id));
+      seen.push(id);
+      displayedAll.push(id);
+    }
+  }
+  assert.ok(sawOmitted);
+  assert.ok(expectedActiveIds.length >= 3);
+  assert.deepEqual([...displayedAll].sort(), [...expectedActiveIds].sort());
 });
 
 test("TurnEnvelope v0/v1 and progressive opening preserve peer_coordination_digest cleanly", () => {

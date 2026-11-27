@@ -110,11 +110,11 @@ def write_peer_coordination_cursor(
     *,
     goal_id: str,
     agent_id: str,
-    active_opportunity_ids: Sequence[str],
+    seen_opportunity_ids: Sequence[str],
 ) -> bool:
-    """Persist normalized active opportunity IDs, skipping no-op writes and pruning empties."""
+    """Persist normalized seen opportunity IDs, skipping no-op writes and pruning empties."""
 
-    normalized = _normalize_opportunity_ids(active_opportunity_ids)
+    normalized = _normalize_opportunity_ids(seen_opportunity_ids)
     path = peer_coordination_cursor_path(
         runtime_root, goal_id=goal_id, agent_id=agent_id
     )
@@ -323,6 +323,49 @@ def attach_turn_peer_coordination_digest(
         payload["peer_coordination_digest"] = digest
 
 
+def displayed_opportunity_ids_from_digest(digest: Mapping[str, Any] | Any) -> list[str]:
+    """Return the exact opportunity IDs actually shown inline inside a rendered digest."""
+
+    if not isinstance(digest, Mapping):
+        return []
+    items = digest.get("items")
+    if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+        return []
+    return _normalize_opportunity_ids(
+        [
+            str(item.get("id") or "")
+            for item in items
+            if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+        ]
+    )
+
+
+def commit_displayed_peer_coordination_cursor(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str,
+    active_opportunity_ids: Sequence[str],
+    displayed_opportunity_ids: Sequence[str],
+) -> bool:
+    """Advance cursor using only actually displayed IDs + still-active previously seen IDs."""
+
+    active_set = set(_normalize_opportunity_ids(active_opportunity_ids))
+    displayed_set = set(_normalize_opportunity_ids(displayed_opportunity_ids)) & active_set
+    existing_seen = set(
+        read_peer_coordination_cursor(
+            runtime_root, goal_id=goal_id, agent_id=agent_id
+        )
+    ) & active_set
+    next_seen = sorted(existing_seen | displayed_set)
+    return write_peer_coordination_cursor(
+        runtime_root,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        seen_opportunity_ids=next_seen,
+    )
+
+
 def maybe_commit_turn_peer_coordination_cursor(
     payload: Mapping[str, Any],
     *,
@@ -333,7 +376,7 @@ def maybe_commit_turn_peer_coordination_cursor(
     closeout_unavailable: bool,
     status_payload: Mapping[str, Any] | None,
     registry_path: Path,
-    runtime_root: Path,
+    runtime_root: Path | None,
     goal_id: str | None,
     agent_id: str | None,
 ) -> bool:
@@ -347,6 +390,7 @@ def maybe_commit_turn_peer_coordination_cursor(
         or closeout_unavailable
         or payload.get("ok") is not True
         or status_payload is None
+        or runtime_root is None
         or not goal_id
         or not agent_id
         or str(payload.get("effective_action") or "").strip() in _SKIPPED_EFFECTIVE_ACTIONS
@@ -379,6 +423,9 @@ def maybe_commit_turn_peer_coordination_cursor(
         or peer_coordination_digest_disabled(registry_goal=registry_goal)
     ):
         return False
+    displayed_ids = displayed_opportunity_ids_from_digest(
+        payload.get("peer_coordination_digest")
+    )
     digest_emitted = isinstance(payload.get("peer_coordination_digest"), Mapping)
     try:
         cursor_file = peer_coordination_cursor_path(
@@ -402,9 +449,10 @@ def maybe_commit_turn_peer_coordination_cursor(
         agent_id=normalized_agent,
         registered_agent_ids=normalized_agents,
     )
-    return write_peer_coordination_cursor(
+    return commit_displayed_peer_coordination_cursor(
         runtime_root,
         goal_id=goal_id,
         agent_id=normalized_agent,
         active_opportunity_ids=active_ids,
+        displayed_opportunity_ids=displayed_ids,
     )

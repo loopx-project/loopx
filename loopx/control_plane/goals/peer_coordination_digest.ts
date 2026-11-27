@@ -138,6 +138,7 @@ export function projectPeerCoordinationDigest(value: unknown): JsonObject {
       digest: null,
       active_opportunity_ids: [],
       new_opportunity_ids: [],
+      displayed_opportunity_ids: [],
       serialized_delta_bytes: 0,
     };
   }
@@ -178,6 +179,7 @@ export function projectPeerCoordinationDigest(value: unknown): JsonObject {
       digest: null,
       active_opportunity_ids: activeOpportunityIds,
       new_opportunity_ids: [],
+      displayed_opportunity_ids: [],
       serialized_delta_bytes: 0,
     };
   }
@@ -221,6 +223,7 @@ export function projectPeerCoordinationDigest(value: unknown): JsonObject {
     digest,
     active_opportunity_ids: activeOpportunityIds,
     new_opportunity_ids: newOpportunities.map((opp) => opp.opportunity_id),
+    displayed_opportunity_ids: packed.map((item) => item.id as string),
     serialized_delta_bytes: serializedBytes,
   };
 }
