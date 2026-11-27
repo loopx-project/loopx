@@ -684,6 +684,7 @@ def test_configure_steward_monitor_rejects_non_mapping_plan_todo(
 def test_steward_pump_failure_backoff_dedup_and_clear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    import errno
     import logging
     from loopx.capabilities.native_chat import steward_reports as reports_mod
 
@@ -727,7 +728,11 @@ def test_steward_pump_failure_backoff_dedup_and_clear(
 
     frontier_calls: list[float] = []
     report_mode: dict[str, object] = {
-        "exc": ValueError("provider verification failed at /Users/alice/.loopx/private-state"),
+        "exc": PermissionError(
+            errno.EACCES,
+            "Permission denied",
+            "/Users/alice/dir with spaces/secret file.json",
+        ),
     }
 
     class FakeReports:
@@ -755,16 +760,19 @@ def test_steward_pump_failure_backoff_dedup_and_clear(
     monkeypatch.setattr(StewardMonitor, "runnable_advancement_todos", lambda _self, _actor, *, todos=None: [])
 
     caplog.set_level(logging.WARNING, logger=steward_monitor_pump.__name__)
-    # First failure at t=1000 logs once with redacted path and sets 60s report backoff (until 1060).
+    # First failure at t=1000 logs once with allowlisted diagnostics (no path text even with spaces)
+    # and sets 60s report backoff (until 1060).
     # _schedule_soonest_monitor_backoff sets binding next-check to t=1015 (15s remaining).
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
     assert frontier_calls == [1000.0]
     assert len(caplog.records) == 1
     msg0 = caplog.records[0].getMessage()
     assert "An original steward report is unavailable" in msg0
-    assert "ValueError:" in msg0
-    assert "/Users/alice" not in msg0
-    assert "<path>" in msg0
+    assert "stage=steward_report" in msg0
+    assert "error=PermissionError" in msg0
+    assert "errno=EACCES" in msg0
+    for leaked in ("Users", "alice", "dir with spaces", "secret", "Permission denied", "/"):
+        assert leaked not in msg0
 
     # Simulate human busy -> idle flip (`fg_checked=False`) at t=1010 AND soon-due wake at t=1020:
     # foreground fast-path and _schedule_soonest_monitor_backoff must NOT bypass report failure backoff.
@@ -790,12 +798,15 @@ def test_steward_pump_failure_backoff_dedup_and_clear(
     assert frontier_calls == [1000.0, 1081.0]
 
     # At t=1211 (past 120s backoff 1201 and binding check 1210), a different exception emits one transition warning (240s -> 1451).
-    report_mode["exc"] = RuntimeError("quota verification timed out")
+    report_mode["exc"] = RuntimeError("sensitive text /tmp/never logged/here")
     clock["now"] = 1211.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
     assert frontier_calls == [1000.0, 1081.0, 1211.0]
     assert len(caplog.records) == 2
-    assert "RuntimeError: quota verification timed out" in caplog.records[1].getMessage()
+    msg1 = caplog.records[1].getMessage()
+    assert "stage=steward_report, error=RuntimeError" in msg1
+    assert "sensitive text" not in msg1
+    assert "never logged" not in msg1
 
     clock["now"] = 1440.0
     controller._steward_monitor_fg_idle_checked["b-backoff"] = False  # type: ignore[attr-defined]
@@ -963,3 +974,151 @@ def test_steward_pump_monitor_outer_and_managed_session_backoff(
     assert submit_calls == ["m-fail", "m-ok", "m-ok", "m-fail", "m-ok"]
     assert managed_report_calls == [2000.0, 2062.0]
     assert len(caplog.records) == 3
+
+
+def test_managed_session_watch_failure_does_not_starve_report_and_witness_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    from loopx.capabilities.native_chat import (
+        steward_managed_mode as managed_mod,
+        steward_reports as reports_mod,
+    )
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
+
+    store = ChatSessionStore(tmp_path / "chat")
+    s_managed = store.create_session(
+        goal_id="goal-managed-watch", agent_id="codex", adapter_kind="codex-app-server",
+        upstream_thread_id="th-watch",
+    )
+    monkeypatch.setattr(
+        store,
+        "list_sessions",
+        lambda: [{**s_managed, "managed_agent_id": "agent-1"}],
+    )
+    bindings = _StubBindings(tmp_path / "bindings.json", bindings_rows=[])
+    controller = _StubController(tmp_path, bindings=bindings)
+    controller.store = store
+
+    monkeypatch.setattr(
+        steward_monitor_pump,
+        "_report_config_for_goal",
+        lambda _ctrl, _gid: {
+            "enabled": True,
+            "profile_preset": "weekly-progress",
+            "route_ref": f"managed-session:{s_managed['session_id']}",
+        },
+    )
+
+    watch_todo: StewardTodoRecord = {
+        "todo_id": "w-due", "task_class": "continuous_monitor", "status": "open",
+        "target_key": f"managed-session-watch.{s_managed['session_id']}",
+        "next_due_at": "2020-01-01T00:00:00Z",
+    }
+    monkeypatch.setattr(StewardMonitor, "todos", lambda _self, _actor: [watch_todo])
+    monkeypatch.setattr(steward_monitor_pump, "monitor_todo_is_due", lambda _todo: True)
+
+    watch_calls: list[float] = []
+    report_calls: list[float] = []
+    report_ready = {"created": False}
+
+    class FakeManagedTurn:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        def _request(self, sid: str, aid: str, _op: str) -> dict[str, object]:
+            return {"actor": {"goal_id": "goal-managed-watch", "agent_id": aid, "session_id": sid}}
+
+        def admit(self, _req: Mapping[str, object]) -> None:
+            return None
+
+        def submit(self, _sid: str, **_kw: object) -> tuple[dict[str, object], bool]:
+            watch_calls.append(clock["now"])
+            raise RuntimeError("watch submission unavailable /Users/private/dir with spaces")
+
+    class FakeManagedReports:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        def frontier(self, _sid: str) -> tuple[dict[str, object] | None, bool]:
+            report_calls.append(clock["now"])
+            if report_ready["created"]:
+                return {"turn_id": "report-turn-1122"}, True
+            return None, False
+
+    monkeypatch.setattr(managed_mod, "ManagedSessionTurn", FakeManagedTurn)
+    monkeypatch.setattr(reports_mod, "ManagedSessionReports", FakeManagedReports)
+
+    caplog.set_level(logging.WARNING, logger=steward_monitor_pump.__name__)
+    # t=1000: watch fails -> 60s watch backoff (until 1060).
+    assert steward_monitor_pump.pump_managed_session_monitors(_as_controller(controller)) == []
+    assert watch_calls == [1000.0]
+    assert report_calls == [1000.0]
+    assert len(caplog.records) == 1
+    assert "stage=managed_session_watch, error=RuntimeError" in caplog.records[0].getMessage()
+    assert "dir with spaces" not in caplog.records[0].getMessage()
+
+    # t=1061: watch retries and fails -> 120s watch backoff (until 1181), while session normal check is +60s (1121).
+    clock["now"] = 1061.0
+    assert steward_monitor_pump.pump_managed_session_monitors(_as_controller(controller)) == []
+    assert watch_calls == [1000.0, 1061.0]
+    assert report_calls == [1000.0, 1061.0]
+    assert len(caplog.records) == 1
+
+    # t=1122: healthy weekly-progress report becomes ready inside watch's 120s backoff and MUST still submit!
+    report_ready["created"] = True
+    clock["now"] = 1122.0
+    out = steward_monitor_pump.pump_managed_session_monitors(_as_controller(controller))
+    assert [row["turn_id"] for row in out] == ["report-turn-1122"]
+    assert watch_calls == [1000.0, 1061.0]
+    assert report_calls == [1000.0, 1061.0, 1122.0]
+
+    # Verify outer binding storage witness: corrupted session stays backed off while untouched,
+    # then recovers immediately on repair without clearing _steward_monitor_next_check.
+    session_path = store._session_path(s_managed["session_id"])
+    original_bytes = session_path.read_bytes()
+    b_sid = store.create_session(
+        goal_id="steward-agent-b-witness", agent_id="steward", adapter_kind="codex-app-server",
+        upstream_thread_id="th-witness",
+    )
+    b_path = store._session_path(b_sid["session_id"])
+    b_original = b_path.read_bytes()
+    b_bindings = _StubBindings(
+        tmp_path / "b-bindings.json",
+        bindings_rows=[{
+            "binding_id": "b-witness",
+            "enabled": True,
+            "managed_actor": {"goal_id": "steward-agent-b-witness", "agent_id": "steward", "session_id": b_sid["session_id"]},
+        }],
+    )
+    b_ctrl = _StubController(tmp_path, bindings=b_bindings)
+    b_ctrl.store = store
+    monkeypatch.setattr(store, "list_sessions", lambda: [])
+    b_path.write_bytes(b"\xff")
+    load_calls: list[str] = []
+    orig_load = store.load_session
+
+    def tracked_load(sid: str) -> dict[str, object] | None:
+        load_calls.append(sid)
+        return orig_load(sid)
+
+    monkeypatch.setattr(store, "load_session", tracked_load)
+    monkeypatch.setattr(StewardMonitor, "todos", lambda _self, _actor: [])
+    monkeypatch.setattr(StewardMonitor, "due_monitors", lambda _self, _actor, *, todos=None: [])
+    monkeypatch.setattr(StewardMonitor, "runnable_advancement_todos", lambda _self, _actor, *, todos=None: [])
+
+    clock["now"] = 2000.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(b_ctrl))
+    assert load_calls == [b_sid["session_id"]]
+    # Same tick/unchanged corrupted file at t=2003 stays backed off without re-reading disk JSON.
+    clock["now"] = 2003.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(b_ctrl))
+    assert load_calls == [b_sid["session_id"]]
+    # Repairing the file on disk invalidates the witness immediately at t=2004 without waiting 60s.
+    b_path.write_bytes(b_original)
+    clock["now"] = 2004.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(b_ctrl))
+    assert len(load_calls) >= 2
+    assert session_path.read_bytes() == original_bytes
