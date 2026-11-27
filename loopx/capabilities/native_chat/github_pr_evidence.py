@@ -672,6 +672,17 @@ def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
     return True, None
 
 
+def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | None:
+    # An unreadable row could supersede any observed reply on this page.
+    if not isinstance(raw_nodes, list) or any(
+        not isinstance(comment, Mapping)
+        or _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at")) is None
+        for comment in raw_nodes
+    ):
+        return None
+    return raw_nodes
+
+
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     raw_reviews = node.get("reviews")
     if isinstance(raw_reviews, Mapping) and isinstance(raw_reviews.get("nodes"), list):
@@ -682,18 +693,17 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         reviews = []
 
     raw_comments = node.get("comments")
-    comments_has_previous_page = False
-    comments_start_cursor = None
-    if isinstance(raw_comments, Mapping):
-        raw_nodes = raw_comments.get("nodes")
-        comments = [item for item in raw_nodes if isinstance(item, Mapping)] if isinstance(raw_nodes, list) else []
+    raw_comment_nodes = raw_comments.get("nodes") if isinstance(raw_comments, Mapping) else raw_comments
+    comments = _read_graphql_comment_nodes(raw_comment_nodes)
+    if comments is None:
+        comments = []
+        comments_has_previous_page, comments_start_cursor = True, None
+    elif isinstance(raw_comments, Mapping):
         comments_has_previous_page, comments_start_cursor = _graphql_comment_page_info(
             raw_comments.get("pageInfo")
         )
-    elif isinstance(raw_comments, list):
-        comments = [item for item in raw_comments if isinstance(item, Mapping)]
     else:
-        comments = []
+        comments_has_previous_page, comments_start_cursor = False, None
 
     raw_commits = node.get("commits")
     commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
@@ -803,9 +813,9 @@ def _backfill_pr_comments_if_needed(
         comments_conn = pr_data.get("comments") if isinstance(pr_data, Mapping) else None
         older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
         page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
-        if not isinstance(older_nodes, list):
+        older_comments = _read_graphql_comment_nodes(older_nodes)
+        if older_comments is None:
             break
-        older_comments = [item for item in older_nodes if isinstance(item, Mapping)]
         next_has_prev, next_cursor = _graphql_comment_page_info(page_info)
         if next_cursor == comment_cursor:
             next_cursor = None

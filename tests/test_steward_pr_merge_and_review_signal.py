@@ -231,6 +231,7 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
     default_contexts = copied.pop("statusCheckRollup", [])
     rollup_contexts = contexts if contexts is not None else default_contexts
     copied["reviews"] = {"nodes": copied.get("reviews") or []}
+    copied.setdefault("comments", {"nodes": [], "pageInfo": {"hasPreviousPage": False}})
     copied["commits"] = {
         "nodes": [
             {
@@ -663,9 +664,18 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
         pytest.param("older", {"hasPreviousPage": False}, None, True, id="verified-end"),
         pytest.param("older", {}, "anchor", True, id="missing-flag-with-anchor"),
         pytest.param("older", None, "author", True, id="missing-page-info-with-author-reply"),
+        pytest.param("initial", {"hasPreviousPage": False}, "null-row", False, id="initial-null-row"),
+        pytest.param("older", {"hasPreviousPage": False}, "null-row", False, id="older-null-row"),
+        pytest.param("initial", {"hasPreviousPage": False}, "gap-after-author", False, id="gap-after-author"),
+        pytest.param("older", {"hasPreviousPage": False}, "gap-before-author", False, id="gap-before-author"),
+        pytest.param("initial", {"hasPreviousPage": False}, "missing-nodes", False, id="missing-nodes"),
+        pytest.param("older", {"hasPreviousPage": False}, "invalid-time", False, id="unreadable-timestamp"),
+        pytest.param("initial", {"hasPreviousPage": False}, "missing-connection", False, id="missing-connection"),
+        pytest.param("initial", {"hasPreviousPage": False}, None, True, id="initial-verified-empty"),
+        pytest.param("initial", {"hasPreviousPage": True, "startCursor": "recent"}, "author", True, id="verified-reply"),
     ],
 )
-def test_steward_comment_page_requires_terminal_marker_or_independent_evidence(
+def test_steward_requires_readable_comment_page_for_coverage(
     page_kind, page_info, evidence, expected_complete,
 ) -> None:
     head = "a" * 40
@@ -677,18 +687,30 @@ def test_steward_comment_page_requires_terminal_marker_or_independent_evidence(
             "author": {"login": "maintainer"}, "commit": {"oid": head},
         }],
     ))
-    node["comments"] = {"nodes": [], "pageInfo": page_info if page_kind == "initial" else {
-        "hasPreviousPage": True, "startCursor": "recent",
-    }}
-    rows = []
+    rows: list[object] = []
     if evidence == "anchor":
         rows.append({"createdAt": "2030-01-01T08:00:00Z"})
-    elif evidence == "author":
+    elif evidence in {"author", "gap-before-author", "gap-after-author"}:
         rows.append({
             "createdAt": "2030-01-01T09:00:00Z",
             "authorAssociation": "NONE",
             "author": {"__typename": "User", "login": "member"},
         })
+    if evidence == "gap-before-author":
+        rows.insert(0, None)
+    elif evidence in {"null-row", "gap-after-author"}:
+        rows.append(None)
+    elif evidence == "invalid-time":
+        rows.append({"createdAt": "invalid", "author": {"login": "maintainer"}})
+
+    response_page: dict[str, object] = {"nodes": rows, "pageInfo": page_info}
+    if evidence == "missing-nodes":
+        del response_page["nodes"]
+    node["comments"] = response_page if page_kind == "initial" else {
+        "nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "recent"},
+    }
+    if evidence == "missing-connection":
+        del node["comments"]
     requested_cursors = []
 
     def runner(cmd, **kwargs):
@@ -699,7 +721,7 @@ def test_steward_comment_page_requires_terminal_marker_or_independent_evidence(
         else:
             requested_cursors.append(cursor)
             response = {"data": {"repository": {"pullRequest": {
-                "comments": {"nodes": rows, "pageInfo": page_info},
+                "comments": response_page,
             }}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
@@ -1236,7 +1258,7 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
 
     # Normalization defaults vs pageInfo propagation.
     plain_norm = _normalize_graphql_pr_node(_sample_pr(number=400, head_oid=head))
-    assert plain_norm["commentsHasPreviousPage"] is False
+    assert plain_norm["commentsHasPreviousPage"] is True
     assert plain_norm["commentsStartCursor"] is None
 
     # Pre-anchor comment inside truncated window proves completeness without backfill.

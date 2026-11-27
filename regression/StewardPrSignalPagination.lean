@@ -400,6 +400,50 @@ theorem missing_terminal_marker_counterexample :
     ((none : Option Bool) != some true) = true ∧
     commentPageCovered none false = false ∧ nextOlderCommentCursor none (some 7) = none := by decide
 
+/- A missing comment connection or node list maps to none, while a genuine
+   empty page maps to some []. A null or unreadable comment slot maps to none
+   inside the list. The model accepts page metadata and coverage witnesses
+   only after validating the entire batch. Position does not bound the date
+   or author of an unreadable row. -/
+def readCommentNodes : List (Option Nat) → Option (List Nat)
+  | [] => some []
+  | none :: _ => none
+  | some clock :: rest => (readCommentNodes rest).map (clock :: ·)
+
+def applyCommentPage (prior : List Nat × Bool) (batch : Option (List (Option Nat)))
+    (terminal : Option Bool) (independentCoverage : Bool) : List Nat × Bool :=
+  match batch.bind readCommentNodes with
+  | none => prior
+  | some rows => (rows ++ prior.1, commentPageCovered terminal independentCoverage)
+
+theorem unreadable_node_blocks_coverage_from_the_whole_page (rows : List (Option Nat))
+    (gap : none ∈ rows) : readCommentNodes rows = none := by
+  induction rows with
+  | nil => simp at gap
+  | cons row rest ih =>
+    cases row with
+    | none => rfl
+    | some clock =>
+      have inRest : none ∈ rest := by simpa using gap
+      simp [readCommentNodes, ih inRest]
+
+theorem unreadable_comment_page_preserves_prior_evidence (prior : List Nat × Bool)
+    (rows : List (Option Nat)) (terminal : Option Bool) (independentCoverage : Bool)
+    (gap : none ∈ rows) :
+    applyCommentPage prior (some rows) terminal independentCoverage = prior := by
+  simp [applyCommentPage, unreadable_node_blocks_coverage_from_the_whole_page rows gap]
+
+theorem missing_comment_connection_cannot_change_coverage (prior : List Nat × Bool)
+    (terminal : Option Bool) (independentCoverage : Bool) :
+    applyCommentPage prior none terminal independentCoverage = prior := rfl
+
+theorem genuine_empty_comment_page_differs_from_unreadable_row :
+    applyCommentPage ([], false) (some []) (some false) false = ([], true) ∧
+    applyCommentPage ([], false) (some [none]) (some false) false = ([], false) := by decide
+
+theorem readable_comment_reply_still_supplies_independent_coverage :
+    applyCommentPage ([], false) (some [some 9]) none true = ([9], true) := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -436,5 +480,10 @@ theorem missing_terminal_marker_counterexample :
 #print axioms complete_comment_terminal_page_needs_no_cursor
 #print axioms older_comment_request_needs_explicit_continuation
 #print axioms missing_terminal_marker_counterexample
+#print axioms unreadable_node_blocks_coverage_from_the_whole_page
+#print axioms unreadable_comment_page_preserves_prior_evidence
+#print axioms missing_comment_connection_cannot_change_coverage
+#print axioms genuine_empty_comment_page_differs_from_unreadable_row
+#print axioms readable_comment_reply_still_supplies_independent_coverage
 
 end StewardPrSignalPagination
