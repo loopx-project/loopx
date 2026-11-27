@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import configparser
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 from pathlib import Path
 import re
@@ -17,6 +17,7 @@ from ..pr_review_queue.review_body import (
     english_review_verdict,
     reviewer_declaration_lines,
 )
+from ...control_plane.runtime.time import parse_timestamp
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...registry import load_registry, registry_goals
 
@@ -53,18 +54,8 @@ _NON_MAINTAINER_ASSOCIATIONS = frozenset(
 
 def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
     raw = str(value or "").strip()
-    if not raw:
-        return None
-    normalized = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt, raw
+    parsed = parse_timestamp(raw)
+    return None if parsed is None else (parsed, raw)
 
 
 def _is_bot_login(login: str) -> bool:

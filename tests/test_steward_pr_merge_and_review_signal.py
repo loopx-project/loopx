@@ -566,6 +566,45 @@ def test_steward_protected_merge_head_drift_and_crash_recovery(steward, tmp_path
     assert recovered["receipt"]["resource_ids"]["merge_commit_oid"] == "9" * 40
 
 
+@pytest.mark.parametrize(("anchor_suffix", "replies", "expected"), [
+    ("Z", [("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+    ("Z", [("author", "2030-01-01T08:00:00.000001z")], (True, False)),
+    ("Z", [("author", "2030-01-01T08:00:00.000001Z"), ("maintainer", "2030-01-01T08:00:00.000002z")], (False, False)),
+    ("Z", [("author", "2030-01-01T16:00:00+08:00")], (False, False)),
+    ("Z", [("author", "0001-01-01T00:00:00+01:00"), ("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+    ("Z", [("author", "0001-01-01T00:00:00+01:00")], (False, True)),
+    ("Z", [("author", "unreadable")], (False, True)),
+    ("z", [("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+], ids=[
+    "uppercase-author", "lowercase-author", "lowercase-maintainer", "equal-offset-anchor",
+    "underflow-with-valid-reply", "underflow-only", "unreadable-only", "raw-lowercase-anchor",
+])
+def test_review_timestamp_parity_preserves_reply_and_comment_coverage(
+    anchor_suffix: str, replies: list[tuple[str, str]], expected: tuple[bool, bool],
+) -> None:
+    head = "e" * 40
+    anchor = f"2030-01-01T08:00:00{anchor_suffix}"
+    fixture = _sample_pr(
+        head_oid=head, author="fixture-contributor", review_decision="CHANGES_REQUESTED",
+        reviews=[{
+            "id": "PRR_fixture", "author": {"login": "fixture-maintainer"}, "state": "CHANGES_REQUESTED",
+            "commit": {"oid": head}, "submittedAt": anchor,
+            "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES",
+                                         reviewer="model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"),
+        }],
+    )
+    comments = [
+        {"createdAt": stamp, "author": {"login": "fixture-contributor" if role == "author" else "fixture-maintainer"},
+         "authorAssociation": "CONTRIBUTOR" if role == "author" else "MEMBER"}
+        for role, stamp in replies
+    ]
+    summary = summarize_github_pr_signal({**fixture, "comments": comments, "commentsHasPreviousPage": True})
+
+    assert (summary["author_replied_after_request_changes"], summary["comments_coverage_incomplete"]) == expected
+    assert summary["stalled_since"] == anchor
+    assert summary["review_summary"]["latest_request_changes_review_id"] == "PRR_fixture"
+
+
 def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> None:
     head = "e" * 40
     old = "0" * 40
