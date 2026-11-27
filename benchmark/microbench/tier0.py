@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+import inspect
 from pathlib import Path
 import runpy
 import subprocess
@@ -27,6 +28,8 @@ from .metrics import (
     assert_public_safe_payload,
     build_scenario_source_attribution,
     compare_base_vs_head_efficiency,
+    require_remaining_budget,
+    resolve_deadline,
     summarize_artifact_boundary,
     summarize_claim_scope,
 )
@@ -50,24 +53,72 @@ def _differential_smoke_helpers() -> dict[str, Any]:
     return runpy.run_path(str(DIFFERENTIAL_SMOKE_PATH))
 
 
-def _resolve_pinned_base_ref(base_ref: str, *, main_ref: str = "origin/main") -> str:
+def _call_with_deadline(
+    fn: Any,
+    *args: Any,
+    deadline_monotonic: float | None = None,
+    **kwargs: Any,
+) -> Any:
+    effective_deadline = resolve_deadline(deadline_monotonic)
+    if effective_deadline is None:
+        return fn(*args, **kwargs)
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return fn(*args, **kwargs)
+    if "deadline_monotonic" in params or any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    ):
+        return fn(*args, deadline_monotonic=effective_deadline, **kwargs)
+    return fn(*args, **kwargs)
+
+
+def _resolve_pinned_base_ref(
+    base_ref: str,
+    *,
+    main_ref: str = "origin/main",
+    deadline_monotonic: float | None = None,
+) -> str:
+    effective_deadline = resolve_deadline(deadline_monotonic)
+    if effective_deadline is not None:
+        require_remaining_budget(effective_deadline, stage="resolve_base_ref")
     helpers = _differential_smoke_helpers()
+    is_ancestor_fn = helpers["_is_ancestor"]
     selected = select_cli_output_base_ref(
         base_ref,
         main_ref=main_ref,
-        is_ancestor=helpers["_is_ancestor"],
+        is_ancestor=lambda ancestor, descendant: _call_with_deadline(
+            is_ancestor_fn,
+            ancestor,
+            descendant,
+            deadline_monotonic=effective_deadline,
+        ),
     )
-    return str(helpers["_pin_probe_base_ref"](selected, main_ref=main_ref))
+    if effective_deadline is not None:
+        require_remaining_budget(effective_deadline, stage="pin_base_ref")
+    return str(
+        _call_with_deadline(
+            helpers["_pin_probe_base_ref"],
+            selected,
+            main_ref=main_ref,
+            deadline_monotonic=effective_deadline,
+        )
+    )
 
 
-def _head_commit() -> str:
+def _head_commit(*, deadline_monotonic: float | None = None) -> str:
+    effective_deadline = resolve_deadline(deadline_monotonic)
+    timeout = 10.0
+    if effective_deadline is not None:
+        rem = require_remaining_budget(effective_deadline, stage="head_commit")
+        timeout = min(10.0, rem)
     completed = subprocess.run(
         ["git", "rev-parse", "--verify", "HEAD"],
         cwd=REPO_ROOT,
         check=True,
         capture_output=True,
         text=True,
-        timeout=10.0,
+        timeout=timeout,
     )
     return completed.stdout.strip()
 
@@ -155,12 +206,21 @@ def run_tier0_differential(
                 base_behavior=m2_base["behavior_constraint"],
                 head_behavior=m2_head["behavior_constraint"],
             )
+            m2_arms_ok = bool(
+                m2_base["behavior_constraint"].passed and m2_head["behavior_constraint"].passed
+            )
             m2_deltas = m2_cmp["deltas"]
             tok_delta = m2_deltas.get("prompt_tokens") if isinstance(m2_deltas, Mapping) else None
-            head_ok = bool(m2_cmp["behavior_preserved"]) and isinstance(tok_delta, int) and tok_delta < 0
+            head_ok = bool(
+                m2_arms_ok
+                and m2_cmp["behavior_preserved"]
+                and isinstance(tok_delta, int)
+                and tok_delta < 0
+            )
             hook_available = bool(m2_head.get("semantic_unit_settlement_hook_available"))
             prod_hot_path_ok = bool(
-                m2_head.get("production_settlement_executed")
+                m2_arms_ok
+                and m2_head.get("production_settlement_executed")
                 and m2_head.get("production_settlement_readback_ok")
             )
             return {
@@ -215,16 +275,19 @@ def run_tier0_differential(
                 head_behavior=m3_head["behavior_constraint"],
             )
             m3_cross = base_source_root is not None
+            m3_arms_ok = bool(
+                m3_base["behavior_constraint"].passed and m3_head["behavior_constraint"].passed
+            )
             return {
                 "scenario_id": "m3_claim_block_settle_invariants",
-                "passed": bool(m3_cmp["behavior_preserved"]) and m3_head["behavior_constraint"].passed,
+                "passed": bool(m3_arms_ok and m3_cmp["behavior_preserved"]),
                 "source_attribution": build_scenario_source_attribution(
                     base_source="external_base_checkout" if m3_cross else "candidate_head",
                     head_source="candidate_head",
                     comparison_kind=(
                         "cross_commit_differential" if m3_cross else "same_commit_arm_contrast"
                     ),
-                    production_hot_path_covered=True,
+                    production_hot_path_covered=m3_arms_ok,
                 ),
                 "base": {
                     "behavior_constraint": m3_base["behavior_constraint"].to_dict(),
@@ -270,13 +333,21 @@ def run_tier0_differential(
                 base_behavior=m1_base["behavior_constraint"],
                 head_behavior=m1_head["behavior_constraint"],
             )
+            m1_base_ok = bool(m1_base["behavior_constraint"].passed)
+            m1_head_ok = bool(m1_head["behavior_constraint"].passed)
+            m1_arms_ok = m1_base_ok and m1_head_ok
             m1_deltas = m1_cmp["deltas"]
             wire_delta = m1_deltas.get("wire_bytes") if isinstance(m1_deltas, Mapping) else None
             if context_delivery == "auto":
                 # Head slim delivery (`on`) must shrink delivered wire/tokens vs `off` while keeping invariants.
-                head_ok = bool(m1_cmp["behavior_preserved"]) and isinstance(wire_delta, int) and wire_delta < 0
+                head_ok = bool(
+                    m1_arms_ok
+                    and m1_cmp["behavior_preserved"]
+                    and isinstance(wire_delta, int)
+                    and wire_delta < 0
+                )
             else:
-                head_ok = bool(m1_cmp["behavior_preserved"])
+                head_ok = bool(m1_arms_ok and m1_cmp["behavior_preserved"])
             m1_cross = base_source_root is not None
             m1_comparison_kind = (
                 ("cross_commit_differential" if m1_cross else "same_commit_arm_contrast")
@@ -292,7 +363,12 @@ def run_tier0_differential(
                         base_source="external_base_checkout" if m1_cross else "candidate_head",
                         head_source="candidate_head",
                         comparison_kind=m1_comparison_kind,
-                        production_hot_path_covered=True,
+                        production_hot_path_covered=m1_arms_ok,
+                        note=(
+                            None
+                            if m1_arms_ok
+                            else "Excluded from production hot-path claims because one or both M1 arms failed behavior invariants."
+                        ),
                     ),
                     "base": {
                         "behavior_constraint": m1_base["behavior_constraint"].to_dict(),
@@ -340,11 +416,19 @@ def run_tier0_differential(
                 "rows": probe_head_rows,
             },
         )
+        m1_base_valid = bool(m1_base is not None and m1_base["behavior_constraint"].passed)
+        m1_head_valid = bool(m1_head is not None and m1_head["behavior_constraint"].passed)
+        probe_arms_valid = m1_base_valid and m1_head_valid
         cli_diff_summary = {
             "mode": "m1_probe_receipt_differential",
-            "ok": cli_diff["ok"],
+            "ok": bool(cli_diff["ok"] and probe_arms_valid),
+            "baseline_valid": m1_base_valid,
             "compared_row_count": cli_diff["compared_row_count"],
-            "failed_row_count": cli_diff["failed_row_count"],
+            "failed_row_count": (
+                int(cli_diff["failed_row_count"])
+                if probe_arms_valid
+                else max(int(cli_diff["failed_row_count"]), 1)
+            ),
             "review_row_count": cli_diff["review_row_count"],
         }
 
@@ -369,8 +453,10 @@ def run_tier0_differential(
         }
 
     wall_seconds = round(time.monotonic() - started, 3)
-    overall_passed = all(row["passed"] for row in results) and (
-        full_smoke_result["ok"] if full_smoke_result is not None else True
+    overall_passed = (
+        all(row["passed"] for row in results)
+        and (cli_diff_summary["ok"] if cli_diff_summary is not None else True)
+        and (full_smoke_result["ok"] if full_smoke_result is not None else True)
     )
     claim_scope = summarize_claim_scope(results)
     payload: dict[str, Any] = {

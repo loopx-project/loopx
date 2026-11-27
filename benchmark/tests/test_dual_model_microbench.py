@@ -2140,3 +2140,236 @@ def test_ark_partial_prompt_blocks_occupancy_and_cli_pin_with_output_json(
     assert m1_row["passed"] is True
     assert m1_row["source_attribution"]["comparison_kind"] == "same_commit_aa"
     assert_public_safe_payload(saved)
+
+
+def test_tier0_fails_and_blocks_hot_path_attribution_when_m1_baseline_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_run_arm = microbench_scenarios.run_m1_deterministic_arm
+
+    def _failing_base_arm(
+        fixture: Any,
+        *,
+        arm: str,
+        source_root: Path | None = None,
+        context_delivery: str | None = None,
+        deadline_monotonic: float | None = None,
+    ) -> dict[str, Any]:
+        result = real_run_arm(
+            fixture,
+            arm=arm,
+            source_root=source_root,
+            context_delivery=context_delivery,
+            deadline_monotonic=deadline_monotonic,
+        )
+        if arm == "base":
+            checks = dict(result["behavior_constraint"].checks)
+            checks["blocked_p0_preserved"] = False
+            result["behavior_constraint"] = BehaviorConstraintResult(
+                passed=False,
+                checks=checks,
+                violations=("blocked_p0_preserved",),
+            )
+        return result
+
+    monkeypatch.setattr(microbench_tier0, "run_m1_deterministic_arm", _failing_base_arm)
+    report = run_tier0_differential(scenarios=("m1_envelope_scoped_recovery",))
+
+    assert report["passed"] is False
+    assert report["cli_output_differential"]["ok"] is False
+    assert report["cli_output_differential"]["baseline_valid"] is False
+    assert report["cli_output_differential"]["failed_row_count"] >= 1
+    m1_row = report["scenarios"][0]
+    assert m1_row["passed"] is False
+    assert m1_row["base"]["behavior_constraint"]["passed"] is False
+    assert m1_row["head"]["behavior_constraint"]["passed"] is True
+    assert m1_row["comparison"]["baseline_valid"] is False
+    assert m1_row["comparison"]["behavior_preserved"] is False
+    assert m1_row["comparison"]["base_violations"] == ["blocked_p0_preserved"]
+    assert m1_row["comparison"]["deltas"]["wire_bytes"] < 0
+    assert m1_row["source_attribution"]["production_hot_path_covered"] is False
+    assert m1_row["source_attribution"]["excluded_from_production_hot_path_claims"] is True
+    assert "m1_envelope_scoped_recovery" in report["claim_scope"]["excluded_from_production_hot_path_claims"]
+    assert "m1_envelope_scoped_recovery" not in report["claim_scope"]["production_hot_path_scenarios"]
+
+
+def test_codex_runner_enforces_single_arm_deadline_across_setup_and_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as std_time
+
+    trial_root = tmp_path / "trial"
+    project_root = trial_root / "project"
+    project_root.mkdir(parents=True)
+    auth_file = tmp_path / "auth.json"
+    auth_file.write_text('{"tokens":{}}', encoding="utf-8")
+
+    # Marker-writing fake codex script based on _write_fake_codex.
+    codex_bin = tmp_path / "fake-codex-marker"
+    _write_fake_codex(codex_bin, mode="ok")
+    marker_file = tmp_path / "codex-invoked.marker"
+    codex_text = codex_bin.read_text(encoding="utf-8")
+    codex_bin.write_text(
+        codex_text.replace(
+            "_ = sys.stdin.read()",
+            f"pathlib.Path({str(marker_file)!r}).write_text('started', encoding='utf-8')\n"
+            f"if os.environ.get('FAKE_CODEX_SLEEP_SECONDS'):\n"
+            f"    import time; time.sleep(float(os.environ['FAKE_CODEX_SLEEP_SECONDS']))\n"
+            "_ = sys.stdin.read()",
+        ),
+        encoding="utf-8",
+    )
+
+    # Subcase A: prepare_codex_home exhausts 0.05s budget -> 0 child processes launched.
+    clock_a = {"t": 100.0}
+    monkeypatch.setattr(std_time, "monotonic", lambda: clock_a["t"])
+    real_prepare = microbench_models.prepare_codex_home
+
+    def _slow_prepare_exhausted(*args: Any, **kwargs: Any) -> Any:
+        clock_a["t"] += 0.08
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(microbench_models, "prepare_codex_home", _slow_prepare_exhausted)
+    runner = CodexGptMicrobenchRunner(
+        codex_bin=str(codex_bin),
+        auth_json_path=auth_file,
+        sandbox="read-only",
+    )
+    out_exhausted = runner.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="Read fixture/m1-proof.json",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=0.05,
+    )
+    assert marker_file.exists() is False
+    assert out_exhausted.status == "error"
+    assert out_exhausted.error_code == "codex_budget_exhausted"
+    assert out_exhausted.verdict is None
+
+    # Subcase B: prepare_codex_home consumes 0.35s of 1.00s budget -> subprocess receives ~0.65s remaining timeout.
+    clock_b = {"t": 200.0}
+    monkeypatch.setattr(std_time, "monotonic", lambda: clock_b["t"])
+    seen_timeouts: list[float | None] = []
+    real_sub_run = subprocess.run
+
+    def _slow_prepare_partial(*args: Any, **kwargs: Any) -> Any:
+        clock_b["t"] += 0.35
+        return real_prepare(*args, **kwargs)
+
+    def _spy_codex_sub_run(*args: Any, **kwargs: Any) -> Any:
+        cmd = args[0] if args else kwargs.get("args", [])
+        if cmd and str(cmd[0]) == str(codex_bin):
+            seen_timeouts.append(kwargs.get("timeout"))
+        return real_sub_run(*args, **kwargs)
+
+    monkeypatch.setattr(microbench_models, "prepare_codex_home", _slow_prepare_partial)
+    monkeypatch.setattr(microbench_models.subprocess, "run", _spy_codex_sub_run)
+    out_partial = runner.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="Read fixture/m1-proof.json",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=1.00,
+    )
+    assert out_partial.status == "ok", out_partial
+    assert marker_file.exists() is True
+    assert seen_timeouts == [pytest.approx(0.65, abs=0.02)]
+
+    # Subcase C: child process exceeding remaining timeout fails as codex_timeout.
+    monkeypatch.undo()
+    monkeypatch.setenv("FAKE_CODEX_SLEEP_SECONDS", "0.25")
+    out_timeout = runner.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="Read fixture/m1-proof.json",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=0.05,
+    )
+    assert out_timeout.status == "error"
+    assert out_timeout.error_code == "codex_timeout"
+
+
+def test_tier1_stops_git_base_resolution_and_export_stages_after_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as std_time
+
+    class _NeverDispatchedRunner:
+        provider = "synthetic"
+        model_id = "synthetic-never-dispatched"
+
+        def run_case(self, **kwargs: Any) -> ModelRunOutcome:
+            raise AssertionError(f"runner should not be called: {kwargs.get('scenario_id')}")
+
+    real_sub_run = subprocess.run
+
+    # Case A: git read-tree crosses 1.25s deadline by 0.30s (t += 1.55s) -> 0 ls-files, 0 checkout-index, 0 CLI/runner calls.
+    clock_a = {"t": 1000.0}
+    git_calls_a: list[tuple[list[str], float | None]] = []
+    cli_calls_a: list[list[str]] = []
+
+    def _intercept_export_run(*args: Any, **kwargs: Any) -> Any:
+        cmd = [str(x) for x in (args[0] if args else kwargs.get("args", []))]
+        if any("loopx.cli" in part for part in cmd):
+            cli_calls_a.append(cmd)
+        if cmd and cmd[0] == "git":
+            git_calls_a.append((cmd, kwargs.get("timeout")))
+        result = real_sub_run(*args, **kwargs)
+        if len(cmd) >= 2 and cmd[0] == "git" and cmd[1] == "read-tree":
+            clock_a["t"] += 1.55
+        return result
+
+    monkeypatch.setattr(std_time, "monotonic", lambda: clock_a["t"])
+    monkeypatch.setattr(subprocess, "run", _intercept_export_run)
+    report_a = run_tier1_dual_model_suite(
+        runners=[_NeverDispatchedRunner()],
+        scenarios=("m1_envelope_scoped_recovery",),
+        base_ref="origin/main",
+        main_ref="origin/main",
+        max_total_seconds=1.25,
+        per_call_timeout_seconds=10.0,
+    )
+    assert report_a["within_budget"] is False
+    assert report_a["passed"] is False
+    assert cli_calls_a == []
+    assert any(len(cmd) >= 2 and cmd[1] == "read-tree" for cmd, _ in git_calls_a)
+    assert not any(len(cmd) >= 2 and cmd[1] == "ls-files" for cmd, _ in git_calls_a)
+    assert not any(len(cmd) >= 2 and cmd[1] == "checkout-index" for cmd, _ in git_calls_a)
+    for cmd, timeout in git_calls_a:
+        assert timeout is not None and timeout <= 1.25, (cmd, timeout)
+    assert report_a["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"
+    assert report_a["results"][0]["head"]["error_code"] == "tier1_wall_budget_exhausted"
+
+    # Case B: git merge-base --is-ancestor crosses 0.50s deadline -> 0 pin / export / CLI / runner calls.
+    head_sha = microbench_tier0._head_commit()
+    clock_b = {"t": 2000.0}
+    git_calls_b: list[tuple[list[str], float | None]] = []
+
+    def _intercept_pin_run(*args: Any, **kwargs: Any) -> Any:
+        cmd = [str(x) for x in (args[0] if args else kwargs.get("args", []))]
+        if cmd and cmd[0] == "git":
+            git_calls_b.append((cmd, kwargs.get("timeout")))
+        result = real_sub_run(*args, **kwargs)
+        if len(cmd) >= 3 and cmd[0] == "git" and cmd[1] == "merge-base" and "--is-ancestor" in cmd:
+            clock_b["t"] += 0.80
+        return result
+
+    monkeypatch.setattr(std_time, "monotonic", lambda: clock_b["t"])
+    monkeypatch.setattr(subprocess, "run", _intercept_pin_run)
+    report_b = run_tier1_dual_model_suite(
+        runners=[_NeverDispatchedRunner()],
+        scenarios=("m1_envelope_scoped_recovery",),
+        base_ref=head_sha,
+        main_ref="origin/main",
+        max_total_seconds=0.50,
+        per_call_timeout_seconds=10.0,
+    )
+    assert report_b["within_budget"] is False
+    assert report_b["passed"] is False
+    assert any("--is-ancestor" in cmd for cmd, _ in git_calls_b)
+    assert not any(len(cmd) >= 2 and cmd[1] == "read-tree" for cmd, _ in git_calls_b)
+    assert not any(len(cmd) >= 2 and cmd[1] == "ls-files" for cmd, _ in git_calls_b)
+    assert not any(len(cmd) >= 2 and cmd[1] == "checkout-index" for cmd, _ in git_calls_b)
+    assert report_b["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"

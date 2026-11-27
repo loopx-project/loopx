@@ -9,6 +9,7 @@ import inspect
 import json
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import time
 from typing import Any
@@ -59,7 +60,12 @@ from .scenarios import (
     run_m2_deterministic_arm,
     run_m3_deterministic_arm,
 )
-from .tier0 import _differential_smoke_helpers, _head_commit, _resolve_pinned_base_ref
+from .tier0 import (
+    _call_with_deadline,
+    _differential_smoke_helpers,
+    _head_commit,
+    _resolve_pinned_base_ref,
+)
 
 
 def _prompt_m1(
@@ -601,12 +607,9 @@ def run_tier1_dual_model_suite(
     if unknown:
         raise ValueError(f"unknown microbench scenarios: {', '.join(unknown)}")
 
-    head_sha = _head_commit()
+    head_sha = "deadline_exhausted"
     resolved_base_sha: str | None = None
     use_external_base = False
-    if base_ref:
-        resolved_base_sha = _resolve_pinned_base_ref(base_ref, main_ref=main_ref)
-        use_external_base = resolved_base_sha != head_sha
 
     active_runners: tuple[MicrobenchModelRunner, ...]
     if runners is not None:
@@ -655,11 +658,30 @@ def run_tier1_dual_model_suite(
         base_source_root: Path | None = None
         try:
             with microbench_deadline_scope(deadline):
+                head_sha = str(
+                    _call_with_deadline(_head_commit, deadline_monotonic=deadline)
+                )
+                if base_ref:
+                    resolved_base_sha = str(
+                        _call_with_deadline(
+                            _resolve_pinned_base_ref,
+                            base_ref,
+                            main_ref=main_ref,
+                            deadline_monotonic=deadline,
+                        )
+                    )
+                    use_external_base = resolved_base_sha != head_sha
+
                 if use_external_base and resolved_base_sha is not None:
                     require_remaining_budget(deadline, stage="materialize_base")
                     helpers = _differential_smoke_helpers()
                     base_source_root = temp_root / "base-src"
-                    helpers["_materialize_base_source"](resolved_base_sha, base_source_root)
+                    _call_with_deadline(
+                        helpers["_materialize_base_source"],
+                        resolved_base_sha,
+                        base_source_root,
+                        deadline_monotonic=deadline,
+                    )
 
                 if "m1_envelope_scoped_recovery" in selected:
                     require_remaining_budget(deadline, stage="prepare:m1_envelope_scoped_recovery")
@@ -820,7 +842,7 @@ def run_tier1_dual_model_suite(
                             ),
                         }
                     )
-        except MicrobenchDeadlineExpired:
+        except (MicrobenchDeadlineExpired, TimeoutError, subprocess.TimeoutExpired):
             prep_exhausted = True
 
         if prep_exhausted:

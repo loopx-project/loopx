@@ -43,6 +43,7 @@ from .metrics import (
     EfficiencyMetrics,
     collect_codex_rollout_metrics,
     compute_occupancy_summary,
+    resolve_deadline,
 )
 
 DEFAULT_CODEX_MODEL = "gpt-6.2-sol"
@@ -868,7 +869,23 @@ class CodexGptMicrobenchRunner:
     ) -> ModelRunOutcome:
         timeout_seconds = require_positive_finite_float(timeout_seconds, label="timeout_seconds")
         started = time.monotonic()
+        deadline = resolve_deadline(started + timeout_seconds) or (started + timeout_seconds)
         wire_bytes = len(prompt_text.encode("utf-8"))
+
+        def _budget_exhausted_outcome() -> ModelRunOutcome:
+            return ModelRunOutcome(
+                model_id=self.model_id,
+                provider=self.provider,
+                status="error",
+                error_code="codex_budget_exhausted",
+                verdict=None,
+                efficiency=EfficiencyMetrics(
+                    wire_bytes=wire_bytes,
+                    wall_seconds=round(time.monotonic() - started, 3),
+                ),
+                telemetry_source="codex_session_usage",
+            )
+
         base_url, api_key, auth_src, auth_err = self._resolve_auth_mode()
         if auth_err is not None:
             return ModelRunOutcome(
@@ -902,6 +919,9 @@ class CodexGptMicrobenchRunner:
                 ),
                 telemetry_source="codex_session_usage",
             )
+
+        if deadline - time.monotonic() <= 0.0:
+            return _budget_exhausted_outcome()
 
         with tempfile.TemporaryDirectory(prefix="microbench-codex-run-") as run_tmp:
             tmp_path = Path(run_tmp)
@@ -959,6 +979,10 @@ class CodexGptMicrobenchRunner:
                 "--json",
                 "-",
             ]
+            remaining_before_exec = deadline - time.monotonic()
+            if remaining_before_exec <= 0.0:
+                return _budget_exhausted_outcome()
+
             timed_out = False
             stdout_text = ""
             stderr_text = ""
@@ -974,7 +998,7 @@ class CodexGptMicrobenchRunner:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=timeout_seconds,
+                    timeout=remaining_before_exec,
                 )
                 stdout_text = completed.stdout
                 stderr_text = completed.stderr

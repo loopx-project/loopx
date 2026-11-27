@@ -541,15 +541,20 @@ def compare_base_vs_head_efficiency(
         else:
             pct_changes[field_name] = None
 
-    behavior_preserved = head_behavior.passed and (
-        not base_behavior.passed or head_behavior.pass_rate >= base_behavior.pass_rate
+    baseline_valid = bool(base_behavior.passed)
+    behavior_preserved = bool(
+        baseline_valid
+        and head_behavior.passed
+        and head_behavior.pass_rate >= base_behavior.pass_rate
     )
     return {
         "behavior_preserved": behavior_preserved,
+        "baseline_valid": baseline_valid,
         "base_passed": base_behavior.passed,
         "head_passed": head_behavior.passed,
         "base_pass_rate": base_behavior.pass_rate,
         "head_pass_rate": head_behavior.pass_rate,
+        "base_violations": list(base_behavior.violations),
         "head_violations": list(head_behavior.violations),
         "excluded_partial_metrics": excluded_partial,
         "deltas": deltas,
