@@ -195,6 +195,65 @@ theorem complete_overlap_and_valid_empty_are_accepted :
       some [1, 2, 3] ∧
     collectCovered 5 [⟨⟨.terminal, []⟩, some 0⟩] = some [] := by decide
 
+/- The collector requests a prefix of this plan. Its first count chooses the
+   later page size, but the existing validation still decides when to stop and
+   whether a snapshot can publish. The sample provider below is stable and
+   obeys the requested page size. -/
+def scanPageSizes (total : Nat) : List Nat :=
+  if 120 < total then [20]
+  else 20 :: List.replicate 4 (if 100 < total then 25 else 20)
+
+theorem adaptive_plan_respects_page_and_row_limits (total : Nat) :
+    (scanPageSizes total).length ≤ 5 ∧ (scanPageSizes total).sum ≤ 120 := by
+  by_cases aboveCapacity : 120 < total
+  · simp [scanPageSizes, aboveCapacity]
+  · by_cases overflow : 100 < total <;> simp [scanPageSizes, aboveCapacity, overflow]
+
+theorem ordinary_repository_keeps_standard_pages (total : Nat) (h : total ≤ 100) :
+    scanPageSizes total = List.replicate 5 20 := by
+  have fits : total ≤ 120 := by omega
+  simp [scanPageSizes, Nat.not_lt.mpr h, Nat.not_lt.mpr fits, List.replicate_succ]
+
+def stableProviderPages (total : Nat) : Nat → List Nat → List CountedPage
+  | _, [] => []
+  | start, size :: sizes =>
+    let count := min size (total - start)
+    let next := start + count
+    let nodes := (List.range' (start + 1) count).map some
+    if next < total then
+      ⟨⟨.next next, nodes⟩, some total⟩ :: stableProviderPages total next sizes
+    else
+      [⟨⟨.terminal, nodes⟩, some total⟩]
+
+theorem adaptive_pages_recover_111_prs :
+    collectCovered 5 (stableProviderPages 111 0 (List.replicate 5 20)) = none ∧
+    collectCovered 5 (stableProviderPages 111 0 (scanPageSizes 111)) =
+      some (List.range' 1 111) := by decide
+
+theorem out_of_capacity_keeps_prior_signal (previous : List Nat) :
+    scanPageSizes 121 = [20] ∧
+    observe previous (collectCovered 5 (stableProviderPages 121 0 (scanPageSizes 121))) =
+      (previous, false) := by
+  constructor <;> rfl
+
+-- Each comment request consumes one slot even on failure.
+def backfillSpent (remaining : Nat) : List Nat → Nat
+  | [] => 0
+  | demand :: rest =>
+    let issued := min remaining (min demand 3)
+    issued + backfillSpent (remaining - issued) rest
+
+theorem comment_backfill_preserves_scan_limit (demands : List Nat) (remaining : Nat) :
+    backfillSpent remaining demands ≤ remaining := by
+  induction demands generalizing remaining with
+  | nil => simp [backfillSpent]
+  | cons demand rest ih =>
+    let issued := min remaining (min demand 3)
+    have issuedBound : issued ≤ remaining := Nat.min_le_left _ _
+    have restBound := ih (remaining - issued)
+    change issued + backfillSpent (remaining - issued) rest ≤ remaining
+    omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -208,5 +267,10 @@ theorem complete_overlap_and_valid_empty_are_accepted :
 #print axioms count_drift_preserves_prior_signal
 #print axioms overlap_hides_missing_pr_counterexample
 #print axioms complete_overlap_and_valid_empty_are_accepted
+#print axioms adaptive_plan_respects_page_and_row_limits
+#print axioms ordinary_repository_keeps_standard_pages
+#print axioms adaptive_pages_recover_111_prs
+#print axioms out_of_capacity_keeps_prior_signal
+#print axioms comment_backfill_preserves_scan_limit
 
 end StewardPrSignalPagination

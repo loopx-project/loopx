@@ -472,6 +472,90 @@ def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatc
     assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
 
 
+@pytest.mark.parametrize(
+    ("total", "expected_sizes"),
+    [
+        (100, [20, 20, 20, 20, 20]),
+        (101, [20, 25, 25, 25, 25]),
+        (120, [20, 25, 25, 25, 25]),
+        (121, [20]),
+    ],
+)
+def test_observe_github_repository_prs_covers_overflow_within_five_pages(
+    monkeypatch, total, expected_sizes,
+) -> None:
+    requests: list[int] = []
+    read_count = 0
+
+    def fake_run(cmd, **kwargs):
+        nonlocal read_count
+        assert kwargs["timeout"] == 20
+        size = int(next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("pageSize=")), "20"))
+        requests.append(size)
+        limit = min(read_count + size, total)
+        nodes = [_graphql_node(_sample_pr(number=number)) for number in range(read_count + 1, limit + 1)]
+        read_count = limit
+        page = _graphql_page(
+            nodes, has_next_page=limit < total, end_cursor=f"cursor-{limit}", total_count=total,
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(page))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    observed = _observe_github_repository_prs("org/repo")
+    if total <= 120:
+        assert observed["status"] == "ok"
+        assert [item["number"] for item in observed["items"]] == list(range(1, total + 1))
+    else:
+        assert observed == {"status": "unavailable", "repository": "org/repo"}
+    assert requests == expected_sizes
+
+
+def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_scan(monkeypatch) -> None:
+    head = "9" * 40
+    review = {
+        "id": "PRR_review",
+        "state": "CHANGES_REQUESTED",
+        "submittedAt": "2030-01-01T08:00:00Z",
+        "author": {"login": "maintainer"},
+        "commit": {"oid": head},
+    }
+    backfilled: list[str] = []
+    read_count = 0
+
+    def fake_run(cmd, **_kwargs):
+        nonlocal read_count
+        cursor = next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("before=")), None)
+        if cursor is not None:
+            backfilled.append(next(arg for arg in cmd if arg.startswith("number=")))
+            comments = {"pageInfo": {"hasPreviousPage": True, "startCursor": cursor + "-older"}, "nodes": []}
+            payload = {"data": {"repository": {"pullRequest": {"comments": comments}}}}
+        else:
+            size = int(next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("pageSize=")), "20"))
+            limit = min(read_count + size, 101)
+            nodes = []
+            for number in range(read_count + 1, limit + 1):
+                node = _graphql_node(_sample_pr(
+                    number=number, head_oid=head, review_decision="CHANGES_REQUESTED", reviews=[review],
+                ))
+                node["comments"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}, "nodes": []}
+                nodes.append(node)
+            read_count = limit
+            payload = _graphql_page(
+                nodes, has_next_page=limit < 101, end_cursor=f"cursor-{limit}", total_count=101,
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+    observed = _observe_github_repository_prs("org/repo", backfill_comments=True)
+
+    assert observed["status"] == "ok"
+    assert len(observed["items"]) == 101
+    assert len(backfilled) == 300
+    assert "number=101" not in backfilled
+    assert observed["items"][-1]["comments_coverage_incomplete"] is True
+
+
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     head = "d" * 40
     pr_row = _sample_pr(

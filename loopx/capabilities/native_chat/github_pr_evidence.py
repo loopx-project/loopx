@@ -537,8 +537,16 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 _GITHUB_PR_LIST_PAGE_SIZE = 20
+_GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE = 25
 _GITHUB_PR_LIST_MAX_PAGES = 5
+_GITHUB_PR_LIST_STANDARD_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE * _GITHUB_PR_LIST_MAX_PAGES
+_GITHUB_PR_LIST_MAX_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE + (
+    _GITHUB_PR_LIST_MAX_PAGES - 1
+) * _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
 _GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES = 3
+_GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET = (
+    _GITHUB_PR_LIST_STANDARD_CAPACITY * _GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES
+)
 _GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -559,11 +567,11 @@ _GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $numb
     }
   }
 }"""
-_GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String) {
+_GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(
       states: OPEN,
-      first: 20,
+      first: $pageSize,
       after: $cursor,
       orderBy: {field: UPDATED_AT, direction: DESC}
     ) {
@@ -728,17 +736,16 @@ def _backfill_pr_comments_if_needed(
     name: str,
     number: int,
     runner: Callable[..., Any],
-) -> dict[str, Any]:
-    """Boundedly backfill older PR comment pages when active RC reply coverage is truncated."""
-    attempts = 0
-    while (
-        summary.get("comments_coverage_incomplete") is True
-        and attempts < _GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES
-    ):
+    remaining_pages: int,
+) -> tuple[dict[str, Any], int]:
+    """Backfill an incomplete PR and return the remaining scan-wide allowance."""
+    for _ in range(min(_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES, remaining_pages)):
+        if summary.get("comments_coverage_incomplete") is not True:
+            break
         comment_cursor = str(norm_node.get("commentsStartCursor") or "").strip()
         if not comment_cursor:
             break
-        attempts += 1
+        remaining_pages -= 1
         try:
             completed = runner(
                 [
@@ -789,7 +796,7 @@ def _backfill_pr_comments_if_needed(
         summary = summarize_github_pr_signal(norm_node)
         if stalled_cursor:
             break
-    return summary
+    return summary, remaining_pages
 
 
 def observe_github_repository_prs(
@@ -807,6 +814,7 @@ def observe_github_repository_prs(
     expected_total: int | None = None
     cursor: str | None = None
     seen_cursors: set[str] = set()
+    page_size = _GITHUB_PR_LIST_PAGE_SIZE
     try:
         for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
             cmd = [
@@ -819,6 +827,8 @@ def observe_github_repository_prs(
                 f"owner={owner}",
                 "-f",
                 f"name={name}",
+                "-F",
+                f"pageSize={page_size}",
             ]
             if cursor is not None:
                 cmd.extend(["-f", f"cursor={cursor}"])
@@ -840,13 +850,13 @@ def observe_github_repository_prs(
             if not isinstance(pull_requests, Mapping):
                 return {"status": "unavailable", "repository": repo_slug}
             page_total = pull_requests.get("totalCount")
-            if type(page_total) is not int or page_total < 0:
+            if type(page_total) is not int or not 0 <= page_total <= _GITHUB_PR_LIST_MAX_CAPACITY:
                 return {"status": "unavailable", "repository": repo_slug}
             if expected_total is not None and page_total != expected_total:
                 return {"status": "unavailable", "repository": repo_slug}
             expected_total = page_total
             nodes = pull_requests.get("nodes")
-            if not isinstance(nodes, list):
+            if not isinstance(nodes, list) or len(nodes) > page_size:
                 return {"status": "unavailable", "repository": repo_slug}
             for node in nodes:
                 # Dropping an unidentified row can make an open PR look removed.
@@ -867,23 +877,27 @@ def observe_github_repository_prs(
                 return {"status": "unavailable", "repository": repo_slug}
             seen_cursors.add(next_cursor)
             cursor = next_cursor
+            if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
+                page_size = _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
         else:
             # A partial list can make the monitor report PRs as removed.
             return {"status": "unavailable", "repository": repo_slug}
         if len(raw_nodes_by_number) != expected_total:
             return {"status": "unavailable", "repository": repo_slug}
         items: list[dict[str, Any]] = []
+        remaining_comment_pages = _GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET
         for number in sorted(raw_nodes_by_number):
             norm_node = _normalize_graphql_pr_node(raw_nodes_by_number[number])
             summary = summarize_github_pr_signal(norm_node)
-            if backfill_comments:
-                summary = _backfill_pr_comments_if_needed(
+            if backfill_comments and remaining_comment_pages > 0:
+                summary, remaining_comment_pages = _backfill_pr_comments_if_needed(
                     norm_node,
                     summary,
                     owner=owner,
                     name=name,
                     number=number,
                     runner=runner,
+                    remaining_pages=remaining_comment_pages,
                 )
             items.append(summary)
         return {"status": "ok", "repository": repo_slug, "items": items}
