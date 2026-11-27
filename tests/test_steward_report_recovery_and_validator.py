@@ -1516,3 +1516,240 @@ def test_validate_replan_surfaces_replan_writeback_rejected_reason_code(
         assert validation["status"] == "failed"
         assert validation["recovery_kind"] == "replan_required"
         assert "stride_review_basis_mismatch" in validation["summary"]
+
+
+def test_selection_recovery_admission_resume_recovers_after_task_postcondition_replan_failure(
+    steward, tmp_path, monkeypatch, caplog,
+):
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.configure_goal import configure_goal
+    from test_native_steward_reports import _REPORT_MODEL_SOURCE
+
+    _, runtime, _, transport, binding, _, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=3)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    rejected_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {
+            "vision_summary": "Keep reporting.",
+            "acceptance_summary": "Validate full report.",
+        },
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["nonexistent_evidence_ref_triggers_postcondition_reject"],
+        },
+    }
+    postcondition_fail = {
+        "result_kind": "replan_required",
+        "classification": "replan_postcondition_rejected",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_progress",
+        "work_evidence": ["Observed baseline candidate"],
+        "validation_evidence": ["Preview checks evidence refs"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(rejected_vision),
+        "summary": "Syntactically valid replan candidate rejected by semantic preview.",
+        "next_action": "Clear replan before resuming report.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(postcondition_fail)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    probe = finish(runtime, pump_steward_monitors(runtime)[0])
+    replan_events = [
+        row["payload"]
+        for row in runtime.store.events_after(sid, probe["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"
+    ]
+    assert len(replan_events) == 1
+    assert replan_events[0]["status"] == "failed"
+    assert replan_events[0]["result_kind"] == "validation_failed"
+    assert replan_events[0]["validation_stage"] == "task_postcondition"
+
+    # While replan obligation remains active, subsequent pump ticks must stay quiet without warning spam.
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        assert pump_steward_monitors(runtime) == []
+    assert "An original steward report is unavailable" not in caplog.text
+
+    # Once replan clears, .admission-resume recovers the retained report window and advances cleanly.
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    runtime._steward_monitor_next_check.clear()
+    with caplog.at_level(logging.WARNING):
+        resumed = pump_steward_monitors(runtime)
+    assert "An original steward report is unavailable" not in caplog.text
+    assert len(resumed) == 1
+    expected_client_id = native_steward_client_id(
+        actor,
+        rejected["loopx_request"]["turn_instance_id"] + ".admission-resume",
+    )
+    assert resumed[0]["client_turn_id"] == expected_client_id
+    done = finish(runtime, resumed[0])
+    assert done["response"]["native_loopx"]["status"] == "committed", done
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    assert transport.steward_reports.reconcile() == 1
+    assert reports.health(owner)["publication_verified"] is True
+    task = next(
+        row for row in StewardMonitor(runtime).todos(actor)
+        if row["todo_id"] == done["loopx_request"]["todo_id"]
+    )
+    assert task["status"] == "done"
+
+    # Next day's morning report window is no longer blocked behind the recovered window.
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    next_day = pump_steward_monitors(runtime)
+    assert len(next_day) == 1
+    next_done = finish(runtime, next_day[0])
+    assert next_done["response"]["native_loopx"]["status"] == "committed", next_done
+    assert transport.steward_reports.reconcile() == 1
+
+
+def test_advancement_followup_recovers_after_failed_inline_replan_and_pre_dispatch_resume_failed():
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS,
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        advancement_turn_id,
+        is_exhausted_zero_write_followup_todo,
+        resolve_advancement_turn_id,
+    )
+
+    actor = {
+        "schema_version": "loopx_steward_managed_actor_v0",
+        "goal_id": "steward-agent-e0e2226022a24adf9209cbe7",
+        "agent_id": "steward",
+        "session_id": "19fc2a50410c4ee387d14d40053cae0d",
+    }
+    todo = {
+        "todo_id": "todo_followup_1",
+        "status": "open",
+        "task_class": "advancement_task",
+        "target_key": "steward-monitor-followup:todo_mon_1",
+        "updated_at": "2026-11-26T02:00:00Z",
+        "note": "",
+    }
+    base = advancement_turn_id(todo)
+    base_client = native_steward_client_id(actor, base)
+    retry_client = native_steward_client_id(actor, base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX)
+    completed_iso = "2026-11-26T02:03:34.505828Z"
+    completed_epoch = datetime.fromisoformat(completed_iso.replace("Z", "+00:00")).timestamp()
+
+    class FakeStore:
+        def __init__(self, by_client: dict[str, dict[str, object]]) -> None:
+            self.by_client = by_client
+
+        def turn_for_client(self, session_id: str, client_turn_id: str):
+            assert session_id == actor["session_id"]
+            return self.by_client.get(client_turn_id)
+
+    replan_deferred_with_host_turn = {
+        "status": "completed",
+        "completed_at": completed_iso,
+        "response": {
+            "schema_version": "loopx_chat_agent_response_v0",
+            "message": "本轮任务尚未完成；执行状态已保留。",
+            "proposals": [],
+            "gate": None,
+            "native_loopx": {
+                "ok": False,
+                "error_code": "turn_todo_selection_deferred",
+                "selection_rejection": {
+                    "state": "deferred",
+                    "reason_code": "autonomous_replan",
+                    "recovery_action": "reenter_guard_without_selection",
+                },
+                "effects": {
+                    "host_invoked": True,
+                    "state_written": False,
+                    "quota_spent": False,
+                    "scheduler_acknowledged": False,
+                },
+            },
+        },
+    }
+    store = FakeStore({base_client: replan_deferred_with_host_turn})
+    assert resolve_advancement_turn_id(store, actor, todo, now=completed_epoch + 10) is None
+    assert is_exhausted_zero_write_followup_todo(store, actor, todo, now=completed_epoch + 10) is False
+
+    after_cooldown = completed_epoch + ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS + 1
+    assert resolve_advancement_turn_id(store, actor, todo, now=after_cooldown) == (
+        base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    )
+    assert is_exhausted_zero_write_followup_todo(store, actor, todo, now=after_cooldown) is False
+
+    # If the precommit retry also fails with zero writes, the follow-up is marked exhausted so monitor polls can rearm it.
+    pre_dispatch_failed_turn = {
+        "status": "failed",
+        "origin": "native_loopx",
+        "loopx_execution": True,
+        "error_code": "resume_failed",
+        "response": None,
+        "upstream_turn_id": None,
+        "started_at": None,
+        "first_event_at": None,
+        "delta_count": 0,
+        "completed_at": completed_iso,
+    }
+    exhausted_store = FakeStore({
+        base_client: replan_deferred_with_host_turn,
+        retry_client: pre_dispatch_failed_turn,
+    })
+    assert resolve_advancement_turn_id(exhausted_store, actor, todo, now=after_cooldown) is None
+    assert is_exhausted_zero_write_followup_todo(exhausted_store, actor, todo, now=after_cooldown) is True
+
+    # Direct pre-dispatch outer Chat failure on base turn also schedules .precommit-retry after cooldown,
+    # while any started/streaming outer failure fails closed.
+    outer_only_store = FakeStore({base_client: pre_dispatch_failed_turn})
+    assert resolve_advancement_turn_id(outer_only_store, actor, todo, now=after_cooldown) == (
+        base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    )
+    started_outer_failure = {**pre_dispatch_failed_turn, "upstream_turn_id": "started-turn-1"}
+    worker_exited_started = {
+        **pre_dispatch_failed_turn,
+        "error_code": "execution_worker_exited",
+        "started_at": completed_iso,
+    }
+    unmapped_worker_exit = {**pre_dispatch_failed_turn, "error_code": "execution_worker_exited_before_dispatch"}
+    for non_retryable in (started_outer_failure, worker_exited_started, unmapped_worker_exit):
+        unsafe_store = FakeStore({base_client: non_retryable})
+        assert resolve_advancement_turn_id(unsafe_store, actor, todo, now=after_cooldown) is None
+        assert is_exhausted_zero_write_followup_todo(unsafe_store, actor, todo, now=after_cooldown) is False

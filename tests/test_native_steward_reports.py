@@ -2737,7 +2737,7 @@ def test_periodic_report_uses_shipped_reporting_templates_and_respects_workspace
         assert "360" in frozen["reporting"] and "https://github.com/example-org/example-repo/pull/123" in frozen["reporting"]
 
 
-def test_report_selection_recovery_fails_closed_for_task_postcondition_probe_without_looping(
+def test_report_selection_recovery_fails_closed_for_settlement_postcondition_probe_without_looping(
     steward, tmp_path, monkeypatch, caplog
 ):
     import logging
@@ -2820,7 +2820,7 @@ def test_report_selection_recovery_fails_closed_for_task_postcondition_probe_wit
     turn_key = replan_events[0]["resume_turn_key"]
     jpath = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=turn_key)
     journal = load_turn_journal(jpath)
-    journal["validation_stage"] = "task_postcondition"
+    journal["validation_stage"] = "settlement_postcondition"
     jpath.write_text(json.dumps(journal), encoding="utf-8")
 
     assert configure_goal(
