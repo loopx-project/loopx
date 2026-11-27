@@ -34,6 +34,22 @@ const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const COMPLETE_REQUIREMENTS_CLAUSE = "This view retains complete requirements and current review/check states. ";
 const PROGRESSIVE_COMPLETE_REQUIREMENTS_CLAUSE =
   "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. ";
+const EXPLORE_GRAPH_BOILERPLATE_KEYS = [
+  "result_writeback_option",
+  "result_writeback_inline_option",
+  "result_writeback_inline_field",
+  "result_attachment_schema",
+  "path_delta_attachment_schema",
+  "path_delta_attachment_template",
+  "linked_question_attachment_template",
+  "optional_question_evolution_example",
+  "optional_execution_observation_example",
+  "result_writeback_guidance",
+  "result_attachment_template",
+  "optional_measurement_example",
+  "record_node_template",
+  "record_finding_template",
+] as const;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -558,6 +574,16 @@ export function progressiveContextPlan(request: JsonObject,
   );
   const agent = ["interaction_contract", "agent_channel"];
   const sourcePath = [...agent, "work_context", "sources"];
+  const agentChannel = jsonObject(at(payload, agent));
+  const agentRequiredReads = Array.isArray(agentChannel?.required_reads) ? agentChannel.required_reads : [];
+  const requiredCapabilities = new Set(
+    (Array.isArray(selectedTodo?.required_capabilities) ? selectedTodo.required_capabilities : [])
+      .filter((cap): cap is string => typeof cap === "string" && cap.length > 0),
+  );
+  const allowExploreGraphDeferral = !includeGoalAcceptanceDetail
+    && !requiredCapabilities.has("explore")
+    && payload.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+    && payload.replan_action_packet == null;
   const sources = at(payload, sourcePath);
   if (Array.isArray(sources)) sources.forEach((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
@@ -569,6 +595,48 @@ export function progressiveContextPlan(request: JsonObject,
         ? new Set(outcomeCtx.suggested_outcome_ids.filter((id): id is string => typeof id === "string" && id.length > 0))
         : undefined;
       carriers.push({path: [...sourcePath, i, "content", "goal_acceptance_contract"], suggestedIds: suggested});
+    }
+    const agenda = requiredManagerAgenda(value, agentRequiredReads);
+    if (agenda && Buffer.byteLength(JSON.stringify(agenda.items), "utf8") >= 2048) {
+      const agendaPath = [...sourcePath, i, "content", "unfinished_delegations"];
+      deferred.push({
+        path: [...agendaPath, "items"],
+        parent: agendaPath,
+        index_key: "supporting_material_pointer",
+        read_instruction: "Full unfinished delegation request rows remain in the required manager-inbox read and at unfinished_delegations/items via context_details. ",
+      });
+    }
+    const graph = jsonObject(content?.graph);
+    if (allowExploreGraphDeferral && source?.kind === "explore_turn_context" && content?.ok === true
+        && content?.graph_enabled === true && graph) {
+      const graphPath = [...sourcePath, i, "content", "graph"];
+      let graphDeferred = false;
+      if (Array.isArray(graph.writeback_results) && graph.writeback_results.length > 0
+          && Buffer.byteLength(JSON.stringify(graph.writeback_results), "utf8") >= 1024) {
+        deferred.push({path: [...graphPath, "writeback_results"], parent: graphPath, index_key: "supporting_material_pointer"});
+        graphDeferred = true;
+      }
+      if (Array.isArray(graph.measurement_feedback) && graph.measurement_feedback.length > 0
+          && (!Array.isArray(graph.work_yardsticks) || graph.work_yardsticks.length === 0)
+          && Buffer.byteLength(JSON.stringify(graph.measurement_feedback), "utf8") >= 1024) {
+        deferred.push({path: [...graphPath, "measurement_feedback"], parent: graphPath, index_key: "supporting_material_pointer"});
+        if (typeof graph.measurement_guidance === "string") {
+          deferred.push({path: [...graphPath, "measurement_guidance"], parent: graphPath, index_key: "supporting_material_pointer"});
+        }
+        graphDeferred = true;
+      }
+      if (typeof graph.result_writeback_guidance === "string"
+          && Buffer.byteLength(graph.result_writeback_guidance, "utf8") >= 1024) {
+        for (const key of EXPLORE_GRAPH_BOILERPLATE_KEYS) {
+          if (Object.hasOwn(graph, key)) {
+            deferred.push({path: [...graphPath, key], parent: graphPath, index_key: "supporting_material_pointer"});
+          }
+        }
+        graphDeferred = true;
+      }
+      if (graphDeferred) {
+        deferred.at(-1)!.read_instruction = "Deferred Explore history and authoring templates remain readable at graph.supporting_material_pointer children or via explore turn-context. ";
+      }
     }
   });
   let deferredHistoricalRequirements = false;
@@ -597,8 +665,9 @@ export function progressiveContextPlan(request: JsonObject,
             || typeof requirement.id !== "string" || typeof requirement.description !== "string") return;
         if (requirement.agent_review === undefined) continue;
         const review = jsonObject(requirement.agent_review);
-        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_digest", "basis_current", "independently_verified"])
             || (review.recorded_for_agent_id !== undefined && !isGoalOutcomeIdentifier(review.recorded_for_agent_id))
+            || (review.basis_digest !== undefined && typeof review.basis_digest !== "string")
             || typeof review.note !== "string" || !Array.isArray(review.evidence_refs)
             || review.evidence_refs.some(ref => typeof ref !== "string")
             || !["met", "unmet", "uncertain"].includes(String(review.conclusion))
@@ -1204,8 +1273,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // remains disabled while that review is being settled.
   const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true
     && cli?.spend_allowed_now === false;
-  const requiredInboxReads = (normalWork || replanningBeforeWork) && channel?.must_attempt === true
-    && Array.isArray(channel.required_reads)
+  const recoveryReads = context.effective_action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY
+    && context.ok === true && Array.isArray(channel?.required_reads);
+  const requiredInboxReads = ((normalWork || replanningBeforeWork) && channel?.must_attempt === true || recoveryReads)
+    && Array.isArray(channel?.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];

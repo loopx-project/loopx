@@ -719,7 +719,9 @@ def main() -> int:
     args.fixture_root.mkdir(parents=True)
     # Use one current root owner for both revisions. A historical test source
     # may still assume /tmp exists on every Windows drive.
-    with fixture_support.stable_budget_fixture_root(args.fixture_root) as stable_root:
+    with fixture_support.stable_budget_fixture_root(args.fixture_root) as stable_root, fixture_support.isolated_probe_host_env(
+        stable_root / "isolated-home"
+    ):
         rows = [
             *_default_rows(
                 probe, semantics, stable_root,
