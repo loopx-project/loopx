@@ -330,7 +330,8 @@ test("an unchanged lease proof cannot extend a running Host after wall clock rol
   const context = decodeDelegatedHostLease({lease, ttl_seconds: 1,
     read_argv: request(`require('fs').appendFileSync(${JSON.stringify(reads)}, 'r');
       console.log(${JSON.stringify(JSON.stringify({ok: true, lease}))});`).argv,
-    renew_argv: request("setTimeout(() => console.log(JSON.stringify({ok: false})), 5000)").argv});
+    // The supervisor appends lease flags. Keep them out of the Node option parser.
+    renew_argv: [...request("setTimeout(() => console.log(JSON.stringify({ok: false})), 5000)").argv, "--"]});
   t.mock.timers.enable({apis: ["Date"], now: wall});
   const child = request(`setTimeout(() => {
     require('fs').writeFileSync(${JSON.stringify(marker)}, 'finished');
