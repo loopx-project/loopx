@@ -1313,6 +1313,34 @@ test("repository observation distinguishes invalid items, verified emptiness and
   }
 });
 
+test("repository observations and backfill require distinct readable PR numbers", () => {
+  const scoped = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: false, pr_filter: {exclude_drafts: true}};
+  const valid = {number: 42, isDraft: false};
+  const malformedRows = [null, [], "42", {title: "Missing number", isDraft: true},
+    ...[null, false, "42", 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map(number => ({number}))];
+  const invalidLists = [...malformedRows.map(row => [valid, row]), [valid, {...valid}]];
+  for (const signal_scope of [null, scoped]) {
+    const observe = (items: unknown[], previous_hash?: unknown) => observeStewardSignalMonitor({
+      signal_scope, repository_snapshot: {status: "ok", items}, previous_hash,
+    });
+    const baseline = observe([valid, {number: Number.MAX_SAFE_INTEGER, isDraft: true}]);
+    assert.equal(baseline.observation_incomplete, false);
+    if (signal_scope) assert.deepEqual(baseline.scoped_repository_items, [valid]);
+    for (const items of invalidLists) {
+      const result = observe(items, baseline.result_hash);
+      assert.equal(result.observation_incomplete, true, JSON.stringify(items));
+      assert.equal(result.result_hash, baseline.result_hash);
+      assert.equal(result.material_change, false);
+    }
+    assert.equal(observe([], baseline.result_hash).material_change, true);
+  }
+  for (const repository_items of invalidLists) {
+    assert.throws(() => planStewardSignalCommentBackfill({signal_scope: scoped, repository_items}),
+      /backfill requires distinct valid PR numbers/);
+  }
+});
+
 test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {
   const noAgeScope = {
     schema_version: "steward_signal_monitor_scope_v0",

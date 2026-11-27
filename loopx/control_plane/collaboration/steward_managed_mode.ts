@@ -1130,12 +1130,26 @@ function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean)
   return "under_24h";
 }
 
+type RepositoryItem = JsonObject & { number: number };
+
+function hasReadableRepositoryItems(items: unknown[]): items is RepositoryItem[] {
+  const seenNumbers = new Set<number>();
+  for (const item of items) {
+    const number = jsonObject(item)?.number;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0 || seenNumbers.has(number)) {
+      return false;
+    }
+    seenNumbers.add(number);
+  }
+  return true;
+}
+
 function filterScopedRepositoryItems(
-  rawItems: unknown[],
+  items: RepositoryItem[],
   filter: JsonObject | null,
   observedAtValue: unknown,
-  onIncompleteComments?: (item: JsonObject) => void,
-): { items: JsonObject[]; observationIncomplete: boolean } {
+  onIncompleteComments?: (item: RepositoryItem) => void,
+): { items: RepositoryItem[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
   if (minStalledHours !== null) {
@@ -1154,10 +1168,8 @@ function filterScopedRepositoryItems(
   const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
   const canBypassAge = authorMode === "exclude";
 
-  const matched: JsonObject[] = [];
-  for (const rawItem of rawItems) {
-    const item = jsonObject(rawItem);
-    if (!item) continue;
+  const matched: RepositoryItem[] = [];
+  for (const item of items) {
     if (filter?.exclude_drafts === true && item.isDraft === true) continue;
     const reviewSummary = jsonObject(item.review_summary);
     if (
@@ -1240,17 +1252,17 @@ function filterScopedRepositoryItems(
 export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject {
   const scope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const filter = jsonObject(scope?.pr_filter);
-  if (!Array.isArray(params.repository_items)) {
+  const items = params.repository_items;
+  if (!Array.isArray(items)) {
     throw new EffectRuntimeRequestError("comment backfill requires repository items");
+  }
+  if (!hasReadableRepositoryItems(items)) {
+    throw new EffectRuntimeRequestError("comment backfill requires distinct valid PR numbers");
   }
   const prNumbers: number[] = [];
   // The planner's cutoff includes the time still available for provider reads.
-  filterScopedRepositoryItems(params.repository_items, filter, params.observed_at, (item) => {
-    const number = item.number;
-    if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {
-      throw new EffectRuntimeRequestError("comment backfill requires a valid PR number");
-    }
-    prNumbers.push(number);
+  filterScopedRepositoryItems(items, filter, params.observed_at, (item) => {
+    prNumbers.push(item.number);
   });
   return { pr_numbers: prNumbers };
 }
@@ -1275,9 +1287,7 @@ function omitKeys(obj: JsonObject, keysToOmit: readonly string[]): JsonObject {
   return Object.fromEntries(Object.entries(obj).filter(([key]) => !omit.has(key)));
 }
 
-function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFilter: boolean): unknown {
-  const item = jsonObject(rawItem);
-  if (!item) return rawItem;
+function projectRepositoryItemForMaterialHash(item: RepositoryItem, usesStalledAgeFilter: boolean): JsonObject {
   const reviewSummary = jsonObject(item.review_summary);
   if (usesStalledAgeFilter) {
     const hasStalledSinceClock = typeof item.stalled_since === "string"
@@ -1313,9 +1323,10 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   };
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
-  const rawRepoItems = repo !== null && Array.isArray(repo.items) ? repo.items : null;
+  const rawItems = repo?.items;
+  const repoItems = Array.isArray(rawItems) && hasReadableRepositoryItems(rawItems) ? rawItems : null;
   // An unreadable list must not report that PRs were removed.
-  if (repo !== null && (repo.status === "unavailable" || rawRepoItems === null)) {
+  if (repo !== null && (repo.status === "unavailable" || repoItems === null)) {
     return incompleteObservation;
   }
   const portfolio = params.portfolio_observation == null ? null
@@ -1326,9 +1337,9 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
     && Number.isFinite(rawMinStalledHours)
     && rawMinStalledHours > 0;
-  const scopedResult = signalScope !== null && rawRepoItems !== null
+  const scopedResult = signalScope !== null && repoItems !== null
     ? filterScopedRepositoryItems(
-      rawRepoItems,
+      repoItems,
       prFilter,
       params.observed_at ?? repo?.observed_at,
     )
@@ -1337,7 +1348,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     return incompleteObservation;
   }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
-  const baseRepoItems = scopedRepoItems ?? rawRepoItems;
+  const baseRepoItems = scopedRepoItems ?? repoItems;
   const hashedRepoItems = baseRepoItems === null
     ? null
     : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));

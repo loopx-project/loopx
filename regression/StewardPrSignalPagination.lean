@@ -612,6 +612,73 @@ theorem old_empty_fallback_changes_the_result_of_invalid_items (number : Nat) :
       observeRepositoryRead (some [number]) .invalidItems := by
   simp [observeRepositoryRead, repositoryHashInput]
 
+/- Decode rows at the Core boundary as optional natural numbers. Non-object
+   rows and non-integer or negative numbers have no natural number encoding.
+   The upper bound is JavaScript's largest safe integer. -/
+def RepositoryRowsValid (seen : List Nat) : List (Option Nat) → Prop
+  | [] => True
+  | none :: _ => False
+  | some number :: rest =>
+      0 < number ∧ number ≤ 9007199254740991 ∧ number ∉ seen ∧
+        RepositoryRowsValid (number :: seen) rest
+
+def repositoryRowsValid (seen : List Nat) : List (Option Nat) → Bool
+  | [] => true
+  | none :: _ => false
+  | some number :: rest =>
+      decide (0 < number ∧ number ≤ 9007199254740991 ∧ number ∉ seen) &&
+        repositoryRowsValid (number :: seen) rest
+
+theorem repository_row_check_is_sound_and_complete (seen : List Nat) (rows : List (Option Nat)) :
+    repositoryRowsValid seen rows = true ↔ RepositoryRowsValid seen rows := by
+  induction rows generalizing seen with
+  | nil => simp [repositoryRowsValid, RepositoryRowsValid]
+  | cons row rest ih =>
+    cases row <;> simp [repositoryRowsValid, RepositoryRowsValid, ih, and_assoc]
+
+theorem valid_repository_rows_keep_every_number_in_order (seen : List Nat) (rows : List (Option Nat))
+    (valid : RepositoryRowsValid seen rows) : (rows.filterMap id).map some = rows := by
+  induction rows generalizing seen with
+  | nil => rfl
+  | cons row rest ih =>
+    cases row with
+    | none => simp [RepositoryRowsValid] at valid
+    | some number =>
+      simp [RepositoryRowsValid] at valid
+      simp [ih (number :: seen) valid.2.2.2]
+
+def observeRepositoryRows (prior : Option (List Nat)) (rows : List (Option Nat)) :
+    Option (List Nat) × Bool :=
+  if repositoryRowsValid [] rows then
+    observeRepositoryRead prior (.verified (rows.filterMap id))
+  else
+    observeRepositoryRead prior .invalidItems
+
+theorem invalid_repository_rows_preserve_the_verified_result (prior : Option (List Nat))
+    (rows : List (Option Nat)) (invalid : ¬ RepositoryRowsValid [] rows) :
+    observeRepositoryRows prior rows = (prior, false) := by
+  have rejected : repositoryRowsValid [] rows ≠ true :=
+    fun accepted => invalid ((repository_row_check_is_sound_and_complete [] rows).1 accepted)
+  simp [observeRepositoryRows, rejected, invalid_repository_items_keep_the_verified_result]
+
+theorem valid_repository_rows_publish_the_verified_input (prior : Option (List Nat))
+    (rows : List (Option Nat)) (valid : RepositoryRowsValid [] rows) :
+    observeRepositoryRows prior rows = observeRepositoryRead prior (.verified (rows.filterMap id)) := by
+  simp [observeRepositoryRows, (repository_row_check_is_sound_and_complete [] rows).2 valid]
+
+theorem verified_empty_rows_can_publish_a_removal (number : Nat) :
+    observeRepositoryRows (some [number]) [] = (some [], true) := by
+  simpa [observeRepositoryRows, repositoryRowsValid] using
+    genuinely_empty_repository_can_publish_a_removal number
+
+theorem dropping_an_unreadable_row_can_publish_a_false_removal :
+    observeRepositoryRows (some [42]) [none] ≠ observeRepositoryRows (some [42]) [] := by
+  decide
+
+theorem duplicate_repository_numbers_preserve_the_verified_result (prior : Option (List Nat)) :
+    observeRepositoryRows prior [some 42, some 42] = (prior, false) := by
+  exact invalid_repository_rows_preserve_the_verified_result prior _ (by simp [RepositoryRowsValid])
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -673,5 +740,12 @@ theorem old_empty_fallback_changes_the_result_of_invalid_items (number : Nat) :
 #print axioms genuinely_empty_repository_can_publish_a_removal
 #print axioms no_repository_has_a_distinct_complete_input
 #print axioms old_empty_fallback_changes_the_result_of_invalid_items
+#print axioms repository_row_check_is_sound_and_complete
+#print axioms valid_repository_rows_keep_every_number_in_order
+#print axioms invalid_repository_rows_preserve_the_verified_result
+#print axioms valid_repository_rows_publish_the_verified_input
+#print axioms verified_empty_rows_can_publish_a_removal
+#print axioms dropping_an_unreadable_row_can_publish_a_false_removal
+#print axioms duplicate_repository_numbers_preserve_the_verified_result
 
 end StewardPrSignalPagination

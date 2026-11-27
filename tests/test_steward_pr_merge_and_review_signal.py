@@ -1905,6 +1905,17 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     )
     no_age_todo_with_pre = {**no_age_todo, "result_hash": pre9207_no_age_obs["result_hash"]}
 
+    with monkeypatch.context() as provider:
+        provider.setattr(
+            "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+            lambda _repo: {"status": "ok", "repository": "org/repo", "items": [pre9207_item]},
+        )
+        legacy_obs, legacy_succ = monitor._collect_signal_monitor(actor, context, no_age_todo_with_pre)
+    assert legacy_obs["observation_incomplete"] is False
+    assert legacy_obs["result_hash"] == pre9207_no_age_obs["result_hash"]
+    assert legacy_obs["material_change"] is False
+    assert legacy_succ == []
+
     obs_na1, succ_na1, cmds_na1 = _collect_with_gh(no_age_todo_with_pre, _fail_if_backfill(truncated_node))
     assert len(cmds_na1) == 1
     assert obs_na1["result_hash"] == pre9207_no_age_obs["result_hash"]
@@ -1927,16 +1938,17 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
         runtime.coordination_runtime_root, actor["goal_id"], no_age_todo["todo_id"],
     )
     verified_snapshot = snapshot_path.read_bytes()
-    with monkeypatch.context() as provider:
-        provider.setattr(
-            "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
-            lambda _repo: {"status": "ok", "repository": "org/repo", "items": None},
-        )
-        with pytest.raises(RuntimeError, match="temporarily unavailable"):
-            monitor._collect_signal_monitor(
-                actor, context, {**no_age_todo, "result_hash": obs_na2["result_hash"]},
+    for items in (None, [None], [{"title": "Missing number"}], [pre9207_item, pre9207_item]):
+        with monkeypatch.context() as provider:
+            provider.setattr(
+                "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+                lambda _repo, items=items: {"status": "ok", "repository": "org/repo", "items": items},
             )
-    assert snapshot_path.read_bytes() == verified_snapshot
+            with pytest.raises(RuntimeError, match="temporarily unavailable"):
+                monitor._collect_signal_monitor(
+                    actor, context, {**no_age_todo, "result_hash": obs_na2["result_hash"]},
+                )
+        assert snapshot_path.read_bytes() == verified_snapshot
 
     # 3. Scoped monitor WITH min_stalled_hours > 0 DOES invoke backfill RPC and preserves state on failure.
     age_scope = {
