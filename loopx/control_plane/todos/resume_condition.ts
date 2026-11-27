@@ -345,18 +345,31 @@ interface PrMergedEvent {
   refs: PrRef[];
 }
 
-function prMergedEvents(rolloutEvents: unknown[]): PrMergedEvent[] {
-  return rolloutEvents.flatMap((rawEvent, index) => {
-    const event = requireJsonObject(rawEvent, `rollout_events[${index}]`);
-    if (!PR_MERGED_EVENT_KINDS.has(normalizedString(event.event_kind))) return [];
-    return [{ event, refs: rolloutEventPrRefs(event) }];
-  });
+const prMergedEventsCache = new WeakMap<readonly unknown[], readonly PrMergedEvent[]>();
+
+function prMergedEvents(rolloutEvents: readonly unknown[]): readonly PrMergedEvent[] {
+  const frozen = Object.isFrozen(rolloutEvents);
+  if (frozen) {
+    const cached = prMergedEventsCache.get(rolloutEvents);
+    if (cached !== undefined) return cached;
+  }
+  const result: PrMergedEvent[] = [];
+  for (let index = 0; index < rolloutEvents.length; index += 1) {
+    const event = requireJsonObject(rolloutEvents[index], `rollout_events[${index}]`);
+    if (!PR_MERGED_EVENT_KINDS.has(normalizedString(event.event_kind))) continue;
+    result.push({ event, refs: rolloutEventPrRefs(event) });
+  }
+  if (frozen) {
+    Object.freeze(result);
+    prMergedEventsCache.set(rolloutEvents, result);
+  }
+  return result;
 }
 
 function resolvePrRepositoryBinding(
   targetRef: PrRef,
   item: TodoItem,
-  events: PrMergedEvent[],
+  events: readonly PrMergedEvent[],
 ): { repository: string | null; projection: JsonObject } {
   if (targetRef.repo) {
     return {
@@ -399,7 +412,7 @@ function resolvePrRepositoryBinding(
 }
 
 function matchingPrMerge(
-  events: PrMergedEvent[],
+  events: readonly PrMergedEvent[],
   targetRef: PrRef,
   targetRepo: string,
 ): JsonObject | null {
@@ -438,7 +451,7 @@ export function compactTodoResumeMergeEvidence(items: unknown[], events: readonl
   }
   const facts = new Map<string, JsonObject>();
   const diagnostics = new Map<number, Map<string, JsonObject>>();
-  for (const {event, refs} of prMergedEvents([...events])) {
+  for (const {event, refs} of prMergedEvents(events)) {
     for (const ref of refs) {
       const fact: JsonObject = {event_kind: normalizedString(event.event_kind), pr_ref: ref.normalized};
       for (const key of ["event_id", "recorded_at"]) {

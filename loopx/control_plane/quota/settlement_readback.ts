@@ -375,16 +375,32 @@ function appendIndexed(
   else index.set(key, [record]);
 }
 
-function indexSettlementSnapshot(
-  runtimeRoot: string,
-  goalId: string,
-  events: readonly JsonObject[],
-  runs: readonly JsonObject[],
-): QuotaSettlementReadbackSnapshot {
+interface CachedRunsIndex {
+  readonly runsByTurn: ReadonlyMap<string, readonly JsonObject[]>;
+  readonly runsByEffectRef: ReadonlyMap<string, readonly JsonObject[]>;
+  readonly runPositions: ReadonlyMap<JsonObject, number>;
+}
+
+const eventsByTurnCache = new WeakMap<
+  readonly JsonObject[],
+  ReadonlyMap<string, readonly JsonObject[]>
+>();
+const runsIndexCache = new WeakMap<
+  readonly JsonObject[],
+  CachedRunsIndex
+>();
+
+function freezeIndexedBuckets(index: Map<string, JsonObject[]>): void {
+  for (const bucket of index.values()) Object.freeze(bucket);
+}
+
+function indexEventsByTurn(events: readonly JsonObject[]): ReadonlyMap<string, readonly JsonObject[]> {
+  const frozen = Object.isFrozen(events);
+  if (frozen) {
+    const cached = eventsByTurnCache.get(events);
+    if (cached !== undefined) return cached;
+  }
   const eventsByTurn = new Map<string, JsonObject[]>();
-  const runsByTurn = new Map<string, JsonObject[]>();
-  const runsByEffectRef = new Map<string, JsonObject[]>();
-  const runPositions = new Map<JsonObject, number>();
   for (const event of events) {
     appendIndexed(
       eventsByTurn,
@@ -396,6 +412,22 @@ function indexSettlementSnapshot(
       event,
     );
   }
+  if (frozen) {
+    freezeIndexedBuckets(eventsByTurn);
+    eventsByTurnCache.set(events, eventsByTurn);
+  }
+  return eventsByTurn;
+}
+
+function indexRunsRecords(runs: readonly JsonObject[]): CachedRunsIndex {
+  const frozen = Object.isFrozen(runs);
+  if (frozen) {
+    const cached = runsIndexCache.get(runs);
+    if (cached !== undefined) return cached;
+  }
+  const runsByTurn = new Map<string, JsonObject[]>();
+  const runsByEffectRef = new Map<string, JsonObject[]>();
+  const runPositions = new Map<JsonObject, number>();
   for (const [position, run] of runs.entries()) {
     runPositions.set(run, position);
     appendIndexed(
@@ -409,6 +441,23 @@ function indexSettlementSnapshot(
     );
     appendIndexed(runsByEffectRef, optionalString(run.effect_ref), run);
   }
+  const result: CachedRunsIndex = { runsByTurn, runsByEffectRef, runPositions };
+  if (frozen) {
+    freezeIndexedBuckets(runsByTurn);
+    freezeIndexedBuckets(runsByEffectRef);
+    runsIndexCache.set(runs, result);
+  }
+  return result;
+}
+
+function indexSettlementSnapshot(
+  runtimeRoot: string,
+  goalId: string,
+  events: readonly JsonObject[],
+  runs: readonly JsonObject[],
+): QuotaSettlementReadbackSnapshot {
+  const eventsByTurn = indexEventsByTurn(events);
+  const { runsByTurn, runsByEffectRef, runPositions } = indexRunsRecords(runs);
   return {
     runtimeRoot,
     goalId,
