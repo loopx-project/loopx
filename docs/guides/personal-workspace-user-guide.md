@@ -503,6 +503,7 @@ URL 的 `todo` 参数支持刷新与返回恢复检查上下文。来源中已�
 「添加任务」就在当前工作区域：输入一次，检查后确认一次，创建结果通过刷新读回。
 检查或应用失败时保留草稿，可从原有动作流程重新检查和确认；选择视图不会执行任务。
 右侧「全部工作」可按状态筛选并搜索已载入的任务；完成记录沿用既有分页与虚拟化历史。
+完成记录和 Goal 成果按完成时刻从新到旧排序，缺少可读时间的记录排在有时间的记录之后。
 「活动」显示时间线中已结束的执行、已返回成果和已记录决定，覆盖范围取决于来源。
 
 The Overview composes Direction, Needs you, Now and Results. Now groups work by its recorded owner,
@@ -513,6 +514,8 @@ retaining stale action authority. Add task uses one input and the existing previ
 a failed preview or apply retains the draft. All work filters/searches listed tasks and reuses paginated,
 virtualized completed history. Activity shows ended runs, returned results and recorded decisions from
 the available timeline; it makes no complete-history claim.
+Completed history and Goal results show the newest completion first. Records without a readable
+completion time appear after dated records.
 
 工作指标保持明确的覆盖范围：
 工作指标只有在来源提供完成数、且未完成列表覆盖已知时显示“完成 / 总数”。

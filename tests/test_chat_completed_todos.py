@@ -7,7 +7,11 @@ from urllib.error import HTTPError
 
 import pytest
 
-from loopx.chat.completed_todos import CompletedTodoPages, _verify_goal_result_page
+from loopx.chat.completed_todos import (
+    CompletedTodoPages,
+    _verify_goal_result_page,
+    completed_todo_rows,
+)
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
 from loopx.control_plane.todos.contract import encode_metadata_value
 
@@ -17,6 +21,25 @@ def test_history_uses_the_same_readback_owner_through_the_compatibility_facade()
     from loopx.todos import list_goal_todos as facade
 
     assert facade is readback
+
+
+def test_completed_history_keeps_unknown_timestamp_fallbacks_after_dated_rows():
+    timestamps = [
+        ("todo_missing", None),
+        ("todo_opaque_a", "legacy-a"),
+        ("todo_earliest", "0001-01-01T00:00:00Z"),
+        ("todo_opaque_b", "legacy-b"),
+    ]
+    rows = [
+        {"todo_id": todo_id, "completed_at": stamp, "done": True, "status": "done"}
+        for todo_id, stamp in timestamps
+    ]
+
+    ordered = completed_todo_rows({"todos": rows})
+
+    assert [row["todo_id"] for row in ordered] == [
+        "todo_earliest", "todo_opaque_b", "todo_opaque_a", "todo_missing",
+    ]
 
 
 def test_snapshot_pagination_is_bounded_and_stable():
@@ -178,6 +201,137 @@ def test_goal_report_page_names_unavailable_rows_instead_of_hiding_the_rest(monk
     assert verified["unavailable_count"] == 1
     assert verified["unavailable_todo_ids"] == ["todo_report_stale"]
     assert [row["todo_id"] for row in verified["items"]] == ["todo_report_planned"]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_chat_history_routes_sort_mixed_timestamps_and_keep_frozen_pages(
+    tmp_path, monkeypatch, provider
+):
+    from pathlib import Path
+    import subprocess
+    import sys
+    from urllib.parse import urlencode
+
+    from loopx.control_plane.coordination.local_authority import read_canonical_todos_if_promoted
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.goals.acceptance import configure_goal_acceptance, inspect_goal_acceptance
+    from loopx.control_plane.testing.canary_harness import write_fixture_registry
+    from loopx.control_plane.todos.mutation_api import complete_goal_todo
+    from tests.control_plane.canonical_authority_fixture import (
+        advance_canonical_fixture_authority, initialize_canonical_authority, isolate_sqlite_runtime,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    goal_id, agent_id = "history-goal", "agent-a"
+    project, runtime, registry = tmp_path / "project", tmp_path / "runtime", tmp_path / "registry.json"
+    project.mkdir()
+    state = project / "state.md"
+    state.write_text("# Synthetic history\n\n## Agent Todo\n\n## User Todo\n", encoding="utf-8")
+    write_fixture_registry(
+        project=project, runtime_root=runtime, registry_path=registry, goal_id=goal_id,
+        domain="acceptance", adapter_kind="generic_project_goal_v0", state_file=str(state),
+        registered_agents=[agent_id],
+    )
+    stamps = {
+        "todo_whole": "2026-02-03T10:00:00Z",
+        "todo_later": "2026-02-03T10:00:00.000001Z",
+        "todo_offset_tie": "2026-02-03T18:00:00+08:00",
+    }
+    todo_ids = [*stamps, "todo_new"]
+    todos = [
+        {"schema_version": "todo_item_v0", "todo_id": todo_id, "role": "agent",
+         "text": f"Synthetic result {index}", "status": "open", "done": False,
+         "task_class": "advancement_task", "action_kind": "implement", "index": index + 1,
+         "source_section": "Agent Todo", "archive_state": "active", "claimed_by": agent_id}
+        for index, todo_id in enumerate(todo_ids)
+    ]
+
+    def projection(rows):
+        return build_todo_runtime_shadow_projection(goal_id=goal_id, todos=rows, handoff_mode="soft_claim")
+
+    initialize_canonical_authority(runtime, goal_id, projection(todos), state_path=state, provider=provider)
+    acceptance_route = dict(registry_path=registry, goal_id=goal_id, runtime_root=str(runtime))
+    configured = configure_goal_acceptance(
+        **acceptance_route,
+        expected_provider_revision=inspect_goal_acceptance(**acceptance_route)["provider_revision"],
+        document={
+            "scope": {"kind": "all_advancement"}, "objective": "Write accepted synthetic results",
+            "non_goals": [],
+            "criteria": [{"id": "result", "description": "The local result matches the fixture",
+                          "validation_argv": [sys.executable, "-c",
+                              "from pathlib import Path; assert Path('completion.md').read_text() == '# Synthetic result\\n'"],
+                          "validation_timeout_seconds": 5}],
+            "bindings": [{"todo_id": todo_id, "criterion_ids": ["result"]} for todo_id in todo_ids],
+        }, execute=True,
+    )
+    assert configured["status"] == "applied", configured
+    result_file = project / "completion.md"
+    result_file.write_text("# Synthetic result\n", encoding="utf-8")
+
+    def complete(todo_id, stamp):
+        with monkeypatch.context() as clock:
+            clock.setattr("loopx.control_plane.todos.provider_terminal_lifecycle.now_local", lambda: stamp)
+            result = complete_goal_todo(
+                registry_path=registry, goal_id=goal_id, todo_id=todo_id, agent_id=agent_id,
+                runtime_root_arg=str(runtime), evidence="Validated synthetic result",
+                completion_result_file=result_file, completion_validation_workspace_path=project,
+            )
+        assert result["ok"], result
+
+    for todo_id, stamp in stamps.items():
+        complete(todo_id, stamp)
+
+    # Retain the real accepted artifacts and inject only historical timestamp encodings.
+    provider_module = Path(__file__).resolve().parents[1] / "loopx/control_plane/coordination/local_authority_provider.ts"
+    retained = json.loads(subprocess.check_output(
+        ["node", "--no-warnings", "--experimental-strip-types", "--input-type=module", "-e",
+         "const [module, root, goal] = process.argv.slice(1);"
+         "const {openLocalAuthorityStore} = await import(module);"
+         "const loaded = await (await openLocalAuthorityStore(root, goal)).loadAuthority();"
+         "if (loaded.status !== 'loaded') throw new Error(loaded.status);"
+         "process.stdout.write(JSON.stringify(loaded.head));",
+         provider_module.as_uri(), str(runtime), goal_id],
+        text=True, timeout=30,
+    ))
+    for row in retained["todos"]:
+        if row["todo_id"] in stamps:
+            row["completed_at"] = stamps[row["todo_id"]]
+    retained["todo_read_model"] = projection(retained["todos"])["todo_read_model"]
+    advance_canonical_fixture_authority(runtime, goal_id, retained, operation_id="fixture:mixed-completion-times")
+    before = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.verbose = registry, runtime, False
+    server.completed_todo_pages.page_size = 2
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        def read(route, cursor=""):
+            query = urlencode({"goal_id": goal_id, "cursor": cursor})
+            with urlopen(f"http://127.0.0.1:{server.server_port}/api/chat/{route}?{query}", timeout=20) as response:
+                return json.load(response)
+
+        first = {route: read(route) for route in ("completed-todos", "goal-results")}
+        after = read_canonical_todos_if_promoted(runtime_root=runtime, goal_id=goal_id)
+        assert after == before
+        complete("todo_new", "2026-02-03T11:00:00Z")
+        for route, page in first.items():
+            assert page["total"] == 3 and page["next_cursor"]
+            assert [row["todo_id"] for row in page["items"]] == ["todo_later", "todo_whole"], route
+            second = read(route, page["next_cursor"])
+            assert second["total"] == 3 and second["next_cursor"] is None
+            assert [row["todo_id"] for row in second["items"]] == ["todo_offset_tie"], route
+            for row in page["items"] + second["items"]:
+                assert row["completed_at"] == stamps[row["todo_id"]]
+            fresh = read(route)
+            assert fresh["total"] == 4
+            assert [row["todo_id"] for row in fresh["items"]] == ["todo_new", "todo_later"], route
+            if route == "goal-results":
+                assert page["unavailable_count"] == second["unavailable_count"] == fresh["unavailable_count"] == 0
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
 
 
 @pytest.mark.parametrize("count", [85, 4087])
