@@ -238,8 +238,8 @@ the adapter, use a v0-compatible adapter and omit the declaration or pass
 `loopx_turn_host_request_v0`. Recovery with a saved typed result continues
 without launching an adapter.
 
-A DeepSeek Harness adapter lives in the `loopx.dsh_goal_mode` subpackage
-(run with `python -m loopx.dsh_goal_mode`; the legacy
+A DeepSeek Harness adapter lives in the `loopx.hosts.dsh` subpackage
+(run with `python -m loopx.hosts.dsh`; the legacy
 `scripts/dsh_turn_host_adapter.py` launcher still works); it uses
 the optional `deepseek-harness-sdk` Python client to run one bounded dsh session
 and parses the final assistant JSON message into the same typed Turn result.

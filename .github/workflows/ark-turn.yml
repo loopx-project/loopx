@@ -8,7 +8,7 @@ on:
       - "loopx/control_plane/turn_driver/**"
       - "loopx/control_plane/collaboration/**"
       - "loopx/collaboration_mcp.py"
-      - "loopx/dsh_goal_mode/**"
+      - "loopx/hosts/dsh/**"
       - "loopx/cli_commands/turn*.py"
       - "loopx/control_plane/goals/acceptance*.ts"
       - "loopx/control_plane/goals/acceptance.py"

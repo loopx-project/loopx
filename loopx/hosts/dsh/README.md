@@ -26,7 +26,7 @@ The `deepseek-harness` host surface (aliases: `deepseek_harness`,
 ## Run the adapter
 
 ```bash
-python -m loopx.dsh_goal_mode \
+python -m loopx.hosts.dsh \
   --cordis /path/to/cordis.yml \
   --model deepseek-flash \
   --provider deepseek-official

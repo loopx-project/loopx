@@ -874,7 +874,7 @@ def collect_doctor(
             f"--zcode-home {home_arg}"
         )
     elif canonical_agent_type in {"agy", "antigravity-app"}:
-        from .agy_goal_mode import antigravity_config_home
+        from .hosts.agy import antigravity_config_home
         from .slash_command_install import inspect_skill_facades
 
         agy_cfg_skills = antigravity_config_home() / "skills"
@@ -1394,7 +1394,7 @@ def collect_doctor(
         else:
             payload["fix"] += "\nAfter restoring the LoopX installation/runtime, " + skill_fix
     if canonical_agent_type in {"agy", "antigravity-app"}:
-        from .agy_goal_mode import (
+        from .hosts.agy import (
             ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
             ANTIGRAVITY_MCP_CONFIG_FILENAME,
             ANTIGRAVITY_SIDECAR_FILENAME,

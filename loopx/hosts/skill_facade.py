@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..agy_goal_mode import (
+from .agy import (
     ANTIGRAVITY_APP_INSTALL_SURFACE,
     ANTIGRAVITY_SKILLS_ROOT_LABEL,
     agy_activation_extras,

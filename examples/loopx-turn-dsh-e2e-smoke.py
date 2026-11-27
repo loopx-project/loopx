@@ -38,7 +38,7 @@ ADAPTER = REPO_ROOT / "scripts" / "dsh_turn_host_adapter.py"
 
 # The fake runner stands in for the DeepSeek Harness host, so its keyword
 # signature must track the keyword set the adapter supplies, which
-# ``loopx.dsh_goal_mode.turn_host_adapter.load_dsh_runner`` documents. Three
+# ``loopx.hosts.dsh.turn_host_adapter.load_dsh_runner`` documents. Three
 # smokes load a fake runner, so the signature is emitted from this one place: a
 # fixture that lags the adapter otherwise surfaces as an unattributed
 # ``host_failure`` instead of a readable error at the seam that moved.

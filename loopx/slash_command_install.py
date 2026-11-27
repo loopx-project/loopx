@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 
-from .agy_goal_mode import (
+from .hosts.agy import (
     ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
     ANTIGRAVITY_MCP_CONFIG_FILENAME,
     agy_home as _agy_home,

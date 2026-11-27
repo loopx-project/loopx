@@ -67,7 +67,7 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     base = [*prefix, "turn", "run-once", "--goal-id", f.GOAL_ID, "--agent-id", f.AGENT_ID,
         "--host", "generic-cli", "--execution-mode", "isolated-headless", "--project", str(workspace),
         "--host-adapter-request-schema", "loopx_turn_host_request_v1",
-        "--host-command-json", json.dumps([sys.executable, "-m", "loopx.dsh_goal_mode",
+        "--host-command-json", json.dumps([sys.executable, "-m", "loopx.hosts.dsh",
             "--workspace", str(workspace), "--dsh-home", str(tmp_path / "dsh-home"), "--dsh-runner", str(runner)]),
         "--validation-command-json", json.dumps(validator),
         "--no-global-sync", "--timeout-seconds", "30"]

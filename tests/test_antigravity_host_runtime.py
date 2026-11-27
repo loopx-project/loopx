@@ -10,11 +10,11 @@ import sys
 
 import pytest
 
-from loopx.agy_goal_mode import (
+from loopx.hosts.agy import (
     build_antigravity_hooks_template,
     build_antigravity_sidecar_template,
 )
-from loopx.agy_goal_mode import host_runtime as runtime
+from loopx.hosts.agy import host_runtime as runtime
 from loopx.slash_command_install import (
     ANTIGRAVITY_HOOKS_MARKER_NAME,
     _merge_managed_hooks_json,
@@ -206,7 +206,7 @@ def test_stop_hook_recovers_a_non_ascii_event_under_a_locale_codec(tmp_path):
     expected = "继续授权的工作"
     script = f'''
 import sys
-from loopx.agy_goal_mode import host_runtime
+from loopx.hosts.agy import host_runtime
 
 def native_input(args, text):
     return ("frozen-input", "RUNNING", 1) if text == {expected!r} else None
@@ -252,7 +252,7 @@ def test_admission_decodes_utf8_core_output_under_a_locale_codec(tmp_path):
     script = '''
 import argparse
 import sys
-from loopx.agy_goal_mode import host_runtime
+from loopx.hosts.agy import host_runtime
 
 host_runtime._core_args = lambda args, command: [sys.executable, sys.argv[1]]
 assert host_runtime._admitted(argparse.Namespace()) is True

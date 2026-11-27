@@ -35,7 +35,7 @@ import uuid
 from ..chat import _turn_prompt, parse_agent_response
 from ..chat_agent import CodexChatAgentError, CodexChatTimeoutError
 from ..control_plane.turn_driver.host_binding import dsh_output_token_budget
-from ..dsh_goal_mode.turn_host_adapter import (
+from ..hosts.dsh.turn_host_adapter import (
     normalize_runner_outcome,
     resolve_dsh_home,
     run_dsh_turn,

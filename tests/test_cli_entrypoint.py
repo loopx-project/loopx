@@ -596,7 +596,7 @@ assert "loopx.todos" not in sys.modules
 assert "loopx.control_plane.todos.provider_update" not in sys.modules
 assert "loopx.control_plane.todos.provider_create" not in sys.modules
 assert "loopx.control_plane.turn_driver.executor" not in sys.modules
-assert "loopx.dsh_goal_mode.turn_host_adapter" not in sys.modules
+assert "loopx.hosts.dsh.turn_host_adapter" not in sys.modules
 assert "loopx.cli_commands.turn_managed_step" not in sys.modules
 assert "loopx.control_plane.quota.slot_accounting" not in sys.modules
 assert "loopx.control_plane.quota.void_commit" not in sys.modules

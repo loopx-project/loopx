@@ -85,7 +85,7 @@ wake with the native `schedule` tool only when quota allows more work.
 
 In-session `schedule(...)` timers suspend while Antigravity is running, so an
 OS reboot or Antigravity Language Server restart clears in-memory timers.
-`loopx.agy_goal_mode.host_runtime` provides two guarded subcommands for
+`loopx.hosts.agy.host_runtime` provides two guarded subcommands for
 surviving restarts without disturbing healthy `swarm_wait` or `schedule` sleeps:
 
 - `heartbeat-tick`: discovers the running Antigravity Language Server, reads
@@ -105,7 +105,7 @@ surviving restarts without disturbing healthy `swarm_wait` or `schedule` sleeps:
   unloaded or absent before removing the plist).
 
 ```bash
-python3 -E -P -m loopx.agy_goal_mode.host_runtime install-launchd \
+python3 -E -P -m loopx.hosts.agy.host_runtime install-launchd \
   --goal-id <goal-id> --agent-id <agent-id> --conversation-id <conversation-id> --execute
 ```
 

@@ -377,7 +377,7 @@ export const AGY_HOST_CAPABILITIES: HostHarnessCapabilities =
   defineHostHarnessCapabilities({
     host_id: "agy",
     integration_tier: "orchestrated_app",
-    adapter_module: "loopx.agy_goal_mode",
+    adapter_module: "loopx.hosts.agy",
     supported_capabilities: [],
     hook_events: ["Stop"],
     requires_utf8_stdio: true,
@@ -476,7 +476,7 @@ export const DSH_HOST_CAPABILITIES: HostHarnessCapabilities =
   defineHostHarnessCapabilities({
     host_id: "dsh",
     integration_tier: "in_tree_codesigned",
-    adapter_module: "loopx.dsh_goal_mode",
+    adapter_module: "loopx.hosts.dsh",
     supported_capabilities: [],
     hook_events: [],
     requires_utf8_stdio: true,

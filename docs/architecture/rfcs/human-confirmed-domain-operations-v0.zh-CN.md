@@ -491,7 +491,7 @@ Codex 宿主。其合成 File/SQLite 验证不证明真实确认、本机宿主�
 只接受 `codex-cli`。已配置的 `dsh` 执行器可以通过既有 runtime、凭据和模型
 profile 检查，同时在请求 operation tools 时返回
 `operation_transport_host_unsupported`。
-[`DSH Turn adapter`](../../../loopx/dsh_goal_mode/turn_host_adapter.py) 通过 SDK
+[`DSH Turn adapter`](../../../loopx/hosts/dsh/turn_host_adapter.py) 通过 SDK
 运行模型，没有安装上述受管 `loopx_operation` 连接。SDK 内置工具、模型回复
 成功、`unrestricted` 权限模式或已登记源线程不能代替原生身份 producer；开放
 更多 shell 工具也不会提供它。

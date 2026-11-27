@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 from . import __version__
-from .agy_goal_mode import antigravity_config_home
+from .hosts.agy import antigravity_config_home
 from .file_lock import exclusive_file_lock
 from .python_install_owner import interpreter_invocation
 from .skill_install_readback import (

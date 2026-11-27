@@ -134,7 +134,7 @@ LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Tur
 |---|---|---|---|
 | **Level 1 · `BoundaryCLI`** | 进程边界隔离的外部 CLI 宿主（`codex-cli`、`claude-code`、`opencode`、`pi`、`zcode`、`kiro-cli`、`kunluncode` 及 skill-facade CLI），LoopX 仅在 Turn 边界接入 | 保持无竞争日常轮次零仪式感（**`Quiet-Turn`**，零每 Turn 必填表单税），在阶段内保持原生 `KeepRaw` 前缀 KV-cache 稳定，并把前缀重定基与精简增量/快照重置推迟到显式静止的 **`EpochReset`** 边界 | [`loopx/host_loop_activation.py`](../../../loopx/host_loop_activation.py)、[`loopx/hosts/skill_facade.py`](../../../loopx/hosts/skill_facade.py)、`context_delivery.ts`（[历史工作集策略](history-working-set-context-policy-v0.zh-CN.md#51-单一投影-owner)） |
 | **Level 2 · `OrchestratedApp`** | 协调并发 lane 与交接的多单元 App、IDE、IM 及 `Controller–Worker` 编排器 | 强化 **`Subagent Scope`** 隔离（`collaboration_brief_v0`、有界 `remaining_work` 投影、按 worker 隔离的 workspace/lease 围栏与异步唤醒谓词），使长程 worker 执行不阻塞 controller 与用户交互，也不跨切片泄漏父上下文重力 | [`controller-executor-unified-contract-v0.zh-CN.md`](controller-executor-unified-contract-v0.zh-CN.md#router-controller-worker)、[`capable-manager-semantic-handoff-v0.zh-CN.md`](capable-manager-semantic-handoff-v0.zh-CN.md) |
-| **Level 3 · `InTree`** | 运行在 LoopX 进程内或直连进程传输的原生协同宿主（如 DeepSeek Harness 的 `loopx turn run-once --host dsh`） | 把受回执门控的 `FoldToReceipt` / `EpochReset` 队列压缩与回合启动时的确定性上下文/产物预取（**`FoldAndPrefetch`**）及类型化故障恢复（`loopx_turn_host_failure_v0`）融合在同一受控生命周期内 | [`loopx/dsh_goal_mode/turn_host_adapter.py`](../../../loopx/dsh_goal_mode/turn_host_adapter.py)、[`harness-selection-dsh-pi-v0.zh-CN.md`](harness-selection-dsh-pi-v0.zh-CN.md) |
+| **Level 3 · `InTree`** | 运行在 LoopX 进程内或直连进程传输的原生协同宿主（如 DeepSeek Harness 的 `loopx turn run-once --host dsh`） | 把受回执门控的 `FoldToReceipt` / `EpochReset` 队列压缩与回合启动时的确定性上下文/产物预取（**`FoldAndPrefetch`**）及类型化故障恢复（`loopx_turn_host_failure_v0`）融合在同一受控生命周期内 | [`loopx/hosts/dsh/turn_host_adapter.py`](../../../loopx/hosts/dsh/turn_host_adapter.py)、[`harness-selection-dsh-pi-v0.zh-CN.md`](harness-selection-dsh-pi-v0.zh-CN.md) |
 
 为避免各宿主适配器在顶层包中重复复制控制面逻辑：
 
@@ -146,8 +146,8 @@ LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Tur
   [统一契约的退役门禁](controller-executor-unified-contract-v0.zh-CN.md#3-具名退役清单与棘轮规则)与
   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)，将
   `9` 个顶层 `loopx/*_goal_mode/` 包迁入 `loopx/hosts/` 并收敛至共享 `HostHarnessCapabilities`
-  投影（已迁入 `4` 个：`hosts/kiro_cli`、`hosts/opencode`、`hosts/opencode2`、`hosts/pi`；
-  待迁移 `5` 个：`agy_goal_mode`、`claude_goal_mode`、`dsh_goal_mode`、`kunluncode_goal_mode`、
+  投影（已迁入 `6` 个：`hosts/agy`、`hosts/dsh`、`hosts/kiro_cli`、`hosts/opencode`、
+  `hosts/opencode2`、`hosts/pi`；待迁移 `3` 个：`claude_goal_mode`、`kunluncode_goal_mode`、
   `zcode_goal_mode`），仅在调用方切换完成前保留 CLI 兼容别名。
 - **漏斗验证门禁：** `BoundaryCLI`、`OrchestratedApp` 与 `InTree` 的协同优化（`Quiet-Turn`、
   `EpochReset`、`Subagent Scope`、`FoldAndPrefetch`）在通过[四层漏斗验证协议](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#55-四层漏斗验证协议)前均为架构与设计目标，不直接等同已测收益或默认切换。

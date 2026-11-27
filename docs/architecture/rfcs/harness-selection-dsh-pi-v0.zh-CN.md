@@ -186,7 +186,7 @@ DeepSeek-V4.1-Flash 世代的正式 ID `deepseek-flash`。该退役拼写仍被�
 LoopX 公开的 [Ark Managed Agent host contract](../../../loopx/ark_managed_agent_host.py)
 当前规定一次 Goal 激活、原生续跑、无外层 Turn driver。云端 governed-Turn adapter
 是**独立、尚未资格化、需显式选择的候选**，不能重新解释该 profile。DSH 的
-[有界 Turn adapter](../../../loopx/dsh_goal_mode/README.md)与
+[有界 Turn adapter](../../../loopx/hosts/dsh/README.md)与
 [同会话 plugin](../../../packages/dsh-loopx-plugin/README.md)也有不同续跑合同，资格
 不能互借。
 

@@ -50,7 +50,7 @@ _CALLER_ERROR_CAPS: dict[str, int] = {
     "loopx/capabilities/native_chat/antigravity_observations.py": 0,
     "loopx/capabilities/native_chat/antigravity_adapter.py": 0,
     "tests/test_antigravity_adapter_contract.py": 0,
-    "loopx/agy_goal_mode/host_runtime.py": 1,
+    "loopx/hosts/agy/host_runtime.py": 1,
     "loopx/capabilities/native_chat/model_settings.py": 2,
     "loopx/capabilities/native_chat/report_failure_proof.py": 6,
     "loopx/capabilities/native_chat/external_conversations.py": 37,
@@ -319,7 +319,7 @@ def test_antigravity_adapter_preserves_caller_typing_contracts() -> None:
         )
 
     for guarded_caller in (
-        "loopx/agy_goal_mode/host_runtime.py",
+        "loopx/hosts/agy/host_runtime.py",
         "loopx/capabilities/native_chat/model_settings.py",
         "loopx/capabilities/native_chat/report_failure_proof.py",
     ):

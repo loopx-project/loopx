@@ -286,7 +286,7 @@ workflows.
 The onboarding path uses Codex App and Codex CLI as its worked examples, because those two routes can be
 reproduced end to end. LoopX's agent type coverage is wider: `SUPPORTED_AGENT_TYPES` in
 `loopx/host_loop_activation.py` lists 21 types, and 9 of them have a dedicated goal-mode adapter package
-(`hosts/{kiro_cli,opencode,opencode2,pi}` consolidated under `loopx/hosts/`, alongside `claude_goal_mode`,
-`kunluncode_goal_mode`, `zcode_goal_mode`, `agy_goal_mode`, `dsh_goal_mode`, and others). Choosing two routes is a teaching
+(`hosts/{agy,dsh,kiro_cli,opencode,opencode2,pi}` consolidated under `loopx/hosts/`, alongside
+`claude_goal_mode`, `kunluncode_goal_mode`, `zcode_goal_mode`, and others). Choosing two routes is a teaching
 tradeoff, not a capability boundary: for another harness, follow its own adapter package and the
 [protocol documentation](/loopx/docs/reference/protocols/).

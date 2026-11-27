@@ -106,8 +106,8 @@ def test_python_and_typescript_vocabulary_and_canonical_descriptors_match() -> N
 
 
 def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
-    from loopx.agy_goal_mode import AGY_HOST_CAPABILITIES
-    from loopx.agy_goal_mode.host_runtime import (
+    from loopx.hosts.agy import AGY_HOST_CAPABILITIES
+    from loopx.hosts.agy.host_runtime import (
         AGY_HOST_CAPABILITIES as RUNTIME_AGY_HOST_CAPABILITIES,
     )
     from loopx.capabilities.native_chat.codex_adapter import (
@@ -130,8 +130,8 @@ def test_flagship_hosts_register_exact_shipped_capabilities() -> None:
     from loopx.control_plane.turn_driver.semantic_unit_hook import (
         CODEX_CLI_HOOKS_HOST_CAPABILITIES as SEMANTIC_HOOK_CODEX_CLI_HOOKS_CAPABILITIES,
     )
-    from loopx.dsh_goal_mode import DSH_HOST_CAPABILITIES
-    from loopx.dsh_goal_mode.turn_host_adapter import (
+    from loopx.hosts.dsh import DSH_HOST_CAPABILITIES
+    from loopx.hosts.dsh.turn_host_adapter import (
         DSH_HOST_CAPABILITIES as ADAPTER_DSH_HOST_CAPABILITIES,
     )
     from loopx.host_loop_activation import (
@@ -283,16 +283,16 @@ def test_capabilities_lookup_loads_flagship_adapters_lazily_without_cold_import_
     script = """
 import sys
 from loopx.hosts.capabilities import get_host_capabilities
-assert 'loopx.agy_goal_mode' not in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
 agy = get_host_capabilities('agy')
 assert agy is not None and agy.integration_tier == 'orchestrated_app'
-assert 'loopx.agy_goal_mode' in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.agy' in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
 """
     completed = subprocess.run(
@@ -341,9 +341,9 @@ assert host_supports_capability('codex-app-server', 'session_fork') is True
 assert 'loopx.hosts.codex_capabilities' in sys.modules
 for mod in heavy_modules[1:]:
     assert mod not in sys.modules, f"codex descriptor lookup pulled heavy module {mod}"
-assert 'loopx.agy_goal_mode' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -379,12 +379,12 @@ assert [item.host_id for item in results if item is not None] == list(targets)
 def test_importing_agy_package_registers_capabilities_without_loading_host_runtime() -> None:
     script = """
 import sys
-import loopx.agy_goal_mode as agy_pkg
+import loopx.hosts.agy as agy_pkg
 from loopx.hosts.capabilities import get_host_capabilities
 
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 assert get_host_capabilities('agy') is agy_pkg.AGY_HOST_CAPABILITIES
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 """
     completed = subprocess.run(
         [sys.executable, "-c", script],
@@ -421,9 +421,9 @@ with pytest.raises(ValueError, match='conflicting host capabilities registration
     register_host_capabilities(conflicting_claude)
 
 assert 'loopx.claude_goal_mode' in sys.modules
-assert 'loopx.agy_goal_mode' not in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
 import loopx.claude_goal_mode as claude_mod
 assert get_host_capabilities('claude') == claude_mod.CLAUDE_HOST_CAPABILITIES
@@ -450,9 +450,9 @@ override_claude = HostHarnessCapabilities(
 )
 registered = register_host_capabilities(override_claude, replace=True)
 assert registered == override_claude
-assert 'loopx.agy_goal_mode' not in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
 import loopx.claude_goal_mode as claude_mod
 assert claude_mod.CLAUDE_HOST_CAPABILITIES != override_claude
@@ -486,9 +486,9 @@ assert get_host_capabilities('claude') == authoritative
 assert register_host_capabilities(authoritative) == authoritative
 replaced = register_host_capabilities(conflicting_claude, replace=True)
 assert get_host_capabilities('claude') == replaced
-assert 'loopx.agy_goal_mode' not in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 """
     for script in (
         cold_conflict_script,
@@ -522,7 +522,7 @@ def test_concurrent_first_builtin_load_blocks_conflict_without_blocking_other_bu
     builtin_dsh = HostHarnessCapabilities(
         host_id="dsh",
         integration_tier="in_tree_codesigned",
-        adapter_module="loopx.dsh_goal_mode",
+        adapter_module="loopx.hosts.dsh",
         supported_capabilities=("native_context_budget",),
         hook_events=(),
         requires_utf8_stdio=True,
@@ -630,7 +630,7 @@ class _PauseBeforeDshRegistrationLoader(importlib.abc.Loader):
 
 class _PauseFailureMapFinder(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
-        if fullname != "loopx.dsh_goal_mode.host_failure_map":
+        if fullname != "loopx.hosts.dsh.host_failure_map":
             return None
         sys.meta_path.remove(self)
         spec = importlib.machinery.PathFinder.find_spec(fullname, path, target)
@@ -643,7 +643,7 @@ sys.meta_path.insert(0, _PauseFailureMapFinder())
 conflicting_dsh = HostHarnessCapabilities(
     host_id="dsh",
     integration_tier="in_tree_codesigned",
-    adapter_module="loopx.dsh_goal_mode",
+    adapter_module="loopx.hosts.dsh",
     supported_capabilities=("native_context_budget",),
     hook_events=(),
     requires_utf8_stdio=True,
@@ -660,7 +660,7 @@ t3_error = None
 def run_direct_import() -> None:
     global t1_error
     try:
-        importlib.import_module("loopx.dsh_goal_mode.turn_host_adapter")
+        importlib.import_module("loopx.hosts.dsh.turn_host_adapter")
     except BaseException as exc:  # pragma: no cover
         t1_error = exc
 
@@ -700,13 +700,13 @@ assert not t1.is_alive() and not t2.is_alive() and not t3.is_alive(), "ABBA dead
 assert t1_error is None, repr(t1_error)
 assert t2_error is None, repr(t2_error)
 
-import loopx.dsh_goal_mode.turn_host_adapter as turn_adapter
+import loopx.hosts.dsh.turn_host_adapter as turn_adapter
 assert t2_result == turn_adapter.DSH_HOST_CAPABILITIES
 assert get_host_capabilities("dsh") == turn_adapter.DSH_HOST_CAPABILITIES
 assert isinstance(t3_error, ValueError), repr(t3_error)
 assert "conflicting host capabilities registration for dsh" in str(t3_error)
-assert "loopx.agy_goal_mode" not in sys.modules
-assert "loopx.agy_goal_mode.host_runtime" not in sys.modules
+assert "loopx.hosts.agy" not in sys.modules
+assert "loopx.hosts.agy.host_runtime" not in sys.modules
 assert "loopx.claude_goal_mode" not in sys.modules
 """
     completed = subprocess.run(
@@ -981,7 +981,7 @@ def test_negative_cases_and_invariant_validation() -> None:
 
 
 def test_flagship_wiring_preserves_default_runtime_behavior(tmp_path: Path) -> None:
-    from loopx.agy_goal_mode import host_runtime as agy_runtime
+    from loopx.hosts.agy import host_runtime as agy_runtime
     from loopx.control_plane.turn_driver.host_binding import selected_turn_host
 
     args = Namespace(
@@ -1031,19 +1031,19 @@ from loopx.hosts.capabilities import (
     get_host_capabilities,
 )
 
-assert 'loopx.agy_goal_mode' not in sys.modules
+assert 'loopx.hosts.agy' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 
 isolated = HostCapabilitiesRegistry(builtin_modules=BUILTIN_HOST_ADAPTER_MODULES)
 agy = isolated.get('agy')
 assert agy is not None and agy.host_id == 'agy'
-assert 'loopx.agy_goal_mode' in sys.modules
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.hosts.agy' in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 assert 'loopx.claude_goal_mode' not in sys.modules
 assert 'loopx.hosts.codex_capabilities' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 assert get_host_capabilities('agy') == agy
 
 conflicting_claude = HostHarnessCapabilities(
@@ -1074,14 +1074,14 @@ assert isolated.get('claude') is not None
 assert isolated.get('codex-cli') is not None
 assert isolated.get('codex-app') is not None
 assert isolated.get('dsh') is not None
-assert 'loopx.agy_goal_mode.host_runtime' not in sys.modules
+assert 'loopx.hosts.agy.host_runtime' not in sys.modules
 """
     warm_and_override_isolated_script = """
 import sys
-import loopx.agy_goal_mode as agy_mod
+import loopx.hosts.agy as agy_mod
 import loopx.claude_goal_mode as claude_mod
 import loopx.hosts.codex_capabilities as codex_mod
-import loopx.dsh_goal_mode.turn_host_adapter as dsh_mod
+import loopx.hosts.dsh.turn_host_adapter as dsh_mod
 from loopx.hosts.capabilities import (
     BUILTIN_HOST_ADAPTER_MODULES,
     HostCapabilitiesRegistry,
