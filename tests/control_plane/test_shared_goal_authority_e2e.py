@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -452,7 +453,29 @@ def test_retired_prototype_rows_are_not_relabelled_as_native_evidence(capsys) ->
 
 def test_native_ladder_suites_remain_in_the_regular_typescript_test_job() -> None:
     package = json.loads((ladder.REPO_ROOT / "package.json").read_text())
-    assert "tests/control_plane_ts/*.test.ts" in package["scripts"]["test:control-plane"]
+    script = package["scripts"]["test:control-plane"]
+    if "scripts/run_control_plane_ts_tests.mjs" in script:
+        node = ladder.node_executable()
+        assert node is not None
+        probe = subprocess.run(
+            [
+                node,
+                "--input-type=module",
+                "-e",
+                (
+                    "import { buildNodeTestArgs } from './scripts/run_control_plane_ts_tests.mjs'; "
+                    "console.log(JSON.stringify(buildNodeTestArgs([])));"
+                ),
+            ],
+            cwd=ladder.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        selected_args = set(json.loads(probe.stdout))
+        assert {path.as_posix() for path in ladder.LOCAL_CONFORMANCE_TESTS.values()} <= selected_args
+    else:
+        assert "tests/control_plane_ts/*.test.ts" in script
     regular_suites = set(ladder.REPO_ROOT.glob("tests/control_plane_ts/*.test.ts"))
     assert {ladder.REPO_ROOT / path for path in ladder.LOCAL_CONFORMANCE_TESTS.values()} <= regular_suites
     assert {row.id for row in ladder.LADDER_ROWS if row.stage == "0"} == {

@@ -54,6 +54,23 @@ const envelope = JSON.parse(readFileSync(new URL(
 export const PRODUCTION_SCALE_FIXTURE_SCHEMA =
   "loopx_coordination_production_scale_fixture_v0";
 
+const fixtureTemplateCache = new Map<string, unknown>();
+
+function memoizeFixture<A extends unknown[], R>(
+  name: string,
+  build: (...args: A) => R,
+): (...args: A) => R {
+  return (...args: A): R => {
+    const key = JSON.stringify([name, ...args]);
+    let cached = fixtureTemplateCache.get(key);
+    if (cached === undefined) {
+      cached = build(...args);
+      fixtureTemplateCache.set(key, cached);
+    }
+    return structuredClone(cached) as R;
+  };
+}
+
 /**
  * One long retained history over the production-scale projection.
  *
@@ -239,10 +256,12 @@ function todoRecords(
   });
 }
 
-export function productionScaleCoordinationFixture(
-  goalId: string,
-  schema: AuthorityProjectionSchema = "legacy",
-): ProductionScaleCoordinationFixture {
+export const productionScaleCoordinationFixture = memoizeFixture(
+  "coordination",
+  (
+    goalId: string,
+    schema: AuthorityProjectionSchema = "legacy",
+  ): ProductionScaleCoordinationFixture => {
   if (envelope.schema_version !== PRODUCTION_SCALE_FIXTURE_SCHEMA) {
     throw new Error("production-scale fixture envelope schema mismatch");
   }
@@ -343,7 +362,7 @@ export function productionScaleCoordinationFixture(
       service_requires_factory: envelope.provider_matrix.service_requires_factory,
     },
   };
-}
+});
 
 export const PRODUCTION_SCALE_RETIRED_LEASE_COUNT = envelope.retired_lease_count;
 export const PRODUCTION_SCALE_REJECTED_DECISION_COUNT = envelope.rejected_standing_decision_count;
@@ -434,36 +453,39 @@ export interface ProductionScaleHistoryProjection {
  * The retained-history projection: production-scale record families and record
  * shapes at a size that keeps hundreds of retained transactions affordable.
  */
-export function productionScaleHistoryProjection(
-  goalId: string,
-  schema: AuthorityProjectionSchema = "legacy",
-): ProductionScaleHistoryProjection {
-  const full = productionScaleCoordinationFixture(goalId, "legacy");
-  const scope = PRODUCTION_SCALE_HISTORY.projection_scope;
-  const allTodos = full.projection.todos as Record<string, unknown>[];
-  const agentTodos = allTodos.filter(todo => todo.role === "agent");
-  // Retained history is dominated by live observations, so the slice keeps the
-  // open monitors first and fills the remaining record budget with the other
-  // agent Todos in fixture order.
-  const openMonitors = agentTodos.filter(todo =>
-    todo.status === "open" && todo.task_class === "continuous_monitor");
-  const todos = [...openMonitors, ...agentTodos.filter(todo => !openMonitors.includes(todo))]
-    .slice(0, scope.agent_todos)
-    .concat(allTodos.filter(todo => todo.role === "user").slice(0, scope.user_todos));
-  const todoIds = new Set(todos.map(todo => String(todo.todo_id)));
-  const leases = (full.projection.leases as Record<string, unknown>[])
-    .filter(lease => todoIds.has(String(lease.todo_id))).slice(0, scope.leases);
-  const projection = authorityProjectionFixture(goalId, todos, leases, "legacy",
-    {source_authority: "synthetic_production_scale_history_fixture", handoff_mode: "hard_lease"});
-  const monitor_ids = todos.filter(todo => todo.task_class === "continuous_monitor")
-    .map(todo => String(todo.todo_id));
-  if (monitor_ids.length === 0) {
-    throw new Error("production fixture history projection needs monitor Todos");
-  }
-  return {projection: schema === "legacy" ? projection : projectionFixtureAsSchema(projection, schema),
-    todo_ids: todos.map(todo => String(todo.todo_id)).sort(authorityUnicodeCompare),
-    monitor_ids: monitor_ids.sort(authorityUnicodeCompare)};
-}
+export const productionScaleHistoryProjection = memoizeFixture(
+  "history",
+  (
+    goalId: string,
+    schema: AuthorityProjectionSchema = "legacy",
+  ): ProductionScaleHistoryProjection => {
+    const full = productionScaleCoordinationFixture(goalId, "legacy");
+    const scope = PRODUCTION_SCALE_HISTORY.projection_scope;
+    const allTodos = full.projection.todos as Record<string, unknown>[];
+    const agentTodos = allTodos.filter(todo => todo.role === "agent");
+    // Retained history is dominated by live observations, so the slice keeps the
+    // open monitors first and fills the remaining record budget with the other
+    // agent Todos in fixture order.
+    const openMonitors = agentTodos.filter(todo =>
+      todo.status === "open" && todo.task_class === "continuous_monitor");
+    const todos = [...openMonitors, ...agentTodos.filter(todo => !openMonitors.includes(todo))]
+      .slice(0, scope.agent_todos)
+      .concat(allTodos.filter(todo => todo.role === "user").slice(0, scope.user_todos));
+    const todoIds = new Set(todos.map(todo => String(todo.todo_id)));
+    const leases = (full.projection.leases as Record<string, unknown>[])
+      .filter(lease => todoIds.has(String(lease.todo_id))).slice(0, scope.leases);
+    const projection = authorityProjectionFixture(goalId, todos, leases, "legacy",
+      {source_authority: "synthetic_production_scale_history_fixture", handoff_mode: "hard_lease"});
+    const monitor_ids = todos.filter(todo => todo.task_class === "continuous_monitor")
+      .map(todo => String(todo.todo_id));
+    if (monitor_ids.length === 0) {
+      throw new Error("production fixture history projection needs monitor Todos");
+    }
+    return {projection: schema === "legacy" ? projection : projectionFixtureAsSchema(projection, schema),
+      todo_ids: todos.map(todo => String(todo.todo_id)).sort(authorityUnicodeCompare),
+      monitor_ids: monitor_ids.sort(authorityUnicodeCompare)};
+  },
+);
 
 export interface ProductionScaleObservationStep {
   readonly operation_id: string;
@@ -506,179 +528,200 @@ export function productionScaleObservationStep(
 
 /** Exercise execution handover inside the same mixed-status, decision and
  * historical-lease population. The ordinary fixture's counts stay unchanged. */
-export function productionScaleLeaseLifecycleFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleCoordinationFixture(goalId, schema);
-  const scenario = envelope.lease_lifecycle;
-  const todos = fixture.projection.todos as Record<string, unknown>[];
-  const leases = fixture.projection.leases as Record<string, unknown>[];
-  const target = fixture.completion_todo_id;
-  const projection = authorityProjectionFixture(goalId,
-    todos.map(todo => todo.todo_id === target ? {...todo, claimed_by: null} : todo),
-    leases.map(lease => lease.todo_id === target ? {...lease, owner: scenario.owner,
-      idempotency_key: scenario.execution_key, version: scenario.version,
-      lease_epoch: scenario.lease_epoch} : lease), schema,
-    {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
-  return {projection, target, scenario, registered_agents: fixture.registered_agents};
-}
+export const productionScaleLeaseLifecycleFixture = memoizeFixture(
+  "lease_lifecycle",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleCoordinationFixture(goalId, schema);
+    const scenario = envelope.lease_lifecycle;
+    const todos = fixture.projection.todos as Record<string, unknown>[];
+    const leases = fixture.projection.leases as Record<string, unknown>[];
+    const target = fixture.completion_todo_id;
+    const projection = authorityProjectionFixture(goalId,
+      todos.map(todo => todo.todo_id === target ? {...todo, claimed_by: null} : todo),
+      leases.map(lease => lease.todo_id === target ? {...lease, owner: scenario.owner,
+        idempotency_key: scenario.execution_key, version: scenario.version,
+        lease_epoch: scenario.lease_epoch} : lease), schema,
+      {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
+    return {projection, target, scenario, registered_agents: fixture.registered_agents};
+  },
+);
 
 /** Claimed handover retains the complete mixed-status work graph. */
-export function productionScaleClaimTransferFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleLeaseLifecycleFixture(goalId, schema);
-  const target = (fixture.projection.todos as Record<string, unknown>[]).find(todo => todo.todo_id === fixture.target)!;
-  target.claimed_by = fixture.scenario.owner;
-  return {...fixture, projection: authorityProjectionFixture(goalId,
-    fixture.projection.todos as Record<string, unknown>[], fixture.projection.leases as Record<string, unknown>[],
-    schema, {handoff_mode: "hard_lease"})};
-}
+export const productionScaleClaimTransferFixture = memoizeFixture(
+  "claim_transfer",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleLeaseLifecycleFixture(goalId, schema);
+    const target = (fixture.projection.todos as Record<string, unknown>[]).find(todo => todo.todo_id === fixture.target)!;
+    target.claimed_by = fixture.scenario.owner;
+    return {...fixture, projection: authorityProjectionFixture(goalId,
+      fixture.projection.todos as Record<string, unknown>[], fixture.projection.leases as Record<string, unknown>[],
+      schema, {handoff_mode: "hard_lease"})};
+  },
+);
 
 /** Start without a target lease, with a live peer beyond the bounded display. */
-export function productionScaleLeaseAcquisitionFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleLeaseLifecycleFixture(goalId, schema);
-  const scenario = envelope.lease_acquisition;
-  const todos = fixture.projection.todos as Record<string, unknown>[];
-  const leases = fixture.projection.leases as Record<string, unknown>[];
-  const target = todos.find(todo => todo.todo_id === fixture.target)!;
-  const oldLease = leases.find(lease => lease.todo_id === fixture.target)!;
-  const projection = authorityProjectionFixture(goalId,
-    [...todos, {...target, todo_id: scenario.conflict_todo_id, text: "Independent scope holder beyond display limits"}],
-    [...leases.filter(lease => lease.todo_id !== fixture.target), {...oldLease,
-      todo_id: scenario.conflict_todo_id, owner: "agent-b", idempotency_key: "scope-holder",
-      write_scopes: ["independent-work/**"]}], schema,
-    {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
-  return {...fixture, projection, acquisition: scenario};
-}
+export const productionScaleLeaseAcquisitionFixture = memoizeFixture(
+  "lease_acquisition",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleLeaseLifecycleFixture(goalId, schema);
+    const scenario = envelope.lease_acquisition;
+    const todos = fixture.projection.todos as Record<string, unknown>[];
+    const leases = fixture.projection.leases as Record<string, unknown>[];
+    const target = todos.find(todo => todo.todo_id === fixture.target)!;
+    const oldLease = leases.find(lease => lease.todo_id === fixture.target)!;
+    const projection = authorityProjectionFixture(goalId,
+      [...todos, {...target, todo_id: scenario.conflict_todo_id, text: "Independent scope holder beyond display limits"}],
+      [...leases.filter(lease => lease.todo_id !== fixture.target), {...oldLease,
+        todo_id: scenario.conflict_todo_id, owner: "agent-b", idempotency_key: "scope-holder",
+        write_scopes: ["independent-work/**"]}], schema,
+      {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
+    return {...fixture, projection, acquisition: scenario};
+  },
+);
 
 /** A leased Monitor in the complete mixed work graph, with prior observations
  * and a waiting dependent. Only these target rows differ from the base fixture. */
-export function productionScaleLeasedMonitorFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleCoordinationFixture(goalId, schema);
-  const target = fixture.completion_todo_id;
-  const rows = fixture.projection.todos as Record<string, unknown>[];
-  const dependent = [...rows].reverse().find(todo => todo.role === "agent" && todo.status === "open" && todo.todo_id !== target)!;
-  const todos = rows.map(todo => todo.todo_id === target ? {...todo,
-    task_class: "continuous_monitor", target_key: "leased-public-watch", cadence: "1h",
-    material_change_generation: 4, consecutive_no_change: "2", result_hash: "previous-evidence",
-    last_checked_at: "2026-09-01T00:00:00Z", next_due_at: "2026-09-01T01:00:00Z"} :
-    todo.todo_id === dependent.todo_id ? {...todo, resume_when: `monitor_changed:${target}`,
-      resume_monitor_generation: 4} : todo);
-  const projection = authorityProjectionFixture(goalId, todos,
-    fixture.projection.leases as Record<string, unknown>[], schema,
-    {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
-  return {projection, target, dependent: String(dependent.todo_id),
-    actor: "agent-a", registered_agents: fixture.registered_agents,
-    now: new Date("2026-09-01T01:00:00Z"),
-    proof: {idempotency_key: fixture.completion_lease_idempotency_key,
-      expected_version: fixture.completion_lease_expected_version}};
-}
+export const productionScaleLeasedMonitorFixture = memoizeFixture(
+  "leased_monitor",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleCoordinationFixture(goalId, schema);
+    const target = fixture.completion_todo_id;
+    const rows = fixture.projection.todos as Record<string, unknown>[];
+    const dependent = [...rows].reverse().find(todo => todo.role === "agent" && todo.status === "open" && todo.todo_id !== target)!;
+    const todos = rows.map(todo => todo.todo_id === target ? {...todo,
+      task_class: "continuous_monitor", target_key: "leased-public-watch", cadence: "1h",
+      material_change_generation: 4, consecutive_no_change: "2", result_hash: "previous-evidence",
+      last_checked_at: "2026-09-01T00:00:00Z", next_due_at: "2026-09-01T01:00:00Z"} :
+      todo.todo_id === dependent.todo_id ? {...todo, resume_when: `monitor_changed:${target}`,
+        resume_monitor_generation: 4} : todo);
+    const projection = authorityProjectionFixture(goalId, todos,
+      fixture.projection.leases as Record<string, unknown>[], schema,
+      {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
+    return {projection, target, dependent: String(dependent.todo_id),
+      actor: "agent-a", registered_agents: fixture.registered_agents,
+      now: new Date("2026-09-01T01:00:00Z"),
+      proof: {idempotency_key: fixture.completion_lease_idempotency_key,
+        expected_version: fixture.completion_lease_expected_version}};
+  },
+);
 
 /** A completed watch and its waiting dependent within the full mixed graph. */
-export function productionScaleCompletedMonitorFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native", retainedLease: "absent" | "active" | "expired" | "released" = "absent") {
-  const fixture = productionScaleLeasedMonitorFixture(goalId, schema);
-  const todos = (fixture.projection.todos as Record<string, unknown>[]).map(todo =>
-    todo.todo_id === fixture.target ? {...todo, status: "done", done: true,
-      completed_at: "2026-09-01T00:30:00Z", no_followup: true,
-      completion_continuation: "no_followup", completion_recovery: "same_turn_terminal_closeout",
-      completion_turn_key: "retired-cycle", watch_only: "true"} : todo);
-  return {...fixture, projection: authorityProjectionFixture(goalId, todos,
-    (fixture.projection.leases as Record<string, unknown>[]).flatMap(lease => lease.todo_id !== fixture.target ? [lease] :
-      retainedLease === "absent" ? [] : [{...lease,
-        status: retainedLease === "released" ? "released" : "active",
-        ...(retainedLease === "expired" ? {expires_at: "2026-09-01T00:20:00Z"} : {}),
-        ...(retainedLease === "released" ? {released_at: "2026-09-01T00:30:00Z"} : {})}]),
-    schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: retainedLease === "absent" ? "soft_claim" : "hard_lease"})};
-}
+export const productionScaleCompletedMonitorFixture = memoizeFixture(
+  "completed_monitor",
+  (goalId: string, schema: AuthorityProjectionSchema = "native",
+    retainedLease: "absent" | "active" | "expired" | "released" = "absent") => {
+    const fixture = productionScaleLeasedMonitorFixture(goalId, schema);
+    const todos = (fixture.projection.todos as Record<string, unknown>[]).map(todo =>
+      todo.todo_id === fixture.target ? {...todo, status: "done", done: true,
+        completed_at: "2026-09-01T00:30:00Z", no_followup: true,
+        completion_continuation: "no_followup", completion_recovery: "same_turn_terminal_closeout",
+        completion_turn_key: "retired-cycle", watch_only: "true"} : todo);
+    return {...fixture, projection: authorityProjectionFixture(goalId, todos,
+      (fixture.projection.leases as Record<string, unknown>[]).flatMap(lease => lease.todo_id !== fixture.target ? [lease] :
+        retainedLease === "absent" ? [] : [{...lease,
+          status: retainedLease === "released" ? "released" : "active",
+          ...(retainedLease === "expired" ? {expires_at: "2026-09-01T00:20:00Z"} : {}),
+          ...(retainedLease === "released" ? {released_at: "2026-09-01T00:30:00Z"} : {})}]),
+      schema, {source_authority: "synthetic_production_scale_fixture", handoff_mode: retainedLease === "absent" ? "soft_claim" : "hard_lease"})};
+  },
+);
 
 /** User decisions act on an exact dependent inside the full mixed graph.
  * The second blocker is deliberately beyond the compact display population. */
-export function productionScaleUserCompletionFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native", otherBlocker = false) {
-  const fixture = productionScaleCoordinationFixture(goalId, schema);
-  const scenario = envelope.semantic_cases.user_completion;
-  const todos = structuredClone(fixture.projection.todos) as Record<string, unknown>[];
-  const target = todos.find(todo => todo.role === "agent" && todo.status === "blocked")!;
-  const source = todos.find(todo => todo.role === "user" && todo.status === "open")!;
-  const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: scenario.scope_key};
-  Object.assign(target, {task_class: "advancement_task", claimed_by: "agent-a", required_decision_scopes: [scope],
-    decision_scope_outcomes: [{schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
-      decision_scope: scope, source_todo_id: "todo_fixture_prior_decision"}]});
-  Object.assign(source, {task_class: "user_gate", bound_agent: "agent-a", blocks_agent: "agent-a",
-    claimed_by: "agent-a", decision_scope: scope, unblocks_todo_id: target.todo_id});
-  if (otherBlocker) todos.push({...source, todo_id: scenario.other_blocker_id, text: "Independent remaining owner decision"});
-  return {projection: authorityProjectionFixture(goalId, todos, fixture.projection.leases as Record<string, unknown>[],
-    schema, {handoff_mode: "hard_lease"}), source: String(source.todo_id), target: String(target.todo_id),
-    scope, registered_agents: fixture.registered_agents};
-}
+export const productionScaleUserCompletionFixture = memoizeFixture(
+  "user_completion",
+  (goalId: string, schema: AuthorityProjectionSchema = "native", otherBlocker = false) => {
+    const fixture = productionScaleCoordinationFixture(goalId, schema);
+    const scenario = envelope.semantic_cases.user_completion;
+    const todos = structuredClone(fixture.projection.todos) as Record<string, unknown>[];
+    const target = todos.find(todo => todo.role === "agent" && todo.status === "blocked")!;
+    const source = todos.find(todo => todo.role === "user" && todo.status === "open")!;
+    const scope = {schema_version: "decision_scope_v0", kind: "direction", granularity: "action", scope_key: scenario.scope_key};
+    Object.assign(target, {task_class: "advancement_task", claimed_by: "agent-a", required_decision_scopes: [scope],
+      decision_scope_outcomes: [{schema_version: "todo_decision_scope_outcome_v0", outcome: "reject",
+        decision_scope: scope, source_todo_id: "todo_fixture_prior_decision"}]});
+    Object.assign(source, {task_class: "user_gate", bound_agent: "agent-a", blocks_agent: "agent-a",
+      claimed_by: "agent-a", decision_scope: scope, unblocks_todo_id: target.todo_id});
+    if (otherBlocker) todos.push({...source, todo_id: scenario.other_blocker_id, text: "Independent remaining owner decision"});
+    return {projection: authorityProjectionFixture(goalId, todos, fixture.projection.leases as Record<string, unknown>[],
+      schema, {handoff_mode: "hard_lease"}), source: String(source.todo_id), target: String(target.todo_id),
+      scope, registered_agents: fixture.registered_agents};
+  },
+);
 
 /** Complete graph evidence must survive archive, selection and display limits. */
-export function productionScaleSuccessionFixture(goalId: string, schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleCoordinationFixture(goalId, schema);
-  const projection = structuredClone(fixture.projection);
-  const todos = projection.todos as Record<string, unknown>[];
-  const cases = envelope.semantic_cases.succession as Record<string, string>;
-  const base = todos.find(todo => todo.role === "agent")!;
-  const source = (key: string, fields: Record<string, unknown> = {}): Record<string, unknown> => ({...base,
-    todo_id: cases[key], text: "Verify the continuation relationship", index: todos.length + Object.keys(cases).indexOf(key) + 1,
-    status: "done", done: true, archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task",
-    successor_todo_ids: [], superseded_by: null, resume_when: null, unblocks_todo_id: null,
-    no_followup: false, excluded_agents: [], ...fields});
-  const added = [source("inferred_source"), source("archived_target", {archive_state: "archive",
-    resume_when: `todo_done:${cases.inferred_source}`, no_followup: true}),
-    source("missing_source", {successor_todo_ids: ["todo_missing_continuation"]}),
-    source("self_source", {successor_todo_ids: [cases.self_source]}),
-    source("handoff_source", {excluded_agents: ["agent-b"], unblocks_todo_id: cases.inferred_source,
-      successor_todo_ids: [cases.explicit_target]}),
-    source("explicit_target", {status: "open", done: false}),
-    source("closed_source", {no_followup: true})];
-  for (const record of added) {
-    Reflect.deleteProperty(record, "material_change_generation");
-    if (schema === "native") {Reflect.deleteProperty(record, "index"); Reflect.deleteProperty(record, "source_section");}
-    else if (record.archive_state === "archive") record.source_section = "Completed Work Archive";
-  }
-  todos.push(...added);
-  todos.sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
-  const readModel = projection.todo_read_model as Record<string, unknown>;
-  readModel.todo_count = todos.length;
-  readModel.records_sha256 = canonicalAuthoritySha256(todos);
-  return {projection, cases};
-}
+export const productionScaleSuccessionFixture = memoizeFixture(
+  "succession",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleCoordinationFixture(goalId, schema);
+    const projection = structuredClone(fixture.projection);
+    const todos = projection.todos as Record<string, unknown>[];
+    const cases = envelope.semantic_cases.succession as Record<string, string>;
+    const base = todos.find(todo => todo.role === "agent")!;
+    const source = (key: string, fields: Record<string, unknown> = {}): Record<string, unknown> => ({...base,
+      todo_id: cases[key], text: "Verify the continuation relationship", index: todos.length + Object.keys(cases).indexOf(key) + 1,
+      status: "done", done: true, archive_state: "active", claimed_by: "agent-a", task_class: "advancement_task",
+      successor_todo_ids: [], superseded_by: null, resume_when: null, unblocks_todo_id: null,
+      no_followup: false, excluded_agents: [], ...fields});
+    const added = [source("inferred_source"), source("archived_target", {archive_state: "archive",
+      resume_when: `todo_done:${cases.inferred_source}`, no_followup: true}),
+      source("missing_source", {successor_todo_ids: ["todo_missing_continuation"]}),
+      source("self_source", {successor_todo_ids: [cases.self_source]}),
+      source("handoff_source", {excluded_agents: ["agent-b"], unblocks_todo_id: cases.inferred_source,
+        successor_todo_ids: [cases.explicit_target]}),
+      source("explicit_target", {status: "open", done: false}),
+      source("closed_source", {no_followup: true})];
+    for (const record of added) {
+      Reflect.deleteProperty(record, "material_change_generation");
+      if (schema === "native") {Reflect.deleteProperty(record, "index"); Reflect.deleteProperty(record, "source_section");}
+      else if (record.archive_state === "archive") record.source_section = "Completed Work Archive";
+    }
+    todos.push(...added);
+    todos.sort((left, right) => authorityUnicodeCompare(String(left.todo_id), String(right.todo_id)));
+    const readModel = projection.todo_read_model as Record<string, unknown>;
+    readModel.todo_count = todos.length;
+    readModel.records_sha256 = canonicalAuthoritySha256(todos);
+    return {projection, cases};
+  },
+);
 
 /** Retained User addressing in the complete graph, including legacy claims.
  * Selection must not derive completeness from the short display population. */
-export function productionScaleConsumerScopeFixture(goalId: string, schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleSuccessionFixture(goalId, schema);
-  const extra = [
-    {todo_id: "todo_scope_peer_gate", task_class: "user_gate", claimed_by: "agent-b"},
-    {todo_id: "todo_scope_peer_action", task_class: "user_action", claimed_by: "agent-b"},
-    {todo_id: "todo_scope_explicit_gate", task_class: "user_gate", claimed_by: "agent-b", blocks_agent: "agent-a"},
-    {todo_id: "todo_scope_explicit_action", task_class: "user_action", claimed_by: "agent-b", bound_agent: "agent-a"},
-    {todo_id: "todo_scope_global", task_class: "user_gate", claimed_by: "agent-b", global_gate: true},
-  ].map((item, index) => ({role: "user", status: "open", done: false, archive_state: "active",
-    text: "Review a synthetic result", source_section: "User Todo", index: 2000 + index, ...item}));
-  return {...fixture, projection: authorityProjectionFixture(goalId,
-    [...fixture.projection.todos as Record<string, unknown>[], ...extra],
-    fixture.projection.leases as Record<string, unknown>[], schema, {handoff_mode: "soft_claim"})};
-}
+export const productionScaleConsumerScopeFixture = memoizeFixture(
+  "consumer_scope",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleSuccessionFixture(goalId, schema);
+    const extra = [
+      {todo_id: "todo_scope_peer_gate", task_class: "user_gate", claimed_by: "agent-b"},
+      {todo_id: "todo_scope_peer_action", task_class: "user_action", claimed_by: "agent-b"},
+      {todo_id: "todo_scope_explicit_gate", task_class: "user_gate", claimed_by: "agent-b", blocks_agent: "agent-a"},
+      {todo_id: "todo_scope_explicit_action", task_class: "user_action", claimed_by: "agent-b", bound_agent: "agent-a"},
+      {todo_id: "todo_scope_global", task_class: "user_gate", claimed_by: "agent-b", global_gate: true},
+    ].map((item, index) => ({role: "user", status: "open", done: false, archive_state: "active",
+      text: "Review a synthetic result", source_section: "User Todo", index: 2000 + index, ...item}));
+    return {...fixture, projection: authorityProjectionFixture(goalId,
+      [...fixture.projection.todos as Record<string, unknown>[], ...extra],
+      fixture.projection.leases as Record<string, unknown>[], schema, {handoff_mode: "soft_claim"})};
+  },
+);
 
 /** Capability-owned bucket inside a full mixed graph, including a historical
  * same-target row that must never shadow the current Monitor. */
-export function productionScaleGroupedMonitorFixture(goalId: string,
-  schema: AuthorityProjectionSchema = "native") {
-  const fixture = productionScaleCoordinationFixture(goalId, schema);
-  const targetKey = "github-pr-state-example--repo-checks-pending";
-  const monitor = {schema_version: "todo_domain_record_v0", todo_id: "todo_grouped_monitor",
-    role: "agent", status: "open", done: false, archive_state: "active", text: "Watch the pending PR bucket",
-    task_class: "continuous_monitor", action_kind: "issue_fix_pr_state_checks_pending", target_key: targetKey,
-    claimed_by: "agent-a", cadence: "30m", watch_only: "true", last_checked_at: "2026-09-01T00:00:00Z",
-    result_hash: "previous-membership", material_change_generation: 4, required_write_scopes: []};
-  const projection = authorityProjectionFixture(goalId, [...fixture.projection.todos as Record<string, unknown>[],
-    monitor, {...monitor, todo_id: "todo_grouped_history", status: "done", done: true, archive_state: "archive"}],
-    fixture.projection.leases as Record<string, unknown>[], schema,
-    {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
-  return {projection, target: monitor.todo_id, targetKey, actor: "agent-a", registered_agents: fixture.registered_agents,
-    now: new Date("2026-09-01T01:00:00Z")};
-}
+export const productionScaleGroupedMonitorFixture = memoizeFixture(
+  "grouped_monitor",
+  (goalId: string, schema: AuthorityProjectionSchema = "native") => {
+    const fixture = productionScaleCoordinationFixture(goalId, schema);
+    const targetKey = "github-pr-state-example--repo-checks-pending";
+    const monitor = {schema_version: "todo_domain_record_v0", todo_id: "todo_grouped_monitor",
+      role: "agent", status: "open", done: false, archive_state: "active", text: "Watch the pending PR bucket",
+      task_class: "continuous_monitor", action_kind: "issue_fix_pr_state_checks_pending", target_key: targetKey,
+      claimed_by: "agent-a", cadence: "30m", watch_only: "true", last_checked_at: "2026-09-01T00:00:00Z",
+      result_hash: "previous-membership", material_change_generation: 4, required_write_scopes: []};
+    const projection = authorityProjectionFixture(goalId, [...fixture.projection.todos as Record<string, unknown>[],
+      monitor, {...monitor, todo_id: "todo_grouped_history", status: "done", done: true, archive_state: "archive"}],
+      fixture.projection.leases as Record<string, unknown>[], schema,
+      {source_authority: "synthetic_production_scale_fixture", handoff_mode: "hard_lease"});
+    return {projection, target: monitor.todo_id, targetKey, actor: "agent-a", registered_agents: fixture.registered_agents,
+      now: new Date("2026-09-01T01:00:00Z")};
+  },
+);

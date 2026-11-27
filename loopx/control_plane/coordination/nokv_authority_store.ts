@@ -202,6 +202,8 @@ function validStoreIdentity(value: string, workbench: string): boolean {
   return value.startsWith(prefix) && HEX_128_PATTERN.test(value.slice(prefix.length));
 }
 
+const FATAL_UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
 /** Stage 2A candidate. No runtime constructs this provider by default. */
 export class NoKVAuthorityStore implements AuthorityStore {
   readonly providerKind = "nokv" as const;
@@ -267,7 +269,7 @@ export class NoKVAuthorityStore implements AuthorityStore {
       const generation = requireGeneration(result.generation, "NoKV read generation");
       let raw: string;
       try {
-        raw = new TextDecoder("utf-8", { fatal: true }).decode(result.bytes);
+        raw = FATAL_UTF8_DECODER.decode(result.bytes);
       } catch (error) {
         throw new AuthorityStoreProtocolError(
           `NoKV authority store bytes are not UTF-8: ${

@@ -94,21 +94,42 @@ test("JSON-lines transport cannot bypass its open handshake", () => {
   assert.equal(processStarted, false);
 });
 
-registerAuthorityStoreConformance("NoKV JSON-lines process", async (t) => {
-  const transport = await openSdkHelper();
-  t.after(async () => await transport.close());
-  return {
-    store: new NoKVAuthorityStore(transport, {
-      tenant_id: "tenant-a",
-      goal_id: "goal-a",
-      workbench: "authority-workbench",
-    }),
-    contender: new NoKVAuthorityStore(transport, {
-      tenant_id: "tenant-a",
-      goal_id: "goal-a",
-      workbench: "authority-workbench",
-    }),
-  };
+const CONFORMANCE_POOL_SIZE = 6;
+const idleConformanceTransports: NoKVJsonLinesTransport[] = [];
+const openedConformanceTransports: NoKVJsonLinesTransport[] = [];
+let conformanceCounter = 0;
+
+test.suite("NoKV JSON-lines process conformance", { concurrency: CONFORMANCE_POOL_SIZE }, () => {
+  test.after(async () => {
+    const transports = openedConformanceTransports.splice(0);
+    idleConformanceTransports.length = 0;
+    await Promise.all(transports.map((transport) => transport.close()));
+  });
+
+  registerAuthorityStoreConformance("NoKV JSON-lines process", async (t) => {
+    let transport = idleConformanceTransports.pop();
+    if (transport === undefined) {
+      transport = await openSdkHelper();
+      openedConformanceTransports.push(transport);
+    }
+    const leased = transport;
+    t.after(() => {
+      idleConformanceTransports.push(leased);
+    });
+    const tenantId = `tenant-conformance-${conformanceCounter++}`;
+    return {
+      store: new NoKVAuthorityStore(leased, {
+        tenant_id: tenantId,
+        goal_id: "goal-a",
+        workbench: "authority-workbench",
+      }),
+      contender: new NoKVAuthorityStore(leased, {
+        tenant_id: tenantId,
+        goal_id: "goal-a",
+        workbench: "authority-workbench",
+      }),
+    };
+  });
 });
 
 test("JSON-lines transport starts once and reuses the helper process", async (t) => {
