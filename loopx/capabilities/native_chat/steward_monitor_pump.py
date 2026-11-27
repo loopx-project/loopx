@@ -4,12 +4,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+import errno
+import hashlib
+import json
 import logging
+from pathlib import Path
+import re
 import time
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
+from ...registry import registry_goals
 from .steward_monitor_turns import (
     FOLLOWUP_TARGET_PREFIX,
     StewardControllerProtocol,
@@ -18,9 +25,13 @@ from .steward_monitor_turns import (
     _coerce_dict,
     monitor_turn_id,
     resolve_advancement_turn_id,
+    steward_background_session_id,
 )
 
 _LOG = logging.getLogger(__name__)
+_DEFAULT_POLL_INTERVAL_SECONDS = 60.0
+_MAX_FAILURE_BACKOFF_SECONDS = 3600.0
+_SAFE_ERROR_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class _CancelCheck(Protocol):
@@ -31,9 +42,19 @@ class _BindingsReaderProtocol(Protocol):
     def read(self) -> Mapping[str, object]: ...
 
 
-def _ensure_float_cache(
+class _HashDigest(Protocol):
+    def update(self, data: bytes, /) -> None: ...
+
+
+_WitnessRecord = tuple[str, tuple[Path, ...]]
+_StatVersion = tuple[int, int, int, int]
+_RegistryCacheEntry = tuple[_StatVersion | None, dict[str, str], str | None]
+_V = TypeVar("_V")
+
+
+def _ensure_dict_cache(
     controller: StewardControllerProtocol, attr: str
-) -> dict[str, float]:
+) -> dict[str, _V]:
     cache = getattr(controller, attr, None)
     if not isinstance(cache, dict):
         cache = {}
@@ -41,26 +62,288 @@ def _ensure_float_cache(
     return cache
 
 
-def _ensure_bool_cache(
-    controller: StewardControllerProtocol, attr: str
-) -> dict[str, bool]:
-    cache = getattr(controller, attr, None)
-    if not isinstance(cache, dict):
-        cache = {}
-        setattr(controller, attr, cache)
-    return cache
+def _failure_key(lane: str, owner_id: str, item_id: str = "") -> str:
+    return f"failure.{lane}.{owner_id}.{item_id}" if item_id else f"failure.{lane}.{owner_id}"
 
 
-def _report_config_for_goal(
-    controller: StewardControllerProtocol, goal_id: str
-) -> Mapping[str, object]:
+_SESSION_FAILURE_LANES = (
+    "session.admit",
+    "watch.session",
+    "calendar.session",
+    "report.session",
+)
+
+
+def _exception_diagnostics(stage: str, exc: BaseException) -> str:
+    """Build structured, path-free diagnostic metadata from allowlisted fields only."""
+    parts = [f"stage={stage}", f"error={type(exc).__name__}"]
+    if isinstance(exc, OSError) and isinstance(exc.errno, int):
+        parts.append(f"errno={errno.errorcode.get(exc.errno, str(exc.errno))}")
+    raw_code = getattr(exc, "error_code", None)
+    if isinstance(raw_code, str) and _SAFE_ERROR_CODE_RE.fullmatch(raw_code):
+        parts.append(f"code={raw_code}")
+    return ", ".join(parts)
+
+
+def _update_path_stat_digest(digest: _HashDigest, label: str, path: object) -> None:
+    if not isinstance(path, Path):
+        return
+    digest.update(label.encode("utf-8"))
+    try:
+        st = path.stat()
+        digest.update(f":{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_size}:{st.st_ino};".encode("utf-8"))
+    except OSError:
+        digest.update(b":missing;")
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        default=lambda item: dict(item) if isinstance(item, Mapping) else str(item),
+    ).encode("utf-8")
+
+
+def _canonical_json_digest(digest: _HashDigest, label: str, value: object) -> None:
+    digest.update(label.encode("utf-8"))
+    digest.update(b":")
+    digest.update(_canonical_json_bytes(value))
+    digest.update(b";")
+
+
+def _registry_goal_witness_token(
+    controller: StewardControllerProtocol, registry_path: Path, goal_id: str
+) -> str:
+    try:
+        st = registry_path.stat()
+        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        stat_version = None
+    except OSError as exc:
+        return f"stat_err:{type(exc).__name__}"
+    reg_cache: dict[str, _RegistryCacheEntry] = _ensure_dict_cache(
+        controller, "_steward_monitor_registry_cache"
+    )
+    key = str(registry_path)
+    cached = reg_cache.get(key)
+    if cached is not None and cached[0] == stat_version:
+        _, goal_digests, error_tag = cached
+        return error_tag if error_tag is not None else goal_digests.get(goal_id, "missing")
+    if len(reg_cache) >= 8 and key not in reg_cache:
+        reg_cache.clear()
+    if stat_version is None:
+        reg_cache[key] = (None, {}, None)
+        return "missing"
+    try:
+        registry = load_registry(registry_path)
+        goal_digests = {
+            str(goal["id"]): hashlib.sha256(_canonical_json_bytes(goal)).hexdigest()
+            for goal in registry_goals(registry)
+            if isinstance(goal, Mapping) and goal.get("id") is not None
+        }
+        reg_cache[key] = (stat_version, goal_digests, None)
+        return goal_digests.get(goal_id, "missing")
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        error_tag = f"err:{type(exc).__name__}"
+        reg_cache[key] = (stat_version, {}, error_tag)
+        return error_tag
+
+
+def _collect_session_turn_targets(
+    controller: StewardControllerProtocol, session_ids: Sequence[str], exc: BaseException | None = None
+) -> tuple[Path, ...]:
+    """Capture only active/failing turn paths at failure time (never scan historical turns)."""
+    sessions_root = getattr(controller.store, "sessions_root", None)
+    if not isinstance(sessions_root, Path):
+        return ()
+    targets: set[Path] = set()
+    failed_map = getattr(controller.store, "_last_read_error_paths", None)
+    exc_name = getattr(exc, "filename", None) if isinstance(exc, OSError) else None
+    exc_path = Path(exc_name) if isinstance(exc_name, (str, Path)) else None
+    for sid in session_ids:
+        if not sid:
+            continue
+        turns_dir = sessions_root / sid / "turns"
+        failed = failed_map.pop(sid, None) if isinstance(failed_map, dict) else None
+        if isinstance(failed, Path):
+            targets.add(failed)
+        if exc_path is not None and exc_path.parent == turns_dir:
+            targets.add(exc_path)
+        try:
+            raw = json.loads((sessions_root / sid / "session.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = None
+        if isinstance(raw, Mapping):
+            active_tid = raw.get("active_turn_id")
+            if (isinstance(active_tid, str) and active_tid and "/" not in active_tid and "\\" not in active_tid
+                    and Path(active_tid).name == active_tid and active_tid not in {".", ".."}):
+                targets.add(turns_dir / f"{active_tid}.json")
+    return tuple(sorted(targets))
+
+
+def _session_storage_witness(
+    controller: StewardControllerProtocol, session_ids: Sequence[str], *,
+    goal_id: str = "", binding: Mapping[str, object] | None = None, turn_targets: Sequence[Path] = (),
+) -> str:
+    """Compute an O(1) target-scoped witness so on-disk repairs invalidate backoff immediately."""
+    digest = hashlib.sha256()
+    sessions_root = getattr(controller.store, "sessions_root", None)
+    if isinstance(sessions_root, Path):
+        for sid in session_ids:
+            if not sid:
+                continue
+            sdir = sessions_root / sid
+            _update_path_stat_digest(digest, f"session:{sid}", sdir / "session.json")
+            _update_path_stat_digest(digest, f"turns_dir:{sid}", sdir / "turns")
+    for target in turn_targets:
+        _update_path_stat_digest(digest, f"turn_target:{target.name}", target)
+    registry_path = getattr(controller, "registry_path", None)
+    if isinstance(registry_path, Path) and goal_id:
+        token = _registry_goal_witness_token(controller, registry_path, goal_id)
+        digest.update(f"registry_goal:{goal_id}:{token};".encode("utf-8"))
+    if binding is not None:
+        _canonical_json_digest(digest, "binding", binding)
+    coord_root = getattr(controller, "coordination_runtime_root", None)
+    if isinstance(coord_root, Path) and goal_id:
+        gdir = coord_root / "goals" / goal_id
+        for label, target in (
+            ("goal_dir", gdir), ("goal_sqlite", gdir / "state.sqlite3"),
+            ("goal_sqlite_wal", gdir / "state.sqlite3-wal"), ("goal_auth", gdir / "authority.sqlite"),
+            ("goal_auth_wal", gdir / "authority.sqlite-wal"),
+        ):
+            _update_path_stat_digest(digest, label, target)
+    return digest.hexdigest()
+
+
+def _failure_active(cache: dict[str, float], failure_key: str, now_mono: float) -> bool:
+    return bool(failure_key) and cache.get(failure_key, 0.0) > now_mono
+
+
+def _witness_backoff_active(
+    controller: StewardControllerProtocol, cache: dict[str, float], witnesses: dict[str, _WitnessRecord],
+    failure_key: str, session_ids: Sequence[str], now_mono: float, *,
+    goal_id: str = "", binding: Mapping[str, object] | None = None, throttle_key: str = "",
+) -> bool:
+    if not _failure_active(cache, failure_key, now_mono):
+        return False
+    stored = witnesses.get(failure_key)
+    if stored is None:
+        return True
+    current = (
+        _session_storage_witness(controller, session_ids, goal_id=goal_id, binding=binding, turn_targets=stored[1])
+        if session_ids or binding is not None else ""
+    )
+    if stored[0] and current != stored[0]:
+        cache.pop(failure_key, None)
+        if throttle_key:
+            cache.pop(throttle_key, None)
+        witnesses.pop(failure_key, None)
+        return False
+    return True
+
+
+def _record_session_failure(
+    controller: StewardControllerProtocol, cache: dict[str, float], failures: dict[str, tuple[int, str]],
+    witnesses: dict[str, _WitnessRecord], failure_key: str, base_message: str, exc: BaseException, *,
+    stage: str, now_mono: float, session_ids: Sequence[str],
+    goal_id: str = "", binding: Mapping[str, object] | None = None, throttle_key: str = "",
+) -> None:
+    if throttle_key:
+        cache.pop(throttle_key, None)
+    targets = _collect_session_turn_targets(controller, session_ids, exc)
+    witness = (
+        _session_storage_witness(controller, session_ids, goal_id=goal_id, binding=binding, turn_targets=targets)
+        if session_ids or binding is not None else ""
+    )
+    _record_failure(
+        cache, failures, failure_key, base_message, exc, stage=stage, now_mono=now_mono,
+        witnesses=witnesses, witness=(witness, targets) if witness else None,
+    )
+
+
+def _any_session_failure_active(
+    cache: dict[str, float], session_id: str, now_mono: float
+) -> bool:
+    return any(
+        _failure_active(cache, _failure_key(lane, session_id), now_mono)
+        for lane in _SESSION_FAILURE_LANES
+    )
+
+
+def _clear_failure(
+    cache: dict[str, float],
+    failures: dict[str, tuple[int, str]],
+    failure_key: str,
+    *,
+    witnesses: dict[str, _WitnessRecord] | None = None,
+) -> None:
+    if not failure_key:
+        return
+    cache.pop(failure_key, None)
+    failures.pop(failure_key, None)
+    if witnesses is not None:
+        witnesses.pop(failure_key, None)
+
+
+def _record_failure(
+    cache: dict[str, float],
+    failures: dict[str, tuple[int, str]],
+    failure_key: str,
+    base_message: str,
+    exc: BaseException,
+    *,
+    stage: str,
+    now_mono: float,
+    witnesses: dict[str, _WitnessRecord] | None = None,
+    witness: _WitnessRecord | None = None,
+) -> float:
+    detail = _exception_diagnostics(stage, exc)
+    count, prev_sig = failures.get(failure_key, (0, "")) if failure_key else (0, "")
+    next_count = count + 1
+    delay: float = float(
+        min(
+            _MAX_FAILURE_BACKOFF_SECONDS,
+            _DEFAULT_POLL_INTERVAL_SECONDS * (1 << min(6, next_count - 1)),
+        )
+    )
+    if failure_key:
+        failures[failure_key] = (next_count, detail)
+        cache[failure_key] = max(cache.get(failure_key, 0.0), now_mono + delay)
+        if witnesses is not None and witness is not None:
+            witnesses[failure_key] = witness
+    if detail != prev_sig:
+        _LOG.warning("%s (%s)", base_message, detail)
+    else:
+        _LOG.debug("%s (suppressed repeat #%d: %s)", base_message, next_count, detail)
+    return delay
+
+
+def clear_steward_monitor_check_hints(
+    controller: StewardControllerProtocol, owner_key: str
+) -> None:
+    """Reset ephemeral pump throttle and failure-backoff hints for one owner."""
+    exact_keys = {
+        owner_key,
+        f"session.{owner_key}",
+        *(_failure_key(lane, owner_key) for lane in ("binding", "report", *_SESSION_FAILURE_LANES)),
+    }
+    prefixes = (f"failure.monitor.{owner_key}.", f"failure.advancement.{owner_key}.")
+    for attr in (
+        "_steward_monitor_next_check",
+        "_steward_monitor_failure_state",
+        "_steward_monitor_failure_witnesses",
+    ):
+        cache = getattr(controller, attr, None)
+        if not isinstance(cache, dict):
+            continue
+        for key in list(cache.keys()):
+            if key in exact_keys or any(key.startswith(prefix) for prefix in prefixes):
+                cache.pop(key, None)
+
+
+def _report_config_for_goal(controller: StewardControllerProtocol, goal_id: str) -> Mapping[str, object]:
     goal = load_goal_from_registry(controller.registry_path, goal_id)
     control_plane = goal.get("control_plane") if isinstance(goal, Mapping) else None
-    report_config = (
-        control_plane.get("periodic_report")
-        if isinstance(control_plane, Mapping)
-        else None
-    )
+    report_config = control_plane.get("periodic_report") if isinstance(control_plane, Mapping) else None
     return report_config if isinstance(report_config, Mapping) else {}
 
 
@@ -70,28 +353,18 @@ def _remaining_due_seconds(next_due_at: str) -> float:
 
 
 def _schedule_soonest_monitor_backoff(
-    cache: dict[str, float],
-    binding_id: str,
-    todos: Sequence[StewardTodoRecord],
+    cache: dict[str, float], binding_id: str, todos: Sequence[StewardTodoRecord]
 ) -> None:
     all_monitors = [
-        row
-        for row in todos
-        if row.get("task_class") == "continuous_monitor"
-        and row.get("status") == "open"
+        row for row in todos
+        if row.get("task_class") == "continuous_monitor" and row.get("status") == "open"
         and isinstance(row.get("target_key"), str)
         and not row["target_key"].startswith("managed-session-watch.")
-        and not row["target_key"].startswith(FOLLOWUP_TARGET_PREFIX)
-        and row.get("next_due_at")
+        and not row["target_key"].startswith(FOLLOWUP_TARGET_PREFIX) and row.get("next_due_at")
     ]
     if not all_monitors:
         return
-    soonest = min(
-        all_monitors,
-        key=lambda row: datetime.fromisoformat(
-            row["next_due_at"].replace("Z", "+00:00")
-        ),
-    )
+    soonest = min(all_monitors, key=lambda row: datetime.fromisoformat(row["next_due_at"].replace("Z", "+00:00")))
     remaining = _remaining_due_seconds(soonest["next_due_at"])
     if remaining > 0:
         cache[binding_id] = time.monotonic() + min(60, remaining)
@@ -103,6 +376,7 @@ def _process_steward_binding(
     binding: Mapping[str, object],
     *,
     cache: dict[str, float],
+    failures: dict[str, tuple[int, str]],
     fg_checked: dict[str, bool],
     changed: list[dict[str, object]],
 ) -> None:
@@ -132,24 +406,14 @@ def _process_steward_binding(
     bg_session_id = StewardTurnHost.background_session_id(binding_id)
     bg_session = controller.store.load_session(bg_session_id)
     recover_fn = getattr(controller, "recover_exited_turn", None)
-    if (
-        bg_session is not None
-        and bg_session.get("active_turn_id")
-        and callable(recover_fn)
-    ):
+    if bg_session is not None and bg_session.get("active_turn_id") and callable(recover_fn):
         recover_fn(bg_session_id)
         bg_session = controller.store.load_session(bg_session_id)
     if bg_session is not None and bg_session.get("status") == "closed":
         bg_idle = False
         bg_active = False
     else:
-        bg_active = bool(
-            bg_session is not None
-            and (
-                bg_session.get("active_turn_id")
-                or controller.store.queued_turns(bg_session_id)
-            )
-        )
+        bg_active = bool(bg_session is not None and (bg_session.get("active_turn_id") or controller.store.queued_turns(bg_session_id)))
         bg_idle = not bg_active
     # Background monitor polls and foreground native turns share the same
     # steward Goal's runs/ ledger; serialize them against each other while
@@ -168,14 +432,16 @@ def _process_steward_binding(
         return
     # An ephemeral wake hint only, never authority. Configuration clears it immediately;
     # external edits are observed within a minute. Every dispatch rechecks native state.
-    cache[binding_id] = now_mono + 60
+    cache[binding_id] = now_mono + _DEFAULT_POLL_INTERVAL_SECONDS
     fg_checked[binding_id] = fg_can_dispatch
     # The existing pump also observes the optional report frontier without adding timers.
     if fg_can_dispatch:
         report_config = _report_config_for_goal(controller, str(actor["goal_id"]))
+        report_fail_key = _failure_key("report", binding_id)
         if (
             report_config.get("enabled") is True
             and report_config.get("profile_preset") == "portfolio-progress"
+            and not _failure_active(cache, report_fail_key, now_mono)
         ):
             from .steward_reports import StewardReports
 
@@ -183,14 +449,17 @@ def _process_steward_binding(
                 accepted, created = StewardReports(controller).frontier(
                     _coerce_dict(binding)
                 )
+                _clear_failure(cache, failures, report_fail_key)
                 if created:
                     changed.append(_coerce_dict(accepted))
                     if bg_idle:
                         cache.pop(binding_id, None)
                     return
-            except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                _LOG.warning(
-                    "An original steward report is unavailable; its window and other work are retained"
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                _record_failure(
+                    cache, failures, report_fail_key,
+                    "An original steward report is unavailable; its window and other work are retained",
+                    exc, stage="steward_report", now_mono=now_mono,
                 )
     todos = service.todos(actor)
     if bg_can_dispatch:
@@ -198,27 +467,27 @@ def _process_steward_binding(
         if due:
             dispatched = False
             for todo in due:
+                monitor_fail_key = _failure_key("monitor", binding_id, str(todo["todo_id"]))
+                if _failure_active(cache, monitor_fail_key, now_mono):
+                    continue
                 try:
                     accepted, created = StewardTurnHost(controller).submit(
-                        binding_id,
-                        turn_instance_id=monitor_turn_id(todo),
-                        todo_id=todo["todo_id"],
-                        work_kind="monitor",
-                        monitor_deadline=todo["next_due_at"],
+                        binding_id, turn_instance_id=monitor_turn_id(todo), todo_id=todo["todo_id"],
+                        work_kind="monitor", monitor_deadline=todo["next_due_at"],
                     )
-                except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-                    _LOG.warning(
-                        "A native steward monitor is unavailable; original work retained"
+                except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                    _record_failure(
+                        cache, failures, monitor_fail_key,
+                        "A native steward monitor is unavailable; original work retained",
+                        exc, stage="steward_monitor", now_mono=now_mono,
                     )
                     continue
+                _clear_failure(cache, failures, monitor_fail_key)
                 if created:
                     changed.append(_coerce_dict(accepted))
                     dispatched = True
                     break
-                if isinstance(accepted, dict) and accepted.get("status") in {
-                    "queued",
-                    "running",
-                }:
+                if isinstance(accepted, dict) and accepted.get("status") in {"queued", "running"}:
                     dispatched = True
                     break
             if dispatched:
@@ -228,17 +497,24 @@ def _process_steward_binding(
     advancement_dispatched = False
     if fg_can_dispatch:
         for adv in service.runnable_advancement_todos(actor, todos=todos):
-            turn_id_token = resolve_advancement_turn_id(
-                controller.store, actor, adv
-            )
+            turn_id_token = resolve_advancement_turn_id(controller.store, actor, adv)
             if turn_id_token is None:
                 continue
-            accepted, created = StewardTurnHost(controller).submit(
-                binding_id,
-                turn_instance_id=turn_id_token,
-                todo_id=adv["todo_id"],
-                work_kind="native_turn",
-            )
+            adv_fail_key = _failure_key("advancement", binding_id, str(adv["todo_id"]))
+            if _failure_active(cache, adv_fail_key, now_mono):
+                continue
+            try:
+                accepted, created = StewardTurnHost(controller).submit(
+                    binding_id, turn_instance_id=turn_id_token, todo_id=adv["todo_id"], work_kind="native_turn",
+                )
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+                _record_failure(
+                    cache, failures, adv_fail_key,
+                    "A native steward monitor is unavailable; original work retained",
+                    exc, stage="steward_advancement", now_mono=now_mono,
+                )
+                continue
+            _clear_failure(cache, failures, adv_fail_key)
             if created:
                 changed.append(_coerce_dict(accepted))
             advancement_dispatched = True
@@ -253,6 +529,7 @@ def _process_managed_session(
     session: Mapping[str, object],
     *,
     cache: dict[str, float],
+    failures: dict[str, tuple[int, str]],
     changed: list[dict[str, object]],
 ) -> None:
     from .steward_managed_mode import ManagedSessionTurn
@@ -266,19 +543,22 @@ def _process_managed_session(
         or controller.store.queued_turns(session_id)
     ):
         return
+    now_mono = time.monotonic()
     key = "session." + session_id
-    if cache.get(key, 0) > time.monotonic():
+    if cache.get(key, 0) > now_mono:
         return
-    cache[key] = time.monotonic() + 60
+    cache[key] = now_mono + _DEFAULT_POLL_INTERVAL_SECONDS
     service = ManagedSessionTurn(controller)
     request = service._request(session_id, str(managed_agent_id), "preview")
     service.admit(request)
     report_config = _report_config_for_goal(controller, str(session["goal_id"]))
     route_ref = "managed-session:" + session_id
+    calendar_fail_key = _failure_key("calendar.session", session_id)
     if (
         report_config.get("enabled") is True
         and report_config.get("profile_preset") == "session-task"
         and report_config.get("route_ref") == route_ref
+        and not _failure_active(cache, calendar_fail_key, now_mono)
     ):
         from .session_calendar_tasks import SessionCalendarTasks
         from .steward_reports import ManagedSessionReports
@@ -286,53 +566,63 @@ def _process_managed_session(
         try:
             calendar_tasks: ManagedSessionReports = SessionCalendarTasks(controller)
             accepted, created = calendar_tasks.frontier(session_id)
+            _clear_failure(cache, failures, calendar_fail_key)
             if created:
                 changed.append(_coerce_dict(accepted))
                 return
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            _LOG.warning(
-                "A managed calendar task is unavailable; its original window and work are retained"
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            _record_failure(
+                cache, failures, calendar_fail_key,
+                "A managed calendar task is unavailable; its original window and work are retained",
+                exc, stage="managed_calendar", now_mono=now_mono,
             )
-    if (
-        report_config.get("enabled") is True
-        and report_config.get("profile_preset") == "weekly-progress"
-        and report_config.get("route_ref") == route_ref
-    ):
+    report_fail_key = _failure_key("report.session", session_id)
+    if (report_config.get("enabled") is True and report_config.get("profile_preset") == "weekly-progress"
+            and report_config.get("route_ref") == route_ref and not _failure_active(cache, report_fail_key, now_mono)):
         from .steward_reports import ManagedSessionReports
 
         try:
             accepted, created = ManagedSessionReports(controller).frontier(session_id)
+            _clear_failure(cache, failures, report_fail_key)
             if created:
                 changed.append(_coerce_dict(accepted))
                 return
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            _LOG.warning(
-                "A managed Session report is unavailable; its original window and other work are retained"
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            _record_failure(
+                cache, failures, report_fail_key,
+                "A managed Session report is unavailable; its original window and other work are retained",
+                exc, stage="managed_report", now_mono=now_mono,
             )
-    rows = [
-        row
-        for row in monitor.todos(request["actor"])
-        if row.get("target_key") == "managed-session-watch." + session_id
-    ]
-    if len(rows) != 1:
-        if rows:
-            raise ValueError("the original managed Session watch is ambiguous")
+    watch_fail_key = _failure_key("watch.session", session_id)
+    if _failure_active(cache, watch_fail_key, now_mono):
         return
-    todo = rows[0]
-    if not monitor_todo_is_due(todo):
-        if todo.get("status") == "open" and todo.get("next_due_at"):
-            remaining = _remaining_due_seconds(todo["next_due_at"])
-            cache[key] = time.monotonic() + min(60, max(0, remaining))
-        return
-    accepted, created = service.submit(
-        session_id,
-        agent_id=str(managed_agent_id),
-        operation_id=monitor_turn_id(todo),
-        todo_id=todo["todo_id"],
-        monitor_deadline=todo["next_due_at"],
-    )
-    if created:
-        changed.append(_coerce_dict(accepted))
+    try:
+        rows = [row for row in monitor.todos(request["actor"]) if row.get("target_key") == "managed-session-watch." + session_id]
+        if len(rows) != 1:
+            if rows:
+                raise ValueError("the original managed Session watch is ambiguous")
+            _clear_failure(cache, failures, watch_fail_key)
+            return
+        todo = rows[0]
+        if not monitor_todo_is_due(todo):
+            _clear_failure(cache, failures, watch_fail_key)
+            if todo.get("status") == "open" and todo.get("next_due_at") and not _any_session_failure_active(cache, session_id, now_mono):
+                remaining = _remaining_due_seconds(todo["next_due_at"])
+                cache[key] = time.monotonic() + min(60, max(0, remaining))
+            return
+        accepted, created = service.submit(
+            session_id, agent_id=str(managed_agent_id), operation_id=monitor_turn_id(todo),
+            todo_id=todo["todo_id"], monitor_deadline=todo["next_due_at"],
+        )
+        _clear_failure(cache, failures, watch_fail_key)
+        if created:
+            changed.append(_coerce_dict(accepted))
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        _record_failure(
+            cache, failures, watch_fail_key,
+            "A managed Session watch is unavailable; its original task and deadline are retained",
+            exc, stage="managed_session_watch", now_mono=now_mono,
+        )
 
 
 def pump_steward_monitors(
@@ -350,8 +640,16 @@ def pump_steward_monitors(
         return []
     service = StewardMonitor(controller)
     changed: list[dict[str, object]] = []
-    cache = _ensure_float_cache(controller, "_steward_monitor_next_check")
-    fg_checked = _ensure_bool_cache(controller, "_steward_monitor_fg_idle_checked")
+    cache: dict[str, float] = _ensure_dict_cache(controller, "_steward_monitor_next_check")
+    failures: dict[str, tuple[int, str]] = _ensure_dict_cache(
+        controller, "_steward_monitor_failure_state"
+    )
+    witnesses: dict[str, _WitnessRecord] = _ensure_dict_cache(
+        controller, "_steward_monitor_failure_witnesses"
+    )
+    fg_checked: dict[str, bool] = _ensure_dict_cache(
+        controller, "_steward_monitor_fg_idle_checked"
+    )
     raw_bindings = bindings.read().get("bindings") if bindings is not None else []
     binding_rows = (
         raw_bindings
@@ -364,19 +662,39 @@ def pump_steward_monitors(
             break
         if not isinstance(binding, Mapping):
             continue
+        raw_binding_id = binding.get("binding_id")
+        binding_fail_key = (
+            _failure_key("binding", raw_binding_id)
+            if isinstance(raw_binding_id, str) and raw_binding_id
+            else ""
+        )
+        actor = binding.get("managed_actor")
+        session_ids = (
+            [str(actor.get("session_id") or ""), steward_background_session_id(raw_binding_id)]
+            if isinstance(actor, Mapping) and isinstance(raw_binding_id, str) and raw_binding_id
+            else []
+        )
+        goal_id = str(actor.get("goal_id") or "") if isinstance(actor, Mapping) else ""
+        throttle_key = raw_binding_id if isinstance(raw_binding_id, str) else ""
+        now_mono = time.monotonic()
+        if _witness_backoff_active(
+            controller, cache, witnesses, binding_fail_key, session_ids, now_mono,
+            goal_id=goal_id, binding=binding, throttle_key=throttle_key,
+        ):
+            continue
         try:
             _process_steward_binding(
-                controller,
-                service,
-                binding,
-                cache=cache,
-                fg_checked=fg_checked,
-                changed=changed,
+                controller, service, binding,
+                cache=cache, failures=failures, fg_checked=fg_checked, changed=changed,
             )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+            _clear_failure(cache, failures, binding_fail_key, witnesses=witnesses)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             # One unreadable conversation or unavailable provider must not starve other monitors.
-            _LOG.warning(
-                "A native steward monitor is unavailable; original work retained"
+            _record_session_failure(
+                controller, cache, failures, witnesses, binding_fail_key,
+                "A native steward monitor is unavailable; original work retained",
+                exc, stage="steward_binding", now_mono=now_mono,
+                session_ids=session_ids, goal_id=goal_id, binding=binding, throttle_key=throttle_key,
             )
     return changed + pump_managed_session_monitors(controller, cancelled=cancelled)
 
@@ -391,16 +709,39 @@ def pump_managed_session_monitors(
 
     changed: list[dict[str, object]] = []
     monitor = StewardMonitor(controller)
-    cache = _ensure_float_cache(controller, "_steward_monitor_next_check")
+    cache: dict[str, float] = _ensure_dict_cache(controller, "_steward_monitor_next_check")
+    failures: dict[str, tuple[int, str]] = _ensure_dict_cache(
+        controller, "_steward_monitor_failure_state"
+    )
+    witnesses: dict[str, _WitnessRecord] = _ensure_dict_cache(
+        controller, "_steward_monitor_failure_witnesses"
+    )
     for session in controller.store.list_sessions():
         if cancelled():
             break
+        raw_session_id = session.get("session_id") if isinstance(session, Mapping) else None
+        raw_goal_id = session.get("goal_id") if isinstance(session, Mapping) else None
+        session_id = raw_session_id if isinstance(raw_session_id, str) else ""
+        goal_id = raw_goal_id if isinstance(raw_goal_id, str) else ""
+        session_ids = [session_id] if session_id else []
+        admit_fail_key = _failure_key("session.admit", session_id) if session_id else ""
+        session_throttle_key = f"session.{session_id}" if session_id else ""
+        now_mono = time.monotonic()
+        if _witness_backoff_active(
+            controller, cache, witnesses, admit_fail_key, session_ids, now_mono,
+            goal_id=goal_id, throttle_key=session_throttle_key,
+        ):
+            continue
         try:
             _process_managed_session(
-                controller, monitor, session, cache=cache, changed=changed
+                controller, monitor, session, cache=cache, failures=failures, changed=changed
             )
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            _LOG.warning(
-                "A managed Session watch is unavailable; its original task and deadline are retained"
+            _clear_failure(cache, failures, admit_fail_key, witnesses=witnesses)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+            _record_session_failure(
+                controller, cache, failures, witnesses, admit_fail_key,
+                "A managed Session watch is unavailable; its original task and deadline are retained",
+                exc, stage="managed_session_admit", now_mono=now_mono,
+                session_ids=session_ids, goal_id=goal_id, throttle_key=session_throttle_key,
             )
     return changed

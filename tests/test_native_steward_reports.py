@@ -2735,3 +2735,117 @@ def test_periodic_report_uses_shipped_reporting_templates_and_respects_workspace
     else:
         assert frozen["reporting"] == expected_default
         assert "360" in frozen["reporting"] and "https://github.com/example-org/example-repo/pull/123" in frozen["reporting"]
+
+
+def test_report_selection_recovery_fails_closed_for_task_postcondition_probe_without_looping(
+    steward, tmp_path, monkeypatch, caplog
+):
+    import logging
+    from datetime import timezone
+    from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.capabilities.periodic_report import cadence_runtime
+    from loopx.configure_goal import configure_goal
+    from loopx.control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
+    import loopx.capabilities.native_chat.steward_reports as report_host
+
+    store, runtime, _, transport, binding, capture, _ = steward
+    point = datetime.now(timezone.utc).replace(hour=9, minute=1, second=0, microsecond=0) - timedelta(days=2)
+
+    class CalendarClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return point.astimezone(tz) if tz else point.replace(tzinfo=None)
+
+    monkeypatch.setattr(report_host, "datetime", CalendarClock)
+    monkeypatch.setattr(cadence_runtime, "datetime", CalendarClock)
+    sid, actor, reports, _ = configured(steward, tmp_path, monkeypatch, "sqlite")
+    owner = binding["binding_id"]
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=1, execute=True,
+    )["ok"]
+    install_model(steward, tmp_path, sid)
+    assert finish(runtime, pump_steward_monitors(runtime)[0])["response"]["native_loopx"]["status"] == "committed"
+    assert transport.steward_reports.reconcile() == 1
+
+    point += timedelta(days=1)
+    runtime._steward_monitor_next_check.clear()
+    rejected = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert rejected["response"]["native_loopx"]["error_code"] == "turn_todo_selection_deferred"
+
+    bad_vision = {
+        "schema_version": "goal_vision_replan_contract_v0",
+        "state": "active",
+        "vision_patch": {"vision_summary": "Keep reporting.", "acceptance_summary": "Validate full report."},
+        "path_delta": {
+            "outcome": "replan",
+            "prior_assumption": "Old assumption",
+            "observed_reality": "Reality",
+            "retained": ["Same report route"],
+            "changed": ["Updated baseline"],
+            "evidence_refs": ["fixture:evidence"],
+        },
+    }
+    bad_outcome = {
+        "result_kind": "replan_required",
+        "classification": "outcome_gap_without_blocked_fields",
+        "delivery_batch_scale": "implementation",
+        "delivery_outcome": "outcome_gap",
+        "work_evidence": ["Observed gap"],
+        "validation_evidence": ["Validated check"],
+        "path_delta_mode": "material_replan",
+        "agent_vision_json": json.dumps(bad_vision),
+        "summary": "Trigger failed validation probe.",
+        "next_action": "Retain safely.",
+    }
+    helper = tmp_path / "report_model.py"
+    helper.write_text(
+        _REPORT_MODEL_SOURCE.replace("def fake_report_model(", "def report_only(")
+        + "\ndef fake_report_model(params):\n"
+        + "    import json\n"
+        + "    prompt = '\\n'.join(row.get('text', '') for row in params.get('input', []) if isinstance(row, dict))\n"
+        + "    request = json.JSONDecoder().raw_decode(prompt.split('Turn request:', 1)[1].lstrip())[0]\n"
+        + "    if request.get('detail_ref', {}).get('replan_action_packet'):\n"
+        + "        return " + repr(json.dumps(bad_outcome)) + "\n"
+        + "    return report_only(params)\n"
+    )
+    runtime._steward_monitor_next_check.clear()
+    retry_turn = finish(runtime, pump_steward_monitors(runtime)[0])
+    replan_events = [
+        row["payload"] for row in store.events_after(sid, retry_turn["turn_id"], None)
+        if row["kind"] == "native_loopx.replan_result"
+    ]
+    assert len(replan_events) == 1
+    turn_key = replan_events[0]["resume_turn_key"]
+    jpath = turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=turn_key)
+    journal = load_turn_journal(jpath)
+    journal["validation_stage"] = "task_postcondition"
+    jpath.write_text(json.dumps(journal), encoding="utf-8")
+
+    assert configure_goal(
+        registry_path=runtime.registry_path, goal_id=actor["goal_id"],
+        execution_replan_after_turns=6, execute=True,
+    )["ok"]
+    host = StewardTurnHost(runtime)
+    assert host.report_selection_recovery(rejected, probe_turn=retry_turn) is None
+
+    caplog.set_level(logging.WARNING, logger="loopx.capabilities.native_chat.steward_monitor_pump")
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    runtime._steward_monitor_next_check.clear()
+    assert not pump_steward_monitors(runtime)
+    current_binding = next(
+        row for row in runtime.project_contexts.conversation_bindings.read()["bindings"]
+        if row["binding_id"] == owner
+    )
+    accepted, created = reports.frontier(dict(current_binding))
+    assert created is False and accepted["turn_id"] == retry_turn["turn_id"]
+    assert not caplog.records
+    assert capture.read_bytes() == calls
+    _, window = reports.current_window(owner)
+    assert window is not None and any(
+        row["target_key"] == window["window_id"] and row["status"] == "open"
+        for row in StewardMonitor(runtime).todos(actor)
+    )

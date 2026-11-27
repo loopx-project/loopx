@@ -559,9 +559,7 @@ class StewardTurnHost:
             or (attempt_directory(reports.root, window) / "private-generation.json").exists()}
         if probe_turn is not None:
             from ...control_plane.turn_driver.executor import inspect_loopx_turn_journal
-            from ...control_plane.turn_driver.journal_store import (
-                load_turn_journal, turn_journal_path,
-            )
+            from ...control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
             actor = request["actor"]
             keys = {row["payload"].get("resume_turn_key")
                 for row in self.store.events_after(actor["session_id"], probe_turn["turn_id"], None)
@@ -570,15 +568,17 @@ class StewardTurnHost:
                 return None
             key = keys.pop()
             from ...control_plane.effect_runtime import source_number_tokens
-
             journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
-            current_guard = None
-            if (journal.get("status") == "failed"
-                    and journal.get("result_kind") == "validation_failed"
+            if not isinstance(journal, Mapping):
+                return None
+            current_guard, journal_status = None, journal.get("status")
+            if (journal_status == "failed" and journal.get("result_kind") == "validation_failed"
                     and journal.get("validation_stage") == "host_result_contract"):
                 current_guard = self._cleared_replan_guard(actor)
                 if current_guard is None:
                     return None
+            elif journal_status != "stopped":
+                return None
             # Transport canonical observations to the shared typed admission
             # owner.
             proof["probe"] = {"turn": probe_turn,
