@@ -13,6 +13,7 @@ import argparse
 import os
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import cast
 
 from ..capabilities.explore.activation import (
     sync_explore_graph_after_material_refresh,
@@ -524,12 +525,28 @@ def handle_refresh_state_command(
             raise ValueError("--resume-external-sinks requires the original --turn-instance-id")
         if outcome_update is not None:
             from ..control_plane.goals.acceptance import refine_goal_outcome, public_goal_acceptance
+            raw_refinement = outcome_update["refinement"]
+            refinement = raw_refinement if isinstance(raw_refinement, Mapping) else {}
+            reviewed_work_update = (
+                {
+                    "todo_id": args.todo_id,
+                    "append_explore_result_node_refs": [explore_result["node_id"]],
+                }
+                if explore_result is not None
+                and any(key in refinement for key in ("review", "review_patch"))
+                else None
+            )
             refinement_result = refine_goal_outcome(
-                registry_path=registry_path, runtime_root=args.runtime_root, goal_id=args.goal_id,
-                agent_id=args.agent_id, execute=not args.dry_run, **outcome_update,
-                **({"reviewed_work_update": {"todo_id": args.todo_id,
-                    "append_explore_result_node_refs": [explore_result["node_id"]]}}
-                   if explore_result is not None and any(key in outcome_update["refinement"] for key in ("review", "review_patch")) else {}))
+                registry_path=registry_path,
+                runtime_root=args.runtime_root,
+                goal_id=args.goal_id,
+                agent_id=args.agent_id,
+                execute=not args.dry_run,
+                refinement=refinement,
+                expected_provider_revision=cast(str, outcome_update["expected_provider_revision"]),
+                operation_id=cast(str, outcome_update["operation_id"]),
+                reviewed_work_update=reviewed_work_update,
+            )
             outcome_update_result = public_goal_acceptance(refinement_result, include_contract=False)
             if args.dry_run:
                 # Preview the same ordered composition as execution: the typed

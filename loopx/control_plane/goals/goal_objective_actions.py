@@ -187,8 +187,13 @@ class GoalObjectiveActionMixin:
         before = inspect_goal_acceptance(**route)
         document = {key: parameters[key] for key in ("objective", "reason", "source_ref")}
         preview = update_goal_objective(**route, operation="revise-objective", document=document,
-            expected_provider_revision=before["provider_revision"], operation_id=f"objective-preview:{uuid4().hex}")
-        objective = preview["goal_acceptance_contract"]["goal_objective"]
+            expected_provider_revision=str(before["provider_revision"]), operation_id=f"objective-preview:{uuid4().hex}")
+        contract = preview["goal_acceptance_contract"]
+        if not isinstance(contract, Mapping):
+            raise TypeError("Goal acceptance contract shape is invalid")
+        objective = contract["goal_objective"]
+        if not isinstance(objective, Mapping):
+            raise TypeError("Goal objective shape is invalid")
         return json.dumps({"provider_revision": before["provider_revision"], "objective_digest": objective["digest"]}, sort_keys=True), preview
 
     def _apply_objective_revision(self, proposal_id: str) -> dict[str, Any]:

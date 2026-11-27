@@ -901,8 +901,9 @@ class ChatLoopXMode:
                 from .control_plane.goals.acceptance import inspect_goal_acceptance
                 objective_basis = inspect_goal_acceptance(registry_path=self.controller.registry_path,
                     runtime_root=str(self.store.root.parent), goal_id=current["goal_id"], agent_id=settings["agent_id"])
-                if objective_basis.get("goal_objective_guard"):
-                    return {"ok": False, "error": "goal_objective_review_required", **objective_basis["goal_objective_guard"],
+                guard = objective_basis.get("goal_objective_guard")
+                if isinstance(guard, dict) and guard:
+                    return {"ok": False, "error": "goal_objective_review_required", **guard,
                         "next_action": "Use action=outcomes; reconcile your work and action=adopt_goal_objective before this execution."}
             if action in {"prepare_goal_objective", "adopt_goal_objective"}:
                 from .control_plane.goals.acceptance import public_goal_acceptance, update_goal_objective
