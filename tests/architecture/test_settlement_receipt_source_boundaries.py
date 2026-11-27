@@ -8,9 +8,11 @@ vocabularies in F1/F2 or establish whole-program producer completeness.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import subprocess
+import threading
 from itertools import product
 from pathlib import Path
 
@@ -55,22 +57,66 @@ def identity():
     return SettlementIdentity(**IDENTITY_INPUT).as_dict()
 
 
+_WITNESS_LOCK = threading.Lock()
+_WITNESS_PROC: subprocess.Popen[str] | None = None
+
+
+def _shutdown_witness_proc() -> None:
+    global _WITNESS_PROC
+    with _WITNESS_LOCK:
+        proc = _WITNESS_PROC
+        _WITNESS_PROC = None
+        if proc is None:
+            return
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1)
+        except OSError:
+            pass
+
+
+atexit.register(_shutdown_witness_proc)
+
+
 def _direct(operation, payload):
-    completed = subprocess.run(
-        [
-            "node",
-            "--no-warnings",
-            "--experimental-strip-types",
-            str(ROOT / "scripts/settlement_receipt_source_witness.mts"),
-        ],
-        input=json.dumps({"operation": operation, "input": payload}),
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-        timeout=30,
-    )
-    assert completed.returncode == 0, completed.stderr
-    return json.loads(completed.stdout)
+    global _WITNESS_PROC
+    encoded = json.dumps({"operation": operation, "input": payload}) + "\n"
+    with _WITNESS_LOCK:
+        if _WITNESS_PROC is None or _WITNESS_PROC.poll() is not None:
+            _WITNESS_PROC = subprocess.Popen(
+                [
+                    "node",
+                    "--no-warnings",
+                    "--experimental-strip-types",
+                    str(ROOT / "scripts/settlement_receipt_source_witness.mts"),
+                    "--server",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                cwd=ROOT,
+            )
+        proc = _WITNESS_PROC
+        assert proc.stdin is not None and proc.stdout is not None
+        proc.stdin.write(encoded)
+        proc.stdin.flush()
+        line = proc.stdout.readline()
+        if not line:
+            stderr = proc.stderr.read() if proc.stderr is not None else ""
+            _WITNESS_PROC = None
+            raise AssertionError(f"settlement witness failed: {stderr}")
+    response = json.loads(line)
+    assert response.get("ok"), response.get("error")
+    return response["result"]
 
 
 def _turn(identity, **overrides):

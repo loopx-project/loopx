@@ -20,6 +20,12 @@ from pathlib import Path
 import pytest
 
 from loopx import chat_action_store, chat_actions
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OWNER_PATH = "loopx/chat_action_store.py"
@@ -61,10 +67,9 @@ def set_literal(node: ast.AST) -> frozenset[str] | None:
     return frozenset(members)
 
 
-def module_level_bindings(source: str) -> list[tuple[list[ast.expr], ast.expr | None]]:
-    """(targets, value) pairs for module-level assignments, typed or untyped."""
+def _module_level_bindings_tree(tree: ast.Module) -> list[tuple[list[ast.expr], ast.expr | None]]:
     bindings: list[tuple[list[ast.expr], ast.expr | None]] = []
-    for statement in ast.parse(source).body:
+    for statement in tree.body:
         if isinstance(statement, ast.Assign):
             bindings.append((list(statement.targets), statement.value))
         elif isinstance(statement, ast.AnnAssign):
@@ -72,21 +77,33 @@ def module_level_bindings(source: str) -> list[tuple[list[ast.expr], ast.expr | 
     return bindings
 
 
-def vocabulary_assignments(source: str) -> list[str]:
-    """Names in this source that restate the owner's vocabulary as their own set."""
+def module_level_bindings(source: str) -> list[tuple[list[ast.expr], ast.expr | None]]:
+    """(targets, value) pairs for module-level assignments, typed or untyped."""
+    return _module_level_bindings_tree(ast.parse(source))
+
+
+def _vocabulary_assignments_tree(tree: ast.Module) -> list[str]:
     held: list[str] = []
-    for targets, value in module_level_bindings(source):
+    for targets, value in _module_level_bindings_tree(tree):
         if value is None or set_literal(value) != KIND_VALUE:
             continue
         held.extend(target.id for target in targets if isinstance(target, ast.Name))
     return held
 
 
+def vocabulary_assignments(source: str) -> list[str]:
+    """Names in this source that restate the owner's vocabulary as their own set."""
+    return _vocabulary_assignments_tree(ast.parse(source))
+
+
 def modules_holding_the_vocabulary() -> list[str]:
     offenders: list[str] = []
-    for path in sorted(REPO_ROOT.glob("loopx/**/*.py")):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            held = vocabulary_assignments(path.read_text(encoding="utf-8"))
+            source = read_text_cached(path)
+            if not has_char_escape(source) and "operation.execute" not in source:
+                continue
+            held = _vocabulary_assignments_tree(parse_python_cached(path))
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - guarded tree
             continue
         if held:

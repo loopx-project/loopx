@@ -137,6 +137,24 @@ def enum_members(source: SourceFile, symbol: str, *, strict: bool = False) -> di
     return result
 
 
+def _tree_mentions_field(tree: ast.AST, field: str) -> bool:
+    for node in ast.walk(tree):
+        node_type = type(node)
+        if node_type is ast.Name:
+            if node.id == field:
+                return True
+        elif node_type is ast.Attribute:
+            if node.attr == field:
+                return True
+        elif node_type is ast.Constant:
+            if node.value == field:
+                return True
+        elif node_type is ast.keyword:
+            if node.arg == field:
+                return True
+    return False
+
+
 @lru_cache(maxsize=4096)
 def _field_mentions(source: SourceFile) -> frozenset[str]:
     """Reuse parsed names, not another retained AST or a source-text filter."""
@@ -153,13 +171,24 @@ def _field_mentions(source: SourceFile) -> frozenset[str]:
     return frozenset(names)
 
 
-def python_literal_uses(source: SourceFile, field: str) -> set[str]:
+def python_literal_uses(
+    source: SourceFile,
+    field: str,
+    *,
+    tree: ast.Module | None = None,
+) -> set[str]:
     """Literal writes and direct dispatch operands; not alias/data-flow proof."""
     # Parsing precedes absence: escaped keys and normalized identifiers count,
-    # and invalid syntax must fail even without a textual field mention.
-    if field not in _field_mentions(source):
+    # and invalid syntax must fail even without a textual field mention. Avoid
+    # populating `_TREES` for full-repo literal scans so 2M AST nodes do not
+    # remain pinned across unrelated steps.
+    if tree is None:
+        if source in _TREES:
+            tree = _TREES[source]
+        else:
+            tree = ast.parse(source.text, filename=source.path)
+    if not _tree_mentions_field(tree, field):
         return set()
-    tree = _parsed(source)
 
     def reads(node: ast.AST) -> bool:
         if isinstance(node, ast.Name):
@@ -195,7 +224,9 @@ def python_literal_uses(source: SourceFile, field: str) -> set[str]:
 
     # Production collection already separates conditional results from their
     # conditions and does not inspect strings containing sample source text.
-    rows = scan_python_production(source, field=field, enums={})
+    rows = _scan_python_production_tree(
+        source, tree, field=field, enums={}, skip_field_mention_check=True,
+    )
     result = set().union(*(row.values for row in rows))
     for node in ast.walk(tree):
         if isinstance(node, ast.Compare):
@@ -217,8 +248,14 @@ _Binding = TypeVar('_Binding')
 
 def _qualified_bindings(source: SourceFile, tree: ast.Module, owners: Mapping[str, _Binding],
                         modules: Mapping[str, SourceFile] | None = None) -> dict[str, _Binding]:
+    if not owners:
+        return {}
     bindings = {owner.split('::')[1]: value for owner, value in owners.items()
                 if owner.split('::')[0] == source.path}
+    if not bindings and source.text.isascii() and '\\' not in source.text and not any(
+        owner.split('::')[1] in source.text for owner in owners
+    ):
+        return {}
     imports = {(_module(owner.split('::')[0]), owner.split('::')[1]): value
                for owner, value in owners.items()}
     symbols = {symbol for _, symbol in imports}
@@ -368,6 +405,27 @@ def _union(values: list[ast.expr]) -> ast.expr:
     return node
 
 
+def _can_mention_production(
+    source: SourceFile,
+    field: str | None,
+    enums: Mapping[str, object],
+    return_functions: frozenset[str],
+    call_arguments: Mapping[str, object] | None,
+) -> bool:
+    if return_functions:
+        return True
+    text = source.text
+    if not text.isascii() or '\\' in text:
+        return True
+    if field and field in text:
+        return True
+    if any(owner.split('::')[1] in text for owner in enums):
+        return True
+    if call_arguments and any(owner.split('::')[1] in text for owner in call_arguments):
+        return True
+    return False
+
+
 def scan_python_production(
     source: SourceFile,
     *,
@@ -412,14 +470,44 @@ def scan_python_production(
     # The scan never mutates the tree, so one parse per file serves every
     # vocabulary; synthetic selection nodes are built fresh, never spliced in.
     tree = _parsed(source)
+    return _scan_python_production_tree(
+        source,
+        tree,
+        field=field,
+        enums=enums,
+        return_functions=return_functions,
+        return_paths=return_paths,
+        call_arguments=call_arguments,
+        modules=modules,
+    )
+
+
+def _scan_python_production_tree(
+    source: SourceFile,
+    tree: ast.Module,
+    *,
+    field: str | None,
+    enums: Mapping[str, Mapping[str, str]],
+    return_functions: frozenset[str] = frozenset(),
+    return_paths: Mapping[str, tuple[str | int, ...]] | None = None,
+    call_arguments: Mapping[str, Mapping[str, int | None]] | None = None,
+    modules: Mapping[str, SourceFile] | None = None,
+    skip_field_mention_check: bool = False,
+) -> list[Production]:
+    if not skip_field_mention_check and not _can_mention_production(
+        source, field, enums, return_functions, call_arguments
+    ):
+        return []
     bindings = _qualified_bindings(source, tree, enums, modules)
     call_arguments = call_arguments or {}
     calls = _qualified_bindings(source, tree, call_arguments, modules)
     return_paths = return_paths or {}
     # Every output form needs a field, registered return or qualified owner.
     # Keep enum results and builder arguments even when the field is absent.
-    if not bindings and not calls and not return_functions and (
-        not field or field not in _field_mentions(source)
+    if not bindings and not calls and not return_functions and not skip_field_mention_check and (
+        not field
+        or (source.text.isascii() and '\\' not in source.text and field not in source.text)
+        or field not in _field_mentions(source)
     ):
         return []
     module_functions = _module_functions(source, tree)

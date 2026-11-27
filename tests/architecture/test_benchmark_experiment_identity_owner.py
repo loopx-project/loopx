@@ -26,6 +26,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.benchmark_toolkit import experiment_identity as owner
 from loopx.capabilities.benchmark_toolkit import (
     concurrency_envelope,
@@ -177,11 +184,10 @@ def string_elements(node: ast.AST) -> list[str] | None:
     return None
 
 
-def identity_rows(source: str, name: str) -> list[dict[str, object]]:
-    """Rows for every arm-vocabulary or token-shape decision inside ``source``."""
-
+def _identity_rows_from_tree(
+    tree: ast.Module, source: str, name: str
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    tree = ast.parse(source)
     if ARM_PRESCREEN in source:
         for node in ast.walk(tree):
             elements = string_elements(node)
@@ -222,12 +228,15 @@ def identity_rows(source: str, name: str) -> list[dict[str, object]]:
     return list(unique.values())
 
 
-def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
-    if not any(token in source for token in PRESCREEN_TOKENS):
+def identity_rows(source: str, name: str) -> list[dict[str, object]]:
+    """Rows for every arm-vocabulary or token-shape decision inside ``source``."""
+
+    if ARM_PRESCREEN not in source and not any(token in source for token in PRESCREEN_TOKENS):
         return []
-    if "A-Za-z0-9" not in source:
-        return []
-    tree = ast.parse(source)
+    return _identity_rows_from_tree(ast.parse(source), source, name)
+
+
+def _unfoldable_rows_from_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     return [
         {"file": name, "line": node.lineno, "kind": "unfoldable_regex"}
@@ -240,16 +249,36 @@ def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     ]
 
 
+def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
+    if not any(token in source for token in PRESCREEN_TOKENS):
+        return []
+    if "A-Za-z0-9" not in source:
+        return []
+    return _unfoldable_rows_from_tree(ast.parse(source), name)
+
+
 def collect(root: pathlib.Path, scan_dir: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / scan_dir).rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / scan_dir):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(identity_rows(source, path.relative_to(root).as_posix()))
+        has_arm_candidate = (
+            ARM_PRESCREEN in source
+            and (has_char_escape(source) or all(w in source for w in ARM_NAMES))
+        )
+        has_token_candidate = (
+            any(token in source for token in PRESCREEN_TOKENS)
+            and (("A-Za-z0-9" in source and "127" in source) or has_char_escape(source))
+        )
+        if not has_arm_candidate and not has_token_candidate:
+            continue
+        rows.extend(
+            _identity_rows_from_tree(
+                parse_python_cached(path), source, path.relative_to(root).as_posix()
+            )
+        )
     return rows
 
 
@@ -529,7 +558,7 @@ def test_unfoldable_token_construction_cannot_hide() -> None:
 
 def parse(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 def module_level_bindings(tree: ast.Module) -> set[str]:

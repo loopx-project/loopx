@@ -41,6 +41,14 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    check_python_syntax_cached,
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.issue_fix import cli as issue_fix_cli
 from loopx.capabilities.issue_fix import metrics_projection, repository_snapshot
 from loopx.capabilities.issue_fix.cli import register_issue_fix_commands
@@ -133,10 +141,9 @@ def module_source(rel_path: str) -> str:
     return (REPO_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def _analyse(source: str, names: frozenset[str]):
-    """Derive named bindings and string sites without retaining syntax trees."""
+def _analyse_tree(tree: ast.Module, names: frozenset[str]):
+    """Derive named bindings and string sites from a parsed AST."""
 
-    tree = ast.parse(source)
     bindings = []
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -146,6 +153,12 @@ def _analyse(source: str, names: frozenset[str]):
     strings = [(node.lineno, node.value) for node in ast.walk(tree)
                if isinstance(node, ast.Constant) and isinstance(node.value, str)]
     return bindings, strings
+
+
+def _analyse(source: str, names: frozenset[str]):
+    """Derive named bindings and string sites without retaining syntax trees."""
+
+    return _analyse_tree(ast.parse(source), names)
 
 
 def _binding_lines(bindings, name: str, value: str | None):
@@ -184,13 +197,29 @@ def literal_sites(source: str, value: str) -> list[int]:
     return _sites(_analyse(source, frozenset()), "", value)[1]
 
 
+_SCHEMA_VALUE_HINTS = (
+    "periodic_report_",
+    "issue_fix_repository_reporting_",
+    "semantic_preference_provider_",
+)
+
+
 def _repository_scan():
     bindings = {name: [] for name in DECISIONS}
     sites = {name: {} for name in DECISIONS}
     names = frozenset(DECISIONS)
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
+        source = read_text_cached(path)
+        if (
+            not has_char_escape(source)
+            and not any(hint in source for hint in _SCHEMA_VALUE_HINTS)
+            and not any(k in source for k in names)
+        ):
+            # Validate syntax without pinning full-tree ASTs into the shared cache.
+            check_python_syntax_cached(path)
+            continue
         rel = path.relative_to(REPO_ROOT).as_posix()
-        analysis = _analyse(path.read_text(encoding="utf-8"), names)
+        analysis = _analyse_tree(parse_python_cached(path), names)
         for name, (owner_path, _module, value, _consumers) in DECISIONS.items():
             if rel == owner_path:
                 continue

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -23,33 +24,41 @@ def _write(root: Path, relative: str, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-@pytest.fixture
-def repository(tmp_path: Path) -> Path:
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+@pytest.fixture(scope="module")
+def _base_probe_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("dev-probe-base")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.email", "fixture@example.com"],
+        ["git", "-C", str(root), "config", "user.email", "fixture@example.com"],
         check=True,
     )
     subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.name", "Fixture"],
+        ["git", "-C", str(root), "config", "user.name", "Fixture"],
         check=True,
     )
     _write(
-        tmp_path,
+        root,
         "loopx/a.py",
         'from typing import Literal\nMode = Literal["fast", "slow"]\n',
     )
     _write(
-        tmp_path,
+        root,
         "loopx/semantics/vocabulary_v0.json",
         '{"vocabularies":{"mode":{"values":["fast","slow","safe"],'
         '"owners":{"python":"loopx/owner.py::Mode"}}}}\n',
     )
-    subprocess.run(["git", "-C", str(tmp_path), "add", "loopx"], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "loopx"], check=True)
     subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-qm", "baseline"], check=True
+        ["git", "-C", str(root), "commit", "-qm", "baseline"], check=True
     )
-    return tmp_path
+    return root
+
+
+@pytest.fixture
+def repository(tmp_path: Path, _base_probe_repo: Path) -> Path:
+    target = tmp_path / "repo"
+    shutil.copytree(_base_probe_repo, target, copy_function=shutil.copyfile)
+    return target
 
 
 def _registry() -> dict:

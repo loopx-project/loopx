@@ -33,6 +33,12 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.explore.result_log import EXPLORE_RESULT_PROJECTION_VERSION
 from loopx.cli_commands.explore_feishu_commands import register_explore_feishu_commands
 from loopx.cli_commands.lark_kanban import register_lark_kanban_commands
@@ -90,10 +96,7 @@ def module_source(path: pathlib.Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def module_level_binds(source: str) -> list[tuple[int, str]]:
-    """Name the module-level assignments that restate a guarded name."""
-
-    tree = ast.parse(source)
+def _module_level_binds_tree(tree: ast.Module) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     for node in tree.body:
         if not isinstance(node, ast.Assign):
@@ -104,10 +107,13 @@ def module_level_binds(source: str) -> list[tuple[int, str]]:
     return found
 
 
-def inline_pair_sites(source: str) -> list[tuple[int, str]]:
-    """Name every string literal that carries one half of the pair."""
+def module_level_binds(source: str) -> list[tuple[int, str]]:
+    """Name the module-level assignments that restate a guarded name."""
 
-    tree = ast.parse(source)
+    return _module_level_binds_tree(ast.parse(source))
+
+
+def _inline_pair_sites_tree(tree: ast.Module) -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Constant) and node.value in PAIR_VALUES:
@@ -116,20 +122,32 @@ def inline_pair_sites(source: str) -> list[tuple[int, str]]:
     return found
 
 
+def inline_pair_sites(source: str) -> list[tuple[int, str]]:
+    """Name every string literal that carries one half of the pair."""
+
+    return _inline_pair_sites_tree(ast.parse(source))
+
+
 def scan_tree() -> tuple[list[str], list[str]]:
     """Return (restated-name findings, inline-literal findings) across ``loopx/``."""
 
     name_findings: list[str] = []
     literal_findings: list[str] = []
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
         rel = path.relative_to(REPO_ROOT).as_posix()
         if rel == OWNER_PATH:
             continue
-        source = module_source(path)
-        for lineno, name in module_level_binds(source):
-            name_findings.append(f"{rel}:{lineno} rebinds {name}")
-        if any(token in source for token in PRESCREEN_TOKENS):
-            for lineno, value in inline_pair_sites(source):
+        source = read_text_cached(path)
+        has_guarded = any(name in source for name in GUARDED_NAMES)
+        has_prescreen = any(token in source for token in PRESCREEN_TOKENS)
+        if not has_guarded and not has_prescreen:
+            continue
+        tree = parse_python_cached(path)
+        if has_guarded:
+            for lineno, name in _module_level_binds_tree(tree):
+                name_findings.append(f"{rel}:{lineno} rebinds {name}")
+        if has_prescreen:
+            for lineno, value in _inline_pair_sites_tree(tree):
                 literal_findings.append(f"{rel}:{lineno} spells out {value!r}")
     return name_findings, literal_findings
 

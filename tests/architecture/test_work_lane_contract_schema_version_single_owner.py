@@ -15,6 +15,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.control_plane.quota import task_orchestration
 from loopx.control_plane.work_items import (
     capability_monitor_fallback,
@@ -38,17 +44,17 @@ DEFERRED_INLINE_RESTATEMENTS = {
 
 
 def _modules(root: Path) -> list[Path]:
-    return sorted(path for path in (root / "loopx").rglob("*.py"))
+    return list(iter_python_sources(root / "loopx"))
 
 
 def _constant_bindings(root: Path) -> dict[str, list[int]]:
     """Name every module that binds the constant at module level."""
     offenders: dict[str, list[int]] = {}
     for path in _modules(root):
-        source = path.read_text(encoding="utf-8")
+        source = read_text_cached(path)
         if CONSTANT_NAME not in source:
             continue
-        tree = ast.parse(source)
+        tree = parse_python_cached(path)
         lines = [
             node.lineno
             for node in tree.body
@@ -75,7 +81,7 @@ def _inline_restatements(root: Path) -> dict[str, int]:
         relative = path.relative_to(root).as_posix()
         if relative == OWNER_MODULE:
             continue
-        source = path.read_text(encoding="utf-8")
+        source = read_text_cached(path)
         hits = source.count(f'"{WIRE_VALUE}"') + source.count(f"'{WIRE_VALUE}'")
         if hits:
             counts[relative] = hits

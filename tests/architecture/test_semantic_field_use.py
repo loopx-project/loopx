@@ -18,6 +18,7 @@ from loopx.semantics.field_use import (
     field_use_summary,
     lexical_module_count,
     python_module_scan,
+    python_module_scan_with_mention,
     scan_field_uses,
 )
 from loopx.semantics.inventory import SourceFile
@@ -411,3 +412,19 @@ def test_every_equivalent_writing_of_one_access_is_still_one_module_of_work() ->
     assert len(uses) == 1, uses
     assert uses[0].reads and uses[0].writes and uses[0].binds and uses[0].unresolved
     assert uses[0].role == "reader" and uses[0].in_migration_surface
+
+
+def test_python_module_scan_with_mention_preserves_dynamic_sites_and_literal_mentions() -> None:
+    forms, dyn, mentioned = python_module_scan_with_mention(
+        ast.parse(r'payload.get(k); v = "\x65ffective_action"'),
+        frozenset(),
+        "effective_action",
+    )
+    assert forms == {} and dyn == 1 and mentioned is True
+
+    forms2, dyn2, mentioned2 = python_module_scan_with_mention(
+        ast.parse("payload.get(k); payload['goal_boundary'] = 1"),
+        FIELDS,
+        "effective_action",
+    )
+    assert forms2 == {FIELD: {"subscript_write"}} and dyn2 == 1 and mentioned2 is False

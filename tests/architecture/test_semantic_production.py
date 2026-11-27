@@ -390,3 +390,55 @@ def test_typescript_scan_names_the_missing_setup_step(monkeypatch):
         production.run_typescript_scan(ROOT, source, {})
     assert str(raised.value) == production.NPM_DEV_DEPENDENCIES_MISSING
     assert 'x.mjs' not in str(raised.value), 'parser stderr must never reach public diagnostics'
+
+
+def test_typescript_batch_scan_matches_single_queries_and_preserves_syntax_boundary():
+    from loopx.semantics import production
+
+    valid = SourceFile(
+        'loopx/control_plane/quota/batch_probe.ts',
+        '.ts',
+        'export function decide(ok: boolean) { const p = {effective_action: ok ? "run" : "wait"}; return p; }\n',
+    )
+    requests = [
+        {
+            'id': 'lit',
+            'mode': 'literal_uses',
+            'field': 'effective_action',
+            'return_functions': [],
+            'paths': [valid.path],
+        },
+        {
+            'id': 'prod',
+            'mode': 'production',
+            'field': 'effective_action',
+            'return_functions': [],
+            'paths': [valid.path],
+        },
+        {
+            'id': 'fu',
+            'mode': 'field_uses',
+            'fields': ['effective_action'],
+            'paths': [valid.path],
+        },
+    ]
+    batched = production.run_typescript_batch_scan(ROOT, [valid], requests)
+    assert batched['lit'] == production.run_typescript_scan(
+        ROOT, [valid], {'mode': 'literal_uses', 'field': 'effective_action', 'return_functions': []},
+    )
+    assert batched['prod'] == production.run_typescript_scan(
+        ROOT, [valid], {'mode': 'production', 'field': 'effective_action', 'return_functions': []},
+    )
+    assert batched['fu'] == production.run_typescript_scan(
+        ROOT, [valid], {'mode': 'field_uses', 'fields': ['effective_action']},
+    )
+
+    broken = SourceFile('loopx/control_plane/quota/broken_batch.ts', '.ts', 'const s = "secret";\nfunction invalid( {\n')
+    finish = production.submit_typescript_batch_scan(
+        ROOT,
+        [valid, broken],
+        [{'id': 'broken', 'mode': 'literal_uses', 'field': 'effective_action', 'paths': [broken.path]}],
+    )
+    with pytest.raises(ValueError, match=r'broken_batch\.ts:3: invalid TypeScript source') as err:
+        finish()
+    assert 'secret' not in str(err.value)

@@ -32,7 +32,9 @@ from loopx.semantics.inventory import (  # noqa: E402
     build_inventory,
     collect_string_constants,
     load_sources,
+    parse_python,
     python_facts,
+    python_facts_from_tree,
     render_inventory as render_inventory,
     string_constant_definitions,
     typescript_facts,
@@ -40,13 +42,22 @@ from loopx.semantics.inventory import (  # noqa: E402
 
 from loopx.semantics.production import (  # noqa: E402
     collect_production, validate_production, INPUT_WITNESSES, quota_action_domain, collect_literal_uses,
-    PRODUCER_FILES, PRODUCER_ROOTS,
+    PRODUCER_FILES, PRODUCER_ROOTS, submit_typescript_batch_scan,
 )
-from loopx.semantics.python_production import scan_python_production  # noqa: E402
+from loopx.semantics.python_production import (  # noqa: E402
+    _TREES as _PYTHON_PRODUCTION_TREES,
+    python_literal_uses,
+    scan_python_production,
+)
 from loopx.semantics.field_use import (  # noqa: E402
-    FACTS, ROLES, field_use_summary, lexical_module_count, render_field_uses, scan_field_uses,
+    FACTS, ROLES, field_use_summary, lexical_module_count,
+    python_module_scan_with_mention, render_field_uses, scan_field_uses,
 )
 from loopx.semantics.project_registry_io import (  # noqa: E402
+    _excluded as _excluded_registry_io,
+    load_registry_io_sources_from_base,
+    registry_io_javascript_request,
+    scan_python_registry_io,
     validate_project_registry_io_manifest,
 )
 from scripts.generate_semantic_bindings import build_artifacts  # noqa: E402
@@ -579,9 +590,7 @@ RETIRED_LEASE_INPUT_MODULE = "loopx.control_plane.coordination.authority_core"
 RETIRED_LEASE_INPUT_SYMBOLS = frozenset({"LeaseAction", "LeaseModeGateCommand", "CoordinationCommand"})
 
 
-def check_retired_lease_input(registry: dict[str, Any], sources: list[SourceFile]) -> None:
-    from importlib.util import resolve_name
-
+def _check_retired_lease_registry(registry: dict[str, Any]) -> None:
     require("lease_action" not in registry["vocabularies"],
             "retired lease input must not return to the registry")
     lifecycle = registry["vocabularies"].get("task_lease_lifecycle_operation", {})
@@ -589,28 +598,53 @@ def check_retired_lease_input(registry: dict[str, Any], sources: list[SourceFile
         "python": None,
         "typescript": "loopx/control_plane/work_items/task_lease_lifecycle_request.ts::TASK_LEASE_LIFECYCLE_OPERATIONS",
     }, "native lease lifecycle coverage must retain its actual owner")
+
+
+def _check_retired_lease_source_tree(
+    source: SourceFile, tree: ast.Module, resolve_name_fn: Callable[[str, str], str],
+) -> None:
+    module = source.path.removesuffix(".py").replace("/", ".")
+    if (
+        module != RETIRED_LEASE_INPUT_MODULE
+        and "authority_core" not in source.text
+        and source.text.isascii()
+    ):
+        return
+    package = module.rpartition(".")[0]
+    for node in ast.walk(tree):
+        if module == RETIRED_LEASE_INPUT_MODULE:
+            names = set()
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                names.update(target.id for target in node.targets if isinstance(target, ast.Name))
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+            retired = sorted(names & RETIRED_LEASE_INPUT_SYMBOLS)
+            if retired:
+                raise Drift(f"{source.path}:{node.lineno}: retired lease input definition {retired}")
+        if isinstance(node, ast.ImportFrom):
+            target = resolve_name_fn("." * node.level + (node.module or ""), package) if node.level else node.module
+            if target == RETIRED_LEASE_INPUT_MODULE:
+                retired = sorted({alias.name for alias in node.names} & RETIRED_LEASE_INPUT_SYMBOLS)
+                require(not retired, f"{source.path}:{node.lineno}: retired lease input import {retired}")
+
+
+def check_retired_lease_input(registry: dict[str, Any], sources: list[SourceFile]) -> None:
+    from importlib.util import resolve_name
+
+    _check_retired_lease_registry(registry)
     for source in sources:
         if source.suffix != ".py":
             continue
         module = source.path.removesuffix(".py").replace("/", ".")
-        package = module.rpartition(".")[0]
-        for node in ast.walk(ast.parse(source.text)):
-            if module == RETIRED_LEASE_INPUT_MODULE:
-                names = set()
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
-                    names.add(node.name)
-                elif isinstance(node, ast.Assign):
-                    names.update(target.id for target in node.targets if isinstance(target, ast.Name))
-                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                    names.add(node.target.id)
-                retired = sorted(names & RETIRED_LEASE_INPUT_SYMBOLS)
-                if retired:
-                    raise Drift(f"{source.path}:{node.lineno}: retired lease input definition {retired}")
-            if isinstance(node, ast.ImportFrom):
-                target = resolve_name("." * node.level + (node.module or ""), package) if node.level else node.module
-                if target == RETIRED_LEASE_INPUT_MODULE:
-                    retired = sorted({alias.name for alias in node.names} & RETIRED_LEASE_INPUT_SYMBOLS)
-                    require(not retired, f"{source.path}:{node.lineno}: retired lease input import {retired}")
+        if (
+            module != RETIRED_LEASE_INPUT_MODULE
+            and source.text.isascii()
+            and "authority_core" not in source.text
+        ):
+            continue
+        _check_retired_lease_source_tree(source, ast.parse(source.text), resolve_name)
 
 
 def check_coverage_floor(registry: dict[str, Any]) -> str:
@@ -710,18 +744,135 @@ def check_owned_vocabularies(registry: dict[str, Any], inventory: dict[str, Any]
 # --- literal scan -------------------------------------------------------------------
 
 
-def scan_literals(field: str, roots: list[str], suffixes: list[str], sources: list[SourceFile]) -> dict[str, set[str]]:
+def scan_literals(
+    field: str,
+    roots: list[str],
+    suffixes: list[str],
+    sources: list[SourceFile],
+    *,
+    ts_rows: list[dict[str, Any]] | None = None,
+    py_observed: dict[str, set[str]] | None = None,
+) -> dict[str, set[str]]:
     selected = [source for source in sources if source.suffix in suffixes
                 and any(source.path.startswith(root.rstrip('/') + '/') for root in roots)]
-    return collect_literal_uses(REPO_ROOT, field, selected)
+    if py_observed is None:
+        return collect_literal_uses(REPO_ROOT, field, selected, ts_rows=ts_rows)
+    observed: dict[str, set[str]] = {
+        value: set(paths) for value, paths in py_observed.items()
+    }
+    ts_only = [source for source in selected if source.suffix == ".ts"]
+    for value, paths in collect_literal_uses(REPO_ROOT, field, ts_only, ts_rows=ts_rows).items():
+        observed.setdefault(value, set()).update(paths)
+    return observed
 
 
-def check_literal_vocabularies(registry: dict[str, Any], sources: list[SourceFile]) -> None:
+def _ts_literal_batch_requests(
+    registry: dict[str, Any], ts_sources: list[SourceFile]
+) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for name, vocabulary in registry["vocabularies"].items():
+        scan = vocabulary.get("literal_scan")
+        if not scan or ".ts" not in scan["suffixes"]:
+            continue
+        roots = tuple(root.rstrip("/") + "/" for root in scan["roots"])
+        requests.append(
+            {
+                "id": f"literal:{name}",
+                "mode": "literal_uses",
+                "field": scan["field"],
+                "return_functions": [],
+                "paths": [
+                    s.path for s in ts_sources if any(s.path.startswith(root) for root in roots)
+                ],
+            }
+        )
+    return requests
+
+
+def _ts_producer_batch_requests(
+    registry: dict[str, Any], ts_sources: list[SourceFile]
+) -> list[dict[str, Any]]:
+    producer_ts_paths = [
+        s.path
+        for s in ts_sources
+        if (
+            s.path in PRODUCER_FILES
+            or any(s.path.startswith(prefix + "/") for prefix in PRODUCER_ROOTS)
+        )
+    ]
+    if not producer_ts_paths:
+        return []
+    requests: list[dict[str, Any]] = []
+    for name, vocabulary in registry["vocabularies"].items():
+        if "producers" not in vocabulary:
+            continue
+        field = vocabulary.get("literal_scan", {}).get("field")
+        returns = vocabulary.get("return_producers", [])
+        if field or returns:
+            item: dict[str, Any] = {
+                "id": f"producer:{name}",
+                "mode": "production",
+                "return_functions": returns,
+                "paths": producer_ts_paths,
+            }
+            if field:
+                item["field"] = field
+            requests.append(item)
+    return requests
+
+
+def check_literal_vocabularies(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    ts_rows_by_vocab: dict[str, list[dict[str, Any]]] | None = None,
+    py_uses_by_vocab: dict[str, dict[str, set[str]]] | None = None,
+) -> None:
+    if ts_rows_by_vocab is None:
+        ts_sources = [s for s in sources if s.suffix == ".ts"]
+        requests = _ts_literal_batch_requests(registry, ts_sources)
+        if requests:
+            batch = submit_typescript_batch_scan(REPO_ROOT, ts_sources, requests)()
+            ts_rows_by_vocab = {
+                req["id"].removeprefix("literal:"): batch.get(req["id"], [])
+                for req in requests
+            }
+        else:
+            ts_rows_by_vocab = {}
+    if py_uses_by_vocab is None:
+        py_targets: list[tuple[str, str, tuple[str, ...]]] = []
+        for name, vocabulary in registry["vocabularies"].items():
+            scan = vocabulary.get("literal_scan")
+            if scan and ".py" in scan["suffixes"]:
+                roots = tuple(root.rstrip("/") + "/" for root in scan["roots"])
+                py_targets.append((name, scan["field"], roots))
+        py_uses_by_vocab = {name: {} for name, _, _ in py_targets}
+        for source in sources:
+            if source.suffix != ".py":
+                continue
+            matching = [
+                (name, field)
+                for name, field, roots in py_targets
+                if any(source.path.startswith(root) for root in roots)
+            ]
+            if not matching:
+                continue
+            tree = ast.parse(source.text, filename=source.path)
+            for name, field in matching:
+                for value in python_literal_uses(source, field, tree=tree):
+                    py_uses_by_vocab[name].setdefault(value, set()).add(source.path)
     for name, vocabulary in registry["vocabularies"].items():
         scan = vocabulary.get("literal_scan")
         if not scan:
             continue
-        observed = scan_literals(scan["field"], scan["roots"], scan["suffixes"], sources)
+        observed = scan_literals(
+            scan["field"],
+            scan["roots"],
+            scan["suffixes"],
+            sources,
+            ts_rows=ts_rows_by_vocab.get(name) if ts_rows_by_vocab is not None else None,
+            py_observed=py_uses_by_vocab.get(name) if py_uses_by_vocab is not None else None,
+        )
         expected = quota_action_domain(registry) if name == 'effective_action' else set(vocabulary["values"])
         unregistered = {value: sorted(files) for value, files in observed.items() if value not in expected}
         require(not unregistered, f"{name}: literals not in the registry (register them or use a registered value): {unregistered}")
@@ -845,21 +996,71 @@ def summarise_formal_domains(registry: dict[str, Any], sources: list[SourceFile]
     )
 
 
-def check_producers(registry: dict[str, Any], sources: list[SourceFile]) -> list[str]:
-    unknown: list[str] = []
-    for name, vocabulary in registry['vocabularies'].items():
-        if 'producers' not in vocabulary:
-            # Skipped: a vocabulary that declares no producers. That is every
-            # cross_runtime vocabulary except the ones carrying an executed
-            # witness. F1/F2 therefore hold over the walked set the registry's
-            # formal_model names Producers(V) -- not an unconditional claim.
-            continue
+def check_producers(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    ts_rows_by_vocab: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[str]:
+    added_trees: list[SourceFile] = []
+    if ts_rows_by_vocab is None:
+        ts_sources = [s for s in sources if s.suffix == ".ts"]
+        requests = _ts_producer_batch_requests(registry, ts_sources)
         try:
-            rows = collect_production(REPO_ROOT, vocabulary, sources)
-            field_domain = quota_action_domain(registry) if name == 'effective_action' else None
-            unknown.extend(validate_production(name, vocabulary, rows, field_domain=field_domain))
+            finish_ts = (
+                submit_typescript_batch_scan(REPO_ROOT, ts_sources, requests)
+                if requests
+                else None
+            )
+            for source in sources:
+                if (
+                    source.suffix == ".py"
+                    and source not in _PYTHON_PRODUCTION_TREES
+                    and (
+                        source.path in PRODUCER_FILES
+                        or any(source.path.startswith(prefix + "/") for prefix in PRODUCER_ROOTS)
+                    )
+                ):
+                    try:
+                        _PYTHON_PRODUCTION_TREES[source] = ast.parse(
+                            source.text, filename=source.path
+                        )
+                    except SyntaxError:
+                        pass
+                    else:
+                        added_trees.append(source)
+            batch = finish_ts() if finish_ts is not None else {}
         except ValueError as error:
+            for source in added_trees:
+                _PYTHON_PRODUCTION_TREES.pop(source, None)
             raise Drift(str(error)) from error
+        ts_rows_by_vocab = {
+            req["id"].removeprefix("producer:"): batch.get(req["id"], [])
+            for req in requests
+        }
+    unknown: list[str] = []
+    try:
+        for name, vocabulary in registry["vocabularies"].items():
+            if "producers" not in vocabulary:
+                # Skipped: a vocabulary that declares no producers. That is every
+                # cross_runtime vocabulary except the ones carrying an executed
+                # witness. F1/F2 therefore hold over the walked set the registry's
+                # formal_model names Producers(V) -- not an unconditional claim.
+                continue
+            try:
+                rows = collect_production(
+                    REPO_ROOT,
+                    vocabulary,
+                    sources,
+                    ts_rows=ts_rows_by_vocab.get(name),
+                )
+                field_domain = quota_action_domain(registry) if name == "effective_action" else None
+                unknown.extend(validate_production(name, vocabulary, rows, field_domain=field_domain))
+            except ValueError as error:
+                raise Drift(str(error)) from error
+    finally:
+        for source in added_trees:
+            _PYTHON_PRODUCTION_TREES.pop(source, None)
     return sorted(set(unknown))
 
 
@@ -924,8 +1125,15 @@ def check_projections(registry: dict[str, Any]) -> None:
         require(actual is LoopDisposition(expected), f"route {route} projects {actual.value}, registry says {expected}")
 
 
-def check_schema_version_owners(registry: dict[str, Any], sources: list[SourceFile]) -> None:
-    definitions = string_constant_definitions(collect_string_constants(sources))
+def check_schema_version_owners(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    python_facts_map: dict[SourceFile, dict[str, list[Any]]] | None = None,
+) -> None:
+    definitions = string_constant_definitions(
+        collect_string_constants(sources, python_facts_map=python_facts_map)
+    )
     for name, entry in registry["schema_versions"].items():
         defining = definitions.get(entry["constant"], [])
         modules = sorted(item["module"] for item in defining)
@@ -1013,7 +1221,13 @@ def count_identifier_modules(field: str, suffix: str, sources: list[SourceFile])
     return lexical_module_count(field, suffix, sources)
 
 
-def check_reader_metric(registry: dict[str, Any], sources: list[SourceFile]) -> tuple[list[str], list[str]]:
+def check_reader_metric(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    ts_rows_override: dict[str, dict[str, Any]] | None = None,
+    python_scan_override: dict[str, tuple[dict[str, set[str]], int]] | None = None,
+) -> tuple[list[str], list[str]]:
     """Check the B3 syntactic metric against the ledger, and report its roles.
 
     Four obligations, all measured rather than assumed:
@@ -1040,7 +1254,12 @@ def check_reader_metric(registry: dict[str, Any], sources: list[SourceFile]) -> 
       is not thereby proven dead. The smoke says so in its own output.
     """
     ledger = registry["retirement_ledger"]["should_run_legacy_decision_fields"]["fields"]
-    summary = field_use_summary(ledger, sources)
+    summary = field_use_summary(
+        ledger,
+        sources,
+        ts_rows_override=ts_rows_override,
+        python_scan_override=python_scan_override,
+    )
     report: list[str] = []
     detail: list[str] = []
     for field in sorted(ledger):
@@ -1136,8 +1355,13 @@ def evaluate_inventory_budget_findings(
     )
 
 
-def check_inventory(registry: dict[str, Any], sources: list[SourceFile]) -> tuple[dict[str, Any], str]:
-    inventory = build_inventory(REPO_ROOT, sources=sources)
+def check_inventory(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    python_facts_map: dict[SourceFile, dict[str, list[Any]]] | None = None,
+) -> tuple[dict[str, Any], str]:
+    inventory = build_inventory(REPO_ROOT, sources=sources, python_facts_map=python_facts_map)
     require(inventory["schema_version"] == INVENTORY_SCHEMA_VERSION, "inventory schema drift")
     semantic_multi_value_forks = check_scope_declarations(registry, inventory)
     ratchets = registry["inventory_ratchets"]
@@ -1169,16 +1393,191 @@ def check_inventory(registry: dict[str, Any], sources: list[SourceFile]) -> tupl
     return inventory, " ".join(parts)
 
 
+_DEFAULT_VALIDATE_PROJECT_REGISTRY_IO_MANIFEST = validate_project_registry_io_manifest
+_DEFAULT_CHECK_RETIRED_LEASE_INPUT = check_retired_lease_input
+
+
+def _collect_single_pass_scans(
+    registry: dict[str, Any],
+    sources: list[SourceFile],
+    reg_sources: list[SourceFile],
+    *,
+    check_retired_lease: bool = False,
+) -> tuple[
+    dict[SourceFile, dict[str, list[Any]]],
+    list[Any],
+    dict[str, dict[str, set[str]]],
+    dict[str, tuple[dict[str, set[str]], int]],
+    dict[str, Any],
+    dict[SourceFile, ast.Module],
+]:
+    """Run one streaming Python AST pass concurrently with one batched Node TS AST pass."""
+    from importlib.util import resolve_name
+
+    literal_targets: list[tuple[str, str, tuple[str, ...], bool]] = []
+    for name, vocabulary in registry["vocabularies"].items():
+        scan = vocabulary.get("literal_scan")
+        if scan:
+            roots = tuple(root.rstrip("/") + "/" for root in scan["roots"])
+            suffixes = scan["suffixes"]
+            literal_targets.append((name, scan["field"], roots, ".py" in suffixes))
+    py_uses_by_vocab: dict[str, dict[str, set[str]]] = {
+        name: {} for name, *_ in literal_targets
+    }
+    ledger_fields = frozenset(
+        registry["retirement_ledger"]["should_run_legacy_decision_fields"]["fields"]
+    )
+    ts_by_path: dict[str, SourceFile] = {}
+    for source in reg_sources:
+        if source.suffix in {".ts", ".tsx", ".js", ".mjs"}:
+            ts_by_path[source.path] = source
+    for source in sources:
+        if source.suffix == ".ts":
+            ts_by_path.setdefault(source.path, source)
+
+    ts_sources = [s for s in sources if s.suffix == ".ts"]
+    batch_requests: list[dict[str, Any]] = [
+        {
+            "id": "registry_io",
+            "paths": [
+                s.path
+                for s in reg_sources
+                if s.suffix in {".ts", ".tsx", ".js", ".mjs"}
+            ],
+            **registry_io_javascript_request(),
+        },
+        {
+            "id": "field_uses",
+            "mode": "field_uses",
+            "fields": sorted(ledger_fields),
+            "paths": [s.path for s in ts_sources],
+        },
+        *_ts_literal_batch_requests(registry, ts_sources),
+        *_ts_producer_batch_requests(registry, ts_sources),
+    ]
+
+    all_ts_sources = [ts_by_path[path] for path in sorted(ts_by_path)]
+    try:
+        finish_ts = submit_typescript_batch_scan(REPO_ROOT, all_ts_sources, batch_requests)
+    except ValueError as error:
+        raise Drift(str(error)) from error
+
+    python_facts_map: dict[SourceFile, dict[str, list[Any]]] = {}
+    py_registry_obs: list[Any] = []
+    py_field_scan: dict[str, tuple[dict[str, set[str]], int]] = {}
+    producer_trees: dict[SourceFile, ast.Module] = {}
+    single_literal_target = (
+        literal_targets[0]
+        if len(literal_targets) == 1 and literal_targets[0][3]
+        else None
+    )
+
+    try:
+        if check_retired_lease:
+            _check_retired_lease_registry(registry)
+        for source in sources:
+            if source.suffix != ".py":
+                continue
+            try:
+                tree = parse_python(source)
+            except ValueError as error:
+                if not _excluded_registry_io(source.path):
+                    message = str(error).replace("cannot inventory invalid Python source:", "cannot scan invalid Python source:", 1)
+                    raise ValueError(message) from None
+                raise
+            if check_retired_lease:
+                _check_retired_lease_source_tree(source, tree, resolve_name)
+            python_facts_map[source] = python_facts_from_tree(source, tree)
+            if not _excluded_registry_io(source.path):
+                py_registry_obs.extend(scan_python_registry_io(source, tree=tree))
+            present = frozenset(field for field in ledger_fields if field in source.text)
+            if single_literal_target is not None:
+                lit_name, lit_field, lit_roots, _ = single_literal_target
+                wants_lit = any(source.path.startswith(root) for root in lit_roots)
+                forms, dynamic_sites, mentioned = python_module_scan_with_mention(
+                    tree, present, lit_field if wants_lit else None
+                )
+                py_field_scan[source.path] = (forms, dynamic_sites)
+                if wants_lit and mentioned:
+                    for value in python_literal_uses(source, lit_field, tree=tree):
+                        py_uses_by_vocab[lit_name].setdefault(value, set()).add(source.path)
+            else:
+                forms, dynamic_sites, _ = python_module_scan_with_mention(tree, present)
+                py_field_scan[source.path] = (forms, dynamic_sites)
+                for name, field, roots, wants_py in literal_targets:
+                    if wants_py and any(source.path.startswith(root) for root in roots):
+                        for value in python_literal_uses(source, field, tree=tree):
+                            py_uses_by_vocab[name].setdefault(value, set()).add(source.path)
+            if (
+                source.path in PRODUCER_FILES
+                or any(source.path.startswith(prefix + "/") for prefix in PRODUCER_ROOTS)
+            ):
+                producer_trees[source] = tree
+        batch_results = finish_ts()
+    except Exception as error:
+        if isinstance(error, ValueError):
+            # Ensure background TS future settles before propagating or raising Drift.
+            try:
+                finish_ts()
+            except ValueError as ts_error:
+                raise Drift(str(ts_error)) from ts_error
+            raise
+        if isinstance(error, Drift):
+            try:
+                finish_ts()
+            except Exception:
+                pass
+            raise
+        try:
+            finish_ts()
+        except Exception:
+            pass
+        raise
+    return python_facts_map, py_registry_obs, py_uses_by_vocab, py_field_scan, batch_results, producer_trees
+
+
 def main() -> int:
     registry = load_registry()
     coverage = check_coverage_floor(registry)
     sources = load_sources(REPO_ROOT)
-    check_retired_lease_input(registry, sources)
-    registry_io_errors = validate_project_registry_io_manifest(REPO_ROOT)
-    require(not registry_io_errors, "; ".join(registry_io_errors)
-            + "; inspect with uv run python scripts/generate_project_registry_io_manifest.py "
-            "and review direct-I/O classifications in project_registry_io_classifications_v1.json")
-    inventory, ratchets = check_inventory(registry, sources)
+    custom_retired_check = (
+        check_retired_lease_input is not _DEFAULT_CHECK_RETIRED_LEASE_INPUT
+    )
+    if custom_retired_check:
+        check_retired_lease_input(registry, sources)
+    custom_registry_io_check = (
+        validate_project_registry_io_manifest is not _DEFAULT_VALIDATE_PROJECT_REGISTRY_IO_MANIFEST
+    )
+    if custom_registry_io_check:
+        registry_io_errors = validate_project_registry_io_manifest(REPO_ROOT)
+        require(not registry_io_errors, "; ".join(registry_io_errors)
+                + "; inspect with uv run python scripts/generate_project_registry_io_manifest.py "
+                "and review direct-I/O classifications in project_registry_io_classifications_v1.json")
+    reg_sources = load_registry_io_sources_from_base(REPO_ROOT, sources)
+    (
+        python_facts_map,
+        py_registry_obs,
+        py_uses_by_vocab,
+        py_field_scan,
+        batch_results,
+        producer_trees,
+    ) = _collect_single_pass_scans(
+        registry,
+        sources,
+        reg_sources,
+        check_retired_lease=not custom_retired_check,
+    )
+    if not custom_registry_io_check:
+        registry_io_errors = validate_project_registry_io_manifest(
+            REPO_ROOT,
+            sources=reg_sources,
+            precomputed_python_observations=py_registry_obs,
+            precomputed_js_rows=batch_results.get("registry_io", []),
+        )
+        require(not registry_io_errors, "; ".join(registry_io_errors)
+                + "; inspect with uv run python scripts/generate_project_registry_io_manifest.py "
+                "and review direct-I/O classifications in project_registry_io_classifications_v1.json")
+    inventory, ratchets = check_inventory(registry, sources, python_facts_map=python_facts_map)
     check_owned_vocabularies(registry, inventory)
     for path, expected in build_artifacts().items():
         require(
@@ -1186,13 +1585,43 @@ def main() -> int:
             f"{path.relative_to(REPO_ROOT)} is stale; "
             "run uv run python scripts/generate_semantic_bindings.py and commit the result",
         )
-    check_literal_vocabularies(registry, sources)
-    unknown_producers = check_producers(registry, sources)
+    ts_literal_rows = {
+        name: batch_results.get(f"literal:{name}", [])
+        for name, vocabulary in registry["vocabularies"].items()
+        if vocabulary.get("literal_scan") and ".ts" in vocabulary["literal_scan"]["suffixes"]
+    }
+    check_literal_vocabularies(
+        registry,
+        sources,
+        ts_rows_by_vocab=ts_literal_rows,
+        py_uses_by_vocab=py_uses_by_vocab,
+    )
+    ts_producer_rows = {
+        name: batch_results.get(f"producer:{name}", [])
+        for name, vocabulary in registry["vocabularies"].items()
+        if "producers" in vocabulary
+    }
+    added_producer_trees = [
+        source for source in producer_trees if source not in _PYTHON_PRODUCTION_TREES
+    ]
+    for source in added_producer_trees:
+        _PYTHON_PRODUCTION_TREES[source] = producer_trees[source]
+    try:
+        unknown_producers = check_producers(registry, sources, ts_rows_by_vocab=ts_producer_rows)
+    finally:
+        for source in added_producer_trees:
+            _PYTHON_PRODUCTION_TREES.pop(source, None)
     check_relations(registry)
     check_projections(registry)
-    check_schema_version_owners(registry, sources)
+    check_schema_version_owners(registry, sources, python_facts_map=python_facts_map)
     budgets = check_retirement_budgets(registry, sources)
-    reader_metric, reader_detail = check_reader_metric(registry, sources)
+    ts_field_rows = {row["path"]: row for row in batch_results.get("field_uses", [])}
+    reader_metric, reader_detail = check_reader_metric(
+        registry,
+        sources,
+        ts_rows_override=ts_field_rows,
+        python_scan_override=py_field_scan,
+    )
     twins = check_dual_runtime_twins(registry)
     print("semantic-vocabulary-drift-smoke: ok")
     print("  " + coverage)
@@ -1213,7 +1642,12 @@ def main() -> int:
         for line in reader_detail:
             print(f"  retirement_role: {line}")
         ledger_fields = registry["retirement_ledger"]["should_run_legacy_decision_fields"]["fields"]
-        uses, _ = scan_field_uses(ledger_fields, sources)
+        uses, _ = scan_field_uses(
+            ledger_fields,
+            sources,
+            ts_rows_override=ts_field_rows,
+            python_scan_override=py_field_scan,
+        )
         for line in render_field_uses(uses):
             print(f"  field_use: {line}")
     return 0

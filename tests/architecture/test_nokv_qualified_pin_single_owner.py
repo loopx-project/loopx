@@ -30,6 +30,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 OWNER_MODULE = "loopx/control_plane/coordination/nokv_qualification.py"
 OWNED_NAMES = ("QUALIFIED_NOKV_SDK_VERSION", "QUALIFIED_NOKV_API_VERSION")
@@ -50,34 +57,40 @@ def _rel(path: pathlib.PurePath) -> str:
 
 
 def _product_sources() -> list[pathlib.Path]:
-    return sorted(
-        path
-        for path in (REPO_ROOT / "loopx").rglob("*.py")
-        if "__pycache__" not in path.parts
-    )
+    return list(iter_python_sources(REPO_ROOT / "loopx"))
 
 
-def _assigned_names(node: ast.stmt) -> tuple[list[str], str]:
+def _assigned_name_targets(node: ast.AST) -> tuple[list[str], ast.expr | None]:
     if isinstance(node, ast.Assign):
         return (
             [target.id for target in node.targets if isinstance(target, ast.Name)],
-            ast.unparse(node.value),
+            node.value,
         )
     if (
         isinstance(node, ast.AnnAssign)
         and isinstance(node.target, ast.Name)
         and node.value
     ):
-        return ([node.target.id], ast.unparse(node.value))
-    return ([], "")
+        return ([node.target.id], node.value)
+    return ([], None)
+
+
+def _assigned_names(node: ast.stmt) -> tuple[list[str], str]:
+    names, value_node = _assigned_name_targets(node)
+    if not names or value_node is None:
+        return ([], "")
+    return (names, ast.unparse(value_node))
 
 
 def _module_level_definitions() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {name: [] for name in OWNED_NAMES}
     for path in _product_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if not any(name in source for name in OWNED_NAMES):
+            continue
+        tree = parse_python_cached(path)
         for node in tree.body:
-            names, _ = _assigned_names(node)
+            names, _ = _assigned_name_targets(node)
             for name in names:
                 if name in found:
                     found[name].append(_rel(path.relative_to(REPO_ROOT)))
@@ -89,15 +102,20 @@ def _any_depth_definitions() -> list[tuple[str, int, str]]:
 
     hits: list[tuple[str, int, str]] = []
     for path in _product_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if not any(name in source for name in OWNED_NAMES):
+            continue
+        tree = parse_python_cached(path)
+        rel = _rel(path.relative_to(REPO_ROOT))
         for node in ast.walk(tree):
-            names, value = _assigned_names(node)
-            rel = _rel(path.relative_to(REPO_ROOT))
-            hits.extend(
-                (rel, node.lineno, f"{name} = {value}")
-                for name in names
-                if name in OWNED_NAMES
-            )
+            names, value_node = _assigned_name_targets(node)
+            matched = [name for name in names if name in OWNED_NAMES]
+            if matched and value_node is not None:
+                value = ast.unparse(value_node)
+                hits.extend(
+                    (rel, node.lineno, f"{name} = {value}")
+                    for name in matched
+                )
     return hits
 
 
@@ -109,8 +127,13 @@ def _sdk_literal_sites(value: object) -> list[str]:
     """
 
     sites: set[str] = set()
+    str_value = value if isinstance(value, str) and value else None
     for path in _product_sources():
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        if str_value is not None:
+            source = read_text_cached(path)
+            if not has_char_escape(source) and str_value not in source:
+                continue
+        tree = parse_python_cached(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Constant) and node.value == value:
                 sites.add(_rel(path.relative_to(REPO_ROOT)))

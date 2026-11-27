@@ -26,6 +26,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx import public_safe_text
 from loopx.capabilities.issue_fix import periodic_report as issue_fix_report
 from loopx.capabilities.periodic_report import (
@@ -174,10 +181,7 @@ def regex_calls(tree: ast.Module) -> list[ast.Call]:
     return calls
 
 
-def shape_rows(source: str, name: str) -> list[dict[str, object]]:
-    if not any(token in source for token in PRESCREEN_TOKENS):
-        return []
-    tree = ast.parse(source)
+def _shape_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     rows: list[dict[str, object]] = []
     for node in regex_calls(tree):
@@ -191,12 +195,13 @@ def shape_rows(source: str, name: str) -> list[dict[str, object]]:
     return rows
 
 
-def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
+def shape_rows(source: str, name: str) -> list[dict[str, object]]:
     if not any(token in source for token in PRESCREEN_TOKENS):
         return []
-    if "[a-z" not in source:
-        return []
-    tree = ast.parse(source)
+    return _shape_rows_tree(ast.parse(source), name)
+
+
+def _unfoldable_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     return [
         {"file": name, "line": node.lineno, "kind": "unfoldable_regex"}
@@ -206,17 +211,27 @@ def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     ]
 
 
+def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
+    if not any(token in source for token in PRESCREEN_TOKENS):
+        return []
+    if "[a-z" not in source:
+        return []
+    return _unfoldable_rows_tree(ast.parse(source), name)
+
+
 def collect(root: pathlib.Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
+        if not any(token in source for token in PRESCREEN_TOKENS):
+            continue
+        if "[a-z" not in source and not has_char_escape(source):
+            continue
         relative = path.relative_to(root).as_posix()
-        rows.extend(shape_rows(source, relative))
+        rows.extend(_shape_rows_tree(parse_python_cached(path), relative))
     return rows
 
 
@@ -290,7 +305,7 @@ def referenced(tree: ast.Module, name: str) -> bool:
 
 def parse(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 # --------------------------------------------------------------------------
@@ -304,9 +319,12 @@ def test_no_other_module_compiles_the_slug_shape() -> None:
 
 def modules_importing_the_owner() -> set[str]:
     importing: set[str] = set()
-    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            source = read_text_cached(path)
+            if source.isascii() and "PUBLIC_SAFE_SLUG_PATTERN" not in source:
+                continue
+            tree = parse_python_cached(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         for node in ast.walk(tree):
@@ -339,14 +357,14 @@ def test_owner_states_the_shape_as_the_recorded_literal() -> None:
 
 def test_no_module_hides_an_unfoldable_slug_construction() -> None:
     rows: list[dict[str, object]] = []
-    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(unfoldable_rows(source, path.relative_to(REPO_ROOT).as_posix()))
+        if not any(token in source for token in PRESCREEN_TOKENS) or "[a-z" not in source:
+            continue
+        rows.extend(_unfoldable_rows_tree(parse_python_cached(path), path.relative_to(REPO_ROOT).as_posix()))
     assert unfoldable_offender_rows(rows) == []
 
 

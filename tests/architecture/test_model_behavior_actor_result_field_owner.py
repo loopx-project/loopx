@@ -41,6 +41,13 @@ import sys
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.control_plane.testing import (
     model_behavior_qualification as owner,
     onboarding_model_behavior_qualification as consumer,
@@ -75,14 +82,7 @@ def _members(node: ast.expr) -> frozenset[str] | None:
     return None
 
 
-def _field_literal_sites(source: str) -> list[int]:
-    """Every collection literal in the source folding to FIELDS, counted once.
-
-    ``frozenset({...})`` is walked as both the call and its inner set; the inner
-    node is skipped so one restatement is one site, not two.
-    """
-
-    tree = ast.parse(source)
+def _field_literal_sites_tree(tree: ast.Module) -> list[int]:
     wrapped = {
         id(node.args[0])
         for node in ast.walk(tree)
@@ -96,6 +96,16 @@ def _field_literal_sites(source: str) -> list[int]:
         for node in ast.walk(tree)
         if id(node) not in wrapped and _members(node) == FIELDS
     ]
+
+
+def _field_literal_sites(source: str) -> list[int]:
+    """Every collection literal in the source folding to FIELDS, counted once.
+
+    ``frozenset({...})`` is walked as both the call and its inner set; the inner
+    node is skipped so one restatement is one site, not two.
+    """
+
+    return _field_literal_sites_tree(ast.parse(source))
 
 
 def _binding_sites(source: str, names: tuple[str, ...]) -> list[int]:
@@ -147,11 +157,14 @@ def _package_same_value_candidates() -> dict[str, list[int]]:
     """Advisory whole-package census: report same-value sites for review only."""
 
     candidates: dict[str, list[int]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative == OWNER_PATH:
             continue
-        sites = _field_literal_sites(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if not has_char_escape(source) and "actor_ref" not in source:
+            continue
+        sites = _field_literal_sites_tree(parse_python_cached(path))
         if sites:
             candidates[relative] = sites
     return candidates

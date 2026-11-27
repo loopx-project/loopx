@@ -5,6 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIRECT_LOADER_ALLOWLIST = {
@@ -104,10 +110,13 @@ def _assert_recreation_reader_is_location_only(tree: ast.Module) -> None:
 
 def test_direct_project_registry_loaders_have_source_session_denial() -> None:
     callers: set[str] = set()
-    for path in (REPO_ROOT / "loopx").rglob("*.py"):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         if path.name == "registry_codec.py":
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if source.isascii() and "load_project_registry" not in source:
+            continue
+        tree = parse_python_cached(path)
         if any(
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)

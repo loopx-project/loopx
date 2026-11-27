@@ -49,6 +49,12 @@ from loopx.control_plane.content_digest import (
     BARE_SHA256_PATTERN,
     ENVELOPED_SHA256_PATTERN,
 )
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
 from tests.architecture.test_content_digest_single_owner import (
     _collect_scopes,
     _fold_text,
@@ -135,9 +141,12 @@ def _scan_source(relative: str, source: str) -> list[str]:
 def _scan_surface(directory: str) -> dict[str, list[str]]:
     offenders: dict[str, list[str]] = {}
     root = REPOSITORY_ROOT / directory
-    for path in sorted(root.rglob("*.py")):
+    for path in iter_python_sources(root):
         relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-        hits = _scan_source(relative, path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if ENVELOPE not in source and not has_char_escape(source):
+            continue
+        hits = _scan_source(relative, source)
         if hits:
             offenders[relative] = hits
     return offenders
@@ -261,11 +270,14 @@ def test_the_owner_is_the_only_module_that_states_the_prefix_rule() -> None:
     # the staging meaningful: the prefix literal lives in exactly two modules,
     # the generated shape owner and the production owner.
     holders: dict[str, list[str]] = {}
-    for path in sorted((REPOSITORY_ROOT / "loopx").rglob("*.py")):
+    for path in iter_python_sources(REPOSITORY_ROOT / "loopx"):
         relative = path.relative_to(REPOSITORY_ROOT).as_posix()
         if relative in {PRODUCTION_OWNER, "loopx/control_plane/content_digest.py"}:
             continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if not has_char_escape(source) and ENVELOPE not in source:
+            continue
+        tree = parse_python_cached(path)
         prefixed = [
             target.id
             for node in tree.body

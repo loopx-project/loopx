@@ -41,6 +41,8 @@ from typing import Any
 
 import pytest
 
+from tests.architecture._repo_ast_cache import iter_python_sources, read_text_cached
+
 from loopx.control_plane import content_digest
 from loopx.control_plane.content_digest import (
     BARE_SHA256_PATTERN,
@@ -784,6 +786,27 @@ def _analyse(source: str, name: str = "<module>") -> dict[str, Any]:
 
 
 _REPO_SCAN: list[dict[str, Any]] | None = None
+_SHAPE_ESCAPE_RE = re.compile(r"\\(?:[xXuUN\r\n]|[0-7]{2,3})")
+
+
+_CONTENT_DIGEST_IMPORT_RE = re.compile(
+    r"\b(?:from\s+[\w.]*content_digest\b|import\s+(?:[^\n]*|\([^)]*\))\bcontent_digest\b)"
+)
+
+
+def _needs_digest_scan(source: str) -> bool:
+    if "content_digest" in source and _CONTENT_DIGEST_IMPORT_RE.search(source) is not None:
+        return True
+    if (
+        "{" in source
+        and "}" in source
+        and ("64}" in source or "{64" in source or '"6"' in source or "'6'" in source)
+        and ("a-f" in source or "0-9" in source or "f0" in source or "9a" in source)
+    ):
+        return True
+    if _SHAPE_ESCAPE_RE.search(source) is not None:
+        return True
+    return False
 
 
 def _repo_scan() -> list[dict[str, Any]]:
@@ -796,13 +819,18 @@ def _repo_scan() -> list[dict[str, Any]]:
     global _REPO_SCAN
     if _REPO_SCAN is None:
         entries: list[dict[str, Any]] = []
-        for path in sorted(
-            candidate
-            for candidate in PACKAGE_ROOT.rglob("*.py")
-            if "__pycache__" not in candidate.parts
-        ):
-            source = path.read_text(encoding="utf-8")
-            entry = _analyse(source, str(path))
+        for path in iter_python_sources(PACKAGE_ROOT):
+            source = read_text_cached(path)
+            if _needs_digest_scan(source):
+                entry = _analyse(source, str(path))
+            else:
+                entry = {
+                    "statements": [],
+                    "constructions": [],
+                    "owner_imports": {},
+                    "owner_text_reads": [],
+                    "loaded": set(),
+                }
             entry["path"] = path
             entry["relative"] = f"loopx/{path.relative_to(PACKAGE_ROOT).as_posix()}"
             parts = list(path.relative_to(PACKAGE_ROOT.parent).parts)

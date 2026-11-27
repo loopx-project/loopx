@@ -23,6 +23,13 @@ import pathlib
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    has_char_escape,
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.issue_fix import reviewer_notification
 from loopx.domain_packs import issue_fix as issue_fix_pack
 
@@ -112,8 +119,7 @@ def module_constants(tree: ast.Module) -> dict[str, str]:
     return constants
 
 
-def version_rows(source: str, name: str) -> list[dict[str, object]]:
-    tree = ast.parse(source)
+def _version_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_constants(tree)
     rows: list[dict[str, object]] = []
     for _bound, lineno, value in stated_bindings(tree):
@@ -122,16 +128,23 @@ def version_rows(source: str, name: str) -> list[dict[str, object]]:
     return rows
 
 
+def version_rows(source: str, name: str) -> list[dict[str, object]]:
+    return _version_rows_tree(ast.parse(source), name)
+
+
 def collect(root: pathlib.Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(version_rows(source, path.relative_to(root).as_posix()))
+        if (
+            "receipt_v1" not in source
+            and not has_char_escape(source)
+        ):
+            continue
+        rows.extend(_version_rows_tree(parse_python_cached(path), path.relative_to(root).as_posix()))
     return rows
 
 

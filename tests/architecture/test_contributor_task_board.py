@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import runpy
 import shutil
@@ -13,9 +14,33 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(scope="module")
+def _shared_smoke():
+    return runpy.run_path(str(ROOT / "examples/docs-governance-smoke.py"))
+
+
+@pytest.fixture(scope="module")
+def _shared_board_tree(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("contributor-board-shared")
+    (root / "docs/architecture").mkdir(parents=True)
+    os.symlink(ROOT / "docs/architecture/rfcs", root / "docs/architecture/rfcs")
+    (root / "scripts").mkdir()
+    shutil.copyfile(
+        ROOT / "scripts/generate_rfc_status_index.py",
+        root / "scripts/generate_rfc_status_index.py",
+    )
+    return root
+
+
 @pytest.fixture
-def check_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    smoke = runpy.run_path(str(ROOT / "examples/docs-governance-smoke.py"))
+def check_board(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _shared_smoke,
+    _shared_board_tree: Path,
+):
+    smoke = _shared_smoke
     check = smoke["assert_contributor_task_board_is_current"]
     scope = check.__globals__
 
@@ -23,17 +48,27 @@ def check_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return (ROOT / path).read_text(encoding="utf-8")
 
     board = original_read("docs/development/contributor-tasks.md")
-    # The board consumes the real generator and real local RFC files. Changes to
-    # lifecycle in these disposable files must affect admission immediately.
-    shutil.copytree(
-        ROOT / "docs/architecture/rfcs", tmp_path / "docs/architecture/rfcs"
-    )
-    (tmp_path / "scripts").mkdir()
-    shutil.copyfile(
-        ROOT / "scripts/generate_rfc_status_index.py",
-        tmp_path / "scripts/generate_rfc_status_index.py",
-    )
-    monkeypatch.setitem(scope, "REPO_ROOT", tmp_path)
+    # Most tests only mutate the in-memory board text; only tests that mutate
+    # RFC files on disk need a fresh temporary RFC directory with a private copy
+    # of the edited RFC and symlinked siblings.
+    if request.node.originalname == "test_inactive_or_unmerged_design_cannot_be_available":
+        rfcs_dir = tmp_path / "docs/architecture/rfcs"
+        rfcs_dir.mkdir(parents=True)
+        for entry in (ROOT / "docs/architecture/rfcs").iterdir():
+            target = rfcs_dir / entry.name
+            if entry.name == "goal-direction-baseline-v0.md":
+                shutil.copyfile(entry, target)
+            else:
+                os.symlink(entry, target)
+        (tmp_path / "scripts").mkdir()
+        shutil.copyfile(
+            ROOT / "scripts/generate_rfc_status_index.py",
+            tmp_path / "scripts/generate_rfc_status_index.py",
+        )
+        board_root = tmp_path
+    else:
+        board_root = _shared_board_tree
+    monkeypatch.setitem(scope, "REPO_ROOT", board_root)
 
     def run(updated: str = board) -> None:
         monkeypatch.setitem(
@@ -56,7 +91,7 @@ def check_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "| Synthetic admission gap. Exit: preserve canonical admission. "
         "| Focused admission negative controls | Available |"
     )
-    return run, board.replace(first_row, fixture_row, 1), tmp_path
+    return run, board.replace(first_row, fixture_row, 1), board_root
 
 
 def edit_row(
