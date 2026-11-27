@@ -650,9 +650,9 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     code, page = cli._run_cli(registry, runtime, *reader[reader.index("quota"):], "--select", selector, cwd=project)
     assert code == 0 and page["eof"], page
     authoring = selected_context_values(page["content"])[selector]
-    assert authoring["path_delta"]["material_closeout_continuation_outcomes"] == ["continue", "no_change", "replan"]
+    assert authoring["path_delta"]["open_stage_closeout_outcomes"] == ["continue", "no_change", "replan"]
     assert "wait" in authoring["path_delta"]["outcomes"]
-    assert "path_delta.reentry_condition" in authoring["rule"]
+    assert "Record waits in reentry_condition" in authoring["rule"]
 
     dependency = "Continue when the next verification input is available."
     vision = authoring["minimal_example"]

@@ -123,7 +123,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
     path_delta: {
       schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
       outcomes: [...GOAL_PATH_DELTA_OUTCOMES],
-      material_closeout_continuation_outcomes: [...OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES],
+      open_stage_closeout_outcomes: [...OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES],
       required: ["outcome", "prior_assumption", "observed_reality"],
       require_any: ["retained", "changed", "stopped"],
       scalar_limits: {...GOAL_PATH_DELTA_SCALAR_LIMITS},
@@ -132,8 +132,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       )),
     },
     rule: "Material closeout: acceptance_summary + evidence-linked path_delta. " +
-      "While the stage stays open, use path_delta.material_closeout_continuation_outcomes. " +
-      "Describe any pending dependency in path_delta.reentry_condition. " +
+      "Record waits in reentry_condition. " +
       (autonomousReplan
         ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
         : "Changed mainline: outcome=replan. ") +

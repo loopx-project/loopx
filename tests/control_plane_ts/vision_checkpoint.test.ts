@@ -560,9 +560,9 @@ test("material closeout leaves an invalid path decision recoverable", () => {
   const allowedOutcomes = ["continue", "no_change", "replan"];
   const authoring = visionAuthoringContract();
   const pathAuthoring = authoring.path_delta as Record<string, unknown>;
-  assert.deepEqual(pathAuthoring.material_closeout_continuation_outcomes, allowedOutcomes);
+  assert.deepEqual(pathAuthoring.open_stage_closeout_outcomes, allowedOutcomes);
   assert.deepEqual(pathAuthoring.outcomes, ["ask_human", "continue", "no_change", "replan", "stop", "wait"]);
-  assert.match(String(authoring.rule), /path_delta\.reentry_condition/);
+  assert.match(String(authoring.rule), /Record waits in reentry_condition/);
 
   const dependency = "Resume after the independent result is available.";
   const packet = (outcome: string) => ({
