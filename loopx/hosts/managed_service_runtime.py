@@ -23,8 +23,10 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from xml.parsers.expat import ExpatError
 
 from ..file_lock import exclusive_file_lock, write_bytes_atomic, write_json_atomic
+from ..release_manifest import RUNTIME_IDENTITY_SCHEMA_VERSION
 from .. import runtime_activation as activation
 
 
@@ -135,13 +137,13 @@ def has_runtime_binding() -> bool:
     return False
 
 
-def _service_command(payload: dict) -> tuple[dict[str, str], list[str]]:
+def _service_command(payload: dict, *, expected_command: str | None = None) -> tuple[dict[str, str], list[str]]:
     arguments, _ = _launcher(payload)
     #  Parse the command
     # position, rather than finding a word that could be an option's value.
     # This adapter accepts the installer's global options; custom invocations
     # remain under their original owner without any signal or persistent edit.
-    expected = {"com.loopx.status": "serve-status", "com.loopx.chat": "chat"}.get(payload.get("Label"))
+    expected = expected_command or {"com.loopx.status": "serve-status", "com.loopx.chat": "chat"}.get(payload.get("Label"))
     if expected is None or Path(arguments[0]).name != "loopx":
         raise ValueError("service_runtime_route_unverified")
     index = 1
@@ -158,8 +160,8 @@ def _service_command(payload: dict) -> tuple[dict[str, str], list[str]]:
     return options, arguments[index + 1:]
 
 
-def _endpoint(payload: dict) -> int:
-    _, arguments = _service_command(payload)
+def _endpoint(payload: dict, *, expected_command: str | None = None) -> int:
+    _, arguments = _service_command(payload, expected_command=expected_command)
     def option(flag):
         values = [word.split("=", 1)[1] if word.startswith(flag + "=")
             else arguments[i + 1] if i + 1 < len(arguments) else ""
@@ -176,6 +178,23 @@ def _endpoint(payload: dict) -> int:
     if not 1 <= port <= 65535:
         raise ValueError("service_runtime_route_unverified")
     return port
+
+
+def legacy_restart_endpoint(plist: Path, launcher: Path) -> int:
+    """Verify the loaded legacy route without retargeting its installation."""
+    if plist.is_symlink():
+        raise ValueError("service_runtime_route_unverified")
+    payload = plistlib.loads(plist.read_bytes())
+    if not isinstance(payload, dict) or payload.get("Label") != plist.stem:
+        raise ValueError("service_runtime_route_unverified")
+    arguments, _ = _launcher(payload)
+    if Path(arguments[0]).resolve(strict=True) != launcher:
+        raise ValueError("service_runtime_route_unverified")
+    loaded, _ = activation._managed_service_state(plist, payload=payload)
+    if not loaded:
+        raise ValueError("service_runtime_route_unverified")
+    command = "chat" if plist.stem.endswith(".chat") else "serve-status"
+    return _endpoint(payload, expected_command=command)
 
 
 def _observer_route(payload: dict) -> Path:
@@ -340,13 +359,64 @@ def _start_order(paths):
     return sorted(paths, key=lambda path: path.stem != _OBSERVER_LABEL)
 
 
+def _serving_identity(opener: urllib.request.OpenerDirector, path: Path, port: int) -> dict | None:
+    status = path.stem.endswith(".status")
+    url = f"http://127.0.0.1:{port}" + ("/?readiness=1" if status else "/api/chat/readiness")
+    try:
+        try:
+            response = opener.open(url, timeout=0.5)
+        except urllib.error.HTTPError as exc:
+            if status or exc.code != 404:
+                raise
+            response = opener.open(f"http://127.0.0.1:{port}/api/chat/capabilities", timeout=0.5)
+        with response:
+            body = response.read(1024 * 1024 + 1)
+        if len(body) > 1024 * 1024:
+            return None
+        observed = json.loads(body)
+        if isinstance(observed, dict):
+            readiness = observed.get("readiness")
+            ready = (observed.get("source") == "serve-status"
+                and isinstance(readiness, dict) and readiness.get("state") == "ready") if status else (
+                observed.get("schema_version") == "loopx_chat_capabilities_v1" or
+                (observed.get("schema_version") == "loopx_chat_readiness_v1"
+                    and observed.get("ok") is True and observed.get("state") == "ready"))
+            identity = observed.get("runtime_identity")
+            if ready and isinstance(identity, dict):
+                return identity
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def managed_services_match_runtime(plists: list[Path], identity: dict) -> bool:
+    """Prove an unbound standard service already serves the installed package."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        for path in plists:
+            if path.is_symlink():
+                return False
+            payload = plistlib.loads(path.read_bytes())
+            if not isinstance(payload, dict) or payload.get("Label") != path.stem:
+                return False
+            port = _endpoint(payload)
+            if not all(activation._managed_service_state(path, payload=payload)):
+                return False
+            if _serving_identity(opener, path, port) != identity:
+                return False
+        return bool(plists)
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError, subprocess.SubprocessError):
+        return False
+
+
 def _verify_services(
     services: dict[Path, int],
     identity: dict,
     *,
     timeout_seconds: float = _SERVICE_READINESS_TIMEOUT_SECONDS,
 ) -> None:
-    #  Read back the
+    # A working CLI does not prove its Chat assets can serve. Read back the
+
     # exact HTTP runtime before committing the handoff; a failed start restores
     # the original manager configuration instead of leaving the App spinning.
     pending = dict(services)
@@ -354,39 +424,17 @@ def _verify_services(
     deadline = time.monotonic() + timeout_seconds
     while pending and time.monotonic() < deadline:
         for path, port in list(pending.items()):
-            status = path.stem.endswith(".status")
-            url = f"http://127.0.0.1:{port}" + ("/?readiness=1" if status else "/api/chat/readiness")
-            try:
-                try:
-                    response = opener.open(url, timeout=0.5)
-                except urllib.error.HTTPError as exc:
-                    if status or exc.code != 404:
-                        raise
-                    response = opener.open(f"http://127.0.0.1:{port}/api/chat/capabilities", timeout=0.5)
-                with response:
-                    body = response.read(1024 * 1024 + 1)
-                    if len(body) > 1024 * 1024:
-                        continue
-                    observed = json.loads(body)
-                if not isinstance(observed, dict):
-                    continue
-                readiness = observed.get("readiness")
-                ready = (observed.get("source") == "serve-status"
-                    and isinstance(readiness, dict) and readiness.get("state") == "ready") if status else (
-                    observed.get("schema_version") == "loopx_chat_capabilities_v1" or
-                    (observed.get("schema_version") == "loopx_chat_readiness_v1"
-                        and observed.get("ok") is True and observed.get("state") == "ready"))
-                if ready and observed.get("runtime_identity") == identity:
-                    pending.pop(path)
-            except (OSError, ValueError):
-                pass
+            if _serving_identity(opener, path, port) == identity:
+                pending.pop(path)
         if pending:
             time.sleep(0.1)
     if pending:
         raise RuntimeError("service_runtime_alignment_failed")
 
 
-def align_managed_runtime(executable: str) -> dict:
+def align_managed_runtime(
+    executable: str, *, expected_python_identity: dict | None = None,
+) -> dict:
     """Align the standard desktop services once, with rollback and Chat fencing.
 
     This is an explicit activation operation, not an installer or a change to
@@ -397,7 +445,9 @@ def align_managed_runtime(executable: str) -> dict:
     journal = directory / ".loopx-runtime-activation.json"
     with exclusive_file_lock(directory / ".loopx-runtime-activation.lock", timeout_seconds=2):
         _recover_alignment(journal)
-        return _align_managed_runtime(executable, journal)
+        return _align_managed_runtime(
+            executable, journal, expected_python_identity=expected_python_identity,
+        )
 
 
 def _recover_alignment(journal: Path) -> None:
@@ -482,7 +532,7 @@ def _recover_alignment(journal: Path) -> None:
         journal.unlink()
 
 
-def _align_managed_runtime(executable: str, journal: Path) -> dict:
+def _qualified_runtime(executable: str | Path) -> tuple[Path, dict, str]:
     target = Path(executable)
     if not target.is_absolute() or not target.is_file() or not os.access(target, os.X_OK):
         raise ValueError("service_runtime_unverified")
@@ -502,13 +552,38 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
     python = python_info.get("executable") if isinstance(python_info, dict) else None
     if (doctor.returncode or qualified.get("ok") is not True
             or qualified.get("scope") != "installation_only"
-            or not isinstance(identity, dict) or identity.get("schema_version") != "loopx_runtime_identity_v1"
+            or not isinstance(identity, dict) or identity.get("schema_version") != RUNTIME_IDENTITY_SCHEMA_VERSION
             or not isinstance(python, str) or not Path(python).is_absolute()):
         raise ValueError("service_runtime_unverified")
+    return target, identity, python
 
+
+def qualify_expected_python_runtime(
+    executable: str | Path | None, expected_identity: dict,
+) -> tuple[Path, dict, str]:
+    """Check that the live install is the package the updater already checked."""
+    if executable is None:
+        raise activation.RuntimeActivationIdentityUnverified()
+    try:
+        qualified = _qualified_runtime(executable)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise activation.RuntimeActivationIdentityUnverified() from exc
+    if qualified[1] != expected_identity:
+        raise activation.RuntimeActivationIdentityUnverified()
+    return qualified
+
+
+def _align_managed_runtime(
+    executable: str, journal: Path, *, expected_python_identity: dict | None = None,
+) -> dict:
+    target, identity, python = (
+        qualify_expected_python_runtime(executable, expected_python_identity)
+        if expected_python_identity is not None else _qualified_runtime(executable)
+    )
     plists = [Path.home() / "Library/LaunchAgents" / f"com.loopx.{kind}.plist"
         for kind in ("status", "chat")]
     originals, updates, pids, endpoints = {}, {}, {}, {}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     for plist in plists:
         if not plist.exists():
             continue
@@ -527,6 +602,14 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
             originals[plist] = original
             updates[plist] = plistlib.dumps(updated)
             pids[plist] = pid
+        elif pid and identity.get("package_fingerprint"):
+            # Pip and pipx can replace bytes in place. A verified old runtime
+            # on the same managed route still requires a fenced handoff.
+            running = _serving_identity(opener, plist, endpoints[plist])
+            if (running and running.get("schema_version") == identity["schema_version"]
+                    and running != identity):
+                originals[plist] = updates[plist] = original
+                pids[plist] = pid
     chat = [p for p in plists if p.exists() and p.stem.endswith(".chat")]
     observer = journal.parent / f"{_OBSERVER_LABEL}.plist"
     observer_root = None
@@ -579,6 +662,11 @@ def _align_managed_runtime(executable: str, journal: Path) -> dict:
                     or _chat_account_root(plistlib.loads(chat[0].read_bytes())) != observer_root.resolve()):
                 raise ValueError("native_observer_owner_unverified")
             observer_handed_off_from_chat = lock_pid != pid
+        # Route and service checks above can outlast an external package replacement.
+        if expected_python_identity is not None and qualify_expected_python_runtime(
+            executable, expected_python_identity,
+        ) != (target, identity, python):
+            raise activation.RuntimeActivationIdentityUnverified()
         write_json_atomic(journal, {"schema_version": "loopx_managed_runtime_handoff_v1",
             "services": {p.stem: {"original": base64.b64encode(originals[p]).decode(),
                 "candidate": base64.b64encode(updates[p]).decode()} for p in updates}},

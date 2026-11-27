@@ -22,8 +22,10 @@ from .activation_qualification import (
     runtime_activation_qualification,
 )
 from .doctor import collect_doctor
+from .control_plane.content_digest import ENVELOPED_SHA256_PATTERN
 from .install_contract import NO_CLONE_INSTALL_URL
 from .python_install_owner import interpreter_invocation
+from .release_manifest import RUNTIME_IDENTITY_SCHEMA_VERSION, release_runtime_identity
 from .runtime_activation import restart_services_for_runtime_activation
 from .self_update_download import run_archive_installer
 
@@ -42,16 +44,35 @@ PERSISTED_PYTHON_FILENAME = ".loopx-python"
 _PACKAGE_VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"([^"]+)"$', re.MULTILINE)
 
 
-def _installed_readback(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def _installed_readback(
+    result: subprocess.CompletedProcess[str], *, installation_only: bool = False,
+) -> dict[str, Any]:
     try:
         doctor = json.loads(result.stdout)
         if isinstance(doctor, dict):
+            if installation_only and (
+                doctor.get("scope") != "installation_only" or doctor.get("ok") is not True
+            ):
+                return {}
             identity = doctor.get("service_runtime_identity")
             if isinstance(identity, dict):
                 return identity
     except (ValueError, TypeError):
         pass
     return {}
+
+
+def _python_package_key(identity: dict[str, Any]) -> tuple[str, str] | None:
+    version = identity.get("package_version")
+    fingerprint = identity.get("package_fingerprint")
+    if (
+        identity.get("schema_version") == RUNTIME_IDENTITY_SCHEMA_VERSION
+        and isinstance(version, str) and version
+        and isinstance(fingerprint, str)
+        and ENVELOPED_SHA256_PATTERN.fullmatch(fingerprint)
+    ):
+        return version, fingerprint
+    return None
 
 
 class UpdateAction(StrEnum):
@@ -1023,45 +1044,44 @@ def _execute_python_distribution_update(
     )
     driver = lifecycle.get("execution_driver")
     package_manager_environment = lifecycle.get("package_manager_environment")
+    # Keep the owning interpreter and its user site, while ignoring a caller's
+    # checkout and PYTHONPATH. The worker itself is already pinned at startup.
+    python_module = [sys.executable, "-E", "-P", "-m"]
+    runtime_cli = [*python_module, "loopx.cli", *route_arguments]
+    runtime_env = os.environ.copy()
+    runtime_env.pop("LOOPX_RELEASE_ROOT", None)
     install_command = (
         ["pipx", "upgrade", str(package_manager_environment or "loopx")]
         if driver == "python_pipx"
-        else [sys.executable, "-m", "pip", "install", "--upgrade", "loopx"]
+        else [*python_module, "pip", "install", "--upgrade", "loopx"]
     )
     commands = {
         "install": install_command,
-        "authority_upgrade": [sys.executable, "-m", "loopx.cli", "--format", "json",
+        "installation_readback": [*runtime_cli, "--format", "json", "doctor", "--installation-only"],
+        "authority_upgrade": [*runtime_cli, "--format", "json",
                               "authority-archive", "upgrade", "--all-known", "--execute"],
         "workflow_skills": [
-            sys.executable,
-            "-m",
-            "loopx.cli",
+            *runtime_cli,
             "workflow-skills",
             "--install",
             "--format",
             "json",
         ],
         "slash_commands": [
-            sys.executable,
-            "-m",
-            "loopx.cli",
+            *runtime_cli,
             "slash-commands",
             "--install",
             "--format",
             "json",
         ],
         "doctor": [
-            sys.executable,
-            "-m",
-            "loopx.cli",
+            *runtime_cli,
             "doctor",
             "--format",
             "json",
         ],
         "extension_doctor": [
-            sys.executable,
-            "-m",
-            "loopx.cli",
+            *runtime_cli,
             "extension",
             "doctor",
             "--all-enabled",
@@ -1070,9 +1090,9 @@ def _execute_python_distribution_update(
             "json",
         ],
     }
-    for step, command in commands.items():
-        if step != "install":
-            command[3:3] = route_arguments
+    host_steps = ("authority_upgrade", "workflow_skills", "slash_commands", "doctor")
+    previous_identity = release_runtime_identity(Path(__file__).resolve().parents[1])
+    installed_identity: dict[str, Any] = {}
     results: dict[str, subprocess.CompletedProcess[str]] = {}
     progress("Updating CLI through its Python package manager")
     results["install"] = subprocess.run(
@@ -1082,35 +1102,75 @@ def _execute_python_distribution_update(
         timeout=timeout_seconds,
     )
     if results["install"].returncode == 0:
-        for step in ("authority_upgrade", "workflow_skills", "slash_commands", "doctor"):
+        for step in ("installation_readback", *host_steps):
             progress(f"Validating updated runtime: {step}")
             results[step] = subprocess.run(
                 commands[step],
                 text=True, encoding="utf-8", errors="replace",
-                capture_output=True,
+                capture_output=True, env=runtime_env,
                 timeout=timeout_seconds,
             )
             if results[step].returncode != 0:
                 break
+            if step == "installation_readback":
+                installed_identity = _installed_readback(results[step], installation_only=True)
+                if _python_package_key(installed_identity) is None:
+                    break
         if all(
             step in results and results[step].returncode == 0
-            for step in ("authority_upgrade", "workflow_skills", "slash_commands", "doctor")
+            for step in host_steps
         ):
             results["extension_doctor"] = subprocess.run(
                 commands["extension_doctor"],
                 text=True, encoding="utf-8", errors="replace",
-                capture_output=True,
+                capture_output=True, env=runtime_env,
+                timeout=timeout_seconds,
+            )
+            progress("Rechecking package identity after extension validation")
+            results["activation_readback"] = subprocess.run(
+                commands["installation_readback"],
+                text=True, encoding="utf-8", errors="replace",
+                capture_output=True, env=runtime_env,
                 timeout=timeout_seconds,
             )
 
+    previous_key = _python_package_key(previous_identity)
+    installed_key = _python_package_key(installed_identity)
+    # Host-material checks can overlap another installer. Never certify the
+    # earlier package, or align services to it, after Doctor observes new bytes.
+    final_doctor = results.get("doctor")
+    final_identity = _installed_readback(final_doctor) if final_doctor is not None else {}
+    final_key = _python_package_key(final_identity)
+    activation_doctor = results.get("activation_readback")
+    activation_identity = (
+        _installed_readback(activation_doctor, installation_only=True)
+        if activation_doctor is not None and activation_doctor.returncode == 0 else {}
+    )
+    identity_verified = (
+        previous_key is not None and installed_key is not None
+        and (final_doctor is None or final_key == installed_key)
+        and (activation_doctor is None or _python_package_key(activation_identity) == installed_key)
+    )
+    installed_launcher = None
+    launcher_readback = activation_doctor or final_doctor
+    if launcher_readback is not None and launcher_readback.returncode == 0:
+        try:
+            launcher = json.loads(launcher_readback.stdout).get("path", {}).get("loopx")
+            if isinstance(launcher, str) and Path(launcher).is_absolute():
+                installed_launcher = Path(launcher)
+        except (ValueError, AttributeError):
+            pass
     execution: dict[str, Any] = {
         "driver": driver,
         "python_executable": sys.executable,
         "install_returncode": results["install"].returncode,
         "install_stdout_tail": results["install"].stdout[-2000:],
         "install_stderr_tail": results["install"].stderr[-2000:],
+        "previous_runtime_identity": previous_identity,
+        "installed_runtime_identity": installed_identity,
+        "package_identity_verified": identity_verified,
     }
-    for step in ("authority_upgrade", "workflow_skills", "slash_commands", "doctor", "extension_doctor"):
+    for step in ("installation_readback", *host_steps, "extension_doctor", "activation_readback"):
         result = results.get(step)
         if result is None:
             execution[f"{step}_status"] = "skipped_prior_step_failed"
@@ -1118,40 +1178,37 @@ def _execute_python_distribution_update(
         execution[f"{step}_returncode"] = result.returncode
         execution[f"{step}_stdout_tail"] = result.stdout[-2000:]
         execution[f"{step}_stderr_tail"] = result.stderr[-2000:]
-        if step == "doctor" and result.returncode == 0:
-            execution["installed_runtime_identity"] = _installed_readback(result)
-
-    runtime_steps = (
-        "install",
-        "authority_upgrade",
-        "workflow_skills",
-        "slash_commands",
-        "doctor",
-    )
-    runtime_ready = all(
-        step in results and results[step].returncode == 0 for step in runtime_steps
+    runtime_ready = identity_verified and all(
+        step in results and results[step].returncode == 0 for step in host_steps
     )
     extension_ready = (
         "extension_doctor" in results and results["extension_doctor"].returncode == 0
     )
     updated = dict(payload)
     updated["execution"] = execution
-    updated["ok"] = runtime_ready and extension_ready
-    updated["changes_applied"] = results["install"].returncode == 0
+    changes_applied = identity_verified and previous_key != installed_key
     execution.update(
         restart_services_for_runtime_activation(
-            changes_applied=updated["changes_applied"],
+            changes_applied=changes_applied,
             runtime_ready=runtime_ready,
+            installed_python_identity=activation_identity if runtime_ready else None,
+            installed_bin=installed_launcher,
         )
     )
-    if _retain_pending_service_activation(updated):
+    identity_verified = execution["package_identity_verified"]
+    runtime_ready = runtime_ready and identity_verified
+    updated["changes_applied"] = changes_applied and identity_verified
+    updated["ok"] = runtime_ready and extension_ready
+    if identity_verified and _retain_pending_service_activation(updated):
         return updated
     if updated["ok"]:
         updated["recommended_action"] = (
-            "PyPI update and host-material readback passed; use the new LoopX process"
+            "Python package update and host-material readback passed; use the new LoopX process"
+            if updated["changes_applied"]
+            else "The installed Python package is unchanged; host-material readback passed"
         )
         updated["next_action"] = {
-            "kind": "use_updated_runtime",
+            "kind": "use_updated_runtime" if updated["changes_applied"] else "review_execution",
             "command": "loopx doctor",
             "mutating": False,
             "requires_explicit_approval": False,
@@ -1159,13 +1216,25 @@ def _execute_python_distribution_update(
         }
     elif runtime_ready:
         updated["recommended_action"] = (
-            "the updated runtime is installed and serving; repair the blocked "
+            "the installed runtime passed its core checks; repair the blocked "
             "enabled extension providers, then rerun "
             "`loopx extension doctor --all-enabled --execute`"
         )
         updated["next_action"] = {
             "kind": "repair_blocked_extensions",
             "command": "loopx extension doctor --all-enabled --execute",
+            "mutating": False,
+            "requires_explicit_approval": False,
+            "reason": updated["recommended_action"],
+        }
+    elif results["install"].returncode == 0 and not identity_verified:
+        updated["recommended_action"] = (
+            "the package manager succeeded, but the installed package change could not be "
+            "verified; inspect the installation with `loopx doctor --installation-only`"
+        )
+        updated["next_action"] = {
+            "kind": "review_update_failure",
+            "command": "loopx doctor --installation-only",
             "mutating": False,
             "requires_explicit_approval": False,
             "reason": updated["recommended_action"],

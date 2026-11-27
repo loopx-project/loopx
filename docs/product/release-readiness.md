@@ -70,6 +70,18 @@ current data. Use `loopx update plan
 qualification. Re-running the curl installer remains a repair path when an
 archive wrapper is too broken to run its own updater.
 
+For pip and pipx, `changes_applied` reports an observed change to the installed
+package version or fingerprint. A successful apply can leave the package
+unchanged and still refresh host material or reconcile a stale service.
+`execution.restarted_services` records the services actually restarted. The
+updater rechecks the package after extension validation and inside the managed
+service handoff. If identity cannot be verified, the update retains the
+package-manager result and directs you to `loopx doctor --installation-only` in
+the owning Python environment before retrying.
+An unbound service can restart through its verified launcher and needs matching
+HTTP readiness before activation succeeds. A mismatched route or response
+leaves activation pending.
+
 For contributors, keep the clone-plus-canary path:
 
 ```bash

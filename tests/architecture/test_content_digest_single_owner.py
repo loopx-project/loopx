@@ -230,6 +230,7 @@ CONSUMER_MODULES = (
     "loopx.presentation.chat_bundle",
     "loopx.presentation.content_media_api",
     "loopx.presentation.static_site",
+    "loopx.self_update",
 )
 
 # A consumer that hands `re` a pattern this file cannot fold. Folding reads
