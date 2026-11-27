@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
-from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -398,19 +397,6 @@ def as_str_list(value: object) -> list[str]:
 def as_int(value: object, default: int = 0) -> int:
     """Return value when it is a non-bool int, otherwise default."""
     return value if isinstance(value, int) and not isinstance(value, bool) else default
-
-
-def iso_timestamp_seconds(value: object) -> float | None:
-    """Parse an ISO-8601 timestamp into UTC epoch seconds, or None."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
 
 
 def same_report_validator_command(frozen_cmd: object, request_cmd: object) -> bool:

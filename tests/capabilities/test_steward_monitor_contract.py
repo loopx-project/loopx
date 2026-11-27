@@ -372,6 +372,40 @@ def test_steward_retry_cooldowns_use_the_retained_completion_instant(
     assert StewardTurnHost.monitor_restart_request({**monitor, "error_code": "unrelated"}, now=monitor_due) is None
 
 
+def test_both_retry_cooldowns_preserve_far_future_microseconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    from math import inf, nextafter
+    import time
+
+    from loopx.capabilities.native_chat import steward_turn
+
+    completed_second = int(datetime(9999, 12, 31, 23, 50, tzinfo=timezone.utc).timestamp())
+    completed = {"completed_at": "9999-12-31T23:50:00.000001Z"}
+    original = {
+        **completed, "status": "failed", "error_code": "runtime_unavailable", "turn_id": "retained-monitor",
+        "loopx_request": {"work_kind": "monitor", "monitor_restart_recovery": {"original_turn_id": "prior"}},
+    }
+    advancement_second = completed_second + ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+    monitor_second = completed_second + steward_turn.MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS
+    clock_ns = 0
+    monkeypatch.setattr(time, "time_ns", lambda: clock_ns)
+    monkeypatch.setattr(time, "time", lambda: clock_ns / 1_000_000_000)
+
+    for offset in (-1_000, -1, 0, 1_000):
+        clock_ns = advancement_second * 1_000_000_000 + 1_000 + offset
+        followup_due = steward_monitor_turns._past_precommit_cooldown(completed, None)
+        clock_ns = monitor_second * 1_000_000_000 + 1_000 + offset
+        recovery_due = steward_turn.StewardTurnHost.monitor_restart_request(original) is not None
+        assert (followup_due, recovery_due) == (offset >= 0, offset >= 0)
+
+    assert not steward_monitor_turns._past_precommit_cooldown(completed, float(advancement_second))
+    assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=float(monitor_second)) is None
+    assert steward_monitor_turns._past_precommit_cooldown(completed, nextafter(advancement_second, inf))
+    assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=nextafter(monitor_second, inf)) is not None
+    for invalid_now in (inf, -inf, float("nan")):
+        assert not steward_monitor_turns._past_precommit_cooldown(completed, invalid_now)
+        assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=invalid_now) is None
+
+
 def test_advancement_retry_exhaustion_and_lookup_cache_efficiency(tmp_path: Path) -> None:
     store = ChatSessionStore(tmp_path / "chat")
     counting_store = _CountingTurnLookupStore(store)

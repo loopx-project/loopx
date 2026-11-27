@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from copy import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -18,7 +17,6 @@ if TYPE_CHECKING:
     from ...chat_store import ChatSessionStore
 
 from ...control_plane.goals.activation import goal_is_stopped
-from ...control_plane.runtime.time import parse_timestamp
 from ...file_lock import exclusive_file_lock
 from .report_failure_proof import (
     build_report_quota_request,
@@ -65,6 +63,7 @@ from .steward_turn_common import (
     split_bounded_evidence_items,
     split_evidence_text_chunks,
 )
+
 from .steward_turn_context import (
     apply_steward_user_actions,
     governance_replan_context,
@@ -92,31 +91,6 @@ from .steward_turn_recovery import (
 _append_bounded_ellipsis = append_bounded_ellipsis
 _split_bounded_evidence_items = split_bounded_evidence_items
 _split_evidence_text_chunks = split_evidence_text_chunks
-
-def _iso_timestamp_seconds(completed_at: object) -> float | None:
-    parsed = parse_timestamp(completed_at) if isinstance(completed_at, str) else None
-    return parsed.timestamp() if parsed is not None else None
-
-
-def _normalize_monitor_completion(turn: Mapping[str, object]) -> dict[str, object]:
-    if "completed_at" not in turn:
-        return dict(turn)
-    completed_at = turn["completed_at"]
-    parsed = parse_timestamp(completed_at) if isinstance(completed_at, str) else None
-    return {**turn, "completed_at": parsed.isoformat() if parsed is not None else None}
-
-
-class _MonitorRestartStore:
-    def __init__(self, store: StewardStoreProtocol) -> None:
-        self._store = store
-        self.retained_turn: dict[str, object] | None = None
-
-    def __getattr__(self, name: str) -> object:
-        return getattr(self._store, name)
-
-    def turn_for_client(self, session_id: str, client_turn_id: str) -> dict[str, object] | None:
-        self.retained_turn = self._store.turn_for_client(session_id, client_turn_id)
-        return _normalize_monitor_completion(self.retained_turn) if self.retained_turn is not None else None
 
 
 class StewardTurnHost:
@@ -351,20 +325,13 @@ class StewardTurnHost:
         original: Mapping[str, object], *, now: float | None = None
     ) -> dict[str, object] | None:
         """Prepare correlation only; current typed admission decides recovery."""
-        return monitor_restart_request(_normalize_monitor_completion(original), now=now)
+        return monitor_restart_request(original, now=now)
 
     def monitor_restart_carrier(
         self, original: Mapping[str, object], client_id: str
     ) -> MonitorRestartCarrier | None:
         """Find the latest carrier for the same observation; typed admission proves a safe restart."""
-        # shortcut: Normalize at the host until the extracted recovery helpers use the shared parser.
-        restart_store = _MonitorRestartStore(self.store)
-        restart_host = copy(self)
-        restart_host.store = cast(StewardStoreProtocol, restart_store)
-        carrier = monitor_restart_carrier(restart_host, _normalize_monitor_completion(original), client_id)
-        if carrier is not None and "turn" in carrier and restart_store.retained_turn is not None:
-            carrier["turn"].update(restart_store.retained_turn)
-        return carrier
+        return monitor_restart_carrier(self, original, client_id)
 
     def _report_continuation_basis(
         self, request: Mapping[str, object], *, recovery_key: str, basis_key: str
