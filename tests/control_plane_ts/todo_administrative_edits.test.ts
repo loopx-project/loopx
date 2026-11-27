@@ -1,37 +1,23 @@
 import assert from "node:assert/strict";
-import {randomUUID} from "node:crypto";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
-import {Pool} from "pg";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {executeCoordinationTodoUpdate, type CoordinationTodoUpdateInput} from "../../loopx/control_plane/coordination/todo_update.ts";
 
 const GOAL = "administrative-edits";
 const NOW = new Date("2026-09-25T06:00:00Z");
-const pool = process.env.LOOPX_TEST_POSTGRES_URL ? new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL}) : null;
-const database = pool && {connect: async () => {
-  const client = await pool.connect();
-  return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-    release: (error?: Error) => client.release(error)};
-}};
-const installed = database && installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-test.after(async () => { await pool?.end(); });
 
-async function fixture(t: test.TestContext, provider: "file" | "sqlite" | "postgresql", leaseState: string | null = "active") {
+async function fixture(t: test.TestContext, provider: "file" | "sqlite", leaseState: string | null = "active") {
   const root = await mkdtemp(join(tmpdir(), "loopx-administrative-"));
   t.after(() => rm(root, {recursive: true, force: true}));
-  await installed;
-  const store: AuthorityStore = provider === "postgresql"
-    ? new PostgreSqlAuthorityStore(database!, {tenant_id: `test-${randomUUID()}`, goal_id: GOAL})
-    : provider === "file" ? new FileAuthorityStore(root, GOAL) : new SqliteAuthorityStore(root, GOAL);
+  const store: AuthorityStore = provider === "file" ? new FileAuthorityStore(root, GOAL) : new SqliteAuthorityStore(root, GOAL);
   const todo = {schema_version: "todo_item_v0", todo_id: "todo_work", source_section: "Agent Todo", role: "agent", status: "open",
     done: false, archive_state: "active", claimed_by: "agent-a", text: "Original task",
     task_class: "advancement_task", task_repository: "git:github.com/example/project", required_write_scopes: ["src/**"], completion_validation_required: true};
@@ -58,8 +44,8 @@ async function head(store: AuthorityStore) {
   return read;
 }
 
-for (const provider of ["file", "sqlite", "postgresql"] as const) {
-  const options = {skip: provider === "postgresql" && !pool ? "requires isolated real PostgreSQL" : false};
+for (const provider of ["file", "sqlite"] as const) {
+  const options = {};
   for (const state of [null, "active", "expired", "released"]) test(`${provider}: owner metadata needs no execution grant (${state})`, options, async t => {
     const {store, input} = await fixture(t, provider, state);
     const before = await head(store);

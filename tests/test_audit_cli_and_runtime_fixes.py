@@ -17,15 +17,12 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_cli_build_parser_accepts_postgres_subcommands() -> None:
+def test_cli_build_parser_rejects_removed_postgres_subcommand() -> None:
     from loopx.cli import build_parser
 
     parser = build_parser()
-    parsed = parser.parse_args(["postgres", "--format", "json", "setup", "--execute"])
-    assert parsed.command == "postgres"
-    assert parsed.postgres_action == "setup"
-    assert parsed.subcommand_format == "json"
-    assert parsed.execute is True
+    with pytest.raises(SystemExit):
+        parser.parse_args(["postgres", "--format", "json", "setup", "--execute"])
 
 
 def test_opencode2_goal_worker_routes_stderr_and_preserves_failure_exit(

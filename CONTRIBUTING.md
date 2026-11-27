@@ -202,7 +202,6 @@ fixing it there.
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
 | `ci-maintenance.yml` | opened, reopened, edited, updated or closed PR (`pull_request_target`, trusted base code only) | no | inspects potential stale PR comparisons without mutating the head or target; cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
-| `postgresql-integration.yml` | control-plane or npm lockfile paths (plus nightly schedule) | no | PostgreSQL authority store and service on a temporary instance |
 | `package-smoke.yml` | `packages/**`, distribution tests, extension entrypoints, and `pyproject.toml` (plus `main` push and nightly schedule) | no | `loopx-core` and extension packages install, entrypoints, and example schemas |
 | `release-artifacts.yml` | release, installer, packaging metadata, and browser recovery paths (plus `release` and read-only nightly schedule) | no | release identity and a release build from this source |
 | `runtime-snapshots.yml` | runtime artifact, installer, and updater paths | no | qualified, revision-addressed runtime archives and the main channel pointer |

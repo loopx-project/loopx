@@ -226,25 +226,26 @@ lease proof. Before downgrading to a version without this protocol, finish v1
 pending settlements; older binaries cannot interpret them. Never disable a
 writer fence to recover by writing an older Markdown projection.
 
-The bounded source rehearsal reads a stable Markdown snapshot, including
-unreferenced archives, and adds synthetic records only in disposable runtimes.
-Use a baseline that supports the same authority format and Monitor reactivation;
-all four arms must preserve the full source records and reach identical heads.
-The disposable cases use `soft_claim` for observation and `hard_lease` for
+The bounded source rehearsal in `loopx-project/loopx` reads a stable Markdown
+snapshot, including unreferenced archives, and adds synthetic records only in
+disposable `File` and `SQLite` runtimes alongside the baseline. Use a baseline
+that supports the same authority format and Monitor reactivation; all three
+arms must preserve the full source records and reach identical heads. The
+disposable cases use `soft_claim` for observation and `hard_lease` for
 execution. These fixture transitions do not qualify policy migration, whole-Goal
-recovery, or the contents of a selected canonical store. It requires an isolated
-PostgreSQL URL:
+recovery, or the contents of a selected canonical store (server-side PostgreSQL
+service admission and integration qualification live in
+`loopx-project/loopx-cloud`, with pre-split self-hosted references at `v2.4.0`):
 
-有界演练读取稳定的 Markdown 快照，保留无依赖关系的完整归档；仅在临时运行目录添加
-合成记录。基线须支持相同的权威存储格式及 Monitor 重启语义，四组最终状态必须一致。
-观察使用 `soft_claim`，执行使用 `hard_lease`；样本内切换不证明实际策略迁移、完整
-Goal 恢复或已选 canonical 存储的内容验收。
+有界演练读取稳定的 Markdown 快照，保留无依赖关系的完整归档；仅在临时运行目录为基线
+及本地 `File`、`SQLite` 三组添加合成记录。基线须支持相同的权威存储格式及 Monitor 重启
+语义，三组最终状态必须一致。观察使用 `soft_claim`，执行使用 `hard_lease`；样本内切换
+不证明实际策略迁移、完整 Goal 恢复或已选 canonical 存储的内容验收（服务端 PostgreSQL
+service admission 与集成验收位于 `loopx-project/loopx-cloud`，拆分前自托管可参考 `v2.4.0`）。
 
 ```bash
-LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" \
 uv run --extra test python examples/control_plane/authority-monitor-poll-rehearsal.py \
-  --registry "$REGISTRY" --goal-id "$GOAL" --baseline-repo "$FROZEN_BASELINE" \
-  --execute-isolated-postgresql
+  --registry "$REGISTRY" --goal-id "$GOAL" --baseline-repo "$FROZEN_BASELINE"
 ```
 
 ### Observation updates and reactivation
@@ -470,8 +471,9 @@ File、SQLite 与经 service 打开的 PostgreSQL 共用此事务语义；这不
 降级到不支持此协议的版本前，应先完成 v1 pending settlement；旧程序无法解释它们。
 不得通过关闭 writer fence、恢复旧 Markdown 写入来绕过恢复要求。
 
-上述 rehearsal 命令只读源数据，在临时 runtime 中增加合成记录，比较冻结基线及三个
-真实后端；要求隔离 PostgreSQL，输出限于计数和摘要，不写回原 Goal。
+上述 `loopx` 本地 rehearsal 命令只读源数据，在临时 runtime 中增加合成记录，比较冻结基线
+及本地 `File`、`SQLite` 后端，输出限于计数和摘要，不写回原 Goal；隔离 PostgreSQL
+演练与 service admission 归属 `loopx-project/loopx-cloud`。
 
 ### 观察更新与再激活
 
@@ -512,9 +514,11 @@ Legacy 保留 writer 并共用观察／时间 planner；上述保留租约的原
 
 ### Qualification boundary for retained execution
 
-The snapshot rehearsal now compares a frozen pre-fix baseline (which rejects
-retained-lease reactivation) with real File, SQLite and an isolated PostgreSQL
-service. It preserves the complete source Todo/lease population, adds only a
+The snapshot rehearsal in `loopx` now compares a frozen pre-fix baseline (which
+rejects retained-lease reactivation) with isolated `File` and `SQLite`
+providers (server-side PostgreSQL service admission and rehearsal live in
+`loopx-project/loopx-cloud`). It preserves the complete source Todo/lease
+population, adds only a
 synthetic Monitor and successor, and checks equal final provider heads, fresh
 execution epoch, immutable replay and unchanged unrelated records. Provider
 conformance additionally covers released, expired and time-active historical

@@ -121,7 +121,7 @@ SQLite 跨 provider 恢复复用逻辑归档。这不晋升 provider／默认值
 
 [统一路线](loopx-overall-roadmap-v0.zh-CN.md) R5 复用本 RFC 的 D1 投影、D2 真实 backend/容量/适用十日 soak、D3 fenced cutover；R6 再把所选 shared profile 接入认证的本地/云端路径。R1–R3 可在已支持 profile 上前进，不等待 PostgreSQL 或整 Goal 默认晋升。
 
-`e94759d88` 已增加 [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.zh-CN.md)，包含认证/tenant 验证注入与 identity rotation。[候选远程任务服务](../../reference/remote-authority-task-service-v0.md) 复用该边界，提供 TLS 认领、进度、租约与读取命令，以及服务端拥有的限定范围凭证、有界连接池、incarnation 绑定和回执恢复。源码入口测试使用独立客户端进程、真实 PostgreSQL 与受限数据库角色，覆盖响应丢失和服务重启。这不代表已通过本地／云端实机、共享预算所有权、Host 监督、App/CLI 接入、故障切换、容量／soak 或晋升资格；这些仍由 P lane 与 R6/D1–D3 owner 承接。R7 百 Agent 资格需独立报告注册数、活跃执行器和实测容量；目录、presence、管家计划或一次 source read 不授予 shared authority。既有 source-failure fail-closed、receipt/replay 和 rollback 合同保持。
+`e94759d88` 曾增加 [PostgreSQL service admission（`v2.4.0`）](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/postgresql-authority-service-v0.zh-CN.md)，包含认证/tenant 验证注入与 identity rotation，[`v2.4.0` 候选远程任务服务](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md) 复用该边界提供 TLS 认领、进度、租约与读取命令、服务端限定范围凭证、有界连接池、incarnation 绑定与回执恢复（在 Open-Core 架构分层后，出站 HTTPS [`RemoteAuthority` 协议契约](../../../loopx/control_plane/coordination/remote_authority_contract.ts)与客户端保留在 Apache-2.0 的 `loopx` 中，服务端 PostgreSQL 权威与多租户协调迁移至 `loopx-project/loopx-cloud`）。这不代表已通过本地／云端实机、共享预算所有权、Host 监督、App/CLI 接入、故障切换、容量／soak 或晋升资格；这些仍由 P lane 与 R6/D1–D3 owner 承接。R7 百 Agent 资格需独立报告注册数、活跃执行器和实测容量；目录、presence、管家计划或一次 source read 不授予 shared authority。既有 source-failure fail-closed、receipt/replay 和 rollback 合同保持。
 
 ## 当前实现事实
 
@@ -1310,7 +1310,7 @@ stdio MCP 桥接 HTTPS。原生远程 MCP 需通过宿主身份和认证资格�
 | 客户端省略生命周期，服务端独立绑定当前生命周期及受众 | 按普通 ACL 检查已绑定资源和动作。范围外拒绝。 |
 | 显式提供过期生命周期或错误资源或版本 | 即使密钥有效且连接的是当前存储，仍拒绝不匹配的动作。 |
 
-[v0 远程任务服务](../../reference/remote-authority-task-service-v0.md) 是源码候选。
+[`v2.4.0` v0 远程任务服务](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md)（其出站 [`RemoteAuthority` 协议契约](../../../loopx/control_plane/coordination/remote_authority_contract.ts)保留于 `loopx`，服务端实现承载于 `loopx-project/loopx-cloud`）是源码候选。
 其严格请求与策略支持租户、Goal、actor、动作范围和存储 incarnation，无法表达上述资源或
 Goal 生命周期 ACL。凭该服务的 scoped key，本身无法验证跨人阅读及证据交付。开放跨人
 接入前，通过已有服务和资源 owner 补齐检查。本地入口、provider 选择、Goal 身份激活及
@@ -2007,8 +2007,12 @@ CLI runner、observation-lock 窗口、候选回读）、只读 TypeScript 探�
   （`examples/nokv-authority-store/live-qualification.ts --execute-live`），要求
   `ok=true`、单节点 store conformance 范围、每项 check 通过、NoKV SDK `0.11.0`
   / API `1`，且不宣称晋升或可用性。
-- Stage 2B：`s2b.postgresql_conformance_live` 在 node TAP reporter 下运行
-  PostgreSQL 集成测试文件，要求至少九个 pass、零 fail、零 skip。
+- Stage 2B：`s2b.postgresql_conformance_live` 在 `loopx-project/loopx` 中登记为
+  `PENDING_ROWS`（`examples/shared-goal-authority-e2e/ladder.py --stage 2b --list`）；
+  服务端 PostgreSQL 集成与 service admission 已迁往 `loopx-project/loopx-cloud`
+  （面向隔离 `LOOPX_TEST_POSTGRES_URL` 实例运行 `npm run test:postgresql-authority-store` 与
+  `npm run test:postgresql-authority-service`，拆分前自托管源码冻结于 `v2.4.0` 标签）。
+  直接选中 Stage `2b` 而未传 `--allow-pending` 仍以非零退出。
 - Stage 2C 观察基础：七个 `s2c1.*` 行移植本地 shadow CLI E2E 与迁移断言，并钉住单一
   lineage 保证。
   configure 往返先预览、再开启、回读、最后关闭 observer；每个保留的 writer family
@@ -2043,10 +2047,12 @@ CLI runner、observation-lock 窗口、候选回读）、只读 TypeScript 探�
   并完成 drain；十笔事务度量 file-v0 历史增长：完整投影全部保留、每笔增量最多增加
   一条 live 记录，不宣称任何容量水平线。
 
-Live 行按环境门控（`LOOPX_TEST_POSTGRES_URL`；`NOKV_COORDINATION_LIVE=1` 加
-`NOKV_*` 栈变量；`LOOPX_NOKV_AUTHORITY_LIVE=1` 加 `LOOPX_NOKV_AUTHORITY_*` 输入）。
+`loopx-project/loopx` 中的 Live 行按环境门控（`NOKV_COORDINATION_LIVE=1` 加
+`NOKV_*` 栈变量；`LOOPX_NOKV_AUTHORITY_LIVE=1` 加 `LOOPX_NOKV_AUTHORITY_*` 输入；
+`LOOPX_TEST_POSTGRES_URL` 随 Stage 2B 迁至 `loopx-project/loopx-cloud`）。
 没有栈时它们报告 `unverified`，除非传入 `--allow-unverified`，否则 ladder 以非零
-退出；unverified 行永不计为 green。pending 行同样是未兑现的义务：选中它而不传
+退出；unverified 行永不计为 green。Open-Core 拆分后的 pending 行
+（`s2b.postgresql_conformance_live`）同样是未兑现的义务：选中它而不传
 `--allow-pending` 就非零退出，所以一份零执行的报告不可能显示为 green。
 报告绑定 LoopX commit、工作树是否 dirty、探针 digest 与经哈希的连接事实；其隐私
 扫描会把任何临时根目录、home 目录、连接 URL 或配置路径的泄露改写为

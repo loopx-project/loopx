@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {randomUUID} from "node:crypto";
 import {mkdtemp, rm, readdir, writeFile, rename} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {readCanonicalSnapshotFromStore, readCanonicalSnapshotPage, readCanonicalSnapshot,
@@ -31,17 +28,6 @@ async function fixture(t: test.TestContext, kind: "file" | "sqlite" = "file") {
   t.after(() => rm(root, {recursive: true, force: true}));
   const Store = kind === "file" ? FileAuthorityStore : SqliteAuthorityStore;
   return {store: new Store(root, "goal-a"), contender: new Store(root, "goal-a")};
-}
-async function postgresqlFixture(t: test.TestContext): Promise<AuthorityStore> {
-  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
-  t.after(() => pool.end());
-  const database = {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }};
-  await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-  return new PostgreSqlAuthorityStore(database, {tenant_id: `snapshot-${randomUUID()}`, goal_id: "goal-a"});
 }
 async function verifyLeaseSelection(store: AuthorityStore): Promise<void> {
   const {projection} = productionScaleCoordinationFixture("goal-a", "native");
@@ -107,10 +93,6 @@ for (const provider of (qualifiedSqlite ? ["file", "sqlite"] : ["file"]) as ("fi
     });
   }
 }
-test("postgresql: lease selection preserves matching lease records and binds continuation scope",
-  {skip: !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
-    await verifyLeaseSelection(await postgresqlFixture(t));
-  });
 if (qualifiedSqlite) {
   test("selected SQLite snapshot retains the complete independent read contract", async t => {
     const {store} = await fixture(t, "sqlite");

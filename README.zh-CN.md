@@ -152,7 +152,7 @@ LoopX 把这套**开源、Harness 中立**的控制面直接做成可运行基�
 | 使用形态 | LoopX 运行方式 | 权威存储、协作与治理形态 |
 | --- | --- | --- |
 | **个人开发者 & 本地 Agent** | `python3 -m pip install --upgrade loopx` 零外部依赖直接运行，接入已有 CLI / 桌面端 | 默认本地权威 **SQLite** + hard lease（兼顾既有 File 配置），跨重启、跨压缩保留现场且闲置零 Token |
-| **工程团队 & 组织级扩展** | 多 Agent 认领 Todo、基于同一 Goal 经工作区 / GitHub / 飞书协同交付与互审（[三 Agent 协作示例](examples/collaboration-delivery/README.md)） | 保留各自责任边界与人工审批门；支持向预置的 **PostgreSQL** 远程共享权威（[源码实现](loopx/control_plane/coordination/postgresql_authority_store.ts)）以及[组织治理路线图](docs/product/roadmaps/saas-opportunity-assessment.zh-CN.md)中的 RBAC、SSO 与审计能力平滑演进 |
+| **工程团队 & 组织级扩展** | 多 Agent 认领 Todo、基于同一 Goal 经工作区 / GitHub / 飞书协同交付与互审（[三 Agent 协作示例](examples/collaboration-delivery/README.md)） | 保留各自责任边界与人工审批门；本地 **File**/**SQLite** 权威及出站 HTTPS **RemoteAuthority** 客户端契约（[协议契约](loopx/control_plane/coordination/remote_authority_contract.ts)）在 `loopx` 中保持 Apache-2.0 开源，服务端 PostgreSQL 权威、分布式协调与多租户组织治理（RBAC、SSO、配额与签名审计）承载于 `loopx-project/loopx-cloud`（见[许可证边界](docs/project/licensing.md#open-core-and-commercial-boundaries)与[组织治理路线图](docs/product/roadmaps/saas-opportunity-assessment.zh-CN.md)） |
 
 ## 看看 LoopX 如何工作
 

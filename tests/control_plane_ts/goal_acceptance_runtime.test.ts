@@ -1,16 +1,15 @@
 import {compileActionReviewPlan} from "../../loopx/control_plane/presentation/action_review_plan.ts";
 import assert from "node:assert/strict";
-import {randomUUID} from "node:crypto";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test, {type TestContext} from "node:test";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {HandoffMode} from "../../loopx/control_plane/coordination/handoff_mode_vocabulary.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
@@ -69,21 +68,12 @@ async function replace(store: AuthorityStore, head: JsonObject, operation_id: st
   assert.equal((await store.commitAuthority({operation_id, expected_provider_revision: current.provider_revision,
     next_projection: head, events: [], receipts: []})).status, "applied");
 }
-async function seeded(t: TestContext, provider: string, state: "bound" | "unbound" | "off", extra: JsonObject = {}, mode: HandoffMode = "soft_claim") {
+async function seeded(t: TestContext, provider: "file" | "sqlite", state: "bound" | "unbound" | "off", extra: JsonObject = {}, mode: HandoffMode = "soft_claim") {
   const root = await mkdtemp(join(tmpdir(), "loopx-acceptance-runtime-"));
   t.after(() => rm(root, {recursive: true, force: true}));
-  let store: AuthorityStore;
-  if (provider === "postgresql") {
-    const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
-    t.after(() => pool.end());
-    const database = {connect: async () => {
-      const client = await pool.connect();
-      return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-        release: () => client.release()};
-    }};
-    await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-    store = new PostgreSqlAuthorityStore(database, {tenant_id: `acceptance-${randomUUID()}`, goal_id: "goal-a"});
-  } else store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
+  const store: AuthorityStore = provider === "sqlite"
+    ? new SqliteAuthorityStore(join(root, "authority", "sqlite-v0"), "goal-a")
+    : new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
   const records = [todo(extra)];
   const head = {...projection(records, state === "off" ? undefined : acceptance(records, state === "bound")),
     handoff_mode: mode};
@@ -92,7 +82,8 @@ async function seeded(t: TestContext, provider: string, state: "bound" | "unboun
   return {store, root, head};
 }
 
-for (const provider of ["file", ...(process.env.LOOPX_TEST_POSTGRES_URL ? ["postgresql"] : [])]) {
+const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
+for (const provider of (sqliteQualified ? ["file", "sqlite"] : ["file"]) as ("file" | "sqlite")[]) {
   test(`${provider}: scoped probe permits an independent claim/lease but preserves ordinary completion validation`, async t => {
     const {store, head} = await seeded(t, provider, "unbound");
     const declaration = {validation_command: null, validation_command_argv: ["true"],
