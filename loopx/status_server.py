@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -219,7 +221,50 @@ def configure_goal_preview_id(payload: dict[str, Any]) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()[:24]
 
 
-class StatusHTTPServer(ThreadingHTTPServer):
+_DISCONNECT_ERRNOS = frozenset({
+    errno.EPIPE,
+    errno.ECONNRESET,
+    errno.ECONNABORTED,
+    errno.ESHUTDOWN,
+})
+_HTTP_RESPONSE_CHUNK_BYTES = 65536
+
+
+def is_client_disconnect_error(exc: BaseException | None) -> bool:
+    """Return True when exc represents a peer closing its HTTP socket early."""
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+        return True
+    return isinstance(exc, OSError) and exc.errno in _DISCONNECT_ERRNOS
+
+
+def send_http_response(handler: BaseHTTPRequestHandler, body: bytes | None = None) -> bool:
+    """Flush response headers and write body chunks, absorbing peer disconnects cleanly."""
+    try:
+        handler.end_headers()
+        if body:
+            for offset in range(0, len(body), _HTTP_RESPONSE_CHUNK_BYTES):
+                handler.wfile.write(body[offset : offset + _HTTP_RESPONSE_CHUNK_BYTES])
+        flush = getattr(handler.wfile, "flush", None)
+        if callable(flush):
+            flush()
+    except OSError as exc:
+        if is_client_disconnect_error(exc):
+            handler.close_connection = True
+            return False
+        raise
+    return True
+
+
+class DisconnectSafeHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that suppresses tracebacks for benign client disconnects."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if is_client_disconnect_error(sys.exc_info()[1]):
+            return
+        super().handle_error(request, client_address)
+
+
+class StatusHTTPServer(DisconnectSafeHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
@@ -370,14 +415,13 @@ class StatusRequestHandler(ExtensionPresentationRequestMixin, BaseHTTPRequestHan
         self.send_header("Cache-Control", "no-store")
         for key, value in cors_response_headers(self.headers.get("Origin")).items():
             self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
+        send_http_response(self, body)
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         for key, value in cors_response_headers(self.headers.get("Origin")).items():
             self.send_header(key, value)
-        self.end_headers()
+        send_http_response(self)
 
     def _read_json_body(self) -> dict[str, Any]:
         content_length = int(self.headers.get("Content-Length") or "0")

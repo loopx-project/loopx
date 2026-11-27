@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Callable, Mapping
 import webbrowser
 from functools import partial
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import parse_qs, urlparse
@@ -117,8 +117,11 @@ from .thread_agent_binding import list_attached_session_bindings
 from .status_server import (
     DEFAULT_EXTENSION_PRESENTATION_SURFACES_PATH,
     DEFAULT_EXTENSION_PROJECTION_PATH,
+    DisconnectSafeHTTPServer,
+    is_client_disconnect_error,
     is_loopback_host,
     parse_strict_json_object,
+    send_http_response,
 )
 
 
@@ -262,7 +265,7 @@ def resolve_lark_cli_for_runtime(
     )
 
 
-class ChatHTTPServer(background_api.BackgroundServicesServerMixin, ThreadingHTTPServer):
+class ChatHTTPServer(background_api.BackgroundServicesServerMixin, DisconnectSafeHTTPServer):
     allow_reuse_address = True
 
     registry_path: Path
@@ -356,8 +359,7 @@ class ChatRequestHandler(
         self.send_header("X-Content-Type-Options", "nosniff")
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
+        send_http_response(self, body)
 
     def _send_error(
         self,
@@ -454,8 +456,7 @@ class ChatRequestHandler(
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.end_headers()
-        self.wfile.write(body)
+        send_http_response(self, body)
 
     def _create_session(self) -> None:
         try:
@@ -762,9 +763,10 @@ class ChatRequestHandler(
             self._send_error("chat session was not found", status=404)
         except ValueError as exc:
             self._send_error(str(exc), status=400)
-        except (BrokenPipeError, ConnectionResetError):
-            return
-        except OSError:
+        except OSError as exc:
+            if is_client_disconnect_error(exc):
+                self.close_connection = True
+                return
             self._send_error("Chat history is temporarily unavailable", status=503)
 
     def _list_sessions(self) -> None:
@@ -856,7 +858,8 @@ class ChatRequestHandler(
         self.send_header("X-Accel-Buffering", "no")
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
+        if not send_http_response(self):
+            return
         cursor = str(last_event_id or "0")
         heartbeat_at = time.monotonic()
         try:
@@ -880,8 +883,11 @@ class ChatRequestHandler(
                     self.wfile.flush()
                     heartbeat_at = time.monotonic()
                 time.sleep(0.05)
-        except (BrokenPipeError, ConnectionResetError):
-            return
+        except OSError as exc:
+            if is_client_disconnect_error(exc):
+                self.close_connection = True
+                return
+            raise
 
     def _steer_turn(self, session_id: str, turn_id: str) -> None:
         try:
@@ -1499,7 +1505,8 @@ class ChatRequestHandler(
         if path == "/":
             self.send_response(302)
             self.send_header("Location", DEFAULT_CHAT_PATH)
-            return self.end_headers()
+            send_http_response(self)
+            return
         if path == "/chat" or path.startswith("/chat/"):
             return self._serve_asset(path)
         self._send_error("unknown path", status=404)
@@ -1576,7 +1583,7 @@ class ChatRequestHandler(
         self.send_response(204)
         for key, value in chat_cors_response_headers(self._cors_origin).items():
             self.send_header(key, value)
-        self.end_headers()
+        send_http_response(self)
 
     def do_DELETE(self) -> None:
         if not self._require_loopback_origin():

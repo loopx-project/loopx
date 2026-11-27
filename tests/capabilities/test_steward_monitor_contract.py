@@ -679,3 +679,287 @@ def test_configure_steward_monitor_rejects_non_mapping_plan_todo(
     none_pause = run_cfg("pause", None)
     assert none_pause == {"ok": True, "applied": True, "plan": {"plan_id": "plan-1", "todo": None}}
     assert writes == []
+
+
+def test_steward_pump_failure_backoff_dedup_and_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    from loopx.capabilities.native_chat import steward_reports as reports_mod
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
+    base_utc = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    class _FakeDateTime:
+        @staticmethod
+        def now(tz: timezone | None = None) -> datetime:
+            dt = base_utc + timedelta(seconds=clock["now"] - 1000.0)
+            return dt if tz is not None else dt.replace(tzinfo=None)
+
+        @staticmethod
+        def fromisoformat(value: str) -> datetime:
+            return datetime.fromisoformat(value)
+
+    monkeypatch.setattr(steward_monitor_pump, "datetime", _FakeDateTime)
+
+    store = ChatSessionStore(tmp_path / "chat")
+    session = store.create_session(
+        goal_id="steward-agent-b-backoff",
+        agent_id="steward",
+        adapter_kind="codex-app-server",
+        upstream_thread_id="th-backoff",
+    )
+    binding = {
+        "binding_id": "b-backoff",
+        "enabled": True,
+        "managed_actor": {"goal_id": "steward-agent-b-backoff", "agent_id": "steward", "session_id": session["session_id"]},
+    }
+    bindings = _StubBindings(tmp_path / "bindings.json", bindings_rows=[binding])
+    controller = _StubController(tmp_path, bindings=bindings)
+    controller.store = store
+
+    monkeypatch.setattr(
+        steward_monitor_pump,
+        "_report_config_for_goal",
+        lambda _ctrl, _gid: {"enabled": True, "profile_preset": "portfolio-progress"},
+    )
+
+    frontier_calls: list[float] = []
+    report_mode: dict[str, object] = {
+        "exc": ValueError("provider verification failed at /Users/alice/.loopx/private-state"),
+    }
+
+    class FakeReports:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        def frontier(self, _binding: Mapping[str, object]) -> tuple[dict[str, object] | None, bool]:
+            frontier_calls.append(clock["now"])
+            exc = report_mode["exc"]
+            if isinstance(exc, BaseException):
+                raise exc
+            return None, False
+
+    monkeypatch.setattr(reports_mod, "StewardReports", FakeReports)
+    soon_due = (base_utc + timedelta(seconds=15)).isoformat()
+    todo_row: StewardTodoRecord = {
+        "todo_id": "todo-soon",
+        "task_class": "continuous_monitor",
+        "status": "open",
+        "target_key": TARGET,
+        "next_due_at": soon_due,
+    }
+    monkeypatch.setattr(StewardMonitor, "todos", lambda _self, _actor: [todo_row])
+    monkeypatch.setattr(StewardMonitor, "due_monitors", lambda _self, _actor, *, todos=None: [])
+    monkeypatch.setattr(StewardMonitor, "runnable_advancement_todos", lambda _self, _actor, *, todos=None: [])
+
+    caplog.set_level(logging.WARNING, logger=steward_monitor_pump.__name__)
+    # First failure at t=1000 logs once with redacted path and sets 60s report backoff (until 1060).
+    # _schedule_soonest_monitor_backoff sets binding next-check to t=1015 (15s remaining).
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0]
+    assert len(caplog.records) == 1
+    msg0 = caplog.records[0].getMessage()
+    assert "An original steward report is unavailable" in msg0
+    assert "ValueError:" in msg0
+    assert "/Users/alice" not in msg0
+    assert "<path>" in msg0
+
+    # Simulate human busy -> idle flip (`fg_checked=False`) at t=1010 AND soon-due wake at t=1020:
+    # foreground fast-path and _schedule_soonest_monitor_backoff must NOT bypass report failure backoff.
+    controller._steward_monitor_fg_idle_checked["b-backoff"] = False  # type: ignore[attr-defined]
+    clock["now"] = 1010.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    clock["now"] = 1020.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0]
+    assert len(caplog.records) == 1
+
+    # At t=1081 (past binding check 1020+60 and report 60s backoff), frontier retries -> backs off 120s (until 1201),
+    # and identical exception signature emits zero duplicate WARNING logs.
+    clock["now"] = 1081.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0, 1081.0]
+    assert len(caplog.records) == 1
+
+    # Even with fg_checked=False flip inside 120s window (t=1150 -> binding check 1210), frontier stays backed off.
+    clock["now"] = 1150.0
+    controller._steward_monitor_fg_idle_checked["b-backoff"] = False  # type: ignore[attr-defined]
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0, 1081.0]
+
+    # At t=1211 (past 120s backoff 1201 and binding check 1210), a different exception emits one transition warning (240s -> 1451).
+    report_mode["exc"] = RuntimeError("quota verification timed out")
+    clock["now"] = 1211.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0, 1081.0, 1211.0]
+    assert len(caplog.records) == 2
+    assert "RuntimeError: quota verification timed out" in caplog.records[1].getMessage()
+
+    clock["now"] = 1440.0
+    controller._steward_monitor_fg_idle_checked["b-backoff"] = False  # type: ignore[attr-defined]
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0, 1081.0, 1211.0]
+
+    # Explicit clear resets backoff & dedup signature; recovery also clears for next transition.
+    steward_monitor_pump.clear_steward_monitor_check_hints(_as_controller(controller), "b-backoff")
+    report_mode["exc"] = None
+    clock["now"] = 1441.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert frontier_calls == [1000.0, 1081.0, 1211.0, 1441.0]
+
+    report_mode["exc"] = ValueError("provider verification failed at /Users/alice/.loopx/private-state")
+    steward_monitor_pump.clear_steward_monitor_check_hints(_as_controller(controller), "b-backoff")
+    clock["now"] = 1442.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert len(caplog.records) == 3
+
+
+def test_steward_pump_monitor_outer_and_managed_session_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+    from loopx.capabilities.native_chat import (
+        session_calendar_tasks as cal_mod,
+        steward_managed_mode as managed_mod,
+        steward_reports as reports_mod,
+        steward_turn as turn_mod,
+    )
+
+    clock = {"now": 2000.0}
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
+
+    store = ChatSessionStore(tmp_path / "chat")
+    s_bad = store.create_session(
+        goal_id="steward-agent-b-bad", agent_id="steward", adapter_kind="codex-app-server", upstream_thread_id="th-bad"
+    )
+    s_good = store.create_session(
+        goal_id="steward-agent-b-good", agent_id="steward", adapter_kind="codex-app-server", upstream_thread_id="th-good"
+    )
+    s_managed = store.create_session(
+        goal_id="goal-managed-1", agent_id="codex", adapter_kind="codex-app-server",
+        upstream_thread_id="th-managed",
+    )
+    monkeypatch.setattr(
+        store,
+        "list_sessions",
+        lambda: [s_bad, s_good, {**s_managed, "managed_agent_id": "agent-1"}],
+    )
+    bindings = _StubBindings(
+        tmp_path / "bindings.json",
+        bindings_rows=[
+            {"binding_id": "b-bad", "enabled": True, "managed_actor": {"goal_id": "steward-agent-b-bad", "agent_id": "steward", "session_id": s_bad["session_id"]}},
+            {"binding_id": "b-good", "enabled": True, "managed_actor": {"goal_id": "steward-agent-b-good", "agent_id": "steward", "session_id": s_good["session_id"]}},
+        ],
+    )
+    controller = _StubController(tmp_path, bindings=bindings)
+    controller.store = store
+
+    due_fail: StewardTodoRecord = {
+        "todo_id": "m-fail", "task_class": "continuous_monitor", "status": "open",
+        "target_key": TARGET, "next_due_at": "2020-01-01T00:00:00Z",
+    }
+    due_ok: StewardTodoRecord = {
+        "todo_id": "m-ok", "task_class": "continuous_monitor", "status": "open",
+        "target_key": TARGET, "next_due_at": "2020-01-01T00:00:00Z",
+    }
+    managed_soon = (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat()
+    managed_watch: StewardTodoRecord = {
+        "todo_id": "w-1", "task_class": "continuous_monitor", "status": "open",
+        "target_key": f"managed-session-watch.{s_managed['session_id']}", "next_due_at": managed_soon,
+    }
+
+    todo_calls_bad: list[float] = []
+
+    def fake_todos(_self: object, actor: Mapping[str, object]) -> list[StewardTodoRecord]:
+        gid = str(actor.get("goal_id") or "")
+        if gid == "steward-agent-b-bad":
+            todo_calls_bad.append(clock["now"])
+            raise RuntimeError("CanonicalAuthorityRequired: migrate goal")
+        if gid == "goal-managed-1":
+            return [managed_watch]
+        return [due_fail, due_ok]
+
+    submit_calls: list[str] = []
+
+    class FakeHost:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        @staticmethod
+        def background_session_id(bid: str) -> str:
+            return f"steward.background.{bid}"
+
+        def submit(self, _bid: str, *, todo_id: str, **_kw: object) -> tuple[dict[str, object], bool]:
+            submit_calls.append(todo_id)
+            if todo_id == "m-fail":
+                raise ValueError("monitor identity unavailable at /tmp/private/sub")
+            return {"turn_id": f"turn-{todo_id}", "status": "queued"}, True
+
+    monkeypatch.setattr(StewardMonitor, "todos", fake_todos)
+    monkeypatch.setattr(StewardMonitor, "due_monitors", lambda _self, _actor, *, todos=None: [due_fail, due_ok])
+    monkeypatch.setattr(StewardMonitor, "runnable_advancement_todos", lambda _self, _actor, *, todos=None: [])
+    monkeypatch.setattr(turn_mod, "StewardTurnHost", FakeHost)
+
+    monkeypatch.setattr(
+        steward_monitor_pump,
+        "_report_config_for_goal",
+        lambda _ctrl, gid: (
+            {"enabled": True, "profile_preset": "weekly-progress", "route_ref": f"managed-session:{s_managed['session_id']}"}
+            if gid == "goal-managed-1" else {}
+        ),
+    )
+
+    class FakeManagedTurn:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        def _request(self, sid: str, aid: str, _op: str) -> dict[str, object]:
+            return {"actor": {"goal_id": "goal-managed-1", "agent_id": aid, "session_id": sid}}
+
+        def admit(self, _req: Mapping[str, object]) -> None:
+            return None
+
+    managed_report_calls: list[float] = []
+
+    class FakeManagedReports:
+        def __init__(self, _ctrl: object) -> None:
+            pass
+
+        def frontier(self, _sid: str) -> tuple[dict[str, object] | None, bool]:
+            managed_report_calls.append(clock["now"])
+            raise ValueError("managed session report auth expired")
+
+    monkeypatch.setattr(managed_mod, "ManagedSessionTurn", FakeManagedTurn)
+    monkeypatch.setattr(reports_mod, "ManagedSessionReports", FakeManagedReports)
+    monkeypatch.setattr(cal_mod, "SessionCalendarTasks", FakeManagedReports)
+    monkeypatch.setattr(steward_monitor_pump, "monitor_todo_is_due", lambda _todo: False)
+
+    caplog.set_level(logging.WARNING, logger=steward_monitor_pump.__name__)
+    out = steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    # Healthy second binding's second due monitor still ran even though b-bad & m-fail failed!
+    assert [row["turn_id"] for row in out] == ["turn-m-ok"]
+    assert todo_calls_bad == [2000.0]
+    assert submit_calls == ["m-fail", "m-ok"]
+    assert managed_report_calls == [2000.0]
+    assert len(caplog.records) == 3
+
+    # Clear b-good's normal check cache at t=2006s and simulate b-good background now idle, plus check b-bad/m-fail/managed backoff:
+    # Even at t=2006s (past the 5s managed watch remaining window), managed_report_calls stays blocked for 60s!
+    controller._steward_monitor_next_check.pop("b-good", None)  # type: ignore[attr-defined]
+    clock["now"] = 2006.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_calls_bad == [2000.0]
+    assert submit_calls == ["m-fail", "m-ok", "m-ok"]
+    assert managed_report_calls == [2000.0]
+    assert len(caplog.records) == 3
+
+    # After 60s backoff expires (t=2062), failing lanes retry once without duplicate warnings, doubling to 120s.
+    controller._steward_monitor_next_check.pop("b-good", None)  # type: ignore[attr-defined]
+    clock["now"] = 2062.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_calls_bad == [2000.0, 2062.0]
+    assert submit_calls == ["m-fail", "m-ok", "m-ok", "m-fail", "m-ok"]
+    assert managed_report_calls == [2000.0, 2062.0]
+    assert len(caplog.records) == 3

@@ -344,9 +344,9 @@ class StewardMonitor:
         return _coerce_dict(result)
 
     def _clear_next_check_hint(self, binding_id: str) -> None:
-        cache = getattr(self.controller, "_steward_monitor_next_check", None)
-        if isinstance(cache, dict):
-            cache.pop(binding_id, None)
+        from .steward_monitor_pump import clear_steward_monitor_check_hints
+
+        clear_steward_monitor_check_hints(self.controller, binding_id)
 
     def configure(
         self,
