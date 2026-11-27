@@ -340,3 +340,95 @@ def test_tracked_python_paths_keeps_a_carriage_return_name(tmp_path: Path) -> No
     paths = tracked_python_paths(repo)
 
     assert repo / name in paths
+
+
+def test_canary_rejects_crisscross_merge_and_allows_genuine_zero_diff(tmp_path: Path) -> None:
+    """Reject ambiguous criss-cross merge bases while keeping genuine zero-diff passing."""
+    from loopx.canary.planner import DEFAULT_CATALOG_PATH
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.name", "LoopX Test")
+    _git(repo, "config", "user.email", "loopx@example.invalid")
+    catalog = repo / "docs/concepts/interaction-pattern-catalog.md"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes(DEFAULT_CATALOG_PATH.read_bytes())
+    (repo / "loopx").mkdir()
+    (repo / "loopx/runtime.py").write_text("value = 'v0'\n", encoding="utf-8")
+    (repo / "docs/note.md").write_text("note v0\n", encoding="utf-8")
+    _git(repo, "add", "--all")
+    _git(repo, "commit", "-m", "root")
+    root_sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+
+    # Branch m_runtime alters runtime.py; m_doc leaves runtime.py untouched and alters docs/note.md.
+    _git(repo, "checkout", "-qb", "m-runtime", root_sha)
+    (repo / "loopx/runtime.py").write_text("value = 'v1'\n", encoding="utf-8")
+    _git(repo, "add", "loopx/runtime.py")
+    _git(repo, "commit", "-m", "runtime change")
+    m_runtime = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+
+    _git(repo, "checkout", "-qb", "m-doc", root_sha)
+    (repo / "docs/note.md").write_text("note v1\n", encoding="utf-8")
+    _git(repo, "add", "docs/note.md")
+    _git(repo, "commit", "-m", "doc change")
+    m_doc = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+
+    # Build target = merge(m_doc into m_runtime) and feature = criss-cross merge keeping m_doc's tree.
+    _git(repo, "checkout", "-qb", "target", m_runtime)
+    _git(repo, "merge", "--no-ff", "--no-edit", m_doc)
+
+    _git(repo, "checkout", "-qb", "feature", m_doc)
+    _git(repo, "merge", "--no-ff", "-s", "ours", "--no-edit", m_runtime)
+
+    merge_bases = subprocess.check_output(
+        ["git", "-C", str(repo), "merge-base", "--all", "target", "HEAD"], text=True
+    ).splitlines()
+    assert len(merge_bases) == 2
+
+    # Show why naive `git diff target...HEAD` was dangerous: one ancestor yields an empty diff.
+    assert {m_doc, m_runtime} == set(merge_bases)
+    assert subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--name-only", f"{m_doc}..HEAD"], text=True
+    ).strip() == ""
+    assert "loopx/runtime.py" in subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--name-only", f"{m_runtime}..HEAD"], text=True
+    )
+
+    selector = collect_git_diff_changed_files(repo_root=repo, base_ref="target")
+    assert selector["ok"] is False
+    assert "unambiguous merge base" in selector["error"]
+    assert "--git-diff-base" in selector["error"]
+    assert selector["changed_files"] == []
+    assert [warning["source"] for warning in selector["warnings"]] == ["base"]
+
+    for subcommand, extra in [("plan", []), ("premerge", ["--tier", "quick", "--no-execute"])]:
+        response = run_source_cli(
+            ["--format", "json", "canary", subcommand, "--from-git-diff", "--git-diff-base", "target", *extra],
+            cwd=repo, check=False, timeout=60,
+        )
+        assert response.returncode != 0, response.stdout
+        payload = json.loads(response.stdout)
+        assert payload["ok"] is False
+        assert "unambiguous merge base" in payload["error"]
+        assert "gate" not in payload and "selection_inputs" not in payload
+
+    # Genuine zero-diff branch with a single unambiguous merge base succeeds cleanly.
+    _git(repo, "checkout", "-qb", "clean-zero-diff", "target")
+    _git(repo, "commit", "--allow-empty", "-m", "empty commit on clean target")
+    clean_selector = collect_git_diff_changed_files(repo_root=repo, base_ref="target")
+    assert clean_selector["ok"] is True
+    assert clean_selector["changed_files"] == []
+    assert clean_selector["warnings"] == []
+
+    for subcommand, extra in [("plan", []), ("premerge", ["--tier", "quick", "--no-execute"])]:
+        ok_resp = run_source_cli(
+            ["--format", "json", "canary", subcommand, "--from-git-diff", "--git-diff-base", "target", *extra],
+            cwd=repo, check=False, timeout=60,
+        )
+        assert ok_resp.returncode == 0, ok_resp.stderr
+        ok_payload = json.loads(ok_resp.stdout)
+        assert ok_payload["ok"] is True
+        assert ok_payload["selector_sources"]["git_diff"]["changed_files"] == []
+        selected = ok_payload["selection_inputs"]["changed_files"] if subcommand == "plan" else ok_payload["changed_files"]
+        assert selected == []
