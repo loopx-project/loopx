@@ -62,3 +62,29 @@ def test_failed_snapshot_cannot_recover_inside_the_same_request(tmp_path, monkey
     assert again.value.code == 'unavailable'
     assert again.value.payload == {'detail': ['first']}
     assert authority.CanonicalTodoSnapshot().read(**args) == {'todos': []}
+
+
+def test_read_contract_rows_skips_todo_fields_copy_and_preserves_isolation(tmp_path, monkeypatch):
+    calls = []
+    source = {
+        'provider_revision': 'rev-1',
+        'todo_contract_rows': [{'todo_id': 't1', 'status': 'open'}],
+        '_todo_fields': {'agent_todos': {'items': [{'todo_id': 't1'}]}},
+    }
+
+    def read(**kwargs):
+        calls.append(kwargs)
+        return deepcopy(source)
+
+    monkeypatch.setattr(authority, 'read_canonical_todos_if_promoted', read)
+    snapshot = authority.CanonicalTodoSnapshot()
+    args = dict(runtime_root=tmp_path, goal_id='goal-a')
+    contract_view = snapshot.read_contract_rows(**args)
+    assert '_todo_fields' not in contract_view
+    assert contract_view['todo_contract_rows'] == [{'todo_id': 't1', 'status': 'open'}]
+    contract_view['todo_contract_rows'][0]['status'] = 'mutated'
+
+    full_view = snapshot.read(**args)
+    assert full_view['todo_contract_rows'] == [{'todo_id': 't1', 'status': 'open'}]
+    assert full_view['_todo_fields']['agent_todos']['items'] == [{'todo_id': 't1'}]
+    assert len(calls) == 1

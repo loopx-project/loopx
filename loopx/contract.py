@@ -1101,7 +1101,11 @@ def _todo_contract_diagnostics(
         # Todo display. Reuse the TS read-model/record validator: the Markdown
         # copy cannot invalidate or rescue a promoted collection.
         try:
-            canonical_reader = todo_snapshot.read if todo_snapshot is not None else read_canonical_todos_if_promoted
+            canonical_reader = (
+                todo_snapshot.read_contract_rows
+                if todo_snapshot is not None
+                else read_canonical_todos_if_promoted
+            )
             canonical = canonical_reader(runtime_root=goal_runtime, goal_id=goal_id)
         except LocalCoordinationAuthorityUnavailable as exc:
             add_error(exc.code, f"{goal_id}: canonical Todo contract unavailable: {exc}")

@@ -302,3 +302,42 @@ def test_load_index_reuses_artifact_existence_checks_for_duplicate_rows(
     ]
     assert records[0]["json_exists"] is False
     assert records[0]["markdown_exists"] is False
+
+
+def test_load_index_snapshot_rejects_comma_multi_object_and_preserves_u2028_and_time_parity(
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime, timezone
+    from loopx.control_plane.runtime.time import chronology_key, parse_timestamp
+
+    index_path = tmp_path / "index.jsonl"
+    # A valid row with literal UTF-8 U+2028 inside JSON string, followed by a
+    # single malformed line with comma-joined JSON objects (must count invalid=1).
+    u2028_row = json.dumps(
+        {
+            "generated_at": "2026-11-27T23:23:55.123456Z",
+            "json_path": "artifacts/u2028.json",
+            "markdown_path": "artifacts/u2028.md",
+            "note": "line\u2028break",
+        },
+        ensure_ascii=False,
+    )
+    index_path.write_text(
+        f"{u2028_row}\n"
+        + '{"generated_at":"2026-11-27T23:24:00Z"},{"generated_at":"2026-11-27T23:25:00Z"}\n',
+        encoding="utf-8",
+    )
+    snap = history_module.load_index_snapshot(index_path, include_artifact_status=False)
+    assert snap.raw_count == 2
+    assert snap.invalid_count == 1
+    assert len(snap.records) == 1
+    assert snap.records[0]["note"] == "line\u2028break"
+
+    assert parse_timestamp("2026-11-27T23:23:55Z") == datetime(
+        2026, 11, 27, 23, 23, 55, tzinfo=timezone.utc
+    )
+    assert parse_timestamp("2026-11-27T23:23:55.123456Z") == datetime(
+        2026, 11, 27, 23, 23, 55, 123456, tzinfo=timezone.utc
+    )
+    assert parse_timestamp("2026-11-27T24:00:00Z") is None
+    assert chronology_key("2026-11-27T23:23:55.000000Z")[0] == 1
