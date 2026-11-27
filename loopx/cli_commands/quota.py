@@ -275,6 +275,40 @@ def _prepare_quota_result_context(
     )
 
 
+def _turn_peer_digest_delivery_callback(
+    payload: Mapping[str, object],
+    args: argparse.Namespace,
+    *,
+    preview: bool,
+    preflight_failed: bool,
+    closeout_unavailable: bool,
+    context: QuotaCommandContext | None,
+    registry_path: Path,
+    heartbeat_turn_id: str | None,
+) -> Callable[[Mapping[str, object]], None]:
+    """Create post-delivery cursor commit callback bound to the emitted channel view."""
+    from ..control_plane.goals.peer_coordination_digest_source import (
+        maybe_commit_turn_peer_coordination_cursor,
+    )
+
+    turn_id = heartbeat_turn_id or getattr(args, "turn_instance_id", None)
+    return lambda delivered: maybe_commit_turn_peer_coordination_cursor(
+        payload,
+        quota_command=args.quota_command,
+        preview=preview,
+        scheduler_observation=bool(getattr(args, "scheduler_observation", False)),
+        preflight_failed=preflight_failed,
+        closeout_unavailable=closeout_unavailable,
+        status_payload=context.status_payload if context is not None else None,
+        registry_path=registry_path,
+        runtime_root=context.runtime_root if context is not None else None,
+        goal_id=args.goal_id,
+        agent_id=args.agent_id,
+        delivered_payload=delivered,
+        turn_instance_id=turn_id,
+    )
+
+
 def _emit_quota_result(
     payload: dict[str, object],
     args: argparse.Namespace,
@@ -286,6 +320,7 @@ def _emit_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
+    on_delivered: Callable[[Mapping[str, object]], None] | None = None,
 ) -> int:
     from .quota_result_delivery import emit_quota_result
 
@@ -300,6 +335,7 @@ def _emit_quota_result(
         capture_directory=capture_directory,
         detail_sections=detail_sections,
         print_payload=print_payload,
+        on_delivered=on_delivered,
     )
 
 
@@ -728,20 +764,6 @@ def _execute_quota_command(
                 rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
-    from ..control_plane.goals.peer_coordination_digest_source import (
-        maybe_commit_turn_peer_coordination_cursor,
-    )
-
-    maybe_commit_turn_peer_coordination_cursor(
-        payload, quota_command=args.quota_command, preview=preview,
-        scheduler_observation=bool(getattr(args, "scheduler_observation", False)),
-        preflight_failed=action_selection_preflight_failed,
-        closeout_unavailable=closeout_query_unavailable,
-        status_payload=context.status_payload if context is not None else None,
-        registry_path=registry_path,
-        runtime_root=context.runtime_root if context is not None else None,
-        goal_id=args.goal_id, agent_id=args.agent_id,
-    )
     return _emit_quota_result(
         payload,
         args,
@@ -752,4 +774,14 @@ def _execute_quota_command(
         capture_directory=capture_directory,
         detail_sections=detail_sections,
         print_payload=print_payload,
+        on_delivered=_turn_peer_digest_delivery_callback(
+            payload,
+            args,
+            preview=preview,
+            preflight_failed=action_selection_preflight_failed,
+            closeout_unavailable=closeout_query_unavailable,
+            context=context,
+            registry_path=registry_path,
+            heartbeat_turn_id=heartbeat_turn_id,
+        ),
     )

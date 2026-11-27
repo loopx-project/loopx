@@ -613,16 +613,39 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             )
         return _handle_context_hook(args, activation=activation)
     if args.quota_command == "context-project":
+        from ..control_plane.goals.peer_coordination_digest_source import (
+            maybe_commit_captured_peer_coordination_cursor,
+        )
+
         payload = project_saved_context_capture(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
         print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
+        if payload.get("ok") is True:
+            try:
+                maybe_commit_captured_peer_coordination_cursor(
+                    args, emitted_payload=payload,
+                    registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                )
+            except Exception:  # noqa: BLE001 - best-effort cursor commit never blocks delivered projection.
+                pass
         return 0 if payload["ok"] else 1
     if args.quota_command == "context-read":
         from ..command_invocation import current_loopx_cli_argv
+        from ..control_plane.goals.peer_coordination_digest_source import (
+            maybe_commit_captured_peer_coordination_cursor,
+        )
 
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
         payload = quota_capture.read_context_capture(args, reader_argv=current_loopx_cli_argv())
         print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        if payload.get("ok") is True:
+            try:
+                maybe_commit_captured_peer_coordination_cursor(
+                    args, emitted_payload=payload,
+                    registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                )
+            except Exception:  # noqa: BLE001 - best-effort cursor commit never blocks delivered readback.
+                pass
         return 0 if payload["ok"] else 1
     if args.quota_command == "replan-view":
         return handle_replan_view(args, print_payload)

@@ -91,8 +91,14 @@ def _emit_and_prune_result(
     context: QuotaCommandContext | None,
     capture_directory: Path | None,
     exit_code: int,
+    on_delivered: Callable[[Mapping[str, object]], None] | None = None,
 ) -> int:
     print_payload(payload, args.format, renderer)
+    if exit_code == 0 and on_delivered is not None:
+        try:
+            on_delivered(payload)
+        except Exception:  # noqa: BLE001 - best-effort cursor commit never breaks delivered output.
+            pass
     try:
         _prune_ephemeral_context_delivery(
             args,
@@ -231,6 +237,7 @@ def emit_quota_result(
     capture_directory: Path | None,
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
+    on_delivered: Callable[[Mapping[str, object]], None] | None = None,
 ) -> int:
     """Capture the full decision before projecting and printing the CLI view."""
     capture_sha256: str | None = None
@@ -255,6 +262,7 @@ def emit_quota_result(
             detail_sections=detail_sections,
             print_payload=print_payload,
             record_capture=record_capture,
+            on_delivered=on_delivered,
         )
     except Exception as exc:  # noqa: BLE001 - publication cannot revoke a durable guard.
         receipt = payload.get("heartbeat_receipt")
@@ -288,6 +296,7 @@ def _publish_quota_result(
     detail_sections: frozenset[str],
     print_payload: PrintPayload,
     record_capture: Callable[[dict[str, object], str | None], None],
+    on_delivered: Callable[[Mapping[str, object]], None] | None = None,
 ) -> int:
     from ..command_invocation import current_loopx_cli_argv
 
@@ -457,6 +466,7 @@ def _publish_quota_result(
             context=context,
             capture_directory=capture_directory,
             exit_code=0,
+            on_delivered=on_delivered,
         )
     if (
         payload.get("ok") is False
@@ -582,4 +592,5 @@ def _publish_quota_result(
         context=context,
         capture_directory=capture_directory,
         exit_code=0 if succeeded else 1,
+        on_delivered=on_delivered,
     )

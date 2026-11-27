@@ -22,6 +22,7 @@ from loopx.control_plane.goals.peer_coordination_digest_source import (
     commit_displayed_peer_coordination_cursor,
     peer_coordination_cursor_path,
     read_peer_coordination_cursor,
+    read_peer_coordination_cursor_state,
 )
 from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.todos.todo_summary import canonical_todo_read_record, structured_todo_item
@@ -530,3 +531,360 @@ def test_dry_run_non_mutating_and_omitted_opportunities_surface_across_turns(
     )
     assert quiet_code == 0 and quiet_payload["ok"] is True
     assert "peer_coordination_digest" not in quiet_payload
+
+
+def _run_quota_cli(
+    *,
+    registry: Path,
+    runtime: Path,
+    subcommand: str,
+    extra_args: tuple[str, ...] = (),
+) -> tuple[int, dict[str, Any]]:
+    argv = [
+        "--registry",
+        str(registry),
+        "--runtime-root",
+        str(runtime),
+        "--format",
+        "json",
+        "quota",
+        subcommand,
+        *extra_args,
+    ]
+    buf = io.StringIO()
+    saved_thread = os.environ.pop("CODEX_THREAD_ID", None)
+    try:
+        with contextlib.redirect_stdout(buf):
+            code = cli_main(argv)
+    finally:
+        if saved_thread is not None:
+            os.environ["CODEX_THREAD_ID"] = saved_thread
+    return code, json.loads(buf.getvalue())
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_capture_failure_preserves_cursor_and_same_turn_or_next_turn_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=_sample_multi_agent_todos(),
+        provider=provider,
+    )
+    cursor = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    from loopx.control_plane.turn_driver import decision_capture
+
+    with monkeypatch.context() as patch:
+        def _fail_capture(*_args: Any, **_kwargs: Any) -> str:
+            raise OSError("disk full")
+
+        patch.setattr(decision_capture, "write_decision_capture", _fail_capture)
+        fail_code, fail_payload = _run_should_run(
+            registry=paths["registry"],
+            runtime=paths["runtime"],
+            agent_id="agent-a",
+            extra_args=(
+                "--turn-instance-id",
+                "turn-cap-fail",
+                "--decision-output-dir",
+                str(tmp_path / "cap-fail"),
+            ),
+        )
+    assert fail_code == 1 and fail_payload["ok"] is False
+    assert fail_payload["error_code"] == "quota_decision_transport_failed"
+    assert not cursor.exists()
+
+    # Same Turn retries once capture path succeeds -> delivers collision and commits ONLY collision.
+    retry_code, retry_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=(
+            "--turn-instance-id",
+            "turn-cap-fail",
+            "--decision-output-dir",
+            str(tmp_path / "cap-retry"),
+        ),
+    )
+    assert retry_code == 0 and retry_payload["ok"] is True
+    retry_digest = retry_payload["peer_coordination_digest"]
+    assert [item["kind"] for item in retry_digest["items"]] == ["collision"]
+    assert retry_digest.get("omitted") == 1
+    seen_after_retry, turns_after_retry = read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+    assert seen_after_retry == [retry_digest["items"][0]["id"]]
+    assert turns_after_retry == ["turn-cap-fail"]
+
+    # Replaying the exact same Turn ID again stays idempotent (0 B, does not consume verify).
+    replay_code, replay_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=(
+            "--turn-instance-id",
+            "turn-cap-fail",
+            "--decision-output-dir",
+            str(tmp_path / "cap-replay"),
+        ),
+    )
+    assert replay_code == 0 and replay_payload["ok"] is True
+    assert "peer_coordination_digest" not in replay_payload
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == (seen_after_retry, turns_after_retry)
+
+    # Next normal Turn surfaces the previously omitted verify opportunity.
+    next_code, next_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--turn-instance-id", "turn-next"),
+    )
+    assert next_code == 0 and next_payload["ok"] is True
+    next_digest = next_payload["peer_coordination_digest"]
+    assert [item["kind"] for item in next_digest["items"]] == ["verify"]
+    seen_after_next, turns_after_next = read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+    assert len(seen_after_next) == 2
+    assert turns_after_next == ["turn-cap-fail", "turn-next"]
+
+    quiet_code2, quiet_payload2 = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--turn-instance-id", "turn-quiet"),
+    )
+    assert quiet_code2 == 0 and quiet_payload2["ok"] is True
+    assert "peer_coordination_digest" not in quiet_payload2
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_delivery_failure_after_capture_preserves_cursor_and_context_read_recovers_idempotently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=_sample_multi_agent_todos(),
+        provider=provider,
+    )
+    cursor = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    from loopx.cli_commands import quota_result_delivery
+    from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
+
+    with monkeypatch.context() as patch:
+        def _fail_handoff(*_args: Any, **_kwargs: Any) -> Any:
+            raise QuotaDecisionTransportError("simulated handoff transport failure")
+
+        patch.setattr(quota_result_delivery, "handoff_decision", _fail_handoff)
+        fail_code, fail_payload = _run_should_run(
+            registry=paths["registry"],
+            runtime=paths["runtime"],
+            agent_id="agent-a",
+            extra_args=(
+                "--turn-instance-id",
+                "turn-handoff-fail",
+                "--decision-output-dir",
+                str(tmp_path / "cap-handoff"),
+            ),
+        )
+    assert fail_code == 1 and fail_payload["ok"] is False
+    assert fail_payload["error_code"] == "quota_decision_transport_failed"
+    assert not cursor.exists()
+    captured_ref = fail_payload["captured_decision"]
+
+    # Reading an unrelated pointer does NOT advance the peer digest cursor.
+    hb_code, hb_payload = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--select",
+            "/heartbeat_receipt",
+        ),
+    )
+    assert hb_code == 0 and hb_payload["ok"] is True and hb_payload["eof"] is True
+    assert not cursor.exists()
+
+    # Full same-decision recovery read delivers collision digest and commits ONLY collision + original Turn.
+    read1_code, read1_payload = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--page-bytes",
+            "65536",
+            "--max-page-output-bytes",
+            "65536",
+        ),
+    )
+    assert read1_code == 0 and read1_payload["ok"] is True and read1_payload["eof"] is True
+    recovered_doc = json.loads(read1_payload["content"])
+    collision_id = recovered_doc["peer_coordination_digest"]["items"][0]["id"]
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([collision_id], ["turn-handoff-fail"])
+
+    # Repeated readback of the same saved decision is idempotent (same bytes, no extra advancement).
+    read2_code, read2_payload = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--page-bytes",
+            "65536",
+            "--max-page-output-bytes",
+            "65536",
+        ),
+    )
+    assert read2_code == 0 and read2_payload["ok"] is True
+    assert read2_payload["content"] == read1_payload["content"]
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([collision_id], ["turn-handoff-fail"])
+
+    # Subsequent normal Turn surfaces omitted verify item.
+    next_code, next_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--turn-instance-id", "turn-after-recovery"),
+    )
+    assert next_code == 0 and next_payload["ok"] is True
+    assert [item["kind"] for item in next_payload["peer_coordination_digest"]["items"]] == ["verify"]
+    seen_after_next, turns_after_next = read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+    assert len(seen_after_next) == 2
+    assert turns_after_next == ["turn-handoff-fail", "turn-after-recovery"]
+
+    # Late repeated readback on the old capture stays idempotent and never regresses cursor.
+    late_code, late_payload = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--select",
+            "/peer_coordination_digest",
+        ),
+    )
+    assert late_code == 0 and late_payload["ok"] is True
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == (seen_after_next, turns_after_next)
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_prepared_capture_reference_defers_cursor_until_selected_read_and_stdout_failure_preserves_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=_sample_multi_agent_todos(),
+        provider=provider,
+    )
+    cursor = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    cap_dir = tmp_path / "prepared-cap"
+    prep_code, prep_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=(
+            "--turn-instance-id",
+            "turn-prep",
+            "--decision-output-dir",
+            str(cap_dir),
+            "--prepared-capture-reference",
+        ),
+    )
+    assert prep_code == 0 and prep_payload["ok"] is True
+    assert "peer_coordination_digest" not in prep_payload
+    assert not cursor.exists()
+
+    sel_code, sel_payload = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            str(cap_dir / "decision.json"),
+            "--capture-sha256",
+            prep_payload["capture_sha256"],
+            "--select",
+            "/peer_coordination_digest",
+        ),
+    )
+    assert sel_code == 0 and sel_payload["ok"] is True and sel_payload["eof"] is True
+    selections = json.loads(sel_payload["content"])["selections"]
+    collision_id = selections[0]["value"]["items"][0]["id"]
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([collision_id], ["turn-prep"])
+
+    # Stdout emission error never advances cursor either.
+    from loopx import cli_runtime
+
+    with monkeypatch.context() as patch:
+        def _fail_print(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("broken pipe")
+
+        patch.setattr(cli_runtime, "print_payload", _fail_print)
+        with pytest.raises(OSError, match="broken pipe"):
+            cli_main(
+                [
+                    "--registry",
+                    str(paths["registry"]),
+                    "--runtime-root",
+                    str(paths["runtime"]),
+                    "--format",
+                    "json",
+                    "quota",
+                    "should-run",
+                    "--goal-id",
+                    GOAL_ID,
+                    "--agent-id",
+                    "agent-a",
+                    "--turn-instance-id",
+                    "turn-stdout-fail",
+                    "--context-delivery",
+                    "off",
+                ]
+            )
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([collision_id], ["turn-prep"])

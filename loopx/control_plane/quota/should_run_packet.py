@@ -1798,7 +1798,7 @@ def _build_quota_should_run_payload(
             "interaction_contract": payload["interaction_contract"],
             "selection_context": action_selection_context(payload),
         })
-    attach_turn_peer_coordination_digest(payload, prepared=prepared,
+    attach_turn_peer_coordination_digest(payload, prepared=prepared, turn_instance_id=turn_instance_id,
         runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload))
     return payload
 
