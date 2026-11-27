@@ -299,6 +299,34 @@ theorem comment_deadline_counterexample :
     receivedInTime 100 101 true = none ∧
     receivedInTime 100 100 true = some true := by decide
 
+/- Core supplies the matched-before-coverage predicate for each row.
+   This abstracts its draft, conflict, verdict, reviewer, author and
+   stalled-anchor checks. The list order models the collector's PR order. -/
+structure CommentCandidate where
+  number : Nat
+  matchedBeforeCoverage : Bool
+  incompleteComments : Bool
+  deriving DecidableEq
+
+def commentBackfillCandidates (rows : List CommentCandidate) : List CommentCandidate :=
+  rows.filter fun row => row.matchedBeforeCoverage && row.incompleteComments
+
+theorem backfill_targets_exactly_matching_incomplete_comments
+    (rows : List CommentCandidate) (row : CommentCandidate) :
+    row ∈ commentBackfillCandidates rows ↔
+      row ∈ rows ∧ row.matchedBeforeCoverage = true ∧ row.incompleteComments = true := by
+  simp [commentBackfillCandidates]
+
+theorem unmatched_pr_cannot_consume_first_comment_request (first : CommentCandidate)
+    (remaining : List CommentCandidate) (outOfScope : first.matchedBeforeCoverage = false) :
+    commentBackfillCandidates (first :: remaining) = commentBackfillCandidates remaining := by
+  simp [commentBackfillCandidates, outOfScope]
+
+theorem only_remaining_request_reaches_matching_pr_counterexample :
+    let rows : List CommentCandidate := [⟨500, false, true⟩, ⟨501, true, true⟩]
+    (((rows.filter (·.incompleteComments)).head?).map CommentCandidate.number = some 500) ∧
+    (((commentBackfillCandidates rows).head?).map CommentCandidate.number = some 501) := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -322,5 +350,8 @@ theorem comment_deadline_counterexample :
 #print axioms late_list_reply_keeps_prior_result
 #print axioms late_comment_does_not_replace_list_or_complete_coverage
 #print axioms comment_deadline_counterexample
+#print axioms backfill_targets_exactly_matching_incomplete_comments
+#print axioms unmatched_pr_cannot_consume_first_comment_request
+#print axioms only_remaining_request_reaches_matching_pr_counterexample
 
 end StewardPrSignalPagination

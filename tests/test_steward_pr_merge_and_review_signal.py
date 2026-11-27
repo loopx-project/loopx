@@ -1735,8 +1735,18 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     }
     age_todo = _create_monitor("steward-age-backfill", age_scope)
 
+    # A lower-numbered draft used to consume the remaining read window.
+    elapsed = 0
+    pr_pages = iter([
+        {**truncated_node, "number": 500, "isDraft": True},
+        truncated_node,
+        *({**complete_node, "number": number, "isDraft": True} for number in (502, 503, 504)),
+    ])
+
     def _age_backfill_runner(cmd, **_kw):
+        nonlocal elapsed
         if any(arg == "before=c20" for arg in cmd):
+            elapsed += 5
             return subprocess.CompletedProcess(
                 cmd,
                 0,
@@ -1756,11 +1766,18 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
                 ),
                 stderr="",
             )
-        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([truncated_node])), stderr="")
+        elapsed += 19
+        page = _graphql_page(
+            [next(pr_pages)], has_next_page=elapsed < 95, end_cursor=f"page-{elapsed}", total_count=5,
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(page), stderr="")
 
-    obs_age, succ_age, cmds_age = _collect_with_gh(age_todo, _age_backfill_runner)
-    assert len(cmds_age) == 2
-    assert any("before=c20" in cmd for cmd in cmds_age)
+    with monkeypatch.context() as clock:
+        clock.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed)
+        obs_age, succ_age, cmds_age = _collect_with_gh(age_todo, _age_backfill_runner)
+    assert len(cmds_age) == 6
+    backfill_targets = [arg for cmd in cmds_age for arg in cmd if arg.startswith("number=")]
+    assert backfill_targets == ["number=501"]
     assert obs_age["material_change"] is True
     assert obs_age["observation_incomplete"] is False
     assert obs_age["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"

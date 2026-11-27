@@ -811,6 +811,7 @@ def observe_github_repository_prs(
     *,
     runner: Callable[..., Any] = subprocess.run,
     backfill_comments: bool = False,
+    select_comment_backfill: Callable[[Sequence[Mapping[str, object]]], set[int]] | None = None,
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     normalized = normalize_github_repo_slug(repo_slug)
@@ -895,15 +896,23 @@ def observe_github_repository_prs(
             return {"status": "unavailable", "repository": repo_slug}
         if len(raw_nodes_by_number) != expected_total:
             return {"status": "unavailable", "repository": repo_slug}
-        items: list[dict[str, Any]] = []
-        remaining_comment_pages = _GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET
-        for number in sorted(raw_nodes_by_number):
-            norm_node = _normalize_graphql_pr_node(raw_nodes_by_number[number])
-            summary = summarize_github_pr_signal(norm_node)
-            if backfill_comments and remaining_comment_pages > 0:
-                summary, remaining_comment_pages = _backfill_pr_comments_if_needed(
-                    norm_node,
-                    summary,
+        normalized_nodes = {
+            number: _normalize_graphql_pr_node(raw_nodes_by_number[number])
+            for number in sorted(raw_nodes_by_number)
+        }
+        items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
+        if backfill_comments:
+            candidates = [number for number, item in items.items() if item["comments_coverage_incomplete"]]
+            if select_comment_backfill is not None and candidates and monotonic() < deadline:
+                selected = select_comment_backfill([items[number] for number in candidates])
+                candidates = [number for number in candidates if number in selected]
+            remaining_comment_pages = _GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET
+            for number in candidates:
+                if remaining_comment_pages <= 0 or monotonic() >= deadline:
+                    break
+                items[number], remaining_comment_pages = _backfill_pr_comments_if_needed(
+                    normalized_nodes[number],
+                    items[number],
                     owner=owner,
                     name=name,
                     number=number,
@@ -911,8 +920,7 @@ def observe_github_repository_prs(
                     remaining_pages=remaining_comment_pages,
                     deadline=deadline,
                 )
-            items.append(summary)
-        return {"status": "ok", "repository": repo_slug, "items": items}
+        return {"status": "ok", "repository": repo_slug, "items": list(items.values())}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}
 

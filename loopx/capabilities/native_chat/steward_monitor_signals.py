@@ -91,14 +91,29 @@ def _read_repository_snapshot(
     todo: Mapping[str, object],
     signal_scope: Mapping[str, object] | None,
     observe_github_prs: Callable[..., dict[str, object]],
+    core: Callable[[str, Mapping[str, object]], Mapping[str, object]],
 ) -> dict[str, object] | None:
     repo_slug = _github_repo_slug(todo.get("task_repository"))
     if not repo_slug:
         return None
-    backfill_comments = _signal_scope_uses_stalled_age(signal_scope)
-    if backfill_comments and _accepts_backfill_comments(observe_github_prs):
+    if not _signal_scope_uses_stalled_age(signal_scope) or not _accepts_backfill_comments(observe_github_prs):
+        return observe_github_prs(repo_slug)
+    if "select_comment_backfill" not in inspect.signature(observe_github_prs).parameters:
         return observe_github_prs(repo_slug, backfill_comments=True)
-    return observe_github_prs(repo_slug)
+
+    def select_comment_backfill(items: Sequence[Mapping[str, object]]) -> set[int]:
+        planned = core("collaboration.steward.monitor.comment_backfill.plan", {
+            "signal_scope": signal_scope,
+            "repository_items": items,
+            "observed_at": now_utc().isoformat(),
+        }).get("pr_numbers")
+        if not isinstance(planned, list) or any(type(number) is not int or number <= 0 for number in planned):
+            raise TypeError("invalid Steward comment backfill plan")
+        return set(planned)
+
+    return observe_github_prs(
+        repo_slug, backfill_comments=True, select_comment_backfill=select_comment_backfill,
+    )
 
 
 def _persist_signal_snapshot(
@@ -212,7 +227,7 @@ def collect_signal_monitor(
     inbox_items = _read_pending_inbox_items(
         runtime_root, goal_id=goal_id, agent_id=agent_id, include_inbox=include_inbox
     )
-    repo_snapshot = _read_repository_snapshot(todo, signal_scope, observe_github_prs)
+    repo_snapshot = _read_repository_snapshot(todo, signal_scope, observe_github_prs, bindings._core)
     observed_at = now_utc().isoformat()
     signal_request: dict[str, object] = {
         "portfolio_observation": portfolio,

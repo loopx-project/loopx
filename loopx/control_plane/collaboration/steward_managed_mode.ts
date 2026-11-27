@@ -1134,6 +1134,7 @@ function filterScopedRepositoryItems(
   rawItems: unknown[],
   filter: JsonObject | null,
   observedAtValue: unknown,
+  onIncompleteComments?: (item: JsonObject) => void,
 ): { items: JsonObject[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
@@ -1198,7 +1199,9 @@ function filterScopedRepositoryItems(
       const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
         || reviewSummary?.comments_coverage_incomplete === true;
       if (commentsCoverageIncomplete) {
-        return { items: [], observationIncomplete: true };
+        if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+        onIncompleteComments(item);
+        continue;
       }
       const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
       const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
@@ -1218,6 +1221,24 @@ function filterScopedRepositoryItems(
     }
   }
   return { items: matched, observationIncomplete: false };
+}
+
+/** Read-only selection at the same coverage gate used by scoped observation. */
+export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject {
+  const scope = normalizeStewardSignalMonitorScope(params.signal_scope);
+  const filter = jsonObject(scope?.pr_filter);
+  if (!Array.isArray(params.repository_items)) {
+    throw new EffectRuntimeRequestError("comment backfill requires repository items");
+  }
+  const prNumbers: number[] = [];
+  filterScopedRepositoryItems(params.repository_items, filter, params.observed_at, (item) => {
+    const number = item.number;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {
+      throw new EffectRuntimeRequestError("comment backfill requires a valid PR number");
+    }
+    prNumbers.push(number);
+  });
+  return { pr_numbers: prNumbers };
 }
 
 const AGE_FILTER_ITEM_FIELDS = [

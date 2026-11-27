@@ -8,7 +8,7 @@ or quota spend. Reports remain a separate periodic-report integration.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 import subprocess as subprocess
 
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
@@ -64,11 +64,17 @@ from .steward_monitor_turns import (
 
 
 def _observe_github_repository_prs(
-    repo_slug: str, *, backfill_comments: bool = False
+    repo_slug: str,
+    *,
+    backfill_comments: bool = False,
+    select_comment_backfill: Callable[[Sequence[Mapping[str, object]]], set[int]] | None = None,
 ) -> dict[str, object]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     raw = observe_github_repository_prs(
-        repo_slug, runner=subprocess.run, backfill_comments=backfill_comments
+        repo_slug,
+        runner=subprocess.run,
+        backfill_comments=backfill_comments,
+        select_comment_backfill=select_comment_backfill,
     )
     return _coerce_dict(raw)
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {admitStewardManagedTurn, bindStewardManagedActor, observeStewardNativeExecutor, planStewardManagedMode,
   planStewardMonitor, observeStewardPortfolio,
-  observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+  observeStewardSignalMonitor, planStewardSignalCommentBackfill} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -1100,6 +1100,25 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
       comments_coverage_incomplete: true,
     },
   });
+  const repositoryItems = [
+    {...truncatedExternal, number: 300, isDraft: true},
+    {...truncatedExternal, number: 301, author: {login: " ALICE "}},
+    truncatedExternal,
+    {...truncatedExternal, number: 303, mergeable: "CONFLICTING"},
+    makeExternalPr({number: 304}),
+    {...truncatedExternal, number: 305, review_summary: {effective_verdict: "APPROVE"}},
+    {...truncatedExternal, number: 306, comments_coverage_incomplete: false},
+  ];
+  const planParams = {repository_items: repositoryItems, observed_at: "2026-11-21T11:00:00Z"};
+  assert.deepEqual(planStewardSignalCommentBackfill({...planParams, signal_scope: {
+    ...externalStalledScope, pr_filter: {...externalStalledScope.pr_filter, exclude_conflicting: true},
+  }}), {pr_numbers: [302, 306]});
+  assert.deepEqual(planStewardSignalCommentBackfill({
+    ...planParams, signal_scope: internalStalledScope,
+  }), {pr_numbers: [301]});
+  assert.deepEqual(planStewardSignalCommentBackfill({
+    ...planParams, signal_scope: noAgeScope,
+  }), {pr_numbers: []});
   const noAgeObs = observeStewardSignalMonitor({
     signal_scope: noAgeScope,
     repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedExternal]},
