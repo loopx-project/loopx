@@ -62,12 +62,12 @@ export async function inspectRemoteAuthority(raw: unknown): Promise<JsonObject> 
   try {
     input = canonicalAuthorityObject(raw, "inspection input");
     if (input.goal_registered !== true) return remoteAuthorityInspectionResult("goal_unregistered");
-    if (input.actor_registered !== true) return remoteAuthorityInspectionResult("actor_unregistered");
     cfg = canonicalAuthorityObject(input.config ?? {}, "remote authority binding");
   } catch {return remoteAuthorityInspectionResult("binding_invalid");}
   if (cfg.enabled !== true) return remoteAuthorityInspectionResult("disabled");
   if (!["endpoint", "tenant_id", "store_identity", "actor_id", "probe_todo_id"].every(
     key => typeof cfg[key] === "string" && cfg[key].trim())) return remoteAuthorityInspectionResult("binding_incomplete");
+  if (input.actor_registered !== true) return remoteAuthorityInspectionResult("actor_unregistered");
   if (input.agent_id !== cfg.actor_id) return remoteAuthorityInspectionResult("actor_mismatch");
   const endpoint = cfg.endpoint as string;
   try {remoteAuthorityOrigin(endpoint);} catch {return remoteAuthorityInspectionResult("endpoint_invalid");}

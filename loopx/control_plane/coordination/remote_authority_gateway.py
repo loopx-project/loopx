@@ -87,7 +87,7 @@ def _inspection_io_failure(reason: str, message: str, action: str) -> dict[str, 
     }
 
 
-def inspect_remote_authority(registry_path: Path, goal_id: str, agent_id: str) -> dict[str, object]:
+def inspect_remote_authority(registry_path: Path, goal_id: str, agent_id: str | None = None) -> dict[str, object]:
     from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
     from ..effect_runtime import EffectRuntimeStartupError, _node_executable
     from ..runtime.node_probe import node_typescript_flags
@@ -105,6 +105,11 @@ def inspect_remote_authority(registry_path: Path, goal_id: str, agent_id: str) -
         cfg = {key: cfg[key] for key in (
             "enabled", "endpoint", "tenant_id", "store_identity", "actor_id", "probe_todo_id", "ca_file",
         ) if key in cfg}
+    # The App inspects the existing bound actor; it cannot supply a credential,
+    # endpoint or alternative binding. CLI callers keep their explicit actor.
+    if agent_id is None and isinstance(cfg, dict):
+        bound_actor = cfg.get("actor_id")
+        agent_id = bound_actor if isinstance(bound_actor, str) else None
     request = {
         "goal_registered": goal is not None,
         "actor_registered": agent_id in registered_agent_ids_for_goal(goal),

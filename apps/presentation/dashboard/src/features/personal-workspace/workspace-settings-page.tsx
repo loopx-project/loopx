@@ -10,6 +10,7 @@ import type { WorkspaceLocale } from "./i18n";
 import { useWorkspaceI18n } from "./i18n";
 import { LarkSettingsPage } from "./lark-settings-page";
 import { GoalCapabilitySettings } from "./goal-capability-settings";
+import { GoalRemoteAuthorityInspection } from "./remote-authority-inspection";
 import { GoalAmendmentSettings } from "./goal-amendment-settings";
 import { GoalDirectionSettings } from "./goal-direction-settings";
 import { GoalOwnershipSettings } from "./goal-ownership-settings";
@@ -264,7 +265,8 @@ export function WorkspaceSettingsPage({
         /> : null}
         {tab === "conversation" ? <MachineConfigurationSettings onChanged={onChanged} section="conversation" /> : null}
         {tab === "capabilities" && scope === "machine" ? <MachineConfigurationSettings onChanged={onChanged} section="other" /> : null}
-        {tab === "capabilities" && editableGoal ? (
+        {tab === "capabilities" && editableGoal ? <div className="personal-goal-capability-content" key={editableGoal.goalId}>
+          <GoalRemoteAuthorityInspection goalId={editableGoal.goalId} />
           <GoalCapabilitySettings
             key={editableGoal.goalId}
             callbacks={callbacks}
@@ -272,7 +274,7 @@ export function WorkspaceSettingsPage({
             notification={goalNotifications.find((row) => row.goalId === editableGoal.goalId)}
             onChanged={onChanged}
           />
-        ) : null}
+        </div> : null}
         {tab === "ownership" && editableGoal ? <div key={editableGoal.goalId}>
               {canonicalSettingsReady ? <GoalOwnershipSettings goalId={editableGoal.goalId} onChanged={onChanged} refreshKey={ownershipRefresh} /> : null}
               <GoalStorageSettings goalId={editableGoal.goalId} onChanged={() => {

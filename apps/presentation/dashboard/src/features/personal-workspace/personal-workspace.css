@@ -659,7 +659,21 @@ button.personal-execution-chip:focus-visible { outline: 2px solid #0070f3; outli
 .personal-settings-tabs button > span { display: grid; gap: 2px; min-width: 0; }
 .personal-settings-tabs strong { font-size: var(--text-body); line-height: var(--leading-body); }
 .personal-settings-body { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 0 clamp(24px, 5vw, 72px) 30px; }
-.personal-settings-body:has(> .personal-capability-settings) { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.personal-settings-body:has(> .personal-capability-settings), .personal-settings-body:has(> .personal-goal-capability-content) { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+.personal-goal-capability-content { display: grid; grid-template-rows: auto minmax(420px, 1fr); min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.personal-remote-authority { padding: 16px 20px; border-bottom: 1px solid var(--pw-line); }
+.personal-remote-authority-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.personal-remote-authority h3 { margin: 0; font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-remote-authority p { margin: 5px 0; color: var(--pw-muted); font-size: var(--text-body); line-height: var(--leading-body); }
+.personal-remote-authority button { display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 8px 12px; border: 1px solid var(--pw-line-strong); border-radius: 7px; background: var(--pw-card); color: var(--pw-text); font: inherit; cursor: pointer; }
+.personal-remote-authority button:disabled { opacity: .6; cursor: wait; }
+.personal-remote-authority-result { margin-top: 14px; }
+.personal-remote-authority-result strong { display: flex; align-items: center; gap: 8px; font-size: var(--text-body); }
+.personal-remote-authority-result[data-verified="true"] strong { color: var(--pw-green); }
+.personal-remote-authority-result[data-verified="false"] strong { color: var(--pw-caution); }
+.personal-remote-authority details { margin-top: 8px; color: var(--pw-muted); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.personal-remote-authority details summary { cursor: pointer; }
+.personal-remote-authority .personal-machine-error { margin: 12px 0 0; }
 .personal-settings-body > .personal-settings-header { min-width: 0; }
 .personal-settings-page *, .personal-settings-page *::before, .personal-settings-page *::after { box-sizing: border-box; }
 .personal-appearance-settings { max-width: 680px; }

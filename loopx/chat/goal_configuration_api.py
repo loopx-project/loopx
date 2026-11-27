@@ -40,6 +40,7 @@ _goal_capability_options = goal_capability_options
 CHAT_GOAL_CONFIGURATION_PATH = "/api/chat/goal-configuration"
 CHAT_GOAL_CONFIGURATION_PREVIEW_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/preview"
 CHAT_GOAL_CONFIGURATION_APPLY_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/apply"
+CHAT_GOAL_REMOTE_AUTHORITY_INSPECTION_PATH = f"{CHAT_GOAL_CONFIGURATION_PATH}/remote-authority/inspect"
 
 
 class GoalConfigurationRequestMixin:
@@ -68,6 +69,23 @@ class GoalConfigurationRequestMixin:
 
     def _goal_configuration_writer(self) -> GoalConfigurationWriter:
         return configure_goal_with_global_sync
+
+    def _goal_remote_authority_inspect(self) -> None:
+        """Explicit, origin-guarded read through the same owner as the CLI."""
+        from ..control_plane.coordination.remote_authority_gateway import inspect_remote_authority
+
+        try:
+            body = self._read_json()
+            goal_id = body.get("goal_id")
+            if (set(body) != {"goal_id"} or not isinstance(goal_id, str)
+                    or not goal_id.strip() or len(goal_id) > 200):
+                raise ValueError("invalid inspection target")
+        except (TypeError, ValueError):
+            self._send_error("Select one registered Goal to inspect.", status=400,
+                             error_code="invalid_remote_authority_inspection_request")
+            return
+        result = inspect_remote_authority(self.server.registry_path, goal_id)
+        self._send_json({"goal_id": goal_id, "inspection": result})
 
     @staticmethod
     def _goal_configuration_readback_matches(

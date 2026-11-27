@@ -215,6 +215,18 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -e ".[test]"
           node apps/presentation/dashboard/smoke/team-task-revalidation-smoke.mjs
+      - name: Qualify packaged remote task inspection and recovery
+        if: matrix.shard == 2
+        working-directory: apps/presentation/dashboard
+        run: npm run smoke:remote-authority-inspection
+      - name: Preserve synthetic remote task inspection views
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@v7
+        with:
+          name: remote-authority-inspection-${{ github.sha }}
+          path: output/playwright/remote-authority-inspection/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Preserve synthetic original-task recovery views
         if: always() && matrix.shard == 2
         uses: actions/upload-artifact@v7

@@ -6,6 +6,19 @@
 loopx remote-authority inspect --goal-id <goal-id> --agent-id <agent-id> --format json
 ```
 
+In the App, open **Settings → One Goal → Capability Center**, select the Goal,
+and use **Remote task connection → Check connection**. Opening settings makes
+no remote request. The button checks that Goal's existing bound actor and shows
+the verified/unverified result, a safe next step and diagnostic details. After
+correcting configuration or access, use **Check again**. Switching Goals clears
+the result; a late response cannot appear under the newly selected Goal.
+
+The App and CLI use the same inspection owner. The App's local POST route accepts
+only the Goal identifier, enforces the Chat server's origin checks, and reads
+the existing binding and credential on the server. The browser cannot supply
+an endpoint, credential, actor override or execution operation. Binding setup
+remains a separate operation; the button does not enable or modify a binding.
+
 It uses the selected registered Goal's existing `remote_authority` binding:
 `enabled: true`, `endpoint`, `tenant_id`, `store_identity`, `actor_id`, and
 `probe_todo_id`, plus optional `ca_file`. The selected agent must be registered
