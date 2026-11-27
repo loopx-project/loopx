@@ -26,6 +26,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.benchmark_toolkit import experiment_identity as owner
 from loopx.capabilities.benchmark_toolkit import (
     concurrency_envelope,
@@ -177,12 +184,11 @@ def string_elements(node: ast.AST) -> list[str] | None:
     return None
 
 
-def identity_rows(source: str, name: str) -> list[dict[str, object]]:
-    """Rows for every arm-vocabulary or token-shape decision inside ``source``."""
-
+def _identity_rows_from_tree(
+    tree: ast.Module, source: str, name: str
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    tree = ast.parse(source)
-    if ARM_PRESCREEN in source:
+    if ARM_PRESCREEN in source or may_split_or_escape_literal(source):
         for node in ast.walk(tree):
             elements = string_elements(node)
             if elements is None or set(elements) != ARM_NAMES:
@@ -222,12 +228,19 @@ def identity_rows(source: str, name: str) -> list[dict[str, object]]:
     return list(unique.values())
 
 
-def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
-    if not any(token in source for token in PRESCREEN_TOKENS):
+def identity_rows(source: str, name: str) -> list[dict[str, object]]:
+    """Rows for every arm-vocabulary or token-shape decision inside ``source``."""
+
+    if (
+        ARM_PRESCREEN not in source
+        and not may_split_or_escape_literal(source)
+        and not any(token in source for token in PRESCREEN_TOKENS)
+    ):
         return []
-    if "A-Za-z0-9" not in source:
-        return []
-    tree = ast.parse(source)
+    return _identity_rows_from_tree(ast.parse(source), source, name)
+
+
+def _unfoldable_rows_from_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     return [
         {"file": name, "line": node.lineno, "kind": "unfoldable_regex"}
@@ -240,16 +253,31 @@ def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     ]
 
 
+def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
+    if not any(token in source for token in PRESCREEN_TOKENS):
+        return []
+    return _unfoldable_rows_from_tree(ast.parse(source), name)
+
+
 def collect(root: pathlib.Path, scan_dir: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / scan_dir).rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / scan_dir):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(identity_rows(source, path.relative_to(root).as_posix()))
+        has_arm_candidate = (
+            ARM_PRESCREEN in source
+            or may_split_or_escape_literal(source)
+        )
+        has_token_candidate = any(token in source for token in PRESCREEN_TOKENS)
+        if not has_arm_candidate and not has_token_candidate:
+            continue
+        rows.extend(
+            _identity_rows_from_tree(
+                parse_python_cached(path), source, path.relative_to(root).as_posix()
+            )
+        )
     return rows
 
 
@@ -529,7 +557,7 @@ def test_unfoldable_token_construction_cannot_hide() -> None:
 
 def parse(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 def module_level_bindings(tree: ast.Module) -> set[str]:
@@ -575,3 +603,23 @@ def parser_arm_choices() -> list[str]:
                     assert keyword.value.id == "ARM_ROLE_CHOICES"
                     return list(benchmark_concurrency.ARM_ROLE_CHOICES)
     raise AssertionError("no argparse choices= argument found")
+
+
+def test_collect_prescreen_catches_implicit_split_arm_and_token_literals(
+    tmp_path: pathlib.Path,
+) -> None:
+    pkg = tmp_path / "loopx"
+    pkg.mkdir()
+    (pkg / "split_arm.py").write_text(
+        'ARMS = {"base" "line", "control", "treatment", "explore"}\n',
+        encoding="utf-8",
+    )
+    (pkg / "split_token.py").write_text(
+        'import re\nPAT = re.compile(r"^[A-Za-z0-9]" r"[A-Za-z0-9_.:@+-]{0,127}$")\n',
+        encoding="utf-8",
+    )
+    rows = collect(tmp_path, "loopx")
+    assert {(str(row["file"]), str(row["kind"])) for row in rows} == {
+        ("loopx/split_arm.py", "arm_vocabulary"),
+        ("loopx/split_token.py", "token_shape"),
+    }

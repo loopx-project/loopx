@@ -35,6 +35,12 @@ from loopx import history, project_prompt, state_refresh, status
 from loopx.control_plane import progress_scope as owner
 from loopx.control_plane.agents import agent_lane_recommendation
 from loopx.control_plane.status import run_projection
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPOSITORY_ROOT / "loopx"
@@ -93,16 +99,12 @@ def _label(path: pathlib.Path, tree: pathlib.Path) -> str:
 
 
 def _python_sources(tree: pathlib.Path) -> list[pathlib.Path]:
-    return sorted(
-        path
-        for path in (tree / "loopx").rglob("*.py")
-        if "__pycache__" not in path.parts
-    )
+    return list(iter_python_sources(tree / "loopx"))
 
 
-def _module_level_bound_names(source: str) -> list[str]:
+def _module_level_bound_names_tree(tree: ast.Module) -> list[str]:
     names: list[str] = []
-    for node in ast.parse(source).body:
+    for node in tree.body:
         if isinstance(node, ast.Assign):
             names.extend(
                 target.id for target in node.targets if isinstance(target, ast.Name)
@@ -112,13 +114,20 @@ def _module_level_bound_names(source: str) -> list[str]:
     return names
 
 
+def _module_level_bound_names(source: str) -> list[str]:
+    return _module_level_bound_names_tree(ast.parse(source))
+
+
 def declaring_modules(tree: pathlib.Path) -> list[str]:
     """Every module under ``tree`` that re-binds the guarded name at module level."""
-    return sorted(
-        _label(path, tree)
-        for path in _python_sources(tree)
-        if GUARDED_NAME in _module_level_bound_names(path.read_text(encoding="utf-8"))
-    )
+    declared: list[str] = []
+    for path in _python_sources(tree):
+        source = read_text_cached(path)
+        if source.isascii() and GUARDED_NAME not in source:
+            continue
+        if GUARDED_NAME in _module_level_bound_names_tree(parse_python_cached(path)):
+            declared.append(_label(path, tree))
+    return sorted(declared)
 
 
 def _scope_literal_nodes(node: ast.expr | None) -> list[ast.Constant]:
@@ -174,8 +183,12 @@ def inline_value_sites(tree: pathlib.Path) -> dict[str, int]:
     """Where the value is written out again in a position that consumes it as a scope."""
     sites: dict[str, int] = {}
     for path in _python_sources(tree):
-        source = path.read_text(encoding="utf-8")
-        hits = _value_positions(ast.parse(source), source)
+        source = read_text_cached(path)
+        if not may_split_or_escape_literal(source) and (
+            SCOPE_VALUE not in source or "progress" not in source
+        ):
+            continue
+        hits = _value_positions(parse_python_cached(path), source)
         if hits:
             sites[_label(path, tree)] = len(hits)
     return sites

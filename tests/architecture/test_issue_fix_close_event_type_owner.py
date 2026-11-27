@@ -31,6 +31,13 @@ import pathlib
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.issue_fix import (
     metrics_projection as projection_mod,
     metrics_supplement as owner,
@@ -83,14 +90,7 @@ def _members(node: ast.expr) -> frozenset[str] | None:
     return None
 
 
-def _close_type_literal_sites(source: str) -> list[int]:
-    """Every collection literal in the source folding to ISSUE_CLOSE, counted once.
-
-    ``frozenset({...})`` is walked as both the call and its inner set; the inner
-    node is skipped so one restatement is one site, not two.
-    """
-
-    tree = ast.parse(source)
+def _close_type_literal_sites_tree(tree: ast.Module) -> list[int]:
     wrapped = {
         id(node.args[0])
         for node in ast.walk(tree)
@@ -106,14 +106,27 @@ def _close_type_literal_sites(source: str) -> list[int]:
     ]
 
 
+def _close_type_literal_sites(source: str) -> list[int]:
+    """Every collection literal in the source folding to ISSUE_CLOSE, counted once.
+
+    ``frozenset({...})`` is walked as both the call and its inner set; the inner
+    node is skipped so one restatement is one site, not two.
+    """
+
+    return _close_type_literal_sites_tree(ast.parse(source))
+
+
 @pytest.fixture(scope="module")
 def tree_offenders() -> dict[str, list[int]]:
     offenders: dict[str, list[int]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative == OWNER_PATH:
             continue
-        sites = _close_type_literal_sites(path.read_text(encoding="utf-8"))
+        source = read_text_cached(path)
+        if not may_split_or_escape_literal(source) and "issue_close_recommended" not in source:
+            continue
+        sites = _close_type_literal_sites_tree(parse_python_cached(path))
         if sites:
             offenders[relative] = sites
     return offenders

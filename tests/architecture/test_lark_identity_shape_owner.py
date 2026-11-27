@@ -25,6 +25,12 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.extensions.lark import (
     event_collector,
     event_collector_routes,
@@ -280,12 +286,7 @@ def regex_constructions(tree: ast.Module) -> list[ast.Call]:
     return calls
 
 
-def shape_rows_in_source(source: str, name: str) -> list[dict[str, object]]:
-    """Every whole-value identifier shape decided inside ``source``."""
-
-    if not any(token in source for token in PRESCREEN_TOKENS):
-        return []
-    tree = ast.parse(source)
+def _shape_rows_in_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     rows: list[dict[str, object]] = []
     for node in regex_constructions(tree):
@@ -309,14 +310,15 @@ def shape_rows_in_source(source: str, name: str) -> list[dict[str, object]]:
     return sorted(rows, key=lambda row: (str(row["file"]), int(row["line"])))
 
 
-def unfoldable_rows_in_source(source: str, name: str) -> list[dict[str, object]]:
-    """Regex constructions in ``source`` whose pattern value cannot be folded."""
+def shape_rows_in_source(source: str, name: str) -> list[dict[str, object]]:
+    """Every whole-value identifier shape decided inside ``source``."""
 
     if not any(token in source for token in PRESCREEN_TOKENS):
         return []
-    if not any(token in source for token in IDENTIFIER_RELEVANCE_TOKENS):
-        return []
-    tree = ast.parse(source)
+    return _shape_rows_in_tree(ast.parse(source), name)
+
+
+def _unfoldable_rows_in_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_level_string_constants(tree)
     return [
         {"file": name, "line": node.lineno, "unfoldable": True}
@@ -325,13 +327,21 @@ def unfoldable_rows_in_source(source: str, name: str) -> list[dict[str, object]]
     ]
 
 
+def unfoldable_rows_in_source(source: str, name: str) -> list[dict[str, object]]:
+    """Regex constructions in ``source`` whose pattern value cannot be folded."""
+
+    if not any(token in source for token in PRESCREEN_TOKENS):
+        return []
+    if not any(token in source for token in IDENTIFIER_RELEVANCE_TOKENS):
+        return []
+    return _unfoldable_rows_in_tree(ast.parse(source), name)
+
+
 def collect_source_rows(root: pathlib.Path) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
-    for path in sorted(root.rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
         pairs.append((path.relative_to(REPO_ROOT).as_posix(), source))
@@ -339,19 +349,33 @@ def collect_source_rows(root: pathlib.Path) -> list[tuple[str, str]]:
 
 
 def collect_shape_definitions(root: pathlib.Path) -> list[dict[str, object]]:
-    return [
-        row
-        for name, source in collect_source_rows(root)
-        for row in shape_rows_in_source(source, name)
-    ]
+    rows: list[dict[str, object]] = []
+    for path in iter_python_sources(root):
+        try:
+            source = read_text_cached(path)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not any(token in source for token in PRESCREEN_TOKENS):
+            continue
+        name = path.relative_to(REPO_ROOT).as_posix()
+        rows.extend(_shape_rows_in_tree(parse_python_cached(path), name))
+    return rows
 
 
 def collect_unfoldable_definitions(root: pathlib.Path) -> list[dict[str, object]]:
-    return [
-        row
-        for name, source in collect_source_rows(root)
-        for row in unfoldable_rows_in_source(source, name)
-    ]
+    rows: list[dict[str, object]] = []
+    for path in iter_python_sources(root):
+        try:
+            source = read_text_cached(path)
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not any(token in source for token in PRESCREEN_TOKENS):
+            continue
+        if not any(token in source for token in IDENTIFIER_RELEVANCE_TOKENS):
+            continue
+        name = path.relative_to(REPO_ROOT).as_posix()
+        rows.extend(_unfoldable_rows_in_tree(parse_python_cached(path), name))
+    return rows
 
 
 def offender_rows(
@@ -435,7 +459,7 @@ def references(tree: ast.Module, name: str) -> bool:
 
 def parse_module(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 # --------------------------------------------------------------------------

@@ -27,6 +27,12 @@ import re
 from pathlib import Path
 from typing import Any
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOPX_ROOT = REPO_ROOT / "loopx"
 CEILINGS_FIXTURE = Path(__file__).with_name("posix_flag_ceilings.json")
@@ -35,9 +41,8 @@ POSIX_ONLY_FLAGS = frozenset({"O_NOFOLLOW", "O_DIRECTORY", "O_NONBLOCK"})
 _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def bare_flag_uses(source: str) -> list[tuple[int, str]]:
-    """Every direct `os.<flag>` or `from os import <flag>` in one module."""
-    tree = ast.parse(source)
+def _bare_flag_uses_tree(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every direct `os.<flag>` or `from os import <flag>` in a parsed module."""
     aliases = {
         alias.asname or alias.name
         for node in ast.walk(tree)
@@ -63,11 +68,19 @@ def bare_flag_uses(source: str) -> list[tuple[int, str]]:
     return sorted(uses)
 
 
+def bare_flag_uses(source: str) -> list[tuple[int, str]]:
+    """Every direct `os.<flag>` or `from os import <flag>` in one module."""
+    return _bare_flag_uses_tree(ast.parse(source))
+
+
 def observed_ceiling(loopx_root: Path | None = None) -> dict[str, list[tuple[int, str]]]:
     root = loopx_root or LOOPX_ROOT
     observed: dict[str, list[tuple[int, str]]] = {}
-    for path in sorted(root.rglob("*.py")):
-        uses = bare_flag_uses(path.read_text(encoding="utf-8"))
+    for path in iter_python_sources(root):
+        source = read_text_cached(path)
+        if source.isascii() and not any(flag in source for flag in POSIX_ONLY_FLAGS):
+            continue
+        uses = _bare_flag_uses_tree(parse_python_cached(path))
         if uses:
             observed[path.relative_to(REPO_ROOT).as_posix()] = uses
     return observed

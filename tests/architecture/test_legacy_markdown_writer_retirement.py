@@ -8,6 +8,12 @@ import json
 from pathlib import Path
 import subprocess
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
+)
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPOSITORY_ROOT / "loopx"
@@ -94,9 +100,13 @@ const noteName = (sourcePath, node) => {
   }
 };
 
+const retiredModuleName = "handoff_mode_legacy_plan";
 for (const relative of request.sources) {
   const sourcePath = path.resolve(request.root, relative);
   const text = fs.readFileSync(sourcePath, "utf8");
+  if (!text.includes(retiredModuleName) && !request.retired_symbols.some(s => text.includes(s))) {
+    continue;
+  }
   const tree = ts.createSourceFile(
     relative,
     text,
@@ -140,13 +150,21 @@ def _module_name(path: Path) -> str:
     return ".".join(("loopx", *parts))
 
 
+_PYTHON_PRESCREEN_TOKENS = tuple(
+    {module.rsplit(".", 1)[-1] for module in RETIRED_MODULES} | RETIRED_PYTHON_SYMBOLS
+)
+
+
 def _python_offenders() -> list[tuple[str, str, str]]:
     offenders: list[tuple[str, str, str]] = []
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
+        source = read_text_cached(path)
+        if not any(tok in source for tok in _PYTHON_PRESCREEN_TOKENS):
+            continue
         relative = str(path.relative_to(REPOSITORY_ROOT))
         module = _module_name(path)
         package = module if path.name == "__init__.py" else module.rpartition(".")[0]
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        tree = parse_python_cached(path)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 imported = {alias.name for alias in node.names}

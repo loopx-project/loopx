@@ -4,6 +4,7 @@ import ast
 import importlib
 from importlib.util import resolve_name
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -12,6 +13,11 @@ import pytest
 from loopx.canary.maintainability_ratchet import (
     REVIEWED_MAINTAINABILITY_EXCEPTIONS,
     evaluate_maintainability_findings,
+)
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    parse_python_cached,
+    read_text_cached,
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +80,7 @@ def _module_name(path: Path) -> str:
 def _resolved_imports(path: Path) -> set[str]:
     module_name = _module_name(path)
     package_name = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     imports: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -92,7 +98,7 @@ def _resolved_from_imports(path: Path) -> dict[str, set[str]]:
     if path.is_relative_to(PACKAGE_ROOT):
         module_name = _module_name(path)
         package_name = module_name if path.name == "__init__.py" else module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     imports: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -107,7 +113,7 @@ def _resolved_from_imports(path: Path) -> dict[str, set[str]]:
 
 
 def _top_level_imported_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     return {
         alias.asname or alias.name
         for node in tree.body
@@ -117,7 +123,7 @@ def _top_level_imported_names(path: Path) -> set[str]:
 
 
 def _top_level_function_names(path: Path) -> set[str]:
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     return {
         node.name
         for node in tree.body
@@ -128,7 +134,7 @@ def _top_level_function_names(path: Path) -> set[str]:
 def _top_level_import_bindings(path: Path) -> dict[str, str]:
     module_name = _module_name(path)
     package_name = module_name.rpartition(".")[0]
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     bindings: dict[str, str] = {}
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -144,7 +150,7 @@ def _top_level_import_bindings(path: Path) -> dict[str, str]:
 
 
 def _public_import_only_bindings(path: Path) -> dict[str, str]:
-    tree = ast.parse(path.read_bytes(), filename=str(path))
+    tree = parse_python_cached(path)
     loaded_names = {
         node.id
         for node in ast.walk(tree)
@@ -157,11 +163,32 @@ def _public_import_only_bindings(path: Path) -> dict[str, str]:
     }
 
 
+_FACADE_IMPORT_HINT = re.compile(
+    r"\bfrom\s*(?:\\\r?\n\s*)*loopx(?:\s*\.\s*(?:status|quota)\b|\s+import(?:\s*\([^)]*\b(?:status|quota)\b|[^\n]*\b(?:status|quota)\b))",
+    re.DOTALL,
+)
+_RELATIVE_FACADE_HINT = re.compile(
+    r"\bfrom\s*(?:\\\r?\n\s*)*\.+(?:\s*(?:status|quota)\b|\s+import(?:\s*\([^)]*\b(?:status|quota)\b|[^\n]*\b(?:status|quota)\b))",
+    re.DOTALL,
+)
+
+
 def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
     evidence: dict[tuple[str, str], set[str]] = {}
     for root in PUBLIC_CONTRACT_ROOTS:
-        for path in root.rglob("*.py"):
-            tree = ast.parse(path.read_bytes(), filename=str(path))
+        for path in iter_python_sources(root):
+            try:
+                source = read_text_cached(path)
+            except UnicodeDecodeError:
+                tree = ast.parse(path.read_bytes(), filename=str(path))
+            else:
+                if (
+                    ("status" not in source and "quota" not in source)
+                    or "loopx" not in source
+                    or _FACADE_IMPORT_HINT.search(source) is None
+                ):
+                    continue
+                tree = parse_python_cached(path)
             # Aliases such as ``from loopx import status as status_module`` are a
             # real consumer of a facade export, reached by attribute access
             # rather than a from-import. Without this map the audit would report
@@ -192,11 +219,14 @@ def _public_contract_evidence() -> dict[tuple[str, str], set[str]]:
                     evidence.setdefault((facade_name, node.attr), set()).add(
                         str(path.relative_to(REPOSITORY_ROOT))
                     )
+    facade_exports = [
+        (facade_name, importlib.import_module(facade_name)._PUBLIC_COMPAT_REEXPORTS)
+        for facade_name in PUBLIC_COMPAT_FACADES
+    ]
     for path in (REPOSITORY_ROOT / "docs").rglob("*.md"):
         text = path.read_text(encoding="utf-8")
-        for facade_name in PUBLIC_COMPAT_FACADES:
-            facade = importlib.import_module(facade_name)
-            for export_name in facade._PUBLIC_COMPAT_REEXPORTS:
+        for facade_name, exports in facade_exports:
+            for export_name in exports:
                 if (
                     f"{facade_name}.{export_name}" in text
                     or f"from {facade_name} import {export_name}" in text
@@ -221,7 +251,7 @@ def _review_outward_dependencies(edges, *, reviewed=REVIEWED_MAINTAINABILITY_EXC
 def test_control_plane_has_no_unreviewed_outward_dependencies() -> None:
     outward_dependencies = {
         (_module_name(path), dependency)
-        for path in CONTROL_PLANE_ROOT.rglob("*.py")
+        for path in iter_python_sources(CONTROL_PLANE_ROOT)
         for dependency in _resolved_imports(path)
         if any(
             dependency == prefix or dependency.startswith(prefix + ".")
@@ -559,14 +589,18 @@ def test_inert_lark_projector_does_not_load_routes_before_activation(tmp_path) -
 
 
 def test_core_does_not_import_experiments() -> None:
-    forbidden_edges = {
-        (_module_name(path), dependency)
-        for path in PACKAGE_ROOT.rglob("*.py")
-        if not path.is_relative_to(EXPERIMENT_ROOT)
-        for dependency in _resolved_imports(path)
-        if dependency == EXPERIMENT_PREFIX
-        or dependency.startswith(EXPERIMENT_PREFIX + ".")
-    }
+    forbidden_edges: set[tuple[str, str]] = set()
+    for path in iter_python_sources(PACKAGE_ROOT):
+        if path.is_relative_to(EXPERIMENT_ROOT):
+            continue
+        source = read_text_cached(path)
+        if "experiments" not in source:
+            continue
+        for dependency in _resolved_imports(path):
+            if dependency == EXPERIMENT_PREFIX or dependency.startswith(
+                EXPERIMENT_PREFIX + "."
+            ):
+                forbidden_edges.add((_module_name(path), dependency))
 
     assert not forbidden_edges, (
         "stable LoopX code must not depend on opt-in experiments; "
@@ -608,16 +642,31 @@ def test_internal_consumers_bypass_status_and_quota_reexport_routes() -> None:
     internal_paths = (
         path
         for root in (PACKAGE_ROOT, SCRIPTS_ROOT)
-        for path in root.rglob("*.py")
+        for path in iter_python_sources(root)
         if path not in {STATUS_MODULE, QUOTA_MODULE}
     )
-    indirect_imports = {
-        (_module_name(path) if path.is_relative_to(PACKAGE_ROOT) else str(path.relative_to(REPOSITORY_ROOT)), facade, name)
-        for path in internal_paths
-        for facade, imported_names in _resolved_from_imports(path).items()
-        if facade in facade_reexports
-        for name in imported_names & facade_reexports[facade]
-    }
+    indirect_imports = set()
+    for path in internal_paths:
+        source = read_text_cached(path)
+        if (
+            ("status" not in source and "quota" not in source)
+            or "from" not in source
+            or (
+                _FACADE_IMPORT_HINT.search(source) is None
+                and _RELATIVE_FACADE_HINT.search(source) is None
+            )
+        ):
+            continue
+        for facade, imported_names in _resolved_from_imports(path).items():
+            if facade not in facade_reexports:
+                continue
+            for name in imported_names & facade_reexports[facade]:
+                target = (
+                    _module_name(path)
+                    if path.is_relative_to(PACKAGE_ROOT)
+                    else str(path.relative_to(REPOSITORY_ROOT))
+                )
+                indirect_imports.add((target, facade, name))
 
     assert not indirect_imports, (
         "repository-internal consumers must import extracted symbols from their "
@@ -738,7 +787,8 @@ def test_lark_inbox_provider_is_owned_by_the_extension_layer() -> None:
     }
     remaining_legacy_imports = {
         (_module_name(path), dependency)
-        for path in PACKAGE_ROOT.rglob("*.py")
+        for path in iter_python_sources(PACKAGE_ROOT)
+        if "lark" in read_text_cached(path)
         for dependency in _resolved_imports(path)
         if dependency in legacy_imports
     }
@@ -768,7 +818,8 @@ def test_lark_projection_sinks_are_owned_by_the_extension_layer() -> None:
     core_provider_imports = {
         (_module_name(path), dependency)
         for root in (PACKAGE_ROOT / "capabilities", PACKAGE_ROOT / "presentation")
-        for path in root.rglob("*.py")
+        for path in iter_python_sources(root)
+        if "lark" in read_text_cached(path)
         for dependency in _resolved_imports(path)
         if dependency == "loopx.extensions.lark"
         or dependency.startswith("loopx.extensions.lark.")

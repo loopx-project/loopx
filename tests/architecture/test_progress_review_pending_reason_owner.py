@@ -23,6 +23,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.progress_review import receipt
 from loopx.control_plane.work_items import (
     external_progress_review,
@@ -36,9 +43,7 @@ OWNER_MODULE = "progress_review_policy"
 REASON_VALUE = "pending_evaluation"
 
 
-def reason_assignments(source: str) -> list[str]:
-    """Names bound to the pending-reason literal anywhere in a module."""
-    tree = ast.parse(source)
+def _reason_assignments_tree(tree: ast.Module) -> list[str]:
     held: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -59,11 +64,19 @@ def reason_assignments(source: str) -> list[str]:
     return held
 
 
+def reason_assignments(source: str) -> list[str]:
+    """Names bound to the pending-reason literal anywhere in a module."""
+    return _reason_assignments_tree(ast.parse(source))
+
+
 def modules_holding_the_reason() -> list[str]:
     holders: list[str] = []
-    for path in sorted(REPO_ROOT.glob("loopx/**/*.py")):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            held = reason_assignments(path.read_text(encoding="utf-8"))
+            source = read_text_cached(path)
+            if not may_split_or_escape_literal(source) and REASON_VALUE not in source:
+                continue
+            held = _reason_assignments_tree(parse_python_cached(path))
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - guarded tree
             continue
         if held:

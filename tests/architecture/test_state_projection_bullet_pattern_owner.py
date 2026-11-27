@@ -35,6 +35,12 @@ import pytest
 from loopx import state_projection as consumer
 from loopx.control_plane.status import active_state_projection as owner
 from loopx.control_plane.todos.contract import compact_todo_text
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 PACKAGE_ROOT = REPO_ROOT / "loopx"
@@ -46,15 +52,7 @@ SECTION_HEADING_PATTERN = r"^##+\s+(.+?)\s*$"
 PRIORITY_PATTERN = r"^\[(P[0-4])\]\s+(.+)$"
 
 
-def _compiled_pattern_sites(source: str, pattern: str) -> list[int]:
-    """Every ``re.compile(<literal>)`` call in the source whose pattern matches.
-
-    Keys on the pattern literal, so a restatement under any name (or with extra
-    flags) is still one site; a bare pattern string that is never compiled is not
-    a compiled-regex restatement and is left alone.
-    """
-
-    tree = ast.parse(source)
+def _compiled_pattern_sites_tree(tree: ast.Module, pattern: str) -> list[int]:
     sites: list[int] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -71,14 +69,28 @@ def _compiled_pattern_sites(source: str, pattern: str) -> list[int]:
     return sites
 
 
+def _compiled_pattern_sites(source: str, pattern: str) -> list[int]:
+    """Every ``re.compile(<literal>)`` call in the source whose pattern matches.
+
+    Keys on the pattern literal, so a restatement under any name (or with extra
+    flags) is still one site; a bare pattern string that is never compiled is not
+    a compiled-regex restatement and is left alone.
+    """
+
+    return _compiled_pattern_sites_tree(ast.parse(source), pattern)
+
+
 @pytest.fixture(scope="module")
 def tree_offenders() -> dict[str, list[int]]:
     offenders: dict[str, list[int]] = {}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative == OWNER_PATH:
             continue
-        sites = _compiled_pattern_sites(path.read_text(encoding="utf-8"), PATTERN)
+        source = read_text_cached(path)
+        if not may_split_or_escape_literal(source) and PATTERN not in source:
+            continue
+        sites = _compiled_pattern_sites_tree(parse_python_cached(path), PATTERN)
         if sites:
             offenders[relative] = sites
     return offenders

@@ -162,13 +162,20 @@ def python_facts(source: SourceFile) -> dict[str, list[FactEntry]]:
     scans of the same tree (owner_values plus build_inventory in the drift
     smoke) parse each file once instead of once per caller.
     """
+    return python_facts_from_tree(source, parse_python(source))
+
+
+def python_facts_from_tree(
+    source: SourceFile,
+    tree: ast.Module,
+) -> dict[str, list[FactEntry]]:
+    """Extract Python vocabulary facts from an already-parsed syntax tree."""
     facts: dict[str, list[FactEntry]] = {
         "enums": [],
         "closed_sets": [],
         "literal_aliases": [],
         "string_constants": [],
     }
-    tree = parse_python(source)
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and _is_enum_class(node):
             values: list[str] = []
@@ -361,6 +368,8 @@ def build_inventory(
     repo_root: Path,
     root: str = DEFAULT_ROOT,
     sources: Sequence[SourceFile] | None = None,
+    *,
+    python_facts_map: Mapping[SourceFile, dict[str, list[FactEntry]]] | None = None,
 ) -> dict[str, object]:
     resolved_sources = load_sources(repo_root, root) if sources is None else list(sources)
     enums: list[FactEntry] = []
@@ -370,7 +379,11 @@ def build_inventory(
     string_constants: list[FactEntry] = []
     for source in resolved_sources:
         if source.suffix == ".py":
-            facts = python_facts(source)
+            facts = (
+                python_facts_map[source]
+                if python_facts_map is not None and source in python_facts_map
+                else python_facts(source)
+            )
             enums.extend(facts["enums"])
             closed_sets.extend(facts["closed_sets"])
             literal_aliases.extend(facts["literal_aliases"])
@@ -485,10 +498,19 @@ def string_constant_definitions(
 
 def collect_string_constants(
     sources: Sequence[SourceFile],
+    *,
+    python_facts_map: Mapping[SourceFile, dict[str, list[FactEntry]]] | None = None,
 ) -> list[StringConstantEntry]:
     constants: list[StringConstantEntry] = []
     for source in sources:
-        facts = python_facts(source) if source.suffix == ".py" else typescript_facts(source)
+        if source.suffix == ".py":
+            facts = (
+                python_facts_map[source]
+                if python_facts_map is not None and source in python_facts_map
+                else python_facts(source)
+            )
+        else:
+            facts = typescript_facts(source)
         for item in facts["string_constants"]:
             constants.append(
                 {

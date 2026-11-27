@@ -23,6 +23,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities import configuration_ui
 from loopx.capabilities.progress_review import policy as capability_policy
 from loopx.capabilities.progress_review import receipt
@@ -69,7 +76,7 @@ def literal_value(node: ast.AST) -> tuple[str, ...] | None:
 
 
 def signal_rows(source: str, name: str) -> list[dict[str, object]]:
-    if "noul" not in source:
+    if "noul" not in source and not may_split_or_escape_literal(source):
         return []
     tree = ast.parse(source)
     return [
@@ -81,15 +88,20 @@ def signal_rows(source: str, name: str) -> list[dict[str, object]]:
 
 def collect(root: pathlib.Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
+        if "noul" not in source and not may_split_or_escape_literal(source):
+            continue
+        tree = parse_python_cached(path)
         relative = path.relative_to(root).as_posix()
-        rows.extend(signal_rows(source, relative))
+        rows.extend(
+            {"file": relative, "line": node.lineno, "kind": "signal_vocabulary"}
+            for node in ast.walk(tree)
+            if literal_value(node) == SIGNAL_VALUE
+        )
     return rows
 
 
@@ -120,9 +132,12 @@ def offenders(
 
 def modules_importing_the_owner() -> set[str]:
     importing: set[str] = set()
-    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            source = read_text_cached(path)
+            if source.isascii() and OWNER_NAME not in source:
+                continue
+            tree = parse_python_cached(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         for node in ast.walk(tree):
@@ -141,7 +156,7 @@ def referenced(tree: ast.Module, name: str) -> bool:
 
 def parse(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 def test_no_other_module_states_the_signal_set() -> None:

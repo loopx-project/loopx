@@ -54,6 +54,14 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    check_python_syntax_cached,
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.explore import todo_branch_plan, worker_branch_plan
 from loopx.capabilities.issue_fix import github_public, pr_description
 from loopx.capabilities.issue_fix import repository_commit_evidence as commit_evidence
@@ -171,10 +179,9 @@ def folded_value(node: ast.expr) -> tuple[str, object] | None:
     return None
 
 
-def _analyse(source: str):
-    """Derive the consumed sites once; syntax trees remain temporary."""
+def _analyse_tree(tree: ast.Module):
+    """Derive the consumed sites from a parsed AST."""
 
-    tree = ast.parse(source)
     bindings = []
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -188,6 +195,12 @@ def _analyse(source: str):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             strings.append((node.lineno, node.value))
     return bindings, members, strings
+
+
+def _analyse(source: str):
+    """Derive the consumed sites once; syntax trees remain temporary."""
+
+    return _analyse_tree(ast.parse(source))
 
 
 def _binding_lines(bindings, name, kind, payload):
@@ -217,6 +230,21 @@ def body_literal_sites(source: str, body: str) -> list[int]:
     return _sites(_analyse(source), "", "body", body)[1]
 
 
+_REWARD_SCAN_TOKENS = (
+    "actor_role",
+    "confidence",
+    "source_freshness",
+    "surface_id",
+    "A-Za-z0-9_",
+    "_SOURCE_FIELDS",
+    "_REASONING_FIELDS",
+    "_GUARD_FIELDS",
+    "_SCOPE_FIELDS",
+    "TOKEN_PATTERN",
+    "_REPO_PATTERN",
+)
+
+
 def _repository_scan():
     queries = [(name, "members", spec[0], spec[1], {})
                for name, spec in SET_DECISIONS.items()]
@@ -224,9 +252,17 @@ def _repository_scan():
                 for name, spec in PATTERN_DECISIONS.items()]
     bindings = {name: [] for name, *_ in queries}
     sites = {name: {} for name, *_ in queries}
-    for path in sorted(PACKAGE_ROOT.rglob("*.py")):
+    for path in iter_python_sources(PACKAGE_ROOT):
+        source = read_text_cached(path)
+        if (
+            not may_split_or_escape_literal(source)
+            and not any(tok in source for tok in _REWARD_SCAN_TOKENS)
+        ):
+            # Validate syntax without pinning full-tree ASTs into the shared cache.
+            check_python_syntax_cached(path)
+            continue
         rel = path.relative_to(REPO_ROOT).as_posix()
-        analysis = _analyse(path.read_text(encoding="utf-8"))
+        analysis = _analyse_tree(parse_python_cached(path))
         for name, kind, payload, owner_path, _declared in queries:
             if rel == owner_path:
                 continue

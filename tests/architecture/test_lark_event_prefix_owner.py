@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import pathlib
 
+from tests.architecture._repo_ast_cache import iter_python_sources, read_text_cached
+
 from loopx.extensions.lark import (
     event_collector_runtime,
     goal_topic_runtime,
@@ -25,14 +27,10 @@ STATED_LITERALS = ('"[event] ready "', '"[event] "')
 
 
 def _module_sources() -> dict[str, str]:
-    sources: dict[str, str] = {}
-    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
-        sources[path.relative_to(REPO_ROOT).as_posix()] = path.read_text(
-            encoding="utf-8"
-        )
-    return sources
+    return {
+        path.relative_to(REPO_ROOT).as_posix(): read_text_cached(path)
+        for path in iter_python_sources(REPO_ROOT / "loopx")
+    }
 
 
 def test_only_the_owner_states_each_event_line_prefix() -> None:

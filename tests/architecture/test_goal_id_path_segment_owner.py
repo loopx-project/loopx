@@ -13,6 +13,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx import history, paths, runtime
 from loopx.control_plane.quota import slot_accounting
 
@@ -49,9 +56,12 @@ def _states_traversal_rule(node: ast.AST) -> bool:
 
 def _sites(root: Path) -> dict[str, int]:
     found: dict[str, int] = {}
-    for path in sorted((root / "loopx").rglob("*.py")):
+    for path in iter_python_sources(root / "loopx"):
+        source = read_text_cached(path)
+        if not may_split_or_escape_literal(source) and "goal id is required" not in source:
+            continue
         relative = path.relative_to(root).as_posix()
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tree = parse_python_cached(path)
         count = sum(
             1
             for node in ast.walk(tree)

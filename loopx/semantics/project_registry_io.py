@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 import json
 from pathlib import Path
 import subprocess
@@ -106,6 +108,45 @@ def load_registry_io_sources(repo_root: Path) -> list[SourceFile]:
             )
         )
     return result
+
+
+EXTRA_REGISTRY_IO_PATTERNS = (
+    f"{SOURCE_ROOT}/*.tsx",
+    f"{SOURCE_ROOT}/*.js",
+    f"{SOURCE_ROOT}/*.mjs",
+)
+
+
+def load_registry_io_sources_from_base(
+    repo_root: Path, base_sources: Sequence[SourceFile],
+) -> list[SourceFile]:
+    """Reuse already-loaded ``.py``/``.ts`` sources and load remaining JS/TSX files."""
+    by_path: dict[str, SourceFile] = {
+        source.path: source
+        for source in base_sources
+        if source.suffix in PROJECT_REGISTRY_SOURCE_SUFFIXES and not _excluded(source.path)
+    }
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached", "-z", "--", *EXTRA_REGISTRY_IO_PATTERNS],
+        cwd=repo_root,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode("utf-8").split("\0")
+    for relative in sorted(set(tracked) - {""}):
+        path = repo_root / relative
+        if (
+            _excluded(relative)
+            or path.is_symlink()
+            or not path.is_file()
+            or path.suffix not in PROJECT_REGISTRY_SOURCE_SUFFIXES
+        ):
+            continue
+        by_path[relative] = SourceFile(
+            path=relative,
+            suffix=path.suffix,
+            text=path.read_text(encoding="utf-8", errors="replace"),
+        )
+    return [by_path[key] for key in sorted(by_path)]
 
 
 def _terminal_name(node: ast.AST) -> str | None:
@@ -364,31 +405,57 @@ class _PythonRegistryIOScanner(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-def scan_python_registry_io(source: SourceFile) -> list[RegistryIOObservation]:
+def _scan_python_registry_io_from_tree(
+    source: SourceFile,
+    tree: ast.Module,
+) -> tuple[RegistryIOObservation, ...]:
+    text = source.text
+    if (
+        text.isascii()
+        and "json" not in text
+        and "write_text" not in text
+        and "write_bytes" not in text
+        and "registr" not in text.lower()
+    ):
+        return ()
+    scanner = _PythonRegistryIOScanner(source)
+    scanner.visit(tree)
+    return tuple(scanner.observations)
+
+
+@lru_cache(maxsize=4096)
+def _scan_python_registry_io_cached(source: SourceFile) -> tuple[RegistryIOObservation, ...]:
     try:
         tree = ast.parse(source.text, filename=source.path)
     except SyntaxError as error:
         raise ValueError(
             f"cannot scan invalid Python source: {source.path}:{error.lineno}"
         ) from None
-    scanner = _PythonRegistryIOScanner(source)
-    scanner.visit(tree)
-    return scanner.observations
+    return _scan_python_registry_io_from_tree(source, tree)
 
 
-def _scan_javascript_registry_io(
-    repo_root: Path, sources: list[SourceFile]
+def scan_python_registry_io(
+    source: SourceFile,
+    *,
+    tree: ast.Module | None = None,
 ) -> list[RegistryIOObservation]:
-    rows = run_typescript_scan(
-        repo_root,
-        sources,
-        {
-            "mode": "registry_io",
-            "approved_reads": sorted(APPROVED_READ_APIS),
-            "approved_writes": sorted(APPROVED_WRITE_APIS),
-            "approved_transactions": sorted(APPROVED_TRANSACTION_APIS),
-        },
-    )
+    if tree is None:
+        return list(_scan_python_registry_io_cached(source))
+    return list(_scan_python_registry_io_from_tree(source, tree))
+
+
+def registry_io_javascript_request() -> dict[str, Any]:
+    return {
+        "mode": "registry_io",
+        "approved_reads": sorted(APPROVED_READ_APIS),
+        "approved_writes": sorted(APPROVED_WRITE_APIS),
+        "approved_transactions": sorted(APPROVED_TRANSACTION_APIS),
+    }
+
+
+def _decode_javascript_registry_io_rows(
+    rows: Sequence[dict[str, Any]],
+) -> list[RegistryIOObservation]:
     return [
         RegistryIOObservation(
             path=row["path"],
@@ -402,20 +469,40 @@ def _scan_javascript_registry_io(
     ]
 
 
-def collect_project_registry_io(
-    repo_root: Path, sources: list[SourceFile] | None = None
+def _scan_javascript_registry_io(
+    repo_root: Path, sources: list[SourceFile]
 ) -> list[RegistryIOObservation]:
-    selected = sources if sources is not None else load_registry_io_sources(repo_root)
+    rows = run_typescript_scan(repo_root, sources, registry_io_javascript_request())
+    return _decode_javascript_registry_io_rows(rows)
+
+
+def collect_project_registry_io(
+    repo_root: Path,
+    sources: list[SourceFile] | None = None,
+    *,
+    precomputed_python_observations: Sequence[RegistryIOObservation] | None = None,
+    precomputed_js_rows: Sequence[dict[str, Any]] | None = None,
+) -> list[RegistryIOObservation]:
     observations: list[RegistryIOObservation] = []
-    for source in selected:
-        if source.suffix == ".py":
-            observations.extend(scan_python_registry_io(source))
-    javascript = [
-        source
-        for source in selected
-        if source.suffix in {".ts", ".tsx", ".js", ".mjs"}
-    ]
-    observations.extend(_scan_javascript_registry_io(repo_root, javascript))
+    if precomputed_python_observations is not None:
+        observations.extend(precomputed_python_observations)
+        selected = sources
+    else:
+        selected = sources if sources is not None else load_registry_io_sources(repo_root)
+        for source in selected:
+            if source.suffix == ".py":
+                observations.extend(scan_python_registry_io(source))
+    if precomputed_js_rows is not None:
+        observations.extend(_decode_javascript_registry_io_rows(precomputed_js_rows))
+    else:
+        if selected is None:
+            selected = load_registry_io_sources(repo_root)
+        javascript = [
+            source
+            for source in selected
+            if source.suffix in {".ts", ".tsx", ".js", ".mjs"}
+        ]
+        observations.extend(_scan_javascript_registry_io(repo_root, javascript))
     return sorted(observations)
 
 
@@ -461,11 +548,18 @@ def build_project_registry_io_manifest(
     *,
     classifications: dict[str, str] | None = None,
     sources: list[SourceFile] | None = None,
+    precomputed_python_observations: Sequence[RegistryIOObservation] | None = None,
+    precomputed_js_rows: Sequence[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compute the census; only reviewed direct-I/O classifications are tracked."""
     if classifications is None:
         classifications = load_project_registry_io_classifications(repo_root)
-    observations = collect_project_registry_io(repo_root, sources)
+    observations = collect_project_registry_io(
+        repo_root,
+        sources,
+        precomputed_python_observations=precomputed_python_observations,
+        precomputed_js_rows=precomputed_js_rows,
+    )
     return {
         "schema_version": PROJECT_REGISTRY_IO_MANIFEST_SCHEMA,
         "source_policy": {
@@ -500,6 +594,8 @@ def validate_project_registry_io_manifest(
     *,
     classifications: dict[str, str] | None = None,
     sources: list[SourceFile] | None = None,
+    precomputed_python_observations: Sequence[RegistryIOObservation] | None = None,
+    precomputed_js_rows: Sequence[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Check current source policy, or an explicit export against current source."""
     if manifest is not None and manifest.get("schema_version") != PROJECT_REGISTRY_IO_MANIFEST_SCHEMA:
@@ -510,6 +606,8 @@ def validate_project_registry_io_manifest(
         repo_root,
         classifications=classifications,
         sources=sources,
+        precomputed_python_observations=precomputed_python_observations,
+        precomputed_js_rows=precomputed_js_rows,
     )
     if manifest is None:
         manifest = expected

@@ -2,15 +2,27 @@
 from __future__ import annotations
 
 import ast
+import atexit
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
+import selectors
 import shutil
 import subprocess
+import threading
+import time
 from typing import Any, Callable
 
 from ..control_plane.runtime.node_probe import node_typescript_flags
 from .inventory import SourceFile
-from .python_production import Production, enum_members, scan_python_production
+from .python_production import (
+    _TREES as _PYTHON_PRODUCTION_TREES,
+    Production,
+    enum_members,
+    scan_python_production,
+)
 
 
 # Matched verbatim by tests/conftest.py to collapse repeated failures into one hint.
@@ -50,7 +62,13 @@ def quota_action_domain(registry: dict[str, Any]) -> set[str]:
     return result
 
 
-def collect_production(root: Path, vocabulary: dict[str, Any], sources: list[SourceFile]) -> list[Production]:
+def collect_production(
+    root: Path,
+    vocabulary: dict[str, Any],
+    sources: list[SourceFile],
+    *,
+    ts_rows: Sequence[dict[str, Any]] | None = None,
+) -> list[Production]:
     by_path = {s.path: s for s in sources}
     owner = vocabulary['owners'].get('python')
     enums = {}
@@ -71,14 +89,25 @@ def collect_production(root: Path, vocabulary: dict[str, Any], sources: list[Sou
     selected = [s for s in sources if s.path in PRODUCER_FILES
                 or any(s.path.startswith(p + '/') for p in PRODUCER_ROOTS)]
     rows = []
-    for source in selected:
-        if source.suffix == '.py':
-            names = frozenset(site.split('::')[1] for site in returns if site.split('::')[0] == source.path)
-            paths = {site.split('::')[1]: tuple(path) for site, path in return_paths.items()
-                     if site.split('::')[0] == source.path}
-            rows.extend(scan_python_production(source, field=field, enums=enums, return_functions=names,
-                                              return_paths=paths, call_arguments=calls, modules=by_path))
-    rows.extend(_typescript_scan(root, [s for s in selected if s.suffix == '.ts'], field, returns))
+    scan_python = bool(field or enums or calls or any(site.split('::')[0].endswith('.py') for site in returns))
+    if scan_python:
+        prior_trees = set(_PYTHON_PRODUCTION_TREES)
+        try:
+            for source in selected:
+                if source.suffix == '.py':
+                    names = frozenset(site.split('::')[1] for site in returns if site.split('::')[0] == source.path)
+                    paths = {site.split('::')[1]: tuple(path) for site, path in return_paths.items()
+                             if site.split('::')[0] == source.path}
+                    rows.extend(scan_python_production(source, field=field, enums=enums, return_functions=names,
+                                                      return_paths=paths, call_arguments=calls, modules=by_path))
+        finally:
+            for cached_source in list(_PYTHON_PRODUCTION_TREES):
+                if cached_source not in prior_trees and cached_source in _PYTHON_PRODUCTION_TREES:
+                    del _PYTHON_PRODUCTION_TREES[cached_source]
+    if ts_rows is not None:
+        rows.extend(normalize_typescript_production_rows(ts_rows))
+    else:
+        rows.extend(_typescript_scan(root, [s for s in selected if s.suffix == '.ts'], field, returns))
     if witness := INPUT_WITNESSES.get(vocabulary.get('input_producer') or ''):
         rows.extend(witness(vocabulary))
     return rows
@@ -109,6 +138,14 @@ def _call_arguments(declarations: dict[str, list[str]], sources: dict[str, Sourc
     return calls
 
 
+def normalize_typescript_production_rows(rows: Sequence[dict[str, Any]]) -> list[Production]:
+    # The parser names the same blocker vocabulary as the Python scanner;
+    # ``typescript_dynamic`` stays the fallback for a form it cannot classify.
+    return [Production(r['site'], r['line'], r['form'], frozenset(r['values']), r['unresolved'],
+                       (r.get('blocker') or 'typescript_dynamic') if r['unresolved'] else None)
+            for r in rows]
+
+
 def _typescript_scan(
     root: Path, ts_sources: list[SourceFile], field: str | None,
     returns: list[str], mode: str = 'production',
@@ -121,26 +158,276 @@ def _typescript_scan(
     if field:
         request['field'] = field
     rows = run_typescript_scan(root, ts_sources, request)
-    # The parser names the same blocker vocabulary as the Python scanner;
-    # ``typescript_dynamic`` stays the fallback for a form it cannot classify.
-    return [Production(r['site'], r['line'], r['form'], frozenset(r['values']), r['unresolved'],
-                       (r.get('blocker') or 'typescript_dynamic') if r['unresolved'] else None)
-            for r in rows]
+    return normalize_typescript_production_rows(rows)
 
 
-def run_typescript_scan(
-    root: Path, ts_sources: list[SourceFile], request: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Run repository semantic AST analysis with one bounded error boundary."""
-    if not ts_sources:
-        return []
+_REPO_SCAN_SCRIPT = Path(__file__).resolve().parents[2] / 'scripts/semantic_production_scan.mjs'
+_DEFAULT_WHICH = shutil.which
+_DEFAULT_SUBPROCESS_RUN = subprocess.run
+_DEFAULT_TS_SCAN_TIMEOUT_SECONDS = 60.0
+_MAX_TS_SERVER_STDERR_BYTES = 65536
+_TS_SERVER_LOCK = threading.Lock()
+_TS_SERVER: subprocess.Popen[bytes] | None = None
+_TS_SERVER_KEY: tuple[str, str] | None = None
+_TS_SERVER_STDOUT_BUF = bytearray()
+
+
+def _close_pipe(stream: Any) -> None:
+    if stream is not None:
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _shutdown_ts_server_locked(*, force: bool = False) -> None:
+    global _TS_SERVER, _TS_SERVER_KEY
+    proc = _TS_SERVER
+    _TS_SERVER = None
+    _TS_SERVER_KEY = None
+    _TS_SERVER_STDOUT_BUF.clear()
+    if proc is None:
+        return
+    try:
+        _close_pipe(proc.stdin)
+        if not force:
+            try:
+                proc.wait(timeout=1)
+                return
+            except subprocess.TimeoutExpired:
+                pass
+            except OSError:
+                return
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    finally:
+        _close_pipe(proc.stdout)
+        _close_pipe(proc.stderr)
+
+
+def _shutdown_ts_server() -> None:
+    with _TS_SERVER_LOCK:
+        _shutdown_ts_server_locked()
+
+
+atexit.register(_shutdown_ts_server)
+
+
+def _raise_syntax_error(error: Any, ts_paths: set[str]) -> None:
+    if (isinstance(error, dict) and error.get('code') == 'typescript_syntax'
+            and error.get('path') in ts_paths
+            and isinstance(error.get('line'), int) and error['line'] > 0):
+        raise ValueError(f"{error['path']}:{error['line']}: invalid TypeScript source; repair syntax before semantic scanning")
+
+
+def _drain_nonblocking_fd(
+    fd: int, buf: bytearray, *, deadline: float, cmd: list[str], timeout: float,
+) -> bool:
+    """Drain immediately available bytes from a non-blocking stderr pipe within deadline."""
+    while True:
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
+        if not chunk:
+            return True
+        buf.extend(chunk)
+        if len(buf) > _MAX_TS_SERVER_STDERR_BYTES:
+            del buf[: len(buf) - _MAX_TS_SERVER_STDERR_BYTES]
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+
+def _exchange_ts_server_request(
+    proc: subprocess.Popen[bytes], encoded: bytes, cmd: list[str], deadline: float, timeout: float,
+) -> tuple[bytes, str, bool]:
+    """Write one NDJSON line and read one response line under a single deadline."""
+    assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+    stdin_fd = proc.stdin.fileno()
+    stdout_fd = proc.stdout.fileno()
+    stderr_fd = proc.stderr.fileno()
+    for fd in (stdin_fd, stdout_fd, stderr_fd):
+        os.set_blocking(fd, False)
+    write_view = memoryview(encoded)
+    write_failed = False
+    stdout_buf = _TS_SERVER_STDOUT_BUF
+    stderr_tail = bytearray()
+    stdout_eof = False
+    stderr_eof = False
+    eof_drain_deadline: float | None = None
+
+    def _check_deadline() -> None:
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+    def _finish_eof() -> tuple[bytes, str, bool]:
+        _drain_nonblocking_fd(
+            stderr_fd, stderr_tail, deadline=deadline, cmd=cmd, timeout=timeout,
+        )
+        _check_deadline()
+        return b'', stderr_tail.decode('utf-8', errors='replace'), write_failed
+
+    with selectors.DefaultSelector() as sel:
+        sel.register(stdin_fd, selectors.EVENT_WRITE)
+        sel.register(stdout_fd, selectors.EVENT_READ)
+        sel.register(stderr_fd, selectors.EVENT_READ)
+        while True:
+            _check_deadline()
+            if not write_view:
+                newline_idx = stdout_buf.find(b'\n')
+                if newline_idx != -1:
+                    _drain_nonblocking_fd(
+                        stderr_fd, stderr_tail, deadline=deadline, cmd=cmd, timeout=timeout,
+                    )
+                    _check_deadline()
+                    line = bytes(stdout_buf[:newline_idx])
+                    del stdout_buf[: newline_idx + 1]
+                    return line, stderr_tail.decode('utf-8', errors='replace'), False
+            if (stdout_eof or write_failed) and (stderr_eof or not write_view):
+                if stdout_eof and stderr_eof:
+                    return _finish_eof()
+                if eof_drain_deadline is None:
+                    eof_drain_deadline = min(deadline, time.monotonic() + 0.2)
+            now = time.monotonic()
+            if now >= deadline:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            if eof_drain_deadline is not None and now >= eof_drain_deadline and (stdout_eof or write_failed):
+                return _finish_eof()
+            active_deadline = min(deadline, eof_drain_deadline) if eof_drain_deadline is not None else deadline
+            remaining = active_deadline - now
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            events = sel.select(timeout=remaining)
+            _check_deadline()
+            if not events:
+                if eof_drain_deadline is not None and (stdout_eof or write_failed):
+                    return _finish_eof()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            for key, mask in events:
+                _check_deadline()
+                if key.fd == stdin_fd and (mask & selectors.EVENT_WRITE):
+                    try:
+                        written = os.write(stdin_fd, write_view)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        write_failed = True
+                        write_view = memoryview(b'')
+                        sel.unregister(stdin_fd)
+                        continue
+                    if written <= 0:
+                        write_failed = True
+                        write_view = memoryview(b'')
+                        sel.unregister(stdin_fd)
+                        continue
+                    write_view = write_view[written:]
+                    if not write_view:
+                        sel.unregister(stdin_fd)
+                    _check_deadline()
+                elif key.fd == stderr_fd and (mask & selectors.EVENT_READ):
+                    if _drain_nonblocking_fd(
+                        stderr_fd, stderr_tail, deadline=deadline, cmd=cmd, timeout=timeout,
+                    ):
+                        stderr_eof = True
+                        sel.unregister(stderr_fd)
+                elif key.fd == stdout_fd and (mask & selectors.EVENT_READ):
+                    while True:
+                        _check_deadline()
+                        try:
+                            chunk = os.read(stdout_fd, 65536)
+                        except BlockingIOError:
+                            break
+                        except OSError:
+                            stdout_eof = True
+                            sel.unregister(stdout_fd)
+                            break
+                        if not chunk:
+                            stdout_eof = True
+                            sel.unregister(stdout_fd)
+                            break
+                        stdout_buf.extend(chunk)
+                        _check_deadline()
+                        if b'\n' in chunk:
+                            break
+
+
+def _invoke_typescript_via_server(
+    node: str, script_path: Path, payload: dict[str, Any], ts_paths: set[str],
+    *, timeout: float | None = None,
+) -> Any:
+    global _TS_SERVER, _TS_SERVER_KEY
+    effective_timeout = _DEFAULT_TS_SCAN_TIMEOUT_SECONDS if timeout is None else timeout
+    deadline = time.monotonic() + effective_timeout
+    key = (node, str(script_path))
+    cmd = [node, str(script_path), '--server']
+    encoded = (json.dumps(payload) + '\n').encode('utf-8')
+    lock_wait = max(0.0, deadline - time.monotonic())
+    if not _TS_SERVER_LOCK.acquire(timeout=lock_wait):
+        raise subprocess.TimeoutExpired(cmd, effective_timeout)
+    try:
+        if _TS_SERVER is None or _TS_SERVER.poll() is not None or _TS_SERVER_KEY != key:
+            _shutdown_ts_server_locked()
+            _TS_SERVER = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0,
+            )
+            _TS_SERVER_KEY = key
+        proc = _TS_SERVER
+        if deadline - time.monotonic() <= 0:
+            _shutdown_ts_server_locked(force=True)
+            raise subprocess.TimeoutExpired(cmd, effective_timeout)
+        try:
+            response_line, stderr_text, write_failed = _exchange_ts_server_request(
+                proc, encoded, cmd, deadline, effective_timeout,
+            )
+        except BaseException:
+            _shutdown_ts_server_locked(force=True)
+            raise
+        if write_failed or not response_line:
+            _shutdown_ts_server_locked(force=True)
+            if 'ERR_MODULE_NOT_FOUND' in stderr_text and "'typescript'" in stderr_text:
+                raise ValueError(NPM_DEV_DEPENDENCIES_MISSING)
+            raise ValueError('TypeScript production parser failed; run npm ci --ignore-scripts and check the Node runtime')
+        try:
+            parsed = json.loads(response_line.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            _shutdown_ts_server_locked(force=True)
+            raise ValueError('TypeScript production parser failed; run npm ci --ignore-scripts and check the Node runtime') from exc
+    finally:
+        _TS_SERVER_LOCK.release()
+    if not isinstance(parsed, dict) or not parsed.get('ok'):
+        error = parsed.get('error') if isinstance(parsed, dict) else None
+        _raise_syntax_error(error, ts_paths)
+        raise ValueError('TypeScript production parser failed; run npm ci --ignore-scripts and check the Node runtime')
+    return parsed.get('result')
+
+
+def _invoke_typescript_scan(
+    root: Path, payload: dict[str, Any], ts_paths: set[str],
+    *, timeout: float | None = None,
+) -> Any:
+    """Invoke the Node TypeScript AST scanner with one bounded error boundary."""
     node = shutil.which('node')
     if node is None:
         raise ValueError('TypeScript semantic scan needs Node.js on PATH; see the Node.js requirement in CONTRIBUTING.md')
+    effective_timeout = _DEFAULT_TS_SCAN_TIMEOUT_SECONDS if timeout is None else timeout
+    script_path = root / 'scripts/semantic_production_scan.mjs'
+    if (os.name == 'posix' and shutil.which is _DEFAULT_WHICH and subprocess.run is _DEFAULT_SUBPROCESS_RUN
+            and script_path.resolve() == _REPO_SCAN_SCRIPT.resolve()):
+        return _invoke_typescript_via_server(node, script_path, payload, ts_paths, timeout=effective_timeout)
     completed = subprocess.run(
-        [node, str(root / 'scripts/semantic_production_scan.mjs')],
-        input=json.dumps({**request, 'sources': [{'path': s.path, 'text': s.text} for s in ts_sources]}),
-        capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
+        [node, str(script_path)],
+        input=json.dumps(payload),
+        capture_output=True, text=True, encoding="utf-8", timeout=effective_timeout, check=False,
     )
     if completed.returncode:
         # Accept only a bounded location from the parser, never echo source
@@ -150,17 +437,71 @@ def run_typescript_scan(
         except json.JSONDecodeError:
             failure = None
         error = failure.get('error') if isinstance(failure, dict) else None
-        if (isinstance(error, dict) and error.get('code') == 'typescript_syntax'
-                and error.get('path') in {s.path for s in ts_sources}
-                and isinstance(error.get('line'), int) and error['line'] > 0):
-            raise ValueError(f"{error['path']}:{error['line']}: invalid TypeScript source; repair syntax before semantic scanning")
+        _raise_syntax_error(error, ts_paths)
         if 'ERR_MODULE_NOT_FOUND' in completed.stderr and "'typescript'" in completed.stderr:
             raise ValueError(NPM_DEV_DEPENDENCIES_MISSING)
         raise ValueError('TypeScript production parser failed; run npm ci --ignore-scripts and check the Node runtime')
     return json.loads(completed.stdout)
 
 
-def collect_literal_uses(root: Path, field: str, sources: list[SourceFile]) -> dict[str, set[str]]:
+def run_typescript_scan(
+    root: Path, ts_sources: list[SourceFile], request: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Run repository semantic AST analysis with one bounded error boundary."""
+    if not ts_sources:
+        return []
+    payload = {**request, 'sources': [{'path': s.path, 'text': s.text} for s in ts_sources]}
+    result = _invoke_typescript_scan(root, payload, {s.path for s in ts_sources})
+    if not isinstance(result, list):
+        raise ValueError('TypeScript production parser returned malformed scan payload')
+    return result
+
+
+def run_typescript_batch_scan(
+    root: Path, ts_sources: Sequence[SourceFile], requests: Sequence[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Run multiple TS AST queries in a single Node process, parsing each file once."""
+    if not ts_sources or not requests:
+        return {str(req['id']): [] for req in requests}
+    payload = {
+        'sources': [{'path': s.path, 'text': s.text} for s in ts_sources],
+        'requests': list(requests),
+    }
+    parsed = _invoke_typescript_scan(root, payload, {s.path for s in ts_sources})
+    results = parsed.get('results') if isinstance(parsed, dict) else None
+    if not isinstance(results, dict):
+        raise ValueError('TypeScript production parser returned malformed batch payload')
+    return results
+
+
+def submit_typescript_batch_scan(
+    root: Path, ts_sources: Sequence[SourceFile], requests: Sequence[dict[str, Any]],
+) -> Callable[[], dict[str, list[dict[str, Any]]]]:
+    """Start a batched Node TS AST scan asynchronously and return a join callable."""
+    if not ts_sources or not requests:
+        empty: dict[str, list[dict[str, Any]]] = {str(req['id']): [] for req in requests}
+        return lambda: empty
+    if shutil.which('node') is None:
+        raise ValueError('TypeScript semantic scan needs Node.js on PATH; see the Node.js requirement in CONTRIBUTING.md')
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(run_typescript_batch_scan, root, ts_sources, requests)
+
+    def _finish() -> dict[str, list[dict[str, Any]]]:
+        try:
+            return future.result()
+        finally:
+            executor.shutdown(wait=True)
+
+    return _finish
+
+
+def collect_literal_uses(
+    root: Path,
+    field: str,
+    sources: list[SourceFile],
+    *,
+    ts_rows: Sequence[dict[str, Any]] | None = None,
+) -> dict[str, set[str]]:
     """Observe literal field writes/dispatch, with a deliberately bounded grammar."""
     from .python_production import python_literal_uses
 
@@ -169,7 +510,12 @@ def collect_literal_uses(root: Path, field: str, sources: list[SourceFile]) -> d
         if source.suffix == '.py':
             for value in python_literal_uses(source, field):
                 observed.setdefault(value, set()).add(source.path)
-    for row in _typescript_scan(root, [s for s in sources if s.suffix == '.ts'], field, [], 'literal_uses'):
+    ts_prod = (
+        normalize_typescript_production_rows(ts_rows)
+        if ts_rows is not None
+        else _typescript_scan(root, [s for s in sources if s.suffix == '.ts'], field, [], 'literal_uses')
+    )
+    for row in ts_prod:
         for value in row.values:
             observed.setdefault(value, set()).add(row.site.split('::')[0])
     return observed

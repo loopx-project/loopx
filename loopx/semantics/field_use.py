@@ -41,11 +41,12 @@ These limits are part of the metric, not caveats around it:
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import re
-from typing import Any, Iterable
+from typing import Any
 
 from .inventory import SourceFile, parse_python
 from .production import run_typescript_scan
@@ -179,7 +180,40 @@ def python_module_scan(tree: ast.AST, fields: frozenset[str]) -> tuple[dict[str,
     paid by everyone. Parsing errors share the inventory's ``parse_python``
     boundary; ASTs are deliberately not retained in a cache.
     """
+    found, dynamic_sites, _ = python_module_scan_with_mention(tree, fields)
+    return found, dynamic_sites
+
+
+def python_module_scan_with_mention(
+    tree: ast.AST,
+    fields: frozenset[str],
+    literal_field: str | None = None,
+) -> tuple[dict[str, set[str]], int, bool]:
+    """Scan field uses plus optional presence of ``literal_field`` in one walk."""
     found: dict[str, set[str]] = {}
+    mentioned = False
+    if not fields:
+        # Fast path: when no requested field token appears anywhere in the
+        # module text, only computed mapping-accessor call sites are needed.
+        dynamic_sites = 0
+        for node in ast.walk(tree):
+            node_type = type(node)
+            if literal_field is not None and not mentioned:
+                if node_type is ast.Name and node.id == literal_field:
+                    mentioned = True
+                elif node_type is ast.Attribute and node.attr == literal_field:
+                    mentioned = True
+                elif node_type is ast.Constant and node.value == literal_field:
+                    mentioned = True
+                elif node_type is ast.keyword and node.arg == literal_field:
+                    mentioned = True
+            if node_type is ast.Call and type(node.func) is ast.Attribute and node.args:
+                attr = node.func.attr
+                if attr in MAPPING_READ_CALLS or attr in MAPPING_WRITE_CALLS:
+                    arg0 = node.args[0]
+                    if not (type(arg0) is ast.Constant and type(arg0.value) is str):
+                        dynamic_sites += 1
+        return found, dynamic_sites, mentioned
     # Constants consumed as a literal key. Whatever is left over is the field
     # name travelling as data, which is how a computed access is written.
     keyed: set[int] = set()
@@ -190,6 +224,16 @@ def python_module_scan(tree: ast.AST, fields: frozenset[str]) -> tuple[dict[str,
         found.setdefault(field, set()).add(form)
 
     for node in ast.walk(tree):
+        node_type = type(node)
+        if literal_field is not None and not mentioned:
+            if node_type is ast.Name and node.id == literal_field:
+                mentioned = True
+            elif node_type is ast.Attribute and node.attr == literal_field:
+                mentioned = True
+            elif node_type is ast.Constant and node.value == literal_field:
+                mentioned = True
+            elif node_type is ast.keyword and node.arg == literal_field:
+                mentioned = True
         key = _literal_key(node)
         if key is not None:
             if key in fields:
@@ -252,7 +296,7 @@ def python_module_scan(tree: ast.AST, fields: frozenset[str]) -> tuple[dict[str,
     for identity, key in seen_constants:
         if identity not in keyed:
             record(key, "name_constant")
-    return found, dynamic_sites
+    return found, dynamic_sites, mentioned
 
 
 @lru_cache(maxsize=256)
@@ -271,7 +315,11 @@ def lexical_module_count(field: str, suffix: str, sources: Iterable[SourceFile])
 
 
 def scan_field_uses(
-    fields: Iterable[str], sources: Iterable[SourceFile],
+    fields: Iterable[str],
+    sources: Iterable[SourceFile],
+    *,
+    ts_rows_override: Mapping[str, Mapping[str, Any]] | None = None,
+    python_scan_override: Mapping[str, tuple[dict[str, set[str]], int]] | None = None,
 ) -> tuple[list[FieldUse], UnresolvedKeySites]:
     """Classify every module's use of each field, beside the standing unknown."""
     wanted = frozenset(fields)
@@ -286,13 +334,16 @@ def scan_field_uses(
     # population costs one parse and adds no per-field work. Measured on 145
     # tracked modules: 0.86s narrowed against 0.52s more for all of them, and
     # the unknown it reports rises from 82 sites to 395.
-    ts_sources = [source for source in materialized if source.suffix == ".ts"]
-    # One AST request for the complete TS population, not one Node process per
-    # module/field. Reuse the producer scanner's parser and safe error boundary.
-    ts_rows = {row["path"]: row for row in run_typescript_scan(
-        Path(__file__).resolve().parents[2], ts_sources,
-        {"mode": "field_uses", "fields": sorted(wanted)},
-    )}
+    if ts_rows_override is not None:
+        ts_rows = ts_rows_override
+    else:
+        ts_sources = [source for source in materialized if source.suffix == ".ts"]
+        # One AST request for the complete TS population, not one Node process per
+        # module/field. Reuse the producer scanner's parser and safe error boundary.
+        ts_rows = {row["path"]: row for row in run_typescript_scan(
+            Path(__file__).resolve().parents[2], ts_sources,
+            {"mode": "field_uses", "fields": sorted(wanted)},
+        )}
     ts_dynamic_sites = sum(int(row.get("dynamic_member_sites") or 0) for row in ts_rows.values())
     for source in materialized:
         # Every Python module contributes to the computed-key total whether or
@@ -300,23 +351,26 @@ def scan_field_uses(
         # per-field work, never the standing unknown.
         present = frozenset(field for field in wanted if field in source.text)
         if source.suffix == ".py":
-            try:
-                tree = parse_python(source)
-            except (SyntaxError, ValueError):
-                # An unparseable tracked module is a measurement gap, and a gap
-                # may hold readers. Calling it a mention would shrink the
-                # migration surface on the strength of a parse failure, so it is
-                # recorded as this field's unknown and stays in the surface
-                # until someone reads the module. Failing closed here is worse:
-                # a direct caller scanning a work-in-progress tree would get an
-                # exception instead of a measurement. The inventory scan rejects
-                # such a module first, so the drift smoke never reaches this.
-                for field in wanted:
-                    if lexical_module_count(field, ".py", [source]):
-                        uses.append(FieldUse(field=field, module=source.path,
-                                             forms=frozenset({"unparsed_module"})))
-                continue
-            forms, module_dynamic_sites = python_module_scan(tree, present)
+            if python_scan_override is not None and source.path in python_scan_override:
+                forms, module_dynamic_sites = python_scan_override[source.path]
+            else:
+                try:
+                    tree = parse_python(source)
+                except (SyntaxError, ValueError):
+                    # An unparseable tracked module is a measurement gap, and a gap
+                    # may hold readers. Calling it a mention would shrink the
+                    # migration surface on the strength of a parse failure, so it is
+                    # recorded as this field's unknown and stays in the surface
+                    # until someone reads the module. Failing closed here is worse:
+                    # a direct caller scanning a work-in-progress tree would get an
+                    # exception instead of a measurement. The inventory scan rejects
+                    # such a module first, so the drift smoke never reaches this.
+                    for field in wanted:
+                        if lexical_module_count(field, ".py", [source]):
+                            uses.append(FieldUse(field=field, module=source.path,
+                                                 forms=frozenset({"unparsed_module"})))
+                    continue
+                forms, module_dynamic_sites = python_module_scan(tree, present)
             dynamic_sites += module_dynamic_sites
         elif source.suffix == ".ts":
             row = ts_rows.get(source.path) or {}
@@ -360,7 +414,13 @@ FACTS = (
 )
 
 
-def field_use_summary(fields: Iterable[str], sources: Iterable[SourceFile]) -> dict[str, Any]:
+def field_use_summary(
+    fields: Iterable[str],
+    sources: Iterable[SourceFile],
+    *,
+    ts_rows_override: Mapping[str, Mapping[str, Any]] | None = None,
+    python_scan_override: Mapping[str, tuple[dict[str, set[str]], int]] | None = None,
+) -> dict[str, Any]:
     """Per-field use counts and migration surface, beside the old token count.
 
     ``migration_surface`` is the number of modules that must be changed or at
@@ -390,7 +450,12 @@ def field_use_summary(fields: Iterable[str], sources: Iterable[SourceFile]) -> d
     """
     materialized = list(sources)
     ordered = sorted(fields)
-    uses, unknown = scan_field_uses(ordered, materialized)
+    uses, unknown = scan_field_uses(
+        ordered,
+        materialized,
+        ts_rows_override=ts_rows_override,
+        python_scan_override=python_scan_override,
+    )
     summary: dict[str, Any] = {
         "fields": {},
         "dynamic_mapping_key_sites": unknown.python_mapping_calls,

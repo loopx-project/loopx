@@ -24,21 +24,40 @@ def test_actual_quota_outputs_establish_the_migrated_actions() -> None:
     assert observed <= set(vocabulary()["values"])
 
 
-@pytest.fixture
-def isolated_source(tmp_path, monkeypatch):
-    # The witness executes the classifier's real imports in the isolated tree.
-    # Copy the owning control plane so a new import cannot strand the mutation.
+@pytest.fixture(scope="module")
+def _isolated_control_plane_base(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("quota-witness-cp")
     shutil.copytree(
-        ROOT / "loopx/control_plane", tmp_path / "loopx/control_plane",
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        ROOT / "loopx/control_plane",
+        root / "loopx/control_plane",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.py", "*.md"),
+        copy_function=shutil.copyfile,
     )
-    for name in ["scripts/quota_run_decision_witness.mts",
-                 "tests/control_plane_ts/fixtures/quota_run_decision.json"]:
-        target = tmp_path / name
+    for name in [
+        "scripts/quota_run_decision_witness.mts",
+        "tests/control_plane_ts/fixtures/quota_run_decision.json",
+    ]:
+        target = root / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
-    monkeypatch.setattr(witness, "__file__", str(tmp_path / "loopx/semantics/production.py"))
-    return tmp_path
+    return root
+
+
+@pytest.fixture
+def isolated_source(_isolated_control_plane_base: Path, monkeypatch):
+    # Share the read-only control_plane snapshot per worker and restore the one
+    # mutated file after each test to avoid repeated multi-hundred-file copies.
+    policy = _isolated_control_plane_base / "loopx/control_plane/quota/run_decision.ts"
+    original_policy = policy.read_text(encoding="utf-8")
+    monkeypatch.setattr(
+        witness,
+        "__file__",
+        str(_isolated_control_plane_base / "loopx/semantics/production.py"),
+    )
+    try:
+        yield _isolated_control_plane_base
+    finally:
+        policy.write_text(original_policy, encoding="utf-8")
 
 
 def test_a_changed_rule_cannot_keep_its_old_production_credit(isolated_source) -> None:

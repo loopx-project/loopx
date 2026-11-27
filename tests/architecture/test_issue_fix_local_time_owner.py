@@ -22,6 +22,13 @@ from types import ModuleType
 
 import pytest
 
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    parse_python_cached,
+    read_text_cached,
+)
+
 from loopx.capabilities.issue_fix import reward_memory, reviewer_notification
 from loopx.domain_packs import issue_fix as issue_fix_pack
 
@@ -98,10 +105,7 @@ def matcher_calls(tree: ast.Module) -> list[ast.Call]:
     return calls
 
 
-def time_rows(source: str, name: str) -> list[dict[str, object]]:
-    if ":" not in source:
-        return []
-    tree = ast.parse(source)
+def _time_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_constants(tree)
     rows: list[dict[str, object]] = []
     for node in matcher_calls(tree):
@@ -110,10 +114,13 @@ def time_rows(source: str, name: str) -> list[dict[str, object]]:
     return rows
 
 
-def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
-    if ":" not in source or "[0-3]" not in source:
+def time_rows(source: str, name: str) -> list[dict[str, object]]:
+    if ":" not in source and not may_split_or_escape_literal(source, include_plus=True):
         return []
-    tree = ast.parse(source)
+    return _time_rows_tree(ast.parse(source), name)
+
+
+def _unfoldable_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
     constants = module_constants(tree)
     return [
         {"file": name, "line": node.lineno, "kind": "unfoldable"}
@@ -123,29 +130,54 @@ def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     ]
 
 
+def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
+    if (":" not in source or "[0-3]" not in source) and not may_split_or_escape_literal(
+        source, include_plus=True
+    ):
+        return []
+    return _unfoldable_rows_tree(ast.parse(source), name)
+
+
 def collect(root: pathlib.Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(time_rows(source, path.relative_to(root).as_posix()))
+        if not any(matcher in source for matcher in MATCHERS):
+            continue
+        if not may_split_or_escape_literal(source, include_plus=True) and (
+            ":" not in source
+            or not (
+                "[0-5]" in source
+                or "[01]" in source
+                or "2[0-3]" in source
+            )
+        ):
+            continue
+        rows.extend(_time_rows_tree(parse_python_cached(path), path.relative_to(root).as_posix()))
     return rows
 
 
 def collect_unfoldable(root: pathlib.Path) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for path in sorted((root / "loopx").rglob("*.py")):
-        if "__pycache__" in path.parts:
-            continue
+    for path in iter_python_sources(root / "loopx"):
         try:
-            source = path.read_text(encoding="utf-8")
+            source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        rows.extend(unfoldable_rows(source, path.relative_to(root).as_posix()))
+        if not any(matcher in source for matcher in MATCHERS):
+            continue
+        if not may_split_or_escape_literal(source, include_plus=True) and (
+            ":" not in source or "[0-3]" not in source
+        ):
+            continue
+        rows.extend(
+            _unfoldable_rows_tree(
+                parse_python_cached(path), path.relative_to(root).as_posix()
+            )
+        )
     return rows
 
 
@@ -217,14 +249,17 @@ def referenced(tree: ast.Module, name: str) -> bool:
 
 def parse(module: ModuleType) -> ast.Module:
     path = pathlib.Path(str(module.__file__)).resolve()
-    return ast.parse(path.read_text(encoding="utf-8"))
+    return parse_python_cached(path)
 
 
 def modules_importing_the_owner() -> set[str]:
     importing: set[str] = set()
-    for path in sorted((REPO_ROOT / "loopx").rglob("*.py")):
+    for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            source = read_text_cached(path)
+            if source.isascii() and OWNER_NAME not in source:
+                continue
+            tree = parse_python_cached(path)
         except (OSError, UnicodeDecodeError, SyntaxError):
             continue
         for node in ast.walk(tree):
