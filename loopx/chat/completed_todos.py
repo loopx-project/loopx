@@ -4,6 +4,8 @@ Snapshots keep concurrent completions from shifting page boundaries. They are
 short-lived and server-local, never a second source of Todo authority.
 """
 from collections import OrderedDict
+from collections.abc import Mapping
+from datetime import datetime
 import json
 from secrets import token_urlsafe
 from threading import Lock
@@ -12,8 +14,16 @@ from urllib.parse import parse_qs, urlparse
 
 from ..paths import resolve_runtime_root
 from ..capabilities.native_chat.project_context import coordination_runtime_root
+from ..control_plane.runtime.time import chronology_key
 from ..status_server import is_loopback_host
 from ..presentation.report_reviews_api import ReportReviewsRequestMixin
+
+
+def _completion_order(entry: tuple[int, Mapping[str, object]]) -> tuple[int, datetime, str, int]:
+    index, todo = entry
+    valid, timestamp, raw = chronology_key(todo.get("completed_at"))
+    # Equal instants use the source position even when their wire strings differ.
+    return valid, timestamp, "" if valid else raw, index
 
 
 def _goal_result_candidates(*, runtime_root, goal_id):
@@ -26,7 +36,7 @@ def _goal_result_candidates(*, runtime_root, goal_id):
     candidates = sorted(
         ((index, item) for index, item in enumerate(payload["todos"])
          if item.get("role") == "agent" and item.get("status") == "done"),
-        key=lambda pair: (str(pair[1].get("completed_at") or ""), pair[0]),
+        key=_completion_order,
         reverse=True,
     )
     return [
@@ -79,7 +89,7 @@ def _verify_goal_result_page(*, page, registry_path, runtime_root, goal_id):
 
 def completed_todo_rows(payload, *, agent_id="", search=""):
     """Existing display projection shared by local and linked native reads."""
-    ordered = sorted(enumerate(payload["todos"]), key=lambda pair: (str(pair[1].get("completed_at") or ""), pair[0]), reverse=True)
+    ordered = sorted(enumerate(payload["todos"]), key=_completion_order, reverse=True)
     return [
         {
             "todo_id": item["todo_id"],
