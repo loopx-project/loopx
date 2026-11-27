@@ -110,8 +110,8 @@ for (const provider of ["file", "sqlite"] as const) {
       expected_version: 1, ttl_seconds: 600, write_scopes: ["src/**"], authority: request.authority};
   }
   const acquireNow = new Date("2026-09-13T10:11:00Z");
-  providerTest(`${provider} original expiry projects administrative recovery, never delivery`, async t => {
-    const {runtime, goal, lease} = await fixture(t, provider);
+  providerTest(`${provider} same-owner expiry allows fenced takeover while competing ownership fences execution`, async t => {
+    const {runtime, goal, lease, request} = await fixture(t, provider);
     const identity = settlementIdentity({goal_id: goal, agent_id: "agent-a", todo_id: "todo_renew",
       turn_instance_id: "original-turn"});
     const details = {todo_id: "todo_renew", settlement_effect_id: identity.effect_id,
@@ -125,12 +125,29 @@ for (const provider of ["file", "sqlite"] as const) {
     t.mock.timers.enable({apis: ["Date"], now: NOW});
     assert.equal(await observeFencedExecution(runtime, identity, receipt), null);
     t.mock.timers.setTime(new Date(lease.expires_at).valueOf());
+    // Same-owner expiry clears execution_loss observation so the original Turn
+    // resumes via fenced lease_takeover instead of forcing closeout.
+    assert.equal(await observeFencedExecution(runtime, identity, receipt), null);
+    const transferred = await executeTaskLeaseLifecycle({
+      ...request, schema_version: TASK_LEASE_CANONICAL_CLAIM_TRANSFER_REQUEST_SCHEMA,
+      operation: "transfer", transfer_claim: true, new_owner: "agent-b", new_idempotency_key: "receiver-b",
+    }, {now: () => NOW});
+    assert.equal(transferred.ok, true, JSON.stringify(transferred));
     const lost = await observeFencedExecution(runtime, identity, receipt);
-    assert.equal(lost?.can_reclaim_control_writer, true);
-    assert.equal(lost?.current_control_writer_active, false);
-    assert.equal(lost?.original_prepared_epoch, lost?.current_lease_epoch);
-    for (const patch of [{prepared_lease_key_sha256: "a".repeat(64)},
-      {prepared_lease_version: lease.version + 1}, {delivery_allowed: false}]) {
+    assert.deepEqual(lost, {
+      original_prepared_epoch: lease.lease_epoch,
+      current_lease_epoch: lease.lease_epoch + 1,
+      current_lease_version: lease.version + 1,
+      current_owner: "agent-b",
+      current_control_writer_active: false,
+      can_reclaim_control_writer: false,
+    });
+    for (const patch of [
+      {prepared_lease_key_sha256: createHash("sha256").update("receiver-b").digest("hex")},
+      {prepared_lease_epoch: lease.lease_epoch + 1},
+      {prepared_lease_version: lease.version + 1},
+      {delivery_allowed: false},
+    ]) {
       assert.equal(await observeFencedExecution(runtime, identity, {...receipt, details: {...details, ...patch}}), null);
     }
   });
