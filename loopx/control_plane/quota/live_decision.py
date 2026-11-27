@@ -336,6 +336,7 @@ def build_live_quota_should_run_decision(
     goal_ref: Mapping[str, object] | None = None,
     inline_goal_source: bool = False,
     tolerate_malformed_settlement_history: bool = False,
+    reuse_fresh_canonical_snapshot: bool = False,
 ) -> dict[str, object]:
     """Build one live CLI decision while keeping host observation injectable."""
 
@@ -437,6 +438,7 @@ def build_live_quota_should_run_decision(
         app_scheduler_state_observer=observe_app_scheduler_state,
         workspace_path=workspace_path, goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
+        reuse_fresh_canonical_snapshot=reuse_fresh_canonical_snapshot,
     )
     _project_receipt_replan_settlement(
         payload, settlement_readback,

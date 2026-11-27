@@ -283,26 +283,30 @@ export async function projectCanonicalTodoFields(
 ): Promise<JsonObject> {
   if (!Array.isArray(input.todos)) throw new EffectRuntimeRequestError("canonical Todo read source must be an array");
   const original = input.todos.map(value => requireJsonObject(value, "canonical Todo source"));
-  const decisions = original.filter(row => row.role === "user");
+  const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
+  const singleRoleQuery = input.kind === "query" && input.selection == null
+    && (query.role === "user" || query.role === "agent");
+  const targetRoles = singleRoleQuery ? [String(query.role)] : ["user", "agent"];
+  const decisions = input.kind === "query" ? [] : original.filter(row => row.role === "user");
   const standing = decisions.length ? projectStandingDecisions(decisions, false) : null;
   const all = input.presentation_ready === true ? original : canonicalTodoReadItems(original);
   const archived = new Set(all.filter(row => row.archive_state === "archive").map(row => row.todo_id));
   const acceptance = object(input.goal_acceptance_contract), guards = object(input.goal_acceptance_work_guards);
   const checksConfigured = configuredGoalChecks(acceptance) !== null;
   const lineage = Array.isArray(input.lineage) ? input.lineage.map(value => requireJsonObject(value, "Todo lineage")) : all;
-  const lineageFacts = input.lineage_facts ?? lineage.map(successionFacts);
+  let cachedLineageFacts = input.lineage_facts;
+  const resolveLineageFacts = () => (cachedLineageFacts ??= lineage.map(successionFacts));
   const includeArchived = input.include_archived === true || input.retained === true;
-  const query = input.kind === "query" && input.selection == null ? object(input.query) : {};
   const includeAcceptance = includeTodoAcceptance(input, query);
   const detailId = query.agent_id == null && query.limit == null ? query.todo_id : null;
   const fields: JsonObject = {}, evaluations: JsonObject = {};
-  for (const role of ["user", "agent"]) {
+  for (const role of targetRoles) {
     const section = role === "agent" ? "Agent Todo" : "User Todo / Owner Review Reading Queue";
     const items = all.filter(row => (row.role === "user" ? "user" : "agent") === role && (includeArchived || !archived.has(row.todo_id)))
       .map(row => structureCanonicalTodo({...row,
         ...(input.retained !== true && checksConfigured && guards[text(row.todo_id)] ? {goal_acceptance_guard: guards[text(row.todo_id)]} : {})}, role, section,
         input.retained === true ? null : 500, input.retained !== true));
-    const grouped = await projectTodoReadGroup({...input, items, lineage, lineage_facts: lineageFacts, evaluated: false, role, source_section: section,
+    const grouped = await projectTodoReadGroup({...input, items, lineage, lineage_facts: items.length > 0 || input.kind !== "query" ? resolveLineageFacts() : undefined, evaluated: false, role, source_section: section,
       selection: typeof detailId === "string" && detailId ? {role, todo_id: detailId, status: null, agent_id: null} : input.selection ?? null,
       item_limit: null, full_selection: true, resume_lineage: items.some(row => readResume(row.resume_when))
         ? all.map(row => structureCanonicalTodo(row, row.role ?? null, row.source_section ?? section)) : []}, options);
