@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
   <title id="t">Long-horizon task primitives compose over one kernel</title>
-  <desc id="d">Scoped resume_when continuation, non-starving continuous_monitor observation, and lineage-preserving replan compose over a single TypeScript transaction kernel backed by AuthorityStore and the append-only rollout journal.</desc>
+  <desc id="d">Per-target conditional continuation, non-blocking background observation, and self-consistent replanning compose over a single TypeScript task state kernel backed by AuthorityStore and an append-only execution journal.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
@@ -22,31 +22,31 @@
   </style>
 
   <text x="42" y="52" font-size="29" font-weight="600">Long-horizon task primitives compose over one kernel</text>
-  <text x="42" y="86" font-size="17" class="sub">Scoped wakes, background watches, lineage replans, and 3h leases share atomic revisions and receipts</text>
+  <text x="42" y="86" font-size="17" class="sub">Per-target wakeups, isolated background watches, and lineage replans share atomic revisions and leases</text>
 
-  <!-- Primitive 1: resume by todo -->
+  <!-- Primitive 1: conditional wakeup & continuation -->
   <rect class="box" x="42" y="114" width="320" height="160" rx="12"/>
-  <text x="64" y="144" font-size="12.5" font-weight="500" class="mono blue">RESUME · #6874 #8231 #9488</text>
-  <text x="64" y="174" font-size="19" font-weight="600">Scoped continuation</text>
-  <text x="64" y="204" font-size="15" class="sub">5 closed resume_when kinds</text>
-  <text x="64" y="229" font-size="14" class="mono sub">monitor_changed:&lt;id&gt;@&lt;scope&gt;</text>
-  <text x="64" y="254" font-size="15" class="sub">Fenced same-owner lease takeover</text>
+  <text x="62" y="144" font-size="12" font-weight="500" class="mono blue">WAKEUP · #4094 #6874 #8231 #9488</text>
+  <text x="62" y="174" font-size="18.5" font-weight="600">Per-target continuation</text>
+  <text x="62" y="203" font-size="14.5" class="sub">Full-graph readiness read (#6874)</text>
+  <text x="62" y="228" font-size="14.5" class="sub">Per-target wakeups, &lt;=128 (#8231)</text>
+  <text x="62" y="253" font-size="14.5" class="sub">Cross-lease continuation (#9488)</text>
 
-  <!-- Primitive 2: continuous_monitor -->
+  <!-- Primitive 2: background observation -->
   <rect class="box" x="390" y="114" width="320" height="160" rx="12"/>
-  <text x="412" y="144" font-size="12.5" font-weight="500" class="mono blue">MONITOR · #5450 #9155 #9320</text>
-  <text x="412" y="174" font-size="19" font-weight="600">Non-starving observation</text>
-  <text x="412" y="204" font-size="15" class="sub">Isolated background carrier</text>
-  <text x="412" y="229" font-size="15" class="sub">Zero LLM healthcheck queue-kill</text>
-  <text x="412" y="254" font-size="15" class="sub">Explicit clear_fields on null</text>
+  <text x="410" y="144" font-size="12" font-weight="500" class="mono blue">MONITOR · #4178 #4335 #5450 #9320</text>
+  <text x="410" y="174" font-size="18.5" font-weight="600">Non-blocking observation</text>
+  <text x="410" y="203" font-size="14.5" class="sub">Edits keep done watches off (#4178)</text>
+  <text x="410" y="228" font-size="14.5" class="sub">Quiet vs. bound receipts (#5450)</text>
+  <text x="410" y="253" font-size="14.5" class="sub">Isolated watch sessions (#9320)</text>
 
-  <!-- Primitive 3: autonomous replan -->
+  <!-- Primitive 3: lineage-preserving replan -->
   <rect class="box" x="738" y="114" width="320" height="160" rx="12"/>
-  <text x="760" y="144" font-size="12.5" font-weight="500" class="mono blue">REPLAN · #5698 #8588 #9411</text>
-  <text x="760" y="174" font-size="19" font-weight="600">Lineage &amp; obligation</text>
-  <text x="760" y="204" font-size="15" class="sub">Atomic supersede + lease release</text>
-  <text x="760" y="229" font-size="15" class="sub">Streak source survives retirement</text>
-  <text x="760" y="254" font-size="15" class="sub">Settle receipt before Goal stop</text>
+  <text x="758" y="144" font-size="12" font-weight="500" class="mono blue">REPLAN · #4902 #5698 #8588 #8854</text>
+  <text x="758" y="174" font-size="18.5" font-weight="600">Self-consistent replanning</text>
+  <text x="758" y="203" font-size="14.5" class="sub">Atomic swap + lease release (#5698)</text>
+  <text x="758" y="228" font-size="14.5" class="sub">Keep trigger on watch exit (#8854)</text>
+  <text x="758" y="253" font-size="14.5" class="sub">Settle turn before stop (#8588)</text>
 
   <!-- Arrows into TS Kernel -->
   <path class="flow" d="M202 274 V308"/>
@@ -55,9 +55,9 @@
 
   <!-- Central TypeScript Kernel -->
   <rect class="kernel" x="42" y="314" width="1016" height="116" rx="12"/>
-  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript Task &amp; Settlement Kernel (turn_envelope · todo.read · replan_semantics)</text>
-  <text x="66" y="380" font-size="15" class="on-dark-sub">Evaluates full Todo &amp; Vision lineage in one transaction · Strips stale guard companions on identity_upgrade (#9411)</text>
-  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">Fences: GoalRef ACK order (#8975) · 3h hard_lease epoch (#9487) · bg monitor vs fg replan serialization (#9474)</text>
+  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript Task State Kernel</text>
+  <text x="66" y="380" font-size="15" class="on-dark-sub">Evaluates task dependencies (#6874), goal wait coverage (#7298), and replan settlement in one state machine</text>
+  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">Invariants: revision CAS · 3h lease-epoch fencing (#9487) · self-referential trigger &amp; stop-order safety</text>
 
   <!-- Arrows into Storage & Journal -->
   <path class="flow" d="M290 430 V462"/>
@@ -65,15 +65,15 @@
 
   <!-- Bottom Left: AuthorityStore -->
   <rect class="box-hi" x="42" y="468" width="494" height="106" rx="12"/>
-  <text x="66" y="501" font-size="18" font-weight="600">AuthorityStore (SQLite WAL · Remote SPI)</text>
-  <text x="66" y="529" font-size="15" class="sub">Atomic head + task_lease + todo_archive + receipt</text>
-  <text x="66" y="555" font-size="13.5" class="mono sub">provider_revision · lease_epoch · clear_fields (#9249)</text>
+  <text x="66" y="501" font-size="18" font-weight="600">Transactional State Store (AuthorityStore)</text>
+  <text x="66" y="529" font-size="14.5" class="sub">Atomic state head, active leases, archive &amp; receipts</text>
+  <text x="66" y="555" font-size="13" class="mono sub">#3798 · #4121 · #5805 · #7834</text>
 
-  <!-- Bottom Right: Rollout & Turn Journal -->
+  <!-- Bottom Right: Execution Journal -->
   <rect class="box" x="564" y="468" width="494" height="106" rx="12"/>
-  <text x="588" y="501" font-size="18" font-weight="600">Append-Only Rollout &amp; Turn Journal</text>
-  <text x="588" y="529" font-size="15" class="sub">Prepared-effect preflight · microsecond ACK index</text>
-  <text x="588" y="555" font-size="13.5" class="mono sub">turn_instance_id · effect_id · takeover_sha256 (#8804)</text>
+  <text x="588" y="501" font-size="18" font-weight="600">Append-Only Execution Journal</text>
+  <text x="588" y="529" font-size="14.5" class="sub">Two-phase external effect preflight &amp; crash recovery</text>
+  <text x="588" y="555" font-size="13" class="mono sub">#3416 · #3464 · #3485</text>
 
-  <text x="42" y="610" font-size="16" class="sub">Composing primitives on typed state eliminates cross-turn deadlocks that single-feature happy paths miss.</text>
+  <text x="42" y="610" font-size="16" class="sub">Composing task primitives on one typed state machine eliminates cross-turn deadlocks missed by isolated happy paths.</text>
 </svg>

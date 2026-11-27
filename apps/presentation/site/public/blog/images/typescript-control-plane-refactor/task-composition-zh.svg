@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
   <title id="t">长程任务原语在同一状态内核上组合运行</title>
-  <desc id="d">按作用域唤醒的 resume_when、不阻塞队列的 continuous_monitor 与保留因果谱系的自主 replan 在同一套 TypeScript 状态内核上组合，底层连接 AuthorityStore 与只追加运行账本。</desc>
+  <desc id="d">按目标精准唤醒的条件续跑、不阻塞前台的持续监控与保留因果谱系的自主重规划在同一套 TypeScript 任务状态机内核上组合，底层连接事务状态存储与只追加执行账本。</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
@@ -22,31 +22,31 @@
   </style>
 
   <text x="42" y="52" font-size="29" font-weight="600">长程任务原语在同一状态内核上组合运行</text>
-  <text x="42" y="86" font-size="17" class="sub">按作用域唤醒、后台观测、谱系重规划与 3 小时租约共享原子修订号与回执</text>
+  <text x="42" y="86" font-size="17" class="sub">按目标唤醒、独立后台观察与谱系重规划共享原子版本号与租约代际</text>
 
-  <!-- Primitive 1: resume by todo -->
+  <!-- Primitive 1: conditional wakeup & continuation -->
   <rect class="box" x="42" y="114" width="320" height="160" rx="12"/>
-  <text x="64" y="144" font-size="12.5" font-weight="500" class="mono blue">RESUME · #6874 #8231 #9488</text>
-  <text x="64" y="174" font-size="19" font-weight="600">按作用域精准续跑</text>
-  <text x="64" y="204" font-size="15" class="sub">5 类闭集唤醒条件微秒级求值</text>
-  <text x="64" y="229" font-size="14" class="mono sub">monitor_changed:&lt;id&gt;@&lt;scope&gt;</text>
-  <text x="64" y="254" font-size="15" class="sub">同 owner 跨代租约安全接管</text>
+  <text x="62" y="144" font-size="12" font-weight="500" class="mono blue">WAKEUP · #4094 #6874 #8231 #9488</text>
+  <text x="62" y="174" font-size="18.5" font-weight="600">按目标精准唤醒与续跑</text>
+  <text x="62" y="203" font-size="14.5" class="sub">单事务求值完整依赖图 (#6874)</text>
+  <text x="62" y="228" font-size="14.5" class="sub">分目标独立代际防误唤醒 (#8231)</text>
+  <text x="62" y="253" font-size="14.5" class="sub">同主跨租约围栏续跑 (#4094, #9488)</text>
 
-  <!-- Primitive 2: continuous_monitor -->
+  <!-- Primitive 2: background observation -->
   <rect class="box" x="390" y="114" width="320" height="160" rx="12"/>
-  <text x="412" y="144" font-size="12.5" font-weight="500" class="mono blue">MONITOR · #5450 #9155 #9320</text>
-  <text x="412" y="174" font-size="19" font-weight="600">不阻塞队列的持续观测</text>
-  <text x="412" y="204" font-size="15" class="sub">独立 background 会话隔离聊天</text>
-  <text x="412" y="229" font-size="15" class="sub">纯观测跳过模型探活防误杀队列</text>
-  <text x="412" y="254" font-size="15" class="sub">清空作用域显式写回 clear_fields</text>
+  <text x="410" y="144" font-size="12" font-weight="500" class="mono blue">MONITOR · #4178 #4335 #5450 #9320</text>
+  <text x="410" y="174" font-size="18.5" font-weight="600">不阻塞前台的持续监控</text>
+  <text x="410" y="203" font-size="14.5" class="sub">局部编辑不重触发已完监控 (#4178)</text>
+  <text x="410" y="228" font-size="14.5" class="sub">分离静默与任务轮询回执 (#5450)</text>
+  <text x="410" y="253" font-size="14.5" class="sub">独立后台通道隔离对话队列 (#9320)</text>
 
-  <!-- Primitive 3: autonomous replan -->
+  <!-- Primitive 3: lineage-preserving replan -->
   <rect class="box" x="738" y="114" width="320" height="160" rx="12"/>
-  <text x="760" y="144" font-size="12.5" font-weight="500" class="mono blue">REPLAN · #5698 #8588 #9411</text>
-  <text x="760" y="174" font-size="19" font-weight="600">保留因果谱系的重规划</text>
-  <text x="760" y="204" font-size="15" class="sub">单事务替代旧任务并释放租约</text>
-  <text x="760" y="229" font-size="15" class="sub">监控退役后保留连续无变化源</text>
-  <text x="760" y="254" font-size="15" class="sub">派生终止前优先完成原回执结算</text>
+  <text x="758" y="144" font-size="12" font-weight="500" class="mono blue">REPLAN · #4902 #5698 #8588 #8854</text>
+  <text x="758" y="174" font-size="18.5" font-weight="600">自指安全的自主重规划</text>
+  <text x="758" y="203" font-size="14.5" class="sub">单事务替换任务并释租 (#4902, #5698)</text>
+  <text x="758" y="228" font-size="14.5" class="sub">重规划内退役监控仍保触发源 (#8854)</text>
+  <text x="758" y="253" font-size="14.5" class="sub">目标停机前先结清当轮回执 (#8588)</text>
 
   <!-- Arrows into TS Kernel -->
   <path class="flow" d="M202 274 V308"/>
@@ -55,9 +55,9 @@
 
   <!-- Central TypeScript Kernel -->
   <rect class="kernel" x="42" y="314" width="1016" height="116" rx="12"/>
-  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript 任务与结算内核（turn_envelope · todo.read · replan_semantics）</text>
-  <text x="66" y="380" font-size="15" class="on-dark-sub">单事务求值完整任务与 Vision 谱系 · identity_upgrade 时自动剥离陈旧守卫字段（#9411）</text>
-  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">并发围栏：GoalRef 历史确认序（#8975）· 3h 强租约代际（#9487）· 后台观测与前台重规划串行化（#9474）</text>
+  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript 任务状态机内核</text>
+  <text x="66" y="380" font-size="15" class="on-dark-sub">在同一状态机内统一求值任务依赖（#6874）、目标等待覆盖（#7298）与重规划回执结算</text>
+  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">核心不变量：版本号 CAS · 3 小时租约代际围栏（#9487）· 自指触发源保留与停机前结算顺序</text>
 
   <!-- Arrows into Storage & Journal -->
   <path class="flow" d="M290 430 V462"/>
@@ -65,15 +65,15 @@
 
   <!-- Bottom Left: AuthorityStore -->
   <rect class="box-hi" x="42" y="468" width="494" height="106" rx="12"/>
-  <text x="66" y="501" font-size="18" font-weight="600">AuthorityStore（SQLite WAL · 远端网关 SPI）</text>
-  <text x="66" y="529" font-size="15" class="sub">原子提交 head、task_lease、归档表与操作回执</text>
-  <text x="66" y="555" font-size="13.5" class="mono sub">provider_revision · lease_epoch · clear_fields (#9249)</text>
+  <text x="66" y="501" font-size="18" font-weight="600">事务状态存储（AuthorityStore）</text>
+  <text x="66" y="529" font-size="14.5" class="sub">原子提交状态头、活跃租约、有界归档与操作回执</text>
+  <text x="66" y="555" font-size="13" class="mono sub">#3798 · #4121 · #5805 · #7834</text>
 
-  <!-- Bottom Right: Rollout & Turn Journal -->
+  <!-- Bottom Right: Execution Journal -->
   <rect class="box" x="564" y="468" width="494" height="106" rx="12"/>
-  <text x="588" y="501" font-size="18" font-weight="600">只追加运行账本与 Turn Journal</text>
-  <text x="588" y="529" font-size="15" class="sub">外部副作用预检记录 · 同秒微秒级日志位点核验</text>
-  <text x="588" y="555" font-size="13.5" class="mono sub">turn_instance_id · effect_id · takeover_sha256 (#8804)</text>
+  <text x="588" y="501" font-size="18" font-weight="600">只追加执行与副作用账本</text>
+  <text x="588" y="529" font-size="14.5" class="sub">外部副作用两阶段预检与崩溃后原回执恢复</text>
+  <text x="588" y="555" font-size="13" class="mono sub">#3416 · #3464 · #3485</text>
 
-  <text x="42" y="610" font-size="16" class="sub">在类型化状态上组合原语，消除了单一特性顺风路径无法暴露的跨轮次死锁与唤醒风暴。</text>
+  <text x="42" y="610" font-size="16" class="sub">在单一类型化状态机上组合任务原语，消除了孤立顺风路径无法暴露的跨轮次死锁与误唤醒。</text>
 </svg>

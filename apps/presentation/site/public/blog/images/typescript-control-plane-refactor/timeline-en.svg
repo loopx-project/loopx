@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
-  <title id="t">103 days, three converging control-plane tracks</title>
-  <desc id="d">Overlapping transaction and task-semantics, authority and storage, and Semantics and Agent-CLI tracks from August 15 to November 27, 2026.</desc>
+  <title id="t">Three converging control-plane tracks</title>
+  <desc id="d">Overlapping transaction and task-semantics, authority and storage, and vocabulary and Agent-CLI tracks from August to November 2026.</desc>
   <rect width="100%" height="100%" fill="#fafafa"/>
   <style>
     text { font-family: Geist, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #171717; }
@@ -10,13 +10,13 @@
     .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
     .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
   </style>
-  <text x="42" y="54" font-size="30" font-weight="600">103 days, three converging control-plane tracks</text>
-  <text x="42" y="90" font-size="17" class="sub">Representative merged milestones (Aug 15 – Nov 27, 2026) · 2,126 core PRs · 124,805 TS LOC</text>
+  <text x="42" y="54" font-size="30" font-weight="600">Three converging control-plane tracks</text>
+  <text x="42" y="90" font-size="17" class="sub">Representative milestones from transactional cutover to Agent task &amp; CLI semantics (Aug – Nov 2026)</text>
 
   <text x="232" y="154" font-size="18" font-weight="600" class="blue">Mid / late Aug</text>
   <text x="444" y="154" font-size="18" font-weight="600" class="blue">September</text>
-  <text x="656" y="154" font-size="18" font-weight="600" class="blue">Mid-October</text>
-  <text x="868" y="154" font-size="18" font-weight="600" class="blue">Late Oct – Nov</text>
+  <text x="656" y="154" font-size="18" font-weight="600" class="blue">October</text>
+  <text x="868" y="154" font-size="18" font-weight="600" class="blue">November</text>
 
   <text x="42" y="226" font-size="18" font-weight="600">Transactions</text>
   <text x="42" y="252" font-size="16" class="sub">&amp; task loop</text>
@@ -26,19 +26,19 @@
   <text x="240" y="266" font-size="13" class="mono sub">#3416 · #3447 · #3464</text>
 
   <rect class="box" x="436" y="182" width="200" height="104" rx="12"/>
-  <text x="452" y="214" font-size="16" font-weight="600">Todo / lease / quota</text>
+  <text x="452" y="214" font-size="16" font-weight="600">Tasks / leases / quota</text>
   <text x="452" y="240" font-size="14" class="sub">Real caller cutovers</text>
   <text x="452" y="266" font-size="13" class="mono sub">#4032 · #4178 · #4286</text>
 
   <rect class="box" x="648" y="182" width="200" height="104" rx="12"/>
   <text x="664" y="214" font-size="16" font-weight="600">Writer retirement</text>
-  <text x="664" y="240" font-size="14" class="sub">−17,935 legacy lines</text>
-  <text x="664" y="266" font-size="13" class="mono sub">#6104 · #6280 · #6396</text>
+  <text x="664" y="240" font-size="14" class="sub">Atomic swap &amp; cleanup</text>
+  <text x="664" y="266" font-size="13" class="mono sub">#5450 · #5698 · #6396</text>
 
   <rect class="box-hi" x="860" y="182" width="200" height="104" rx="12"/>
-  <text x="876" y="214" font-size="16" font-weight="600">C1 + task semantics</text>
-  <text x="876" y="240" font-size="14" class="sub">resume · monitor · replan</text>
-  <text x="876" y="266" font-size="13" class="mono blue">#9176 · #9320 · #9488</text>
+  <text x="876" y="214" font-size="16" font-weight="600">Task composition</text>
+  <text x="876" y="240" font-size="14" class="sub">Scoped wakes &amp; leases</text>
+  <text x="876" y="266" font-size="13" class="mono blue">#7298 · #8231 · #9488</text>
 
   <text x="42" y="352" font-size="18" font-weight="600">Authority</text>
   <text x="42" y="378" font-size="16" class="sub">&amp; storage</text>
@@ -54,13 +54,13 @@
 
   <rect class="box" x="648" y="308" width="200" height="104" rx="12"/>
   <text x="664" y="340" font-size="16" font-weight="600">SQLite + hard lease</text>
-  <text x="664" y="366" font-size="14" class="sub">New-Goal defaults</text>
+  <text x="664" y="366" font-size="14" class="sub">Bounded task archive</text>
   <text x="664" y="392" font-size="13" class="mono sub">#4778 · #5805 · #7834</text>
 
   <rect class="box-hi" x="860" y="308" width="200" height="104" rx="12"/>
   <text x="876" y="340" font-size="16" font-weight="600">3h lease &amp; cloud SPI</text>
-  <text x="876" y="366" font-size="14" class="sub">20k+ commits · handoff</text>
-  <text x="876" y="392" font-size="13" class="mono blue">#8759 · #9223 · #9487</text>
+  <text x="876" y="366" font-size="14" class="sub">20k+ commits · custody</text>
+  <text x="876" y="392" font-size="13" class="mono blue">#8759 · #9223 · #9308</text>
 
   <text x="42" y="478" font-size="18" font-weight="600">Semantics</text>
   <text x="42" y="504" font-size="16" class="sub">&amp; Agent CLI</text>
@@ -71,18 +71,18 @@
 
   <rect class="box" x="436" y="434" width="200" height="104" rx="12"/>
   <text x="452" y="466" font-size="16" font-weight="600">Song: Semantics</text>
-  <text x="452" y="492" font-size="14" class="sub">Registry &amp; producers</text>
-  <text x="452" y="518" font-size="13" class="mono sub">#4433 · #4494 · #4687</text>
+  <text x="452" y="492" font-size="14" class="sub">Registry &amp; single owner</text>
+  <text x="452" y="518" font-size="13" class="mono sub">#4433 · #4494 · #4496</text>
 
   <rect class="box" x="648" y="434" width="200" height="104" rx="12"/>
-  <text x="664" y="466" font-size="16" font-weight="600">Sealed envelopes</text>
-  <text x="664" y="492" font-size="14" class="sub">Freshness &amp; coverage</text>
-  <text x="664" y="518" font-size="13" class="mono sub">#5085 · #6679 · #6874</text>
+  <text x="664" y="466" font-size="16" font-weight="600">Honest CLI views</text>
+  <text x="664" y="492" font-size="14" class="sub">Truncation ≠ finished</text>
+  <text x="664" y="518" font-size="13" class="mono sub">#5085 · #6123 · #6874</text>
 
   <rect class="box-hi" x="860" y="434" width="200" height="104" rx="12"/>
   <text x="876" y="466" font-size="16" font-weight="600">Zero-Any &amp; KV fold</text>
-  <text x="876" y="492" font-size="14" class="sub">34 vocabs · prefix-KV</text>
-  <text x="876" y="518" font-size="13" class="mono blue">#9213 · #9392 · #9433</text>
+  <text x="876" y="492" font-size="14" class="sub">Dedup &amp; suffix receipts</text>
+  <text x="876" y="518" font-size="13" class="mono blue">#7196 · #9213 · #9433</text>
 
-  <text x="42" y="596" font-size="16" class="sub">Aug 15 RFC (#3226) → Oct 16 writer retirement (#6396) → Nov 27 Complete Turn (#9176) &amp; Zero-Any convergence.</text>
+  <text x="42" y="596" font-size="16" class="sub">Aug 15 migration RFC (#3226) → Oct 16 legacy writer retirement (#6396) → Nov 27 composable task &amp; Agent-CLI kernel.</text>
 </svg>

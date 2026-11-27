@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
-  <title id="t">103 天，三条收敛进同一内核的工程线</title>
-  <desc id="d">2026 年 8 月 15 日至 11 月 27 日，事务与任务语义、共享权威与存储、词表棘轮与 Agent CLI 三条主线交错推进。</desc>
+  <title id="t">三条收敛进同一内核的控制面主线</title>
+  <desc id="d">2026 年 8 月至 11 月，事务与任务语义、共享权威与存储、词表棘轮与 Agent CLI 三条主线交错推进。</desc>
   <rect width="100%" height="100%" fill="#fafafa"/>
   <style>
     text { font-family: Geist, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #171717; }
@@ -10,35 +10,35 @@
     .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
     .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
   </style>
-  <text x="42" y="54" font-size="30" font-weight="600">103 天，三条收敛进同一内核的工程线</text>
-  <text x="42" y="90" font-size="17" class="sub">公开合并历史的代表节点（2026.08.15 – 11.27）· 2,126 个核心 PR · 124,805 行 TS</text>
+  <text x="42" y="54" font-size="30" font-weight="600">三条收敛进同一内核的控制面主线</text>
+  <text x="42" y="90" font-size="17" class="sub">从完整事务切换、共享存储到长程任务原语与 Agent CLI 的代表里程碑（2026.08 – 11）</text>
 
   <text x="232" y="154" font-size="18" font-weight="600" class="blue">8 月中下旬</text>
   <text x="444" y="154" font-size="18" font-weight="600" class="blue">9 月</text>
-  <text x="656" y="154" font-size="18" font-weight="600" class="blue">10 月中旬</text>
-  <text x="868" y="154" font-size="18" font-weight="600" class="blue">10 月下旬 – 11 月</text>
+  <text x="656" y="154" font-size="18" font-weight="600" class="blue">10 月</text>
+  <text x="868" y="154" font-size="18" font-weight="600" class="blue">11 月</text>
 
   <text x="42" y="226" font-size="18" font-weight="600">事务与</text>
   <text x="42" y="252" font-size="16" class="sub">任务闭环</text>
   <rect class="box" x="224" y="182" width="200" height="104" rx="12"/>
   <text x="240" y="214" font-size="16" font-weight="600">Effect Program</text>
-  <text x="240" y="240" font-size="14" class="sub">完整事务与 preflight</text>
+  <text x="240" y="240" font-size="14" class="sub">完整事务与两阶段预检</text>
   <text x="240" y="266" font-size="13" class="mono sub">#3416 · #3447 · #3464</text>
 
   <rect class="box" x="436" y="182" width="200" height="104" rx="12"/>
-  <text x="452" y="214" font-size="16" font-weight="600">Todo / lease / quota</text>
+  <text x="452" y="214" font-size="16" font-weight="600">任务 / 租约 / 配额</text>
   <text x="452" y="240" font-size="14" class="sub">真实调用方逐步切换</text>
   <text x="452" y="266" font-size="13" class="mono sub">#4032 · #4178 · #4286</text>
 
   <rect class="box" x="648" y="182" width="200" height="104" rx="12"/>
-  <text x="664" y="214" font-size="16" font-weight="600">旧 writer 集中退役</text>
-  <text x="664" y="240" font-size="14" class="sub">净删 17,935 行旧路径</text>
-  <text x="664" y="266" font-size="13" class="mono sub">#6104 · #6280 · #6396</text>
+  <text x="664" y="214" font-size="16" font-weight="600">旧写入路径退役</text>
+  <text x="664" y="240" font-size="14" class="sub">原子替代与路径清理</text>
+  <text x="664" y="266" font-size="13" class="mono sub">#5450 · #5698 · #6396</text>
 
   <rect class="box-hi" x="860" y="182" width="200" height="104" rx="12"/>
-  <text x="876" y="214" font-size="16" font-weight="600">C1 与长程任务原语</text>
-  <text x="876" y="240" font-size="14" class="sub">resume · monitor · replan</text>
-  <text x="876" y="266" font-size="13" class="mono blue">#9176 · #9320 · #9488</text>
+  <text x="876" y="214" font-size="16" font-weight="600">长程任务原语组合</text>
+  <text x="876" y="240" font-size="14" class="sub">分目标唤醒与跨租约续跑</text>
+  <text x="876" y="266" font-size="13" class="mono blue">#7298 · #8231 · #9488</text>
 
   <text x="42" y="352" font-size="18" font-weight="600">共享权威</text>
   <text x="42" y="378" font-size="16" class="sub">与存储</text>
@@ -54,13 +54,13 @@
 
   <rect class="box" x="648" y="308" width="200" height="104" rx="12"/>
   <text x="664" y="340" font-size="16" font-weight="600">SQLite 与强租约</text>
-  <text x="664" y="366" font-size="14" class="sub">新建 Goal 默认口径</text>
+  <text x="664" y="366" font-size="14" class="sub">默认切换与有界归档</text>
   <text x="664" y="392" font-size="13" class="mono sub">#4778 · #5805 · #7834</text>
 
   <rect class="box-hi" x="860" y="308" width="200" height="104" rx="12"/>
   <text x="876" y="340" font-size="16" font-weight="600">3h 租约与云端 SPI</text>
-  <text x="876" y="366" font-size="14" class="sub">2 万+提交 · 托管交接</text>
-  <text x="876" y="392" font-size="13" class="mono blue">#8759 · #9223 · #9487</text>
+  <text x="876" y="366" font-size="14" class="sub">2 万+提交 · 成果托管</text>
+  <text x="876" y="392" font-size="13" class="mono blue">#8759 · #9223 · #9308</text>
 
   <text x="42" y="478" font-size="18" font-weight="600">词表棘轮</text>
   <text x="42" y="504" font-size="16" class="sub">与 Agent CLI</text>
@@ -71,18 +71,18 @@
 
   <rect class="box" x="436" y="434" width="200" height="104" rx="12"/>
   <text x="452" y="466" font-size="16" font-weight="600">Song: Semantics</text>
-  <text x="452" y="492" font-size="14" class="sub">词表登记与生产检查</text>
-  <text x="452" y="518" font-size="13" class="mono sub">#4433 · #4494 · #4687</text>
+  <text x="452" y="492" font-size="14" class="sub">词表登记与单一决策源</text>
+  <text x="452" y="518" font-size="13" class="mono sub">#4433 · #4494 · #4496</text>
 
   <rect class="box" x="648" y="434" width="200" height="104" rx="12"/>
-  <text x="664" y="466" font-size="16" font-weight="600">密封投影信封</text>
-  <text x="664" y="492" font-size="14" class="sub">新鲜度与完整度分离</text>
-  <text x="664" y="518" font-size="13" class="mono sub">#5085 · #6679 · #6874</text>
+  <text x="664" y="466" font-size="16" font-weight="600">诚实 CLI 读取视图</text>
+  <text x="664" y="492" font-size="14" class="sub">区分展示截断与任务完成</text>
+  <text x="664" y="518" font-size="13" class="mono sub">#5085 · #6123 · #6874</text>
 
   <rect class="box-hi" x="860" y="434" width="200" height="104" rx="12"/>
-  <text x="876" y="466" font-size="16" font-weight="600">零 Any 内核与 CLI</text>
-  <text x="876" y="492" font-size="14" class="sub">34 词表 · 前缀 KV 折叠</text>
-  <text x="876" y="518" font-size="13" class="mono blue">#9213 · #9392 · #9433</text>
+  <text x="876" y="466" font-size="16" font-weight="600">零 Any 与后缀折叠</text>
+  <text x="876" y="492" font-size="14" class="sub">子树去重 · 保前缀 KV</text>
+  <text x="876" y="518" font-size="13" class="mono blue">#7196 · #9213 · #9433</text>
 
-  <text x="42" y="596" font-size="16" class="sub">08.15 正式 RFC（#3226）→ 10.16 旧写入退役（#6396）→ 11.27 完整轮次（#9176）与零 Any 收敛。</text>
+  <text x="42" y="596" font-size="16" class="sub">08.15 迁移提案（#3226）→ 10.16 退役旧写入路径（#6396）→ 11.27 任务原语组合与 Agent CLI 收敛。</text>
 </svg>
