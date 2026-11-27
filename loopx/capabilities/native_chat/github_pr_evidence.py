@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+from time import monotonic
 from typing import Any, Callable, Mapping, Sequence
 
 from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
@@ -539,6 +540,8 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
 _GITHUB_PR_LIST_PAGE_SIZE = 20
 _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE = 25
 _GITHUB_PR_LIST_MAX_PAGES = 5
+_GITHUB_PR_QUERY_TIMEOUT_SECONDS = 20
+_GITHUB_PR_SCAN_TIMEOUT_SECONDS = _GITHUB_PR_LIST_MAX_PAGES * _GITHUB_PR_QUERY_TIMEOUT_SECONDS
 _GITHUB_PR_LIST_STANDARD_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE * _GITHUB_PR_LIST_MAX_PAGES
 _GITHUB_PR_LIST_MAX_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE + (
     _GITHUB_PR_LIST_MAX_PAGES - 1
@@ -737,6 +740,7 @@ def _backfill_pr_comments_if_needed(
     number: int,
     runner: Callable[..., Any],
     remaining_pages: int,
+    deadline: float,
 ) -> tuple[dict[str, Any], int]:
     """Backfill an incomplete PR and return the remaining scan-wide allowance."""
     for _ in range(min(_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES, remaining_pages)):
@@ -744,6 +748,9 @@ def _backfill_pr_comments_if_needed(
             break
         comment_cursor = str(norm_node.get("commentsStartCursor") or "").strip()
         if not comment_cursor:
+            break
+        remaining_seconds = deadline - monotonic()
+        if remaining_seconds <= 0:
             break
         remaining_pages -= 1
         try:
@@ -766,11 +773,11 @@ def _backfill_pr_comments_if_needed(
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=20,
+                timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
             )
         except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
             break
-        if completed.returncode != 0:
+        if monotonic() > deadline or completed.returncode != 0:
             break
         try:
             payload = json.loads(completed.stdout or "{}")
@@ -815,6 +822,7 @@ def observe_github_repository_prs(
     cursor: str | None = None
     seen_cursors: set[str] = set()
     page_size = _GITHUB_PR_LIST_PAGE_SIZE
+    deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
         for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
             cmd = [
@@ -832,14 +840,17 @@ def observe_github_repository_prs(
             ]
             if cursor is not None:
                 cmd.extend(["-f", f"cursor={cursor}"])
+            remaining_seconds = deadline - monotonic()
+            if remaining_seconds <= 0:
+                return {"status": "unavailable", "repository": repo_slug}
             completed = runner(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=20,
+                timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
             )
-            if completed.returncode != 0:
+            if monotonic() > deadline or completed.returncode != 0:
                 return {"status": "unavailable", "repository": repo_slug}
             payload = json.loads(completed.stdout or "{}")
             if not isinstance(payload, Mapping) or payload.get("errors"):
@@ -898,6 +909,7 @@ def observe_github_repository_prs(
                     number=number,
                     runner=runner,
                     remaining_pages=remaining_comment_pages,
+                    deadline=deadline,
                 )
             items.append(summary)
         return {"status": "ok", "repository": repo_slug, "items": items}

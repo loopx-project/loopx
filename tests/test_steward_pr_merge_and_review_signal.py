@@ -556,6 +556,99 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
     assert observed["items"][-1]["comments_coverage_incomplete"] is True
 
 
+@pytest.mark.parametrize("last_page_seconds", [20, 21])
+def test_observe_github_repository_prs_rejects_late_terminal_page(monkeypatch, last_page_seconds) -> None:
+    elapsed = 0
+    requested_timeouts = []
+    monkeypatch.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed, raising=False)
+
+    def fake_run(cmd, **kwargs):
+        nonlocal elapsed
+        requested_timeouts.append(kwargs["timeout"])
+        page = len(requested_timeouts)
+        elapsed += last_page_seconds if page == 5 else 20
+        response = _graphql_page(
+            [_graphql_node(_sample_pr(number=page))],
+            has_next_page=page < 5, end_cursor=f"cursor-{page}", total_count=5,
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+    observed = _observe_github_repository_prs("org/repo")
+
+    assert requested_timeouts == [20] * 5
+    if last_page_seconds == 20:
+        assert observed["status"] == "ok"
+        assert [item["number"] for item in observed["items"]] == [1, 2, 3, 4, 5]
+    else:
+        assert observed == {"status": "unavailable", "repository": "org/repo"}
+
+
+@pytest.mark.parametrize("comment_seconds", [5, 6])
+def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
+    monkeypatch, comment_seconds,
+) -> None:
+    elapsed = 0
+    list_pages = 0
+    comment_timeouts = []
+    head = "9" * 40
+    review = {
+        "id": "PRR_review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+        "author": {"login": "maintainer"}, "commit": {"oid": head},
+    }
+    monkeypatch.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed, raising=False)
+
+    def fake_run(cmd, **kwargs):
+        nonlocal elapsed, list_pages
+        if any(arg.startswith("before=") for arg in cmd):
+            comment_timeouts.append(kwargs["timeout"])
+            elapsed += comment_seconds
+            comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "older"}, "nodes": []}
+            response = {"data": {"repository": {"pullRequest": {"comments": comments}}}}
+        else:
+            list_pages += 1
+            elapsed += 19
+            node = _graphql_node(_sample_pr(
+                number=list_pages, head_oid=head, author=f"author-{list_pages}",
+                reviews=[review] if list_pages <= 2 else [],
+            ))
+            node["comments"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}, "nodes": []}
+            response = _graphql_page(
+                [node], has_next_page=list_pages < 5, end_cursor=f"cursor-{list_pages}", total_count=5,
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
+
+    with monkeypatch.context() as provider:
+        provider.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+        observed = _observe_github_repository_prs("org/repo", backfill_comments=True)
+
+    assert list_pages == 5
+    assert comment_timeouts == [5]
+    assert observed["status"] == "ok"
+    assert [item["number"] for item in observed["items"]] == [1, 2, 3, 4, 5]
+    assert observed["items"][0]["comments_coverage_incomplete"] is (comment_seconds > 5)
+    assert observed["items"][1]["comments_coverage_incomplete"] is True
+
+    observation = ChatConversationBindings._core(
+        "collaboration.steward.monitor.signal_observation",
+        {
+            "repository_snapshot": observed,
+            "previous_hash": "sha256:prior-result",
+            "observed_at": "2030-01-03T08:00:00Z",
+            "signal_scope": {
+                "schema_version": "steward_signal_monitor_scope_v0",
+                "include_portfolio": False,
+                "include_inbox": False,
+                "pr_filter": {"author_mode": "include", "authors": ["author-1"], "min_stalled_hours": 24},
+            },
+        },
+    )
+    assert observation["observation_incomplete"] is (comment_seconds > 5)
+    if comment_seconds > 5:
+        assert observation["result_hash"] == "sha256:prior-result"
+        assert observation["material_change"] is False
+
+
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     head = "d" * 40
     pr_row = _sample_pr(

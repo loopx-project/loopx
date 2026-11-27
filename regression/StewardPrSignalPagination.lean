@@ -254,6 +254,51 @@ theorem comment_backfill_preserves_scan_limit (demands : List Nat) (remaining : 
     change issued + backfillSpent (remaining - issued) rest ≤ remaining
     omega
 
+/- Use a common monotonic deadline for list reads and optional comment reads.
+   Natural-number ticks model the order and timeout arithmetic. The model
+   does not assume that a subprocess has returned merely because its timeout
+   has elapsed. Eligibility checks the actual time of receipt separately. -/
+def requestTimeout (perRequest deadline now : Nat) : Option Nat :=
+  if now < deadline then some (min perRequest (deadline - now)) else none
+
+def receivedInTime (deadline now : Nat) (response : α) : Option α :=
+  if now ≤ deadline then some response else none
+
+theorem request_fits_both_budgets {perRequest deadline now timeout : Nat}
+    (h : requestTimeout perRequest deadline now = some timeout) :
+    now < deadline ∧ timeout ≤ perRequest ∧ now + timeout ≤ deadline := by
+  unfold requestTimeout at h
+  split at h
+  · rename_i before
+    have chosen := Option.some.inj h
+    subst timeout
+    have remaining := Nat.min_le_right perRequest (deadline - now)
+    exact ⟨before, Nat.min_le_left _ _, by omega⟩
+  · simp at h
+
+theorem exhausted_deadline_admits_no_request (perRequest deadline now : Nat)
+    (h : deadline ≤ now) : requestTimeout perRequest deadline now = none := by
+  simp [requestTimeout, Nat.not_lt.mpr h]
+
+theorem late_list_reply_keeps_prior_result (deadline now : Nat) (previous rows : List Nat)
+    (h : deadline < now) :
+    observe previous (receivedInTime deadline now rows) = (previous, false) := by
+  simp [receivedInTime, observe, Nat.not_le.mpr h]
+
+def withCommentCoverage (rows : List Nat) (covered : Option Bool) : List Nat × Bool :=
+  (rows, covered.getD false)
+
+theorem late_comment_does_not_replace_list_or_complete_coverage (deadline now : Nat)
+    (rows : List Nat) (h : deadline < now) :
+    withCommentCoverage rows (receivedInTime deadline now true) = (rows, false) := by
+  simp [withCommentCoverage, receivedInTime, Nat.not_le.mpr h]
+
+theorem comment_deadline_counterexample :
+    requestTimeout 20 100 95 = some 5 ∧
+    receivedInTime (95 + 20) 101 true = some true ∧
+    receivedInTime 100 101 true = none ∧
+    receivedInTime 100 100 true = some true := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -272,5 +317,10 @@ theorem comment_backfill_preserves_scan_limit (demands : List Nat) (remaining : 
 #print axioms adaptive_pages_recover_111_prs
 #print axioms out_of_capacity_keeps_prior_signal
 #print axioms comment_backfill_preserves_scan_limit
+#print axioms request_fits_both_budgets
+#print axioms exhausted_deadline_admits_no_request
+#print axioms late_list_reply_keeps_prior_result
+#print axioms late_comment_does_not_replace_list_or_complete_coverage
+#print axioms comment_deadline_counterexample
 
 end StewardPrSignalPagination
