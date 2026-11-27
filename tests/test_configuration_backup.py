@@ -488,3 +488,58 @@ await assert.rejects(configurationBackupScenario.run({
              "PYTHONPATH": str(shadow)}, capture_output=True, text=True, timeout=45,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cli_compare_exported_snapshots_then_restore_exact_after(environment, tmp_path):
+    source, runtime, registry, _ = environment
+    before_path, after_path = tmp_path / 'before.json', tmp_path / 'after.json'
+    arguments = ('--runtime-root', runtime, '--registry', registry, 'configuration-backup')
+    assert cli(*arguments, 'export', '--output', before_path, '--execute')[0] == 0
+    state = json.loads(source.read_text())
+    optional = state['goals'][0]['control_plane']['optional_provider']
+    optional.pop('nullable')
+    optional.update(enabled=False, ordered=[2, 1], note='完整 ``` # not a heading')
+    source.write_text(json.dumps(state))
+    assert cli(*arguments, 'export', '--output', after_path, '--execute')[0] == 0
+    before, after = json.loads(before_path.read_text()), json.loads(after_path.read_text())
+    paths = [source, runtime / 'machine/configuration.json', before_path, after_path]
+    unchanged = {path: path.read_bytes() for path in paths}
+
+    def compare(format_name, left, right):
+        return subprocess.run([sys.executable, '-m', 'loopx.entrypoint', '--format', format_name,
+            'configuration-backup', 'compare', '--before', str(left), '--after', str(right)],
+            env={**os.environ, 'LOOPX_USAGE_PING': '0'}, capture_output=True, text=True, encoding='utf-8', timeout=60)
+
+    result = compare('json', before_path, after_path)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload['before_sha256'] == before['sha256'] and payload['after_sha256'] == after['sha256']
+    assert payload['before_goal_ids'] == payload['after_goal_ids'] == ['fixture']
+    assert payload['activation_performed'] is False and payload['written'] is False
+    changes = {item['path']: item for item in payload['changes']}
+    missing = changes['/goals/fixture/control_plane/optional_provider/nullable']
+    assert missing['before'] is None and missing['after_present'] is False and 'after' not in missing
+    assert changes['/goals/fixture/control_plane/optional_provider/enabled']['after'] is False
+    markdown = compare('markdown', before_path, after_path)
+    assert markdown.returncode == 0, markdown.stderr
+    assert before['sha256'] in markdown.stdout and after['sha256'] in markdown.stdout
+    assert 'not a live creation or deletion' in markdown.stdout
+    assert '"before_present": true' in markdown.stdout and '"after_present": false' in markdown.stdout
+    assert '````json' in markdown.stdout and '完整 ``` # not a heading' in markdown.stdout
+    same = compare('markdown', after_path, after_path)
+    assert same.returncode == 0 and 'No stored configuration differences' in same.stdout
+    assert {path: path.read_bytes() for path in paths} == unchanged
+    code, restored = cli(*arguments, 'restore', '--input', after_path, '--expected-sha256', after['sha256'],
+        '--destination', tmp_path / 'reviewed-checkpoint', '--execute')
+    assert code == 0 and restored['activation_performed'] is False
+    assert json.loads((tmp_path / 'reviewed-checkpoint/configuration-backup.json').read_text()) == after
+    restored_goals = list((tmp_path / 'reviewed-checkpoint/goals').glob('*.json'))
+    assert [json.loads(path.read_text()) for path in restored_goals] == [after['data']['goals'][0]['goal_configuration']]
+    assert {path: path.read_bytes() for path in paths} == unchanged
+    invalid = tmp_path / 'invalid.json'
+    invalid.write_text(json.dumps({**after, 'sha256': 'invalid'}))
+    for left, right in [(invalid, after_path), (before_path, invalid), (before_path, tmp_path / 'missing.json')]:
+        failure = compare('json', left, right)
+        rejected = json.loads(failure.stdout)
+        assert failure.returncode == 1 and rejected['ok'] is False
+        assert 'changes' not in rejected and 'change_count' not in rejected

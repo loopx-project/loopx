@@ -5,7 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from ..capabilities.configuration_backup import capture_configuration_backup, restore_configuration_backup, verify_configuration_backup
+from ..capabilities.configuration_backup import capture_configuration_backup, compare_configuration_backups, restore_configuration_backup, verify_configuration_backup
 from ..history import load_registry
 from ..paths import resolve_runtime_root
 
@@ -18,6 +18,10 @@ def register_configuration_backup(subparsers, add_format):
     export.add_argument("--goal-id", action="append", help="Select Goal ids; omit to capture all Goals in the invoked registry.")
     export.add_argument("--output", required=True)
     export.add_argument("--execute", action="store_true")
+    compare = commands.add_parser("compare", help="Compare two verified configuration snapshots without changing live settings.")
+    add_format(compare)
+    compare.add_argument("--before", required=True)
+    compare.add_argument("--after", required=True)
     for name in ("verify", "restore"):
         command = commands.add_parser(name)
         add_format(command)
@@ -29,6 +33,9 @@ def register_configuration_backup(subparsers, add_format):
 
 
 def render_configuration_backup(payload):
+    if payload.get("status") == "compared":
+        from .configuration_backup_compare import render_configuration_comparison
+        return render_configuration_comparison(payload)
     return "\n".join(["# Configuration Backup", ""] + [f"- {key}: `{payload[key]}`" for key in
         ("ok", "status", "sha256", "goal_count", "machine_configuration_present", "written", "readback_verified", "activation_performed", "error") if key in payload]) + "\n"
 
@@ -58,6 +65,10 @@ def handle_configuration_backup(args, *, registry_path, print_payload, output_fo
                 if json.loads(path.read_text(encoding="utf-8")) != backup:
                     raise RuntimeError("configuration backup export readback mismatch")
                 payload.update(status="exported", written=True)
+        elif args.configuration_backup_command == "compare":
+            before = json.loads(Path(args.before).expanduser().read_text(encoding="utf-8"))
+            after = json.loads(Path(args.after).expanduser().read_text(encoding="utf-8"))
+            payload = compare_configuration_backups(before, after)
         else:
             backup = json.loads(Path(args.input).expanduser().read_text(encoding="utf-8"))
             payload = (verify_configuration_backup(backup) if args.configuration_backup_command == "verify" else
