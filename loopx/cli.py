@@ -19,6 +19,7 @@ import sys
 from .cli_commands.agent_capabilities import register_agent_capabilities
 from .cli_commands.agent_directory import register_agent_directory
 from .cli_commands.agent_context import register_agent_context
+from .cli_commands.remote_authority import register_remote_authority_command, handle_remote_authority_command
 from .capabilities.multi_subagent.cli import (
     register_native_child_commands, handle_native_child_command,
 )
@@ -326,6 +327,7 @@ def build_parser() -> LoopXArgumentParser:
     register_coordination_shadow_command(sub, add_subcommand_format)
     register_automation_cadence_command(sub, add_subcommand_format)
     register_authority_archive_command(sub, add_subcommand_format)
+    register_remote_authority_command(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
     register_authority_shadow_command(sub, add_subcommand_format)
     register_todo_continuation(sub, add_subcommand_format)
@@ -405,6 +407,12 @@ def _main(argv: list[str] | None = None) -> int:
     )
     if worker_bridge_result is not None:
         return worker_bridge_result
+
+    remote_authority_result = handle_remote_authority_command(
+        args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
+    )
+    if remote_authority_result is not None:
+        return remote_authority_result
 
     support_control_result = handle_support_control_command(
         args,

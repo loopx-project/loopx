@@ -67,6 +67,7 @@ class ChatConfigurationRequestMixin(
 
     def _configuration_post_routes(self) -> dict[str, Callable[[], None]]:
         return {
+            goal_api.CHAT_GOAL_REMOTE_AUTHORITY_INSPECTION_PATH: self._goal_remote_authority_inspect,
             media_api.CONTENT_MEDIA_PATH: self._content_media_request,
             accounts_api.CODEX_ACCOUNTS_PATH: self._codex_accounts_write,
             f"{accounts_api.CODEX_ACCOUNTS_PATH}/keys": self._codex_api_keys_write,

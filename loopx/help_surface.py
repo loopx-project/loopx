@@ -140,6 +140,10 @@ COMMAND_GROUPS: list[dict[str, object]] = [
             },
             {"command": "loopx todo --help", "purpose": "Show todo lifecycle commands."},
             {
+                "command": "loopx remote-authority inspect --goal-id <goal-id> --agent-id <agent-id>",
+                "purpose": "Read a configured remote probe Todo and report safe diagnostics; never admit execution.",
+            },
+            {
                 "command": "loopx coordination-shadow --help",
                 "purpose": "Inspect, bootstrap, or revision-fenced rollback the default-off Stage 2C file shadow.",
             },

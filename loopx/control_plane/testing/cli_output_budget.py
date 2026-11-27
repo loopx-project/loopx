@@ -809,6 +809,12 @@ CLI_OUTPUT_COMMAND_CLASSIFICATIONS: tuple[CliOutputCommandClassification, ...] =
         rationale="agent work-queue read path",
     ),
     CliOutputCommandClassification(
+        command_id="remote-authority",
+        qualification="explicit_cold_path_exception",
+        surface_id=None,
+        rationale="explicit operator inspection of a configured remote read; never invoked by the recurring turn guard",
+    ),
+    CliOutputCommandClassification(
         command_id="coordination-shadow",
         qualification="explicit_cold_path_exception",
         surface_id=None,
