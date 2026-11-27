@@ -854,6 +854,83 @@ theorem interpreting_an_unreadable_window_as_absence_can_publish_a_false_removal
       observeStalledScope [42] 42 (scopeWithReviewCoverage false true true false) := by
   decide
 
+/- An older response is admissible only for the requested PR and head, with
+   the same total count and a timely response. Wrong PR identity and malformed
+   cursor/row shape map to invalid pages. IDs stand for readable review nodes
+   tied to known commits, and the first page was already validated. -/
+structure OlderReviewPage where
+  connection : CountedPage
+  head : Option Nat
+  timely : Bool
+
+def bindOlderReviewPage (head total : Nat) (response : OlderReviewPage) : Page :=
+  if response.head = some head ∧ response.timely = true then
+    checkPageTotal total response.connection
+  else { response.connection.page with metadata := .invalid }
+
+def recoverOlderReviews (budget head total firstCursor : Nat) (first : List Nat)
+    (pages : List OlderReviewPage) : Option (List Nat) := do
+  let older ← collect budget [firstCursor] (pages.map (bindOlderReviewPage head total))
+  let combined := older ++ first
+  if combined.Nodup ∧ combined.length = total then some combined else none
+
+theorem recovered_older_reviews_have_exact_distinct_coverage
+    (budget head total cursor : Nat) (first : List Nat) (pages : List OlderReviewPage)
+    (recovered : List Nat) (h : recoverOlderReviews budget head total cursor first pages = some recovered) :
+    recovered.Nodup ∧ recovered.length = total := by
+  unfold recoverOlderReviews at h
+  cases collected : collect budget [cursor] (pages.map (bindOlderReviewPage head total)) with
+  | none => simp [collected] at h
+  | some older =>
+    have verified : ((older ++ first).Nodup ∧ (older ++ first).length = total) ∧
+        older ++ first = recovered := by simpa [collected] using h
+    simpa [verified.2] using verified.1
+
+theorem older_review_recovery_requires_terminal_within_budget
+    (budget head total cursor : Nat) (first : List Nat) (pages : List OlderReviewPage)
+    (recovered : List Nat) (h : recoverOlderReviews budget head total cursor first pages = some recovered) :
+    ∃ i, i < budget ∧
+      ((pages.map (bindOlderReviewPage head total))[i]?).map Page.metadata = some .terminal := by
+  unfold recoverOlderReviews at h
+  cases collected : collect budget [cursor] (pages.map (bindOlderReviewPage head total)) with
+  | none => simp [collected] at h
+  | some older => exact complete_has_bounded_terminal collected
+
+theorem head_or_count_drift_or_late_review_preserves_prior
+    (budget head total cursor : Nat) (first prior : List Nat) (page : OlderReviewPage)
+    (rest : List OlderReviewPage)
+    (bad : page.head ≠ some head ∨ page.timely = false ∨ page.connection.reportedTotal ≠ some total) :
+    observe prior (recoverOlderReviews (budget + 1) head total cursor first (page :: rest)) =
+      (prior, false) := by
+  rcases bad with wrongHead | late | wrongCount <;>
+    cases valid : validateNodes page.connection.page.nodes <;>
+    simp_all [recoverOlderReviews, collect, bindOlderReviewPage, checkPageTotal, observe]
+
+theorem cross_page_duplicate_review_cannot_replace_prior (prior : List Nat) :
+    observe prior (recoverOlderReviews 1 9 2 1 [1] [⟨⟨⟨.terminal, [some 1]⟩, some 2⟩, some 9, true⟩]) =
+      (prior, false) := by
+  rfl
+
+theorem repeated_older_review_cursor_cannot_replace_prior (prior : List Nat) :
+    observe prior (recoverOlderReviews 2 9 3 1 [1]
+      [⟨⟨⟨.next 1, [some 2]⟩, some 3⟩, some 9, true⟩,
+       ⟨⟨⟨.terminal, [some 3]⟩, some 3⟩, some 9, true⟩]) = (prior, false) := by
+  rfl
+
+theorem one_verified_older_page_can_recover_review_twenty_one :
+    let first := (List.range 20).map Nat.succ
+    recoverOlderReviews 1 9 21 1 first [⟨⟨⟨.terminal, [some 21]⟩, some 21⟩, some 9, true⟩] =
+      some (21 :: first) := by
+  decide
+
+theorem review_and_comment_reads_share_both_budgets
+    (scan usedReviews comments : Nat) (withinPerPr : usedReviews ≤ 3) (withinScan : usedReviews ≤ scan)
+    (allowed : comments ≤ min (scan - usedReviews) (3 - usedReviews)) :
+    usedReviews + comments ≤ scan ∧ usedReviews + comments ≤ 3 := by
+  have remainingScan := Nat.le_trans allowed (Nat.min_le_left (scan - usedReviews) (3 - usedReviews))
+  have remainingPr := Nat.le_trans allowed (Nat.min_le_right (scan - usedReviews) (3 - usedReviews))
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -944,5 +1021,12 @@ theorem interpreting_an_unreadable_window_as_absence_can_publish_a_false_removal
 #print axioms incomplete_required_reviews_keep_the_prior_result
 #print axioms independent_exclusion_survives_unreadable_reviews
 #print axioms interpreting_an_unreadable_window_as_absence_can_publish_a_false_removal
+#print axioms recovered_older_reviews_have_exact_distinct_coverage
+#print axioms older_review_recovery_requires_terminal_within_budget
+#print axioms head_or_count_drift_or_late_review_preserves_prior
+#print axioms cross_page_duplicate_review_cannot_replace_prior
+#print axioms repeated_older_review_cursor_cannot_replace_prior
+#print axioms one_verified_older_page_can_recover_review_twenty_one
+#print axioms review_and_comment_reads_share_both_budgets
 
 end StewardPrSignalPagination

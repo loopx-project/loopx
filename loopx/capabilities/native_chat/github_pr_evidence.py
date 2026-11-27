@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import configparser
 from datetime import datetime, timezone
+from functools import partial
 import json
 from pathlib import Path
 import re
 import subprocess
 from time import monotonic
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, NamedTuple, Sequence
 
 from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
 from ..pr_review_queue.review_body import (
@@ -570,10 +571,34 @@ _GITHUB_PR_LIST_STANDARD_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE * _GITHUB_PR_LIST_
 _GITHUB_PR_LIST_MAX_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE + (
     _GITHUB_PR_LIST_MAX_PAGES - 1
 ) * _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
-_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES = 3
-_GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET = (
-    _GITHUB_PR_LIST_STANDARD_CAPACITY * _GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES
+_GITHUB_PR_MAX_BACKFILL_PAGES = 3
+_GITHUB_PR_BACKFILL_BUDGET = (
+    _GITHUB_PR_LIST_STANDARD_CAPACITY * _GITHUB_PR_MAX_BACKFILL_PAGES
 )
+_GITHUB_PR_REVIEW_PAGE_SIZE = 20
+_GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
+fragment StewardReviewPage on PullRequestReviewConnection {
+  totalCount
+  pageInfo { hasPreviousPage startCursor }
+  nodes {
+    id
+    state
+    submittedAt
+    body
+    authorAssociation
+    author { __typename login }
+    commit { oid }
+  }
+}"""
+_GITHUB_PR_REVIEWS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      headRefOid
+      reviews(last: 20, before: $before) { ...StewardReviewPage }
+    }
+  }
+}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
 _GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -637,24 +662,7 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
           }
         }
         reviews(last: 20) {
-          totalCount
-          pageInfo {
-            hasPreviousPage
-          }
-          nodes {
-            id
-            state
-            submittedAt
-            body
-            authorAssociation
-            author {
-              __typename
-              login
-            }
-            commit {
-              oid
-            }
-          }
+          ...StewardReviewPage
         }
         commits(last: 1) {
           nodes {
@@ -684,7 +692,7 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
       }
     }
   }
-}"""
+}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
 
 
 def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
@@ -707,24 +715,37 @@ def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | 
     return raw_nodes
 
 
-def _read_graphql_review_window(connection: object) -> tuple[list[Mapping[str, Any]], bool]:
-    nodes = connection.get("nodes") if isinstance(connection, Mapping) else connection
-    if not isinstance(nodes, list):
-        return [], False
-    reviews = [review for review in nodes if isinstance(review, Mapping)]
-    if not isinstance(connection, Mapping) or len(reviews) != len(nodes):
-        return reviews, False
+class _ReviewPage(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    ids: set[str]
+    total_count: int
+    previous_cursor: str | None
+
+
+def _read_graphql_review_page(connection: object) -> _ReviewPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    rows = connection.get("nodes")
     page_info = connection.get("pageInfo")
     total_count = connection.get("totalCount")
     if (
-        not isinstance(page_info, Mapping)
-        or page_info.get("hasPreviousPage") is not False
+        not isinstance(rows, list) or len(rows) > _GITHUB_PR_REVIEW_PAGE_SIZE
+        or not isinstance(page_info, Mapping)
         or type(total_count) is not int
-        or total_count != len(reviews)
+        or total_count < len(rows)
     ):
-        return reviews, False
+        return None
+    has_previous = page_info.get("hasPreviousPage")
+    cursor = page_info.get("startCursor") if has_previous is True else None
+    if has_previous is not False and (
+        has_previous is not True or not isinstance(cursor, str) or not cursor.strip()
+        or not rows or total_count == len(rows)
+    ):
+        return None
     seen_ids: set[str] = set()
-    for review in reviews:
+    for review in rows:
+        if not isinstance(review, Mapping):
+            return None
         raw_id = review.get("id")
         review_id = raw_id.strip() if isinstance(raw_id, str) else ""
         commit = review.get("commit")
@@ -733,13 +754,20 @@ def _read_graphql_review_window(connection: object) -> tuple[list[Mapping[str, A
             not review_id or review_id in seen_ids
             or not isinstance(commit_oid, str) or not commit_oid.strip()
         ):
-            return reviews, False
+            return None
         seen_ids.add(review_id)
-    return reviews, True
+    return _ReviewPage(rows, seen_ids, total_count, cursor)
 
 
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
-    reviews, review_coverage_complete = _read_graphql_review_window(node.get("reviews"))
+    raw_reviews = node.get("reviews")
+    review_page = _read_graphql_review_page(raw_reviews)
+    raw_review_nodes = raw_reviews.get("nodes") if isinstance(raw_reviews, Mapping) else raw_reviews
+    reviews = [row for row in raw_review_nodes if isinstance(row, Mapping)] if isinstance(raw_review_nodes, list) else []
+    review_coverage_complete = (
+        review_page is not None and review_page.previous_cursor is None
+        and len(review_page.rows) == review_page.total_count
+    )
 
     raw_comments = node.get("comments")
     raw_comment_nodes = raw_comments.get("nodes") if isinstance(raw_comments, Mapping) else raw_comments
@@ -803,63 +831,101 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _read_older_pr_page(
+    number: int,
+    query: str,
+    cursor: str,
+    remaining_seconds: float,
+    *,
+    owner: str,
+    name: str,
+    runner: Callable[..., Any],
+    deadline: float,
+) -> Mapping[str, Any] | None:
+    try:
+        completed = runner(
+            [
+                "gh", "api", "graphql",
+                "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}",
+                "-F", f"number={number}", "-f", f"before={cursor}",
+            ],
+            capture_output=True, text=True, check=False,
+            timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
+        )
+        if monotonic() > deadline or completed.returncode != 0:
+            return None
+        payload = json.loads(completed.stdout or "{}")
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("errors"):
+        return None
+    data = payload.get("data")
+    repo = data.get("repository") if isinstance(data, Mapping) else None
+    pr_data = repo.get("pullRequest") if isinstance(repo, Mapping) else None
+    return pr_data if isinstance(pr_data, Mapping) else None
+
+
+_ReadOlderPage = Callable[[int, str, str, float], Mapping[str, Any] | None]
+
+
+def _backfill_pr_reviews(
+    number: int,
+    head_oid: str,
+    first_page: _ReviewPage,
+    *,
+    remaining_pages: int,
+    deadline: float,
+    read_older_page: _ReadOlderPage,
+) -> tuple[list[Mapping[str, Any]] | None, int]:
+    if first_page.total_count > len(first_page.rows) + remaining_pages * _GITHUB_PR_REVIEW_PAGE_SIZE:
+        return None, remaining_pages
+    rows = first_page.rows
+    ids = set(first_page.ids)
+    cursor = first_page.previous_cursor
+    seen_cursors: set[str] = set()
+    for _ in range(remaining_pages):
+        remaining_seconds = deadline - monotonic()
+        if cursor is None or cursor in seen_cursors or remaining_seconds <= 0:
+            break
+        seen_cursors.add(cursor)
+        remaining_pages -= 1
+        pr_data = read_older_page(number, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
+        if pr_data is None or type(pr_data.get("number")) is not int or pr_data["number"] != number:
+            break
+        if pr_data.get("headRefOid") != head_oid:
+            break
+        page = _read_graphql_review_page(pr_data.get("reviews"))
+        if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:
+            break
+        ids.update(page.ids)
+        rows = [*page.rows, *rows]
+        cursor = page.previous_cursor
+        if cursor is None:
+            return (rows if len(ids) == first_page.total_count else None), remaining_pages
+        if len(ids) >= first_page.total_count:
+            break
+    return None, remaining_pages
+
+
 def _backfill_pr_comments_if_needed(
     norm_node: dict[str, Any],
     summary: dict[str, Any],
     *,
-    owner: str,
-    name: str,
     number: int,
-    runner: Callable[..., Any],
     remaining_pages: int,
     deadline: float,
+    read_older_page: _ReadOlderPage,
 ) -> tuple[dict[str, Any], int]:
-    """Backfill an incomplete PR and return the remaining scan-wide allowance."""
-    for _ in range(min(_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES, remaining_pages)):
+    """Backfill an incomplete PR and return the remaining allowance."""
+    for _ in range(remaining_pages):
         if summary.get("comments_coverage_incomplete") is not True:
             break
         comment_cursor = norm_node.get("commentsStartCursor")
-        if not comment_cursor:
-            break
         remaining_seconds = deadline - monotonic()
-        if remaining_seconds <= 0:
+        if not comment_cursor or remaining_seconds <= 0:
             break
         remaining_pages -= 1
-        try:
-            completed = runner(
-                [
-                    "gh",
-                    "api",
-                    "graphql",
-                    "-f",
-                    f"query={_GITHUB_PR_COMMENTS_PAGE_QUERY}",
-                    "-f",
-                    f"owner={owner}",
-                    "-f",
-                    f"name={name}",
-                    "-F",
-                    f"number={number}",
-                    "-f",
-                    f"before={comment_cursor}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
-            )
-        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
-            break
-        if monotonic() > deadline or completed.returncode != 0:
-            break
-        try:
-            payload = json.loads(completed.stdout or "{}")
-        except (ValueError, TypeError):
-            break
-        if not isinstance(payload, Mapping) or payload.get("errors"):
-            break
-        data = payload.get("data")
-        repo = data.get("repository") if isinstance(data, Mapping) else None
-        pr_data = repo.get("pullRequest") if isinstance(repo, Mapping) else None
+        pr_data = read_older_page(number, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds)
         comments_conn = pr_data.get("comments") if isinstance(pr_data, Mapping) else None
         older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
         page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
@@ -884,6 +950,7 @@ def observe_github_repository_prs(
     runner: Callable[..., Any] = subprocess.run,
     backfill_comments: bool = False,
     select_comment_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
+    select_review_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     normalized = normalize_github_repo_slug(repo_slug)
@@ -973,6 +1040,37 @@ def observe_github_repository_prs(
             for number in sorted(raw_nodes_by_number)
         }
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
+        remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
+        review_pages_read: dict[int, int] = {}
+        read_older_page = partial(
+            _read_older_pr_page, owner=owner, name=name, runner=runner, deadline=deadline,
+        )
+        if select_review_backfill is not None:
+            review_candidates = {}
+            for number, node in normalized_nodes.items():
+                if not node["review_coverage_incomplete"] or not isinstance(node["headRefOid"], str) or not node["headRefOid"]:
+                    continue
+                first_page = _read_graphql_review_page(raw_nodes_by_number[number].get("reviews"))
+                if first_page is not None and first_page.previous_cursor is not None:
+                    review_candidates[number] = first_page
+            remaining_seconds = deadline - monotonic()
+            if review_candidates and remaining_seconds > 0:
+                selected = select_review_backfill([items[number] for number in review_candidates], remaining_seconds)
+                for number, first_page in review_candidates.items():
+                    if number not in selected or remaining_backfill_pages <= 0 or monotonic() >= deadline:
+                        continue
+                    limit = min(_GITHUB_PR_MAX_BACKFILL_PAGES, remaining_backfill_pages)
+                    node = normalized_nodes[number]
+                    reviews, remaining = _backfill_pr_reviews(
+                        number, node["headRefOid"], first_page, remaining_pages=limit,
+                        deadline=deadline, read_older_page=read_older_page,
+                    )
+                    review_pages_read[number] = limit - remaining
+                    remaining_backfill_pages -= review_pages_read[number]
+                    if reviews is not None:
+                        node["reviews"] = reviews
+                        node["review_coverage_incomplete"] = False
+                        items[number] = summarize_github_pr_signal(node)
         if backfill_comments:
             candidates = [
                 number for number, item in items.items()
@@ -982,20 +1080,21 @@ def observe_github_repository_prs(
             if select_comment_backfill is not None and candidates and remaining_seconds > 0:
                 selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)
                 candidates = [number for number in candidates if number in selected]
-            remaining_comment_pages = _GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET
             for number in candidates:
-                if remaining_comment_pages <= 0 or monotonic() >= deadline:
+                if remaining_backfill_pages <= 0 or monotonic() >= deadline:
                     break
-                items[number], remaining_comment_pages = _backfill_pr_comments_if_needed(
+                limit = min(
+                    remaining_backfill_pages, _GITHUB_PR_MAX_BACKFILL_PAGES - review_pages_read.get(number, 0),
+                )
+                items[number], remaining = _backfill_pr_comments_if_needed(
                     normalized_nodes[number],
                     items[number],
-                    owner=owner,
-                    name=name,
                     number=number,
-                    runner=runner,
-                    remaining_pages=remaining_comment_pages,
+                    remaining_pages=limit,
                     deadline=deadline,
+                    read_older_page=read_older_page,
                 )
+                remaining_backfill_pages -= limit - remaining
         return {"status": "ok", "repository": repo_slug, "items": list(items.values())}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}

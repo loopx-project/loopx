@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import json
 import subprocess
 from typing import Any
@@ -654,6 +655,124 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     if comment_seconds > 5:
         assert observation["result_hash"] == "sha256:prior-result"
         assert observation["material_change"] is False
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_reads", "covered"),
+    [
+        ("one_page", 1, True),
+        ("multiple_pages", 2, True),
+        ("head_changed", 1, False),
+        ("count_drift", 1, False),
+        ("duplicate_row", 1, False),
+        ("unreadable_row", 1, False),
+        ("unknown_terminal", 1, False),
+        ("repeated_cursor", 1, False),
+        ("late_page", 1, False),
+        ("author_excluded", 0, False),
+        ("over_budget", 0, False),
+        ("shared_budget", 1, True),
+        ("per_pr_budget", 3, True),
+    ],
+)
+def test_steward_recovers_older_reviews_within_the_scan_budget(
+    monkeypatch, case: str, expected_reads: int, covered: bool,
+) -> None:
+    from loopx.capabilities.native_chat.steward_monitor_signals import _read_repository_snapshot
+
+    head = "a" * 40
+    observed_time = datetime(2030, 1, 3, 8, 0, tzinfo=timezone.utc)
+    elapsed = 0.0
+    monkeypatch.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed)
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor_signals.now_utc", lambda: observed_time)
+    if case == "shared_budget":
+        monkeypatch.setattr("loopx.capabilities.native_chat.github_pr_evidence._GITHUB_PR_BACKFILL_BUDGET", 1)
+
+    def review(review_id: str, state: str = "COMMENTED") -> dict[str, Any]:
+        return {
+            "id": review_id, "state": state, "commit": {"oid": head},
+            "author": {"login": "maintainer" if state == "CHANGES_REQUESTED" else "visitor"},
+            "submittedAt": "2030-01-01T08:00:00Z",
+        }
+
+    newest = [review(f"new-{i}") for i in range(20)]
+    older_count = {"multiple_pages": 21, "repeated_cursor": 21, "over_budget": 61, "per_pr_budget": 60}.get(case, 1)
+    count = len(newest) + older_count
+    older = [review(f"old-{i}") for i in range(older_count - 1)]
+    older.append(review("active-rc", "CHANGES_REQUESTED"))
+    node = _graphql_node(_sample_pr(
+        number=42, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=newest,
+    ))
+    node["reviews"] = _graphql_reviews(
+        newest, totalCount=count, pageInfo={"hasPreviousPage": True, "startCursor": "recent"},
+    )
+    comments_blocked = case in {"shared_budget", "per_pr_budget"}
+    if comments_blocked:
+        node["comments"]["pageInfo"] = {"hasPreviousPage": True, "startCursor": "comments"}
+    scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {
+            "effective_verdicts": ["REQUEST_CHANGES"], "min_stalled_hours": 24,
+            "author_mode": "include", "authors": ["other" if case == "author_excluded" else "contributor"],
+        },
+    }
+    cursors = []
+
+    def runner(cmd, **kwargs):
+        nonlocal elapsed
+        cursor = next((arg.removeprefix("before=") for arg in cmd if arg.startswith("before=")), None)
+        if cursor is None:
+            payload = _graphql_page([node])
+        else:
+            review_cursors = ["recent", "earlier", "oldest"]
+            assert cursor in review_cursors, "the fixture must not read comments"
+            assert kwargs["timeout"] == 20
+            cursors.append(cursor)
+            page_index = review_cursors.index(cursor)
+            end = len(older) - 20 * page_index
+            start = max(0, end - 20)
+            page_nodes = older[start:end]
+            page_info = {"hasPreviousPage": start > 0}
+            if start > 0:
+                page_info["startCursor"] = review_cursors[page_index + 1]
+            if case == "duplicate_row":
+                page_nodes = [newest[0]]
+            elif case == "unreadable_row":
+                page_nodes = [None]
+            elif case == "unknown_terminal":
+                page_info = {"hasPreviousPage": None}
+            elif case == "repeated_cursor":
+                page_info["startCursor"] = cursor
+            elif case == "late_page":
+                elapsed = 101
+            payload = {"data": {"repository": {"pullRequest": {
+                "number": 42, "headRefOid": "b" * 40 if case == "head_changed" else head,
+                "reviews": _graphql_reviews(page_nodes, totalCount=count + (case == "count_drift"), pageInfo=page_info),
+            }}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    snapshot = _read_repository_snapshot(
+        {"task_repository": "git:github.com/org/repo"}, scope,
+        partial(observe_github_repository_prs, runner=runner), ChatConversationBindings._core,
+    )
+    assert snapshot is not None
+    assert snapshot["status"] == "ok"
+    assert len(cursors) == expected_reads
+    item = snapshot["items"][0]
+    assert item.get("review_coverage_incomplete") is (None if covered else True)
+    assert len(item["review_summary"]["exact_head_reviews"]) == (count if covered else len(newest))
+    observed = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "signal_scope": scope,
+        "observed_at": observed_time.isoformat(), "previous_hash": "sha256:prior",
+    })
+    usable = (covered and not comments_blocked) or case == "author_excluded"
+    assert observed["observation_incomplete"] is not usable
+    if not usable:
+        assert observed["result_hash"] == "sha256:prior"
+        assert observed["material_change"] is False
+    else:
+        numbers = [row["number"] for row in observed["scoped_repository_items"]]
+        assert numbers == ([] if case == "author_excluded" else [42])
 
 
 @pytest.mark.parametrize(
@@ -2089,7 +2208,8 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
         def runner(cmd, **_kw):
             assert all(not arg.startswith("before=") for arg in cmd)
             query = next(arg for arg in cmd if arg.startswith("query="))
-            review_fields = query.split("reviews(last: 20) {", 1)[1].split("nodes {", 1)[0]
+            assert "...StewardReviewPage" in query
+            review_fields = query.split("fragment StewardReviewPage on PullRequestReviewConnection {", 1)[1]
             assert "totalCount" in review_fields and "hasPreviousPage" in review_fields
             node = {**complete_node, "reviews": _graphql_reviews(reviews, **metadata)}
             return subprocess.CompletedProcess(

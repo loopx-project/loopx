@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
+from functools import partial
 import inspect
 import math
 from pathlib import Path
@@ -97,25 +98,29 @@ def _read_repository_snapshot(
     repo_slug = _github_repo_slug(todo.get("task_repository"))
     if not repo_slug:
         return None
-    if not _signal_scope_uses_stalled_age(signal_scope) or not _accepts_backfill_comments(observe_github_prs):
+    if signal_scope is None:
         return observe_github_prs(repo_slug)
-    if "select_comment_backfill" not in inspect.signature(observe_github_prs).parameters:
-        return observe_github_prs(repo_slug, backfill_comments=True)
 
-    def select_comment_backfill(items: Sequence[Mapping[str, object]], remaining_seconds: float) -> set[int]:
+    def select_backfill(source: str, items: Sequence[Mapping[str, object]], remaining_seconds: float) -> set[int]:
         latest_observation = now_utc() + timedelta(milliseconds=math.ceil(remaining_seconds * 1000))
-        planned = core("collaboration.steward.monitor.comment_backfill.plan", {
+        planned = core(f"collaboration.steward.monitor.{source}_backfill.plan", {
             "signal_scope": signal_scope,
             "repository_items": items,
             "observed_at": latest_observation.isoformat(),
         }).get("pr_numbers")
         if not isinstance(planned, list) or any(type(number) is not int or number <= 0 for number in planned):
-            raise TypeError("invalid Steward comment backfill plan")
+            raise TypeError(f"invalid Steward {source} backfill plan")
         return set(planned)
 
-    return observe_github_prs(
-        repo_slug, backfill_comments=True, select_comment_backfill=select_comment_backfill,
-    )
+    parameters = inspect.signature(observe_github_prs).parameters
+    options: dict[str, object] = {}
+    if "select_review_backfill" in parameters:
+        options["select_review_backfill"] = partial(select_backfill, "review")
+    if _signal_scope_uses_stalled_age(signal_scope) and _accepts_backfill_comments(observe_github_prs):
+        options["backfill_comments"] = True
+        if "select_comment_backfill" in parameters:
+            options["select_comment_backfill"] = partial(select_backfill, "comment")
+    return observe_github_prs(repo_slug, **options)
 
 
 def _persist_signal_snapshot(

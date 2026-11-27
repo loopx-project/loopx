@@ -1144,15 +1144,20 @@ function hasReadableRepositoryItems(items: unknown[]): items is RepositoryItem[]
   return true;
 }
 
+type RepositoryBackfillPlan = {
+  source: "comment" | "review";
+  add: (item: RepositoryItem) => void;
+};
+
 function filterScopedRepositoryItems(
   items: RepositoryItem[],
   filter: JsonObject | null,
   observedAtValue: unknown,
-  onIncompleteComments?: (item: RepositoryItem) => void,
+  plan?: RepositoryBackfillPlan,
 ): { items: RepositoryItem[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
-  if (minStalledHours !== null) {
+  if (minStalledHours !== null && plan?.source !== "review") {
     observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
     if (!Number.isFinite(observedAtMs)) {
       throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
@@ -1187,10 +1192,11 @@ function filterScopedRepositoryItems(
       if (login && authorMode === "exclude" && authors.has(login)) continue;
     }
     if (requiresCompleteReviews && item.review_coverage_incomplete === true) {
-      if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
-      // Reading comments cannot recover an incomplete review window.
+      if (plan === undefined) return { items: [], observationIncomplete: true };
+      if (plan.source === "review") plan.add(item);
       continue;
     }
+    if (plan?.source === "review") continue;
     const reviewSummary = jsonObject(item.review_summary);
     if (filter?.exclude_conflicting === true && reviewSummary?.has_review_conflict === true) continue;
     if (effectiveVerdicts !== null) {
@@ -1231,16 +1237,16 @@ function filterScopedRepositoryItems(
       const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
         || reviewSummary?.comments_coverage_incomplete === true;
       if (commentsCoverageIncomplete && (basisKnown || canBypassAge)) {
-        if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+        if (plan === undefined) return { items: [], observationIncomplete: true };
         // Backfill cannot resolve missing creator or clock evidence.
         if (!authorMembershipUncertain || (canBypassAge && basisKnown && !thresholdMet)) {
-          onIncompleteComments(item);
+          plan.add(item);
         }
         continue;
       }
       const authorReplyBypass = authorReplied && canBypassAge;
       if (!authorReplyBypass && !thresholdMet) {
-        if (!basisKnown && onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+        if (!basisKnown && plan === undefined) return { items: [], observationIncomplete: true };
         continue;
       }
       const stalledAgeMs = basisKnown ? Math.max(0, observedAtMs - basisMs) : 0;
@@ -1251,7 +1257,7 @@ function filterScopedRepositoryItems(
       };
     }
     if (authorMembershipUncertain) {
-      if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+      if (plan === undefined) return { items: [], observationIncomplete: true };
       continue;
     }
     matched.push(scopedItem);
@@ -1259,23 +1265,32 @@ function filterScopedRepositoryItems(
   return { items: matched, observationIncomplete: false };
 }
 
-/** Read-only selection at the same coverage gate used by scoped observation. */
-export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject {
+function planStewardSignalBackfill(params: JsonObject, source: RepositoryBackfillPlan["source"]): JsonObject {
   const scope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const filter = jsonObject(scope?.pr_filter);
   const items = params.repository_items;
   if (!Array.isArray(items)) {
-    throw new EffectRuntimeRequestError("comment backfill requires repository items");
+    throw new EffectRuntimeRequestError(`${source} backfill requires repository items`);
   }
   if (!hasReadableRepositoryItems(items)) {
-    throw new EffectRuntimeRequestError("comment backfill requires distinct valid PR numbers");
+    throw new EffectRuntimeRequestError(`${source} backfill requires distinct valid PR numbers`);
   }
   const prNumbers: number[] = [];
   // The planner's cutoff includes the time still available for provider reads.
-  filterScopedRepositoryItems(items, filter, params.observed_at, (item) => {
-    prNumbers.push(item.number);
+  filterScopedRepositoryItems(items, filter, params.observed_at, {
+    source,
+    add: (item) => prNumbers.push(item.number),
   });
   return { pr_numbers: prNumbers };
+}
+
+/** Read-only selection at the same coverage gate used by scoped observation. */
+export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject {
+  return planStewardSignalBackfill(params, "comment");
+}
+
+export function planStewardSignalReviewBackfill(params: JsonObject): JsonObject {
+  return planStewardSignalBackfill(params, "review");
 }
 
 const AGE_FILTER_ITEM_FIELDS = [
