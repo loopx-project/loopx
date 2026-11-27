@@ -438,6 +438,21 @@ def _digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _binding_matches_audience(
+    binding: Mapping[str, Any], *, manager_audience: bool
+) -> bool:
+    routing = binding.get("routing")
+    if isinstance(routing, Mapping):
+        is_manager = routing.get("conversation_kind") == "manager"
+    elif routing:
+        raise ValueError("team plan review audience routing is invalid")
+    else:
+        # Older Goal-only bindings predate the routing object and still select
+        # the Goal audience. Empty scalar containers retain that compatibility.
+        is_manager = False
+    return is_manager is manager_audience
+
+
 def _resolved_binding(
     *,
     registry_path: Path,
@@ -461,11 +476,9 @@ def _resolved_binding(
         if (
             isinstance(default_binding, Mapping)
             and default_binding.get("enabled") is True
-            and (
-                isinstance((default_routing := default_binding.get("routing")), Mapping)
-                and default_routing.get("conversation_kind") == "manager"
+            and _binding_matches_audience(
+                default_binding, manager_audience=manager_audience
             )
-            is manager_audience
         ):
             selected_connection_id = str(
                 default_binding.get("connection_id") or ""
@@ -474,11 +487,9 @@ def _resolved_binding(
             item
             for item in bindings_for_goal(payload, goal_id)
             if item.get("enabled") is True
-            and (
-                isinstance((item_routing := item.get("routing")), Mapping)
-                and item_routing.get("conversation_kind") == "manager"
+            and _binding_matches_audience(
+                item, manager_audience=manager_audience
             )
-            is manager_audience
         ]
         if selected_connection_id is None and candidates:
             selected_connection_id = str(
@@ -493,11 +504,7 @@ def _resolved_binding(
     )
     if raw is None:
         raise ValueError("team plan review audience binding is unavailable")
-    raw_routing = raw.get("routing")
-    if (
-        (isinstance(raw_routing, Mapping) and raw_routing.get("conversation_kind") == "manager")
-        is not manager_audience
-    ):
+    if not _binding_matches_audience(raw, manager_audience=manager_audience):
         raise ValueError("team plan review audience kind is unavailable")
     target_path = default_goal_channel_target_path(runtime_root)
     target_ref = str(raw.get("target_ref") or "")
