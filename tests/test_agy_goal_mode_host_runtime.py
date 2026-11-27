@@ -2677,4 +2677,320 @@ def test_direct_release_invocation_picks_later_matching_shim_on_path(
         )
         assert tick_help.returncode == 0, (label, tick_help.stderr)
         assert "--cli-bin" in tick_help.stdout
-        assert "--cli-bin" in tick_help.stdout
+
+
+def _make_pre_consolidation_release_snapshot(
+    release_dir: Path,
+    repo_root: Path,
+    *,
+    python_bin: Path,
+) -> None:
+    """Build a runnable pre-#9510 snapshot using ``loopx/agy_goal_mode`` (no ``hosts/agy``)."""
+    _make_runnable_release_snapshot(release_dir, repo_root, python_bin=python_bin)
+    pkg_dir = release_dir / "loopx"
+    source_pkg = repo_root / "loopx"
+
+    # Replace symlinked files that reference `hosts.agy` inside `prev_release` only.
+    for rel, old, new in (
+        ("doctor.py", "from .hosts.agy import", "from .agy_goal_mode import"),
+        ("host_loop_activation.py", "from .hosts.agy import", "from .agy_goal_mode import"),
+        ("slash_command_install.py", "from .hosts.agy import", "from .agy_goal_mode import"),
+        ("workflow_skill_install.py", "from .hosts.agy import", "from .agy_goal_mode import"),
+    ):
+        target = pkg_dir / rel
+        if target.is_symlink():
+            target.unlink()
+        target.write_text(
+            (source_pkg / rel).read_text(encoding="utf-8").replace(old, new),
+            encoding="utf-8",
+        )
+    facade_copy = pkg_dir / "hosts" / "skill_facade.py"
+    facade_copy.write_text(
+        facade_copy.read_text(encoding="utf-8").replace(
+            "from .agy import", "from ..agy_goal_mode import"
+        ),
+        encoding="utf-8",
+    )
+    caps_copy = pkg_dir / "hosts" / "capabilities.py"
+    caps_copy.write_text(
+        caps_copy.read_text(encoding="utf-8").replace(
+            '"agy": "loopx.hosts.agy"', '"agy": "loopx.agy_goal_mode"'
+        ),
+        encoding="utf-8",
+    )
+
+    # Convert canonical `hosts/agy/*.py` back to pre-#9510 `agy_goal_mode/*.py`, then delete `hosts/agy`.
+    legacy_dir = pkg_dir / "agy_goal_mode"
+    legacy_dir.unlink()
+    legacy_dir.mkdir(parents=True)
+    for name in ("__init__.py", "host_runtime.py", "launchd_watchdog.py"):
+        src = (source_pkg / "hosts" / "agy" / name).read_text(encoding="utf-8")
+        converted = (
+            src.replace("from ...command_invocation", "from ..command_invocation")
+            .replace("from ...entrypoint", "from ..entrypoint")
+            .replace("from ...file_lock", "from ..file_lock")
+            .replace("from ...chat_agent", "from ..chat_agent")
+            .replace(
+                "from ...capabilities.native_chat.antigravity_adapter",
+                "from ..capabilities.native_chat.antigravity_adapter",
+            )
+            .replace("from ..capabilities import (", "from ..hosts.capabilities import (")
+            .replace("loopx.hosts.agy.host_runtime", "loopx.agy_goal_mode.host_runtime")
+            .replace("loopx.hosts.agy", "loopx.agy_goal_mode")
+            .replace("loopx/hosts/agy", "loopx/agy_goal_mode")
+            .replace('"hosts" / "agy"', '"agy_goal_mode"')
+            .replace('"hosts"/"agy"', '"agy_goal_mode"')
+        )
+        (legacy_dir / name).write_text(converted, encoding="utf-8")
+    shutil.rmtree(pkg_dir / "hosts" / "agy")
+
+
+def test_archive_rollback_to_pre_consolidation_release_preserves_saved_commands(
+    tmp_path: Path,
+) -> None:
+    if os.name == "nt":
+        pytest.skip("requires POSIX scripts/loopx launcher")
+    repo_root = Path(__file__).resolve().parents[1]
+    node_bin = shutil.which("node")
+    assert node_bin is not None, "node is required for agent-onboard CLI probe"
+    node_dir = tmp_path / "node-only-bin"
+    node_dir.mkdir()
+    (node_dir / "node").symlink_to(node_bin)
+
+    provider_venv = tmp_path / "provider-venv"
+    venv.EnvBuilder(symlinks=True, with_pip=False).create(provider_venv)
+    provider_python = provider_venv / "bin" / "python"
+
+    home_dir = tmp_path / "fake-home"
+    releases_dir = home_dir / ".local" / "share" / "loopx" / "releases"
+    prev_release = releases_dir / "20261127T044107Z"
+    curr_release = releases_dir / "20261127T054107Z"
+    _make_pre_consolidation_release_snapshot(
+        prev_release, repo_root, python_bin=provider_python
+    )
+    _make_runnable_release_snapshot(
+        curr_release, repo_root, python_bin=provider_python
+    )
+    assert not (prev_release / "loopx" / "hosts" / "agy").exists()
+    assert (prev_release / "loopx" / "agy_goal_mode" / "host_runtime.py").is_file()
+
+    local_bin = home_dir / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    cli_shim = local_bin / "loopx"
+    cli_shim.symlink_to(curr_release / "scripts" / "loopx")
+
+    project, registry_path, runtime_root = _connected_agy_project(tmp_path)
+    poison_cwd = tmp_path / "poison"
+    (poison_cwd / "loopx").mkdir(parents=True)
+    (poison_cwd / "loopx" / "__init__.py").write_text(
+        'raise RuntimeError("poisoned cwd")\n', encoding="utf-8"
+    )
+
+    run_env = {
+        "HOME": str(home_dir),
+        "LOOPX_USAGE_PING": "0",
+        "PATH": f"{local_bin}:{node_dir}:/usr/bin:/bin",
+        "TMPDIR": str(tmp_path),
+    }
+
+    agents_dir = tmp_path / "LaunchAgents"
+    state_dir = tmp_path / "wd-state"
+    log_dir = tmp_path / "wd-logs"
+
+    activations = [
+        (
+            "curr-bootstrap",
+            [
+                str(cli_shim),
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "--runtime-root",
+                str(runtime_root),
+                "bootstrap-command-pack",
+                "--project",
+                str(project),
+                "--host-surface",
+                "antigravity-app",
+                "--goal-id",
+                "g-upg",
+                "--agent-id",
+                "worker-upg",
+            ],
+        ),
+        (
+            "curr-onboard",
+            [
+                str(cli_shim),
+                "--format",
+                "json",
+                "--registry",
+                str(registry_path),
+                "--runtime-root",
+                str(runtime_root),
+                "agent-onboard",
+                "--project",
+                str(project),
+                "--agent-type",
+                "antigravity-app",
+                "--goal-id",
+                "g-upg",
+                "--agent-id",
+                "worker-upg",
+            ],
+        ),
+    ]
+
+    saved: list[tuple[str, list[str], list[str], Path]] = []
+    for idx, (label, argv) in enumerate(activations):
+        proc = subprocess.run(
+            argv,
+            cwd=project,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
+        assert proc.returncode == 0, (label, proc.stderr, proc.stdout)
+        mut = json.loads(proc.stdout)["host_loop_activation"]["host_mutation"]
+        stop_cmd = shlex.split(mut["hooks_template"]["loopx"]["Stop"][0]["command"])
+        wd_cmd = shlex.split(mut["reboot_watchdog_command"])
+        assert stop_cmd[stop_cmd.index("--cli-bin") + 1] == str(cli_shim)
+        assert wd_cmd[wd_cmd.index("--cli-bin") + 1] == str(cli_shim)
+
+        installed = subprocess.run(
+            [
+                *wd_cmd,
+                "--no-load",
+                "--label",
+                f"com.loopx.test.rollback.{idx}",
+                "--launch-agents-dir",
+                str(agents_dir),
+                "--state-dir",
+                str(state_dir),
+                "--log-dir",
+                str(log_dir),
+            ],
+            cwd=poison_cwd,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+        assert installed.returncode == 0, (label, installed.stderr, installed.stdout)
+        plist_path = Path(str(json.loads(installed.stdout)["plist_path"]))
+        assert plist_path.is_file()
+        dry_cmd = [
+            *(arg for arg in wd_cmd if arg != "--execute"),
+            "--dry-run",
+            "--state-dir",
+            str(state_dir),
+            "--launch-agents-dir",
+            str(agents_dir),
+        ]
+        saved.append((label, stop_cmd, dry_cmd, plist_path))
+
+    # Perform native `loopx update --rollback previous` back to pre-#9510 archive layout.
+    rollback = subprocess.run(
+        [str(cli_shim), "--format", "json", "update", "--rollback", "previous"],
+        cwd=project,
+        env=run_env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert rollback.returncode == 0, (rollback.stderr, rollback.stdout)
+    rb_payload = json.loads(rollback.stdout)
+    assert rb_payload["ok"] is True, rb_payload
+    assert rb_payload["mode"] == "rollback", rb_payload
+    assert rb_payload["plan"]["selected_release_id"] == prev_release.name, rb_payload
+    assert cli_shim.resolve() == (prev_release / "scripts" / "loopx").resolve()
+
+    # All three saved entrypoints generated by curr_release must work after rollback to prev_release.
+    stop_event = json.dumps({"terminationReason": "USER_CANCELED"})
+    for label, stop_cmd, dry_cmd, plist_path in saved:
+        stop_exec = subprocess.run(
+            stop_cmd,
+            input=stop_event,
+            cwd=poison_cwd,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+        assert stop_exec.returncode == 0, (label, stop_exec.stderr)
+        assert json.loads(stop_exec.stdout) == {}
+
+        dry_exec = subprocess.run(
+            dry_cmd,
+            cwd=poison_cwd,
+            env=run_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+        assert dry_exec.returncode == 0, (label, dry_exec.stderr)
+        assert json.loads(dry_exec.stdout)["ok"] is True
+
+        parsed_plist = plistlib.loads(plist_path.read_bytes())
+        plist_env = {str(k): str(v) for k, v in parsed_plist["EnvironmentVariables"].items()}
+        plist_env["HOME"] = str(home_dir)
+        plist_env["TMPDIR"] = str(tmp_path)
+        tick_help = subprocess.run(
+            [*[str(x) for x in parsed_plist["ProgramArguments"]], "--help"],
+            cwd="/",
+            env=plist_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=15,
+            check=False,
+        )
+        assert tick_help.returncode == 0, (label, tick_help.stderr)
+        assert "loopx.agy_goal_mode.host_runtime" in tick_help.stdout
+
+    # Incomplete pre-#9510 snapshot missing host_runtime.py must still fail closed.
+    (prev_release / "loopx" / "agy_goal_mode" / "host_runtime.py").unlink()
+    failed_stop = subprocess.run(
+        saved[0][1],
+        input=stop_event,
+        cwd=poison_cwd,
+        env=run_env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        check=False,
+    )
+    assert failed_stop.returncode != 0
+    assert "release root not found" in failed_stop.stderr
+
+    failed_plist_payload = plistlib.loads(saved[0][3].read_bytes())
+    failed_plist_env = {
+        str(k): str(v) for k, v in failed_plist_payload["EnvironmentVariables"].items()
+    }
+    failed_plist_env["HOME"] = str(home_dir)
+    failed_plist_env["TMPDIR"] = str(tmp_path)
+    failed_tick = subprocess.run(
+        [*[str(x) for x in failed_plist_payload["ProgramArguments"]], "--help"],
+        cwd="/",
+        env=failed_plist_env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=15,
+        check=False,
+    )
+    assert failed_tick.returncode != 0
+    assert "release root not found" in failed_tick.stderr

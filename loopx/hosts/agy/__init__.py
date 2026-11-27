@@ -236,6 +236,7 @@ def build_antigravity_sidecar_template(
 
 
 _HOST_RUNTIME_MODULE = "loopx.hosts.agy.host_runtime"
+_LEGACY_HOST_RUNTIME_MODULE = "loopx.agy_goal_mode.host_runtime"
 _RELEASE_ROOT_BOOTSTRAP = (
     "import os,runpy,shutil,sys;from pathlib import Path;"
     "a=sys.argv[1:];"
@@ -243,13 +244,13 @@ _RELEASE_ROOT_BOOTSTRAP = (
     'next((v[10:] for v in a if v.startswith("--cli-bin=")),None));'
     'c=(shutil.which(c) or c) if c and os.sep not in c and (os.altsep is None or os.altsep not in c) and not c.startswith(".") else c;'
     "p=Path(c).expanduser().resolve() if c else None;"
-    'ok=p is not None and p.is_file() and (os.name=="nt" or os.access(p,os.X_OK)) and len(p.parents)>1 and p.parent.name in ("scripts","bin") and (p.parents[1]/"loopx"/"__init__.py").is_file() and (p.parents[1]/"loopx"/"hosts"/"agy"/"__init__.py").is_file() and (p.parents[1]/"loopx"/"hosts"/"agy"/"host_runtime.py").is_file();'
-    'not ok and sys.exit("loopx release root not found from --cli-bin");'
-    "r=p.parents[1];"
+    "r=p.parents[1] if p is not None and p.is_file() and (os.name==\"nt\" or os.access(p,os.X_OK)) and len(p.parents)>1 and p.parent.name in (\"scripts\",\"bin\") and (p.parents[1]/\"loopx\"/\"__init__.py\").is_file() else None;"
+    f'm=(("{_HOST_RUNTIME_MODULE}" if (r/"loopx"/"hosts"/"agy"/"__init__.py").is_file() and (r/"loopx"/"hosts"/"agy"/"host_runtime.py").is_file() else "") if (r/"loopx"/"hosts"/"agy").is_dir() else ("{_LEGACY_HOST_RUNTIME_MODULE}" if (r/"loopx"/"agy_goal_mode"/"__init__.py").is_file() and (r/"loopx"/"agy_goal_mode"/"host_runtime.py").is_file() else "")) if r is not None else "";'
+    'not m and sys.exit("loopx release root not found from --cli-bin");'
     'sys.path[:]=[str(r),*(x for x in sys.path if x not in ("",".",str(r)))];'
     'os.environ["LOOPX_RELEASE_ROOT"]=str(r);'
-    f'sys.argv=["{_HOST_RUNTIME_MODULE}",*a];'
-    f'runpy.run_module("{_HOST_RUNTIME_MODULE}",run_name="__main__",alter_sys=True)'
+    'sys.argv=[m,*a];'
+    'runpy.run_module(m,run_name="__main__",alter_sys=True)'
 )
 _POSIX_RELEASE_SHELL_BOOTSTRAP = (
     "set -eu\n"
@@ -297,9 +298,18 @@ _POSIX_RELEASE_SHELL_BOOTSTRAP = (
     'parent_name="${p_dir##*/}"\n'
     'r="$(cd -P "$p_dir/.." && pwd)"\n'
     'if { [ "$parent_name" != "scripts" ] && [ "$parent_name" != "bin" ]; } \\\n'
-    '   || [ ! -f "$r/loopx/__init__.py" ] \\\n'
-    '   || [ ! -f "$r/loopx/hosts/agy/__init__.py" ] \\\n'
-    '   || [ ! -f "$r/loopx/hosts/agy/host_runtime.py" ]; then\n'
+    '   || [ ! -f "$r/loopx/__init__.py" ]; then\n'
+    '  printf \'loopx release root not found from --cli-bin\\n\' >&2\n'
+    "  exit 1\n"
+    "fi\n"
+    'if [ -d "$r/loopx/hosts/agy" ]; then\n'
+    '  if [ ! -f "$r/loopx/hosts/agy/__init__.py" ] \\\n'
+    '     || [ ! -f "$r/loopx/hosts/agy/host_runtime.py" ]; then\n'
+    '    printf \'loopx release root not found from --cli-bin\\n\' >&2\n'
+    "    exit 1\n"
+    "  fi\n"
+    'elif [ ! -f "$r/loopx/agy_goal_mode/__init__.py" ] \\\n'
+    '     || [ ! -f "$r/loopx/agy_goal_mode/host_runtime.py" ]; then\n'
     '  printf \'loopx release root not found from --cli-bin\\n\' >&2\n'
     "  exit 1\n"
     "fi\n"
@@ -371,10 +381,18 @@ def _find_dangling_path_symlink(cli_bin: str) -> str | None:
 
 
 def _has_host_runtime_files(release_root: Path) -> bool:
+    if not (release_root / "loopx" / "__init__.py").is_file():
+        return False
+    hosts_agy_dir = release_root / "loopx" / "hosts" / "agy"
+    if hosts_agy_dir.is_dir():
+        return (
+            (hosts_agy_dir / "__init__.py").is_file()
+            and (hosts_agy_dir / "host_runtime.py").is_file()
+        )
+    legacy_dir = release_root / "loopx" / "agy_goal_mode"
     return (
-        (release_root / "loopx" / "__init__.py").is_file()
-        and (release_root / "loopx" / "hosts" / "agy" / "__init__.py").is_file()
-        and (release_root / "loopx" / "hosts" / "agy" / "host_runtime.py").is_file()
+        (legacy_dir / "__init__.py").is_file()
+        and (legacy_dir / "host_runtime.py").is_file()
     )
 
 
