@@ -1803,8 +1803,9 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     const decision = legacy?.decision ?? completeHostDecision(request);
     if (Object.hasOwn(request, "required_write_scope")) {
       const scope = [requireNonEmptyString(request.required_write_scope, "required Host write scope")];
-      if (!isDeepStrictEqual(object(decision.goal_boundary).write_scope, scope) ||
-          !isDeepStrictEqual(object(decision.selected_todo).required_write_scopes, scope)) {
+      const todoId = selectedWorkTodoId(decision);
+      if (!todoId || !isDeepStrictEqual(object(decision.goal_boundary).write_scope, scope) ||
+          !isDeepStrictEqual(selectedTodoRequiredWriteScopes(decision, todoId), scope)) {
         throw new EffectRuntimeRequestError("Codex write directory must match the admitted task and goal scope.");
       }
     }

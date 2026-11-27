@@ -1261,12 +1261,18 @@ assert record['result_kind'] == 'validated_completion'
     home.mkdir()
     node = shutil.which("node")
     assert node is not None
+    isolated_node = binaries / Path(node).name
+    if os.name == "nt":
+        shutil.copy2(node, isolated_node)
+    else:
+        isolated_node.symlink_to(node)
     fake, log = _fake_codex(tmp_path)
     environment = {
-        "PATH": os.pathsep.join([str(binaries), str(Path(core_python).parent), str(Path(node).parent), os.defpath]),
+        "PATH": os.pathsep.join([str(binaries), str(Path(core_python).parent)]),
         "CODEX_HOME": str(home),
         "FAKE_CODEX_LOG": str(log),
     }
+    assert shutil.which("codex", path=environment["PATH"]) is None
     missing = json.loads(_run(core_python, command, tmp_path, environment=environment, expected=1).stdout)
     assert "Codex CLI executable is unavailable" in missing["error"]
     assert not (project / ".loopx").exists() and not log.exists()

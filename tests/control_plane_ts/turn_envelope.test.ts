@@ -265,6 +265,26 @@ test("a native write directory agrees with both captured work scopes", () => {
   (source.selected_todo as JsonObject).required_write_scopes = [];
   assert.throws(() => evaluateTurnEnvelope({...request, payload: capture(), required_write_scope: scope}),
     /write directory must match the admitted task and goal scope/);
+
+  const selected = source.selected_todo as JsonObject;
+  const agent = (source.interaction_contract as JsonObject).agent_channel as JsonObject;
+  const sourceTodo = {todo_id: selected.todo_id, required_write_scopes: [scope]};
+  agent.work_context = {
+    complete: true,
+    selected_todo_ref: "selected_todo",
+    instruction: "Read full task requirements.",
+    selected_todo_text_verified: true,
+    sources: [{source: "selected_todo", content: {todo: sourceTodo}}],
+  };
+  delete selected.required_write_scopes;
+  const compact = capture();
+  assert.deepEqual(evaluateTurnEnvelope({...request, payload: compact, required_write_scope: scope}),
+    evaluateTurnEnvelope({...request, payload: compact}));
+
+  sourceTodo.required_write_scopes = ["src/**"];
+  selected.required_write_scopes = [scope];
+  assert.throws(() => evaluateTurnEnvelope({...request, payload: capture(), required_write_scope: scope}),
+    /write directory must match the admitted task and goal scope/);
 });
 
 test("Host task presentation is source-checked and keeps task and backlog facts", () => {
