@@ -63,8 +63,7 @@ if _FENCED:
 
 class Client:
     def __init__(self, **_values: Any) -> None:
-        self._bytes: bytes | None = None
-        self._generation: int | None = None
+        self._objects: dict[tuple[str, str], tuple[bytes, int]] = {}
 
     def find_workspaces(self, **_values: Any) -> dict[str, Any]:
         return {
@@ -80,15 +79,17 @@ class Client:
         }
 
     def read(self, workbench: str, path: str) -> dict[str, Any]:
-        if self._bytes is None or self._generation is None:
+        entry = self._objects.get((workbench, path))
+        if entry is None:
             raise FileNotFoundError("missing")
+        raw, generation = entry
         return {
-            "bytes": self._bytes,
+            "bytes": raw,
             "metadata": {
                 "workbench": workbench,
                 "path": path,
                 "workspace_incarnation_id": _CURRENT_INCARNATION,
-                "generation": self._generation,
+                "generation": generation,
             },
         }
 
@@ -115,19 +116,22 @@ class Client:
     def _publish(
         self, workbench: str, path: str, payload: bytes, values: dict[str, Any]
     ) -> dict[str, Any]:
+        key = (workbench, path)
+        existing = self._objects.get(key)
+        current_generation = existing[1] if existing is not None else None
         expected = values["expected_generation"]
-        if expected is None and self._generation is not None:
+        if expected is None and current_generation is not None:
             raise FileExistsError("already exists")
-        if expected is not None and expected != self._generation:
+        if expected is not None and expected != current_generation:
             raise RuntimeError("generation conflict")
-        self._generation = (self._generation or 0) + 1
-        self._bytes = payload
+        next_generation = (current_generation or 0) + 1
+        self._objects[key] = (payload, next_generation)
         return {
             "operation_id": values["operation_id"],
             "artifact_revision_id": values["artifact_revision_id"],
             "workbench": workbench,
             "path": path,
-            "generation": self._generation,
+            "generation": next_generation,
         }
 
 

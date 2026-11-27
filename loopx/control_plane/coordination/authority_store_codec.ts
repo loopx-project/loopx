@@ -10,11 +10,9 @@ export function isAuthorityJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function authorityUnicodeCompare(left: string, right: string): number {
-  // Walk code points without allocating two arrays for every sort comparison.
-  // JS's default sort compares UTF-16 units, which would change persisted
-  // revisions for supplementary characters relative to BMP characters.
-  let leftIndex = 0, rightIndex = 0;
+function compareCodePointsFrom(left: string, right: string, startIndex: number): number {
+  let leftIndex = startIndex;
+  let rightIndex = startIndex;
   while (leftIndex < left.length && rightIndex < right.length) {
     const leftPoint = left.codePointAt(leftIndex)!;
     const rightPoint = right.codePointAt(rightIndex)!;
@@ -23,6 +21,24 @@ export function authorityUnicodeCompare(left: string, right: string): number {
     rightIndex += rightPoint > 0xffff ? 2 : 1;
   }
   return leftIndex < left.length ? 1 : rightIndex < right.length ? -1 : 0;
+}
+
+export function authorityUnicodeCompare(left: string, right: string): number {
+  // Fast-path code-unit comparison below 0xD800 where UTF-16 order matches
+  // Unicode code-point order, falling back cleanly for any surrogate units.
+  const limit = Math.min(left.length, right.length);
+  for (let index = 0; index < limit; index++) {
+    const leftUnit = left.charCodeAt(index);
+    const rightUnit = right.charCodeAt(index);
+    if (leftUnit !== rightUnit) {
+      if (leftUnit < 0xd800 && rightUnit < 0xd800) return leftUnit - rightUnit;
+      return compareCodePointsFrom(left, right, index);
+    }
+    if (leftUnit >= 0xd800 && leftUnit <= 0xdfff) {
+      return compareCodePointsFrom(left, right, index);
+    }
+  }
+  return left.length - right.length;
 }
 
 export function hasExactAuthorityKeys(
@@ -111,6 +127,15 @@ export function copyAuthorityJson(value: unknown): unknown {
   return cloneAuthorityJson(value, new Set<object>(), false);
 }
 
+function sortCanonicalKeys(keys: string[]): void {
+  for (let index = 1; index < keys.length; index++) {
+    if (authorityUnicodeCompare(keys[index - 1]!, keys[index]!) > 0) {
+      keys.sort(authorityUnicodeCompare);
+      return;
+    }
+  }
+}
+
 function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: boolean): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
     return value;
@@ -147,20 +172,28 @@ function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: b
   stack.add(value);
   try {
     const keys = Object.keys(value);
-    if (!canonicalKeys) {
-      // Fill without inherited setters (including __proto__), then normalize
-      // to the same ordinary object as Object.fromEntries. No per-field tuples.
-      const copy: JsonObject = Object.create(null);
-      for (const key of keys) copy[key] = cloneAuthorityJson(value[key], stack, false);
-      return Object.setPrototypeOf(copy, Object.prototype);
+    if (canonicalKeys && keys.length > 1) {
+      sortCanonicalKeys(keys);
     }
-    keys.sort(authorityUnicodeCompare);
-    return Object.fromEntries(
-      keys.map((key) => [
-        key,
-        cloneAuthorityJson(value[key], stack, canonicalKeys),
-      ]),
-    );
+    // Define own data properties on an ordinary object (avoiding Object.create(null)
+    // + Object.setPrototypeOf dictionary transitions) while preventing inherited
+    // setters such as __proto__ via Object.defineProperty.
+    const copy: JsonObject = {};
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index]!;
+      const cloned = cloneAuthorityJson(value[key], stack, canonicalKeys);
+      if (key in Object.prototype) {
+        Object.defineProperty(copy, key, {
+          value: cloned,
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
+      } else {
+        copy[key] = cloned;
+      }
+    }
+    return copy;
   } finally {
     stack.delete(value);
   }

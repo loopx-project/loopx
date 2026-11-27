@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {spawnSync} from "node:child_process";
+import {spawn} from "node:child_process";
 import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
@@ -227,6 +227,24 @@ test("native and imported complete graphs audit all history across SQLite checkp
   } finally { await rm(root, {recursive: true, force: true}); }
 });
 
+function runConsumer(kind: "file" | "sqlite", path: string, checkpoint: string): Promise<{status: number | null; stdout: string; stderr: string}> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath,
+      ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", "--input-type=module",
+        "-e", consumerRead, kind, path, checkpoint],
+      {cwd: fileURLToPath(new URL("../../", import.meta.url)), stdio: ["ignore", "pipe", "pipe"], windowsHide: true});
+    let stdout = "", stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("consumerRead timed out")); }, 30000);
+    child.once("error", err => { clearTimeout(timer); reject(err); });
+    child.once("close", status => { clearTimeout(timer); resolve({status, stdout, stderr}); });
+  });
+}
+
+test.suite("archive audit and consumer recovery", { concurrency: 4 }, () => {
 for (const provider of ["file", "sqlite"] as const) {
   test(`${provider}: lagging consumer resumes after process restart and explicit archive roundtrip`, async () => {
     const root = await mkdtemp(join(tmpdir(), "consumer-recovery-"));
@@ -264,12 +282,9 @@ for (const provider of ["file", "sqlite"] as const) {
       assert.deepEqual(consumed.transactions.map(({provider_revision, ...row}) => row), expected);
       await writeFile(checkpoint, JSON.stringify({store_identity: identity.store_identity, after_cursor: "63"}));
       for (let i = 64; i <= 131; i++) revision = await append(source, revision, i);
-      const consume = (kind: "file" | "sqlite", path: string) => spawnSync(process.execPath,
-        ["--no-warnings", "--experimental-sqlite", "--experimental-strip-types", "--input-type=module",
-          "-e", consumerRead, kind, path, checkpoint],
-        {cwd: fileURLToPath(new URL("../../", import.meta.url)), encoding: "utf8", timeout: 30000});
+      const consume = (kind: "file" | "sqlite", path: string) => runConsumer(kind, path, checkpoint);
       const check = async (kind: "file" | "sqlite", path: string, store: AuthorityStore) => {
-        const before = await store.loadAuthority(), child = consume(kind, path);
+        const before = await store.loadAuthority(), child = await consume(kind, path);
         assert.equal(child.status, 0, child.stderr);
         const result = JSON.parse(child.stdout);
         assert.equal(result.cursor, String(expected.length));
@@ -288,7 +303,7 @@ for (const provider of ["file", "sqlite"] as const) {
       const migrated = makeStore(other, migratedPath), backup = join(root, "backup");
       const archive = await exportAuthorityArchive(source, "goal", backup, {pageSize: 17});
       await restoreAuthorityArchive(backup, migrated, archive.archive_sha256);
-      const wrongLineage = consume(other, migratedPath);
+      const wrongLineage = await consume(other, migratedPath);
       assert.notEqual(wrongLineage.status, 0);
       assert.match(wrongLineage.stderr, /another store lineage/);
       // A verified complete archive supplies the explicit cursor mapping. The
@@ -314,3 +329,4 @@ for (const provider of ["file", "sqlite"] as const) {
     } finally { await rm(root, {recursive: true, force: true}); }
   });
 }
+});

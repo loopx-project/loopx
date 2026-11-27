@@ -70,13 +70,26 @@ export function canonicalTodoDomainRecord(value: unknown, label = "Todo domain r
   return record as TodoDomainRecord;
 }
 
+const FROZEN_CONTRACT_ALLOWED = new WeakMap<RecordContract, ReadonlySet<string>>();
+
+function allowedFieldsForContract(contract: RecordContract): ReadonlySet<string> {
+  if (Object.isFrozen(contract) && Object.isFrozen(contract.fields)) {
+    const cached = FROZEN_CONTRACT_ALLOWED.get(contract);
+    if (cached !== undefined) return cached;
+    const set = new Set(contract.fields);
+    FROZEN_CONTRACT_ALLOWED.set(contract, set);
+    return set;
+  }
+  return new Set(contract.fields);
+}
+
 export function canonicalCoordinationRecord(
   value: unknown,
   contract: RecordContract,
   label: string,
 ): JsonObject {
   const record = canonicalAuthorityObject(value, label);
-  const allowed = new Set(contract.fields);
+  const allowed = allowedFieldsForContract(contract);
   const unknownRequired = contract.required_fields.filter(
     (field) => !allowed.has(field),
   );
@@ -85,15 +98,20 @@ export function canonicalCoordinationRecord(
       `${label} required fields are absent from fields: ${unknownRequired.join(", ")}`,
     );
   }
-  const unexpected = Object.keys(record)
-    .filter((field) => !allowed.has(field))
-    .sort((left, right) => left.localeCompare(right));
+  const unexpected: string[] = [];
+  for (const field of Object.keys(record)) {
+    if (!allowed.has(field)) unexpected.push(field);
+  }
   if (unexpected.length > 0) {
+    unexpected.sort((left, right) => left.localeCompare(right));
     throw new AuthorityStoreProtocolError(
       `${label} has unversioned fields: ${unexpected.join(", ")}`,
     );
   }
-  const missing = contract.required_fields.filter((field) => !(field in record));
+  const missing: string[] = [];
+  for (const field of contract.required_fields) {
+    if (!(field in record)) missing.push(field);
+  }
   if (missing.length > 0) {
     throw new AuthorityStoreProtocolError(
       `${label} omits required fields: ${missing.join(", ")}`,
@@ -102,10 +120,12 @@ export function canonicalCoordinationRecord(
   // Preserve the generic contract's legacy `in` selection for inherited fields.
   // Shipped Todo contracts need no reconstruction: normalization already owns
   // every allowed field and nested container in canonical order.
-  if (contract.fields.some((field) => !Object.hasOwn(record, field) && field in record)) {
-    return canonicalAuthorityObject(Object.fromEntries(
-      contract.fields.flatMap((field) => field in record ? [[field, record[field]]] : []),
-    ), label);
+  for (const field of contract.fields) {
+    if (!Object.hasOwn(record, field) && field in record) {
+      return canonicalAuthorityObject(Object.fromEntries(
+        contract.fields.flatMap((entry) => entry in record ? [[entry, record[entry]]] : []),
+      ), label);
+    }
   }
   return record;
 }

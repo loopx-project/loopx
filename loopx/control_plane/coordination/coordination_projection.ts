@@ -374,6 +374,41 @@ export class CoordinationProjectionRead {
   }
 }
 
+function assembleReducedProjection(
+  value: JsonObject,
+  nextTodos: JsonObject[],
+  nextLeases: JsonObject[],
+  readModel: JsonObject | undefined,
+): JsonObject {
+  const rest: JsonObject = {};
+  for (const key of Object.keys(value)) {
+    if (key === "todos" || key === "leases" || key === "todo_read_model") continue;
+    const entry = value[key];
+    if (key in Object.prototype) {
+      Object.defineProperty(rest, key, { value: entry, writable: true, enumerable: true, configurable: true });
+    } else {
+      rest[key] = entry;
+    }
+  }
+  const canonicalRest = canonicalAuthorityObject(rest, "coordination projection");
+  canonicalRest.todos = nextTodos;
+  canonicalRest.leases = nextLeases;
+  if (readModel !== undefined) {
+    canonicalRest.todo_read_model = readModel;
+  }
+  const keys = Object.keys(canonicalRest).sort(authorityUnicodeCompare);
+  const assembled: JsonObject = {};
+  for (const key of keys) {
+    const entry = canonicalRest[key];
+    if (key in Object.prototype) {
+      Object.defineProperty(assembled, key, { value: entry, writable: true, enumerable: true, configurable: true });
+    } else {
+      assembled[key] = entry;
+    }
+  }
+  return assembled;
+}
+
 /**
  * Apply one already-authorized coordination transaction as a pure projection
  * reduction. Domain transition policy stays with the LoopX kernel; this
@@ -394,6 +429,7 @@ export function reduceCoordinationProjection(
   const todos = new Map(current.todos);
   const leases = new Map(current.leases);
   const mutatedRecords = new Set<string>();
+  const mutatedTodoIds: string[] = [];
 
   const claimMutationTarget = (kind: "todo" | "lease", todoId: string): void => {
     const target = `${kind}:${todoId}`;
@@ -403,6 +439,7 @@ export function reduceCoordinationProjection(
       );
     }
     mutatedRecords.add(target);
+    if (kind === "todo") mutatedTodoIds.push(todoId);
   };
 
   for (const [index, mutation] of mutations.entries()) {
@@ -424,25 +461,24 @@ export function reduceCoordinationProjection(
     }
   }
   const nextTodos = sortedIds(todos.keys()).map((todoId) => todos.get(todoId)!);
-  const readModel = previous && coordinationTodoReadModel(nextTodos, previous.readModel.schema_version);
-  const historicalContract = previous?.historicalContract;
-  // Ordinary writes should keep a released declaration readable by its
-  // original consumer. A write that uses newer fields needs the current one.
-  if (readModel && historicalContract && !usesFieldsOutsideTodoContract(nextTodos, historicalContract)) {
-    readModel.contract_fields = [...historicalContract.fields];
+  const nextLeases = sortedIds(leases.keys()).map((todoId) => leases.get(todoId)!);
+  let readModel: JsonObject | undefined;
+  if (previous !== undefined) {
+    for (const todoId of mutatedTodoIds) {
+      const updated = todos.get(todoId);
+      if (updated !== undefined) {
+        canonicalTodoRecord(updated, `coordination Todo read record ${todoId}`);
+      }
+    }
+    readModel = coordinationTodoReadModel(nextTodos, previous.readModel.schema_version);
+    const historicalContract = previous.historicalContract;
+    // Ordinary writes should keep a released declaration readable by its
+    // original consumer. A write that uses newer fields needs the current one.
+    if (historicalContract && !usesFieldsOutsideTodoContract(nextTodos, historicalContract)) {
+      readModel.contract_fields = [...historicalContract.fields];
+    }
   }
-  const reduced = canonicalAuthorityObject({
-    ...value,
-    todos: nextTodos,
-    leases: sortedIds(leases.keys()).map((todoId) => leases.get(todoId)!),
-    ...(readModel === undefined
-      ? {}
-      : { todo_read_model: readModel }),
-  }, "coordination projection");
-  if (value.todo_read_model !== undefined) {
-    validateCoordinationTodoReadModel(reduced, expectedGoalId);
-  }
-  return reduced;
+  return assembleReducedProjection(value, nextTodos, nextLeases, readModel);
 }
 
 function mutationTarget(mutation: CoordinationProjectionMutation, index: number): string {
@@ -476,9 +512,6 @@ export function prepareCoordinationProjectionCommit(
     goalId,
     input.mutations,
   );
-  if (currentProjection.todo_read_model !== undefined) {
-    validateCoordinationTodoReadModel(nextProjection, goalId);
-  }
   const targets = input.mutations.map(mutationTarget).sort(authorityUnicodeCompare);
   const mutationKinds = input.mutations.map((mutation) => mutation.kind).sort(
     authorityUnicodeCompare,
