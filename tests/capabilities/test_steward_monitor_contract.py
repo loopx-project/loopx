@@ -1179,9 +1179,9 @@ def test_witness_backoff_stat_count_stays_o1_across_historical_turns(
         load_calls: list[str] = []
         orig_load = store.load_session
 
-        def tracked_load(target_sid: str, _orig=orig_load, _calls=load_calls) -> dict[str, object] | None:
-            _calls.append(target_sid)
-            return _orig(target_sid)
+        def tracked_load(target_sid: str) -> dict[str, object] | None:
+            load_calls.append(target_sid)
+            return cast("dict[str, object] | None", orig_load(target_sid))
 
         monkeypatch.setattr(store, "load_session", tracked_load)
 
@@ -1306,3 +1306,96 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     clock["now"] = 1006.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert todos_calls == [1000.0, 1004.0, 1006.0]
+
+
+def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
+
+    bindings = _StubBindings(tmp_path / "bindings.json", bindings_rows=[])
+    ctrl = _StubController(tmp_path, bindings=bindings)
+    store = ctrl.store
+    monkeypatch.setattr(store, "list_sessions", lambda: [])
+
+    target_goals: list[dict[str, object]] = []
+    unrelated_goals: list[dict[str, object]] = [
+        {"id": f"goal-extra-{idx:03d}", "description": f"extra-{idx}"}
+        for idx in range(64)
+    ]
+    corrupt_sids: list[str] = []
+    for idx in range(4):
+        gid = f"goal-target-{idx}"
+        target_goals.append({"id": gid, "description": f"target-{idx}-v1"})
+        created = store.create_session(
+            goal_id=gid, agent_id="steward", adapter_kind="codex-app-server",
+            upstream_thread_id=f"th-r4-{idx}",
+        )
+        sid = str(created["session_id"])
+        corrupt_sids.append(sid)
+        store._session_path(sid).write_bytes(b"\xff")
+        bindings.bindings_rows.append({
+            "binding_id": f"b-r4-{idx}",
+            "enabled": True,
+            "managed_actor": {"goal_id": gid, "agent_id": "steward", "session_id": sid},
+        })
+
+    _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
+
+    load_calls: list[str] = []
+    orig_load = store.load_session
+
+    def tracked_load(target_sid: str) -> dict[str, object] | None:
+        load_calls.append(target_sid)
+        return cast("dict[str, object] | None", orig_load(target_sid))
+
+    monkeypatch.setattr(store, "load_session", tracked_load)
+
+    reg_read_bytes: list[int] = []
+    orig_read_bytes = Path.read_bytes
+
+    def tracked_read_bytes(self: Path) -> bytes:
+        data = orig_read_bytes(self)
+        if self == ctrl.registry_path:
+            reg_read_bytes.append(len(data))
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+
+    # Initial failing tick across 4 corrupt sessions reads registry.json at most once.
+    steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
+    assert load_calls == corrupt_sids
+    assert len(reg_read_bytes) == 1
+
+    # Over 4 unchanged idle ticks, registry.json is read 0 times (0 bytes) with 0 premature retries.
+    reg_read_bytes.clear()
+    before_idle = len(load_calls)
+    for _ in range(4):
+        clock["now"] += 3.0
+        steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
+    assert reg_read_bytes == []
+    assert len(load_calls) == before_idle
+
+    # Mutating an unrelated Goal reloads registry.json at most once and preserves all 4 active backoffs.
+    unrelated_goals[0]["description"] = "extra-0-edited"
+    _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
+    clock["now"] += 3.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
+    assert len(reg_read_bytes) == 1
+    assert len(load_calls) == before_idle
+    clock["now"] += 3.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
+    assert len(reg_read_bytes) == 1
+    assert len(load_calls) == before_idle
+
+    # Mutating target Goal #2 reloads once and immediately invalidates ONLY binding #2's witness.
+    reg_read_bytes.clear()
+    target_goals[2]["description"] = "target-2-edited"
+    _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
+    clock["now"] += 3.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
+    assert len(reg_read_bytes) == 1
+    assert load_calls[before_idle:] == [corrupt_sids[2]]

@@ -14,7 +14,9 @@ import time
 from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
+from ...registry import registry_goals
 from .steward_monitor_turns import (
     FOLLOWUP_TARGET_PREFIX,
     StewardControllerProtocol,
@@ -45,6 +47,8 @@ class _HashDigest(Protocol):
 
 
 _WitnessRecord = tuple[str, tuple[Path, ...]]
+_StatVersion = tuple[int, int, int, int]
+_RegistryCacheEntry = tuple[_StatVersion | None, dict[str, str], str | None]
 _V = TypeVar("_V")
 
 
@@ -92,16 +96,56 @@ def _update_path_stat_digest(digest: _HashDigest, label: str, path: object) -> N
         digest.update(b":missing;")
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        default=lambda item: dict(item) if isinstance(item, Mapping) else str(item),
+    ).encode("utf-8")
+
+
 def _canonical_json_digest(digest: _HashDigest, label: str, value: object) -> None:
     digest.update(label.encode("utf-8"))
-    payload = json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        default=lambda item: dict(item) if isinstance(item, Mapping) else str(item),
+    digest.update(b":")
+    digest.update(_canonical_json_bytes(value))
+    digest.update(b";")
+
+
+def _registry_goal_witness_token(
+    controller: StewardControllerProtocol, registry_path: Path, goal_id: str
+) -> str:
+    try:
+        st = registry_path.stat()
+        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        stat_version = None
+    except OSError as exc:
+        return f"stat_err:{type(exc).__name__}"
+    reg_cache: dict[str, _RegistryCacheEntry] = _ensure_dict_cache(
+        controller, "_steward_monitor_registry_cache"
     )
-    digest.update(f":{payload};".encode("utf-8"))
+    key = str(registry_path)
+    cached = reg_cache.get(key)
+    if cached is not None and cached[0] == stat_version:
+        _, goal_digests, error_tag = cached
+        return error_tag if error_tag is not None else goal_digests.get(goal_id, "missing")
+    if len(reg_cache) >= 8 and key not in reg_cache:
+        reg_cache.clear()
+    if stat_version is None:
+        reg_cache[key] = (None, {}, None)
+        return "missing"
+    try:
+        registry = load_registry(registry_path)
+        goal_digests = {
+            str(goal["id"]): hashlib.sha256(_canonical_json_bytes(goal)).hexdigest()
+            for goal in registry_goals(registry)
+            if isinstance(goal, Mapping) and goal.get("id") is not None
+        }
+        reg_cache[key] = (stat_version, goal_digests, None)
+        return goal_digests.get(goal_id, "missing")
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        error_tag = f"err:{type(exc).__name__}"
+        reg_cache[key] = (stat_version, {}, error_tag)
+        return error_tag
 
 
 def _collect_session_turn_targets(
@@ -154,10 +198,8 @@ def _session_storage_witness(
         _update_path_stat_digest(digest, f"turn_target:{target.name}", target)
     registry_path = getattr(controller, "registry_path", None)
     if isinstance(registry_path, Path) and goal_id:
-        try:
-            _canonical_json_digest(digest, f"registry_goal:{goal_id}", load_goal_from_registry(registry_path, goal_id))
-        except (OSError, ValueError, KeyError, TypeError, RuntimeError):
-            _update_path_stat_digest(digest, f"registry_err:{goal_id}", registry_path)
+        token = _registry_goal_witness_token(controller, registry_path, goal_id)
+        digest.update(f"registry_goal:{goal_id}:{token};".encode("utf-8"))
     if binding is not None:
         _canonical_json_digest(digest, "binding", binding)
     coord_root = getattr(controller, "coordination_runtime_root", None)
@@ -530,21 +572,13 @@ def _process_managed_session(
                 return
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             _record_failure(
-                cache,
-                failures,
-                calendar_fail_key,
+                cache, failures, calendar_fail_key,
                 "A managed calendar task is unavailable; its original window and work are retained",
-                exc,
-                stage="managed_calendar",
-                now_mono=now_mono,
+                exc, stage="managed_calendar", now_mono=now_mono,
             )
     report_fail_key = _failure_key("report.session", session_id)
-    if (
-        report_config.get("enabled") is True
-        and report_config.get("profile_preset") == "weekly-progress"
-        and report_config.get("route_ref") == route_ref
-        and not _failure_active(cache, report_fail_key, now_mono)
-    ):
+    if (report_config.get("enabled") is True and report_config.get("profile_preset") == "weekly-progress"
+            and report_config.get("route_ref") == route_ref and not _failure_active(cache, report_fail_key, now_mono)):
         from .steward_reports import ManagedSessionReports
 
         try:
@@ -555,23 +589,15 @@ def _process_managed_session(
                 return
         except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
             _record_failure(
-                cache,
-                failures,
-                report_fail_key,
+                cache, failures, report_fail_key,
                 "A managed Session report is unavailable; its original window and other work are retained",
-                exc,
-                stage="managed_report",
-                now_mono=now_mono,
+                exc, stage="managed_report", now_mono=now_mono,
             )
     watch_fail_key = _failure_key("watch.session", session_id)
     if _failure_active(cache, watch_fail_key, now_mono):
         return
     try:
-        rows = [
-            row
-            for row in monitor.todos(request["actor"])
-            if row.get("target_key") == "managed-session-watch." + session_id
-        ]
+        rows = [row for row in monitor.todos(request["actor"]) if row.get("target_key") == "managed-session-watch." + session_id]
         if len(rows) != 1:
             if rows:
                 raise ValueError("the original managed Session watch is ambiguous")
@@ -580,33 +606,22 @@ def _process_managed_session(
         todo = rows[0]
         if not monitor_todo_is_due(todo):
             _clear_failure(cache, failures, watch_fail_key)
-            if (
-                todo.get("status") == "open"
-                and todo.get("next_due_at")
-                and not _any_session_failure_active(cache, session_id, now_mono)
-            ):
+            if todo.get("status") == "open" and todo.get("next_due_at") and not _any_session_failure_active(cache, session_id, now_mono):
                 remaining = _remaining_due_seconds(todo["next_due_at"])
                 cache[key] = time.monotonic() + min(60, max(0, remaining))
             return
         accepted, created = service.submit(
-            session_id,
-            agent_id=str(managed_agent_id),
-            operation_id=monitor_turn_id(todo),
-            todo_id=todo["todo_id"],
-            monitor_deadline=todo["next_due_at"],
+            session_id, agent_id=str(managed_agent_id), operation_id=monitor_turn_id(todo),
+            todo_id=todo["todo_id"], monitor_deadline=todo["next_due_at"],
         )
         _clear_failure(cache, failures, watch_fail_key)
         if created:
             changed.append(_coerce_dict(accepted))
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         _record_failure(
-            cache,
-            failures,
-            watch_fail_key,
+            cache, failures, watch_fail_key,
             "A managed Session watch is unavailable; its original task and deadline are retained",
-            exc,
-            stage="managed_session_watch",
-            now_mono=now_mono,
+            exc, stage="managed_session_watch", now_mono=now_mono,
         )
 
 
