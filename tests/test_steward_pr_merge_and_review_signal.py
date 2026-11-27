@@ -398,6 +398,13 @@ def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     assert exact["url"] == "https://github.com/org/repo/pull/42#pullrequestreview-998877"
 
 
+def _review_page_stdout(rows, link=None) -> str:
+    fields = ["HTTP/2 200 OK", "Content-Type: application/json"]
+    if link is not None:
+        fields.append(f"Link: {link}")
+    return "\r\n".join(fields) + "\r\n\r\n" + json.dumps(rows)
+
+
 @pytest.mark.parametrize(("views", "rest", "expected"), [
     ([("view-a", "offset", None)], [(None, "utc", "101")], {"view-a": "101"}),
     ([("view-a", "offset", None)], [("view-a", "later", "101"), (None, "offset", "102")], {"view-a": "101"}),
@@ -440,7 +447,12 @@ def test_inspect_github_pull_request_correlates_only_unique_review_links(views, 
         if cmd[:3] == ["gh", "pr", "view"]:
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(pr_row))
         if cmd[:2] == ["gh", "api"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(rest_rows))
+            if "--include" not in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(rest_rows))
+            if "page=2" in cmd[2].split("&"):
+                raise subprocess.TimeoutExpired(cmd, _kwargs["timeout"])
+            link = '<https://api.github.com/repositories/42/pulls/42/reviews?page=2>; rel="next"' if len(rest_rows) == 100 else None
+            return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(rest_rows, link))
         raise AssertionError(cmd)
 
     inspected = inspect_github_pull_request("org/repo", 42, runner=runner)
@@ -452,6 +464,96 @@ def test_inspect_github_pull_request_correlates_only_unique_review_links(views, 
     assert {review["id"]: review["submitted_at"] for review in reviews} == {
         node: timestamps[stamp] for node, stamp, _ in views
     }
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_inspect_github_pull_request_reads_later_ids_before_correlating_fallback(ambiguous) -> None:
+    head = "d" * 40
+    stamp = "2030-01-01T08:30:00Z"
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": lookup}, "state": "COMMENTED", "commit": {"oid": head},
+         "submittedAt": stamp}
+        for node, lookup in (("fallback", "fixture-author"), ("later-id", "fixture-maintainer"))
+    ])
+    candidate = {"html_url": prefix + "101", "user": {"login": "fixture-author"},
+                 "state": "COMMENTED", "commit_id": head, "submitted_at": stamp}
+    later_page = [{"node_id": "later-id", "html_url": prefix + "102"}]
+    if ambiguous:
+        later_page.append({**candidate, "html_url": prefix + "103"})
+    paths = []
+
+    def runner(cmd, **_kwargs):
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(row))
+        assert cmd[:2] == ["gh", "api"]
+        paths.append(cmd[2])
+        if len(paths) == 2:
+            return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(
+                later_page, '<https://api.github.com/repositories/42/pulls/42/reviews?page=1>; rel="prev"',
+            ))
+        if "--include" not in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([candidate]))
+        return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(
+            [candidate], '<https://api.github.com/repositories/42/pulls/42/reviews?page=2>; rel="next"',
+        ))
+
+    result = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert result is not None
+    assert {review["id"]: review["url"] for review in result["review_summary"]["exact_head_reviews"]} == {
+        "fallback": None if ambiguous else prefix + "101", "later-id": prefix + "102",
+    }
+    assert paths == ["repos/org/repo/pulls/42/reviews?per_page=100&page=1",
+                     "repos/org/repo/pulls/42/reviews?per_page=100&page=2"]
+
+
+@pytest.mark.parametrize(("stop", "expected_reads"), [
+    ("page-cap", 3), ("timeout", 2), ("wall-budget", 1), ("malformed-link", 1), ("body-only", 1),
+])
+def test_inspect_github_pull_request_keeps_direct_links_when_pages_are_incomplete(
+    stop: str, expected_reads: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "d" * 40
+    stamp = "2030-01-01T08:30:00Z"
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit": {"oid": head}, "submittedAt": review_time}
+        for node, review_time in (("direct", "2030-01-01T08:30:01Z"), ("fallback", stamp))
+    ])
+    first_page = [
+        {"node_id": "direct", "html_url": prefix + "101"},
+        {"html_url": prefix + "102", "user": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit_id": head, "submitted_at": stamp},
+    ]
+    clock, budgets = 0.0, []
+    monkeypatch.setattr(github_pr_evidence, "monotonic", lambda: clock, raising=False)
+
+    def runner(cmd, **kwargs):
+        nonlocal clock
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(row))
+        assert cmd[:2] == ["gh", "api"]
+        budgets.append(kwargs["timeout"])
+        if stop == "timeout" and len(budgets) == 2:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        clock += 10 if stop == "wall-budget" else 2
+        candidates = first_page if len(budgets) == 1 else []
+        if stop == "body-only" or "--include" not in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(candidates))
+        link = "incomplete header" if stop == "malformed-link" else (
+            f'<https://api.github.com/repositories/42/pulls/42/reviews?page={len(budgets) + 1}>; rel="next"'
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(candidates, link))
+
+    result = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert result is not None
+    assert {review["id"]: review["url"] for review in result["review_summary"]["exact_head_reviews"]} == {
+        "direct": prefix + "101", "fallback": None,
+    }
+    assert budgets == [10.0, 8.0, 6.0][:expected_reads]
 
 
 def _steward_with_repo(steward_comp, tmp_path):
