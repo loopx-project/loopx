@@ -379,6 +379,13 @@ def execute_turn_run_once(
                         "summary": f"independent native semantic replan preview rejected ({reason_code})",
                         "recovery_kind": "replan_required",
                     }
+                except ValueError:
+                    return {
+                        "status": "failed",
+                        "validator_kind": "callback",
+                        "summary": "independent native semantic replan preview rejected invalid candidate",
+                        "recovery_kind": "repair_required",
+                    }
                 return {"status": "passed" if passed else "failed", "validator_kind": "callback",
                     "summary": "independent native semantic replan preview " + ("passed" if passed else "failed"),
                     **({"recovery_kind": "repair_required"} if not passed else {})}

@@ -425,90 +425,95 @@ def advancement_turn_id(todo: Mapping[str, object]) -> str:
     )
 
 
-def _zero_write_advancement_response(
-    turn: Mapping[str, object],
-    *,
-    now: float | None = None,
-) -> Mapping[str, object] | None:
-    """Return native_loopx payload only when a completed Turn wrote zero Steward outputs and passed cooldown."""
+_PRE_DISPATCH_ADVANCEMENT_ERROR_CODES = frozenset({
+    "resume_failed", "runtime_unavailable", "model_auth_unavailable",
+})
+
+
+def _past_precommit_cooldown(turn: Mapping[str, object], now: float | None) -> bool:
+    """Return True when a finished turn has passed the precommit retry cooldown."""
     from .steward_turn import _iso_timestamp_seconds
 
+    completed_ts = _iso_timestamp_seconds(turn.get("completed_at"))
+    if completed_ts is None:
+        return False
+    return (time.time() if now is None else now) - completed_ts >= ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+
+
+def _zero_write_advancement_response(
+    turn: Mapping[str, object], *, now: float | None = None,
+) -> Mapping[str, object] | None:
+    """Return native_loopx payload only when a completed Turn wrote zero Steward outputs and passed cooldown."""
     if turn.get("status") != "completed":
         return None
     resp = turn.get("response")
     if not isinstance(resp, Mapping):
         return None
-    if (
-        resp.get("steward_owner_report_queued")
-        or resp.get("context_handoff")
-        or resp.get("steward_user_action_receipts")
-    ):
+    if resp.get("steward_owner_report_queued") or resp.get("context_handoff") or resp.get("steward_user_action_receipts"):
         return None
     nl = resp.get("native_loopx")
     if not isinstance(nl, Mapping) or nl.get("ok") is not False:
         return None
-    completed_ts = _iso_timestamp_seconds(turn.get("completed_at"))
-    if completed_ts is None:
-        return None
-    current_ts = time.time() if now is None else now
-    if current_ts - completed_ts < ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS:
-        return None
-    return nl
+    return nl if _past_precommit_cooldown(turn, now) else None
+
+
+def _is_zero_effect_pre_dispatch_failed_advancement_turn(
+    turn: Mapping[str, object], *, now: float | None = None,
+) -> bool:
+    """Allow bounded retry only for unstarted outer Chat preparation failures before worker launch."""
+    return (
+        turn.get("status") == "failed"
+        and turn.get("origin") == "native_loopx"
+        and turn.get("loopx_execution") is True
+        and turn.get("error_code") in _PRE_DISPATCH_ADVANCEMENT_ERROR_CODES
+        and all(turn.get(k) is None for k in ("response", "upstream_turn_id", "started_at", "first_event_at"))
+        and turn.get("delta_count") == 0
+        and _past_precommit_cooldown(turn, now)
+    )
 
 
 def _is_precommit_retryable_advancement_turn(
-    turn: Mapping[str, object],
-    *,
-    now: float | None = None,
+    turn: Mapping[str, object], *, now: float | None = None,
 ) -> bool:
     """Allow one delayed retry only when zero kernel/Steward writes occurred."""
+    if _is_zero_effect_pre_dispatch_failed_advancement_turn(turn, now=now):
+        return True
     nl = _zero_write_advancement_response(turn, now=now)
-    if nl is None or nl.get("status") != "failed":
+    if nl is None:
         return False
-    if nl.get("result_kind") not in {"validation_failed", "host_failure"}:
+    effects = nl.get("effects")
+    if nl.get("error_code") == "turn_todo_selection_deferred":
+        refusal = nl.get("selection_rejection")
+        return (
+            isinstance(refusal, Mapping) and refusal.get("state") == "deferred"
+            and refusal.get("reason_code") == "autonomous_replan"
+            and isinstance(effects, Mapping) and effects.get("host_invoked") is True
+            and all(effects.get(k) is False for k in ("state_written", "quota_spent", "scheduler_acknowledged"))
+        )
+    if nl.get("status") != "failed" or nl.get("result_kind") not in {"validation_failed", "host_failure"}:
         return False
     receipt = nl.get("receipt")
-    commit_eligibility = (
-        receipt.get("commit_eligibility") if isinstance(receipt, Mapping) else None
-    ) or {}
-    effects = nl.get("effects") or {}
-    if not isinstance(commit_eligibility, Mapping) or not isinstance(effects, Mapping):
+    elig = (receipt.get("commit_eligibility") if isinstance(receipt, Mapping) else None) or {}
+    eff = effects or {}
+    if not isinstance(elig, Mapping) or not isinstance(eff, Mapping):
         return False
-    if not (
-        commit_eligibility.get("writeback") is False
-        or effects.get("state_written") is False
-    ):
-        return False
-    return not (
-        effects.get("state_written") is True
-        or effects.get("quota_spent") is True
-        or effects.get("scheduler_acknowledged") is True
+    return (elig.get("writeback") is False or eff.get("state_written") is False) and not any(
+        eff.get(k) is True for k in ("state_written", "quota_spent", "scheduler_acknowledged")
     )
 
 
 def _is_zero_effect_selection_deferred_advancement_turn(
-    turn: Mapping[str, object],
-    *,
-    now: float | None = None,
+    turn: Mapping[str, object], *, now: float | None = None,
 ) -> bool:
     """Allow bounded retry only for zero-effect pre-host selection deferrals."""
     nl = _zero_write_advancement_response(turn, now=now)
-    if nl is None or nl.get("error_code") != "turn_todo_selection_deferred":
-        return False
-    refusal = nl.get("selection_rejection")
-    if not isinstance(refusal, Mapping) or refusal.get("state") != "deferred":
-        return False
-    effects = nl.get("effects")
-    if not isinstance(effects, Mapping):
-        return False
-    return not any(
-        effects.get(key) is not False
-        for key in (
-            "host_invoked",
-            "state_written",
-            "quota_spent",
-            "scheduler_acknowledged",
-        )
+    refusal = nl.get("selection_rejection") if nl is not None else None
+    effects = nl.get("effects") if nl is not None else None
+    return (
+        nl is not None and nl.get("error_code") == "turn_todo_selection_deferred"
+        and isinstance(refusal, Mapping) and refusal.get("state") == "deferred"
+        and isinstance(effects, Mapping)
+        and not any(effects.get(k) is not False for k in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"))
     )
 
 

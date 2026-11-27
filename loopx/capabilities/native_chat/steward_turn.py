@@ -573,14 +573,13 @@ class StewardTurnHost:
                 return None
             current_guard, journal_status = None, journal.get("status")
             if (journal_status == "failed" and journal.get("result_kind") == "validation_failed"
-                    and journal.get("validation_stage") == "host_result_contract"):
+                    and journal.get("validation_stage") in {"host_result_contract", "task_postcondition"}):
                 current_guard = self._cleared_replan_guard(actor)
                 if current_guard is None:
                     return None
             elif journal_status != "stopped":
                 return None
-            # Transport canonical observations to the shared typed admission
-            # owner.
+            # Transport canonical observations to the shared typed admission owner.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
