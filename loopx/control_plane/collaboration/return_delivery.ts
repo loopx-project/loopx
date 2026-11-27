@@ -454,6 +454,23 @@ function returnAuthorityBlocker(command: ReturnCommand): string | null {
   return null;
 }
 
+function sourceChatReturnKind(command: ReturnCommand, state: JsonObject, reply: JsonObject): "private" | "native_loopx" | null {
+  const session = requireJsonObject(command.facts.session, "source session");
+  const scope = resolveConversationScope(session);
+  if (scope.private_conversation) return "private";
+  const priorStatus = (state.admission as JsonObject | undefined)?.prior_status ?? state.status;
+  if (!scope.bound_steward || state.attempt != null || state.provider_receipt != null
+      || priorStatus === "verification_required" || state.reply_verified === true
+      || Array.isArray(reply.attachments) && reply.attachments.length > 0) return null;
+  const turn = requireJsonObject(command.facts.turn, "source turn");
+  const route = requireJsonObject(command.facts.route, "source route");
+  // The source grant verifies the registered ingress against this Turn's
+  // origin and bound owner. Scheduled native work has the original App
+  // transcript as its return destination even when the Session is bound to Lark.
+  return turn.origin === "native_loopx" && route.kind !== "peer" && session.session_id === route.session_id
+    && turn.client_turn_id === route.client_turn_id && !returnAuthorityBlocker(command) ? "native_loopx" : null;
+}
+
 async function reconcilePrivateReturn(command: ReturnCommand, state: JsonObject): Promise<JsonObject> {
   if (!privateReadbackCandidate(command, state) || command.facts.error) return returnResponse();
   try {
@@ -462,7 +479,7 @@ async function reconcilePrivateReturn(command: ReturnCommand, state: JsonObject)
     const turn = requireJsonObject(command.facts.turn, "original Turn");
     const route = requireJsonObject(command.facts.route, "original route");
     if (reply.phase !== "conclusion" || route.kind === "peer"
-        || !resolveConversationScope(session).private_conversation
+        || !sourceChatReturnKind(command, state, reply)
         || session.session_id !== route.session_id || turn.client_turn_id !== route.client_turn_id
         || !isDeepStrictEqual(state.goal_ref, reply.goal_ref)
         || state.result_key !== undefined && state.result_key !== command.key
@@ -511,10 +528,10 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const previous = reply.previous_result_key == null ? null
     : await readReturnRecord(join(command.folder, "replies", String(reply.request_id), `${reply.previous_result_key}.delivery.json`));
   if (!collaborationResultDeliveryReady({ result: reply, previous_delivery: previous }).ready) return returnResponse();
-  const privateConversation = resolveConversationScope(requireJsonObject(command.facts.session, "session")).private_conversation;
+  const sourceChatReturn = sourceChatReturnKind(command, state, reply);
   const admission = state.admission == null ? null : requireJsonObject(state.admission, "return admission");
   if (command.exact) {
-    if (state.status === "admitted" && state.attempt == null && !privateConversation) {
+    if (state.status === "admitted" && state.attempt == null && !sourceChatReturn) {
       await writeDeliveryState(command, { status: "explicit_unverified", error: "provider_delivery_unverified", goal_ref: reply.goal_ref });
       return returnResponse();
     }
@@ -533,7 +550,7 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
     await writeDeliveryState(command, state);
   }
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
-  return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
+  return returnResponse({ action: sourceChatReturn ? "private" : verify ? "verify" : "send",
     text: returnTranscriptText(reply, command.exact), message_id: returnMessageId(String(command.request.request_id), command.key),
     attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
     revision: deliveryRevision(state), token: (state.admission as JsonObject | undefined)?.token ?? null });
@@ -610,7 +627,7 @@ async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<
     if (command.exact || !available || !pendingDelivery(command, state) || state.attempt != null
         || source.inspected.interim_superseded || requireJsonObject(command.facts.route, "route").kind === "peer"
         || returnAuthorityBlocker(command)
-        || resolveConversationScope(requireJsonObject(command.facts.session, "session")).private_conversation) {
+        || sourceChatReturnKind(command, state, source.reply)) {
       throw new EffectRuntimeRequestError("external return dispatch is unavailable");
     }
     // A restarted worker must not POST again without a provider locator.
@@ -629,16 +646,25 @@ async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<
     return returnResponse({ revision: deliveryRevision(checkpoint), token: command.request.token });
   }
   if (command.request.phase !== "settle") throw new EffectRuntimeRequestError("unsupported return delivery phase");
+  const outcome = requireJsonObject(command.request.outcome, "return outcome");
   const settled = deliveryOutcome(command, state);
-  if (requireJsonObject(command.request.outcome, "return outcome").kind === "private"
-      && !resolveConversationScope(requireJsonObject(command.facts.session, "source session")).private_conversation) {
-    throw new EffectRuntimeRequestError("external return requires a provider outcome");
+  if (outcome.kind === "private") {
+    const local = sourceChatReturnKind(command, state, source.reply);
+    if (!local) throw new EffectRuntimeRequestError("external return requires a provider outcome");
+    if (local === "native_loopx") {
+      const turn = requireJsonObject(command.facts.turn, "original Turn");
+      const route = requireJsonObject(command.facts.route, "original route");
+      const message = requireJsonObject(outcome.original_message, "original App return");
+      const proof = observeTerminalReturn(message, String(settled.message_id), turn.turn_id,
+        state, source.reply, route, command.exact);
+      if (!proof) throw new EffectRuntimeRequestError("original App return readback does not match");
+      settled.delivered_at = proof.delivered_at;
+    }
   }
   if (settled.status === "explicit_unverified" && state.attempt != null) settled.attempt = state.attempt;
   if (command.exact) settled.goal_ref = requireJsonObject(command.facts.entry, "request").goal_ref;
   if (source.reply.result_key !== undefined) settled.result_key = source.reply.result_key;
   if (!isDeepStrictEqual(settled, state)) await writeDeliveryState(command, settled);
-  const outcome = requireJsonObject(command.request.outcome, "return outcome");
   return returnResponse({ processed: command.exact || settled.status === "delivered"
     || ["error", "conflict", "sender_unavailable"].includes(String(outcome.kind)) ? 1 : 0,
     observe_verified: command.exact && settled.status === "delivered" && settled.reply_verified === true });

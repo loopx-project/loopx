@@ -216,6 +216,70 @@ def _manager_request(root: Path, registry: Path, *, channel="manager", complete=
     return store, session, receipt
 
 
+def test_exact_scheduled_steward_return_recovers_in_original_app(tmp_path, monkeypatch):
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.capabilities.manager_context import _hash
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    registry = _create_source_registry(tmp_path)
+    state_file = tmp_path / "active.md"
+    state_file.write_text("# Isolated delivery Goal\n")
+    initialize_canonical_authority(tmp_path, "delivery",
+        build_todo_runtime_shadow_projection(goal_id="delivery", todos=[], handoff_mode="soft_claim"),
+        state_path=state_file, provider="sqlite")
+    context = {
+        "kind": "bound_steward", "project_ref": "a" * 24, "workspace_path": str(tmp_path),
+        "audience": "bound_owner", "grant": "portfolio_read", "binding_id": "b" * 24, "source_ref": "c" * 24,
+        "provider_ref": "d" * 24, "operator_ref": "e" * 24, "goal_ids": [],
+    }
+    store = ChatSessionStore(tmp_path)
+    channel = f"manager.external.native.{context['binding_id']}.{context['source_ref']}"
+    session = store.create_session(goal_id="loopx-manager", agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="fixture", channel_id=channel, steward_context=context)
+    session_id = session["session_id"]
+    accepted = store.accept_managed_turn(session_id, client_turn_id="native-advance",
+        message="Advance the currently admitted native LoopX work.", origin="native_loopx", loopx_execution=True)
+    turn = accepted.turn
+    target = {"goal_id": "delivery", "agent_id": "builder"}
+    _write(_root(tmp_path) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {
+        channel: {"sender_ids": [context["operator_ref"]], "targets": [target]},
+    }})
+    register_ingress(tmp_path, session_id=session_id, client_turn_id=turn["client_turn_id"], channel=channel,
+        sender_id=context["operator_ref"], message=turn["message"],
+        source_id="native_steward:steward:advance", origin="native_loopx")
+    receipt = deliver(tmp_path, registry, session=session, turn=turn, request=target, source_store=store)
+    turn_id, rid, goal_ref = turn["turn_id"], receipt["request_id"], receipt["goal_ref"]
+    store.update_turn(session_id, turn_id, status="completing",
+        response={"message": "Delegated", "context_handoff_receipt": receipt})
+    store.finalize_managed_turn_completion(session_id, turn_id)
+    acknowledge(tmp_path, "delivery", "builder", rid, "adopt", "Accepted",
+        registry=registry, caller_goal_ref=goal_ref)
+    report(tmp_path, "delivery", "builder", rid, "conclusion", "Verified the original delivery.",
+        registry=registry, caller_goal_ref=goal_ref)
+    message_id = f"handoff.{_hash([rid, 'conclusion'])}"
+    saved = store.append_message(session_id, role="agent", turn_id=turn_id, origin="manager_followup",
+        text=f"Verified the original delivery.\n\n处理结论 · builder · 委托 {rid[:8]}", message_id=message_id)
+    state_path = _root(tmp_path) / "replies" / rid / "conclusion.delivery.json"
+    _write(state_path, {"status": "retry_pending", "attempts": 1,
+        "error": "return_transport_unavailable", "goal_ref": goal_ref})
+
+    restarted = ChatSessionStore(tmp_path)
+    assert drain(tmp_path, registry, restarted, None) == 1
+    after = state_path.read_bytes()
+    state = json.loads(after)
+    assert state["status"] == "delivered" and state["goal_ref"] == goal_ref
+    assert state["message_id"] == message_id and state["delivered_at"] == saved["created_at"]
+    assert "provider_receipt" not in state and "reply_verified" not in state
+    snapshot = _http_snapshot(tmp_path, registry, session_id)
+    returned = [row for row in snapshot["messages"] if row.get("origin") == "manager_followup"]
+    assert len(returned) == 1 and returned[0]["message_id"] == saved["message_id"]
+    assert returned[0]["text"] == saved["text"] and returned[0]["turn_id"] == turn_id
+    assert returned[0]["return_delivery"]["status"] == "delivered"
+    assert drain(tmp_path, registry, restarted, None) == 0
+    assert state_path.read_bytes() == after
+
+
 def _external_manager_request(root: Path, registry: Path):
     store = ChatSessionStore(root)
     session = store.create_session(

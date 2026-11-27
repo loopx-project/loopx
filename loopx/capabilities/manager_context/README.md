@@ -226,6 +226,11 @@ so a separate Chat store cannot split it from the recipient policy and inbox.
 The exact execution catalog and handoff dispatch use that same resolved root;
 private Session/Turn files remain in the existing Chat store.
 Controllers predating that root retain the existing Chat-parent layout.
+Scheduled native Steward text results can complete in the original App
+conversation after the host verifies the saved message identity, Turn and body.
+That receipt records the App transcript delivery. An external provider attempt
+keeps its own verification, including an unavailable transport or a pending
+provider message locator.
 External on-demand context retries one invalidated local inventory snapshot when
 the exact Goal instances and current audience scope remain unchanged. This is
 a fresh read in the same Turn, without another model thread or request replay.

@@ -211,10 +211,11 @@ def test_production_pump_returns_to_original_private_source_after_restart(privat
     assert capture.read_bytes() == before_host_calls
 
 
-def test_scheduled_native_return_retains_original_chat_when_provider_transport_is_unavailable(private_return):
+@pytest.mark.parametrize("case", ["new", "recover", "conflict", "revoked"])
+def test_scheduled_native_return_verifies_original_app_transcript(private_return, case):
     sender, session, _, original_route, _, provider, transport, replies = private_return
-    from loopx.capabilities.manager_context import register_ingress
-    from loopx.capabilities.manager_context.roundtrip import project_chat_return_deliveries
+    from loopx.capabilities.manager_context import _hash, register_ingress
+    from loopx.capabilities.manager_context.roundtrip import ReturnTransportUnavailable, project_chat_return_deliveries
 
     controller = transport.core.controller
     store = controller.store
@@ -238,22 +239,60 @@ def test_scheduled_native_return_retains_original_chat_when_provider_transport_i
     acknowledge(sender.root, target["goal_id"], target["agent_id"], rid, "adopt", "Check the original request")
     conclusion = "The result remains available in the original Chat conversation."
     report(sender.root, target["goal_id"], target["agent_id"], rid, "conclusion", conclusion)
+    result_folder = _root(sender.root) / "replies" / rid
+    message_id = f"handoff.{_hash([rid, 'conclusion'])}"
+    saved = None
+    if case in {"recover", "conflict"}:
+        # Model the old pump stopping after the original append, when the
+        # provider adapter could not deliver a scheduled result.
+        adapter_text = f"{conclusion}\n\n协作回复 · {target['agent_id']} · 委托 {rid[:8]}"
+        saved = store.append_message(session_id, role="agent", turn_id=turn["turn_id"],
+            text=adapter_text if case == "recover" else "A different result",
+            origin="manager_followup", message_id=message_id)
+        _write(result_folder / "conclusion.delivery.json", {
+            "status": "retry_pending", "error": "return_transport_unavailable", "attempts": 1,
+        })
+    if case == "revoked":
+        _write(_root(sender.root) / "policy.json", {"schema_version": POLICY_SCHEMA, "sources": {}})
+    else:
+        adapter_route = _read_json(_root(sender.root) / "roundtrips" / f"{rid}.json")
+        with pytest.raises(ReturnTransportUnavailable):
+            sender(adapter_route, session, turn, conclusion)
     provider_count = len(provider.calls)
 
-    drain(sender.root, controller.registry_path, store, sender)
-    drain(sender.root, controller.registry_path, store, sender,
-          now=datetime.now(timezone.utc) + timedelta(minutes=10))
+    wrong_host = ChatSessionStore(store.root.parent / "unrelated-chat")
+    assert drain(sender.root, controller.registry_path, wrong_host, sender) == 0
+    assert wrong_host.messages(session_id) == []
+    assert drain(sender.root, controller.registry_path, store, sender) == 1
 
     state = reply_status(sender.root, route)[0]
-    assert state["status"] == "retry_pending" and state["error"] == "return_transport_unavailable", state
+    restarted = ChatSessionStore(store.root.parent)
+    assert drain(sender.root, controller.registry_path, restarted, sender,
+                 now=datetime.now(timezone.utc) + timedelta(minutes=10)) == (1 if case == "revoked" else 0)
     assert replies == [] and len(provider.calls) == provider_count
-    messages = project_chat_return_deliveries(sender.root, session_id, store.messages(session_id), source_store=store)
+    messages = project_chat_return_deliveries(sender.root, session_id, restarted.messages(session_id), source_store=restarted)
     followups = [item for item in messages if item.get("origin") == "manager_followup"]
+    if case == "revoked":
+        assert state["status"] == "retry_pending"
+        assert state["error"] == "return_authorization_unavailable"
+        assert not followups
+        return
+    if case == "conflict":
+        assert state["status"] == "explicit_unverified"
+        assert state["error"] == "manager_return_payload_conflict"
+        assert len(followups) == 1 and followups[0]["text"] == saved["text"]
+        return
+    assert state["status"] == "delivered"
+    delivery = _read_json(result_folder / "conclusion.delivery.json")
+    assert delivery["message_id"] == message_id
+    assert "provider_receipt" not in delivery and "reply_verified" not in delivery
     assert len(followups) == 1
     assert followups[0]["turn_id"] == turn["turn_id"]
     assert conclusion in followups[0]["text"]
-    assert followups[0]["return_delivery"]["status"] == "retry_pending"
-    assert followups[0]["return_delivery"]["error"] == "return_transport_unavailable"
+    assert followups[0]["return_delivery"]["status"] == "delivered"
+    assert delivery["delivered_at"] == followups[0]["created_at"]
+    if saved is not None:
+        assert followups[0]["created_at"] == saved["created_at"]
 
 
 @pytest.mark.parametrize("revoke_before_recovery", [False, True])
