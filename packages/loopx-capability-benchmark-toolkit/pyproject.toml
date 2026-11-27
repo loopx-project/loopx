@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-capability-benchmark-toolkit"
+dynamic = ["version", "dependencies"]
+description = "Optional Benchmark Toolkit for the matching LoopX Core release."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+dependencies = {file = "requires-core.txt"}
+
+[tool.setuptools.packages.find]
+include = ["loopx.capabilities.benchmark_toolkit", "loopx.capabilities.benchmark_toolkit.*", "loopx.cli_commands"]
+
+[tool.setuptools.package-data]
+"*" = ["*.ts", "*.json", "*.mjs", "*.js", "*.md", "*.toml"]

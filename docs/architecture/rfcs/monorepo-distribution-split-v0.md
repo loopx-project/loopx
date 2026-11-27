@@ -399,6 +399,17 @@ objective. Moving a file while retaining its shim does not reduce that count;
 combining unrelated responsibilities to meet it is not a successful refactor.
 Measure representative change locality and installation cost separately.
 
+Standalone Core holds the benchmark catalog and its referenced four-arm
+contract. The matching [Benchmark Toolkit wheel](../../../packages/loopx-capability-benchmark-toolkit/README.md)
+owns the existing execution modules and CLI adapters. The capability catalog
+reports availability from matching installed files, and ordinary discovery
+leaves execution unloaded. An explicit benchmark command or scoped Workspace
+analysis request uses the original toolkit. Installing or removing the wheel
+preserves the existing task and analysis records. The ordinary distribution
+continues to bundle the same implementation. This qualifies a D2 package
+boundary for the tested toolkit journey. Benchmark-family execution, public
+release and model-visible overhead have separate acceptance.
+
 ### State model and schema
 
 No canonical record changes. The only new durable artefact is the architecture

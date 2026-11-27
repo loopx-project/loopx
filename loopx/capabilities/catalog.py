@@ -6,8 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from ..extensions.runtime import extension_catalog_entries
-from ..python_install_owner import RESEARCH_DISTRIBUTION
-from .benchmark_toolkit.catalog_entry import BENCHMARK_TOOLKIT_CATALOG_ENTRY
+from ..python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION, RESEARCH_DISTRIBUTION
+from .benchmark_toolkit.catalog_entry import (
+    BENCHMARK_TOOLKIT_CATALOG_ENTRY,
+    BENCHMARK_TOOLKIT_INSTALL_HINT,
+    benchmark_toolkit_installed,
+)
 from .integration_branch.catalog_entry import INTEGRATION_BRANCH_CATALOG_ENTRY
 from .repository_change_window.catalog_entry import (
     REPOSITORY_CHANGE_WINDOW_CATALOG_ENTRY,
@@ -158,6 +162,16 @@ def _record_for_installed_capability(
     *,
     builtin_cli_present: bool,
 ) -> Mapping[str, object]:
+    if record is BENCHMARK_TOOLKIT_CATALOG_ENTRY and not builtin_cli_present:
+        installed = benchmark_toolkit_installed(builtin_cli_present=False)
+        if not any(provider["id"] == BENCHMARK_TOOLKIT_DISTRIBUTION for provider in registry.providers()):
+            registry.register_provider(
+                {"id": BENCHMARK_TOOLKIT_DISTRIBUTION, "origin": "builtin", "installed": installed}
+            )
+        updated = dict(record) | {"provider_id": BENCHMARK_TOOLKIT_DISTRIBUTION}
+        if not installed:
+            updated["next_real_step"] = BENCHMARK_TOOLKIT_INSTALL_HINT
+        return updated
     if record is AGENT_TURN_RECALL_CATALOG_ENTRY:
         installed = agent_turn_recall_installed(builtin_cli_present=builtin_cli_present)
         hint = RECALL_INSTALL_HINT

@@ -315,6 +315,9 @@ def test_required_merge_gate_workflow_is_not_suppressed_by_path_filters() -> Non
     ("package-smoke", ["loopx/cli.py"], False),
     ("package-smoke", ["README.md"], False),
     ("package-smoke", ["packages/loopx-core/prepare.py"], True),
+    ("package-smoke", ["apps/presentation/dashboard/src/App.tsx"], True),
+    ("package-smoke", ["scripts/chat_bundle.py"], True),
+    ("package-smoke", ["tests/test_core_benchmark_distribution.py"], True),
     ("package-smoke", ["loopx/extensions/runtime.py"], True),
     ("package-smoke", ["pyproject.toml"], True),
     ("desktop-release-artifacts", ["loopx/cli.py"], False),
@@ -396,3 +399,28 @@ def test_nightly_schedules_exist_and_release_publication_never_fires_on_schedule
 
     package_smoke = workflow("package-smoke")
     assert package_smoke["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+
+def test_package_smoke_prepares_each_distribution_output_once_before_workspace() -> None:
+    steps = workflow("package-smoke")["jobs"]["core"]["steps"]
+    prepare_outputs: list[str] = []
+    for step in steps:
+        normalized = re.sub(r"\\\n\s*", " ", str(step.get("run", "")))
+        for line in normalized.splitlines():
+            if "packages/loopx-core/prepare.py" in line:
+                match = re.search(r'--output\s+"([^"]+)"|--output\s+(\S+)', line)
+                assert match is not None, line
+                prepare_outputs.append(match.group(1) or match.group(2))
+    assert len(prepare_outputs) == len(set(prepare_outputs)), prepare_outputs
+    assert prepare_outputs.count("$RUNNER_TEMP/benchmark-source") == 1
+    toolkit_indices = [
+        idx for idx, step in enumerate(steps)
+        if "loopx-capability-benchmark-toolkit" in str(step.get("run", ""))
+    ]
+    workspace_indices = [
+        idx for idx, step in enumerate(steps)
+        if "loopx-workspace" in str(step.get("run", ""))
+    ]
+    assert len(toolkit_indices) == 1
+    assert len(workspace_indices) == 1
+    assert toolkit_indices[0] < workspace_indices[0]

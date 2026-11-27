@@ -995,6 +995,12 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			print_payload=print_payload,
 		)
+	elif args.command == "benchmark":
+		from .cli_commands.benchmark_dispatch import handle_benchmark_command
+
+		result = handle_benchmark_command(
+			args, registry_path=registry_path, print_payload=print_payload, output_format=output_format,
+		)
 	elif args.command == "agent-turn-recall":
 		from .capabilities.agent_turn_recall.cli import handle_agent_turn_recall_command
 
@@ -1053,11 +1059,14 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 
 def _available_selected_commands() -> frozenset[str]:
 	from .capabilities.agent_turn_recall.catalog_entry import agent_turn_recall_installed
+	from .capabilities.benchmark_toolkit.catalog_entry import benchmark_toolkit_installed
 	from .capabilities.deep_research.catalog_entry import research_workflows_installed
 	from .capabilities.issue_fix.catalog_entry import issue_fix_workflow_installed
 	from .capabilities.pr_review_queue.catalog_entry import pull_request_review_installed
 
 	commands = set(_SELECTED_COMMANDS)
+	if benchmark_toolkit_installed(builtin_cli_present=False):
+		commands.add("benchmark")
 	if agent_turn_recall_installed(builtin_cli_present=False):
 		commands.add("agent-turn-recall")
 	if pull_request_review_installed(builtin_cli_present=False):
@@ -1176,6 +1185,25 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_command(command: str | None, raw_argv: list[str]) -> int:
+	if command == "benchmark" and _standalone_core():
+		from .capabilities.benchmark_toolkit.catalog_entry import (
+			BENCHMARK_TOOLKIT_INSTALL_HINT, benchmark_toolkit_installed,
+		)
+
+		parser, subparsers = build_cli_parser()
+		if not benchmark_toolkit_installed(builtin_cli_present=False):
+			parser.error(f"benchmark is unavailable in the standalone core. {BENCHMARK_TOOLKIT_INSTALL_HINT}")
+		try:
+			from .cli_commands.benchmark_dispatch import register_benchmark_command_group
+
+			register_benchmark_command_group(subparsers, add_subcommand_format)
+		except ModuleNotFoundError as exc:
+			if not (exc.name or "").startswith(
+				("loopx.capabilities.benchmark_toolkit", "loopx.cli_commands.benchmark_")
+			):
+				raise
+			parser.error(f"benchmark is unavailable in the standalone core. {BENCHMARK_TOOLKIT_INSTALL_HINT}")
+		return _dispatch_selected(parse_cli_args(parser, raw_argv), raw_argv)
 	if command in {"agent-turn-recall", "pr-review", "issue-fix"} and _standalone_core():
 		parser, subparsers = build_cli_parser()
 		if command == "agent-turn-recall":
