@@ -65,7 +65,15 @@ export function projectBlockedSuccessorWaitObservation(request: JsonObject): Jso
     return {required: projectSchedulerArbitration(request).scheduled_recheck_after_seconds === undefined};
   }
   const wait = exactBlockedSuccessorWait(request);
-  return {required: !!wait && pendingAutomaticSuccessor(request, wait) === null};
+  const receipt = jsonObject(request.heartbeat_receipt);
+  // The unbound receipt records this Turn's single observation. Monitor
+  // history retains the frontier identity for cross-Turn evidence.
+  const observed = receipt?.schema_version === "heartbeat_quota_receipt_v0" &&
+    typeof receipt.event_id === "string" && Boolean(receipt.event_id) &&
+    ["committed", "replayed"].includes(String(receipt.status)) &&
+    !("settlement_identity" in receipt) && !("pending_action_selection" in receipt) &&
+    ["appended", "replayed"].includes(String(receipt.stall_observation));
+  return {required: !!wait && !observed && pendingAutomaticSuccessor(request, wait) === null};
 }
 
 export const INTERACTION_CONTRACT_SCHEMA_VERSION =

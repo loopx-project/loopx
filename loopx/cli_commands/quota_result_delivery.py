@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..control_plane.agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..control_plane.quota.error_codes import (
     QuotaCommandValidationError,
     QuotaDecisionTransportError,
@@ -318,6 +319,27 @@ def _publish_quota_result(
             heartbeat_turn_id=heartbeat_turn_id,
             attach_recall=False,
         )
+    receipt = payload.get("heartbeat_receipt")
+    if (
+        args.quota_command == "should-run"
+        and context is not None
+        and payload.get("ok") is True
+        and payload.get("effective_action") == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
+        and isinstance(receipt, Mapping)
+        and heartbeat_turn_id is not None
+        and receipt.get("turn_instance_id") == heartbeat_turn_id
+        and receipt.get("stall_observation") in ("appended", "replayed")
+    ):
+        # The original guard was built before the no-spend receipt existed.
+        from ..control_plane.work_items.interaction_contract import build_interaction_contract
+
+        payload["interaction_contract"] = build_interaction_contract(
+            payload, available_capabilities=args.available_capabilities,
+            scheduler_execution_context=context.scheduler_context,
+            turn_instance_id=heartbeat_turn_id,
+            registry_path=str(registry_path), runtime_root=str(context.runtime_root),
+        )
+
     # Compose optional capability guidance after recovery has chosen the plan,
     # before capture/compaction. The quota decision owner stays capability-neutral.
     interaction_contract = payload.get("interaction_contract")
