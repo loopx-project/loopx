@@ -1926,7 +1926,9 @@ def test_missed_report_keeps_failed_turn_and_returns_only_the_latest_window(
     assert done["loopx_request"]["todo_id"] != original["loopx_request"]["todo_id"]
     assert done["loopx_request"]["report_window_id"] == latest["window_id"]
     assert "report_quota_recovery" not in done["loopx_request"]
-    assert json.loads((cadence.parent / "superseded-cadence" / (old["window_id"] + ".json")).read_text()) == previous
+    active = json.loads(cadence.read_text())
+    predecessor = cadence.parent / "superseded-cadence" / f"{active['supersedes']}.json"
+    assert json.loads(predecessor.read_text()) == previous
     assert [path.read_bytes() for path in old_artifacts] == original_bytes
     assert failure_proof.read_bytes() == retained_bytes
     assert reports.delivery_current(owner, old) is False
@@ -2329,9 +2331,10 @@ def test_empty_items_readback_recovers_on_same_turn_unless_explicitly_contradict
         assert reports.current_window(ctx["owner"])[1]["window_id"] == old["window_id"]
 
 
-def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path):
+@pytest.mark.parametrize("previous_archive_uses_window_id", [False, True])
+def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path, previous_archive_uses_window_id):
     from datetime import timezone
-    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, missed_cadence_bounds
+    from loopx.capabilities.periodic_report.cadence_journal import admit_cadence_window, cadence_journal_path, missed_cadence_bounds
 
     schedule = {"schema_version": "periodic_report_schedule_v0", "schedule_id": "daily-report",
         "timezone": "Asia/Shanghai", "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "start_date": "2001-01-01"}
@@ -2346,10 +2349,26 @@ def test_consecutive_missed_windows_keep_the_first_unreported_deadline(tmp_path)
     first = admit(1)
     attempt_directory(tmp_path, first).mkdir(parents=True)
     middle = admit(3)
+    journal = cadence_journal_path(tmp_path, "example")
+    archives = journal.parent / "superseded-cadence"
+    if previous_archive_uses_window_id:
+        # The old writer named the predecessor file after its window.
+        active = json.loads(journal.read_text())
+        (archives / f"{active['supersedes']}.json").rename(archives / f"{first['window_id']}.json")
+        active["supersedes"] = first["window_id"]
+        journal.write_text(json.dumps(active))
     attempt_directory(tmp_path, middle).mkdir(parents=True)
     latest = admit(5)
     assert missed_cadence_bounds(runtime_root=tmp_path, window=latest) == {
         "first_due_at": "2026-01-01T01:00:00Z", "last_due_at": "2026-01-04T01:00:00Z"}
+
+    active = json.loads(journal.read_text())
+    predecessor = archives / f"{active['supersedes']}.json"
+    archived = json.loads(predecessor.read_text())
+    archived["admitted_at"] = "2026-01-03T03:01:00Z"
+    predecessor.write_text(json.dumps(archived))
+    with pytest.raises(ValueError, match="archive identity does not match"):
+        missed_cadence_bounds(runtime_root=tmp_path, window=latest)
 
 
 def test_distinct_due_daily_windows_keep_normal_native_replan_and_quota_rules(steward, tmp_path, monkeypatch):

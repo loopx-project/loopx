@@ -21,6 +21,7 @@ from ...control_plane.digest_envelope import sha256_envelope
 
 CADENCE_WINDOW_SCHEMA = "periodic_report_cadence_window_v0"
 JOURNAL_SCHEMA = "periodic_report_cadence_journal_v0"
+_ADMISSION_ARCHIVE_PREFIX = "cadence_admission_"
 
 
 def _digest(value: object) -> str:
@@ -80,7 +81,7 @@ def _read_journal(path: Path, goal_id: str) -> dict[str, Any] | None:
     }
     if not isinstance(value, dict) or set(value) - {"supersedes", "retirement", "task_completion"} != fields or value["schema_version"] != JOURNAL_SCHEMA or value["goal_id"] != goal_id:
         raise ValueError("cadence journal contract is invalid")
-    if "supersedes" in value and not re.fullmatch(r"cadence_[0-9a-f]{64}", str(value["supersedes"])):
+    if "supersedes" in value and not re.fullmatch(r"cadence_(?:admission_)?[0-9a-f]{64}", str(value["supersedes"])):
         raise ValueError("cadence journal predecessor is invalid")
     window = validate_cadence_window(value["window"])
     if window["goal_id"] != goal_id:
@@ -174,8 +175,13 @@ def _retire_failed_cadence_window_locked(*, runtime_root: Path, goal_id: str,
     return current
 
 
+def _admission_archive_id(entry: Mapping[str, object]) -> str:
+    # Returning to an earlier configuration can reuse its window ID.
+    return _ADMISSION_ARCHIVE_PREFIX + _digest(entry).removeprefix("sha256:")
+
+
 def _archive_predecessor(path: Path, previous: dict[str, Any]) -> str:
-    identity = previous["window"]["window_id"]
+    identity = _admission_archive_id(previous)
     archive = path.parent / "superseded-cadence" / (identity + ".json")
     if archive.exists():
         if json.loads(archive.read_text(encoding="utf-8")) != previous:
@@ -213,8 +219,15 @@ def missed_cadence_bounds(*, runtime_root: Path, window: dict[str, Any]) -> dict
     first_due_at = None
     while predecessor := current.get("supersedes"):
         previous = _read_journal(path.parent / "superseded-cadence" / (predecessor + ".json"), goal_id)
-        if not previous or previous["window"]["window_id"] != predecessor:
+        if previous is None:
             raise ValueError("cadence predecessor archive is unavailable")
+        identity = (
+            _admission_archive_id(previous)
+            if predecessor.startswith(_ADMISSION_ARCHIVE_PREFIX)
+            else previous["window"]["window_id"]
+        )
+        if identity != predecessor:
+            raise ValueError("cadence predecessor archive identity does not match its reference")
         if not (_missed_windows(previous, current["window"]) or _next_window_due(previous, current["window"])):
             break
         first_due_at = previous["window"]["due_at"]

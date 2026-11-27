@@ -105,9 +105,13 @@ verified publication cursor does so.
 
 Registration reordering retains the frozen reporter. A subscription edit can
 supersede an unprepared window: admission archives the predecessor before
-replacing it, under the same lock used by editorial preparation. Restarting
-between those writes repeats the replacement safely; it does not record a
-publication. The replacement uses the current subscription and elected reporter.
+replacing it, under the same lock used by editorial preparation. New archive
+references identify the complete admission record. Returning to the same
+configuration in the same window retains distinct admissions. The journal
+reader also accepts earlier references based on window IDs. A restart between
+the archive and replacement writes reuses the same predecessor archive. This
+transition leaves publication unset. The replacement uses the current
+subscription and elected reporter.
 Admission resolves registration, lifecycle and subscription again under its
 journal lock; a previously constructed hook is not current authority.
 
