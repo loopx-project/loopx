@@ -2,7 +2,7 @@
 
 `global_manager_command_v0` is a read-first protocol for operator commands
 such as `/loopx-global-summary`, `/loopx-global-gates`,
-`/loopx-global-todos`, and `/loopx-global-risks`.
+`/loopx-global-todos`, `/loopx-global-risks`, and `/loopx-global-lifecycle`.
 
 The product goal is to let a user act as a manager across long-running agent
 work: ask for the last day of progress, see blocked decisions, compare agent
@@ -16,12 +16,13 @@ existing command behavior remains the baseline until each stage is qualified.
 
 This protocol is not a general chat-command router yet. It defines the
 request, allowed sources, response shape, privacy boundary, and action ladder
-for Codex hosts, CLI wrappers, or dashboard command palettes. The four
-implemented global-manager CLI wrappers are `loopx global-summary`, for the
-broad compact `/loopx-global-summary` digest; `loopx global-gates`, for the
-focused current-state gate inbox; `loopx global-todos`, for the focused
-current-state work inbox; and `loopx global-risks`, for the focused
-current-state risk inbox.
+for Codex hosts, CLI wrappers, or dashboard command palettes. Five
+global-manager CLI wrappers implement it: `loopx global-summary` for the broad
+compact `/loopx-global-summary` digest, `loopx global-gates` for the focused
+current-state gate inbox, `loopx global-todos` for the focused current-state
+work inbox, `loopx global-risks` for the focused current-state risk inbox, and
+`loopx global-lifecycle` for the cross-Goal lifecycle board derived from the
+status read model.
 
 ## Command Set
 
@@ -33,6 +34,7 @@ Recommended first commands:
 | `/loopx-global-gates` | Show open user/controller gates and what each blocks. | current state |
 | `/loopx-global-todos` | Show top runnable, blocked, deferred-ready, and review todos. | current state |
 | `/loopx-global-risks` | Show stale runs, public/private boundary warnings, failing checks, and rollback candidates. | 24 hours |
+| `/loopx-global-lifecycle` | Show the cross-Goal lifecycle board: phases, reached milestones, blocking guards with owners, and the next transition per Goal. | current state |
 | `/loopx-pr-review` | Walk the current project's or explicit repository's open and merged GitHub PRs one by one with motivation, scope, checks, risks, and review prompts. | current open + merged PRs, optionally bounded by `--since` |
 | `/loop-goal-summary <goal id>` | Drill into one goal without scanning unrelated projects. | 24 hours |
 
@@ -55,6 +57,7 @@ falling back to a broader status or summary dump.
 | `/loop-global-gates` | `/loopx-global-gates` |
 | `/loop-global-todos` | `/loopx-global-todos` |
 | `/loop-global-risks` | `/loopx-global-risks` |
+| `/loop-global-lifecycle` | `/loopx-global-lifecycle` |
 
 Related project-local command: `/loopx <goal text>` is covered by
 [`loopx_goal_command_v0`](loopx-goal-command-v0.md). It is not a global manager
@@ -472,6 +475,68 @@ history rewrite, external cleanup, or merge. Any future candidate must still use
 destructive action; this command never sets `requires_user_approval=true` on a
 first-version risk row merely to imply that authority.
 
+### Focused Global Lifecycle Response
+
+`loopx global-lifecycle` keeps `global_manager_command_response_v0` and returns a
+`global_goal_lifecycle_board_v0` payload under `board_schema_version`, built only
+from the status read model:
+
+- `summary` counts inspected, projected and unprojected Goals, guard-blocked
+  Goals, Agent-scoped Goals, filtered and returned rows, truncation, and the
+  requested phase and Agent filters;
+- `phases` lists each derived phase with its Goal count and Goal ids, in the
+  operator order `waiting_owner`, `qualifying`, `starting`, `closing`, `closed`;
+- `guards` rolls open guards up by `kind` and `owner` with the blocked Goal ids;
+- `milestones` rolls reached milestone ids up across Goals;
+- `goals` carries the bounded per-Goal rows: phase, reached vs total milestones,
+  open guards, and the first next transition;
+- `gaps` names each Goal whose projection the status owner could not derive as a
+  `global_goal_lifecycle_gap_v0` row with `reason=projection_not_derived`, and
+  `complete=false` says the board is missing evidence rather than healthy.
+
+The projection envelope keeps the same global scope as its peer commands. The
+denominator is `global_registry.global_goal_count`, never the local registry the
+process happened to read: Goals outside the current registry are named under
+`reason=outside_current_registry`, unprojected Goals under
+`reason=projection_not_derived`, a Goal whose identity cannot be published
+under `reason=goal_identity_unavailable`, and a Goal the single bounded status
+read never reached under `reason=goal_scan_omitted`. When global membership is
+missing or unreadable the denominator stays `null` and the envelope reports
+`missing_required_sources`, so an unknown estate is never certified as whole.
+A status read that returned an unhealthy or absent model records
+`reason=status_unavailable` instead of an empty omission list.
+
+The top-level `complete` repeats the envelope verdict: it is `true` only when
+every Goal in global scope carried a derived projection and no source was
+omitted. A board can therefore be whole for the Goals the status read returned
+(`goals_without_projection=0`) while `complete=false` still says the global
+estate behind it is unproven.
+
+`--limit` bounds returned Goal rows only. Phase, guard and milestone rollups
+still describe every inspected Goal, so a truncated page cannot read as a
+smaller estate. `--phase` narrows the returned rows and is echoed in
+`request.phase_filter`; an unsupported phase fails before any status read.
+
+`--agent-id` narrows the returned rows to Goals whose recorded
+`coordination.registered_agents` roster registers that exact identity, and the
+applied scope is echoed in `request.agent_filter` and `summary.agent_filter`.
+The flag's presence arms the filter, never its text: an identity no inspected
+Goal registers, an identity the roster shape rejects, and an explicitly blank
+value all return an empty page with `agent_scope_goal_count=0` and
+`summary.agent_scope_requested=true`; none of them widens back to the whole
+estate. Goal ids are matched, deduplicated and published as the complete
+validated identity, so two long ids that share a truncated display prefix stay
+distinct rows. The page
+counts follow the same rule as the phase filter: `summary.filtered_goal_count`
+is measured after both filters and before the limit, and the envelope's
+`available_count` repeats that count, so an empty filtered page is not reported
+as truncated. Coverage and the cross-Goal rollups keep describing the inspected
+estate rather than the filtered page.
+
+This read never closes a Goal, resolves a guard, spends quota or derives a
+second lifecycle; ordinary status and settlement reads keep their strict
+decoding.
+
 ## Action Ladder
 
 Responses may include actions, but each action must declare its authority:
@@ -512,9 +577,14 @@ or omission, not the material itself.
 A first implementation is acceptable when:
 
 - command responses are read-only by default;
-- `loopx global-summary`, `loopx global-gates`, `loopx global-todos`, and
-  `loopx global-risks` emit their matching canonical command responses, while
-  only goal summary stays host-only;
+- `loopx global-summary`, `loopx global-gates`, `loopx global-todos`,
+  `loopx global-risks`, and `loopx global-lifecycle` emit their matching
+  canonical command responses, while only goal summary stays host-only;
+- global-lifecycle reuses the status owner's
+  `goal_artifact_lifecycle_projection_v0` and never derives a second lifecycle;
+  a Goal without a projection is a typed `global_goal_lifecycle_gap_v0` row and
+  marks the board incomplete, and `--limit` bounds returned rows while phase,
+  guard and milestone rollups still cover every inspected Goal;
 - each command names its compact LoopX source surfaces;
 - gates name owner, formally related blocked todo or goal scope, question, and
   next safe action;

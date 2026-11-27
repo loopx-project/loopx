@@ -249,6 +249,7 @@ WORKFLOW_DOMAIN_PROFILES: tuple[Mapping[str, object], ...] = (
             "/loopx-global-gates",
             "/loopx-global-todos",
             "/loopx-global-risks",
+            "/loopx-global-lifecycle",
             "global-manager",
             "global manager",
             "host command",

@@ -23,6 +23,7 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 | `loopx global-gates` | `global_gates` | `global` |
 | `loopx global-todos` | `global_todos` | `global` |
 | `loopx global-risks` | `global_risks` | `global` |
+| `loopx global-lifecycle` | `global_goal_lifecycle` | `global` |
 | `loopx quota should-run` | `quota_should_run` | `goal` |
 | Delegation operations (CLI, MCP, Goal Chat) | `delegation_inventory` | `requester_page` |
 | Goal task map in delivery review | `goal_task_map` | `goal_task_map` |

@@ -28,6 +28,8 @@ GOAL_ID = "smoke-goal"
 RUNNABLE_GOAL_ID = "smoke-goal-runnable"
 DEFERRED_GOAL_ID = "smoke-goal-deferred"
 AGENT_ID = "codex-smoke"
+SECOND_AGENT_ID = "codex-smoke-secondary"
+UNKNOWN_AGENT_ID = "codex-smoke-unknown"
 BLOCKED_TODO_ID = "todo_blocked"
 RUNNABLE_REVIEW_TODO_ID = "todo_runnable_review"
 DEFERRED_TODO_ID = "todo_deferred_ready"
@@ -385,6 +387,178 @@ def assert_risks_markdown(markdown: str, *, private_root: Path) -> None:
         assert marker not in markdown, marker
 
 
+def assert_lifecycle_agent_scope(
+    root: Path, *, registry: Path, runtime: Path,
+) -> None:
+    """The public CLI must apply --agent-id to the same Goal set it reads.
+
+    One registry copy registers the second Agent on two of the three Goals, so
+    the unfiltered, registered and unknown-Agent reads share one fixture and
+    differ only by the identity on the command line.
+    """
+
+    scoped_registry = root / "lifecycle-agent-registry.json"
+    scoped_payload = json.loads(registry.read_text(encoding="utf-8"))
+    for goal in scoped_payload["goals"]:
+        agents = list(goal["coordination"]["registered_agents"])
+        if goal["id"] != GOAL_ID and SECOND_AGENT_ID not in agents:
+            agents.append(SECOND_AGENT_ID)
+        goal["coordination"]["registered_agents"] = agents
+    scoped_registry.write_text(
+        json.dumps(scoped_payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+    def lifecycle(payload_args: list[str]) -> dict[str, object]:
+        proc = run_cli(
+            registry=scoped_registry,
+            runtime=runtime,
+            command="global-lifecycle",
+            output_format="json",
+            command_args=payload_args,
+        )
+        payload = json.loads(proc.stdout)
+        assert payload["ok"] is True, payload
+        assert_public_safe(payload)
+        return payload
+
+    unfiltered = lifecycle(["--limit", "8"])
+    assert unfiltered["request"]["agent_filter"] == [], unfiltered
+    assert [row["goal_id"] for row in unfiltered["goals"]] == [
+        GOAL_ID,
+        DEFERRED_GOAL_ID,
+        RUNNABLE_GOAL_ID,
+    ], unfiltered
+
+    registered = lifecycle(["--agent-id", SECOND_AGENT_ID, "--limit", "8"])
+    assert registered["request"]["agent_filter"] == [SECOND_AGENT_ID], registered
+    assert registered["summary"]["agent_filter"] == [SECOND_AGENT_ID], registered
+    assert [row["goal_id"] for row in registered["goals"]] == [
+        DEFERRED_GOAL_ID,
+        RUNNABLE_GOAL_ID,
+    ], registered
+    assert registered["summary"]["goals_inspected"] == 3, registered
+    coverage = registered["projection_envelope"]["coverage"]
+    assert coverage["shown_count"] == 2, coverage
+    assert coverage["available_count"] == 2, coverage
+    assert coverage["truncated"] is False, coverage
+
+    unknown = lifecycle(["--agent-id", UNKNOWN_AGENT_ID, "--limit", "8"])
+    assert unknown["request"]["agent_filter"] == [UNKNOWN_AGENT_ID], unknown
+    assert unknown["goals"] == [], unknown
+    assert unknown["summary"]["filtered_goal_count"] == 0, unknown
+    assert unknown["summary"]["truncated"] is False, unknown
+    unknown_coverage = unknown["projection_envelope"]["coverage"]
+    assert unknown_coverage["shown_count"] == 0, unknown_coverage
+    assert unknown_coverage["available_count"] == 0, unknown_coverage
+    assert unknown_coverage["truncated"] is False, unknown_coverage
+
+    paged = lifecycle(["--agent-id", SECOND_AGENT_ID, "--limit", "1"])
+    assert [row["goal_id"] for row in paged["goals"]] == [DEFERRED_GOAL_ID], paged
+    assert paged["summary"]["filtered_goal_count"] == 2, paged
+    assert paged["summary"]["truncated"] is True, paged
+    paged_coverage = paged["projection_envelope"]["coverage"]
+    assert paged_coverage["shown_count"] == 1, paged_coverage
+    assert paged_coverage["available_count"] == 2, paged_coverage
+    assert paged_coverage["truncated"] is True, paged_coverage
+
+    blank = lifecycle(["--agent-id", "", "--limit", "8"])
+    # The flag is present, so the scope is armed even with an empty value: the
+    # page must not widen back to the estate.
+    assert blank["request"]["agent_filter"] == [""], blank
+    assert blank["summary"]["agent_scope_requested"] is True, blank
+    assert blank["goals"] == [], blank
+    blank_coverage = blank["projection_envelope"]["coverage"]
+    assert blank_coverage["shown_count"] == 0, blank_coverage
+    assert blank_coverage["available_count"] == 0, blank_coverage
+    assert blank_coverage["truncated"] is False, blank_coverage
+
+    empty_phase = lifecycle(["--agent-id", SECOND_AGENT_ID, "--phase", "closed"])
+    assert empty_phase["goals"] == [], empty_phase
+    assert empty_phase["summary"]["filtered_goal_count"] == 0, empty_phase
+    empty_coverage = empty_phase["projection_envelope"]["coverage"]
+    assert empty_coverage["shown_count"] == 0, empty_coverage
+    assert empty_coverage["available_count"] == 0, empty_coverage
+    assert empty_coverage["truncated"] is False, empty_coverage
+
+
+def assert_lifecycle_payload(payload: dict[str, object]) -> None:
+    assert payload["ok"] is True, payload
+    request = payload["request"]
+    assert request["command"] == "/loopx-global-lifecycle", request
+    assert request["legacy_aliases"] == ["/loop-global-lifecycle"], request
+    assert request["cli_command"] == "loopx global-lifecycle", request
+    assert request["phase_filter"] == [], request
+    assert request["dry_run"] is True, request
+    assert payload["board_schema_version"] == "global_goal_lifecycle_board_v0", payload
+    summary = payload["summary"]
+    assert summary["goals_inspected"] == 3, payload
+    assert summary["goals_with_projection"] == 3, payload
+    assert summary["goals_without_projection"] == 0, payload
+    assert summary["blocked_goal_count"] == 1, payload
+    assert summary["phase_counts"] == {"waiting_owner": 1, "qualifying": 2}, payload
+    # This fixture has no global registry, so the board covers every Goal the
+    # status read returned while refusing to certify the whole global estate.
+    assert payload["complete"] is False, payload
+    # The owner-gated Goal leads; unfiltered rows keep the phase order.
+    assert payload["phases"] == [
+        {
+            "lifecycle_phase": "waiting_owner",
+            "goal_count": 1,
+            "goal_ids": [GOAL_ID],
+        },
+        {
+            "lifecycle_phase": "qualifying",
+            "goal_count": 2,
+            "goal_ids": [DEFERRED_GOAL_ID, RUNNABLE_GOAL_ID],
+        },
+    ], payload
+    assert payload["guards"] == [
+        {
+            "kind": "owner_decision",
+            "owner": "user",
+            "blocked_goal_count": 1,
+            "blocked_goal_ids": [GOAL_ID],
+        }
+    ], payload
+    assert [row["goal_id"] for row in payload["goals"]] == [
+        GOAL_ID,
+        DEFERRED_GOAL_ID,
+        RUNNABLE_GOAL_ID,
+    ], payload
+    blocked = payload["goals"][0]
+    assert blocked["lifecycle_phase"] == "waiting_owner", blocked
+    assert blocked["guards_open"][0]["id"] == "todo_gate_approve", blocked
+    assert blocked["next_transition"]["precondition"] == (
+        "resolve the open owner decision"
+    ), blocked
+    assert payload["gaps"] == [], payload
+    # This fixture has no global registry, so the global membership denominator
+    # is unknown: the board is whole for the Goals status returned, while the
+    # envelope refuses to certify global scope, exactly like its peer commands.
+    envelope = payload["projection_envelope"]
+    # The board covers every Goal status returned, but this fixture has no
+    # global registry, so no answer here can certify the whole global estate.
+    # `complete` repeats the envelope verdict rather than contradicting it.
+    assert payload["complete"] is False, payload
+    assert envelope["coverage"]["expected_count"] is None, envelope
+    assert envelope["complete"] is False, envelope
+    assert "missing_required_sources" in envelope["alert_reasons"], envelope
+    assert envelope["coverage"]["available_count"] == 3, envelope
+    assert_public_safe(payload)
+
+
+def assert_lifecycle_markdown(markdown: str, *, private_root: Path) -> None:
+    assert "# LoopX Global Lifecycle" in markdown, markdown
+    assert "`/loopx-global-lifecycle`" in markdown, markdown
+    assert "## Phases" in markdown, markdown
+    assert "## Blocking Guards" in markdown, markdown
+    assert "blocked_by owner_decision(user):todo_gate_approve" in markdown, markdown
+    assert "Read-only report" in markdown, markdown
+    assert str(private_root) not in markdown, markdown
+    for marker in synthetic_private_markers().values():
+        assert marker not in markdown, marker
+
+
 def assert_error_envelope(root: Path, *, runtime: Path) -> None:
     error_registry = root / "private" / "error-registry"
     error_registry.mkdir(parents=True)
@@ -401,6 +575,29 @@ def assert_error_envelope(root: Path, *, runtime: Path) -> None:
     assert str(error_registry) not in error_proc.stdout, error_proc.stdout
     assert "<local-path-redacted>" in error_proc.stdout, error_proc.stdout
     assert_public_safe(payload)
+
+    for output_format in ("json", "markdown"):
+        lifecycle_error_proc = run_cli(
+            registry=error_registry,
+            runtime=runtime,
+            command="global-lifecycle",
+            output_format=output_format,
+            check=False,
+        )
+        assert lifecycle_error_proc.returncode != 0, lifecycle_error_proc
+        assert str(error_registry) not in lifecycle_error_proc.stdout, lifecycle_error_proc.stdout
+        assert "<local-path-redacted>" in lifecycle_error_proc.stdout, lifecycle_error_proc.stdout
+        if output_format == "json":
+            lifecycle_payload = json.loads(lifecycle_error_proc.stdout)
+            assert lifecycle_payload["ok"] is False, lifecycle_payload
+            assert (
+                lifecycle_payload["error_code"] == "status_collection_unavailable"
+            ), lifecycle_payload
+            assert "phases" not in lifecycle_payload, lifecycle_payload
+            assert "goals" not in lifecycle_payload, lifecycle_payload
+            assert_public_safe(lifecycle_payload)
+        else:
+            assert "# LoopX Global Lifecycle Unavailable" in lifecycle_error_proc.stdout
 
     todos_error_proc = run_cli(
         registry=error_registry,
@@ -508,6 +705,22 @@ def assert_unhealthy_status_envelope(
         output_format="json",
         check=False,
     )
+
+    lifecycle_proc = run_cli(
+        registry=unhealthy_registry,
+        runtime=runtime,
+        command="global-lifecycle",
+        output_format="json",
+        check=False,
+    )
+    assert lifecycle_proc.returncode != 0, lifecycle_proc
+    lifecycle_payload = json.loads(lifecycle_proc.stdout)
+    assert lifecycle_payload["ok"] is False, lifecycle_payload
+    assert lifecycle_payload["error_code"] == "status_collection_unavailable", lifecycle_payload
+    assert "summary" not in lifecycle_payload, lifecycle_payload
+    assert "goals" not in lifecycle_payload, lifecycle_payload
+    assert str(root) not in lifecycle_proc.stdout, lifecycle_proc.stdout
+    assert_public_safe(lifecycle_payload)
     assert risks_proc.returncode == 0, risks_proc
     risks_payload = json.loads(risks_proc.stdout)
     assert risks_payload["ok"] is True, risks_payload
@@ -612,6 +825,28 @@ def run_scenario(provider: str | None) -> None:
             output_format="markdown",
             command_args=risks_args,
         )
+        lifecycle_args = ["--agent-id", AGENT_ID, "--limit", "8"]
+        lifecycle_proc = run_cli(
+            registry=registry,
+            runtime=runtime,
+            command="global-lifecycle",
+            output_format="json",
+            command_args=lifecycle_args,
+        )
+        lifecycle_markdown_proc = run_cli(
+            registry=registry,
+            runtime=runtime,
+            command="global-lifecycle",
+            output_format="markdown",
+            command_args=lifecycle_args,
+        )
+        phase_proc = run_cli(
+            registry=registry,
+            runtime=runtime,
+            command="global-lifecycle",
+            output_format="json",
+            command_args=[*lifecycle_args, "--phase", "qualifying", "--limit", "1"],
+        )
 
         assert_summary_payload(json.loads(summary_proc.stdout))
         assert_gates_payload(json.loads(gates_proc.stdout))
@@ -620,6 +855,20 @@ def run_scenario(provider: str | None) -> None:
         assert_todos_markdown(todos_markdown_proc.stdout, private_root=root)
         assert_risks_payload(json.loads(risks_proc.stdout), unresolved_failure=False)
         assert_risks_markdown(risks_markdown_proc.stdout, private_root=root)
+        assert_lifecycle_payload(json.loads(lifecycle_proc.stdout))
+        assert_lifecycle_markdown(lifecycle_markdown_proc.stdout, private_root=root)
+        assert_lifecycle_agent_scope(root, registry=registry, runtime=runtime)
+        phase_payload = json.loads(phase_proc.stdout)
+        # A phase filter narrows returned rows, never the rollups.
+        assert phase_payload["request"]["phase_filter"] == ["qualifying"], phase_payload
+        assert phase_payload["summary"]["goals_inspected"] == 3, phase_payload
+        assert phase_payload["summary"]["returned_goal_count"] == 1, phase_payload
+        assert phase_payload["summary"]["truncated"] is True, phase_payload
+        assert [
+            row["lifecycle_phase"] for row in phase_payload["goals"]
+        ] == ["qualifying"], phase_payload
+        assert len(phase_payload["phases"]) == 2, phase_payload
+        assert_public_safe(phase_payload)
         assert snapshot_files(files) == before
 
         # Change only this synthetic historical run: real failures must not be

@@ -1123,6 +1123,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             "global-gates",
             "global-todos",
             "global-risks",
+            "global-lifecycle",
         ):
             envelope = cli(command)["projection_envelope"]
             assert envelope["coverage"]["expected_count"] is None
@@ -1138,6 +1139,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             "global-gates",
             "global-todos",
             "global-risks",
+            "global-lifecycle",
         ):
             local = cli(command)["projection_envelope"]
             assert (local["coverage"]["included_count"], local["coverage"]["expected_count"]) == (1, 2)

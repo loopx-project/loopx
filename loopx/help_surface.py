@@ -383,6 +383,7 @@ MANPAGE_COMMAND_HELP_ONLY = frozenset(
         "demo",
         "dreaming",
         "global-gates",
+        "global-lifecycle",
         "global-risks",
         "global-summary",
         "global-todos",
