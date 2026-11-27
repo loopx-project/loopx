@@ -16,6 +16,7 @@ import {readTurnSelectionRejection} from "../turn_driver/selection_rejection.ts"
 import {EffectiveAction} from "../quota/effective_action.generated.ts";
 import {projectTurnBoundary, turnPlanWorkSource} from "../quota/turn_envelope.ts";
 import {projectGoalCreationExecutionRequest} from "../goals/creation_execution.ts";
+import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 
 /** A stopped observation may get a new Chat carrier for the same native
  * identity. After a recovery starts, only another proven process restart or a
@@ -1122,11 +1123,24 @@ function hasMatchingApprovedReviewerDeclaration(item: JsonObject, requiredTokens
   );
 }
 
-function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean): string {
+const MICROS_PER_HOUR = 3_600_000_000n;
+
+function stalledAgeThresholdMicros(hours: number): bigint {
+  const [mantissa, exponent = "0"] = hours.toString().split("e");
+  const [whole, fraction = ""] = mantissa.split(".");
+  const shift = Number(exponent) - fraction.length;
+  const micros = BigInt(whole + fraction) * MICROS_PER_HOUR;
+  if (shift >= 0) return micros * 10n ** BigInt(shift);
+  const divisor = 10n ** BigInt(-shift);
+  // Ages are integral microseconds, so a fractional cutoff must round up.
+  return (micros + divisor - 1n) / divisor;
+}
+
+function classifyStalledBucket(stalledAgeMicros: bigint, authorReplyBypass: boolean): string {
   if (authorReplyBypass) return "awaiting_maintainer_reply";
-  if (stalledAgeMs >= 168 * 3_600_000) return "7d_plus";
-  if (stalledAgeMs >= 72 * 3_600_000) return "72h_plus";
-  if (stalledAgeMs >= 24 * 3_600_000) return "24h_to_72h";
+  if (stalledAgeMicros >= 168n * MICROS_PER_HOUR) return "7d_plus";
+  if (stalledAgeMicros >= 72n * MICROS_PER_HOUR) return "72h_plus";
+  if (stalledAgeMicros >= 24n * MICROS_PER_HOUR) return "24h_to_72h";
   return "under_24h";
 }
 
@@ -1135,13 +1149,12 @@ function filterScopedRepositoryItems(
   filter: JsonObject | null,
   observedAtValue: unknown,
 ): { items: JsonObject[]; observationIncomplete: boolean } {
-  const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
-  let observedAtMs = NaN;
-  if (minStalledHours !== null) {
-    observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
-    if (!Number.isFinite(observedAtMs)) {
-      throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
-    }
+  const thresholdMicros = typeof filter?.min_stalled_hours === "number"
+    ? stalledAgeThresholdMicros(filter.min_stalled_hours) : null;
+  const observedAtMicros = thresholdMicros !== null && typeof observedAtValue === "string"
+    ? parseTodoTimestampMicros(observedAtValue.trim()) : null;
+  if (thresholdMicros !== null && observedAtMicros === null) {
+    throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
   }
   const effectiveVerdicts = Array.isArray(filter?.effective_verdicts)
     ? new Set(filter.effective_verdicts.map(String))
@@ -1176,7 +1189,7 @@ function filterScopedRepositoryItems(
       if (authorMode === "include" && (!login || !authors.has(login))) continue;
       if (authorMode === "exclude" && login && authors.has(login)) continue;
     }
-    if (minStalledHours !== null) {
+    if (thresholdMicros !== null && observedAtMicros !== null) {
       const authorReplied = item.author_replied_after_request_changes === true
         || reviewSummary?.author_replied_after_request_changes === true;
       const hasExplicitStalledSince = Object.prototype.hasOwnProperty.call(item, "stalled_since")
@@ -1201,17 +1214,17 @@ function filterScopedRepositoryItems(
         return { items: [], observationIncomplete: true };
       }
       const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
-      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const basisMicros = basisIso === null ? null : parseTodoTimestampMicros(basisIso.trim());
+      const stalledAgeMicros = basisMicros === null ? null : observedAtMicros - basisMicros;
       const authorReplyBypass = authorReplied && authorMode === "exclude";
-      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      const thresholdMet = stalledAgeMicros !== null && stalledAgeMicros >= thresholdMicros;
       if (!authorReplyBypass && !thresholdMet) {
         continue;
       }
-      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
       matched.push({
         ...item,
         stalled_threshold_met: thresholdMet,
-        stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
+        stalled_bucket: classifyStalledBucket(stalledAgeMicros ?? 0n, authorReplyBypass),
       });
     } else {
       matched.push(item);
