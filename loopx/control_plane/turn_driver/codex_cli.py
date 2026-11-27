@@ -446,8 +446,23 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
     if complete:
-        from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
+        from ..todos.write_hint import worker_owner_blocker_instruction
+        from .host_candidate import (
+            TURN_EXECUTION_BOUNDARY_RULE,
+            goal_acceptance_prompt_instruction,
+            ordinary_work_segment_instruction,
+        )
 
+        owner_blocker = worker_owner_blocker_instruction(
+            checked is not None and checked.get("owner_blocker_guidance") is True
+        )
+        if owner_blocker:
+            instructions.insert(2, owner_blocker)
+        work_segment = ordinary_work_segment_instruction(
+            checked is not None and checked.get("ordinary_work_segment_guidance") is True
+        )
+        if work_segment:
+            instructions.insert(2, work_segment)
         instructions.insert(2,
             "Read the supplied task_context before dependent work. "
             "The host has validated the complete original observation and derived this task view. "

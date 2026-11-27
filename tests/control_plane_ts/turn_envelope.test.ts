@@ -29,6 +29,8 @@ import { controllerRequest } from "../../loopx/control_plane/turn_driver/loop_co
 import {turnScopedCliSettlementPlan} from "../../loopx/control_plane/quota/settlement_plan.ts";
 import {referenceVisionContinuation, requireVisionAuditReferences}
   from "../../loopx/control_plane/quota/turn_envelope_references.ts";
+import {EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION, projectExecutionPreparation}
+  from "../../loopx/control_plane/work_items/execution_preparation.ts";
 
 test("normal-work initial navigation stays scoped while other reads keep discovery", () => {
   const source = payload();
@@ -261,6 +263,9 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     payload_compaction: {schema_version: "quota_todo_summary_payload_compaction_v0",
       compacted_lanes: {gate_open_items: {shown: 0, total: 3}}},
   };
+  source.heartbeat_recommendation = {recommended_mode: "steering_audit_then_one_step",
+    spend_policy: "append exactly one heartbeat spend only after scope-bounded work " +
+      "is validated and written back; one_step: mode, not an operation limit; stop after the readback"};
   const complete = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
   const envelope = buildTurnEnvelope({payload: complete, scheduler_execution_args: ""});
   const before = structuredClone(complete);
@@ -270,6 +275,8 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     assert.deepEqual(evaluateTurnEnvelope({...request, include_model_context: false}), plain);
     const checked = evaluateTurnEnvelope({...request, include_model_context: true});
     assert.equal(checked.model_context_schema_version, "loopx_turn_model_context_v0");
+    assert.equal(checked.ordinary_work_segment_guidance, false);
+    assert.equal(checked.owner_blocker_guidance, false);
     const view = structuredClone(complete);
     const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
       (row as Record<string | number, unknown>)[key], root);
@@ -285,6 +292,7 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
       backlog_items: [{todo_id: "later", text: "Required dependency."}], future_attention: [],
     });
     assert.deepEqual(view.user_todo_summary, complete.user_todo_summary);
+    assert.deepEqual(view.heartbeat_recommendation, source.heartbeat_recommendation);
     assert.deepEqual(view.goal_boundary, complete.goal_boundary);
     assert.deepEqual((view.interaction_contract as JsonObject).agent_channel,
       (complete.interaction_contract as JsonObject).agent_channel);
@@ -309,7 +317,101 @@ test("Host task presentation is source-checked and keeps task and backlog facts"
     const edits = (checked.model_context_changes as JsonObject).changes as JsonObject[];
     assert.equal(edits.some(edit => (edit.path as string[])[0] === "agent_todo_summary"), false);
   }
+  const standardSource = {...source, heartbeat_recommendation: {recommended_mode: "steering_audit_then_one_step",
+    spend_policy: "append exactly one heartbeat spend only after scope-bounded work " +
+      "is validated and written back; one_step: mode, not an operation limit"}};
+  for (const allowed of [true, false]) {
+    const captured = evaluateTurnEnvelope({operation: "compose_complete",
+      payload: {...standardSource, normal_delivery_allowed: allowed}, scheduler_execution_args: ""});
+    const checked = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: captured, include_model_context: true,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"c".repeat(64)}`}});
+    assert.equal(checked.ordinary_work_segment_guidance, allowed);
+    const edits = (checked.model_context_changes as JsonObject).changes as JsonObject[];
+    assert.equal(edits.some(edit =>
+      (edit.path as string[]).join(".") === "heartbeat_recommendation.spend_policy" && edit.remove === true), allowed);
+  }
+  const standardHint = {
+    rule: "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted " +
+      "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner " +
+      "the action and verification check. Before yielding, reuse a runnable independent " +
+      "Todo or check Goal acceptance for a useful independent successor to record. " +
+      "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action.",
+    section: "User Todo / Owner Review Reading Queue",
+    agent_todo_command_template: "loopx todo add --role agent --priority P1 --text '<x>'",
+    user_action_command_template: "loopx todo add --role user --task-class user_action --text '<x>'",
+    user_gate_command_template: "loopx todo add --role user --task-class user_gate --text '<x>'",
+    task_evidence: {instruction: "Preserve extra task hint metadata."},
+  };
+  for (const [modeName, delivered, action, ruleText, expectsStandard] of [
+    ["normal", true, "normal_run", standardHint.rule, true],
+    ["custom", true, "normal_run", "Custom owner-blocker policy: keep this verbatim.", false],
+    ["non_ordinary_delivery", false, "normal_run", standardHint.rule, false],
+    ["non_ordinary_action", true, "control_plane_repair", standardHint.rule, false],
+  ] as const) {
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: {
+      ...source, normal_delivery_allowed: delivered, effective_action: action,
+      todo_write_hint: {...standardHint, rule: ruleText},
+    }, scheduler_execution_args: ""});
+    const checked = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: captured, include_model_context: true,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"d".repeat(64)}`}});
+    assert.equal(checked.owner_blocker_guidance, expectsStandard, modeName);
+    const view = structuredClone(captured);
+    const at = (root: unknown, path: (string | number)[]) => path.reduce<unknown>((row, key) =>
+      (row as Record<string | number, unknown>)[key], root);
+    for (const edit of (checked.model_context_changes as JsonObject).changes as JsonObject[]) {
+      const path = edit.path as (string | number)[], key = path.at(-1)!;
+      const parent = at(view, path.slice(0, -1)) as Record<string | number, unknown>;
+      if (edit.remove) delete parent[key];
+      else parent[key] = edit.from ? at(captured, edit.from as (string | number)[]) : edit.value;
+    }
+    assert.deepEqual(view.todo_write_hint, expectsStandard
+      ? {task_evidence: standardHint.task_evidence}
+      : {rule: ruleText, task_evidence: standardHint.task_evidence}, modeName);
+    assert.equal((captured.todo_write_hint as JsonObject).user_gate_command_template,
+      standardHint.user_gate_command_template, modeName);
+  }
   assert.deepEqual(complete, before);
+});
+
+test("Worker omits a matching ready launch record and keeps unresolved or unfamiliar preparation", () => {
+  const ready = projectExecutionPreparation({
+    schema_version: EXECUTION_PREPARATION_FACTS_SCHEMA_VERSION,
+    goal_id: "goal-turn-envelope", agent_id: "agent-ts", handoff_mode: "hard_lease",
+    authority_available: true, selected_todo: {todo_id: "todo-1", status: "open", claimed_by: "agent-ts"},
+    leases: [{status: "active", active: true, owner: "agent-ts",
+      lease_proof: {idempotency_key: "bound-to-turn", expected_version: 2}}],
+  });
+  for (const [name, preparation, cliPreparation, completeWork] of [
+    ["current", ready, ready, true],
+    ["future field", {...ready, repair_instruction: "Wait for the verifier."},
+      {...ready, repair_instruction: "Wait for the verifier."}, true],
+    ["other task", {...ready, todo_id: "todo-other"}, {...ready, todo_id: "todo-other"}, true],
+    ["different receipts", ready, {...ready, lease_proof: {idempotency_key: "new", expected_version: 3}}, true],
+    ["unresolved", {...ready, state: "claim_required"}, {...ready, state: "claim_required"}, true],
+    ["incomplete work", ready, ready, false],
+  ] as const) {
+    const source = payload();
+    source.normal_delivery_allowed = true;
+    source.execution_preparation = preparation;
+    const interaction = source.interaction_contract as JsonObject;
+    const agent = interaction.agent_channel as JsonObject;
+    agent.execution_preparation = structuredClone(preparation);
+    agent.work_context = {complete: completeWork, sources: [], instruction: "Use the original task scope."};
+    (interaction.cli_channel as JsonObject).execution_preparation = cliPreparation;
+    (source.goal_boundary as JsonObject).handoff_mode = "hard_lease";
+    const captured = evaluateTurnEnvelope({operation: "compose_complete", payload: source, scheduler_execution_args: ""});
+    const before = structuredClone(captured);
+    const model = evaluateTurnEnvelope({operation: "host_dispatch_context", payload: captured,
+      complete_host_request: {schema_version: "loopx_turn_host_request_v1", turn_key: `sha256:${"a".repeat(64)}`},
+      include_model_context: true});
+    const changes = (model.model_context_changes as JsonObject).changes as JsonObject[];
+    for (const path of [["execution_preparation"], ["interaction_contract", "agent_channel", "execution_preparation"]]) {
+      const removal = changes.some(change => change.remove === true &&
+        JSON.stringify(change.path) === JSON.stringify(path));
+      assert.equal(removal, name === "current", name);
+    }
+    assert.deepEqual(captured, before);
+  }
 });
 
 test("complete Host recovery preserves the existing driver route and hash preimage", () => {

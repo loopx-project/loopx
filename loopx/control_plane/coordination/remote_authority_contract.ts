@@ -2,7 +2,6 @@
 import type {JsonObject} from "../effect_program.ts";
 import {canonicalAuthorityObject, canonicalAuthoritySha256,
   hasExactAuthorityKeys, requireAuthorityStoreId} from "./authority_store_codec.ts";
-import {POSTGRESQL_STORE_IDENTITY_PATTERN} from "./postgresql_authority_store.ts";
 import {taskLeaseOperationIdentity} from "../work_items/task_lease_operation_identity.ts";
 import {normalizeTodoId, normalizeGoalId, normalizeOwner} from "../work_items/task_lease_acquire.ts";
 import {BARE_SHA256_PATTERN} from "../content_digest.ts";
@@ -11,6 +10,7 @@ import {normalizeTodoResumeWhen, TODO_RESUME_NORMALIZE_REQUEST_SCHEMA_VERSION} f
 import {normalizeTodoPriority} from "../todos/priority.ts";
 import {parseWireExactGoalRef, type WireExactGoalRef} from "../goals/acceptance_lifecycle.ts";
 
+export const POSTGRESQL_STORE_IDENTITY_PATTERN = /^postgresql:[0-9a-f]{32}$/;
 export const REMOTE_AUTHORITY_REQUEST = "loopx_remote_authority_request_v0";
 export const REMOTE_AUTHORITY_RESPONSE = "loopx_remote_authority_response_v0";
 export const REMOTE_AUTHORITY_SCOPED_READ_RESPONSE = "loopx_remote_authority_scoped_read_response_v1";

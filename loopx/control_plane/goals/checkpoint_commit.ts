@@ -33,6 +33,12 @@ function unknown(message: string): never {
   throw new EffectRuntimeRequestError(`${message}; read back the original Turn before retrying`, "checkpoint_commit_unknown");
 }
 
+function isExclusiveRegularFile(stats: { isFile(): boolean; nlink: number }): boolean {
+  // lstat().isFile() is true for a hard link, and realpath stays on the
+  // in-directory name. nlink === 1 is the exclusive runs-directory entry.
+  return stats.isFile() && stats.nlink === 1;
+}
+
 function indexBytes(path: string): Buffer {
   const bytes = readFileSync(path);
   // The ordinary history reader tolerates damaged rows. A commit cannot infer
@@ -92,7 +98,7 @@ export function inspectCheckpointReplay(value: unknown): JsonObject {
 }
 
 /** A copied runtime keeps absolute `<old>/goals/<goalId>/runs/<file>` paths.
- * Use that file name only when it is a regular file inside the current runs directory. */
+ * Use that file name only when it is an exclusive regular file inside the current runs directory. */
 function relocatedCheckpointArtifact(rawPath: string, runsDir: string, extension: string, goalId: string): string | null {
   if (!isAbsolute(rawPath)) return null;
   const normalized = resolve(rawPath);
@@ -113,7 +119,7 @@ function relocatedCheckpointArtifact(rawPath: string, runsDir: string, extension
   const candidate = join(runsDirReal, fileName);
   let targetPath: string;
   try {
-    if (!lstatSync(candidate).isFile()) return null;
+    if (!isExclusiveRegularFile(lstatSync(candidate))) return null;
     targetPath = realpathSync(candidate);
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   const relativePath = relative(runsDirReal, targetPath);
@@ -130,8 +136,9 @@ function runPath(value: unknown, runsDir: string, extension: string, goalId: str
   const raw = requireNonEmptyString(value, "run artifact path");
   const path = resolve(raw);
   if (dirname(path) === resolve(runsDir) && path.endsWith(extension)) {
-    try { if (!lstatSync(path).isFile()) unknown("checkpoint artifact is not a regular file"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    try {
+      if (!isExclusiveRegularFile(lstatSync(path))) unknown("checkpoint artifact is not a regular file");
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     return path;
   }
   return relocatedCheckpointArtifact(raw, runsDir, extension, goalId) ?? unknown("checkpoint artifact path is invalid");

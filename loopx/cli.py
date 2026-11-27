@@ -124,7 +124,6 @@ from .cli_commands import (
     register_canary_commands,
     register_coordination_shadow_command,
     register_authority_archive_command,
-    register_postgres_commands,
     register_capability_commands,
     register_doctor_command,
     register_dreaming_commands,
@@ -327,7 +326,6 @@ def build_parser() -> LoopXArgumentParser:
     register_coordination_shadow_command(sub, add_subcommand_format)
     register_automation_cadence_command(sub, add_subcommand_format)
     register_authority_archive_command(sub, add_subcommand_format)
-    register_postgres_commands(sub, add_subcommand_format)
     register_task_lease_command(sub, add_subcommand_format)
     register_authority_shadow_command(sub, add_subcommand_format)
     register_todo_continuation(sub, add_subcommand_format)

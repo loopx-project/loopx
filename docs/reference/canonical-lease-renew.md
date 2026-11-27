@@ -607,13 +607,15 @@ boundary; PostgreSQL uses an isolated real server. NoKV coverage uses its
 existing test transport and is not service qualification.
 
 For a read-only Goal snapshot, compare an immutable clean legacy checkout with
-File, SQLite and real PostgreSQL through the native public lifecycle entrypoint:
+local `File` and `SQLite` providers through the native public lifecycle
+entrypoint (server-side PostgreSQL lifecycle and archive qualification live in
+`loopx-project/loopx-cloud`, while pre-split self-hosted deployments stay on
+`v2.4.0`):
 
 ```bash
-# LOOPX_TEST_POSTGRES_URL must identify a disposable server.
 uv run --extra test python examples/control_plane/authority-lease-lifecycle-rehearsal.py \
   --registry registry.json --goal-id example-goal \
-  --baseline-repo ../loopx-baseline --execute-isolated-postgresql
+  --baseline-repo ../loopx-baseline
 ```
 
 Use the source-checkout Python environment and a qualified SQLite Node runtime.
@@ -691,8 +693,9 @@ runtime 不识别新 acquire schema。fence、provider、注册源变化和 CAS 
 新领取→续约→释放→新执行→完成；complete/supersede 可在 Markdown 展示丢失时
 读取 canonical state，完成后经原 projection outbox 重建，旧路径仍要求源文件。
 
-PostgreSQL 使用已有 service-owned scoped factory 和 incarnation 检查，无新凭据
-参数或自动启用。四臂演练使用相同公共 native 入口；NoKV 仍只经过测试 transport。
+PostgreSQL 使用 `loopx-project/loopx-cloud` 中的服务端 scoped factory 与 incarnation 检查，
+`loopx-project/loopx` 本地演练只比较不可变 legacy、隔离 `File` 与隔离 `SQLite` 三组
+（无新凭据参数或自动启用；NoKV 仍只经过测试 transport）。
 L3/R5 的独立领取/接管及维护由此可用，跨外部 effect 的 executor holder/terminal
 锁和自动结果返回仍需各自验收。D2 soak、D3、默认 profile、活动 Goal 迁移和跨主机
 部署没有改变。回滚保留 canonical state/receipt/fence 并恢复兼容代码，不得复活旧

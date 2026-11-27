@@ -16,6 +16,16 @@ def emit(value: object) -> None:
 
 
 first = json.loads(sys.stdin.readline())
+if mode == "refuse_then_exit":
+    emit(
+        {
+            "request_id": first["request_id"],
+            "status": "failed",
+            "reason_code": "nokv_sdk_capability_mismatch",
+            "reason": "required SDK publication fence is unavailable",
+        }
+    )
+    raise SystemExit(17)
 emit({"request_id": first["request_id"], "status": "ready"})
 
 for line in sys.stdin:
@@ -26,6 +36,10 @@ for line in sys.stdin:
     if mode == "disconnect":
         sys.stderr.write("provider-private-diagnostic=must-not-escape\n")
         sys.stderr.flush()
+        raise SystemExit(17)
+    if mode == "partial_then_exit":
+        sys.stdout.write(json.dumps({"request_id": request_id, "status": "missing"}))
+        sys.stdout.flush()
         raise SystemExit(17)
     if mode == "invalid":
         emit({"request_id": request_id, "status": "loaded", "generation": True})
@@ -82,3 +96,5 @@ for line in sys.stdin:
                 "reason": "unknown operation",
             }
         )
+    if mode == "reply_then_exit":
+        raise SystemExit(17)

@@ -162,12 +162,16 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
     // escape the provider boundary.
     this.child.stderr.on("data", () => {});
     this.child.stdin.on("error", () => {
-      if (!this.closing) this.failUnavailable("NoKV helper stdin failed");
+      if (!this.closing && this.child.exitCode === null && this.child.signalCode === null) {
+        this.failUnavailable("NoKV helper stdin failed");
+      }
     });
     this.child.on("error", () => {
       this.failUnavailable("NoKV helper failed to start");
     });
-    this.child.on("exit", (code, signal) => {
+    // Process exit precedes stdio drain. A complete publication reply still
+    // buffered in stdout must settle its request before disconnection does.
+    this.child.on("close", (code, signal) => {
       if (this.closing && this.pending.size === 0) return;
       this.failUnavailable(
         `NoKV helper disconnected (code=${String(code)}, signal=${String(signal)})`,
@@ -280,6 +284,9 @@ export class NoKVJsonLinesTransport implements NoKVBlobTransport {
 
   private async exchange(operation: string, values: JsonObject): Promise<JsonObject> {
     if (this.terminalError) throw this.terminalError;
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
+      throw new NoKVTransportUnavailableError("NoKV helper disconnected");
+    }
     if (this.closing) {
       throw new NoKVTransportUnavailableError("NoKV helper transport is closed");
     }

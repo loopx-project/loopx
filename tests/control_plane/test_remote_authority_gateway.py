@@ -59,3 +59,90 @@ def test_local_cli_ignores_disabled_and_other_goal_remote_binding(tmp_path, monk
     for key in ("endpoint", "tenant_id", "actor_id", "store_identity", "probe_todo_id"):
         assert key not in other["remote_authority"]
     assert cfg["endpoint"] not in other["task_body"] and cfg["tenant_id"] not in other["task_body"]
+
+
+def test_remote_authority_gateway_probe_verifies_against_standard_https_mock(tmp_path, monkeypatch):
+    import hashlib
+    import http.server
+    import shutil
+    import ssl
+    import subprocess
+    import threading
+
+    from loopx.control_plane.coordination.remote_authority_gateway import (
+        check_remote_authority_gateway_status,
+    )
+
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl required for disposable TLS certificate")
+
+    key_path = tmp_path / "key.pem"
+    cert_path = tmp_path / "cert.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1",
+            "-keyout", str(key_path), "-out", str(cert_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    credential = "synthetic-gateway-credential-" + "a" * 32
+
+    class _MockHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/v0/tasks/execute" or self.headers.get("Authorization") != f"Bearer {credential}":
+                self.send_response(401)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            req = json.loads(self.rfile.read(length).decode("utf-8"))
+            req_digest = hashlib.sha256(
+                json.dumps({"mode": "execute", "request": req}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            payload = {
+                "schema_version": "loopx_remote_authority_response_v0",
+                "request_sha256": req_digest,
+                "status": "found",
+                "provider_revision": f"{req['store_identity']}:1",
+                "todo": {"todo_id": req["todo_id"], "status": "open"},
+                "lease": None,
+            }
+            encoded = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _MockHandler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        cfg = {
+            "enabled": True,
+            "endpoint": f"https://127.0.0.1:{server.server_port}",
+            "tenant_id": "synthetic-tenant",
+            "actor_id": SCOPED_AGENT_ID,
+            "store_identity": "postgresql:" + "b" * 32,
+            "probe_todo_id": "todo_probe",
+            "ca_file": str(cert_path),
+        }
+        monkeypatch.setenv("LOOPX_AUTHORITY_CREDENTIAL", credential)
+        verified = check_remote_authority_gateway_status("full-speed", SCOPED_AGENT_ID, cfg)
+        assert verified["status"] == "verified"
+        assert "endpoint" not in verified and "tenant_id" not in verified
+
+        monkeypatch.setenv("LOOPX_AUTHORITY_CREDENTIAL", "wrong-synthetic-credential-" + "b" * 32)
+        denied = check_remote_authority_gateway_status("full-speed", SCOPED_AGENT_ID, cfg)
+        assert denied["status"] == "unavailable"
+        assert denied["reason_code"] == "remote_authority_read_unverified"
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -84,15 +84,16 @@ and your installed host for the supported native path. Later changes on
 
 ## Can different people share PostgreSQL and wait for approvals?
 
-The [remote authority task service](../../../reference/remote-authority-task-service-v0.md)
-documents an opt-in source-checkout candidate. It accepts authenticated
-claim, progress, lease and read operations through a service. PostgreSQL holds
-the authoritative transactions and receipts. A compare-and-set (CAS) check
-prevents an outdated writer from committing against a newer state. If a
-response is lost, read back the original operation under the same identity
-before retrying. Evidence for the candidate includes real-backend tests with
-independent clients, but enabling cross-host execution requires its own deployed
-host and service qualification. The [current scoped-read candidate](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
+The outbound HTTPS [`RemoteAuthority` wire contract and client](../../../../loopx/control_plane/coordination/remote_authority_contract.ts)
+stay Apache-2.0 in `loopx`, while server-side PostgreSQL authority, distributed
+coordination, and multi-tenant governance live in `loopx-project/loopx-cloud`
+(historical `v2.4.0` candidate notes remain at [`v2.4.0` remote-authority-task-service-v0.md](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md)).
+Clients submit authenticated claim, progress, lease and read intentions over
+verified HTTPS; the server holds authoritative transactions and receipts with
+compare-and-set (CAS) checks so an outdated writer cannot commit against a newer
+state. If a response is lost, read back the original operation under the same
+identity before retrying. Enabling cross-host execution requires its own deployed
+host and service qualification. The [historical scoped-read candidate](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
 adds explicit Todo and audience checks. Its scoped listener rejects writes.
 
 [PR #8747](https://github.com/loopx-project/loopx/pull/8747) added the broader cross-person access design to the

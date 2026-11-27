@@ -131,6 +131,10 @@ const TURN_START_RESULT_FIELDS = new Set([
   "provider_payload_returned",
   "error_code",
 ]);
+const TURN_START_OBSERVATION_FLAGS = [
+  "agent_read_required", "external_reads_performed", "external_writes_performed",
+  "local_private_state_mutated", "private_content_returned", "provider_payload_returned",
+];
 const POST_WRITEBACK_REGISTRATION_FIELDS = new Set([
   "schema_version",
   "hook_id",
@@ -560,14 +564,7 @@ export function validateTurnStartHookInvocation(input: {
   if (observationCount < 0 || observationCount > 10_000) {
     throw new Error("turn-start hook observation_count is invalid");
   }
-  for (const field of [
-    "agent_read_required",
-    "external_reads_performed",
-    "external_writes_performed",
-    "local_private_state_mutated",
-    "private_content_returned",
-    "provider_payload_returned",
-  ]) {
+  for (const field of TURN_START_OBSERVATION_FLAGS) {
     const uncertainEffect = result[field] === null &&
       ["failed", "partial", "unavailable"].includes(status) &&
       ["external_reads_performed", "local_private_state_mutated"].includes(field);
@@ -663,6 +660,29 @@ export function projectTurnStartUnavailableContext(value: unknown): JsonObject |
     dependent_action_policy: "hold_until_fresh_context",
     independent_work_policy: "preserve_existing_authority",
   };
+}
+
+/** Keep current empty/not-applicable observations visible without their effect receipts. */
+export function projectEmptyTurnStartObservations(value: unknown): JsonObject | null {
+  const dispatch = jsonObject(value);
+  if (!dispatch || Object.keys(dispatch).length !== 7 ||
+      dispatch.schema_version !== "loopx_turn_start_capability_hook_dispatch_v1" ||
+      dispatch.phase !== "turn_start" || !Array.isArray(dispatch.results) ||
+      dispatch.registered_count !== dispatch.results.length || dispatch.invoked_count !== dispatch.results.length ||
+      !Array.isArray(dispatch.required_reads) || dispatch.required_reads.length !== 0 ||
+      !Array.isArray(dispatch.failures) || dispatch.failures.length !== 0) return null;
+  const results: JsonObject[] = [];
+  for (const raw of dispatch.results) {
+    const row = jsonObject(raw);
+    if (!row || Object.keys(row).length !== TURN_START_RESULT_FIELDS.size ||
+        row.schema_version !== TURN_START_HOOK_RESULT_SCHEMA_VERSION || row.phase !== "turn_start" ||
+        typeof row.hook_id !== "string" || typeof row.capability_id !== "string" ||
+        (row.status !== "empty" && row.status !== "not_applicable") ||
+        row.observation_count !== 0 || row.error_code !== null ||
+        !TURN_START_OBSERVATION_FLAGS.every(flag => row[flag] === false)) return null;
+    results.push({hook_id: row.hook_id, capability_id: row.capability_id, status: row.status});
+  }
+  return {results};
 }
 
 export function validatePostWritebackHookRegistration(

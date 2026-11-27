@@ -169,7 +169,7 @@ LoopX はそのオープンでハーネス非依存のコントロールレイ�
 | 規模 | LoopX の動かし方 | 権限、連携、ガバナンスの姿勢 |
 | --- | --- | --- |
 | **個人開発者とローカルエージェント** | 外部インフラなしで `python3 -m pip install --upgrade loopx`。既存の CLI/デスクトップのランタイムを接続します | ハードリースを備えた正規のローカル **SQLite** ストア（既存の File セットアップも利用可）。アイドル時のトークン消費ゼロで、再起動やコンパクションを乗り越えます |
-| **エンジニアリングチームとエンタープライズへの道筋** | 対等なワーカーが todo を claim し、Desktop Workspace、GitHub、Lark を通じて共有ゴール上でレビュー済みの成果物を返します（[3 エージェントのデモ](examples/collaboration-delivery/README.md)） | ワーカーのオーナーシップと人間の承認ゲートを維持します。段階的な **PostgreSQL** リモート権限（[プロバイダー](loopx/control_plane/coordination/postgresql_authority_store.ts)）や、計画中の組織ガバナンス（RBAC、SSO、クォータ、署名付き監査）へと拡張できます。詳しくは[導入と SaaS のロードマップ](docs/product/roadmaps/saas-opportunity-assessment.md)をご覧ください |
+| **エンジニアリングチームとエンタープライズへの道筋** | 対等なワーカーが todo を claim し、Desktop Workspace、GitHub、Lark を通じて共有ゴール上でレビュー済みの成果物を返します（[3 エージェントのデモ](examples/collaboration-delivery/README.md)） | ワーカーのオーナーシップと人間の承認ゲートを維持します。ローカルの **File**/**SQLite** 権限およびアウトバウンド HTTPS **RemoteAuthority** クライアント契約（[ワイヤー契約](loopx/control_plane/coordination/remote_authority_contract.ts)）は `loopx` 内で Apache-2.0 のまま維持され、サーバーサイドの PostgreSQL 権限、分散コーディネーション、マルチテナント組織ガバナンス（RBAC、SSO、クォータ、署名付き監査）は `loopx-project/loopx-cloud` に配置されます。詳しくは[ライセンス境界](docs/project/licensing.md#open-core-and-commercial-boundaries)と[導入と SaaS のロードマップ](docs/product/roadmaps/saas-opportunity-assessment.md)をご覧ください |
 
 ## LoopX の動作を見る
 

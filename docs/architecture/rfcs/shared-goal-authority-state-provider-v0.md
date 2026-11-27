@@ -54,6 +54,13 @@ RFC or claim formal D2. This checkpoint starts no cohort, soak or promotion.
 The dated checkpoints below retain source-specific implementation and validation
 history; instructions to remove still-live writers describe those baselines.
 
+The bounded NoKV helper transport repair preserves complete JSON-lines replies
+when process exit precedes stdout drain. Existing requests finish from buffered
+replies; new requests to an exited helper are refused. Real subprocess tests
+cover read, CAS publication, typed open refusal and incomplete replies. This
+qualifies the source transport boundary, not a live NoKV SDK stack, installed
+adoption, provider promotion or D2/D3.
+
 ## Historical 1.x implementation context
 
 Dated records through 2026-10-12 follow; they retain their original source boundaries.
@@ -138,7 +145,7 @@ PR to the remaining work. [Decision and exits](ledger/shared-goal-authority-stat
 
 [Roadmap](loopx-overall-roadmap-v0.md) R5 reuses D1 projection, D2 real-backend/capacity/applicable ten-day soak and D3 fenced cutover. R6 connects the selected shared profile to authenticated local/cloud execution. R1–R3 can advance on supported profiles without waiting for PostgreSQL or whole-Goal default promotion.
 
-`e94759d88` adds [PostgreSQL service admission](../../reference/postgresql-authority-service-v0.md), with authentication/tenant verification injection and identity rotation. The [candidate remote task service](../../reference/remote-authority-task-service-v0.md) reuses that seam for TLS claim/progress/lease/read commands, server-owned scoped credentials, bounded pooling, incarnation pinning and receipt recovery. Its source-checkout tests use independent client processes and a restricted role on real PostgreSQL, including lost responses and service restart. This does not qualify deployed local/cloud hosts, shared budget ownership, Host supervision, App/CLI integration, failover, capacity/soak or promotion; these remain with the P lane and R6/D1–D3 owners. R7 must separately report registration, active executors and measured capacity. Directory, presence, a plan or one source read grants no shared authority. Existing fail-closed source, receipt/replay and rollback contracts remain.
+`e94759d88` added [PostgreSQL service admission (`v2.4.0`)](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/postgresql-authority-service-v0.md), with authentication/tenant verification injection and identity rotation, and the [`v2.4.0` candidate remote task service](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md) reused that seam for TLS claim/progress/lease/read commands, server-owned scoped credentials, bounded pooling, incarnation pinning and receipt recovery (in the Open-Core boundary split, the outbound HTTPS [`RemoteAuthority` wire contract](../../../loopx/control_plane/coordination/remote_authority_contract.ts) and client remain Apache-2.0 in `loopx`, while server-side PostgreSQL authority and multi-tenant services live in `loopx-project/loopx-cloud`). This does not qualify deployed local/cloud hosts, shared budget ownership, Host supervision, App/CLI integration, failover, capacity/soak or promotion; these remain with the P lane and R6/D1–D3 owners. R7 must separately report registration, active executors and measured capacity. Directory, presence, a plan or one source read grants no shared authority. Existing fail-closed source, receipt/replay and rollback contracts remain.
 
 **Observation retirement (2026-09-24).** [Current delivery inventory](ledger/shared-goal-authority-state-provider-v0/2026-09-24-observation-retirement.md)
 separates merged code, open PRs and qualification gates. This delivery removes
@@ -1656,7 +1663,8 @@ Use two distinct lifetimes of the same Goal alias in access qualification.
 | Client omits lifetime, server independently binds current lifetime and audience | Evaluate the bound resource and action through the ordinary ACL. Deny outside that scope. |
 | Explicit stale lifetime or different resource/version | Deny the mismatched action, even with a valid key and a current store connection. |
 
-The [v0 remote task service](../../reference/remote-authority-task-service-v0.md)
+The [`v2.4.0` v0 remote task service](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md)
+(whose outbound [`RemoteAuthority` wire contract](../../../loopx/control_plane/coordination/remote_authority_contract.ts) remains in `loopx` while server-side implementation lives in `loopx-project/loopx-cloud`)
 is a source-checkout candidate. Its strict request and policy accept
 tenant/Goal/actor/operation grants and provider incarnation. They cannot
 express the resource or Goal lifetime ACL above. A scoped key for that service
@@ -2525,9 +2533,13 @@ Historical Stage 0 rows below were retired on 2026-09-26. Use the current ladder
   against an existing workbench with a fresh tenant/goal pair and requires
   `ok=true`, the single-node store-conformance scope, every check passed, NoKV
   SDK `0.11.0` / API `1`, and no promotion or availability claim.
-- Stage 2B: `s2b.postgresql_conformance_live` runs the PostgreSQL integration
-  test file under node's TAP reporter and requires at least nine passes, zero
-  failures, and zero skips.
+- Stage 2B: `s2b.postgresql_conformance_live` is declared in `PENDING_ROWS` in
+  `loopx-project/loopx` (`examples/shared-goal-authority-e2e/ladder.py --stage 2b --list`);
+  server-side PostgreSQL integration and service admission moved to
+  `loopx-project/loopx-cloud` (`npm run test:postgresql-authority-store` /
+  `npm run test:postgresql-authority-service` against an isolated `LOOPX_TEST_POSTGRES_URL`
+  server, with pre-split self-hosted tags preserved at `v2.4.0`). Selecting
+  stage `2b` without `--allow-pending` exits non-zero.
 - Stage 2C observation foundation: seven `s2c1.*` rows port the local-shadow CLI
   E2E and migration assertions and pin the single-lineage guarantee. The configure round trip previews, enables,
   reads back, and disables the observer; every retained writer family (handoff-mode,
@@ -2570,12 +2582,13 @@ Historical Stage 0 rows below were retired on 2026-09-26. Use the current ladder
   projections retained, per-transaction growth accelerating by at most one
   live record, and no capacity horizon claimed.
 
-Live rows are environment-gated (`LOOPX_TEST_POSTGRES_URL`;
-`NOKV_COORDINATION_LIVE=1` plus the `NOKV_*` stack variables;
-`LOOPX_NOKV_AUTHORITY_LIVE=1` plus the `LOOPX_NOKV_AUTHORITY_*` inputs).
-Without a stack they report `unverified`, and the ladder exits non-zero unless
-`--allow-unverified` is passed; an unverified row is never counted as green.
-A pending row is an unmet obligation as well: selecting one exits non-zero
+Live rows in `loopx-project/loopx` are environment-gated (`NOKV_COORDINATION_LIVE=1`
+plus the `NOKV_*` stack variables; `LOOPX_NOKV_AUTHORITY_LIVE=1` plus the
+`LOOPX_NOKV_AUTHORITY_*` inputs; `LOOPX_TEST_POSTGRES_URL` moved with Stage 2B to
+`loopx-project/loopx-cloud`). Without a stack they report `unverified`, and the
+ladder exits non-zero unless `--allow-unverified` is passed; an unverified row is
+never counted as green. A pending row (`s2b.postgresql_conformance_live` after
+the Open-Core split) is an unmet obligation as well: selecting one exits non-zero
 unless `--allow-pending` is passed, so a report cannot read as green while it
 executed nothing.
 The report binds the LoopX commit, tree dirtiness, probe digests, and hashed

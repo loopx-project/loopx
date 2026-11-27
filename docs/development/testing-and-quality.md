@@ -343,21 +343,66 @@ Mutation 运行必须经过同一 public entrypoint，并让独立 oracle 失败
 
 Refactors must exercise the affected production entrypoint and real backend
 before delivery. Unit tests, mocks, and in-memory conformance remain useful,
-but cannot replace that proof. For changes affecting PostgreSQL authority,
-configure `LOOPX_TEST_POSTGRES_URL` to an isolated disposable server and run
-`npm run test:postgresql-authority-store`; a skipped suite is an evidence gap,
-not a pass. Record the exact commit, backend version, tested behavior, and
-failures or limits. The `PostgreSQL Integration` workflow runs that ladder row
-and the service admission suite against a disposable server, so the path stays
-qualified in CI as well as locally. If no safe real environment is available,
-hold delivery.
+but cannot replace that proof. In `loopx-project/loopx` (Apache-2.0 core), run
+`npm run test:control-plane` (`FileAuthorityStore` and `SqliteAuthorityStore`),
+`npm run test:remote-authority` (outbound HTTPS client contract with server TLS
+certificate verification and `Bearer` authentication), and
+`python -m pytest tests/control_plane/test_remote_authority_gateway.py` (Python
+read-only scheduler gateway). For changes affecting server-side PostgreSQL
+authority, configure `LOOPX_TEST_POSTGRES_URL` (for store tests) and
+`LOOPX_TEST_POSTGRES_SERVICE_URL` (for real service admission integration) to
+an isolated disposable server inside authorized access to the private/separately
+licensed `loopx-project/loopx-cloud` repository (unauthenticated public fetches
+return HTTP 404). Because `npm run test:postgresql-authority-store` also runs
+Core Python consumer conformance tests and `loopx-cloud` does not carry Core's
+fallback POSIX launcher, first prepare a Core validation environment following
+[Local Validation Environment](#local-validation-environment--本地验证环境) (for
+example, `uv sync --extra test` in the Core checkout), select that Core
+interpreter explicitly with `LOOPX_TEST_PYTHON=/path/to/loopx/.venv/bin/python`
+(also accepting `LOOPX_PYTHON_BIN` or `LOOPX_PYTHON`), and set
+`PYTHONSAFEPATH=1` so a directory named `loopx/` in the caller working tree
+never shadows Core's installed/editable `loopx` package. Verify the selected
+interpreter and imported source path with
+`PYTHONSAFEPATH=1 "$LOOPX_TEST_PYTHON" -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"`,
+then run `npm run test:postgresql-authority-store` plus
+`npm run test:postgresql-authority-service`. Verify both suites report zero
+failures and zero skipped tests (`0 failed, 0 skipped`, including the Core
+Python conformance cases and service integration suite, rather than relying on
+exit code `0` alone); any failure or skipped case is an evidence gap, not a
+pass. Record the exact commit, backend version, tested
+behavior, and failures or limits. The `PostgreSQL Integration` workflow in
+`loopx-cloud` qualifies those suites against a disposable server, while public
+pre-split self-hosted installations stay on the frozen `v2.4.0` (tag
+`5037daecee`, commit `a6ffb3be6e`) release (`loopx postgres`, Compose bundle,
+and legacy test runner). If no safe real environment is available, hold
+delivery.
 
 重构交付前必须验证受影响的真实生产入口和真实后端。单测、mock 与内存 conformance
-不能替代这项证据。影响 PostgreSQL authority 时，配置指向隔离临时实例的
-`LOOPX_TEST_POSTGRES_URL`，运行 `npm run test:postgresql-authority-store`；跳过不算
-通过。记录精确 commit、后端版本、验证行为与失败或局限；`PostgreSQL Integration`
-workflow 会在临时实例上运行该 ladder row 与 service admission 套件，因此这条路径在
-CI 与本地都会保持验证。没有安全的真实环境则暂停交付。
+不能替代这项证据。在开源核心 `loopx-project/loopx` 中，运行
+`npm run test:control-plane`（`FileAuthorityStore` 与 `SqliteAuthorityStore`）、
+`npm run test:remote-authority`（校验服务端 TLS 证书并携带 `Bearer` 凭证的出站
+HTTPS 客户端契约）以及
+`python -m pytest tests/control_plane/test_remote_authority_gateway.py`（Python 只读
+调度器网关）。影响服务端 PostgreSQL authority 时，请在经授权访问的私有／独立许可
+仓库 `loopx-project/loopx-cloud`（未登录匿名公开访问会返回 HTTP 404）中为隔离
+临时实例同时配置 `LOOPX_TEST_POSTGRES_URL`（store 套件）与
+`LOOPX_TEST_POSTGRES_SERVICE_URL`（真实服务接入集成）。由于
+`npm run test:postgresql-authority-store` 还包含 Core Python consumer conformance
+测试且 `loopx-cloud` 源码树不带 Core 的 POSIX 回退启动器，请先按
+[Local Validation Environment / 本地验证环境](#local-validation-environment--本地验证环境)
+中的可执行步骤准备 Core 测试环境（例如在 Core 检出目录运行 `uv sync --extra test`），
+通过 `LOOPX_TEST_PYTHON=/path/to/loopx/.venv/bin/python`（或
+`LOOPX_PYTHON_BIN` / `LOOPX_PYTHON`）显式指定该 Core 解释器，并设置
+`PYTHONSAFEPATH=1` 避免调用方工作目录下的同名 `loopx/` 目录遮蔽 Core 导入；运行
+`PYTHONSAFEPATH=1 "$LOOPX_TEST_PYTHON" -c "import sys, loopx; print(sys.executable); print(loopx.__file__)"`
+核实解释器与实际导入源码路径后，再执行 `npm run test:postgresql-authority-store` 与
+`npm run test:postgresql-authority-service`，并明确以两套测试零失败、零跳过
+（`0 failed, 0 skipped`，涵盖 store 中的 Core Python consumer 用例与服务套件）
+作为回读标准；不能仅凭退出码 `0` 判定通过，任何失败或被跳过的用例即
+视为证据缺口而非通过。记录精确 commit、后端版本、验证行为与失败或局限；`loopx-cloud`
+的 `PostgreSQL Integration` workflow 会在临时实例上验证这些套件，而公开拆分前的自托管
+部署可继续保留冻结标签 `v2.4.0`（tag `5037daecee`、commit `a6ffb3be6e`、`loopx postgres`、
+Compose 与旧版测试入口）。没有安全的真实环境则暂停交付。
 
 #### Default-Provider Performance Qualification / 默认 Provider 性能资格
 
@@ -400,19 +445,22 @@ profile 的 PR，仍须验证相应 profile，才能宣称该结果。
 新范围资格；性能阈值及冻结 benchmark／评分、资源、时限和晋升合同均不改变。
 
 When one semantic owner fronts multiple authority providers, use a three-arm
-refactor comparison: the immutable legacy baseline, the file provider, and a
-real PostgreSQL provider. All three arms must start from the same
-production-complex snapshot and execute the same public operations. Compare
-the two provider heads exactly, then compare the baseline semantically after
-the declared compatibility projection. The allowed archive normalization is
-narrow: omit provider-retained `archive_state=archive` records from the legacy
-hot view, omit their historical leases from that hot view, and ignore absolute
-imported `index` values only after separately proving identical per-role
-relative order. Provider provenance may also differ. No domain field, archive
-selection, relative order, active lease, or non-target record may be normalized.
-File/PostgreSQL agreement alone is not compatibility evidence because both
-providers execute the same new rule. Verify that every non-target record and
-the source snapshot are unchanged.
+refactor comparison: the immutable legacy baseline, the file provider, and the
+affected real transactional provider (`SqliteAuthorityStore` in
+`loopx-project/loopx`, or `PostgreSqlAuthorityStore` in
+`loopx-project/loopx-cloud` when server-side PostgreSQL authority is
+affected). All three arms must start from the same production-complex snapshot
+and execute the same public operations. Compare the two provider heads
+exactly, then compare the baseline semantically after the declared
+compatibility projection. The allowed archive normalization is narrow: omit
+provider-retained `archive_state=archive` records from the legacy hot view, omit
+their historical leases from that hot view, and ignore absolute imported
+`index` values only after separately proving identical per-role relative order.
+Provider provenance may also differ. No domain field, archive selection,
+relative order, active lease, or non-target record may be normalized.
+Agreement between two native providers (`File`/`SQLite` or `File`/`PostgreSQL`)
+alone is not compatibility evidence because both execute the same new rule.
+Verify that every non-target record and the source snapshot are unchanged.
 
 The source snapshot's `lease_inventory` is byte-level audit evidence for every
 legacy lease file observed under the source locks. It is intentionally broader
@@ -421,35 +469,40 @@ present in the current canonical graph. Historical orphan lease files remain in
 the source inventory and never enter the canonical head.
 
 当同一个 semantic owner 服务多个 authority provider 时，重构对照必须包含三臂：
-不可变 legacy baseline、file provider、真实 PostgreSQL provider。三臂从同一份生产
-复杂度快照出发，执行相同 public operation；两个 provider head 要精确相等，baseline
-按显式 compatibility projection 比较。归档场景只允许三项窄归一化：legacy hot view
-不包含 provider 保留的 `archive_state=archive` 记录、不包含这些记录的历史 lease；并且
-只有先单独证明每个 role 的相对顺序完全一致，才可忽略导入 `index` 的绝对值。provider
-provenance 也可不同。domain 字段、归档选择、相对顺序、active lease 和非目标记录均
-不得归一化。File/PostgreSQL 一致不能单独证明兼容，因为它们执行的是同一套新规则。
-还要验证所有非目标记录与源快照保持不变。
+不可变 legacy baseline、file provider、以及受影响的真实事务性 provider
+（`loopx-project/loopx` 中的 `SqliteAuthorityStore`，或在涉及服务端 PostgreSQL
+authority 时为 `loopx-project/loopx-cloud` 中的 `PostgreSqlAuthorityStore`）。
+三臂从同一份生产复杂度快照出发，执行相同 public operation；两个 provider head
+要精确相等，baseline 按显式 compatibility projection 比较。归档场景只允许三项窄归一化：
+legacy hot view 不包含 provider 保留的 `archive_state=archive` 记录、不包含这些记录的
+历史 lease；并且只有先单独证明每个 role 的相对顺序完全一致，才可忽略导入 `index` 的
+绝对值。provider provenance 也可不同。domain 字段、归档选择、相对顺序、active lease 和
+非目标记录均不得归一化。任意两个原生 provider（`File`/`SQLite` 或 `File`/`PostgreSQL`）
+一致不能单独证明兼容，因为它们执行的是同一套新规则。还要验证所有非目标记录与源快照
+保持不变。
 
 源快照中的 `lease_inventory` 是在 source lock 下观察到的全部 legacy lease 文件的
 字节级审计证据；它有意比 canonical `projection.leases` 更宽。后者只包含当前 canonical
 Todo 图中仍有对应 Todo 的 live edge。历史 orphan lease 文件继续留在 source inventory，
 但绝不进入 canonical head。
 
-The archive rehearsal is executable and emits only bounded counts and digest
-prefixes. It never prints raw projections, Todo identifiers, source paths, or
-the PostgreSQL URL. The URL must name a disposable isolated server:
+The local three-arm archive rehearsal in `loopx-project/loopx` is executable and
+compares the immutable legacy baseline against isolated `FileAuthorityStore` and
+`SqliteAuthorityStore` copies, emitting only bounded counts and digest prefixes
+without mutating the live Goal:
 
 ```bash
-LOOPX_TEST_POSTGRES_URL="$DISPOSABLE_POSTGRES_URL" \
-python examples/control_plane/authority-three-arm-rehearsal.py \
+uv run --extra test python examples/control_plane/authority-three-arm-rehearsal.py \
   --registry "$REGISTRY_PATH" \
-  --goal-id "$GOAL_ID" \
-  --execute-isolated-postgresql
+  --goal-id "$GOAL_ID"
 ```
 
-归档三臂演练可直接执行，且只输出有界计数和 digest 前缀；不输出 raw projection、
-Todo 标识、源路径或 PostgreSQL URL。URL 必须指向一次性隔离服务。命令中的显式
-`--execute-isolated-postgresql` 只是安全确认，不会授权连接共享或生产数据库。
+本地三臂归档演练可直接执行（对比不可变 legacy 基线、隔离 `File` 与隔离
+`SQLite`），且只输出有界计数和 digest 前缀，不修改真实 Goal、也不输出 raw
+projection、Todo 标识或源路径；PostgreSQL 服务端演练与迁移验证归属经授权访问的
+私有／独立许可仓库 `loopx-project/loopx-cloud`（`npm run test:postgresql-authority-store`，以
+`LOOPX_TEST_POSTGRES_URL` 指向一次性隔离实例；公开自托管基线保留在冻结标签
+`v2.4.0` / `5037daecee`）。
 
 Keep tests separate from active state: use a disposable database/tenant and
 runtime directory, with synthetic fixtures or an owner-authorized read-only

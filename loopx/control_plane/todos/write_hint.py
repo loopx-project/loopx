@@ -1,17 +1,47 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
+
+STANDARD_TODO_WRITE_HINT_RULE = (
+    "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted "
+    "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner "
+    "the action and verification check. Before yielding, reuse a runnable independent "
+    "Todo or check Goal acceptance for a useful independent successor to record. "
+    "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action."
+)
+
+# Non-command Worker disposition requirements preserved when standard Todo CLI
+# authoring rules remain with the outer executor.
+WORKER_OWNER_BLOCKER_DISPOSITION_RULE = (
+    "Verified owner-only blocker: report it for a user_gate even if noted in Next Action; "
+    "non-blocking requests belong in user_action. Split mixed work, isolate the smallest "
+    "blocked Todo, and give the owner the exact blocking action and verification check. "
+    "Before yielding, continue runnable independent work or identify a useful independent "
+    "successor from Goal acceptance; the outer executor records Todos, settles the Turn, "
+    "and reruns admission."
+)
+
+
+def worker_owner_blocker_instruction(source: bool | Mapping[str, Any] | None) -> str:
+    """Return built-in Worker owner-blocker rules only when TS validated them."""
+    if isinstance(source, bool):
+        enabled = source
+    elif isinstance(source, Mapping):
+        flag = (
+            source["_owner_blocker_guidance"]
+            if "_owner_blocker_guidance" in source
+            else source.get("owner_blocker_guidance")
+        )
+        enabled = flag is True
+    else:
+        return ""
+    return WORKER_OWNER_BLOCKER_DISPOSITION_RULE if enabled else ""
 
 
 def build_todo_write_hint(goal_id: str) -> dict[str, str]:
     return {
-        "rule": (
-            "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted "
-            "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner "
-            "the action and verification check. Before yielding, reuse a runnable independent "
-            "Todo or check Goal acceptance for a useful independent successor to record. "
-            "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action."
-        ),
+        "rule": STANDARD_TODO_WRITE_HINT_RULE,
         "user_gate_command_template": (
             f"loopx todo add --goal-id {goal_id} --role user "
             "--task-class user_gate --blocks-agent <agent-id> "
