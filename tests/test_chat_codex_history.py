@@ -592,3 +592,150 @@ def test_native_context_observation_cannot_rewrite_prior_facts(conversation, fau
     assert store.load_turn(sid, turn["turn_id"]) == before
     assert [e["kind"] for e in store.events_after(sid, turn["turn_id"], None)] == ["turn.queued"]
     runtime.close()
+
+
+def test_codex_adapter_start_turn_forwards_reply_documents_and_attachments(tmp_path: Path, monkeypatch) -> None:
+    from loopx.capabilities.native_chat.codex_adapter import (
+        CODEX_APP_SERVER_HOST_CAPABILITIES,
+        native_turn_response,
+    )
+
+    assert CODEX_APP_SERVER_HOST_CAPABILITIES
+    sent_calls: list[tuple[str, dict[str, object]]] = []
+    parsed_calls: list[dict[str, object]] = []
+
+    def fake_send(message: str, **kwargs: object) -> dict[str, object]:
+        sent_calls.append((message, kwargs))
+        return {"message": "ok"}
+
+    session = SimpleNamespace(
+        work_dir=tmp_path,
+        team_plan_context=None,
+        _launch_guard=None,
+        send=fake_send,
+    )
+    adapter = CodexAppServerAdapter(session)
+
+    def sink(_kind: str, _payload: dict[str, object]) -> None:
+        return None
+
+    doc = {"kind": "file", "path": "report.txt"}
+
+    assert adapter.start_turn("plain", sink) == {"message": "ok"}
+    assert adapter.start_turn("with-docs", sink, reply_documents=True) == {"message": "ok"}
+    assert adapter.start_turn_with_attachments("with-att", sink, [doc]) == {"message": "ok"}
+    assert sent_calls[0][0] == "plain" and list(sent_calls[0][1]) == ["on_event"]
+    assert sent_calls[1][1]["reply_documents"] is True
+    assert sent_calls[2][1]["attachments"] == [doc]
+
+    def fake_parse(raw: str, **kwargs: object) -> dict[str, object]:
+        parsed_calls.append({"raw": raw, **kwargs})
+        return {"message": raw}
+
+    monkeypatch.setattr("loopx.chat.parse_agent_response", fake_parse)
+    out = native_turn_response(session, "answer", output_schema=None, reply_image_turn_id=None, reply_documents=True)
+    assert out == {"message": "answer"}
+    assert parsed_calls[0]["reply_documents"] is True
+
+
+def test_codex_adapter_zero_any_and_cross_file_caller_mypy_contract(tmp_path: Path) -> None:
+    import ast
+    import re
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    adapter_path = repo_root / "loopx/capabilities/native_chat/codex_adapter.py"
+    source = adapter_path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    any_nodes = sum(
+        1
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Name) and node.id == "Any")
+        or (isinstance(node, ast.Attribute) and node.attr == "Any")
+    )
+    assert any_nodes == 0
+    assert not re.search(r"#\s*(?:type:\s*ignore|noqa)", source)
+
+    probe = tmp_path / "codex_adapter_caller_probe.py"
+    probe.write_text(
+        "\n".join(
+            [
+                "from contextlib import AbstractContextManager, nullcontext",
+                "from pathlib import Path",
+                "from loopx.capabilities.native_chat.codex_adapter import CodexAppServerAdapter, NativeHistoryRestoration",
+                "from loopx.chat.session_open import ChatSessionLifecycleMixin",
+                "from loopx.chat_runtime import ChatRuntimeController",
+                "",
+                "def bind_mixin(ctrl: ChatSessionLifecycleMixin, session: dict[str, object]) -> NativeHistoryRestoration:",
+                "    def commit() -> AbstractContextManager[object]:",
+                "        return nullcontext()",
+                "    return NativeHistoryRestoration(ctrl, session, None, commit, lambda: None, False)",
+                "",
+                "def bind_runtime(ctrl: ChatRuntimeController, session: dict[str, object]) -> NativeHistoryRestoration:",
+                "    def commit() -> AbstractContextManager[object]:",
+                "        return nullcontext()",
+                "    return NativeHistoryRestoration(ctrl, session, None, commit, lambda: None, True)",
+                "",
+                "def read_proof(codex_bin: str, codex_home: Path) -> dict[str, object] | None:",
+                "    return CodexAppServerAdapter.failed_request_observation(",
+                "        codex_bin=codex_bin, codex_home=codex_home, thread_ids=['t1'], turn_id='u1'",
+                "    )",
+                "",
+                "def read_ordinary_message(adapter: CodexAppServerAdapter) -> str:",
+                "    resp = adapter.start_turn('hi', lambda _k, _p: None, reply_documents=True)",
+                "    return str(resp['message'])",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    callers = [
+        "loopx/capabilities/native_chat/codex_adapter.py",
+        "loopx/chat/session_open.py",
+        "loopx/capabilities/native_chat/external_conversations.py",
+        "loopx/capabilities/native_chat/report_failure_probe.py",
+    ]
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--config-file",
+            str(repo_root / "pyproject.toml"),
+            "--no-incremental",
+            "--follow-imports=silent",
+            str(probe),
+            *callers,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode in (0, 1), (proc.returncode, proc.stdout, proc.stderr)
+    assert not proc.stderr.strip(), (proc.stdout, proc.stderr)
+    expected_count = 1 + len(callers)
+    summary_lines = [line for line in proc.stdout.splitlines() if line.startswith(("Success:", "Found "))]
+    assert summary_lines and f"checked {expected_count} source files" in summary_lines[-1], proc.stdout
+    errors_by_file: dict[str, list[str]] = {str(probe): [], **{caller: [] for caller in callers}}
+    for line in proc.stdout.splitlines():
+        if ": error:" not in line:
+            continue
+        file_part = line.split(":", 1)[0]
+        key = str(probe) if Path(file_part).name == probe.name else file_part
+        if key in errors_by_file:
+            errors_by_file[key].append(line)
+    assert errors_by_file[str(probe)] == []
+    assert errors_by_file["loopx/capabilities/native_chat/codex_adapter.py"] == []
+    assert len(errors_by_file["loopx/chat/session_open.py"]) <= 28, errors_by_file["loopx/chat/session_open.py"]
+    assert not any("NativeHistoryRestoration" in err for err in errors_by_file["loopx/chat/session_open.py"])
+    assert len(errors_by_file["loopx/capabilities/native_chat/external_conversations.py"]) <= 38
+    assert not any(
+        'Unsupported operand types for + ("str" and "object")' in err
+        or "start_turn" in err
+        or "failed_request_observation" in err
+        for err in errors_by_file["loopx/capabilities/native_chat/external_conversations.py"]
+    )
+    assert len(errors_by_file["loopx/capabilities/native_chat/report_failure_probe.py"]) <= 2
+    assert not any(":165:" in err and "redundant-cast" in err for err in errors_by_file["loopx/capabilities/native_chat/report_failure_probe.py"])
