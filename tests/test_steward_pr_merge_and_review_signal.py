@@ -13,6 +13,7 @@ from loopx.capabilities.native_chat.conversation_bindings import ChatConversatio
 from loopx.capabilities.native_chat.github_pr_evidence import (
     _normalize_graphql_pr_node,
     inspect_github_pull_request,
+    observe_github_repository_prs,
     parse_github_pr_target,
     summarize_github_pr_signal,
 )
@@ -648,6 +649,79 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     if comment_seconds > 5:
         assert observation["result_hash"] == "sha256:prior-result"
         assert observation["material_change"] is False
+
+
+@pytest.mark.parametrize(
+    ("page_kind", "page_info", "evidence", "expected_complete"),
+    [
+        pytest.param("initial", {"startCursor": "recent"}, None, False, id="initial-missing-flag"),
+        pytest.param("older", {}, None, False, id="older-missing-flag"),
+        pytest.param("older", None, None, False, id="older-missing-page-info"),
+        pytest.param("older", {"hasPreviousPage": "false", "startCursor": "older"}, None, False, id="string-flag"),
+        pytest.param("older", {"hasPreviousPage": 0}, None, False, id="numeric-flag"),
+        pytest.param("older", {"hasPreviousPage": True, "startCursor": 7}, None, False, id="invalid-next-cursor"),
+        pytest.param("older", {"hasPreviousPage": False}, None, True, id="verified-end"),
+        pytest.param("older", {}, "anchor", True, id="missing-flag-with-anchor"),
+        pytest.param("older", None, "author", True, id="missing-page-info-with-author-reply"),
+    ],
+)
+def test_steward_comment_page_requires_terminal_marker_or_independent_evidence(
+    page_kind, page_info, evidence, expected_complete,
+) -> None:
+    head = "a" * 40
+    node = _graphql_node(_sample_pr(
+        head_oid=head,
+        author="member",
+        reviews=[{
+            "id": "PRR_review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+            "author": {"login": "maintainer"}, "commit": {"oid": head},
+        }],
+    ))
+    node["comments"] = {"nodes": [], "pageInfo": page_info if page_kind == "initial" else {
+        "hasPreviousPage": True, "startCursor": "recent",
+    }}
+    rows = []
+    if evidence == "anchor":
+        rows.append({"createdAt": "2030-01-01T08:00:00Z"})
+    elif evidence == "author":
+        rows.append({
+            "createdAt": "2030-01-01T09:00:00Z",
+            "authorAssociation": "NONE",
+            "author": {"__typename": "User", "login": "member"},
+        })
+    requested_cursors = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        cursor = next((arg for arg in cmd if arg.startswith("before=")), None)
+        if cursor is None:
+            response = _graphql_page([node])
+        else:
+            requested_cursors.append(cursor)
+            response = {"data": {"repository": {"pullRequest": {
+                "comments": {"nodes": rows, "pageInfo": page_info},
+            }}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
+    assert requested_cursors == (["before=recent"] if page_kind == "older" else [])
+    assert snapshot["status"] == "ok"
+    assert snapshot["items"][0]["comments_coverage_incomplete"] is (not expected_complete)
+    assert snapshot["items"][0]["author_replied_after_request_changes"] is (evidence == "author")
+
+    observed = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot,
+        "previous_hash": "sha256:verified-prior",
+        "observed_at": "2030-01-02T08:00:00Z",
+        "signal_scope": {
+            "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+            "include_inbox": False, "pr_filter": {"min_stalled_hours": 24},
+        },
+    })
+    assert observed["observation_incomplete"] is (not expected_complete)
+    assert observed["material_change"] is expected_complete
+    if not expected_complete:
+        assert observed["result_hash"] == "sha256:verified-prior"
 
 
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:

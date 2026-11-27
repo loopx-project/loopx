@@ -659,6 +659,19 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
 }"""
 
 
+def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
+    """Return whether older comments may exist and a verified continuation cursor."""
+    if not isinstance(page_info, Mapping):
+        return True, None
+    has_previous = page_info.get("hasPreviousPage")
+    if has_previous is False:
+        return False, None
+    cursor = page_info.get("startCursor")
+    if has_previous is True and isinstance(cursor, str) and cursor.strip():
+        return True, cursor
+    return True, None
+
+
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     raw_reviews = node.get("reviews")
     if isinstance(raw_reviews, Mapping) and isinstance(raw_reviews.get("nodes"), list):
@@ -669,19 +682,18 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         reviews = []
 
     raw_comments = node.get("comments")
-    comments_page_info: Mapping[str, Any] = {}
+    comments_has_previous_page = False
+    comments_start_cursor = None
     if isinstance(raw_comments, Mapping):
         raw_nodes = raw_comments.get("nodes")
         comments = [item for item in raw_nodes if isinstance(item, Mapping)] if isinstance(raw_nodes, list) else []
-        raw_page_info = raw_comments.get("pageInfo")
-        if isinstance(raw_page_info, Mapping):
-            comments_page_info = raw_page_info
+        comments_has_previous_page, comments_start_cursor = _graphql_comment_page_info(
+            raw_comments.get("pageInfo")
+        )
     elif isinstance(raw_comments, list):
         comments = [item for item in raw_comments if isinstance(item, Mapping)]
     else:
         comments = []
-    comments_has_previous_page = bool(comments_page_info.get("hasPreviousPage") is True)
-    comments_start_cursor = str(comments_page_info.get("startCursor") or "").strip() or None
 
     raw_commits = node.get("commits")
     commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
@@ -746,7 +758,7 @@ def _backfill_pr_comments_if_needed(
     for _ in range(min(_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES, remaining_pages)):
         if summary.get("comments_coverage_incomplete") is not True:
             break
-        comment_cursor = str(norm_node.get("commentsStartCursor") or "").strip()
+        comment_cursor = norm_node.get("commentsStartCursor")
         if not comment_cursor:
             break
         remaining_seconds = deadline - monotonic()
@@ -791,17 +803,17 @@ def _backfill_pr_comments_if_needed(
         comments_conn = pr_data.get("comments") if isinstance(pr_data, Mapping) else None
         older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
         page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
-        if not isinstance(older_nodes, list) or not isinstance(page_info, Mapping):
+        if not isinstance(older_nodes, list):
             break
         older_comments = [item for item in older_nodes if isinstance(item, Mapping)]
-        next_has_prev = page_info.get("hasPreviousPage") is True
-        next_cursor = str(page_info.get("startCursor") or "").strip() or None
-        stalled_cursor = next_has_prev and (not next_cursor or next_cursor == comment_cursor)
+        next_has_prev, next_cursor = _graphql_comment_page_info(page_info)
+        if next_cursor == comment_cursor:
+            next_cursor = None
         norm_node["comments"] = [*older_comments, *norm_node["comments"]]
         norm_node["commentsHasPreviousPage"] = next_has_prev
-        norm_node["commentsStartCursor"] = None if stalled_cursor else next_cursor
+        norm_node["commentsStartCursor"] = next_cursor
         summary = summarize_github_pr_signal(norm_node)
-        if stalled_cursor:
+        if next_cursor is None:
             break
     return summary, remaining_pages
 

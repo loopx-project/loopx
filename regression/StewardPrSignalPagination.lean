@@ -363,6 +363,43 @@ theorem using_plan_time_alone_loses_a_threshold_crossing :
     needsAgeCommentCoverage false (some 0) 86400 86395 = false ∧
     needsAgeCommentCoverage false (some 0) 86400 (86395 + 5) = true := by decide
 
+/- A valid false pagination flag proves that there are no older comments.
+   Missing and malformed flags both map to none. Independent coverage means
+   the observed suffix reaches the stalled anchor or contains a reply whose
+   role and timestamp independently establish the current state. Cursor
+   identities abstract valid nonblank strings. -/
+def commentPageCovered (hasPrevious : Option Bool) (independentCoverage : Bool) : Bool :=
+  (hasPrevious == some false) || independentCoverage
+
+def nextOlderCommentCursor (hasPrevious : Option Bool) (cursor : Option Nat) : Option Nat :=
+  if hasPrevious == some true then cursor else none
+
+theorem unknown_comment_flag_cannot_establish_coverage :
+    commentPageCovered none false = false := rfl
+
+theorem unknown_comment_flag_keeps_independent_coverage :
+    commentPageCovered none true = true := rfl
+
+theorem complete_comment_terminal_page_needs_no_cursor (cursor : Option Nat) :
+    commentPageCovered (some false) false = true ∧
+    nextOlderCommentCursor (some false) cursor = none := by
+  simp [commentPageCovered, nextOlderCommentCursor]
+
+theorem older_comment_request_needs_explicit_continuation
+    (marker : Option Bool) (cursor : Option Nat) (admitted : Nat)
+    (h : nextOlderCommentCursor marker cursor = some admitted) :
+    marker = some true ∧ cursor = some admitted := by
+  cases marker with
+  | none => simp [nextOlderCommentCursor] at h
+  | some marker =>
+    cases marker with
+    | false => simp [nextOlderCommentCursor] at h
+    | true => exact ⟨rfl, by simpa [nextOlderCommentCursor] using h⟩
+
+theorem missing_terminal_marker_counterexample :
+    ((none : Option Bool) != some true) = true ∧
+    commentPageCovered none false = false ∧ nextOlderCommentCursor none (some 7) = none := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -394,5 +431,10 @@ theorem using_plan_time_alone_loses_a_threshold_crossing :
 #print axioms exact_threshold_keeps_coverage
 #print axioms unknown_anchor_or_possible_bypass_keeps_coverage
 #print axioms using_plan_time_alone_loses_a_threshold_crossing
+#print axioms unknown_comment_flag_cannot_establish_coverage
+#print axioms unknown_comment_flag_keeps_independent_coverage
+#print axioms complete_comment_terminal_page_needs_no_cursor
+#print axioms older_comment_request_needs_explicit_continuation
+#print axioms missing_terminal_marker_counterexample
 
 end StewardPrSignalPagination
