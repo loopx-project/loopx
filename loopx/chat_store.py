@@ -42,6 +42,7 @@ from .control_plane.collaboration.source_chat_observation import (
     _opaque_id,
     _read_json,
 )
+from .control_plane.runtime.time import chronology_key
 from .file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
 
 
@@ -74,6 +75,12 @@ def _instant(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
+
+
+def _session_recency_key(session: dict[str, object]) -> tuple[int, datetime, str]:
+    valid, timestamp, raw = chronology_key(session.get("updated_at"))
+    # Session discovery order remains the tie break for equal instants.
+    return valid, timestamp, "" if valid else raw
 
 
 def _upstream_id(value: Any) -> str:
@@ -682,7 +689,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             agent_id=agent_id,
             channel_id=channel_id,
         )
-        return max(candidates, key=lambda item: str(item.get("updated_at") or ""), default=None)
+        return max(candidates, key=_session_recency_key, default=None)
 
     def resumable_session_candidates(
         self,
@@ -738,7 +745,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
                       channel_id: str | None = None) -> list[dict[str, Any]]:
         metadata = self.iter_session_metadata(goal_id=goal_id, agent_id=agent_id, channel_id=channel_id)
         rows = (self.public_session(payload) for _, payload in metadata)
-        return sorted(rows, key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        return sorted(rows, key=_session_recency_key, reverse=True)
 
     def iter_session_metadata(self, *, goal_id: str | None = None, agent_id: str | None = None,
                               channel_id: str | None = None) -> Iterator[tuple[Path, dict[str, Any]]]:

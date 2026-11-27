@@ -42,6 +42,72 @@ def legacy(runtime):
     )
 
 
+@pytest.mark.parametrize(
+    "older_stamp",
+    ["2026-02-03T10:00:00Z", "2026-02-03T18:00:00+08:00"],
+    ids=["whole-second", "utc-offset"],
+)
+def test_chat_lists_and_resumes_sessions_by_scoped_update_time(tmp_path, monkeypatch, older_stamp):
+    from urllib.parse import urlencode
+
+    from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+
+    runtime = controller(tmp_path, monkeypatch)
+    store = runtime.store
+    scope = {"goal_id": "fixture", "agent_id": "codex", "channel_id": "goal.fixture"}
+
+    def add(session_id, stamp, **scope_override):
+        with monkeypatch.context() as clock:
+            clock.setattr("loopx.chat_store.utc_now", lambda: stamp)
+            return store.create_session(
+                **{**scope, **scope_override}, session_id=session_id,
+                upstream_thread_id="fixture-thread", adapter_kind="codex_app_server",
+                upstream_mode="chat",
+            )
+
+    older = add("session-older", older_stamp)
+    tied = add("session-tied", "2026-02-03T10:00:00+00:00")
+    later = add("session-later", "2026-02-03T10:00:00.000001Z")
+    closed = add("session-closed", "2026-02-03T13:00:00Z")
+    with monkeypatch.context() as clock:
+        clock.setattr("loopx.chat_store.utc_now", lambda: "2026-02-03T13:00:00Z")
+        store.update_session(closed["session_id"], status="closed")
+    add("other-goal", "2026-02-03T23:00:00Z", goal_id="other")
+    add("other-agent", "2026-02-03T23:00:00Z", agent_id="other")
+    add("other-channel", "2026-02-03T23:00:00Z", channel_id="task.other")
+    tied_ids = {older["session_id"], tied["session_id"]}
+    tie_order = [
+        row["session_id"] for row in store.session_candidates(**scope)
+        if row["session_id"] in tied_ids
+    ]
+
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.chat_store, server.verbose = store, False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=10)
+    try:
+        connection.request("GET", "/api/chat/sessions?" + urlencode(scope))
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+        selected, resumed = runtime.open_session(
+            goal_id=scope["goal_id"], agent_id=scope["agent_id"],
+            work_dir=tmp_path, objective="Synthetic resume", mode="resume_latest",
+        )
+        assert response.status == 200, payload
+        assert [row["session_id"] for row in payload["sessions"]] == [
+            closed["session_id"], later["session_id"], *tie_order,
+        ]
+        assert resumed and selected["session_id"] == later["session_id"]
+        assert len(store.list_sessions()) == 7
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        worker.join()
+        runtime.close()
+
+
 def test_model_discovery_uses_the_same_home_as_runtime_not_ambient_provider(tmp_path, monkeypatch):
     runtime = controller(tmp_path, monkeypatch)
     bound = tmp_path / "bound"

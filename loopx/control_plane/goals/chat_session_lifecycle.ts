@@ -1,6 +1,7 @@
 import type { JsonObject } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { assertNever, jsonObject } from "../runtime_decode.ts";
+import { parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import {
   parseExactGoalRef,
   type ExactGoalRef,
@@ -211,10 +212,18 @@ function decideSelection(
       candidate.kind === "exact"
       && goalRefsEqual(candidate.goalRef, currentGoalRef)
     )
-    .sort((left, right) =>
-      right.updatedAt.localeCompare(left.updatedAt)
-      || right.sessionId.localeCompare(left.sessionId)
-    )[0];
+    .map((session) => ({ session, instant: parseTodoTimestampMicros(session.updatedAt.trim()) }))
+    .sort((left, right) => {
+      if (left.instant !== right.instant) {
+        if (left.instant === null) return 1;
+        if (right.instant === null) return -1;
+        return left.instant < right.instant ? 1 : -1;
+      }
+      const byUnknownTime = left.instant === null
+        ? right.session.updatedAt.localeCompare(left.session.updatedAt)
+        : 0;
+      return byUnknownTime || right.session.sessionId.localeCompare(left.session.sessionId);
+    })[0]?.session;
   return current
     ? {
         kind: "reuse",

@@ -68,6 +68,55 @@ test("selection creates a new exact session when only stale state exists", () =>
   );
 });
 
+test("selection compares exact instants within the current Goal instance", () => {
+  assert.deepEqual(
+    decideChatSessionLifecycle({
+      operation: "select",
+      profile_id: "source_session_v1",
+      current_goal_ref: goalB,
+      candidates: [
+        session("stale", goalA, "2026-09-26T04:00:00Z"),
+        session("offset", goalB, "2026-09-26T09:00:00+08:00"),
+        session("whole", goalB, "2026-09-26T01:00:00Z"),
+        session("fraction", goalB, "2026-09-26T01:00:00.000001Z"),
+      ],
+    }),
+    { kind: "reuse", session_id: "fraction", goal_ref: goalB },
+  );
+});
+
+test("selection keeps the Session ID tie break for equivalent encodings", () => {
+  assert.deepEqual(
+    decideChatSessionLifecycle({
+      operation: "select",
+      profile_id: "source_session_v1",
+      current_goal_ref: goalB,
+      candidates: [
+        session("session-a", goalB, "2026-09-26T09:00:00+08:00"),
+        session("session-z", goalB, "2026-09-26T01:00:00Z"),
+      ],
+    }),
+    { kind: "reuse", session_id: "session-z", goal_ref: goalB },
+  );
+});
+
+test("selection retains the legacy order when update times are unreadable", () => {
+  const legacyTimes = [
+    session("opaque-a", goalB, "legacy-a"),
+    session("opaque-b", goalB, "legacy-b"),
+  ];
+  const request = {
+    operation: "select",
+    profile_id: "source_session_v1",
+    current_goal_ref: goalB,
+  };
+  assert.deepEqual(decideChatSessionLifecycle({ ...request, candidates: legacyTimes }),
+    { kind: "reuse", session_id: "opaque-b", goal_ref: goalB });
+  assert.deepEqual(decideChatSessionLifecycle({
+    ...request, candidates: [...legacyTimes, session("dated", goalB)],
+  }), { kind: "reuse", session_id: "dated", goal_ref: goalB });
+});
+
 test("new work requires the session GoalRef to be current", () => {
   const base = {
     profile_id: "source_session_v1",
