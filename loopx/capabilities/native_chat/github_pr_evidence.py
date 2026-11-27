@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+from collections import Counter
 from datetime import datetime
 import json
 from pathlib import Path
@@ -870,6 +871,16 @@ def observe_github_repository_prs(
         return {"status": "unavailable", "repository": repo_slug}
 
 
+def _review_link_signature(review: Mapping[str, Any]) -> tuple[str, str, str, datetime] | None:
+    author = review.get("author") or review.get("user")
+    login = str((author.get("login") if isinstance(author, Mapping) else None) or "").strip().casefold()
+    state = str(review.get("state") or "").strip().upper()
+    commit = review.get("commit")
+    head = str((commit.get("oid") if isinstance(commit, Mapping) else review.get("commit_id")) or "").strip().casefold()
+    instant = parse_timestamp(review.get("submittedAt") or review.get("submitted_at"))
+    return (login, state, head, instant) if login and state and head and instant is not None else None
+
+
 def _enrich_review_urls(
     row: dict[str, Any],
     repo_slug: str,
@@ -882,9 +893,10 @@ def _enrich_review_urls(
         return
     if all(isinstance(r, Mapping) and r.get("url") for r in reviews):
         return
+    page_size = 100
     try:
         completed = runner(
-            ["gh", "api", f"repos/{repo_slug}/pulls/{pr_number}/reviews?per_page=100"],
+            ["gh", "api", f"repos/{repo_slug}/pulls/{pr_number}/reviews?per_page={page_size}"],
             capture_output=True, text=True, check=False, timeout=10,
         )
         if completed.returncode != 0:
@@ -892,38 +904,41 @@ def _enrich_review_urls(
         rest_rows = json.loads(completed.stdout or "[]")
         if not isinstance(rest_rows, list):
             return
-        by_node = {
-            str(r.get("node_id")): str(r.get("html_url"))
-            for r in rest_rows
-            if isinstance(r, Mapping) and r.get("node_id") and r.get("html_url")
-        }
-        by_sig = {
-            (
-                str((r.get("user") or {}).get("login") or "").casefold(),
-                str(r.get("state") or "").upper(),
-                str(r.get("commit_id") or "").casefold(),
-                str(r.get("submitted_at") or ""),
-            ): str(r.get("html_url"))
-            for r in rest_rows
-            if isinstance(r, Mapping) and r.get("html_url")
-        }
-        for review in reviews:
-            if not isinstance(review, dict) or review.get("url"):
+        # A full page does not establish uniqueness across the REST result.
+        complete = len(rest_rows) < page_size
+        by_node: dict[str, set[str]] = {}
+        by_signature: dict[tuple[str, str, str, datetime], list[tuple[str, str]]] = {}
+        for rest_review in rest_rows:
+            if not isinstance(rest_review, Mapping):
                 continue
-            node_id = str(review.get("id") or "")
-            if node_id and node_id in by_node:
-                review["url"] = by_node[node_id]
+            node_id = str(rest_review.get("node_id") or "").strip()
+            url = str(rest_review.get("html_url") or "")
+            if node_id:
+                links = by_node.setdefault(node_id, set())
+                if url:
+                    links.add(url)
+            signature = _review_link_signature(rest_review)
+            if signature is not None:
+                by_signature.setdefault(signature, []).append((node_id, url))
+
+        view_reviews = [(review, _review_link_signature(review)) for review in reviews if isinstance(review, dict)]
+        view_counts = Counter(signature for _, signature in view_reviews)
+        for review, signature in view_reviews:
+            if review.get("url"):
                 continue
-            author = review.get("author") or {}
-            commit = review.get("commit") or {}
-            sig = (
-                str(author.get("login") if isinstance(author, Mapping) else "").casefold(),
-                str(review.get("state") or "").upper(),
-                str(commit.get("oid") if isinstance(commit, Mapping) else "").casefold(),
-                str(review.get("submittedAt") or ""),
-            )
-            if sig in by_sig:
-                review["url"] = by_sig[sig]
+            node_id = str(review.get("id") or "").strip()
+            if node_id in by_node:
+                links = by_node[node_id]
+                if len(links) == 1:
+                    review["url"] = next(iter(links))
+                continue
+            if not complete or signature is None or view_counts[signature] != 1:
+                continue
+            candidates = by_signature.get(signature, [])
+            if len(candidates) == 1:
+                rest_node_id, url = candidates[0]
+                if url and (not node_id or not rest_node_id):
+                    review["url"] = url
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return
 

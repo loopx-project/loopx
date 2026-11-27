@@ -398,6 +398,62 @@ def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     assert exact["url"] == "https://github.com/org/repo/pull/42#pullrequestreview-998877"
 
 
+@pytest.mark.parametrize(("views", "rest", "expected"), [
+    ([("view-a", "offset", None)], [(None, "utc", "101")], {"view-a": "101"}),
+    ([("view-a", "offset", None)], [("view-a", "later", "101"), (None, "offset", "102")], {"view-a": "101"}),
+    ([("view-a", "utc", None)], [(None, "utc", "101"), (None, "offset", "102")], {"view-a": None}),
+    ([("view-a", "utc", None)], [(None, "utc", "101"), (None, "offset", None)], {"view-a": None}),
+    ([("view-a", "utc", None), ("view-b", "offset", None)], [(None, "utc", "101")],
+     {"view-a": None, "view-b": None}),
+    ([("view-a", "utc", None)], [("rest-b", "utc", "101")], {"view-a": None}),
+    ([("view-a", "invalid", None)], [(None, "invalid", "101")], {"view-a": None}),
+    ([("view-a", "utc", "100"), ("view-b", "later", None)],
+     [("view-a", "utc", "101"), (None, "later", "102")], {"view-a": "100", "view-b": "102"}),
+    ([("view-a", "utc", None)], [("view-a", "utc", "101"), ("view-a", "offset", "102")], {"view-a": None}),
+    ([("view-a", "utc", None), ("rest-0", "later", None)],
+     [(None, "utc", "101")] + [(f"rest-{index}", "later", str(200 + index)) for index in range(99)],
+     {"view-a": None, "rest-0": "200"}),
+], ids=["equivalent-offset", "direct-id-precedence", "multiple-rest-matches", "unlinked-rest-candidate",
+        "multiple-view-matches", "different-known-node", "unreadable-time", "preserve-source-link",
+        "conflicting-direct-links", "full-page-holds-fallback"])
+def test_inspect_github_pull_request_correlates_only_unique_review_links(views, rest, expected) -> None:
+    head = "d" * 40
+    timestamps = {
+        "utc": "2030-01-01T08:30:00Z",
+        "offset": "2030-01-01T16:30:00+08:00",
+        "later": "2030-01-01T08:30:01Z",
+        "invalid": "unreadable",
+    }
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    pr_row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit": {"oid": head}, "submittedAt": timestamps[stamp], "url": prefix + link if link else None}
+        for node, stamp, link in views
+    ])
+    rest_rows = [
+        {"node_id": node, "user": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit_id": head, "submitted_at": timestamps[stamp], "html_url": prefix + link if link else None}
+        for node, stamp, link in rest
+    ]
+
+    def runner(cmd, **_kwargs):
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(pr_row))
+        if cmd[:2] == ["gh", "api"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(rest_rows))
+        raise AssertionError(cmd)
+
+    inspected = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert inspected is not None
+    reviews = inspected["review_summary"]["exact_head_reviews"]
+    assert {review["id"]: review["url"] for review in reviews} == {
+        node: prefix + link if link else None for node, link in expected.items()
+    }
+    assert {review["id"]: review["submitted_at"] for review in reviews} == {
+        node: timestamps[stamp] for node, stamp, _ in views
+    }
+
+
 def _steward_with_repo(steward_comp, tmp_path):
     store, runtime, *_ = steward_comp
     _project, registry, _ = _fixture(tmp_path / "canonical", runtime_root=store.root.parent)
