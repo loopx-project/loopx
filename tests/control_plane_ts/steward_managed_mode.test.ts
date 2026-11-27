@@ -941,6 +941,42 @@ test("observeStewardSignalMonitor uses stalled_since, author-reply bypass, and s
   assert.equal(at24hFromSixHour.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
 });
 
+test("stalled PR eligibility and buckets retain microsecond boundary precision", () => {
+  const stalledSince = "2026-11-20T09:00:00.000001Z";
+  const repository = {status: "ok", repository: "acme/widgets", items: [{
+    number: 201, title: "Synthetic watch item", isDraft: false, mergeable: "MERGEABLE", author: {login: "alice"},
+    updatedAt: stalledSince, stalled_since: stalledSince,
+    review_summary: {effective_verdict: "REQUEST_CHANGES", latest_request_changes_review_id: "PRR_201"},
+  }]};
+  const observe = (hours: number, observedAt: string) => observeStewardSignalMonitor({
+    signal_scope: {
+      schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false, include_inbox: false,
+      pr_filter: {
+        exclude_drafts: true, effective_verdicts: ["REQUEST_CHANGES"],
+        author_mode: "include", authors: ["alice"], min_stalled_hours: hours,
+      },
+    },
+    repository_snapshot: repository,
+    observed_at: observedAt,
+  }).scoped_repository_items;
+
+  assert.deepEqual(observe(24, "2026-11-21T09:00:00Z"), []);
+  assert.equal(observe(24, "2026-11-21T17:00:00.000001+08:00")[0].stalled_bucket, "24h_to_72h");
+  for (const [date, beforeBucket, exactBucket] of [
+    ["2026-11-21", "under_24h", "24h_to_72h"],
+    ["2026-11-23", "24h_to_72h", "72h_plus"],
+    ["2026-11-27", "72h_plus", "7d_plus"],
+  ] as const) {
+    assert.equal(observe(6, `${date}T09:00:00Z`)[0].stalled_bucket, beforeBucket);
+    assert.equal(observe(6, `${date}T09:00:00.000001z`)[0].stalled_bucket, exactBucket);
+  }
+  assert.deepEqual(observe(0.1, "2026-11-20T09:06:00Z"), []);
+  assert.equal(observe(0.1, "2026-11-20T09:06:00.000001Z")[0].stalled_threshold_met, true);
+  assert.deepEqual(observe(Number.MIN_VALUE, stalledSince), []);
+  assert.equal(observe(Number.MIN_VALUE, "2026-11-20T09:00:00.000002Z")[0].stalled_threshold_met, true);
+  assert.deepEqual(observe(Number.MAX_VALUE, "9999-12-31T23:59:59Z"), []);
+});
+
 test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete only for matching stalled-age PRs", () => {
   const externalStalledScope = {
     schema_version: "steward_signal_monitor_scope_v0",
