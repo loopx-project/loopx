@@ -136,6 +136,65 @@ theorem null_node_on_terminal_page_counterexample :
 theorem genuine_empty_terminal_page_is_complete :
     collect 5 [] [⟨.terminal, []⟩] = some [] := rfl
 
+/- A missing or invalid GitHub totalCount maps to none. The guard below marks
+   count drift as invalid before returning a result. Deduplicating the collected
+   numbers models the cardinality of the Python collector's dictionary, rather
+   than its selected PR payloads or result order. Count agreement does not imply
+   that the provider presents an atomic snapshot. -/
+structure CountedPage where
+  page : Page
+  reportedTotal : Option Nat
+
+def checkPageTotal (expected : Nat) (response : CountedPage) : Page :=
+  if response.reportedTotal = some expected then response.page
+  else { response.page with metadata := .invalid }
+
+def collectCovered (budget : Nat) (pages : List CountedPage) : Option (List Nat) := do
+  let first ← pages.head?
+  let expected ← first.reportedTotal
+  let prs ← collect budget [] (pages.map (checkPageTotal expected))
+  let distinct := prs.eraseDups
+  if distinct.length = expected then some distinct else none
+
+theorem accepted_distinct_count_matches_report {budget : Nat} {first : CountedPage}
+    {rest : List CountedPage} {covered : List Nat}
+    (h : collectCovered budget (first :: rest) = some covered) :
+    first.reportedTotal = some covered.length := by
+  cases reported : first.reportedTotal with
+  | none => simp [collectCovered, reported] at h
+  | some expected =>
+    cases scan : collect budget [] (checkPageTotal expected first :: rest.map (checkPageTotal expected)) with
+    | none => simp [collectCovered, reported, scan] at h
+    | some prs =>
+      by_cases count : prs.eraseDups.length = expected
+      · have kept : prs.eraseDups = covered := by
+          simpa [collectCovered, reported, scan, count] using h
+        rw [kept] at count
+        exact congrArg some count.symm
+      · simp [collectCovered, reported, scan, count] at h
+
+theorem count_drift_preserves_prior_signal (budget cursor firstTotal : Nat)
+    (firstNodes : List (Option Nat)) (next : CountedPage) (rest : List CountedPage)
+    (previous : List Nat) (h : next.reportedTotal ≠ some firstTotal) :
+    observe previous (collectCovered (budget + 2)
+      (⟨⟨.next cursor, firstNodes⟩, some firstTotal⟩ :: next :: rest)) = (previous, false) := by
+  cases firstCheck : validateNodes firstNodes <;>
+    cases nextCheck : validateNodes next.page.nodes <;>
+    simp [collectCovered, checkPageTotal, collect, observe, h, firstCheck, nextCheck]
+
+theorem overlap_hides_missing_pr_counterexample :
+    let previous := [1, 2, 3]
+    let pages : List CountedPage :=
+      [⟨⟨.next 1, [some 1, some 2]⟩, some 3⟩, ⟨⟨.terminal, [some 2]⟩, some 3⟩]
+    (observe previous (some [1, 2])).2 = true ∧
+    observe previous (collectCovered 5 pages) = (previous, false) := by decide
+
+theorem complete_overlap_and_valid_empty_are_accepted :
+    collectCovered 5
+      [⟨⟨.next 1, [some 1, some 2]⟩, some 3⟩, ⟨⟨.terminal, [some 2, some 3]⟩, some 3⟩] =
+      some [1, 2, 3] ∧
+    collectCovered 5 [⟨⟨.terminal, []⟩, some 0⟩] = some [] := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -145,5 +204,9 @@ theorem genuine_empty_terminal_page_is_complete :
 #print axioms invalid_page_discards_the_prefix
 #print axioms null_node_on_terminal_page_counterexample
 #print axioms genuine_empty_terminal_page_is_complete
+#print axioms accepted_distinct_count_matches_report
+#print axioms count_drift_preserves_prior_signal
+#print axioms overlap_hides_missing_pr_counterexample
+#print axioms complete_overlap_and_valid_empty_are_accepted
 
 end StewardPrSignalPagination

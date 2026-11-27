@@ -205,12 +205,17 @@ def test_summarize_pr_distinguishes_gpt_gemini_fallback_stale_casual_and_conflic
 
 
 def _graphql_page(
-    nodes: list[dict[str, Any]], *, has_next_page: bool = False, end_cursor: str | None = None
+    nodes: list[dict[str, Any]],
+    *,
+    has_next_page: bool = False,
+    end_cursor: str | None = None,
+    total_count: int | None = None,
 ) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
                 "pullRequests": {
+                    "totalCount": len(nodes) if total_count is None else total_count,
                     "pageInfo": {"hasNextPage": has_next_page, "endCursor": end_cursor},
                     "nodes": nodes,
                 }
@@ -277,7 +282,7 @@ def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> N
         cursor = cursor_args[0].split("=", 1)[1] if cursor_args else None
         seen_cursors.append(cursor)
         if cursor is None:
-            body = _graphql_page([pr_101], has_next_page=True, end_cursor="cursor-page-2")
+            body = _graphql_page([pr_101], has_next_page=True, end_cursor="cursor-page-2", total_count=2)
         else:
             assert cursor == "cursor-page-2"
             # Include duplicate PR 101 across page shift + new PR 99 to test deduplication & sorting.
@@ -334,6 +339,7 @@ def test_observe_github_repository_prs_requires_completion_at_page_cap(monkeypat
             [_graphql_node(_sample_pr(number=page_number))],
             has_next_page=page_number < 5 or not terminal_page,
             end_cursor=f"page-{page_number}",
+            total_count=5 if terminal_page else 6,
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
 
@@ -391,8 +397,10 @@ def test_observe_github_repository_prs_rejects_a_cursor_cycle(monkeypatch) -> No
 def test_observe_github_repository_prs_discards_partial_list_if_a_node_is_invalid(
     monkeypatch, invalid_node,
 ) -> None:
-    first = _graphql_page([_graphql_node(_sample_pr(number=1))], has_next_page=True, end_cursor="p2")
-    terminal = _graphql_page([_graphql_node(_sample_pr(number=2))])
+    first = _graphql_page(
+        [_graphql_node(_sample_pr(number=1))], has_next_page=True, end_cursor="p2", total_count=2
+    )
+    terminal = _graphql_page([_graphql_node(_sample_pr(number=2))], total_count=2)
     terminal["data"]["repository"]["pullRequests"]["nodes"].append(invalid_node)
 
     def fake_run(cmd, **_kwargs):
@@ -411,6 +419,57 @@ def test_observe_github_repository_prs_accepts_a_verified_empty_list(monkeypatch
     monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
 
     assert _observe_github_repository_prs("org/repo") == {"status": "ok", "repository": "org/repo", "items": []}
+
+
+@pytest.mark.parametrize(
+    ("first_count", "last_count", "last_numbers", "expected_numbers"),
+    [
+        pytest.param(3, 3, [2, 3], [1, 2, 3], id="complete-with-overlap"),
+        pytest.param(3, 3, [2], None, id="overlap-hides-a-missing-pr"),
+        pytest.param(3, 2, [2], None, id="terminal-count-matches-after-drift"),
+        pytest.param(2, 3, [2, 3], None, id="terminal-count-matches-after-growth"),
+        pytest.param(2, 2, [2, 3], None, id="more-distinct-prs-than-reported"),
+    ],
+)
+def test_observe_github_repository_prs_requires_stable_distinct_coverage(
+    monkeypatch, first_count, last_count, last_numbers, expected_numbers,
+) -> None:
+    first = _graphql_page(
+        [_graphql_node(_sample_pr(number=1)), _graphql_node(_sample_pr(number=2))],
+        has_next_page=True, end_cursor="p2", total_count=first_count,
+    )
+    terminal = _graphql_page(
+        [_graphql_node(_sample_pr(number=number)) for number in last_numbers], total_count=last_count,
+    )
+
+    def fake_run(cmd, **_kwargs):
+        payload = terminal if "cursor=p2" in cmd else first
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+    observed = _observe_github_repository_prs("org/repo")
+
+    if expected_numbers is None:
+        assert observed == {"status": "unavailable", "repository": "org/repo"}
+    else:
+        assert observed["status"] == "ok"
+        assert [item["number"] for item in observed["items"]] == expected_numbers
+
+
+@pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
+def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
+    def fake_run(cmd, **_kwargs):
+        payload = _graphql_page([_graphql_node(_sample_pr())])
+        connection = payload["data"]["repository"]["pullRequests"]
+        if invalid_count is None:
+            del connection["totalCount"]
+        else:
+            connection["totalCount"] = invalid_count
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
 
 
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:

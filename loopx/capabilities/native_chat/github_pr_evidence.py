@@ -567,6 +567,7 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
       after: $cursor,
       orderBy: {field: UPDATED_AT, direction: DESC}
     ) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
@@ -803,6 +804,7 @@ def observe_github_repository_prs(
         return {"status": "unavailable", "repository": repo_slug}
     owner, name = normalized.split("/", 1)
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
+    expected_total: int | None = None
     cursor: str | None = None
     seen_cursors: set[str] = set()
     try:
@@ -835,7 +837,15 @@ def observe_github_repository_prs(
             data = payload.get("data")
             repo = data.get("repository") if isinstance(data, Mapping) else None
             pull_requests = repo.get("pullRequests") if isinstance(repo, Mapping) else None
-            nodes = pull_requests.get("nodes") if isinstance(pull_requests, Mapping) else None
+            if not isinstance(pull_requests, Mapping):
+                return {"status": "unavailable", "repository": repo_slug}
+            page_total = pull_requests.get("totalCount")
+            if type(page_total) is not int or page_total < 0:
+                return {"status": "unavailable", "repository": repo_slug}
+            if expected_total is not None and page_total != expected_total:
+                return {"status": "unavailable", "repository": repo_slug}
+            expected_total = page_total
+            nodes = pull_requests.get("nodes")
             if not isinstance(nodes, list):
                 return {"status": "unavailable", "repository": repo_slug}
             for node in nodes:
@@ -859,6 +869,8 @@ def observe_github_repository_prs(
             cursor = next_cursor
         else:
             # A partial list can make the monitor report PRs as removed.
+            return {"status": "unavailable", "repository": repo_slug}
+        if len(raw_nodes_by_number) != expected_total:
             return {"status": "unavailable", "repository": repo_slug}
         items: list[dict[str, Any]] = []
         for number in sorted(raw_nodes_by_number):
