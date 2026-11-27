@@ -2787,3 +2787,57 @@ test("default verified writeback without boundary or completion enters settlemen
     });
   }
 });
+
+test("readQuotaSettlementSnapshot reuses frozen index maps and rebuilds after append", async () => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-settlement-index-"));
+  try {
+    const goalRoot = join(root, "goals", goalId);
+    const runsDir = join(goalRoot, "runs");
+    await mkdir(runsDir, { recursive: true });
+    const rolloutPath = join(goalRoot, "rollout-event-log.jsonl");
+    const runsPath = join(runsDir, "index.jsonl");
+    await writeFile(
+      rolloutPath,
+      JSON.stringify({
+        schema_version: "loopx_rollout_event_v0",
+        goal_id: goalId,
+        agent_id: agentId,
+        run_id: turnId,
+        event_kind: "quota_should_run",
+        details: { todo_id: todoId },
+      }) + "\n",
+    );
+    await writeFile(
+      runsPath,
+      JSON.stringify({
+        goal_id: goalId,
+        agent_id: agentId,
+        turn_instance_id: turnId,
+        effect_ref: identity.effect_id,
+      }) + "\n",
+    );
+    const first = await readQuotaSettlementSnapshot(root, goalId);
+    const second = await readQuotaSettlementSnapshot(root, goalId);
+    assert.equal(second.eventsByTurn, first.eventsByTurn);
+    assert.equal(second.runsByTurn, first.runsByTurn);
+    assert.equal(second.runsByEffectRef, first.runsByEffectRef);
+    assert.equal(second.runPositions, first.runPositions);
+    assert.ok(Object.isFrozen(second.eventsByTurn.get(`${goalId}\u0000${agentId}\u0000${turnId}`)));
+
+    await appendFile(
+      runsPath,
+      JSON.stringify({
+        goal_id: goalId,
+        agent_id: agentId,
+        turn_instance_id: "turn-settlement-2",
+        effect_ref: "effect-2",
+      }) + "\n",
+    );
+    const updated = await readQuotaSettlementSnapshot(root, goalId);
+    assert.notEqual(updated.runsByTurn, first.runsByTurn);
+    assert.equal(updated.runs.length, 2);
+    assert.equal(updated.eventsByTurn, first.eventsByTurn);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

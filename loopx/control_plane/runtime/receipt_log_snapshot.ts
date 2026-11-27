@@ -56,11 +56,24 @@ interface Prefix extends ParsedPrefix {
 
 // Bound retained source volume and the number of histories. This is not a
 // promise about JS heap bytes: decoded objects can exceed their JSON size.
-const MAX_RETAINED_BYTES = 128 * 1024 * 1024;
+export const DEFAULT_MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const MAX_RETAINED_LOGS = 4;
 const prefixes = new Map<string, Prefix>();
 let retainedBytes = 0;
 const decoding = new Map<string, { bytes: Buffer; result: Promise<ReceiptLogSnapshot> }>();
+
+export interface ReadReceiptLogSnapshotOptions {
+  readonly maxRetainedBytes?: number;
+}
+
+function resolveMaxRetainedBytes(options?: ReadReceiptLogSnapshotOptions): number {
+  const value = options?.maxRetainedBytes;
+  if (value === undefined) return DEFAULT_MAX_RETAINED_BYTES;
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("maxRetainedBytes must be a positive safe integer");
+  }
+  return value;
+}
 
 function digest(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -72,11 +85,15 @@ function forget(key: string): void {
   prefixes.delete(key);
 }
 
-function remember(key: string, prefix: Prefix): void {
+function remember(
+  key: string,
+  prefix: Prefix,
+  maxRetainedBytes: number = DEFAULT_MAX_RETAINED_BYTES,
+): void {
   forget(key);
-  if (prefix.bytes > MAX_RETAINED_BYTES) return;
+  if (prefix.bytes > maxRetainedBytes) return;
   while (prefixes.size >= MAX_RETAINED_LOGS ||
-    retainedBytes + prefix.bytes > MAX_RETAINED_BYTES) {
+    retainedBytes + prefix.bytes > maxRetainedBytes) {
     forget(prefixes.keys().next().value!);
   }
   prefixes.set(key, prefix);
@@ -297,7 +314,9 @@ export async function readReceiptLogSnapshotWithStat(
   path: string,
   schemaVersion?: string,
   recoveryKeys: readonly string[] = [],
+  options?: ReadReceiptLogSnapshotOptions,
 ): Promise<ReceiptLogSnapshotWithStat> {
+  const maxRetainedBytes = resolveMaxRetainedBytes(options);
   const key = JSON.stringify([resolve(path), schemaVersion ?? null, recoveryKeys]);
   const pre = await safePathStat(path);
   let bytes: Buffer;
@@ -322,7 +341,14 @@ export async function readReceiptLogSnapshotWithStat(
     bigIntStatsMatch(pre, post) &&
     BigInt(bytes.length) === pre.size;
   const consumedStat = stable ? formatReceiptLogStat(pre) : MISSING_RECEIPT_LOG_STAT;
-  const snapshot = await decodeReceiptLogBytes(bytes, key, schemaVersion, recoveryKeys, stable);
+  const snapshot = await decodeReceiptLogBytes(
+    bytes,
+    key,
+    schemaVersion,
+    recoveryKeys,
+    stable,
+    maxRetainedBytes,
+  );
   return { snapshot, stat: consumedStat, stable };
 }
 
@@ -332,15 +358,16 @@ async function decodeReceiptLogBytes(
   schemaVersion: string | undefined,
   recoveryKeys: readonly string[],
   stable: boolean,
+  maxRetainedBytes: number = DEFAULT_MAX_RETAINED_BYTES,
 ): Promise<ReceiptLogSnapshot> {
   // Each caller owns a fresh read. Only coalesce large, byte-identical reads
   // with the same decode contract while the original parse is still running.
-  if (!stable || bytes.length < 1024 * 1024 || bytes.length > MAX_RETAINED_BYTES) {
-    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys, stable);
+  if (!stable || bytes.length < 1024 * 1024 || bytes.length > maxRetainedBytes) {
+    return parseSnapshot(bytes, key, schemaVersion, recoveryKeys, stable, maxRetainedBytes);
   }
   const active = decoding.get(key);
   if (active && bytes.equals(active.bytes)) return active.result;
-  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys, true);
+  const result = parseSnapshot(bytes, key, schemaVersion, recoveryKeys, true, maxRetainedBytes);
   if (active || decoding.size >= MAX_RETAINED_LOGS) return result;
   decoding.set(key, { bytes, result });
   try {
@@ -354,7 +381,9 @@ export async function readReceiptLogSnapshot(
   path: string,
   schemaVersion?: string,
   recoveryKeys: readonly string[] = [],
+  options?: ReadReceiptLogSnapshotOptions,
 ): Promise<ReceiptLogSnapshot | null> {
+  const maxRetainedBytes = resolveMaxRetainedBytes(options);
   const key = JSON.stringify([resolve(path), schemaVersion ?? null, recoveryKeys]);
   let bytes: Buffer;
   try {
@@ -364,22 +393,37 @@ export async function readReceiptLogSnapshot(
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-  return decodeReceiptLogBytes(bytes, key, schemaVersion, recoveryKeys, true);
+  return decodeReceiptLogBytes(bytes, key, schemaVersion, recoveryKeys, true, maxRetainedBytes);
 }
 
 async function parseSnapshot(
-  bytes: Buffer, key: string, schemaVersion: string | undefined, recoveryKeys: readonly string[],
+  bytes: Buffer,
+  key: string,
+  schemaVersion: string | undefined,
+  recoveryKeys: readonly string[],
   rememberPrefix = true,
+  maxRetainedBytes: number = DEFAULT_MAX_RETAINED_BYTES,
 ): Promise<ReceiptLogSnapshot> {
   const completeBytes = bytes.lastIndexOf(10) + 1;
   const prior = prefixes.get(key);
   // The rollout log and run index are usually read together. When whole
-  // histories compete for the retained-byte budget, leave room for a peer.
-  // Preserve a larger already-resident prefix when the same log grows.
+  // histories compete for the retained-byte budget, shrink the newer peer to
+  // the remaining headroom when nontrivial instead of evicting the other log
+  // into alternating full/tail reparse thrashing.
   const otherBytes = retainedBytes - (prior?.bytes ?? 0);
-  const limit = otherBytes + completeBytes <= MAX_RETAINED_BYTES
-    ? completeBytes : Math.max(MAX_RETAINED_BYTES / 2, prior?.bytes ?? 0);
-  const retainedEnd = limit >= completeBytes ? completeBytes : bytes.lastIndexOf(10, limit - 1) + 1;
+  const peerShare = Math.floor(maxRetainedBytes / 2);
+  const availableForPeer = maxRetainedBytes - otherBytes;
+  const minPeerHeadroom = Math.floor(maxRetainedBytes / 4);
+  const limit = otherBytes + completeBytes <= maxRetainedBytes
+    ? completeBytes
+    : availableForPeer >= minPeerHeadroom && (prior === undefined || availableForPeer >= prior.bytes)
+      ? Math.min(completeBytes, availableForPeer)
+      : Math.max(peerShare, prior?.bytes ?? 0);
+  const retainedEnd = limit >= completeBytes
+    ? completeBytes
+    : limit <= 0
+      ? 0
+      : bytes.lastIndexOf(10, limit - 1) + 1;
   let reusable: Prefix | null = null;
   let retainedDigest: string | undefined;
   if (prior !== undefined && prior.bytes <= retainedEnd) {
@@ -395,7 +439,7 @@ async function parseSnapshot(
     ...await parseThrough(bytes, retainedEnd, reusable, schemaVersion, recoveryKeys),
     digest: retainedDigest ?? digest(bytes.subarray(0, retainedEnd)),
   });
-  if (rememberPrefix) remember(key, retained);
+  if (rememberPrefix) remember(key, retained, maxRetainedBytes);
   const prefix = retainedEnd === completeBytes ? retained
     : await parseThrough(bytes, completeBytes, retained, schemaVersion, recoveryKeys);
   const tail = strictUtf8(bytes.subarray(completeBytes));

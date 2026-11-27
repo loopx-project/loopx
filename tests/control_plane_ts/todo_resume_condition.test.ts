@@ -519,3 +519,41 @@ test("complete PR evidence keeps every exact dependency and original alias proof
   assert.equal(conditions[2].satisfied, false);
   assert.equal(conditions[2].repository_binding_state, "ambiguous");
 });
+
+test("frozen rollout snapshots reuse indexed PR merge evidence and invalidate cleanly on update", () => {
+  const items = [
+    todo("todo_wait_pr", "deferred", "advancement_task", { resume_when: "pr_merged:owner/repo#7" }),
+  ];
+  const frozenEvents = Object.freeze([
+    Object.freeze({
+      event_kind: "pr_merge",
+      event_id: "merge-7",
+      pr_ref: "owner/repo#7",
+      recorded_at: "2026-11-28T00:00:00Z",
+    }),
+    Object.freeze({
+      event_kind: "heartbeat_quota_receipt",
+      event_id: "hb-1",
+    }),
+  ]);
+  const first = compactTodoResumeMergeEvidence(items, frozenEvents as unknown as Record<string, unknown>[]);
+  const second = compactTodoResumeMergeEvidence(items, frozenEvents as unknown as Record<string, unknown>[]);
+  assert.deepEqual(second, first);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].event_id, "merge-7");
+
+  const extended = Object.freeze([
+    ...frozenEvents,
+    Object.freeze({
+      event_kind: "pr_merge",
+      event_id: "merge-8",
+      pr_ref: "owner/repo#8",
+      recorded_at: "2026-11-28T00:01:00Z",
+    }),
+  ]);
+  const updated = compactTodoResumeMergeEvidence(
+    [...items, todo("todo_wait_pr8", "deferred", "advancement_task", { resume_when: "pr_merged:owner/repo#8" })],
+    extended as unknown as Record<string, unknown>[],
+  );
+  assert.deepEqual(updated.map((row) => row.event_id), ["merge-7", "merge-8"]);
+});

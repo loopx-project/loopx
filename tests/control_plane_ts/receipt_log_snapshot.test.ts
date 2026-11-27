@@ -262,7 +262,7 @@ test("alternating large logs reuse verified records and still reread both sides 
   await fixture(async (path) => {
     const peer = path + ".peer";
     const marker = '{"id":"start"}\n';
-    const paddingBlocks = 68;
+    const paddingBlocks = 3;
     const padding = Buffer.alloc(1024 * 1024, 32);
     padding[padding.length - 1] = 10;
     const log = await open(path, "w");
@@ -273,28 +273,85 @@ test("alternating large logs reuse verified records and still reread both sides 
     } finally {
       await log.close();
     }
+    const opts = { maxRetainedBytes: 4 * 1024 * 1024 };
     await copyFile(path, peer);
-    await read(path);
-    await read(peer);
-    const first = (await read(path))!;
-    const second = (await read(peer))!;
+    await read(path, undefined, [], opts);
+    await read(peer, undefined, [], opts);
+    const first = (await read(path, undefined, [], opts))!;
+    const second = (await read(peer, undefined, [], opts))!;
     const updated = await open(path, "r+");
     try {
       await updated.write('{"id":"edit"}\n', marker.length + paddingBlocks * padding.length, "utf8");
     } finally {
       await updated.close();
     }
-    const changedTail = (await read(path))!;
+    const changedTail = (await read(path, undefined, [], opts))!;
     assert.equal(changedTail.records[0], first.records[0]);
     assert.deepEqual(changedTail.records.map(record => record.id), ["start", "edit"]);
-    assert.equal((await read(peer))!.records[0], second.records[0]);
+    assert.equal((await read(peer, undefined, [], opts))!.records[0], second.records[0]);
     const rewritten = await open(path, "r+");
     try {
       await rewritten.write('{"id":"other"}\n', 0, "utf8");
     } finally {
       await rewritten.close();
     }
-    assert.deepEqual((await read(path))!.records.map(record => record.id), ["other", "edit"]);
+    assert.deepEqual((await read(path, undefined, [], opts))!.records.map(record => record.id), ["other", "edit"]);
     assert.deepEqual(first.records.map(record => record.id), ["start", "last"]);
+  });
+});
+
+test("peer-preserving retention keeps alternating logs warm without thrashing or hiding rewrites", async () => {
+  await fixture(async (path) => {
+    for (let i = 0; i < 4; i++) {
+      const clearPath = `${path}.clear-${i}`;
+      await writeFile(clearPath, `{"clear":${i}}\n`);
+      await read(clearPath);
+    }
+    const peer = path + ".peer";
+    const row = Buffer.from(JSON.stringify({ pad: "x".repeat(512 * 1024 - 24) }) + "\n");
+    const writeLog = async (target: string, count: number, tag: string) => {
+      const handle = await open(target, "w");
+      try {
+        for (let i = 0; i < count; i++) await handle.writeFile(row);
+        await handle.writeFile(JSON.stringify({ id: tag }) + "\n");
+      } finally {
+        await handle.close();
+      }
+    };
+    await writeLog(path, 5, "primary-tail");
+    await writeLog(peer, 5, "peer-tail");
+
+    // 1) With sufficient total budget (> a + b), alternating logs keep 100% of
+    // both snapshots resident (exact .records reference reuse).
+    const comfy = { maxRetainedBytes: 6 * 1024 * 1024 };
+    const comfyPrimary1 = (await read(path, undefined, [], comfy))!;
+    const comfyPeer1 = (await read(peer, undefined, [], comfy))!;
+    const comfyPrimary2 = (await read(path, undefined, [], comfy))!;
+    const comfyPeer2 = (await read(peer, undefined, [], comfy))!;
+    assert.equal(comfyPrimary2.records, comfyPrimary1.records);
+    assert.equal(comfyPeer2.records, comfyPeer1.records);
+    assert.equal(comfyPrimary1.records.length, 6);
+
+    // 2) Under a tight 4 MiB budget where resident primary (~2.5 MiB) + new
+    // peer (~2.5 MiB) exceed the cap, peer fits into the 1.5 MiB headroom
+    // instead of evicting primary; appends remain immediately visible.
+    const tight = { maxRetainedBytes: 4 * 1024 * 1024 };
+    for (let i = 0; i < 4; i++) {
+      const resetPath = `${path}.tight-reset-${i}`;
+      await writeFile(resetPath, `{"reset":${i}}\n`);
+      await read(resetPath, undefined, [], tight);
+    }
+    const tightPrimary1 = (await read(path, undefined, [], tight))!;
+    const tightPeer1 = (await read(peer, undefined, [], tight))!;
+    const tightPrimary2 = (await read(path, undefined, [], tight))!;
+    const tightPeer2 = (await read(peer, undefined, [], tight))!;
+    assert.equal(tightPrimary2.records, tightPrimary1.records);
+    assert.equal(tightPeer2.records[0], tightPeer1.records[0]);
+    assert.equal(tightPeer2.records.at(-1)?.id, "peer-tail");
+
+    await appendFile(peer, JSON.stringify({ id: "peer-new" }) + "\n");
+    const grownPeer = (await read(peer, undefined, [], tight))!;
+    assert.equal(grownPeer.records[0], tightPeer1.records[0]);
+    assert.equal(grownPeer.records.at(-1)?.id, "peer-new");
   });
 });
