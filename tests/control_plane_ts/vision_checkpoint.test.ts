@@ -557,6 +557,14 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
 });
 
 test("material closeout leaves an invalid path decision recoverable", () => {
+  const allowedOutcomes = ["continue", "no_change", "replan"];
+  const authoring = visionAuthoringContract();
+  const pathAuthoring = authoring.path_delta as Record<string, unknown>;
+  assert.deepEqual(pathAuthoring.material_closeout_continuation_outcomes, allowedOutcomes);
+  assert.deepEqual(pathAuthoring.outcomes, ["ask_human", "continue", "no_change", "replan", "stop", "wait"]);
+  assert.match(String(authoring.rule), /path_delta\.reentry_condition/);
+
+  const dependency = "Resume after the independent result is available.";
   const packet = (outcome: string) => ({
     state: "vision_patch_proposed",
     vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
@@ -566,6 +574,7 @@ test("material closeout leaves an invalid path decision recoverable", () => {
       observed_reality: "Fresh evidence confirms the bounded next step.",
       retained: ["Continue from the verified evidence."],
       evidence_refs: ["evidence:verified-result"],
+      reentry_condition: dependency,
     },
   });
   const prepared = (outcome: string) =>
@@ -573,8 +582,10 @@ test("material closeout leaves an invalid path decision recoverable", () => {
       agent_vision_packet: packet(outcome),
     })).agent_vision;
 
-  for (const outcome of ["continue", "no_change", "replan"]) {
-    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: prepared(outcome)}));
+  for (const outcome of allowedOutcomes) {
+    const vision = prepared(outcome) as {path_delta: Record<string, unknown>};
+    assert.equal(vision.path_delta.reentry_condition, dependency);
+    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: vision}));
     assert.equal(result.decision, "patched");
     assert.equal(result.satisfied, true);
   }
