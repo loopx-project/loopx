@@ -23,12 +23,8 @@ from .native_context_profile import (
     NATIVE_CONTEXT_HISTORY_TOKENS as NATIVE_CONTEXT_HISTORY_TOKENS,
     NATIVE_CONTEXT_OUTPUT_ENV as NATIVE_CONTEXT_OUTPUT_ENV,
     native_context_page_budget as native_context_page_budget,
+    private_capture_supported as private_capture_supported,
 )
-
-
-def private_capture_supported() -> bool:
-    """Whether this host has the POSIX identity needed for private capture IO."""
-    return os.name == "posix" and callable(getattr(os, "getuid", None))
 
 
 def private_capture_uid() -> int:
