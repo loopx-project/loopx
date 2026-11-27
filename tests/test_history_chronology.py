@@ -341,3 +341,29 @@ def test_load_index_snapshot_rejects_comma_multi_object_and_preserves_u2028_and_
     )
     assert parse_timestamp("2026-11-27T24:00:00Z") is None
     assert chronology_key("2026-11-27T23:23:55.000000Z")[0] == 1
+
+    split_plus_comma_path = tmp_path / "split_plus_comma.jsonl"
+    split_plus_comma_path.write_text(
+        '{"a": 1\n"b": 2}\n{"c": 3},{"d": 4}\n',
+        encoding="utf-8",
+    )
+    split_plus_comma_snap = history_module.load_index_snapshot(
+        split_plus_comma_path,
+        include_artifact_status=False,
+    )
+    assert split_plus_comma_snap.raw_count == 3
+    assert split_plus_comma_snap.invalid_count == 3
+    assert split_plus_comma_snap.records == []
+
+    braced_split_plus_comma_path = tmp_path / "braced_split_plus_comma.jsonl"
+    braced_split_plus_comma_path.write_text(
+        '{"a": {"x": 1\n"y": 2}}\n{"c": 3},{"d": 4}\n',
+        encoding="utf-8",
+    )
+    braced_split_plus_comma_snap = history_module.load_index_snapshot(
+        braced_split_plus_comma_path,
+        include_artifact_status=False,
+    )
+    assert braced_split_plus_comma_snap.raw_count == 3
+    assert braced_split_plus_comma_snap.invalid_count == 3
+    assert braced_split_plus_comma_snap.records == []

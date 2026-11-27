@@ -482,30 +482,27 @@ def _decode_index_lines_per_line(
     return raw_count, invalid_count, undecodable_count
 
 
-def _decode_index_text_records(
+def _decode_index_text_per_line(
     text: str,
     records: list[dict[str, object]],
     positions: dict[tuple[str, str, str], int],
-) -> tuple[int, int] | None:
-    nonempty = [ln for ln in text.split("\n") if ln.strip()]
-    if not nonempty:
-        return 0, 0
-    # Pigeonhole invariant: every non-empty JSON line yields >=1 array element
-    # when joined cleanly, so len(parsed) == len(nonempty) with all-dict items
-    # proves every line was a single valid JSON object.
-    try:
-        parsed = json.loads("[" + ",".join(nonempty) + "]")
-    except json.JSONDecodeError:
-        return None
-    if (
-        not isinstance(parsed, list)
-        or len(parsed) != len(nonempty)
-        or not all(type(item) is dict for item in parsed)
-    ):
-        return None
-    for item in parsed:
+) -> tuple[int, int]:
+    raw_count = 0
+    invalid_count = 0
+    for line in text.split("\n"):
+        if not line.strip():
+            continue
+        raw_count += 1
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            invalid_count += 1
+            continue
+        if not isinstance(item, dict):
+            invalid_count += 1
+            continue
         _append_index_item(item, records, positions)
-    return len(nonempty), 0
+    return raw_count, invalid_count
 
 
 def load_index_snapshot(
@@ -556,19 +553,11 @@ def load_index_snapshot(
             positions=positions,
         )
     else:
-        fast_result = _decode_index_text_records(decoded_text, records, positions)
-        if fast_result is not None:
-            raw_count, invalid_count = fast_result
-        else:
-            records.clear()
-            positions.clear()
-            raw_count, invalid_count, undecodable_count = _decode_index_lines_per_line(
-                raw_bytes.split(b"\n"),
-                tolerate_undecodable=tolerate_undecodable,
-                skip_invalid_encoding=skip_invalid_encoding,
-                records=records,
-                positions=positions,
-            )
+        raw_count, invalid_count = _decode_index_text_per_line(
+            decoded_text,
+            records,
+            positions,
+        )
 
     if include_artifact_status:
         observed_runs = runs_dir
