@@ -536,6 +536,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
         "stalled_since": stalled_since,
+        **({"review_coverage_incomplete": True} if row.get("review_coverage_incomplete") is True else {}),
         **({"stalled_since_unknown": True} if stalled_since_unknown else {}),
         "author_replied_after_request_changes": author_replied_after_rc,
         "comments_coverage_incomplete": comments_coverage_incomplete,
@@ -636,6 +637,10 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
           }
         }
         reviews(last: 20) {
+          totalCount
+          pageInfo {
+            hasPreviousPage
+          }
           nodes {
             id
             state
@@ -702,14 +707,39 @@ def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | 
     return raw_nodes
 
 
+def _read_graphql_review_window(connection: object) -> tuple[list[Mapping[str, Any]], bool]:
+    nodes = connection.get("nodes") if isinstance(connection, Mapping) else connection
+    if not isinstance(nodes, list):
+        return [], False
+    reviews = [review for review in nodes if isinstance(review, Mapping)]
+    if not isinstance(connection, Mapping) or len(reviews) != len(nodes):
+        return reviews, False
+    page_info = connection.get("pageInfo")
+    total_count = connection.get("totalCount")
+    if (
+        not isinstance(page_info, Mapping)
+        or page_info.get("hasPreviousPage") is not False
+        or type(total_count) is not int
+        or total_count != len(reviews)
+    ):
+        return reviews, False
+    seen_ids: set[str] = set()
+    for review in reviews:
+        raw_id = review.get("id")
+        review_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        commit = review.get("commit")
+        commit_oid = commit.get("oid") if isinstance(commit, Mapping) else None
+        if (
+            not review_id or review_id in seen_ids
+            or not isinstance(commit_oid, str) or not commit_oid.strip()
+        ):
+            return reviews, False
+        seen_ids.add(review_id)
+    return reviews, True
+
+
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
-    raw_reviews = node.get("reviews")
-    if isinstance(raw_reviews, Mapping) and isinstance(raw_reviews.get("nodes"), list):
-        reviews = [item for item in raw_reviews["nodes"] if isinstance(item, Mapping)]
-    elif isinstance(raw_reviews, list):
-        reviews = [item for item in raw_reviews if isinstance(item, Mapping)]
-    else:
-        reviews = []
+    reviews, review_coverage_complete = _read_graphql_review_window(node.get("reviews"))
 
     raw_comments = node.get("comments")
     raw_comment_nodes = raw_comments.get("nodes") if isinstance(raw_comments, Mapping) else raw_comments
@@ -768,6 +798,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         "commentsHasPreviousPage": comments_has_previous_page,
         "commentsStartCursor": comments_start_cursor,
         "reviews": reviews,
+        "review_coverage_incomplete": not review_coverage_complete or not head_oid,
         "statusCheckRollup": rollup,
     }
 
@@ -943,7 +974,10 @@ def observe_github_repository_prs(
         }
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         if backfill_comments:
-            candidates = [number for number, item in items.items() if item["comments_coverage_incomplete"]]
+            candidates = [
+                number for number, item in items.items()
+                if item["comments_coverage_incomplete"] and not item.get("review_coverage_incomplete")
+            ]
             remaining_seconds = deadline - monotonic()
             if select_comment_backfill is not None and candidates and remaining_seconds > 0:
                 selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)

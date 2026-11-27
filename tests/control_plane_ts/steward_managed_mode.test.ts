@@ -1242,6 +1242,43 @@ test("author scopes preserve the prior observation when an eligible PR loses its
   assert.deepEqual(unfiltered.scoped_repository_items, [unknown]);
 });
 
+test("review-dependent scopes preserve their prior result on incomplete review coverage", () => {
+  const signalScope = {schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false, include_inbox: false, pr_filter: {
+      exclude_drafts: true, exclude_conflicting: true, author_mode: "include", authors: ["alice"],
+      effective_verdicts: ["REQUEST_CHANGES"], min_stalled_hours: 24,
+    }};
+  const observed_at = "2030-01-03T12:00:00Z";
+  const row = {number: 42, author: {login: "alice"}, isDraft: false, mergeable: "MERGEABLE",
+    stalled_since: "2030-01-01T12:00:00Z", review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const observe = (signal_scope: unknown, items: unknown[], previous_hash?: unknown) =>
+    observeStewardSignalMonitor({signal_scope, observed_at, previous_hash,
+      repository_snapshot: {status: "ok", items}});
+  const baseline = observe(signalScope, [row]);
+  assert.equal(baseline.scoped_repository_items.length, 1);
+  for (const review_summary of [
+    row.review_summary, {effective_verdict: "NONE"}, {has_review_conflict: true},
+  ]) {
+    const partial = {...row, stalled_since: null, review_summary, review_coverage_incomplete: true};
+    const result = observe(signalScope, [partial], baseline.result_hash);
+    assert.equal(result.observation_incomplete, true);
+    assert.equal(result.result_hash, baseline.result_hash);
+    assert.equal(result.material_change, false);
+  }
+  for (const independentlyExcluded of [
+    {isDraft: true}, {mergeable: "CONFLICTING"}, {author: {login: "bob"}},
+  ]) {
+    const result = observe(signalScope, [{...row, ...independentlyExcluded, review_coverage_incomplete: true}]);
+    assert.equal(result.observation_incomplete, false);
+    assert.deepEqual(result.scoped_repository_items, []);
+  }
+  const partial = {...row, review_coverage_incomplete: true, comments_coverage_incomplete: true};
+  assert.deepEqual(planStewardSignalCommentBackfill({signal_scope: signalScope, observed_at,
+    repository_items: [partial]}), {pr_numbers: []});
+  assert.equal(observe(null, [row]).result_hash,
+    observe(null, [{...row, review_coverage_incomplete: true}]).result_hash);
+});
+
 test("age filters distinguish unreadable clocks from verified exclusions and reply bypass", () => {
   const observed_at = "2030-01-03T12:00:00Z";
   const oldClock = "2030-01-01T12:00:00Z";

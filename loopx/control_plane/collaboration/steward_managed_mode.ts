@@ -1167,22 +1167,16 @@ function filterScopedRepositoryItems(
   const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
   const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
   const canBypassAge = authorMode === "exclude";
+  const requiresCompleteReviews = minStalledHours !== null || effectiveVerdicts !== null
+    || requiredApprovers !== null || filter?.exclude_conflicting === true;
 
   const matched: RepositoryItem[] = [];
   for (const item of items) {
     if (filter?.exclude_drafts === true && item.isDraft === true) continue;
-    const reviewSummary = jsonObject(item.review_summary);
     if (
       filter?.exclude_conflicting === true
-      && (String(item.mergeable ?? "").toUpperCase() === "CONFLICTING" || reviewSummary?.has_review_conflict === true)
+      && String(item.mergeable ?? "").toUpperCase() === "CONFLICTING"
     ) {
-      continue;
-    }
-    if (effectiveVerdicts !== null) {
-      const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
-      if (!effectiveVerdicts.has(verdict)) continue;
-    }
-    if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
       continue;
     }
     let authorMembershipUncertain = false;
@@ -1191,6 +1185,20 @@ function filterScopedRepositoryItems(
       authorMembershipUncertain = !login;
       if (login && authorMode === "include" && !authors.has(login)) continue;
       if (login && authorMode === "exclude" && authors.has(login)) continue;
+    }
+    if (requiresCompleteReviews && item.review_coverage_incomplete === true) {
+      if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+      // Reading comments cannot recover an incomplete review window.
+      continue;
+    }
+    const reviewSummary = jsonObject(item.review_summary);
+    if (filter?.exclude_conflicting === true && reviewSummary?.has_review_conflict === true) continue;
+    if (effectiveVerdicts !== null) {
+      const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
+      if (!effectiveVerdicts.has(verdict)) continue;
+    }
+    if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
+      continue;
     }
     let scopedItem = item;
     if (minStalledHours !== null) {
@@ -1305,7 +1313,7 @@ function projectRepositoryItemForMaterialHash(item: RepositoryItem, usesStalledA
     }
     return projectedItem;
   }
-  const projectedItem = omitKeys(item, AGE_FILTER_ITEM_FIELDS);
+  const projectedItem = omitKeys(item, [...AGE_FILTER_ITEM_FIELDS, "review_coverage_incomplete"]);
   if (reviewSummary !== null) {
     projectedItem.review_summary = omitKeys(reviewSummary, AGE_FILTER_REVIEW_SUMMARY_FIELDS);
   }

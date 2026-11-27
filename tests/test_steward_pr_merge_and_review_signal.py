@@ -226,11 +226,15 @@ def _graphql_page(
     }
 
 
+def _graphql_reviews(nodes: list[Any], **metadata: Any) -> dict[str, Any]:
+    return {"nodes": nodes, "totalCount": len(nodes), "pageInfo": {"hasPreviousPage": False}, **metadata}
+
+
 def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     copied = dict(row)
     default_contexts = copied.pop("statusCheckRollup", [])
     rollup_contexts = contexts if contexts is not None else default_contexts
-    copied["reviews"] = {"nodes": copied.get("reviews") or []}
+    copied["reviews"] = _graphql_reviews(copied.get("reviews") or [])
     copied.setdefault("comments", {"nodes": [], "pageInfo": {"hasPreviousPage": False}})
     copied["commits"] = {
         "nodes": [
@@ -802,6 +806,7 @@ def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
             **candidate, "id": "PRR_comment", "state": "COMMENTED",
             "submittedAt": submitted, "commit": {"oid": head},
         })
+        node["reviews"]["totalCount"] += 1
     else:
         replies.append({**candidate, "createdAt": submitted})
     finished = {"nodes": replies, "pageInfo": {"hasPreviousPage": False}}
@@ -2080,10 +2085,13 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     )
     verified_age_snapshot = age_snapshot_path.read_bytes()
 
-    def _read_review_times(reviews):
+    def _read_review_times(reviews, **metadata):
         def runner(cmd, **_kw):
             assert all(not arg.startswith("before=") for arg in cmd)
-            node = {**complete_node, "reviews": {"nodes": reviews}}
+            query = next(arg for arg in cmd if arg.startswith("query="))
+            review_fields = query.split("reviews(last: 20) {", 1)[1].split("nodes {", 1)[0]
+            assert "totalCount" in review_fields and "hasPreviousPage" in review_fields
+            node = {**complete_node, "reviews": _graphql_reviews(reviews, **metadata)}
             return subprocess.CompletedProcess(
                 cmd, 0, stdout=json.dumps(_graphql_page([node])), stderr="",
             )
@@ -2097,6 +2105,18 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     ):
         with pytest.raises(RuntimeError, match="temporarily unavailable"):
             _collect_with_gh(age_todo_with_hash, _read_review_times(unresolved_reviews))
+        assert age_snapshot_path.read_bytes() == verified_age_snapshot
+
+    for reviews, metadata in (
+        ([], {"pageInfo": {"hasPreviousPage": True}, "totalCount": 21}),
+        ([None], {}),
+        ([rc_review], {"pageInfo": {"hasPreviousPage": "false"}}),
+        ([rc_review], {"totalCount": 2}),
+        ([rc_review, rc_review], {}),
+        ([{**rc_review, "commit": None}], {}),
+    ):
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            _collect_with_gh(age_todo_with_hash, _read_review_times(reviews, **metadata))
         assert age_snapshot_path.read_bytes() == verified_age_snapshot
 
     stale, _, _ = _collect_with_gh(
@@ -2140,7 +2160,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
             "author": maintainer_reply["author"], "authorAssociation": "MEMBER",
             "id": "PRR_comment_undated", "state": "COMMENTED", "commit": {"oid": head}, "submittedAt": None,
         }
-        node = {**complete_node, "reviews": {"nodes": [rc_review, undated_review]}}
+        node = {**complete_node, "reviews": _graphql_reviews([rc_review, undated_review])}
         with pytest.raises(RuntimeError, match="temporarily unavailable"):
             _collect_with_gh(
                 {**age_todo, "result_hash": known["result_hash"]}, _fail_if_backfill(node),

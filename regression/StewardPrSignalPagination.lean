@@ -801,6 +801,59 @@ theorem skipping_an_undated_maintainer_can_publish_a_false_bypass :
       observeStalledScope [] 42 (decideUndatedReply true []) := by
   decide
 
+/- Review identifiers stand in for readable rows tied to known commits.
+   None represents a row whose identity or commit is unavailable. Use the
+   provider's terminal flag and reported count to qualify the whole window. -/
+def reviewWindowComplete (headKnown : Bool) (hasPrevious : Option Bool) (total : Option Nat)
+    (reviews : List (Option Nat)) : Bool :=
+  headKnown && hasPrevious == some false && total == some reviews.length &&
+    reviews.all Option.isSome && decide reviews.Nodup
+
+theorem review_window_check_is_sound_and_complete (headKnown : Bool) (hasPrevious : Option Bool)
+    (total : Option Nat) (reviews : List (Option Nat)) :
+    reviewWindowComplete headKnown hasPrevious total reviews = true ↔
+      headKnown = true ∧ hasPrevious = some false ∧ total = some reviews.length ∧
+        (∀ review ∈ reviews, review.isSome = true) ∧ reviews.Nodup := by
+  simp [reviewWindowComplete, List.all_eq_true, and_assoc]
+
+theorem truncated_and_verified_empty_review_windows_are_distinct :
+    reviewWindowComplete true (some true) (some 1) [] = false ∧
+      reviewWindowComplete true (some false) (some 0) [] = true := by
+  decide
+
+theorem a_null_review_cannot_be_covered_by_a_matching_count :
+    reviewWindowComplete true (some false) (some 2) [some 7, none] = false := by
+  decide
+
+theorem duplicate_reviews_cannot_supply_distinct_coverage :
+    reviewWindowComplete true (some false) (some 2) [some 7, some 7] = false := by
+  decide
+
+def scopeWithReviewCoverage (independentExclusion reviewsRequired coverageComplete included : Bool) :
+    Option Bool :=
+  if independentExclusion then some false
+  else if reviewsRequired && !coverageComplete then none
+  else some included
+
+theorem review_scope_can_publish_iff_coverage_is_sufficient
+    (independentExclusion reviewsRequired coverageComplete included : Bool) :
+    (scopeWithReviewCoverage independentExclusion reviewsRequired coverageComplete included).isSome =
+      (independentExclusion || !reviewsRequired || coverageComplete) := by
+  cases independentExclusion <;> cases reviewsRequired <;> cases coverageComplete <;> rfl
+
+theorem incomplete_required_reviews_keep_the_prior_result (prior : List Nat) (number : Nat)
+    (included : Bool) :
+    observeStalledScope prior number (scopeWithReviewCoverage false true false included) =
+      (prior, false) := rfl
+
+theorem independent_exclusion_survives_unreadable_reviews (included : Bool) :
+    scopeWithReviewCoverage true true false included = some false := rfl
+
+theorem interpreting_an_unreadable_window_as_absence_can_publish_a_false_removal :
+    observeStalledScope [42] 42 (scopeWithReviewCoverage false true false false) ≠
+      observeStalledScope [42] 42 (scopeWithReviewCoverage false true true false) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -883,5 +936,13 @@ theorem skipping_an_undated_maintainer_can_publish_a_false_bypass :
 #print axioms undated_unknown_actor_cannot_qualify_reply
 #print axioms unreadable_maintainer_time_preserves_prior
 #print axioms skipping_an_undated_maintainer_can_publish_a_false_bypass
+#print axioms review_window_check_is_sound_and_complete
+#print axioms truncated_and_verified_empty_review_windows_are_distinct
+#print axioms a_null_review_cannot_be_covered_by_a_matching_count
+#print axioms duplicate_reviews_cannot_supply_distinct_coverage
+#print axioms review_scope_can_publish_iff_coverage_is_sufficient
+#print axioms incomplete_required_reviews_keep_the_prior_result
+#print axioms independent_exclusion_survives_unreadable_reviews
+#print axioms interpreting_an_unreadable_window_as_absence_can_publish_a_false_removal
 
 end StewardPrSignalPagination
