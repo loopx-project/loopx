@@ -295,10 +295,12 @@ def _print_smoke_suite_progress(event: dict[str, Any]) -> None:
         status = str(event.get("status") or "")
         selected = event.get("selected_check_count")
         executed = event.get("executed_check_count")
+        reused = event.get("reused_check_count")
         failures = event.get("failure_count")
+        reused_part = f" reused={reused}" if reused else ""
         print(
             f"[loopx canary] done {section_prefix.strip() or 'section'}: {status} "
-            f"selected={selected} executed={executed} failures={failures}",
+            f"selected={selected} executed={executed}{reused_part} failures={failures}",
             file=sys.stderr,
             flush=True,
         )
@@ -312,8 +314,9 @@ def _print_smoke_suite_progress(event: dict[str, Any]) -> None:
     elif kind == "check_finished":
         status = str(event.get("status") or "")
         duration = event.get("duration_seconds")
+        reused_suffix = ", reused" if event.get("reused") else ""
         print(
-            f"[loopx canary] done {section_prefix}{index}/{total}: {status} ({duration}s)",
+            f"[loopx canary] done {section_prefix}{index}/{total}: {status} ({duration}s{reused_suffix})",
             file=sys.stderr,
             flush=True,
         )
@@ -630,6 +633,17 @@ def register_canary_commands(
         help="Stop smoke-suite sections after the first failed check.",
     )
     premerge_parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=None,
+        help=(
+            "Run up to this many smoke checks concurrently in catalog and "
+            "risk-profile sections; defaults to bounded CPU parallelism unless "
+            "--fail-fast is set."
+        ),
+    )
+    premerge_parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Do not print premerge validation progress to stderr during execution.",
@@ -775,6 +789,7 @@ def handle_canary_command(
             timeout_seconds=float(args.timeout_seconds or 120.0),
             fail_fast=bool(args.fail_fast),
             include_deep_checks=bool(args.include_deep_checks),
+            parallel_jobs=args.jobs,
             repo_root=target_repo_root,
             progress_callback=(
                 None
