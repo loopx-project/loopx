@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
+  <title id="t">面向 Agent 的 CLI：状态机合同，而非人类终端文本</title>
+  <desc id="d">LoopX 面向 Agent 的 CLI 四大支柱：单一 Turn 决策 owner、区分完整度与展示截断的密封 projection_envelope、前缀 KV 与单次 RPC 经济学，以及纯只读预检与 CAS 加 operation_id 幂等重放。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
+    </marker>
+    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#047857"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#fafafa"/>
+  <style>
+    text { font-family: Geist, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #171717; }
+    .sub { fill: #4d4d4d; }
+    .blue { fill: #0070f3; }
+    .green { fill: #047857; }
+    .on-dark { fill: #ffffff; }
+    .on-dark-sub { fill: #e5e5e5; }
+    .on-dark-muted { fill: #a3a3a3; }
+    .on-dark-dim { fill: #d4d4d4; }
+    .on-dark-sky { fill: #93c5fd; }
+    .mono { font-family: "Geist Mono", "SFMono-Regular", monospace; }
+    .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
+    .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
+    .box-ok { fill: #f0fdf4; stroke: #86efac; stroke-width: 1.4; }
+    .flow { fill: none; stroke: #0070f3; stroke-width: 1.8; marker-end: url(#arrow); }
+    .flow-ok { fill: none; stroke: #047857; stroke-width: 1.8; marker-end: url(#arrowGreen); }
+  </style>
+
+  <text x="42" y="52" font-size="29" font-weight="600">面向 Agent 的 CLI：状态机合同，而非人类终端文本</text>
+  <text x="42" y="86" font-size="17" class="sub">受控输出预算、密封完整度信封、前缀 KV 缓存保护，以及 CAS 与幂等回执重放</text>
+
+  <!-- Left Actor: LLM Agent -->
+  <rect x="42" y="124" width="250" height="404" rx="12" fill="#171717"/>
+  <text x="64" y="162" font-size="20" font-weight="600" class="on-dark">LLM Agent 执行轮</text>
+  <text x="64" y="190" font-size="14" class="on-dark-muted">无跨轮带外记忆的字面量消费者</text>
+
+  <text x="64" y="228" font-size="14" class="on-dark">• 每字节 stdout 都直接计入</text>
+  <text x="76" y="249" font-size="14" class="on-dark-dim">提示词窗口与前缀 KV 缓存</text>
+
+  <text x="64" y="284" font-size="14" class="on-dark">• 未标记截断的 ok:true 会被</text>
+  <text x="76" y="305" font-size="14" class="on-dark-dim">字面误判为“剩余任务为零”</text>
+
+  <text x="64" y="340" font-size="14" class="on-dark">• 预检副作用与超时断连极易</text>
+  <text x="76" y="361" font-size="14" class="on-dark-dim">触发盲目猜参和重复写入</text>
+
+  <rect x="60" y="388" width="214" height="120" rx="8" fill="#262626" stroke="#404040"/>
+  <text x="76" y="416" font-size="12.5" class="mono on-dark-sky">前缀 KV 折叠 (#9213)</text>
+  <text x="76" y="442" font-size="13.5" class="on-dark-sub">早期前缀哈希零改动；</text>
+  <text x="76" y="464" font-size="13.5" class="on-dark-sub">已完结任务后缀原子折叠为</text>
+  <text x="76" y="486" font-size="13.5" class="on-dark-sub">保留失败事实的紧凑回执 μ</text>
+
+  <!-- Pillar 1 -->
+  <rect class="box-hi" x="336" y="124" width="350" height="186" rx="12"/>
+  <text x="358" y="154" font-size="12.5" font-weight="500" class="mono blue">01 · 单一 TURN 决策 OWNER</text>
+  <text x="358" y="184" font-size="19" font-weight="600">统一计划与可复制修复命令</text>
+  <text x="358" y="214" font-size="15" class="sub">should-run · run-once · managed-step</text>
+  <text x="358" y="240" font-size="15" class="sub">2.2 万行 RPC：2.35 MB → 959 B (#7462)</text>
+  <text x="358" y="266" font-size="15" class="sub">直接投影可复制执行的收尾与恢复命令</text>
+  <text x="358" y="293" font-size="13" class="mono sub">#4496 · #6212 · #8855 · #9136 · #9293</text>
+
+  <!-- Pillar 2 -->
+  <rect class="box" x="712" y="124" width="346" height="186" rx="12"/>
+  <text x="734" y="154" font-size="12.5" font-weight="500" class="mono blue">02 · 密封 PROJECTION ENVELOPE</text>
+  <text x="734" y="184" font-size="19" font-weight="600">源完整度 ≠ 展示截断</text>
+  <text x="734" y="214" font-size="15" class="sub">单事务 todo.read 先对全量集合求值</text>
+  <text x="734" y="240" font-size="15" class="sub">truncated:true 绝不伪装成“全部做完”</text>
+  <text x="734" y="266" font-size="15" class="sub">分离 observed_at 与 served_at 诚实计龄</text>
+  <text x="734" y="293" font-size="13" class="mono sub">#5085 · #5087 · #6679 · #6874</text>
+
+  <!-- Pillar 3 -->
+  <rect class="box" x="712" y="342" width="346" height="186" rx="12"/>
+  <text x="734" y="372" font-size="12.5" font-weight="500" class="mono blue">03 · 上下文与 RPC 经济学</text>
+  <text x="734" y="402" font-size="19" font-weight="600">渐进差分交付与单次状态读取</text>
+  <text x="734" y="432" font-size="15" class="sub">&gt;=1 KiB 子树摘要跨轮去重 (#7196)</text>
+  <text x="734" y="458" font-size="15" class="sub">任务备注追加只传新增后缀 (#8523)</text>
+  <text x="734" y="484" font-size="15" class="sub">消除 N+1 风暴：收敛为 1 次 todo.read</text>
+  <text x="734" y="511" font-size="13" class="mono sub">#6123 · #8100 · #9103 · #9392</text>
+
+  <!-- Pillar 4 -->
+  <rect class="box-ok" x="336" y="342" width="350" height="186" rx="12"/>
+  <text x="358" y="372" font-size="12.5" font-weight="500" class="mono green">04 · 读写纯净与 CAS 幂等重放</text>
+  <text x="358" y="402" font-size="19" font-weight="600">纯只读预检与精确 CAS 重放</text>
+  <text x="358" y="432" font-size="15" class="sub">--dry-run 零写钩子、零回执污染 (#8685)</text>
+  <text x="358" y="458" font-size="15" class="sub">漏领准备租约在零配额消耗前前置拒绝</text>
+  <text x="358" y="484" font-size="14" class="mono sub">--expected-revision + --operation-id</text>
+  <text x="358" y="511" font-size="13" class="mono sub">#4094 · #8310 · #8776 · #9263 · #9433</text>
+
+  <!-- Loop connectors -->
+  <path class="flow" d="M292 214 H330"/>
+  <path class="flow" d="M686 214 H706"/>
+  <path class="flow" d="M885 310 V336"/>
+  <path class="flow-ok" d="M712 435 H692"/>
+  <path class="flow-ok" d="M336 435 H298"/>
+
+  <text x="42" y="590" font-size="16" class="sub">每次 PR 由 base/head 差分预算门禁（#6123、#9103）同步校验字节、行数、JSON 键集与动作签名摘要。</text>
+</svg>

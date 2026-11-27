@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
+  <title id="t">长程任务原语在同一状态内核上组合运行</title>
+  <desc id="d">按作用域唤醒的 resume_when、不阻塞队列的 continuous_monitor 与保留因果谱系的自主 replan 在同一套 TypeScript 状态内核上组合，底层连接 AuthorityStore 与只追加运行账本。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#fafafa"/>
+  <style>
+    text { font-family: Geist, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #171717; }
+    .sub { fill: #4d4d4d; }
+    .blue { fill: #0070f3; }
+    .on-dark { fill: #ffffff; }
+    .on-dark-sub { fill: #e5e5e5; }
+    .on-dark-sky { fill: #93c5fd; }
+    .mono { font-family: "Geist Mono", "SFMono-Regular", monospace; }
+    .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
+    .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
+    .kernel { fill: #171717; stroke: #171717; }
+    .flow { fill: none; stroke: #0070f3; stroke-width: 1.8; marker-end: url(#arrow); }
+  </style>
+
+  <text x="42" y="52" font-size="29" font-weight="600">长程任务原语在同一状态内核上组合运行</text>
+  <text x="42" y="86" font-size="17" class="sub">按作用域唤醒、后台观测、谱系重规划与 3 小时租约共享原子修订号与回执</text>
+
+  <!-- Primitive 1: resume by todo -->
+  <rect class="box" x="42" y="114" width="320" height="160" rx="12"/>
+  <text x="64" y="144" font-size="12.5" font-weight="500" class="mono blue">RESUME · #6874 #8231 #9488</text>
+  <text x="64" y="174" font-size="19" font-weight="600">按作用域精准续跑</text>
+  <text x="64" y="204" font-size="15" class="sub">5 类闭集唤醒条件微秒级求值</text>
+  <text x="64" y="229" font-size="14" class="mono sub">monitor_changed:&lt;id&gt;@&lt;scope&gt;</text>
+  <text x="64" y="254" font-size="15" class="sub">同 owner 跨代租约安全接管</text>
+
+  <!-- Primitive 2: continuous_monitor -->
+  <rect class="box" x="390" y="114" width="320" height="160" rx="12"/>
+  <text x="412" y="144" font-size="12.5" font-weight="500" class="mono blue">MONITOR · #5450 #9155 #9320</text>
+  <text x="412" y="174" font-size="19" font-weight="600">不阻塞队列的持续观测</text>
+  <text x="412" y="204" font-size="15" class="sub">独立 background 会话隔离聊天</text>
+  <text x="412" y="229" font-size="15" class="sub">纯观测跳过模型探活防误杀队列</text>
+  <text x="412" y="254" font-size="15" class="sub">清空作用域显式写回 clear_fields</text>
+
+  <!-- Primitive 3: autonomous replan -->
+  <rect class="box" x="738" y="114" width="320" height="160" rx="12"/>
+  <text x="760" y="144" font-size="12.5" font-weight="500" class="mono blue">REPLAN · #5698 #8588 #9411</text>
+  <text x="760" y="174" font-size="19" font-weight="600">保留因果谱系的重规划</text>
+  <text x="760" y="204" font-size="15" class="sub">单事务替代旧任务并释放租约</text>
+  <text x="760" y="229" font-size="15" class="sub">监控退役后保留连续无变化源</text>
+  <text x="760" y="254" font-size="15" class="sub">派生终止前优先完成原回执结算</text>
+
+  <!-- Arrows into TS Kernel -->
+  <path class="flow" d="M202 274 V308"/>
+  <path class="flow" d="M550 274 V308"/>
+  <path class="flow" d="M898 274 V308"/>
+
+  <!-- Central TypeScript Kernel -->
+  <rect class="kernel" x="42" y="314" width="1016" height="116" rx="12"/>
+  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript 任务与结算内核（turn_envelope · todo.read · replan_semantics）</text>
+  <text x="66" y="380" font-size="15" class="on-dark-sub">单事务求值完整任务与 Vision 谱系 · identity_upgrade 时自动剥离陈旧守卫字段（#9411）</text>
+  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">并发围栏：GoalRef 历史确认序（#8975）· 3h 强租约代际（#9487）· 后台观测与前台重规划串行化（#9474）</text>
+
+  <!-- Arrows into Storage & Journal -->
+  <path class="flow" d="M290 430 V462"/>
+  <path class="flow" d="M810 430 V462"/>
+
+  <!-- Bottom Left: AuthorityStore -->
+  <rect class="box-hi" x="42" y="468" width="494" height="106" rx="12"/>
+  <text x="66" y="501" font-size="18" font-weight="600">AuthorityStore（SQLite WAL · 远端网关 SPI）</text>
+  <text x="66" y="529" font-size="15" class="sub">原子提交 head、task_lease、归档表与操作回执</text>
+  <text x="66" y="555" font-size="13.5" class="mono sub">provider_revision · lease_epoch · clear_fields (#9249)</text>
+
+  <!-- Bottom Right: Rollout & Turn Journal -->
+  <rect class="box" x="564" y="468" width="494" height="106" rx="12"/>
+  <text x="588" y="501" font-size="18" font-weight="600">只追加运行账本与 Turn Journal</text>
+  <text x="588" y="529" font-size="15" class="sub">外部副作用预检记录 · 同秒微秒级日志位点核验</text>
+  <text x="588" y="555" font-size="13.5" class="mono sub">turn_instance_id · effect_id · takeover_sha256 (#8804)</text>
+
+  <text x="42" y="610" font-size="16" class="sub">在类型化状态上组合原语，消除了单一特性顺风路径无法暴露的跨轮次死锁与唤醒风暴。</text>
+</svg>

@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
+  <title id="t">Long-horizon task primitives compose over one kernel</title>
+  <desc id="d">Scoped resume_when continuation, non-starving continuous_monitor observation, and lineage-preserving replan compose over a single TypeScript transaction kernel backed by AuthorityStore and the append-only rollout journal.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
+    </marker>
+  </defs>
+  <rect width="100%" height="100%" fill="#fafafa"/>
+  <style>
+    text { font-family: Geist, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #171717; }
+    .sub { fill: #4d4d4d; }
+    .blue { fill: #0070f3; }
+    .on-dark { fill: #ffffff; }
+    .on-dark-sub { fill: #e5e5e5; }
+    .on-dark-sky { fill: #93c5fd; }
+    .mono { font-family: "Geist Mono", "SFMono-Regular", monospace; }
+    .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
+    .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
+    .kernel { fill: #171717; stroke: #171717; }
+    .flow { fill: none; stroke: #0070f3; stroke-width: 1.8; marker-end: url(#arrow); }
+  </style>
+
+  <text x="42" y="52" font-size="29" font-weight="600">Long-horizon task primitives compose over one kernel</text>
+  <text x="42" y="86" font-size="17" class="sub">Scoped wakes, background watches, lineage replans, and 3h leases share atomic revisions and receipts</text>
+
+  <!-- Primitive 1: resume by todo -->
+  <rect class="box" x="42" y="114" width="320" height="160" rx="12"/>
+  <text x="64" y="144" font-size="12.5" font-weight="500" class="mono blue">RESUME · #6874 #8231 #9488</text>
+  <text x="64" y="174" font-size="19" font-weight="600">Scoped continuation</text>
+  <text x="64" y="204" font-size="15" class="sub">5 closed resume_when kinds</text>
+  <text x="64" y="229" font-size="14" class="mono sub">monitor_changed:&lt;id&gt;@&lt;scope&gt;</text>
+  <text x="64" y="254" font-size="15" class="sub">Fenced same-owner lease takeover</text>
+
+  <!-- Primitive 2: continuous_monitor -->
+  <rect class="box" x="390" y="114" width="320" height="160" rx="12"/>
+  <text x="412" y="144" font-size="12.5" font-weight="500" class="mono blue">MONITOR · #5450 #9155 #9320</text>
+  <text x="412" y="174" font-size="19" font-weight="600">Non-starving observation</text>
+  <text x="412" y="204" font-size="15" class="sub">Isolated background carrier</text>
+  <text x="412" y="229" font-size="15" class="sub">Zero LLM healthcheck queue-kill</text>
+  <text x="412" y="254" font-size="15" class="sub">Explicit clear_fields on null</text>
+
+  <!-- Primitive 3: autonomous replan -->
+  <rect class="box" x="738" y="114" width="320" height="160" rx="12"/>
+  <text x="760" y="144" font-size="12.5" font-weight="500" class="mono blue">REPLAN · #5698 #8588 #9411</text>
+  <text x="760" y="174" font-size="19" font-weight="600">Lineage &amp; obligation</text>
+  <text x="760" y="204" font-size="15" class="sub">Atomic supersede + lease release</text>
+  <text x="760" y="229" font-size="15" class="sub">Streak source survives retirement</text>
+  <text x="760" y="254" font-size="15" class="sub">Settle receipt before Goal stop</text>
+
+  <!-- Arrows into TS Kernel -->
+  <path class="flow" d="M202 274 V308"/>
+  <path class="flow" d="M550 274 V308"/>
+  <path class="flow" d="M898 274 V308"/>
+
+  <!-- Central TypeScript Kernel -->
+  <rect class="kernel" x="42" y="314" width="1016" height="116" rx="12"/>
+  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript Task &amp; Settlement Kernel (turn_envelope · todo.read · replan_semantics)</text>
+  <text x="66" y="380" font-size="15" class="on-dark-sub">Evaluates full Todo &amp; Vision lineage in one transaction · Strips stale guard companions on identity_upgrade (#9411)</text>
+  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">Fences: GoalRef ACK order (#8975) · 3h hard_lease epoch (#9487) · bg monitor vs fg replan serialization (#9474)</text>
+
+  <!-- Arrows into Storage & Journal -->
+  <path class="flow" d="M290 430 V462"/>
+  <path class="flow" d="M810 430 V462"/>
+
+  <!-- Bottom Left: AuthorityStore -->
+  <rect class="box-hi" x="42" y="468" width="494" height="106" rx="12"/>
+  <text x="66" y="501" font-size="18" font-weight="600">AuthorityStore (SQLite WAL · Remote SPI)</text>
+  <text x="66" y="529" font-size="15" class="sub">Atomic head + task_lease + todo_archive + receipt</text>
+  <text x="66" y="555" font-size="13.5" class="mono sub">provider_revision · lease_epoch · clear_fields (#9249)</text>
+
+  <!-- Bottom Right: Rollout & Turn Journal -->
+  <rect class="box" x="564" y="468" width="494" height="106" rx="12"/>
+  <text x="588" y="501" font-size="18" font-weight="600">Append-Only Rollout &amp; Turn Journal</text>
+  <text x="588" y="529" font-size="15" class="sub">Prepared-effect preflight · microsecond ACK index</text>
+  <text x="588" y="555" font-size="13.5" class="mono sub">turn_instance_id · effect_id · takeover_sha256 (#8804)</text>
+
+  <text x="42" y="610" font-size="16" class="sub">Composing primitives on typed state eliminates cross-turn deadlocks that single-feature happy paths miss.</text>
+</svg>
