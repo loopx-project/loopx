@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import loopx.chat_store as chat_store
 from loopx.chat_loopx_mode import TOOL
 from loopx.chat_runtime import ChatRuntimeController
 from loopx.chat_store import ChatSessionStore
@@ -314,6 +315,43 @@ def test_queue_inbox_are_durable_distinct_and_steer_failure_is_not_downgraded(
             message="Correction",
         )
     assert len(service.store.loopx_ingress(sid)) == 2
+
+
+def test_retained_ingress_is_read_and_drained_in_utc_order(mode, monkeypatch):
+    service, sid, _, _, _ = mode
+    receipts = [
+        ("earlier-z", "2026-02-03T10:00:00Z", "loopx_queue"),
+        ("later", "2026-02-03T10:00:00.000001Z", "loopx_queue"),
+        ("equal-offset", "2026-02-03T18:00:00+08:00", "loopx_queue"),
+        ("earlier-a", "2026-02-03T10:00:00Z", "loopx_queue"),
+        ("inbox", "2026-02-03T10:00:00.000002Z", "loopx_inbox"),
+        ("live", "2026-02-03T10:00:00.000003Z", "live_steering"),
+    ]
+    for ingress_id, created_at, ingress_mode in receipts:
+        monkeypatch.setattr(chat_store, "utc_now", lambda stamp=created_at: stamp)
+        service.store.create_ingress_receipt(
+            sid, client_ingress_id=ingress_id, mode=ingress_mode, message=ingress_id
+        )
+
+    queue_order = ["earlier-a", "earlier-z", "equal-offset", "later"]
+    assert [row["client_ingress_id"] for row in service.snapshot(sid)["ingress"]] == [
+        *queue_order, "inbox"
+    ]
+
+    delivered_batches = []
+
+    def capture_steer(message, *, expected_turn_id):
+        delivered_batches.append((expected_turn_id, json.loads(message.split("\n", 1)[1])))
+
+    adapter = SimpleNamespace(session=SimpleNamespace(steer=capture_steer))
+    service.deliver_queue(sid, adapter, "fixture-turn")
+    service.deliver_queue(sid, adapter, "next-fixture-turn")
+
+    assert delivered_batches == [("fixture-turn", queue_order)]
+    assert {row["client_ingress_id"]: row["status"] for row in service.store.loopx_ingress(sid)} == {
+        **dict.fromkeys(queue_order, "delivered"),
+        "inbox": "pending",
+    }
 
 
 def test_uncertain_queue_is_not_replayed(mode):
