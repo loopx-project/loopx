@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import timedelta
 import inspect
 import math
 from pathlib import Path
@@ -101,11 +102,12 @@ def _read_repository_snapshot(
     if "select_comment_backfill" not in inspect.signature(observe_github_prs).parameters:
         return observe_github_prs(repo_slug, backfill_comments=True)
 
-    def select_comment_backfill(items: Sequence[Mapping[str, object]]) -> set[int]:
+    def select_comment_backfill(items: Sequence[Mapping[str, object]], remaining_seconds: float) -> set[int]:
+        latest_observation = now_utc() + timedelta(milliseconds=math.ceil(remaining_seconds * 1000))
         planned = core("collaboration.steward.monitor.comment_backfill.plan", {
             "signal_scope": signal_scope,
             "repository_items": items,
-            "observed_at": now_utc().isoformat(),
+            "observed_at": latest_observation.isoformat(),
         }).get("pr_numbers")
         if not isinstance(planned, list) or any(type(number) is not int or number <= 0 for number in planned):
             raise TypeError("invalid Steward comment backfill plan")

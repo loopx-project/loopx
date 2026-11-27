@@ -1152,6 +1152,7 @@ function filterScopedRepositoryItems(
     : null;
   const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
   const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
+  const canBypassAge = authorMode === "exclude";
 
   const matched: JsonObject[] = [];
   for (const rawItem of rawItems) {
@@ -1194,6 +1195,12 @@ function filterScopedRepositoryItems(
       ) {
         continue;
       }
+      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
+      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const basisKnown = Number.isFinite(basisMs);
+      const thresholdMet = basisKnown && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      if (!canBypassAge && basisKnown && !thresholdMet) continue;
+
       // Fail closed when comment pagination did not reach the stalled anchor or a newer
       // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
       const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
@@ -1203,14 +1210,11 @@ function filterScopedRepositoryItems(
         onIncompleteComments(item);
         continue;
       }
-      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
-      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
-      const authorReplyBypass = authorReplied && authorMode === "exclude";
-      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      const authorReplyBypass = authorReplied && canBypassAge;
       if (!authorReplyBypass && !thresholdMet) {
         continue;
       }
-      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
+      const stalledAgeMs = basisKnown ? Math.max(0, observedAtMs - basisMs) : 0;
       matched.push({
         ...item,
         stalled_threshold_met: thresholdMet,
@@ -1231,6 +1235,7 @@ export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject
     throw new EffectRuntimeRequestError("comment backfill requires repository items");
   }
   const prNumbers: number[] = [];
+  // The planner's cutoff includes the time still available for provider reads.
   filterScopedRepositoryItems(params.repository_items, filter, params.observed_at, (item) => {
     const number = item.number;
     if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) {

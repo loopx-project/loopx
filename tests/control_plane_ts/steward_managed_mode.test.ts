@@ -1115,7 +1115,7 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
   }}), {pr_numbers: [302, 306]});
   assert.deepEqual(planStewardSignalCommentBackfill({
     ...planParams, signal_scope: internalStalledScope,
-  }), {pr_numbers: [301]});
+  }), {pr_numbers: []});
   assert.deepEqual(planStewardSignalCommentBackfill({
     ...planParams, signal_scope: noAgeScope,
   }), {pr_numbers: []});
@@ -1165,6 +1165,42 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
   });
   assert.equal(externalIgnoringDraftOrApprove.observation_incomplete, false);
   assert.deepEqual(externalIgnoringDraftOrApprove.scoped_repository_items, []);
+});
+
+test("Steward comment coverage respects the exact age boundary and reply bypass", () => {
+  const observedAt = "2026-11-22T08:00:00.000Z";
+  const scope = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: false, pr_filter: {min_stalled_hours: 24, author_mode: "include", authors: ["alice"]}};
+  const younger = {number: 11, author: {login: "alice"}, stalled_since: "2026-11-21T08:00:00.001Z",
+    comments_coverage_incomplete: true, review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const exact = {...younger, number: 12, stalled_since: "2026-11-21T08:00:00.000Z"};
+  const invalid = {...younger, number: 13, stalled_since: "invalid"};
+  const plan = (signalScope: typeof scope, items: unknown[]) => planStewardSignalCommentBackfill({
+    signal_scope: signalScope, repository_items: items, observed_at: observedAt,
+  });
+  const observe = (signalScope: typeof scope, items: unknown[]) => observeStewardSignalMonitor({
+    signal_scope: signalScope, repository_snapshot: {status: "ok", items}, observed_at: observedAt,
+    previous_hash: "sha256:prior",
+  });
+
+  assert.deepEqual(plan(scope, [younger, exact, invalid]), {pr_numbers: [12, 13]});
+  const observation = observe(scope, [younger, {...exact, comments_coverage_incomplete: false}]);
+  assert.equal(observation.observation_incomplete, false);
+  assert.deepEqual((observation.scoped_repository_items as {number: number}[]).map(row => row.number), [12]);
+  for (const unresolved of [exact, invalid]) {
+    const held = observe(scope, [unresolved]);
+    assert.equal(held.observation_incomplete, true);
+    assert.equal(held.result_hash, "sha256:prior");
+  }
+
+  const external = {...scope, pr_filter: {...scope.pr_filter, author_mode: "exclude", authors: ["other"]}};
+  assert.deepEqual(plan(external, [younger]), {pr_numbers: [11]});
+  assert.equal(observe(external, [younger]).observation_incomplete, true);
+  const reply = observe(external, [{...younger, comments_coverage_incomplete: false,
+    author_replied_after_request_changes: true}]);
+  assert.equal(reply.observation_incomplete, false);
+  assert.equal((reply.scoped_repository_items as {stalled_bucket: string}[])[0]?.stalled_bucket,
+    "awaiting_maintainer_reply");
 });
 
 test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {

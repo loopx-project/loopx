@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import subprocess
 from typing import Any
@@ -1737,11 +1738,12 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
 
     # A lower-numbered draft used to consume the remaining read window.
     elapsed = 0
-    pr_pages = iter([
+    pr_nodes = [
         {**truncated_node, "number": 500, "isDraft": True},
         truncated_node,
         *({**complete_node, "number": number, "isDraft": True} for number in (502, 503, 504)),
-    ])
+    ]
+    pr_pages = iter(pr_nodes)
 
     def _age_backfill_runner(cmd, **_kw):
         nonlocal elapsed
@@ -1782,6 +1784,27 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     assert obs_age["observation_incomplete"] is False
     assert obs_age["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"
     assert "--next-agent-todo" in succ_age
+
+    # The PR reaches 24 hours during the last five seconds reserved for backfill.
+    crossing_scope = {
+        **age_scope,
+        "pr_filter": {**age_scope["pr_filter"], "author_mode": "include", "authors": ["ext-contributor"]},
+    }
+    crossing_todo = _create_monitor("steward-age-crosses-during-backfill", crossing_scope)
+    started_at = datetime(2030, 1, 2, 7, 58, 20, tzinfo=timezone.utc)
+    elapsed = 0
+    pr_pages = iter(pr_nodes)
+    with monkeypatch.context() as clock:
+        clock.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed)
+        clock.setattr(
+            "loopx.capabilities.native_chat.steward_monitor_signals.now_utc",
+            lambda: started_at + timedelta(seconds=elapsed),
+        )
+        crossed, _, crossed_cmds = _collect_with_gh(crossing_todo, _age_backfill_runner)
+    assert [arg for cmd in crossed_cmds for arg in cmd if arg.startswith("number=")] == ["number=501"]
+    assert crossed["observation_incomplete"] is False
+    assert crossed["scoped_repository_items"][0]["stalled_threshold_met"] is True
+    assert crossed["scoped_repository_items"][0]["stalled_bucket"] == "24h_to_72h"
 
     # And backfill failure on age-filtered monitor fails closed (RuntimeError -> no hash overwrite).
     age_todo_with_hash = {**age_todo, "result_hash": obs_age["result_hash"]}

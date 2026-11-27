@@ -811,7 +811,7 @@ def observe_github_repository_prs(
     *,
     runner: Callable[..., Any] = subprocess.run,
     backfill_comments: bool = False,
-    select_comment_backfill: Callable[[Sequence[Mapping[str, object]]], set[int]] | None = None,
+    select_comment_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     normalized = normalize_github_repo_slug(repo_slug)
@@ -903,8 +903,9 @@ def observe_github_repository_prs(
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         if backfill_comments:
             candidates = [number for number, item in items.items() if item["comments_coverage_incomplete"]]
-            if select_comment_backfill is not None and candidates and monotonic() < deadline:
-                selected = select_comment_backfill([items[number] for number in candidates])
+            remaining_seconds = deadline - monotonic()
+            if select_comment_backfill is not None and candidates and remaining_seconds > 0:
+                selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)
                 candidates = [number for number in candidates if number in selected]
             remaining_comment_pages = _GITHUB_PR_COMMENT_SCAN_BACKFILL_BUDGET
             for number in candidates:

@@ -67,7 +67,7 @@ def _observe_github_repository_prs(
     repo_slug: str,
     *,
     backfill_comments: bool = False,
-    select_comment_backfill: Callable[[Sequence[Mapping[str, object]]], set[int]] | None = None,
+    select_comment_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
 ) -> dict[str, object]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     raw = observe_github_repository_prs(

@@ -327,6 +327,42 @@ theorem only_remaining_request_reaches_matching_pr_counterexample :
     (((rows.filter (·.incompleteComments)).head?).map CommentCandidate.number = some 500) ∧
     (((commentBackfillCandidates rows).head?).map CommentCandidate.number = some 501) := by decide
 
+/- The existing stalled anchor is fixed by the observed PR and its reviews,
+   before reading older comments. Ticks abstract the normalized UTC instants
+   and positive age threshold. Planning uses the latest instant allowed by the
+   remaining read window, while publication still uses the actual observation. -/
+def needsAgeCommentCoverage (canBypass : Bool) (anchor : Option Nat)
+    (minAge observedAt : Nat) : Bool :=
+  canBypass || match anchor with
+  | none => true
+  | some basis => decide (basis + minAge ≤ observedAt)
+
+theorem required_coverage_at_completion_is_in_the_plan
+    {canBypass : Bool} {anchor : Option Nat} {minAge actual cutoff : Nat}
+    (withinWindow : actual ≤ cutoff)
+    (required : needsAgeCommentCoverage canBypass anchor minAge actual = true) :
+    needsAgeCommentCoverage canBypass anchor minAge cutoff = true := by
+  cases canBypass <;> cases anchor <;> simp [needsAgeCommentCoverage] at *
+  exact Nat.le_trans required withinWindow
+
+theorem skip_only_below_the_threshold
+    (basis minAge observedAt : Nat) (tooYoung : observedAt < basis + minAge) :
+    needsAgeCommentCoverage false (some basis) minAge observedAt = false := by
+  simp [needsAgeCommentCoverage, Nat.not_le.mpr tooYoung]
+
+theorem exact_threshold_keeps_coverage (basis minAge : Nat) :
+    needsAgeCommentCoverage false (some basis) minAge (basis + minAge) = true := by
+  simp [needsAgeCommentCoverage]
+
+theorem unknown_anchor_or_possible_bypass_keeps_coverage (anchor : Option Nat) (minAge clock : Nat) :
+    needsAgeCommentCoverage true anchor minAge clock = true ∧
+    needsAgeCommentCoverage false none minAge clock = true := by
+  simp [needsAgeCommentCoverage]
+
+theorem using_plan_time_alone_loses_a_threshold_crossing :
+    needsAgeCommentCoverage false (some 0) 86400 86395 = false ∧
+    needsAgeCommentCoverage false (some 0) 86400 (86395 + 5) = true := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -353,5 +389,10 @@ theorem only_remaining_request_reaches_matching_pr_counterexample :
 #print axioms backfill_targets_exactly_matching_incomplete_comments
 #print axioms unmatched_pr_cannot_consume_first_comment_request
 #print axioms only_remaining_request_reaches_matching_pr_counterexample
+#print axioms required_coverage_at_completion_is_in_the_plan
+#print axioms skip_only_below_the_threshold
+#print axioms exact_threshold_keeps_coverage
+#print axioms unknown_anchor_or_possible_bypass_keeps_coverage
+#print axioms using_plan_time_alone_loses_a_threshold_crossing
 
 end StewardPrSignalPagination
