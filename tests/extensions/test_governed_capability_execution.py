@@ -534,6 +534,113 @@ g.start_governed_external_capability(**json.load(sys.stdin), execute=True)
     assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
 
 
+def _service_reservation(query):
+    fields = ("challenge", "operation_key", "intent_digest", "request_digest", "invocation_id")
+    return {**{field: query[field] for field in fields},
+            "status": "reserved_after_terminal_no_effect", "reservation_ref": "service-grant-1"}
+
+
+@pytest.mark.parametrize("receiver", ["original", "successor"])
+@pytest.mark.parametrize("crash_at", ["before_lookup", "grant_reply_lost", "after_delivery"])
+def test_restored_process_exit_preserves_safe_retry_boundary(tmp_path, receiver, crash_at):
+    args = _start_arguments(tmp_path)
+    (tmp_path / "runtime" / paths.RESTORED_RUNTIME_MARKER).touch()
+    child = """
+import json, os, sys
+from pathlib import Path
+from loopx.extensions import governed_capability_execution as governed
+from tests.extensions.test_governed_capability_execution import _service_reservation
+
+checkpoint, service = sys.argv[1], Path(sys.argv[2])
+def reserve(query):
+    if checkpoint == "before_lookup":
+        os._exit(73)
+    proof = _service_reservation(query)
+    (service / "provider-reservation.json").write_text(json.dumps(proof))
+    if checkpoint == "grant_reply_lost":
+        os._exit(73)
+    return proof
+
+persist = governed._write_journal
+def write(path, journal):
+    if checkpoint == "after_delivery" and journal.get("provider_result") is not None:
+        os._exit(73)
+    persist(path, journal)
+
+governed._write_journal = write
+governed.start_governed_external_capability(**json.load(sys.stdin), execute=True, reserve_restored_start=reserve)
+"""
+    exited = subprocess.run([sys.executable, "-c", child, crash_at, str(tmp_path)],
+                            input=json.dumps(args, default=str), text=True, timeout=30, check=False)
+    assert exited.returncode == 73
+    pending = tmp_path / "provider-reservation.json"
+    calls = tmp_path / "provider-calls.txt"
+    assert calls.exists() == (crash_at == "after_delivery")
+    assert pending.exists() == (crash_at == "grant_reply_lost")
+    retry = args
+    if receiver == "successor":
+        identity = SettlementIdentity(goal_id=args["goal_id"], todo_id=args["todo_id"],
+                                      agent_id="receiving-agent", turn_instance_id="successor")
+        retry = {**args, "agent_id": identity.agent_id, "turn_instance_id": identity.turn_instance_id,
+                 "admission": _admission(identity)}
+
+    if crash_at == "after_delivery":
+        def forbidden(_query):
+            pytest.fail("an attempt that may have delivered must use original-result readback")
+        with pytest.raises(ValueError, match="unknown|unsettled"):
+            start_governed_external_capability(**retry, execute=True, reserve_restored_start=forbidden)
+        def read_effect(query):
+            ref = query["invocation_id"]
+            return {"request_digest": (tmp_path / f"{ref}.digest").read_text(), "target_key": query["target_key"],
+                    "result": json.loads((tmp_path / f"{ref}.remote.json").read_text())}
+        received = start_governed_external_capability(**{**args, "admission": retry["admission"]},
+                                                      execute=True, read_start_result=read_effect)
+    else:
+        if pending.exists():
+            # Until the service accounts for its unconsumed grant, no second grant is available.
+            with pytest.raises(ValueError, match="lacks a current provider reservation"):
+                start_governed_external_capability(**retry, execute=True, reserve_restored_start=lambda _: None)
+            assert not calls.exists()
+        def reserve_again(query):
+            if pending.exists():
+                old = json.loads(pending.read_text())
+                assert old["operation_key"] == query["operation_key"] and old["intent_digest"] == query["intent_digest"]
+                assert old["challenge"] != query["challenge"]
+                pending.rename(tmp_path / "revoked-unconsumed-grant.json")
+            proof = _service_reservation(query)
+            with pending.open("x") as grant:
+                json.dump(proof, grant)
+            return proof
+        received = start_governed_external_capability(**retry, execute=True, reserve_restored_start=reserve_again)
+    assert received["status"] == "running"
+    assert calls.read_text().splitlines() == ["start"]
+
+
+def test_restored_grant_lookup_does_not_hold_unrelated_todos(tmp_path):
+    args = _start_arguments(tmp_path)
+    (tmp_path / "runtime" / paths.RESTORED_RUNTIME_MARKER).touch()
+    both_at_service = Barrier(2)
+
+    def unavailable(_query):
+        both_at_service.wait(timeout=10)
+        return None
+
+    def attempt(todo_id):
+        owner = SettlementIdentity(goal_id=args["goal_id"], todo_id=todo_id, agent_id=args["agent_id"],
+                                   turn_instance_id=todo_id)
+        admission = _admission(owner)
+        admission["selected_todo"]["target_key"] = f"fixture-material:{todo_id}"
+        with pytest.raises(ValueError, match="lacks a current provider reservation"):
+            start_governed_external_capability(
+                **{**args, "todo_id": todo_id, "turn_instance_id": owner.turn_instance_id, "admission": admission},
+                execute=True, reserve_restored_start=unavailable,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(attempt, ("todo_first", "todo_second")))
+    assert not (tmp_path / "provider-calls.txt").exists()
+
+
 @pytest.mark.parametrize("original_delivered", [True, False])
 def test_verified_pre_request_restore_requires_external_delivery_evidence(tmp_path, original_delivered):
     from loopx.control_plane.state_recovery_io import verify_state_backup
@@ -573,11 +680,8 @@ def test_verified_pre_request_restore_requires_external_delivery_evidence(tmp_pa
         return None
     with pytest.raises(ValueError, match="lacks a current provider reservation"):
         start_governed_external_capability(**handoff, reserve_restored_start=unavailable, execute=True)
-    def reservation(query):
-        return {**{k: query[k] for k in ("challenge", "operation_key", "intent_digest", "request_digest", "invocation_id")},
-                "status": "reserved_after_terminal_no_effect", "reservation_ref": "service-grant-1"}
     with pytest.raises(ValueError, match="lacks a current provider reservation"):
-        start_governed_external_capability(**handoff, reserve_restored_start=lambda _: reservation(saved_challenge),
+        start_governed_external_capability(**handoff, reserve_restored_start=lambda _: _service_reservation(saved_challenge),
                                            execute=True)
     if original_delivered:
         invocation = original["invocation_id"]
@@ -616,7 +720,7 @@ def test_verified_pre_request_restore_requires_external_delivery_evidence(tmp_pa
                 return None
             if calls.exists() or (tmp_path / "consumed-reservation.json").exists():
                 return None
-            permit = reservation(query)
+            permit = _service_reservation(query)
             with (tmp_path / "provider-reservation.json").open("x") as file:
                 json.dump(permit, file)
             return permit

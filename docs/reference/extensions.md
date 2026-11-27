@@ -594,8 +594,16 @@ atomically grant **one** conditional start. Its receipt must echo
 a bounded non-secret `reservation_ref`. The provider must validate and
 consume this grant atomically with delivery, using
 `request.lifecycle.restored_start_reservation`. An empty lookup, timeout or
-cached grant does not authorize dispatch. A lost grant needs service-side
-reconciliation. Integrations without a suitable service primitive stay held.
+cached grant does not authorize dispatch. While obtaining the grant, the local
+journal remains unarmed. If the process exits here, the original or successor
+Turn can ask the service again. The service must reconcile any outstanding
+grant by operation and intent and fence the old grant before issuing a fresh
+one. LoopX publishes the validated grant and the armed state in one durable
+checkpoint immediately before calling the provider. After that point an
+unknown delivery requires original-result readback. Older armed records with
+no saved grant also require service reconciliation: local state alone cannot
+establish whether an older writer sent the request. Integrations without a
+suitable service primitive stay held.
 
 The interlock covers runtime copies published by this verifier, including
 older compatible archives verified with the updated code. A raw filesystem

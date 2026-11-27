@@ -203,7 +203,10 @@ def _restored_start_reservation(
     return checked
 
 
-def _record_start_intent(path: Path, journal: dict[str, Any]) -> None:
+def _record_start_intent(
+    path: Path, journal: dict[str, Any],
+    reserve_restored_start: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+) -> None:
     """Reserve a Todo operation across Turns before letting its provider start."""
     index = path.parent / ".start-reservations-v1"
     index.mkdir(mode=0o700, exist_ok=True)
@@ -222,7 +225,9 @@ def _record_start_intent(path: Path, journal: dict[str, Any]) -> None:
             fsync_state_directory(initialized)
             initialized.touch(mode=0o600, exist_ok=False)
 
-        group = index / _start_scope(journal)
+    group = index / _start_scope(journal)
+    # A service lookup serializes only other starts of this operation.
+    with exclusive_file_lock(group, operation="reserve_external_start"):
         group.mkdir(mode=0o700, exist_ok=True)
         for reservation in group.iterdir():
             previous_path = _journal_path(path.parent, reservation.name)
@@ -238,7 +243,7 @@ def _record_start_intent(path: Path, journal: dict[str, Any]) -> None:
                 previous, invocation_id=reservation.name, phase="inspect", dry_run=False,
             )
             reservation.unlink()
-        # The scope lock spans both checkpoints. Only the armed checkpoint permits I/O.
+        # Only the armed checkpoint permits delivery. A grant request alone cannot deliver.
         observed = journal.get("provider_result") is not None
         journal["dispatch_armed"] = observed
         _write_journal(path, journal)
@@ -246,6 +251,8 @@ def _record_start_intent(path: Path, journal: dict[str, Any]) -> None:
         fsync_state_directory(group / path.stem)
         fsync_state_directory(group)
         if not observed:
+            if reserve_restored_start is not None:
+                journal["restored_start_reservation"] = _restored_start_reservation(journal, reserve_restored_start)
             journal["dispatch_armed"] = True
             _write_journal(path, journal)
 
@@ -687,19 +694,12 @@ def start_governed_external_capability(
             if restored and reserve_restored_start is None:
                 raise ValueError("restored runtime requires provider reconciliation before external start")
             journal["admitted_target_key"] = admission["selected_todo"]["target_key"]
-            _record_start_intent(path, journal)
+            _record_start_intent(path, journal, reserve_restored_start)
             dispatch_request = request
             if reserve_restored_start is not None:
-                try:
-                    reservation = _restored_start_reservation(journal, reserve_restored_start)
-                except Exception:
-                    # No delivery call has begun. The provider still owns any outstanding grant.
-                    journal["dispatch_armed"] = False
-                    _write_journal(path, journal)
-                    raise
-                journal["restored_start_reservation"] = reservation
-                _write_journal(path, journal)
-                dispatch_request = {**request, "lifecycle": {**request["lifecycle"], "restored_start_reservation": reservation}}
+                dispatch_request = {**request, "lifecycle": {
+                    **request["lifecycle"], "restored_start_reservation": journal["restored_start_reservation"],
+                }}
             provider_result = _execute_extension_runtime_binding(binding, request=dispatch_request, environment=environment)
         journal["provider_result"] = _mapping(
             provider_result,
