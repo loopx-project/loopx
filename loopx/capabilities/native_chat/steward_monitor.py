@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import subprocess as subprocess
 
+from ...control_plane.runtime.time import chronology_key
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...file_lock import exclusive_file_lock
@@ -131,7 +132,7 @@ class StewardMonitor:
         ]
         return sorted(
             rows,
-            key=lambda row: (str(row.get("next_due_at") or ""), str(row["todo_id"])),
+            key=lambda row: (chronology_key(row.get("next_due_at")), str(row["todo_id"])),
         )
 
     def runnable_advancement_todos(

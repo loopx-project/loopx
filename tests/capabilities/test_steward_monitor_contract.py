@@ -383,6 +383,58 @@ def test_advancement_retry_exhaustion_and_lookup_cache_efficiency(tmp_path: Path
     assert loaded is not None and loaded["turn_id"] == found["turn_id"]
 
 
+def test_due_monitor_pump_tries_earliest_utc_deadline_and_preserves_original_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+
+    controller = _StubController(tmp_path)
+    ctrl_proto = _as_controller(controller)
+    session = controller.store.create_session(
+        goal_id="loopx-manager", agent_id="steward",
+        adapter_kind="codex", upstream_thread_id="fixture-thread",
+    )
+    actor = {"goal_id": "steward-agent-b-order", "agent_id": "steward", "session_id": session["session_id"]}
+    controller.project_contexts.conversation_bindings.bindings_rows = [{
+        "binding_id": "b-order", "enabled": True, "managed_actor": actor,
+    }]
+    earliest = "2000-02-03T10:00:00Z"
+    todos: list[StewardTodoRecord] = [
+        {"todo_id": name, "task_class": "continuous_monitor", "status": "open",
+         "claimed_by": "steward", "target_key": "watch-" + name, "next_due_at": stamp}
+        for name, stamp in [
+            ("earlier-z", earliest),
+            ("later", "2000-02-03T10:00:00.000001Z"),
+            ("equal-offset", "2000-02-03T18:00:00+08:00"),
+            ("earlier-a", earliest),
+            ("future", "2999-01-01T00:00:00Z"),
+        ]
+    ]
+    first_due = todos[3]
+    todos.extend([
+        {**first_due, "todo_id": "expired", "target_key": "watch-expired", "expires_at": "2000-02-04T00:00:00Z"},
+        {**first_due, "todo_id": "foreign", "target_key": "watch-foreign", "claimed_by": "peer"},
+        {**first_due, "todo_id": "managed", "target_key": "managed-session-watch.fixture"},
+        {**first_due, "todo_id": "followup", "target_key": FOLLOWUP_TARGET_PREFIX + "fixture"},
+    ])
+    attempts: list[tuple[str, str, str, str, str]] = []
+
+    def capture_submit(_host, binding_id, *, turn_instance_id, todo_id, work_kind, monitor_deadline):
+        attempts.append((binding_id, turn_instance_id, todo_id, work_kind, monitor_deadline))
+        return {"todo_id": todo_id, "status": "queued"}, True
+
+    monkeypatch.setattr(steward_monitor, "list_goal_todos", lambda **_: {"todos": todos})
+    monkeypatch.setattr(StewardTurnHost, "submit", capture_submit)
+    ordered = StewardMonitor(ctrl_proto).due_monitors(actor, todos=todos)
+    queued = pump_steward_monitors(ctrl_proto)
+
+    assert ([row["todo_id"] for row in ordered], attempts) == (
+        ["earlier-a", "earlier-z", "equal-offset", "later"],
+        [("b-order", monitor_turn_id(first_due), "earlier-a", "monitor", earliest)],
+    )
+    assert queued == [{"todo_id": "earlier-a", "status": "queued"}]
+
+
 def test_due_monitors_and_pump_single_todo_read_efficiency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
