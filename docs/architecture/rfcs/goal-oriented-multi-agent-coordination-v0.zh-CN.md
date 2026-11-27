@@ -2,7 +2,7 @@
 
 - **RFC 状态：** 已接受
 - **替代 / 关闭：** 无
-- **交付成熟度：** Partial（M0 只读同目标 Peer 前沿与协同机会投影已实现；M1–M3 留待后续切片）
+- **交付成熟度：** Partial（M0 只读同目标 Peer 前沿与协同机会投影 + M1 Turn 信封条件式默认摘要已实现；M2–M3 留待后续切片）
 - **作者 / 负责人：** 既有控制面 alignment、collaboration 与 directory owners
 - **创建：** 2026-11-27
 - **最近规范性修订：** 2026-11-27
@@ -20,8 +20,8 @@
 
 1. **在不新增数据库或平行 authority 的前提下，让同一 Goal 下的 Peer 前沿结构化可发现。** 对 `shared_goal_alignment_v0` 做向后兼容的增量扩展，新增有界字段 `peer_frontiers` 与 `collaboration_opportunities`，由单一 TypeScript 语义所有者（`loopx/control_plane/goals/peer_coordination.ts`）基于现有 canonical Todo 与任务租约确定性计算。
 2. **严格守住“零授权只读投影”（`grants_authority: false`）。** 发现冲突风险、独立验证需求、高优无租约通道或同域协同机会，本身绝不转移 claim、越过租约、修改 Todo 或直接触发外部投递。
-3. **从“人肉传话 + 被动推信”演进为“面向目标的双向自主配合”。** 保留现有 `shared_goal_alignment_v0`、`peer_agent_directory_v0` 与 `manager-inbox` 各自的所有权，规范拉取式协同发现与后续可选 Turn 信封紧凑摘要（`<=400 B`），使同一 Goal 下的异构专长 Agent（如代码精简 Agent 与验证/评测 Agent）在控制面上下文税 `<5%` 约束内自主对齐配合。
-4. **将确定性 M0 与可选 M1–M3 传输/宿主扩展解耦。** M0 仅在只读对齐投影（`loopx shared-goal-alignment` / `goal-alignment`）落地；Turn 信封自动摘要（M1）、带冷却窗的双向 offer/decline 握手（M2）以及宿主中立的 Antigravity/非 Codex 路由观测配置（M3）均留待各自显式验收后启用。
+3. **从“人肉传话 + 被动推信”演进为“面向目标的自主感知与双向配合”。** 保留现有 `shared_goal_alignment_v0`、`peer_agent_directory_v0` 与 `manager-inbox` 各自的所有权，同时落地有界拉取式发现（M0）与 Turn 信封条件式默认摘要（`peer_coordination_digest`，包含字段键在内的序列化增量严格 `<=300 B`，约 `75` tokens / 不足 200K 上下文窗口的 `0.04%`；非激活或游标未变时省略为 `0 B`），使同 Goal 下异构专长 Agent 无需手动拉取 CLI 或人类中转即可及时感知冲突、独立验收需求或空闲可接续通道。
+4. **将已落地的 M0+M1 只读发现与后续 M2–M3 写入/宿主扩展解耦。** M0（`loopx shared-goal-alignment` / `goal-alignment`）与 M1 条件式默认 Turn 信封摘要（`loopx quota should-run` -> `TurnEnvelope`，同时保留面向冻结评测基线的显式 `off` 关闭开关）在普通产品路径上零手动开启成本；带冷却窗的双向握手（M2）与宿主中立的 Antigravity/非 Codex 路由观测配置（M3）仍各自受其退出验收门禁约束。注意无信号时的 `0 B` 仅描述序列化省略增量，不等价于 `<5%` 控制面上下文开销红线的运行时实测认证。
 5. **本 RFC 明确不批准**自主多 Agent 自合并 PR、跨所有者自动改派 Todo 或无界膨胀 Turn 上下文信封。
 
 ## 2. 问题与动机
@@ -52,7 +52,7 @@
 ### 范围内
 
 - 对 `shared_goal_alignment_v0` 做增量 M0 扩展（`peer_frontiers`、`collaboration_opportunities`），由 TypeScript 计算并通过 `loopx shared-goal-alignment` / `goal-alignment` 输出。
-- 规范拉取式协同匹配规则、确定性 `opportunity_id` 去重、M1 Turn 信封紧凑摘要（`<=400 B`）、M2 冷却窗握手及 M3 宿主中立路由观测契约。
+- 规范拉取式协同匹配规则、确定性 `opportunity_id` 去重、M1 Turn 信封条件式默认紧凑摘要（`<=300 B`）、M2 冷却窗握手及 M3 宿主中立路由观测契约。
 
 ### 非目标
 
@@ -92,8 +92,8 @@
 
 ### 命令与协同生命周期
 
-- **M0（随本 PR 落地）：** 通过 `loopx shared-goal-alignment --goal-id <g> --agent-id <a>` 在 `file_v0`/`sqlite_v0` 上按需实时计算 `peer_frontiers` 与 `collaboration_opportunities`。
-- **M1（后续可选）：** 在 Turn / heartbeat 信封中仅当游标对比发现新 `opportunity_id` 时嵌入 `<=400 B` 紧凑摘要。
+- **M0（已随本 PR 落地）：** 通过 `loopx shared-goal-alignment --goal-id <g> --agent-id <a>`（及 amendment/plan 快照读取）在 `file_v0`/`sqlite_v0` 上按需计算完整的 `peer_frontiers` 与 `collaboration_opportunities`（含 `shared_domain_synergy`）。
+- **M1（已随本 PR 落地 — 条件式默认开启）：** 普通 `loopx quota should-run` Turn 无需手动开启，自动调用 TS `peer_coordination_digest.ts`。仅当同 Goal 注册活跃 Agent `>= 2` 且相对接收者实盘 Turn 游标（`peer-coordination-cursors/<agent_id>.json`）出现新 `opportunity_id` 时，`TurnEnvelope`（`v0`/`v1`）才会嵌入 `peer_coordination_digest`（`schema: "peer_digest_v0"`、`read_only: true`、`grants_authority: false`），含 `,"peer_coordination_digest":` 字段键在内的序列化增量严格 `<=300 B`。繁忙 Turn 仅注入 `shared_target_collision_risk`（`"collision"`）与 `peer_verification_needed`（`"verify"`）；空闲 Turn（`caller_lanes` 为空）注入 `peer_verification_needed`（`"verify"`）与高优 `peer_unleased_lane_attention`（`"unleased"`）。单 Agent、无合格新机会、游标未变、`--dry-run`、调度器跳过状态或显式配置 `off`（`coordination.peer_coordination_digest: "off"` / `LOOPX_PEER_COORDINATION_DIGEST=off`）均整字段省略（`0 B`）。实盘非预览且未被跳过的 Turn 会自动提交并清理已消解的游标条目。
 - **M2（后续可选）：** 基于 `(opportunity_id, basis_digest)` 通过 `manager-inbox` 完成带冷却窗的 `offer` / `accept` / `decline` 握手，防止对拒绝或暂不可达 Peer 重复打扰。
 
 ### 扩展与宿主契约
@@ -122,7 +122,7 @@ M0 仅扩展只读投影输出，不改动磁盘持久化 schema 或迁移流程
 | 声明 | 测试或证据 | 预期结果 | 边界 / 排除项 |
 | --- | --- | --- | --- |
 | TS 归约器准确产出 4 类协同机会、冲突抑制、空闲发现、写域/仓库判定与上限控制 | `node --experimental-strip-types --test tests/control_plane_ts/shared_goal_alignment.test.ts` | 新增与既有 `28` 项 TS 断言全数通过 | 内存合成载荷，不测磁盘 I/O |
-| `file_v0` 与 `sqlite_v0` 真实快照与 CLI JSON/Markdown 输出严格零写入一致 | `uv run --extra test python -m pytest tests/control_plane/test_shared_goal_alignment.py tests/control_plane/test_shared_goal_alignment_cli.py` | 全部 File/SQLite 参数化及 CLI 用例通过 | 单机 canonical 快照，不含 M1–M3 |
+| `file_v0` 与 `sqlite_v0` 真实快照、CLI 与 M1 Turn 信封摘要一致且单 Agent 输出零回归 | `uv run --extra test python -m pytest tests/control_plane/test_shared_goal_alignment.py tests/control_plane/test_shared_goal_alignment_cli.py tests/control_plane/test_peer_coordination_digest.py tests/control_plane/test_cli_output_budget.py` | 全部 File/SQLite 参数化、CLI、TurnEnvelope、游标去重与 `0 B` 基线预算用例通过 | 单机 canonical 快照，不含 M2 握手或 M3 宿主守护进程 |
 | 双语 RFC 索引与校验规则通过 | `python3 scripts/generate_rfc_status_index.py --check` 与 `python3 scripts/check_rfc_bilingual.py --base origin/main --head HEAD` | 退出码 `0` | 校验双语结构成对变更，不代替人工译文审查 |
 
 ## 10. 运维契约
@@ -135,13 +135,13 @@ M0 仅扩展只读投影输出，不改动磁盘持久化 schema 或迁移流程
 | 里程碑 | 交付行为 | 准入条件 | 退出证据 | 回滚路径 |
 | --- | --- | --- | --- | --- |
 | **M0** | TS `peer_coordination.ts`、Python `shared_goal_work_source.py` 透传及 `shared_goal_alignment` / CLI 输出 | `origin/main` 基线干净 | TS + File/SQLite pytest + CLI + `canary premerge` 全过 | 回退本 PR |
-| **M1** | 默认关闭的 Turn/heartbeat 信封 `<=400 B` 游标去重 `peer_coordination_digest` | M0 合入且验证 token 开销边界 | 控制面税 `<5%` 与游标去重单测通过 | 保持默认关闭 |
+| **M1** | Turn 信封条件式默认 `peer_coordination_digest`（含键 `<=300 B`，无新信号/单 Agent 省略 `0 B`，繁/闲分层过滤，实盘游标提交与清理，支持显式 `off`） | `file_v0`/`sqlite_v0` canonical 快照 + `TurnEnvelope` v0/v1 集成 | TS `peer_coordination_digest.test.ts` + File/SQLite `test_peer_coordination_digest.py` + `cli-output-budget` 零回归（`canary premerge`） | 配置 `coordination.peer_coordination_digest="off"` 或回退 M1 接线 |
 | **M2** | 基于 `(opportunity_id, basis_digest)` 与冷却窗的双向 `manager-inbox` 握手 | M1 + 幂等评审通过 | 双端收件箱握手集成测试通过 | 关闭自动 offer 开关 |
 | **M3** | 宿主中立路由观测适配器（覆盖 Antigravity 等非 Codex 宿主）与自主协同指标 | M2 + 宿主适配器开关 | 双 Agent 无人类中转协同实测通过 | 退回 `host_observer_unavailable` |
 
 ## 12. 未决决策
 
-1. **D1（M1 信封默认暴露面）：** M1 是否只在 Turn 信封主动提示 `shared_target_collision_risk` 与 `peer_verification_needed`，而把 `shared_domain_synergy` 保留为 CLI 拉取查询？**负责人：** alignment/quota owners。
+1. **D1（已拍板 — 2026-11-27，M1 默认触发路径与信封暴露面）：** 普通产品路径（`loopx quota should-run` -> `TurnEnvelope`）**无需手动开启** M1。当同一 Goal 注册活跃 Agent `>= 2` 且存在相对游标的新增合格 `opportunity_id` 时自动注入 `<=300 B`（含字段键）的 `peer_coordination_digest`：繁忙 Turn 仅纳入 `shared_target_collision_risk` 与 `peer_verification_needed`；空闲 Turn 纳入 `peer_verification_needed` 与高优 `peer_unleased_lane_attention`；单 Agent、无新合格信号、游标未变、跳过/`dry-run` 模式与显式 `off` 关闭配置均整字段省略（`0 B`）；`shared_domain_synergy` 保留通过 `shared-goal-alignment` / `goal-alignment` 按需拉取。控制面上下文开销 `<5%` 仍以端到端实测验收为准（序列化省略 `0 B` 不替代实测认证）。
 2. **D2（M2 拒绝冷却窗策略）：** `decline` 后的默认冷却时长/revision 绑定规则应如何设定以避免同质打扰？**负责人：** `manager-inbox` owner。
 3. **D3（M3 Antigravity 宿主观测来源）：** 应由签名本地守护进程端点还是应用侧租约文件提供存活观测？**负责人：** desktop/host owners。
 
@@ -149,19 +149,21 @@ M0 仅扩展只读投影输出，不改动磁盘持久化 schema 或迁移流程
 
 ## 附录 A：执行台账（非规范性）
 
-- M0 基线基于 `50b4cc9de4` 随同 M0 实现提交落地（后续 M1–M3 检查点于 `ledger/` 目录独立记录）。
+- M0+M1 已在更新后的 PR 分支一并落地（`peer_coordination.ts` + `peer_coordination_digest.ts` + `TurnEnvelope` v0/v1 接线；后续 M2–M3 检查点可于 `ledger/` 目录独立记录）。
 
 ## 附录 B：决策日志
 
 | 日期 | 决策 | 所有者 / 批准 | 备选方案 | 变更的规范章节 |
 | --- | --- | --- | --- | --- |
 | 2026-11-27 | 采用基于 `shared_goal_alignment_v0` 的 M0 增量投影并复用 TS `evaluateQuotaSchedulingWriteScopesOverlap` | 待维护者 PR 审批 | 独立建表与独立 RPC | 第 1–11 节 |
+| 2026-11-27 | 收口 D1 并落地 M1 条件式默认 `peer_coordination_digest`（`<=300 B`、无激活信号省略 `0 B`、繁/闲分层、游标自动清理与显式 `off` 退出通道） | 用户确认方向（“为啥仍需要主动调用……路径能足够自动和智能么”）+ 待维护者 PR 评审 | 维持默认关闭手动开启开关或仅限手动 CLI 拉取 | 第 1、3、5、9、11、12 节 |
 
 ## 附录 C：证据登记表
 
 | 证据 ID | 声明 | 基线 / 环境 | 产物或命令 | 结果 | 隐私 / 有效性边界 |
 | --- | --- | --- | --- | --- | --- |
-| E1 | TS 与 File/SQLite 对齐一致性及 M0 协同机会单测全过 | `50b4cc9de4` 本地工作树 | `tests/control_plane_ts/shared_goal_alignment.test.ts` 与 `tests/control_plane/test_shared_goal_alignment*.py` | 待编辑后实测验证 | 临时测试夹具，不含真实私密状态 |
+| E1 | TS 与 File/SQLite 对齐一致性及 M0 协同机会单测全过 | 清洁 PR 工作树 | `tests/control_plane_ts/shared_goal_alignment.test.ts` 与 `tests/control_plane/test_shared_goal_alignment*.py` | 本地工作树全过 | 临时测试夹具，不含真实私密状态 |
+| E2 | M1 Turn 信封自动摘要（`<=300 B`）、游标去重/清理、显式关闭与 `file_v0`/`sqlite_v0` 下 CLI 基线预算零回归 | 清洁 PR 工作树 | `tests/control_plane_ts/peer_coordination_digest.test.ts`、`tests/control_plane/test_peer_coordination_digest.py` 与 `test_cli_output_budget.py` | 本地工作树全过 | 临时测试夹具；多 Agent 实测 `<5%` 上下文税单独统计 |
 
 ## 附录 D：被拒绝或替代的方案
 

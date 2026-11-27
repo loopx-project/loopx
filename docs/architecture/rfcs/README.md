@@ -266,15 +266,18 @@ Paired diffs do not certify translation accuracy.
 - [Goal-Oriented Multi-Agent Peer Coordination v0](goal-oriented-multi-agent-coordination-v0.md)
   ([中文版](goal-oriented-multi-agent-coordination-v0.zh-CN.md))
   - **Delivery on `main`:** M0 read-only peer frontier and collaboration
-    opportunity projection implemented (`peer_coordination.ts`); M1–M3 remain
-    unshipped.
+    opportunity projection (`peer_coordination.ts`) and M1 conditional
+    default-on `<=300 B` Turn-envelope digest (`peer_coordination_digest.ts`)
+    implemented; M2–M3 remain unshipped.
   - **Current boundary:** Projects bounded `peer_frontiers` and deterministic
     `collaboration_opportunities` (`shared_target_collision_risk`,
     `peer_verification_needed`, `peer_unleased_lane_attention`,
     `shared_domain_synergy`, all with `grants_authority: false`) onto
-    `shared_goal_alignment_v0` from canonical `file_v0`/`sqlite_v0` snapshots.
-    Turn-envelope `<=400 B` digests (M1), cooldown-gated bilateral `manager-inbox`
-    handshakes (M2), and host-neutral live route observers (M3) remain open.
+    `shared_goal_alignment_v0`, and automatically injects cursor-deduplicated
+    `peer_coordination_digest` (`<=300 B` including field key; omitted at `0 B`
+    when single-agent, unchanged, or opted out) into `TurnEnvelope` on
+    `loopx quota should-run`. Cooldown-gated bilateral `manager-inbox`
+    handshakes (M2) and host-neutral live route observers (M3) remain open.
 - [Goal contract evolution and bounded working context v0](goal-contract-evolution-v0.md)
   ([中文版](goal-contract-evolution-v0.zh-CN.md))
   - **Delivery on `main`:** Proposal only; existing objective revision and additive

@@ -728,6 +728,54 @@ def _execute_quota_command(
                 rollout_details=rollout_details,
                 append_cli_rollout_event=append_cli_rollout_event,
             )
+    if (
+        args.quota_command == "should-run"
+        and not preview
+        and not getattr(args, "scheduler_observation", False)
+        and not action_selection_preflight_failed
+        and not closeout_query_unavailable
+        and payload.get("ok") is True
+        and context is not None
+        and args.goal_id
+        and args.agent_id
+        and str(payload.get("effective_action") or "").strip()
+        not in {
+            "blocked_wait",
+            "throttled_skip",
+            "quota_skip",
+            "heartbeat_settled_skip",
+            "monitor_quiet_skip",
+        }
+    ):
+        from ..control_plane.goals.peer_coordination_digest import (
+            commit_turn_peer_coordination_cursor,
+            resolve_goal_project_root,
+        )
+        from ..control_plane.quota.goal_boundary import registry_goal_by_id
+
+        registry_goal = registry_goal_by_id(status_payload).get(args.goal_id)
+        agent_identity = payload.get("agent_identity")
+        registered_agents = (
+            list(agent_identity.get("registered_agents") or [])
+            if isinstance(agent_identity, dict)
+            else []
+        )
+        if not registered_agents and isinstance(registry_goal, dict):
+            coordination = registry_goal.get("coordination")
+            if isinstance(coordination, dict):
+                registered_agents = list(coordination.get("registered_agents") or [])
+        commit_turn_peer_coordination_cursor(
+            registry_goal=registry_goal,
+            project=resolve_goal_project_root(
+                registry_goal=registry_goal,
+                registry_path_value=str(registry_path),
+            ),
+            runtime_root=runtime_root,
+            goal_id=args.goal_id,
+            agent_id=args.agent_id,
+            registered_agent_ids=registered_agents,
+            digest_emitted=isinstance(payload.get("peer_coordination_digest"), dict),
+        )
     return _emit_quota_result(
         payload,
         args,

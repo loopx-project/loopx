@@ -39,6 +39,7 @@ from ..agents.agent_scope_frontier import (
     read_frontier_action,
 )
 from ..goals.goal_frontier import AUTONOMOUS_REPLAN_REQUIRED_MODE
+from ..goals.peer_coordination_digest_source import attach_turn_peer_coordination_digest
 from ..goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 from ..quota.decision_summary import (
     quota_decision_agent_id,
@@ -1797,6 +1798,8 @@ def _build_quota_should_run_payload(
             "interaction_contract": payload["interaction_contract"],
             "selection_context": action_selection_context(payload),
         })
+    attach_turn_peer_coordination_digest(payload, prepared=prepared,
+        runtime_root=_interaction_runtime_root(runtime_root, prepared.status_payload))
     return payload
 
 

@@ -1135,6 +1135,7 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && typeof supportingSource?.path === "string" && typeof supportingSource.sha256 === "string"
       && typeof details?.instruction === "string" && details.instruction.length > 0;
   for (const field of decisionFields) include(field);
+  include("peer_coordination_digest");
   // A staged replan has already replaced inline acceptance with a pinned
   // review reader. Deliver its first action and ordering without writeback.
   const replan = object(context.replan_action_packet);
