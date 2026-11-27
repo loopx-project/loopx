@@ -1517,6 +1517,62 @@ def _bound_project(fixture):
     return bindings, args, binding, session, turn
 
 
+def test_bound_history_http_orders_verified_sessions_by_utc(ordinary, monkeypatch):  # noqa: F811
+    from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+
+    store, runtime, contexts, request, capture, _fake, workspace = ordinary
+    observation = {"transport_ref": "notes-app", "provider_ref": "c" * 24,
+                   "operator_ref": "d" * 24, "verified": True}
+    bindings = ChatConversationBindings(
+        root=store.root, project_contexts=contexts, observe=lambda _: observation,
+    )
+    contexts.conversation_bindings = bindings
+    ChatExternalConversations(runtime)
+    binding = bindings.configure(
+        transport_ref="notes-app", project_ref=contexts.available()[0]["project_ref"],
+        executor_endpoint_id="codex", project_grant="workspace_read",
+    )
+
+    try:
+        with monkeypatch.context() as clock:
+            clock.setattr("loopx.chat_store.utc_now", lambda: "2026-02-03T10:00:00Z")
+            older, _ = runtime.open_session(
+                goal_id=None, agent_id="codex", work_dir=workspace, objective="",
+                mode="resume_latest", conversation_binding_id=binding["binding_id"],
+                source_context={"source_ref": "a" * 24, "sender_ref": observation["operator_ref"],
+                                "private_human_message": True},
+            )
+        for session_id, timestamp in (
+            ("session-offset-tie", "2026-02-03T18:00:00+08:00"),
+            ("session-later", "2026-02-03T10:00:00.000001Z"),
+        ):
+            with monkeypatch.context() as clock:
+                clock.setattr("loopx.chat_store.utc_now", lambda: timestamp)
+                store.create_session(
+                    goal_id=None, agent_id="codex", adapter_kind="codex_app_server",
+                    upstream_thread_id=f"fixture-{session_id}", session_id=session_id,
+                    channel_id=older["channel_id"], project_context=older["project_context"],
+                )
+        expected = ["session-later", "session-offset-tie", older["session_id"]]
+        before = {session_id: store.load_session(session_id) for session_id in expected}
+        before_calls = capture.read_bytes()
+
+        status, history = request(
+            f"/api/chat/sessions?conversation_binding_id={binding['binding_id']}"
+        )
+
+        assert status == 200, history
+        assert history["conversation_binding_id"] == binding["binding_id"]
+        assert [row["session_id"] for row in history["sessions"]] == expected
+        assert [row["updated_at"] for row in history["sessions"]] == [
+            before[session_id]["updated_at"] for session_id in expected
+        ]
+        assert {session_id: store.load_session(session_id) for session_id in expected} == before
+        assert capture.read_bytes() == before_calls
+    finally:
+        runtime.close()
+
+
 def test_bound_http_continuation_preserves_identity_after_json_key_reordering(ordinary):  # noqa: F811
     store, runtime, _contexts, request, capture, _fake, _workspace = ordinary
     bindings, _args, binding, session, active = _bound_project(ordinary)

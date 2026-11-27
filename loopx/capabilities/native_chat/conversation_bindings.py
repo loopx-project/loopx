@@ -15,6 +15,7 @@ from ...chat_store import (
     _read_json as _read_json,
 )
 from ...control_plane.effect_runtime import effect_runtime_request_scope
+from ...control_plane.runtime.time import chronology_key
 from ...file_lock import exclusive_file_lock as exclusive_file_lock
 from .conversation_binding_agents import (
     agent_candidates_flow,
@@ -425,10 +426,13 @@ class ChatConversationBindings:
         current, sessions, source = self._observe_local_sessions(
             binding_id, app_steward_entry=app_steward_entry
         )
+        ordered = sorted(
+            sessions, key=lambda session: chronology_key(session.get("updated_at")), reverse=True,
+        )
         payload = LocalSessionSnapshotDict(
             {
                 "sessions": [
-                    self.controller.store.public_session(session) for session in sessions
+                    self.controller.store.public_session(session) for session in ordered
                 ],
                 "conversation_source": source,
             }
