@@ -225,6 +225,66 @@ def compute_occupancy_summary(
     }
 
 
+def _build_codex_telemetry_coverage(
+    *,
+    total_rollouts: int,
+    verified_request_rollouts: int,
+    verified_requests: int | None,
+    complete_record_count: int | None,
+    round_trips_reason: str | None = None,
+) -> dict[str, object]:
+    if (
+        total_rollouts > 0
+        and verified_request_rollouts == total_rollouts
+        and verified_requests is not None
+        and verified_requests > 0
+    ):
+        round_trips_cov: dict[str, object] = {
+            "status": "complete",
+            "reported_rollouts": verified_request_rollouts,
+            "total_rollouts": total_rollouts,
+            "verified_requests": verified_requests,
+        }
+        partial_metrics: list[str] = []
+        missing_metrics: list[str] = []
+    elif 0 < verified_request_rollouts < total_rollouts:
+        round_trips_cov = {
+            "status": "partial",
+            "reported_rollouts": verified_request_rollouts,
+            "total_rollouts": total_rollouts,
+            **({"reason": round_trips_reason} if round_trips_reason else {}),
+        }
+        partial_metrics = ["round_trips"]
+        missing_metrics = []
+    else:
+        round_trips_cov = {
+            "status": "missing",
+            "reported_rollouts": 0,
+            "total_rollouts": total_rollouts,
+            **({"reason": round_trips_reason} if round_trips_reason else {}),
+        }
+        partial_metrics = []
+        missing_metrics = ["round_trips"]
+
+    diagnostics: dict[str, object] = {
+        "complete_record_count": complete_record_count,
+        "complete_record_count_scope": "bounded_tail",
+        "rollout_count": total_rollouts,
+    }
+    if round_trips_reason:
+        diagnostics["round_trips_reason"] = round_trips_reason
+
+    return {
+        "schema_version": "microbench_telemetry_coverage_v0",
+        "total_rollouts": total_rollouts,
+        "has_partial_coverage": bool(partial_metrics),
+        "partial_metrics": partial_metrics,
+        "missing_metrics": missing_metrics,
+        "metrics": {"round_trips": round_trips_cov},
+        "diagnostics": diagnostics,
+    }
+
+
 def _parse_codex_rollout_occupancy(rollout: Path) -> dict[str, object]:
     """Validate per-request ``last_token_usage`` against ``total_token_usage`` deltas."""
     per_turn_inputs: list[int] = []
@@ -245,8 +305,12 @@ def _parse_codex_rollout_occupancy(rollout: Path) -> dict[str, object]:
             try:
                 item = json.loads(stripped)
             except json.JSONDecodeError:
+                per_request_valid = False
+                occupancy_error = occupancy_error or "invalid_rollout_json"
                 continue
             if not isinstance(item, Mapping):
+                per_request_valid = False
+                occupancy_error = occupancy_error or "non_object_rollout_record"
                 continue
             kind = str(item.get("type") or "")
             raw_payload = item.get("payload")
@@ -293,13 +357,20 @@ def _parse_codex_rollout_occupancy(rollout: Path) -> dict[str, object]:
                 previous = total
                 samples += 1
 
+    verified_all = per_request_valid and token_count_events > 0 and bool(per_turn_inputs)
+    if token_count_events == 0:
+        occupancy_error = occupancy_error or "missing_token_count_events"
+    elif per_request_valid and not per_turn_inputs:
+        occupancy_error = occupancy_error or "no_nonempty_token_count_delta"
+
     return {
-        "per_turn_inputs": per_turn_inputs if (per_request_valid and token_count_events > 0) else [],
+        "per_turn_inputs": per_turn_inputs if verified_all else [],
+        "verified_request_count": len(per_turn_inputs) if verified_all else None,
         "windows": windows,
         "compaction_events": compaction_events,
         "truncation_events": truncation_events,
-        "per_request_valid": per_request_valid and token_count_events > 0,
-        "occupancy_error": occupancy_error,
+        "per_request_valid": verified_all,
+        "occupancy_error": occupancy_error if not verified_all else None,
     }
 
 
@@ -328,7 +399,16 @@ def collect_codex_rollout_metrics(
                 "completion_tokens": c_tot,
                 "cached_tokens": totals.get("cached"),
                 "total_tokens": total_tok,
+                "round_trips": None,
                 "rollout_count": None,
+                "complete_record_count": None,
+                "telemetry_coverage": _build_codex_telemetry_coverage(
+                    total_rollouts=0,
+                    verified_request_rollouts=0,
+                    verified_requests=None,
+                    complete_record_count=None,
+                    round_trips_reason="harbor_trajectory_totals",
+                ),
                 "error": None,
                 **compute_occupancy_summary(per_turn_context_tokens=None),
             }
@@ -344,7 +424,16 @@ def collect_codex_rollout_metrics(
             "cached_tokens": None,
             "reasoning_tokens": None,
             "total_tokens": None,
+            "round_trips": None,
             "rollout_count": 0,
+            "complete_record_count": 0,
+            "telemetry_coverage": _build_codex_telemetry_coverage(
+                total_rollouts=0,
+                verified_request_rollouts=0,
+                verified_requests=None,
+                complete_record_count=0,
+                round_trips_reason="missing_rollout",
+            ),
             "error": "missing_rollout",
             **compute_occupancy_summary(per_turn_context_tokens=None),
         }
@@ -361,6 +450,7 @@ def collect_codex_rollout_metrics(
     total_truncations = 0
     occupancy_valid = True
     occupancy_error: str | None = None
+    verified_request_rollouts = 0
 
     for rollout in rollouts:
         try:
@@ -375,7 +465,16 @@ def collect_codex_rollout_metrics(
                 "cached_tokens": None,
                 "reasoning_tokens": None,
                 "total_tokens": None,
+                "round_trips": None,
                 "rollout_count": len(rollouts),
+                "complete_record_count": None,
+                "telemetry_coverage": _build_codex_telemetry_coverage(
+                    total_rollouts=len(rollouts),
+                    verified_request_rollouts=0,
+                    verified_requests=None,
+                    complete_record_count=None,
+                    round_trips_reason=type(exc).__name__,
+                ),
                 "error": type(exc).__name__,
                 **compute_occupancy_summary(per_turn_context_tokens=None),
             }
@@ -394,7 +493,16 @@ def collect_codex_rollout_metrics(
                 "cached_tokens": None,
                 "reasoning_tokens": None,
                 "total_tokens": None,
+                "round_trips": None,
                 "rollout_count": len(rollouts),
+                "complete_record_count": None,
+                "telemetry_coverage": _build_codex_telemetry_coverage(
+                    total_rollouts=len(rollouts),
+                    verified_request_rollouts=0,
+                    verified_requests=None,
+                    complete_record_count=None,
+                    round_trips_reason="incomplete_usage_fields",
+                ),
                 "error": "incomplete_usage_fields",
                 **compute_occupancy_summary(per_turn_context_tokens=None),
             }
@@ -425,24 +533,37 @@ def collect_codex_rollout_metrics(
         raw_wins = occ.get("windows")
         if isinstance(raw_wins, set):
             all_windows.update(w for w in raw_wins if isinstance(w, int))
-        if not occ.get("per_request_valid"):
+        raw_inputs = occ.get("per_turn_inputs")
+        if occ.get("per_request_valid") and isinstance(raw_inputs, list) and raw_inputs:
+            verified_request_rollouts += 1
+            all_per_turn_inputs.extend(int(x) for x in raw_inputs)
+        else:
             occupancy_valid = False
             if occupancy_error is None:
                 raw_err = occ.get("occupancy_error")
                 occupancy_error = str(raw_err) if raw_err else "invalid_per_request_usage"
-        else:
-            raw_inputs = occ.get("per_turn_inputs")
-            if isinstance(raw_inputs, list):
-                all_per_turn_inputs.extend(int(x) for x in raw_inputs)
 
     single_window = next(iter(all_windows)) if len(all_windows) == 1 else None
+    all_requests_verified = (
+        occupancy_valid
+        and verified_request_rollouts == len(rollouts)
+        and bool(all_per_turn_inputs)
+    )
+    verified_round_trips = len(all_per_turn_inputs) if all_requests_verified else None
     occ_summary = compute_occupancy_summary(
-        per_turn_context_tokens=all_per_turn_inputs if (occupancy_valid and all_per_turn_inputs) else None,
+        per_turn_context_tokens=all_per_turn_inputs if all_requests_verified else None,
         effective_context_window=single_window,
         occupancy_measurement_kind="per_request_input_proxy",
         occupancy_window_source="codex_model_context_window" if single_window is not None else None,
         compaction_events=total_compactions,
         truncation_events=total_truncations,
+    )
+    coverage = _build_codex_telemetry_coverage(
+        total_rollouts=len(rollouts),
+        verified_request_rollouts=verified_request_rollouts,
+        verified_requests=verified_round_trips,
+        complete_record_count=complete_records,
+        round_trips_reason=None if all_requests_verified else (occupancy_error or "invalid_per_request_usage"),
     )
     return {
         "source": "codex_session_usage",
@@ -451,8 +572,10 @@ def collect_codex_rollout_metrics(
         "cached_tokens": cached_total,
         "reasoning_tokens": reasoning_total,
         "total_tokens": grand_total,
+        "round_trips": verified_round_trips,
         "rollout_count": len(rollouts),
         "complete_record_count": complete_records,
+        "telemetry_coverage": coverage,
         "error": None,
         **({"occupancy_error": occupancy_error} if occupancy_error and not occupancy_valid else {}),
         **occ_summary,

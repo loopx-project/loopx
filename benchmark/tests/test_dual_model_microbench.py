@@ -185,6 +185,11 @@ def test_codex_runner_extracts_rollout_usage_and_classifies_quota_exhaustion(tmp
     assert out_ok.efficiency.reasoning_tokens == 10
     assert out_ok.efficiency.total_tokens == 455
     assert out_ok.efficiency.tool_calls == 1
+    assert out_ok.efficiency.round_trips is None
+    assert out_ok.telemetry_coverage is not None
+    assert out_ok.telemetry_coverage["metrics"]["round_trips"]["status"] == "missing"
+    assert out_ok.telemetry_coverage["metrics"]["round_trips"]["reason"] == "missing_last_token_usage"
+    assert out_ok.telemetry_coverage["diagnostics"]["complete_record_count"] == 3
     assert out_ok.verdict is not None and out_ok.verdict["extracted_proof"] == M1_PROOF_TOKEN
 
     quota_bin = tmp_path / "fake-codex-quota"
@@ -1982,6 +1987,10 @@ def test_codex_rollout_occupancy_extraction_validation_and_compaction(tmp_path: 
 
     metrics = microbench_metrics.collect_codex_rollout_metrics(valid_dir)
     assert metrics["prompt_tokens"] == 144795
+    assert metrics["round_trips"] == 3
+    assert metrics["complete_record_count"] == 8
+    assert metrics["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "complete"
+    assert metrics["telemetry_coverage"]["diagnostics"]["complete_record_count"] == 8
     assert metrics["initial_turn_context_tokens"] == 43607
     assert metrics["per_turn_context_tokens"] == (43607, 49186, 52002)
     assert metrics["peak_context_tokens"] == 52002
@@ -2010,6 +2019,9 @@ def test_codex_rollout_occupancy_extraction_validation_and_compaction(tmp_path: 
     )
     m_nolast = microbench_metrics.collect_codex_rollout_metrics(no_last_dir)
     assert m_nolast["prompt_tokens"] == 1000
+    assert m_nolast["round_trips"] is None
+    assert m_nolast["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "missing"
+    assert m_nolast["telemetry_coverage"]["metrics"]["round_trips"]["reason"] == "missing_last_token_usage"
     assert m_nolast["occupancy_measurement_kind"] == "unknown"
     assert m_nolast["peak_context_tokens"] is None
     assert m_nolast["per_turn_context_tokens"] is None
@@ -2031,9 +2043,70 @@ def test_codex_rollout_occupancy_extraction_validation_and_compaction(tmp_path: 
         encoding="utf-8",
     )
     m_gap = microbench_metrics.collect_codex_rollout_metrics(gap_dir)
+    assert m_gap["round_trips"] is None
+    assert m_gap["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "missing"
+    assert m_gap["telemetry_coverage"]["metrics"]["round_trips"]["reason"] == "counter_gap"
     assert m_gap["occupancy_measurement_kind"] == "unknown"
     assert m_gap["peak_context_tokens"] is None
     assert m_gap["occupancy_error"] == "counter_gap"
+
+    # Negative case: truncated/corrupt JSON line -> invalid_rollout_record fails closed to null round_trips.
+    corrupt_dir = tmp_path / "corrupt-tail"
+    corrupt_dir.mkdir()
+    (corrupt_dir / "rollout.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                rows[0],
+                rows[1],
+                _token_event(total_in=100, total_cached=0, total_out=10, last_in=100, last_out=10),
+            ]
+        )
+        + "\n{truncated-json\n",
+        encoding="utf-8",
+    )
+    m_corrupt = microbench_metrics.collect_codex_rollout_metrics(corrupt_dir)
+    assert m_corrupt["round_trips"] is None
+    assert m_corrupt["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "missing"
+    assert m_corrupt["telemetry_coverage"]["metrics"]["round_trips"]["reason"] == "invalid_rollout_json"
+    assert m_corrupt["occupancy_measurement_kind"] == "unknown"
+
+    # Negative case: multiple rollouts where one lacks last_token_usage -> partial status, null round_trips.
+    partial_dir = tmp_path / "partial-rollouts"
+    partial_dir.mkdir()
+    (partial_dir / "rollout-1.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                rows[0],
+                rows[1],
+                _token_event(total_in=100, total_cached=0, total_out=10, last_in=100, last_out=10),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (partial_dir / "rollout-2.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                {
+                    "type": "session_meta",
+                    "timestamp": "2026-11-27T00:00:00Z",
+                    "payload": {"id": "sess-occ-2"},
+                },
+                rows[1],
+                _token_event(total_in=200, total_cached=0, total_out=20, last_in=None),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    m_partial = microbench_metrics.collect_codex_rollout_metrics(partial_dir)
+    assert m_partial["round_trips"] is None
+    assert m_partial["telemetry_coverage"]["has_partial_coverage"] is True
+    assert m_partial["telemetry_coverage"]["partial_metrics"] == ["round_trips"]
+    assert m_partial["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "partial"
 
 
 def test_ark_partial_prompt_blocks_occupancy_and_cli_pin_with_output_json(
@@ -2373,3 +2446,136 @@ def test_tier1_stops_git_base_resolution_and_export_stages_after_deadline(
     assert not any(len(cmd) >= 2 and cmd[1] == "ls-files" for cmd, _ in git_calls_b)
     assert not any(len(cmd) >= 2 and cmd[1] == "checkout-index" for cmd, _ in git_calls_b)
     assert report_b["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"
+
+
+def test_tier1_codex_round_trips_counts_verified_requests_not_extra_log_lines(
+    tmp_path: Path,
+) -> None:
+    trial_auth = tmp_path / "auth.json"
+    trial_auth.write_text('{"tokens":{}}', encoding="utf-8")
+
+    def _write_paired_codex(bin_path: Path, *, unverified_head: bool) -> None:
+        script = f"""#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+prompt = sys.stdin.read()
+schema_out = args[args.index("--output-last-message") + 1]
+is_head = "arm=head" in prompt
+home = pathlib.Path(os.environ["CODEX_HOME"])
+sessions = home / "sessions" / "2026" / "11" / "27"
+sessions.mkdir(parents=True, exist_ok=True)
+rollout = sessions / "rollout-paired.jsonl"
+
+def token_ev(total_in, total_out, last_in, last_out, include_last=True):
+    info = {{
+        "total_token_usage": {{
+            "input_tokens": total_in,
+            "cached_input_tokens": 0,
+            "output_tokens": total_out,
+            "reasoning_output_tokens": 0,
+            "total_tokens": total_in + total_out,
+        }},
+        "model_context_window": 475000,
+    }}
+    if include_last:
+        info["last_token_usage"] = {{
+            "input_tokens": last_in,
+            "cached_input_tokens": 0,
+            "output_tokens": last_out,
+            "reasoning_output_tokens": 0,
+            "total_tokens": last_in + last_out,
+        }}
+    return {{
+        "type": "event_msg",
+        "timestamp": "2026-11-27T00:00:05Z",
+        "payload": {{"type": "token_count", "info": info}},
+    }}
+
+rows = [
+    {{"type": "session_meta", "timestamp": "2026-11-27T00:00:00Z", "payload": {{"model": "gpt-6.2-sol", "session_id": "sess-paired"}}}},
+    {{"type": "turn_context", "timestamp": "2026-11-27T00:00:01Z", "payload": {{"model": "gpt-6.2-sol"}}}},
+    token_ev(900, 10, 900, 10, include_last=not (is_head and {unverified_head!r})),
+]
+if is_head:
+    # Duplicate token_count + regular event + message record -> 7 lines total vs Base 4 lines, still 2 requests [900, 1000].
+    rows.extend([
+        token_ev(900, 10, 900, 10, include_last=not {unverified_head!r}),
+        {{"type": "event_msg", "timestamp": "2026-11-27T00:00:03Z", "payload": {{"type": "agent_reasoning"}}}},
+        {{"type": "response_item", "timestamp": "2026-11-27T00:00:04Z", "payload": {{"type": "message", "role": "assistant"}}}},
+    ])
+rows.append(token_ev(1900, 20, 1000, 10, include_last=not (is_head and {unverified_head!r})))
+rollout.write_text("\\n".join(json.dumps(r) for r in rows) + "\\n", encoding="utf-8")
+
+verdict = {{
+    "schema_version": "microbench_model_verdict_v0",
+    "scenario_id": "m1_envelope_scoped_recovery",
+    "decision": "execute",
+    "selected_todo_id": {M1_SELECTED_TODO_ID!r},
+    "preserved_blocked_todo_ids": [{M1_BLOCKED_TODO_ID!r}],
+    "extracted_proof": {M1_PROOF_TOKEN!r},
+    "preserved_failure_facts": [],
+    "preserved_open_obligations": [],
+    "claim_owner": None,
+    "spend_attempted": False,
+    "spend_classification": {{"observed": "none", "attempted": False, "confirmed": False}},
+    "tool_actions_summary": ["loopx quota context-read --select"],
+}}
+pathlib.Path(schema_out).write_text(json.dumps(verdict), encoding="utf-8")
+print(json.dumps({{"type": "turn.completed", "usage": {{"input_tokens": 1900, "output_tokens": 20}}}}))
+"""
+        bin_path.write_text(script, encoding="utf-8")
+        bin_path.chmod(bin_path.stat().st_mode | stat.S_IXUSR)
+
+    # Case 1: Identical [900, 1000] request usage with Base=4 vs Head=7 JSONL lines -> round_trips=2 on both, delta=0.
+    codex_paired = tmp_path / "fake-codex-paired"
+    _write_paired_codex(codex_paired, unverified_head=False)
+    report = run_tier1_dual_model_suite(
+        runners=[
+            CodexGptMicrobenchRunner(
+                codex_bin=str(codex_paired),
+                auth_json_path=trial_auth,
+                sandbox="read-only",
+            )
+        ],
+        scenarios=("m1_envelope_scoped_recovery",),
+        base_ref=None,
+        max_total_seconds=60.0,
+        per_call_timeout_seconds=20.0,
+    )
+    assert report["passed"] is True, report
+    row = report["results"][0]
+    assert row["base"]["efficiency"]["per_turn_context_tokens"] == [900, 1000]
+    assert row["head"]["efficiency"]["per_turn_context_tokens"] == [900, 1000]
+    assert row["base"]["efficiency"]["round_trips"] == 2
+    assert row["head"]["efficiency"]["round_trips"] == 2
+    assert row["comparison"]["deltas"]["round_trips"] == 0
+    assert row["comparison"]["pct_changes"]["round_trips"] == 0.0
+    assert row["base"]["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "complete"
+    assert row["head"]["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "complete"
+    assert row["base"]["telemetry_coverage"]["diagnostics"]["complete_record_count"] == 4
+    assert row["head"]["telemetry_coverage"]["diagnostics"]["complete_record_count"] == 7
+
+    # Case 2: Head lacks last_token_usage -> round_trips stays null and delta is excluded via telemetry_coverage.
+    codex_unverified = tmp_path / "fake-codex-unverified"
+    _write_paired_codex(codex_unverified, unverified_head=True)
+    report_unverified = run_tier1_dual_model_suite(
+        runners=[
+            CodexGptMicrobenchRunner(
+                codex_bin=str(codex_unverified),
+                auth_json_path=trial_auth,
+                sandbox="read-only",
+            )
+        ],
+        scenarios=("m1_envelope_scoped_recovery",),
+        base_ref=None,
+        max_total_seconds=60.0,
+        per_call_timeout_seconds=20.0,
+    )
+    assert report_unverified["passed"] is True, report_unverified
+    row_u = report_unverified["results"][0]
+    assert row_u["base"]["efficiency"]["round_trips"] == 2
+    assert row_u["head"]["efficiency"]["round_trips"] is None
+    assert row_u["head"]["telemetry_coverage"]["metrics"]["round_trips"]["status"] == "missing"
+    assert "round_trips" in row_u["comparison"]["excluded_partial_metrics"]
+    assert row_u["comparison"]["deltas"]["round_trips"] is None
+    assert row_u["comparison"]["pct_changes"]["round_trips"] is None

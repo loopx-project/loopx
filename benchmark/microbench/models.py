@@ -1048,7 +1048,7 @@ class CodexGptMicrobenchRunner:
                     expected_scenario_id=scenario_id,
                 )
 
-            rec_count = _opt_int(rollout_metrics, "complete_record_count")
+            verified_round_trips = _opt_int(rollout_metrics, "round_trips")
             raw_per_turn = rollout_metrics.get("per_turn_context_tokens")
             per_turn_tuple = (
                 tuple(int(v) for v in raw_per_turn if isinstance(v, int) and not isinstance(v, bool))
@@ -1062,6 +1062,10 @@ class CodexGptMicrobenchRunner:
                 else None
             )
             raw_win_src = rollout_metrics.get("occupancy_window_source")
+            raw_coverage = rollout_metrics.get("telemetry_coverage")
+            codex_coverage: dict[str, Any] | None = (
+                dict(raw_coverage) if isinstance(raw_coverage, Mapping) else None
+            )
             eff = EfficiencyMetrics(
                 wire_bytes=wire_bytes,
                 prompt_tokens=_opt_int(rollout_metrics, "prompt_tokens"),
@@ -1070,7 +1074,11 @@ class CodexGptMicrobenchRunner:
                 reasoning_tokens=_opt_int(rollout_metrics, "reasoning_tokens"),
                 total_tokens=_opt_int(rollout_metrics, "total_tokens"),
                 tool_calls=tool_calls,
-                round_trips=rec_count if rec_count and rec_count > 0 else None,
+                round_trips=(
+                    verified_round_trips
+                    if verified_round_trips is not None and verified_round_trips > 0
+                    else None
+                ),
                 wall_seconds=wall,
                 initial_turn_context_tokens=_opt_int(rollout_metrics, "initial_turn_context_tokens"),
                 per_turn_context_tokens=per_turn_tuple,
@@ -1092,4 +1100,5 @@ class CodexGptMicrobenchRunner:
                 efficiency=eff,
                 observed_commands=tuple(observed_cmds),
                 telemetry_source=str(rollout_metrics.get("source") or "codex_session_usage"),
+                telemetry_coverage=codex_coverage,
             )
