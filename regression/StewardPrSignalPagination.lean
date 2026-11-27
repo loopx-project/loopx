@@ -524,6 +524,53 @@ theorem known_different_creator_preserves_irrelevant_reply (creator actor : Nat)
     classifyRelativeToCreator (some creator) actor false false = none := by
   simp [classifyRelativeToCreator, different]
 
+/- A known author contributes its membership in the configured set. A row
+   already excluded by an independent filter cannot make the scope uncertain.
+   Once the other gates pass, only an author-scoped row with an unreadable
+   author returns no membership answer. -/
+inductive AuthorScope where
+  | unfiltered
+  | include
+  | exclude
+
+def authorScopeMembership (mode : AuthorScope) (eligible : Bool)
+    (authorInSet : Option Bool) : Option Bool :=
+  if !eligible then some false
+  else match mode with
+  | .unfiltered => some true
+  | .include => authorInSet
+  | .exclude => authorInSet.map Bool.not
+
+def observeAuthorScope (previous rows : List Nat) (membership : Option Bool) : List Nat × Bool :=
+  observe previous (membership.map fun included => if included then rows else [])
+
+theorem unknown_author_keeps_verified_scope (previous rows : List Nat) :
+    observeAuthorScope previous rows (authorScopeMembership .include true none) = (previous, false) ∧
+    observeAuthorScope previous rows (authorScopeMembership .exclude true none) = (previous, false) := by
+  constructor <;> rfl
+
+theorem known_author_membership_remains_dual (listed : Bool) :
+    authorScopeMembership .include true (some listed) = some listed ∧
+    authorScopeMembership .exclude true (some listed) = some (!listed) := by
+  constructor <;> rfl
+
+theorem independent_exclusion_needs_no_author_evidence (mode : AuthorScope) :
+    authorScopeMembership mode false none = some false := rfl
+
+theorem unfiltered_scope_needs_no_author_evidence :
+    authorScopeMembership .unfiltered true none = some true := rfl
+
+-- When an author filter cannot be resolved, backfill is still useful if it
+-- could establish an independent age exclusion in a reply-bypass scope.
+def planScopeCommentBackfill (knownMembership canBypassAge thresholdMet incomplete : Bool) : Bool :=
+  incomplete && (knownMembership || (canBypassAge && !thresholdMet))
+
+theorem unknown_membership_backfill_only_when_age_could_exclude
+    (canBypassAge thresholdMet incomplete : Bool) :
+    planScopeCommentBackfill false canBypassAge thresholdMet incomplete = true ↔
+      incomplete = true ∧ canBypassAge = true ∧ thresholdMet = false := by
+  cases canBypassAge <;> cases thresholdMet <;> cases incomplete <;> decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -575,5 +622,10 @@ theorem known_different_creator_preserves_irrelevant_reply (creator actor : Nat)
 #print axioms absent_creator_keeps_the_verified_signal
 #print axioms known_bot_is_ignored_without_creator_even_with_association
 #print axioms known_different_creator_preserves_irrelevant_reply
+#print axioms unknown_author_keeps_verified_scope
+#print axioms known_author_membership_remains_dual
+#print axioms independent_exclusion_needs_no_author_evidence
+#print axioms unfiltered_scope_needs_no_author_evidence
+#print axioms unknown_membership_backfill_only_when_age_could_exclude
 
 end StewardPrSignalPagination

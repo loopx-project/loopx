@@ -1173,11 +1173,14 @@ function filterScopedRepositoryItems(
     if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
       continue;
     }
+    let authorMembershipUncertain = false;
     if (authorMode !== null && authors !== null) {
       const login = prAuthorLogin(item);
-      if (authorMode === "include" && (!login || !authors.has(login))) continue;
-      if (authorMode === "exclude" && login && authors.has(login)) continue;
+      authorMembershipUncertain = !login;
+      if (login && authorMode === "include" && !authors.has(login)) continue;
+      if (login && authorMode === "exclude" && authors.has(login)) continue;
     }
+    let scopedItem = item;
     if (minStalledHours !== null) {
       const authorReplied = item.author_replied_after_request_changes === true
         || reviewSummary?.author_replied_after_request_changes === true;
@@ -1207,7 +1210,10 @@ function filterScopedRepositoryItems(
         || reviewSummary?.comments_coverage_incomplete === true;
       if (commentsCoverageIncomplete) {
         if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
-        onIncompleteComments(item);
+        // Backfill can rule out an under-age PR, but it cannot identify its creator.
+        if (!authorMembershipUncertain || (canBypassAge && !thresholdMet)) {
+          onIncompleteComments(item);
+        }
         continue;
       }
       const authorReplyBypass = authorReplied && canBypassAge;
@@ -1215,14 +1221,17 @@ function filterScopedRepositoryItems(
         continue;
       }
       const stalledAgeMs = basisKnown ? Math.max(0, observedAtMs - basisMs) : 0;
-      matched.push({
+      scopedItem = {
         ...item,
         stalled_threshold_met: thresholdMet,
         stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
-      });
-    } else {
-      matched.push(item);
+      };
     }
+    if (authorMembershipUncertain) {
+      if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
+      continue;
+    }
+    matched.push(scopedItem);
   }
   return { items: matched, observationIncomplete: false };
 }

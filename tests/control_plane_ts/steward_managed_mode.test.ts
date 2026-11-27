@@ -1203,6 +1203,79 @@ test("Steward comment coverage respects the exact age boundary and reply bypass"
     "awaiting_maintainer_reply");
 });
 
+test("author scopes preserve the prior observation when an eligible PR loses its creator", () => {
+  const scope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+  };
+  const known = {number: 42, author: {login: " MEMBER "}, isDraft: false,
+    review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const unknown = {...known, author: null};
+  const observe = (filter: Record<string, unknown>, items: unknown[], prior?: unknown) =>
+    observeStewardSignalMonitor({
+      signal_scope: {...scope, pr_filter: filter}, repository_snapshot: {status: "ok", items}, previous_hash: prior,
+    });
+  for (const mode of ["include", "exclude"]) {
+    const filter = {author_mode: mode, authors: ["member"], exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"]};
+    const original = observe(filter, [known]);
+    assert.deepEqual(original.scoped_repository_items, mode === "include" ? [known] : []);
+    for (const creator of [null, {login: null}, {login: "   "}]) {
+      const blocked = observe(filter, [{...unknown, author: creator}], original.result_hash);
+      assert.equal(blocked.observation_incomplete, true);
+      assert.equal(blocked.material_change, false);
+      assert.equal(blocked.result_hash, original.result_hash);
+    }
+    const recovered = observe(filter, [known], original.result_hash);
+    assert.equal(recovered.material_change, false);
+    assert.equal(recovered.observation_incomplete, false);
+    const ruledOut = observe(filter, [
+      {...unknown, isDraft: true},
+      {...unknown, number: 43, review_summary: {effective_verdict: "APPROVE"}},
+    ]);
+    assert.equal(ruledOut.observation_incomplete, false);
+    assert.deepEqual(ruledOut.scoped_repository_items, []);
+  }
+  const unfiltered = observe({}, [unknown]);
+  assert.equal(unfiltered.observation_incomplete, false);
+  assert.deepEqual(unfiltered.scoped_repository_items, [unknown]);
+});
+
+test("author membership can be ruled out by age without spending useless comment reads", () => {
+  const observed_at = "2026-11-22T08:00:00Z";
+  const scope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+  };
+  const due = {number: 11, author: null, stalled_since: "2026-11-21T08:00:00Z",
+    comments_coverage_incomplete: true, review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const young = {...due, number: 12, stalled_since: "2026-11-22T07:00:00Z"};
+  const known = {...due, number: 13, author: {login: "member"}};
+  const signalScope = (mode: string) => ({...scope,
+    pr_filter: {author_mode: mode, authors: ["member"], min_stalled_hours: 24}});
+  const plan = (mode: string) => planStewardSignalCommentBackfill({
+    signal_scope: signalScope(mode), repository_items: [due, young, known], observed_at,
+  });
+  const observe = (mode: string, item: unknown) => observeStewardSignalMonitor({
+    signal_scope: signalScope(mode), repository_snapshot: {status: "ok", items: [item]},
+    observed_at, previous_hash: "sha256:prior",
+  });
+
+  assert.deepEqual(plan("include"), {pr_numbers: [13]});
+  assert.deepEqual(plan("exclude"), {pr_numbers: [12]});
+  for (const mode of ["include", "exclude"]) {
+    const completeDue = observe(mode, {...due, comments_coverage_incomplete: false});
+    assert.equal(completeDue.observation_incomplete, true);
+    assert.equal(completeDue.result_hash, "sha256:prior");
+    const tooYoung = observe(mode, {...young, comments_coverage_incomplete: mode === "include"});
+    assert.equal(tooYoung.observation_incomplete, false);
+    assert.deepEqual(tooYoung.scoped_repository_items, []);
+  }
+  assert.equal(observe("exclude", young).observation_incomplete, true);
+});
+
 test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {
   const noAgeScope = {
     schema_version: "steward_signal_monitor_scope_v0",
