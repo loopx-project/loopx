@@ -1313,13 +1313,14 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   };
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
-  if (repo !== null && repo.status === "unavailable") {
+  const rawRepoItems = repo !== null && Array.isArray(repo.items) ? repo.items : null;
+  // An unreadable list must not report that PRs were removed.
+  if (repo !== null && (repo.status === "unavailable" || rawRepoItems === null)) {
     return incompleteObservation;
   }
   const portfolio = params.portfolio_observation == null ? null
     : requireJsonObject(params.portfolio_observation, "portfolio observation");
   const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
-  const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
   const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
   const rawMinStalledHours = prFilter?.min_stalled_hours;
   const usesStalledAgeFilter = typeof rawMinStalledHours === "number"

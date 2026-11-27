@@ -1659,6 +1659,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     from test_native_steward_managed_mode import original, storage
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
+    from loopx.capabilities.native_chat.steward_monitor_turns import steward_monitor_snapshot_path
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     _store, runtime, _provider, transport, binding, _capture, _ = steward
@@ -1921,6 +1922,21 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     assert obs_na2["material_change"] is True
     assert obs_na2["observation_incomplete"] is False
     assert "--next-agent-todo" in succ_na2
+
+    snapshot_path = steward_monitor_snapshot_path(
+        runtime.coordination_runtime_root, actor["goal_id"], no_age_todo["todo_id"],
+    )
+    verified_snapshot = snapshot_path.read_bytes()
+    with monkeypatch.context() as provider:
+        provider.setattr(
+            "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+            lambda _repo: {"status": "ok", "repository": "org/repo", "items": None},
+        )
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            monitor._collect_signal_monitor(
+                actor, context, {**no_age_todo, "result_hash": obs_na2["result_hash"]},
+            )
+    assert snapshot_path.read_bytes() == verified_snapshot
 
     # 3. Scoped monitor WITH min_stalled_hours > 0 DOES invoke backfill RPC and preserves state on failure.
     age_scope = {

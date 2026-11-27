@@ -1276,6 +1276,43 @@ test("author membership can be ruled out by age without spending useless comment
   assert.equal(observe("exclude", young).observation_incomplete, true);
 });
 
+test("repository observation distinguishes invalid items, verified emptiness and no repository", () => {
+  const scoped = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: true, pr_filter: {exclude_drafts: true}};
+  for (const signalScope of [null, scoped]) {
+    const observe = (repositorySnapshot: unknown, previousHash?: unknown, inboxItems: unknown[] = []) =>
+      observeStewardSignalMonitor({
+        signal_scope: signalScope, repository_snapshot: repositorySnapshot,
+        previous_hash: previousHash, inbox_items: inboxItems,
+      });
+    const previous = observe({status: "ok", items: [{number: 42, isDraft: false}]});
+    for (const malformed of [
+      {status: "ok"},
+      {status: "ok", items: null},
+      {status: "ok", items: {}},
+      {status: "ok", items: "[]"},
+      {status: "unavailable", items: []},
+    ]) {
+      const result = observe(malformed, previous.result_hash);
+      assert.equal(result.observation_incomplete, true);
+      assert.equal(result.material_change, false);
+      assert.equal(result.result_hash, previous.result_hash);
+    }
+    const empty = observe({status: "ok", items: []}, previous.result_hash);
+    assert.equal(empty.observation_incomplete, false);
+    assert.equal(empty.material_change, true);
+    if (signalScope !== null) assert.deepEqual(empty.scoped_repository_items, []);
+
+    const absent = observe(undefined);
+    assert.equal(absent.observation_incomplete, false);
+    assert.notEqual(absent.result_hash, empty.result_hash);
+    assert.equal(observe(null, absent.result_hash).material_change, false);
+    const inboxChange = observe(null, absent.result_hash, [{id: "new-evidence"}]);
+    assert.equal(inboxChange.observation_incomplete, false);
+    assert.equal(inboxChange.material_change, true);
+  }
+});
+
 test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {
   const noAgeScope = {
     schema_version: "steward_signal_monitor_scope_v0",

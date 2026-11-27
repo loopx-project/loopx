@@ -571,6 +571,47 @@ theorem unknown_membership_backfill_only_when_age_could_exclude
       incomplete = true ∧ canBypassAge = true ∧ thresholdMet = false := by
   cases canBypassAge <;> cases thresholdMet <;> cases incomplete <;> decide
 
+/- The outer option is permission to use the repository component of the
+   observation. Within a complete observation, none means that the monitor
+   has no associated repository. Some [] means a verified empty PR list.
+   This models canonical data before hashing, without assuming hash injectivity. -/
+inductive RepositoryRead where
+  | noRepository
+  | verified (rows : List Nat)
+  | invalidItems
+  | unavailable
+
+def repositoryHashInput : RepositoryRead → Option (Option (List Nat))
+  | .noRepository => some none
+  | .verified rows => some (some rows)
+  | .invalidItems | .unavailable => none
+
+def observeRepositoryRead (prior : Option (List Nat)) (read : RepositoryRead) :
+    Option (List Nat) × Bool :=
+  match repositoryHashInput read with
+  | none => (prior, false)
+  | some current => (current, decide (current ≠ prior))
+
+theorem invalid_repository_items_keep_the_verified_result (prior : Option (List Nat)) :
+    observeRepositoryRead prior .invalidItems = (prior, false) := rfl
+
+theorem unavailable_repository_keeps_the_verified_result (prior : Option (List Nat)) :
+    observeRepositoryRead prior .unavailable = (prior, false) := rfl
+
+theorem genuinely_empty_repository_can_publish_a_removal (number : Nat) :
+    observeRepositoryRead (some [number]) (.verified []) = (some [], true) := by
+  simp [observeRepositoryRead, repositoryHashInput]
+
+theorem no_repository_has_a_distinct_complete_input :
+    repositoryHashInput .noRepository = some none ∧
+    repositoryHashInput (.verified []) = some (some []) := by
+  constructor <;> rfl
+
+theorem old_empty_fallback_changes_the_result_of_invalid_items (number : Nat) :
+    observeRepositoryRead (some [number]) (.verified []) ≠
+      observeRepositoryRead (some [number]) .invalidItems := by
+  simp [observeRepositoryRead, repositoryHashInput]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -627,5 +668,10 @@ theorem unknown_membership_backfill_only_when_age_could_exclude
 #print axioms independent_exclusion_needs_no_author_evidence
 #print axioms unfiltered_scope_needs_no_author_evidence
 #print axioms unknown_membership_backfill_only_when_age_could_exclude
+#print axioms invalid_repository_items_keep_the_verified_result
+#print axioms unavailable_repository_keeps_the_verified_result
+#print axioms genuinely_empty_repository_can_publish_a_removal
+#print axioms no_repository_has_a_distinct_complete_input
+#print axioms old_empty_fallback_changes_the_result_of_invalid_items
 
 end StewardPrSignalPagination
