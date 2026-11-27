@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from functools import partial
 from pathlib import Path
 import re
 from typing import TYPE_CHECKING, Protocol, cast
@@ -395,12 +396,15 @@ def _run_inbox_return(
             attachment_names=attachment_names, finalize_reactions=not attachments, resume_parts=True,
             before_send=before_send, reply_placement=reply_placement)
     else:
+        scoped_dispatch = getattr(delivery_attempt_recorder, "before_provider_dispatch", None)
+        before_dispatch = (partial(scoped_dispatch, "lark") if callable(scoped_dispatch)
+                           else getattr(delivery_attempt_recorder, "before_provider_send", None))
         result = reply_lark_event_inbox(
             project=project, config_path=config_path, message_id=message_id, text=text, content_format="markdown",
             execute=True, runner=runner or _default_runner, before_send=before_send,
             delivery_attempt_recorder=record_attempt if attachments else delivery_attempt_recorder,
             source_membership_verifier=source_verifier, recover_ambiguous_send=True,
-            before_provider_send=getattr(delivery_attempt_recorder, "before_provider_send", None),
+            before_provider_send=before_dispatch,
             short_message_limit=None, attachment_keys=keys, attachment_names=attachment_names,
             finalize_reactions=not attachments, reply_placement=reply_placement)
     if attachments and result.get("reply_verified") is True:
@@ -445,6 +449,9 @@ class LarkManagerReturnTransport:
     """Send or read back one saved result through the existing Lark adapter."""
 
     supports_result_files = True
+
+    def return_dispatch_provider(self, route: PayloadView, session: PayloadView) -> str:
+        return "lark"
 
     def __init__(self, server: _ReturnServer, root: Path) -> None:
         self.server, self.root, self.cancelled = server, root, lambda: False

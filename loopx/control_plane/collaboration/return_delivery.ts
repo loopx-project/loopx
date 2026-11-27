@@ -535,6 +535,8 @@ async function prepareReturn(command: ReturnCommand, state: JsonObject): Promise
   const verify = priorStatus === "verification_required" || command.exact && state.attempt != null;
   return returnResponse({ action: privateConversation ? "private" : verify ? "verify" : "send",
     text: returnTranscriptText(reply, command.exact), message_id: returnMessageId(String(command.request.request_id), command.key),
+    ...((priorStatus === "queued" || priorStatus === "retry_pending") && !command.exact && !privateConversation && state.attempt == null
+      ? { check_original_dispatch: true } : {}),
     attempt: verify ? savedAttempt(state.attempt) : null, attachments: reply.attachments ?? [],
     revision: deliveryRevision(state), token: (state.admission as JsonObject | undefined)?.token ?? null });
 }
@@ -613,10 +615,15 @@ async function finishReturn(command: ReturnCommand, state: JsonObject): Promise<
         || resolveConversationScope(requireJsonObject(command.facts.session, "session")).private_conversation) {
       throw new EffectRuntimeRequestError("external return dispatch is unavailable");
     }
-    // A restarted worker must not POST again without a provider locator.
+    // Both possible old histories retain the same verify-only checkpoint.
+    // Only a transcript created for this provider's fenced sender permits a
+    // fresh POST. Absence of the optional request field is the old caller ABI.
+    const provider = command.request.dispatch_provider === undefined ? null
+      : matchingString(command.request.dispatch_provider, "dispatch_provider", PROVIDER);
     const started = { status: "verification_required", error: "provider_locator_unavailable", attempts: state.attempts ?? 0 };
     await writeDeliveryState(command, started);
-    return returnResponse({ revision: deliveryRevision(started), token: null });
+    return returnResponse({ revision: deliveryRevision(started), token: null,
+      ...(provider === null ? {} : { dispatch_allowed: command.request.original_dispatch_provider === provider }) });
   }
   if (command.request.phase === "attempt") {
     const attempt = normalizeManagerReturnDeliveryAttempt(command.request.attempt);

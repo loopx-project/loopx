@@ -767,6 +767,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         origin: str | None = None,
         message_id: str | None = None,
         goal_draft: dict[str, Any] | None = None,
+        return_dispatch_provider: str | None = None,
     ) -> dict[str, Any]:
         """Append a message, or return an identical explicit-ID retry.
 
@@ -787,6 +788,10 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             **({"origin": _opaque_id(origin, field="origin")} if origin else {}),
             **({"attachments": attachments} if attachments else {}),
             **({"goal_draft": goal_draft} if goal_draft and role == "agent" else {}),
+            # Provenance of the first insertion. An explicit-ID replay returns
+            # the original row, including the absence of this field on upgrade.
+            **({"return_dispatch_provider": _opaque_id(return_dispatch_provider, field="return_dispatch_provider")}
+               if return_dispatch_provider and origin == "manager_followup" and role == "agent" else {}),
             "created_at": utc_now(),
         }
         with exclusive_file_lock(path, agent_id="loopx-chat", operation="append_chat_message"):

@@ -99,6 +99,21 @@ class ChatConversationTransports:
     # file delivery for another transport that has not qualified it.
     supports_result_files = True
 
+    def return_dispatch_provider(self, route: dict[str, Any], session: dict[str, Any]) -> str | None:
+        # The local binding fixes the transport for this session. A temporary
+        # outage during live observation must not mark a new transcript as a
+        # legacy write. Actual delivery still resolves the current audience.
+        transport = self.default_return
+        saved = session.get("steward_context")
+        if self.transports and isinstance(saved, dict):
+            row = next((row for row in self.bindings.read()["bindings"]
+                        if row["binding_id"] == saved["binding_id"]), None)
+            if row is None:
+                return None
+            transport = self.transports.get(row["transport_ref"], self.default_return)
+        provider = getattr(transport, "return_dispatch_provider", None)
+        return provider(route, session) if callable(provider) else None
+
     def send_with_attempt(self, route: dict[str, Any], session: dict[str, Any], turn: dict[str, Any],
                           text: str, record_attempt: Callable[[Mapping[str, str | None]], None]) -> dict[str, Any]:
         transport = self._return_transport(route, session)
