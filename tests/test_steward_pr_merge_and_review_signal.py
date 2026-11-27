@@ -747,24 +747,33 @@ def test_steward_requires_readable_comment_page_for_coverage(
 
 
 @pytest.mark.parametrize(
-    ("source", "known_login", "actor", "reply_time", "expected"),
+    ("source", "known_login", "actor", "reply_time", "expected", "creator"),
     [
-        pytest.param("latest", "member", None, "09:30", "uncertain", id="null-latest-actor"),
-        pytest.param("older", "member", None, "09:30", "uncertain", id="null-backfilled-actor"),
-        pytest.param("review", "member", None, "09:30", "uncertain", id="null-commented-review-actor"),
-        pytest.param("latest", "member", {"login": None}, "09:30", "uncertain", id="missing-login"),
-        pytest.param("latest", "maintainer", None, "09:00", "uncertain", id="unknown-ties-maintainer"),
-        pytest.param("latest", "member", None, "09:00", "author", id="known-author-wins-tie"),
-        pytest.param("older", "member", None, "08:30", "author", id="verified-newer-author"),
-        pytest.param("truncated", "member", None, "08:30", "author", id="verified-reply-covers-truncated-suffix"),
-        pytest.param("latest", "member", None, "08:00", "author", id="unknown-at-anchor"),
-        pytest.param("latest", "member", {"login": "member"}, "09:30", "author", id="verified-author"),
-        pytest.param("latest", "member", {"login": "maintainer"}, "09:30", "maintainer", id="verified-maintainer"),
-        pytest.param("latest", "member", {"__typename": "Bot"}, "09:30", "author", id="known-bot"),
+        pytest.param("latest", "member", None, "09:30", "uncertain", "member", id="null-latest-actor"),
+        pytest.param("older", "member", None, "09:30", "uncertain", "member", id="null-backfilled-actor"),
+        pytest.param("review", "member", None, "09:30", "uncertain", "member", id="null-commented-review-actor"),
+        pytest.param("latest", "member", {"login": None}, "09:30", "uncertain", "member", id="missing-login"),
+        pytest.param("latest", "maintainer", None, "09:00", "uncertain", "member", id="unknown-ties-maintainer"),
+        pytest.param("latest", "member", None, "09:00", "author", "member", id="known-author-wins-tie"),
+        pytest.param("older", "member", None, "08:30", "author", "member", id="verified-newer-author"),
+        pytest.param("truncated", "member", None, "08:30", "author", "member", id="verified-reply-covers-truncated-suffix"),
+        pytest.param("latest", "member", None, "08:00", "author", "member", id="unknown-at-anchor"),
+        pytest.param("latest", "member", {"login": "member"}, "09:30", "author", "member", id="verified-author"),
+        pytest.param("latest", "member", {"login": "maintainer"}, "09:30", "maintainer", "member", id="verified-maintainer"),
+        pytest.param("latest", "member", {"__typename": "Bot"}, "09:30", "author", "member", id="known-bot"),
+        pytest.param("latest", None, {"login": "member"}, "09:30", "uncertain", None, id="null-pr-creator"),
+        pytest.param("older", None, {"login": "member"}, "09:30", "uncertain", None, id="null-creator-older-reply"),
+        pytest.param("review", None, {"login": "member"}, "09:30", "uncertain", None, id="null-creator-review-reply"),
+        pytest.param("latest", None, {"login": "member"}, "09:30", "uncertain", {"login": None}, id="null-creator-login"),
+        pytest.param("latest", None, {"login": "member"}, "09:30", "author", " MeMbEr ", id="matching-creator"),
+        pytest.param("latest", None, {"login": "member"}, "09:30", "maintainer", "different", id="different-creator"),
+        pytest.param("latest", None, {"__typename": "Bot"}, "09:30", "no-reply", None, id="null-creator-known-bot"),
+        pytest.param("latest", None, {"login": "member"}, "08:00", "no-reply", None, id="null-creator-pre-anchor"),
+        pytest.param("latest", None, {"login": "other"}, "09:30", "excluded-author", "other", id="known-excluded-creator"),
     ],
 )
 def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
-    source, known_login, actor, reply_time, expected,
+    source, known_login, actor, reply_time, expected, creator,
 ) -> None:
     head = "a" * 40
     node = _graphql_node(_sample_pr(
@@ -775,10 +784,13 @@ def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
             "author": {"login": "maintainer"}, "commit": {"oid": head},
         }],
     ))
-    replies = [{
-        "createdAt": "2030-01-01T09:00:00Z", "authorAssociation": "MEMBER",
-        "author": {"login": known_login},
-    }]
+    node["author"] = {"login": creator} if isinstance(creator, str) else creator
+    replies = []
+    if known_login is not None:
+        replies.append({
+            "createdAt": "2030-01-01T09:00:00Z", "authorAssociation": "MEMBER",
+            "author": {"login": known_login},
+        })
     submitted = f"2030-01-01T{reply_time}:00Z"
     candidate = {"author": actor, "authorAssociation": "MEMBER"}
     if source == "review":
@@ -811,7 +823,7 @@ def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
     assert requested_cursors == (["before=recent"] if source == "older" else [])
     assert snapshot["status"] == "ok"
     assert snapshot["items"][0]["comments_coverage_incomplete"] is (expected == "uncertain")
-    assert snapshot["items"][0]["author_replied_after_request_changes"] is (expected == "author")
+    assert snapshot["items"][0]["author_replied_after_request_changes"] is (expected in {"author", "excluded-author"})
 
     observed = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
         "repository_snapshot": snapshot,

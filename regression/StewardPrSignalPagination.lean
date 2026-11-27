@@ -492,6 +492,38 @@ theorem treating_unknown_member_as_maintainer_changes_coverage :
     replyCoverage true (latestReply (9, .author) (10, .maintainer)) = true ∧
     replyCoverage true (latestReply (9, .author) (10, .uncertain)) = false := by decide
 
+/- Identities abstract verified nonempty logins, compared without respect to
+   case. The reply actor is known in this model. Its maintainer evidence
+   cannot resolve whether it is also the unidentified PR creator. -/
+def classifyRelativeToCreator (creator : Option Nat) (actor : Nat)
+    (isBot hasMaintainerEvidence : Bool) : Option ReplyRole :=
+  if isBot then none
+  else match creator with
+  | none => some .uncertain
+  | some owner =>
+    if actor = owner then some .author
+    else if hasMaintainerEvidence then some .maintainer
+    else none
+
+theorem absent_creator_does_not_establish_reply_role (actor : Nat) (associated : Bool) :
+    classifyRelativeToCreator none actor false associated = some .uncertain := rfl
+
+theorem restoring_creator_identity_can_change_the_reply_role :
+    classifyRelativeToCreator (some 1) 1 false true = some .author ∧
+    classifyRelativeToCreator (some 2) 1 false true = some .maintainer := by decide
+
+theorem absent_creator_keeps_the_verified_signal (previous rows : List Nat) (actor : Nat) :
+    observe previous (if (classifyRelativeToCreator none actor false true).any (replyCoverage true)
+      then some rows else none) = (previous, false) := rfl
+
+theorem known_bot_is_ignored_without_creator_even_with_association (actor : Nat) :
+    classifyRelativeToCreator none actor true true = none := rfl
+
+theorem known_different_creator_preserves_irrelevant_reply (creator actor : Nat)
+    (different : actor ≠ creator) :
+    classifyRelativeToCreator (some creator) actor false false = none := by
+  simp [classifyRelativeToCreator, different]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -538,5 +570,10 @@ theorem treating_unknown_member_as_maintainer_changes_coverage :
 #print axioms verified_author_at_same_time_is_decisive
 #print axioms maintainer_at_same_time_cannot_resolve_unknown_actor
 #print axioms treating_unknown_member_as_maintainer_changes_coverage
+#print axioms absent_creator_does_not_establish_reply_role
+#print axioms restoring_creator_identity_can_change_the_reply_role
+#print axioms absent_creator_keeps_the_verified_signal
+#print axioms known_bot_is_ignored_without_creator_even_with_association
+#print axioms known_different_creator_preserves_irrelevant_reply
 
 end StewardPrSignalPagination

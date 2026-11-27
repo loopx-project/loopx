@@ -326,9 +326,9 @@ def _post_reply_role(
     login = raw_login.strip() if isinstance(raw_login, str) else ""
     if _is_bot_actor(raw_user, login):
         return None
-    if not login:
+    if not login or not pr_author:
         return 1, None
-    if pr_author and login.casefold() == pr_author.casefold():
+    if login.casefold() == pr_author.casefold():
         return 1, "author"
     assoc = str(entry.get("authorAssociation") or entry.get("author_association") or "").strip().upper()
     if assoc in _MAINTAINER_ASSOCIATIONS or (
@@ -421,9 +421,8 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project compact, deterministic exact-head review, check, and gate facts."""
     head_oid = str(row.get("headRefOid") or "").strip()
     raw_author = row.get("author")
-    pr_author = str(
-        raw_author.get("login") if isinstance(raw_author, Mapping) else (raw_author or "")
-    ).strip()
+    author_login = raw_author.get("login") if isinstance(raw_author, Mapping) else raw_author
+    pr_author = author_login.strip() if isinstance(author_login, str) else ""
     raw_reviews = [item for item in (row.get("reviews") or []) if isinstance(item, Mapping)]
     stale_count = 0
     exact_reviews: list[dict[str, Any]] = []
