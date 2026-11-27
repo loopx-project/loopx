@@ -75,7 +75,7 @@ const GOAL_PATH_DELTA_LIST_LIMITS = {
 
 // Guidance for the existing material-closeout qualification, not a new gate.
 export const VISION_MATERIAL_CLOSEOUT_HINT =
-  "For material semantic_closeout, provide " +
+  "For progress semantic_closeout, provide " +
   `vision_patch.acceptance_summary and top-level path_delta (outcome=${OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES.join("/")}, ` +
   "prior_assumption, observed_reality, retained/changed/stopped, evidence_refs). " +
   "An unchanged reason only reuses an already evidence-linked current vision. " +
@@ -123,7 +123,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
     path_delta: {
       schema_version: GOAL_PATH_DELTA_SCHEMA_VERSION,
       outcomes: [...GOAL_PATH_DELTA_OUTCOMES],
-      open_stage_closeout_outcomes: [...OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES],
+      open_progress_outcomes: [...OUTCOME_CHECKPOINT_CONTINUATION_OUTCOMES],
       required: ["outcome", "prior_assumption", "observed_reality"],
       require_any: ["retained", "changed", "stopped"],
       scalar_limits: {...GOAL_PATH_DELTA_SCALAR_LIMITS},
@@ -132,7 +132,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       )),
     },
     rule: "Material closeout: acceptance_summary + evidence-linked path_delta. " +
-      "Record waits in reentry_condition. " +
+      "Progress wait: reentry_condition. Gap allows wait. " +
       (autonomousReplan
         ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
         : "Changed mainline: outcome=replan. ") +

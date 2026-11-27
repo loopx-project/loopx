@@ -560,9 +560,9 @@ test("material closeout leaves an invalid path decision recoverable", () => {
   const allowedOutcomes = ["continue", "no_change", "replan"];
   const authoring = visionAuthoringContract();
   const pathAuthoring = authoring.path_delta as Record<string, unknown>;
-  assert.deepEqual(pathAuthoring.open_stage_closeout_outcomes, allowedOutcomes);
+  assert.deepEqual(pathAuthoring.open_progress_outcomes, allowedOutcomes);
   assert.deepEqual(pathAuthoring.outcomes, ["ask_human", "continue", "no_change", "replan", "stop", "wait"]);
-  assert.match(String(authoring.rule), /Record waits in reentry_condition/);
+  assert.match(String(authoring.rule), /Progress wait: reentry_condition\. Gap allows wait\./);
 
   const dependency = "Resume after the independent result is available.";
   const packet = (outcome: string) => ({
@@ -599,9 +599,10 @@ test("material closeout leaves an invalid path decision recoverable", () => {
 
   const reportedGap = buildVisionCheckpoint(finalizeRequest({
     delivery_outcome: "outcome_gap",
-    agent_vision: prepared("replan"),
+    agent_vision: prepared("wait"),
   }));
   assert.equal(reportedGap.decision, "patched");
+  assert.equal(reportedGap.satisfied, true);
 });
 
 test("missing checkpoint offers unchanged only with a persisted vision", () => {
