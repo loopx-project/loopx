@@ -199,7 +199,7 @@ def test_standard_installation_distinguishes_doctor_fingerprint_and_commands(
     finally:
         workflow_plan.write_bytes(workflow_backup)
 
-    # Corrupt companion metadata (direct_url.json) must preserve structured JSON diagnostics and fail closed.
+    # Corrupt, null-dir_info, or unreadable companion metadata (direct_url.json) must preserve structured JSON diagnostics and fail closed.
     dist_info_probe = subprocess.run(
         [
             core_python,
@@ -218,27 +218,45 @@ def test_standard_installation_distinguishes_doctor_fingerprint_and_commands(
     direct_url_path = Path(dist_info_probe.stdout.strip())
     direct_url_had_file = direct_url_path.exists()
     direct_url_backup = direct_url_path.read_bytes() if direct_url_had_file else None
-    direct_url_path.write_text("{corrupt-json", encoding="utf-8")
+    damage_cases: list[tuple[str, str | None]] = [
+        ("truncated", "{corrupt-json"),
+        ("null_dir_info", json.dumps({"dir_info": None})),
+    ]
+    if os.name != "nt" and os.geteuid() != 0:
+        damage_cases.append(("unreadable", None))
     try:
-        corrupt_doctor = _installation_doctor(core_python, tmp_path, expected=1)
-        assert corrupt_doctor["ok"] is False
-        assert "package_fingerprint" not in corrupt_doctor["service_runtime_identity"]
-        corrupt_checks = {check["id"]: check for check in corrupt_doctor["checks"]}
-        assert corrupt_checks["companion_distributions_compatible"]["required"] is True
-        assert corrupt_checks["companion_distributions_compatible"]["ok"] is False
-        assert "loopx-capability-issue-fix" in corrupt_checks["companion_distributions_compatible"]["detail"]
-        assert corrupt_checks["package_runtime_fingerprint"]["required"] is True
-        assert corrupt_checks["package_runtime_fingerprint"]["ok"] is False
-        corrupt_companions = {
-            item["distribution"]: item for item in corrupt_doctor["companion_distributions"]
-        }
-        assert set(corrupt_companions) == set(STANDARD_DISTRIBUTIONS)
-        assert corrupt_companions["loopx-capability-issue-fix"]["ready"] is False
-        assert "invalid_companion_metadata" in corrupt_companions["loopx-capability-issue-fix"]["reasons"]
-        assert corrupt_companions["loopx-capability-agent-turn-recall"]["ready"] is True
-        assert corrupt_companions["loopx-capability-pull-request-review"]["ready"] is True
-        assert "loopx-capability-issue-fix" in corrupt_doctor["fix"]
+        for case_name, content in damage_cases:
+            if case_name == "unreadable":
+                direct_url_path.write_text(json.dumps({"url": "file:///wheel.whl"}), encoding="utf-8")
+                direct_url_path.chmod(0o000)
+            else:
+                assert content is not None
+                direct_url_path.write_text(content, encoding="utf-8")
+            try:
+                corrupt_doctor = _installation_doctor(core_python, tmp_path, expected=1)
+                assert corrupt_doctor["ok"] is False, case_name
+                assert "package_fingerprint" not in corrupt_doctor["service_runtime_identity"], case_name
+                corrupt_checks = {check["id"]: check for check in corrupt_doctor["checks"]}
+                assert corrupt_checks["companion_distributions_compatible"]["required"] is True, case_name
+                assert corrupt_checks["companion_distributions_compatible"]["ok"] is False, case_name
+                assert "loopx-capability-issue-fix" in corrupt_checks["companion_distributions_compatible"]["detail"]
+                assert corrupt_checks["package_runtime_fingerprint"]["required"] is True, case_name
+                assert corrupt_checks["package_runtime_fingerprint"]["ok"] is False, case_name
+                corrupt_companions = {
+                    item["distribution"]: item for item in corrupt_doctor["companion_distributions"]
+                }
+                assert set(corrupt_companions) == set(STANDARD_DISTRIBUTIONS), case_name
+                assert corrupt_companions["loopx-capability-issue-fix"]["ready"] is False, case_name
+                assert "invalid_companion_metadata" in corrupt_companions["loopx-capability-issue-fix"]["reasons"], case_name
+                assert corrupt_companions["loopx-capability-agent-turn-recall"]["ready"] is True, case_name
+                assert corrupt_companions["loopx-capability-pull-request-review"]["ready"] is True, case_name
+                assert "loopx-capability-issue-fix" in corrupt_doctor["fix"], case_name
+            finally:
+                if case_name == "unreadable" and direct_url_path.exists():
+                    direct_url_path.chmod(0o644)
     finally:
+        if direct_url_path.exists():
+            direct_url_path.chmod(0o644)
         if direct_url_had_file and direct_url_backup is not None:
             direct_url_path.write_bytes(direct_url_backup)
         else:

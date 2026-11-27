@@ -531,6 +531,7 @@ def test_collect_companion_distribution_diagnostics_covers_all_core_companions(
         "{corrupt-json",
         "",
         "[]",
+        json.dumps({"dir_info": None}),
         json.dumps({"dir_info": "invalid"}),
         OSError("unreadable"),
     ],
@@ -588,3 +589,47 @@ def test_inspect_builtin_capability_distribution_handles_corrupt_direct_url_meta
         ("loopx.capabilities.issue_fix.workflow_plan",),
         builtin_cli_present=False,
     )
+
+
+def test_read_editable_direct_url_rejects_null_dir_info_and_unreadable_file_on_path_distribution(
+    tmp_path: Path,
+) -> None:
+    from loopx import __version__, python_install_owner, release_manifest
+
+    dist_info = tmp_path / "loopx_capability_issue_fix-2.4.1.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: loopx-capability-issue-fix\nVersion: {__version__}\n",
+        encoding="utf-8",
+    )
+    (dist_info / "RECORD").write_text(
+        "loopx/capabilities/issue_fix/workflow_plan.py,,\n",
+        encoding="utf-8",
+    )
+    installed = PathDistribution(dist_info)
+
+    # Absent direct_url.json is a valid non-editable wheel install.
+    assert python_install_owner.read_editable_direct_url(installed) is False
+    assert "loopx/capabilities/issue_fix/workflow_plan.py" in release_manifest._owned_runtime_files(installed)
+
+    direct_url = dist_info / "direct_url.json"
+    direct_url.write_text(json.dumps({"dir_info": None}), encoding="utf-8")
+    assert python_install_owner.read_editable_direct_url(installed) is None
+    assert release_manifest._owned_runtime_files(installed) == {}
+
+    if os.name != "nt" and os.geteuid() != 0:
+        direct_url.write_text(json.dumps({"url": "file:///wheel.whl"}), encoding="utf-8")
+        direct_url.chmod(0o000)
+        try:
+            assert python_install_owner.read_editable_direct_url(installed) is None
+            assert release_manifest._owned_runtime_files(installed) == {}
+        finally:
+            direct_url.chmod(0o644)
+
+    direct_url.unlink()
+    direct_url.mkdir()
+    try:
+        assert python_install_owner.read_editable_direct_url(installed) is None
+        assert release_manifest._owned_runtime_files(installed) == {}
+    finally:
+        direct_url.rmdir()

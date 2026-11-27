@@ -92,15 +92,28 @@ def read_editable_direct_url(installed: Distribution) -> bool | None:
     """Inspect ``direct_url.json`` for editable metadata, returning ``None`` when malformed."""
     try:
         raw_direct_url = installed.read_text("direct_url.json")
+        if raw_direct_url is None:
+            dist_path = getattr(installed, "_path", None)
+            if isinstance(dist_path, (str, os.PathLike)):
+                direct_url_path = Path(dist_path) / "direct_url.json"
+                try:
+                    direct_url_path.lstat()
+                except FileNotFoundError:
+                    raw_direct_url = None
+                else:
+                    # PathDistribution.read_text swallows PermissionError and IsADirectoryError as None.
+                    raw_direct_url = direct_url_path.read_text(encoding="utf-8")
         direct_url = json.loads(raw_direct_url) if raw_direct_url is not None else {}
     except (OSError, ValueError):
         return None
     if not isinstance(direct_url, dict):
         return None
-    dir_info = direct_url.get("dir_info")
-    if dir_info is not None and not isinstance(dir_info, dict):
-        return None
-    return bool(dir_info.get("editable")) if isinstance(dir_info, dict) else False
+    if "dir_info" in direct_url:
+        dir_info = direct_url["dir_info"]
+        if not isinstance(dir_info, dict):
+            return None
+        return bool(dir_info.get("editable"))
+    return False
 
 
 def inspect_builtin_capability_distribution(
