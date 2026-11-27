@@ -507,6 +507,19 @@ test("chained post-context transient watch carriers recover only after cooldown 
     request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
     monitor_todo: monitor, monitor_restart_basis: basis};
   assert.equal(admitStewardManagedTurn(input).observation_only, true);
+  const retainedMicrosecond = {...carrier, completed_at: "2026-11-20T07:45:00.000001Z"};
+  assert.throws(() => admitStewardManagedTurn({
+    ...input, monitor_restart_basis: {...basis, original: retainedMicrosecond},
+  }), /watch restart requires independent proof/);
+  assert.equal(admitStewardManagedTurn({
+    ...input, monitor_restart_basis: {
+      ...basis, original: retainedMicrosecond, observed_at: completedSec + 300.000002,
+    },
+  }).observation_only, true);
+  const offsetCompletion = {...carrier, completed_at: "2026-11-20T15:45:00.125000+08:00"};
+  assert.equal(admitStewardManagedTurn({
+    ...input, monitor_restart_basis: {...basis, original: offsetCompletion, observed_at: completedSec + 300.125},
+  }).observation_only, true);
   for (const [errorCode, errorText] of [
     ["lock_acquire_timeout", "file lock acquisition timed out (recorded holder pid 4189)"],
     ["runtime_error", "file lock acquisition timed out (recorded holder pid 4189)"],
@@ -523,6 +536,7 @@ test("chained post-context transient watch carriers recover only after cooldown 
   for (const badBasis of [
     {observed_at: completedSec + 299},
     {observed_at: undefined},
+    {observed_at: Infinity},
     {original: {...carrier, completed_at: undefined}},
     {original: {...carrier, error_code: "runtime_error", error: "the portfolio observation omitted authorized Goals",
       contexts: [{schema_version: "manager_turn_context_v1", goals: [], warnings: ["external_authorization_changed"],

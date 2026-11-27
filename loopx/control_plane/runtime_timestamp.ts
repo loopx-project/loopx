@@ -44,6 +44,22 @@ export function parseIsoTimestamp(value: string): Date | null {
   return Number.isNaN(parsed.valueOf()) ? null : parsed;
 }
 
+/** Floor the exact binary64 epoch seconds without rounding up on multiplication. */
+export function floorEpochSecondsMicros(value: unknown): bigint | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (Number.isInteger(value)) return BigInt(value) * 1000000n;
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  const exponent = (bits >> 52n) & 0x7ffn;
+  const fraction = bits & ((1n << 52n) - 1n);
+  const significand = exponent === 0n ? fraction : (1n << 52n) + fraction;
+  const signedSignificand = (bits >> 63n) === 0n ? significand : -significand;
+  // The power accounts for the 52 fraction bits, with a fixed exponent for subnormals.
+  const power = exponent === 0n ? -1074n : exponent - 1075n;
+  return (signedSignificand * 1000000n) << power;
+}
+
 /** Compatibility codec for datetime.fromisoformat inputs used by Todo metadata.
  * It keeps microseconds and offset seconds, which a JS Date cannot represent.
  * Missing timezone means UTC by default. The explicit aware-Python mode is

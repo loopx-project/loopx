@@ -4,7 +4,8 @@ import { planMonitorMetadata, TODO_MONITOR_METADATA_REQUEST_SCHEMA as SCHEMA } f
 import { planTodoFieldUpdate, TODO_FIELD_UPDATE_REQUEST_SCHEMA } from "../../loopx/control_plane/todos/field_update.ts";
 import type { JsonObject } from "../../loopx/control_plane/effect_program.ts";
 import { productionScaleCoordinationFixture } from "./production_scale_coordination_fixture.ts";
-import { parseTodoTimestampMicros } from "../../loopx/control_plane/runtime_timestamp.ts";
+import { floorEpochSecondsMicros, parseTodoTimestampMicros } from "../../loopx/control_plane/runtime_timestamp.ts";
+
 import {
   advanceMonitorScopeGeneration,
   monitorScopeGeneration,
@@ -183,6 +184,23 @@ test("poll rejects invalid observation shapes without mutating its input", () =>
     const before = structuredClone(source);
     assert.throws(() => planMonitorMetadata(source));
     assert.deepEqual(source, before);
+  }
+});
+
+test("float epoch samples floor to exact UTC microseconds", () => {
+  for (const [sample, expected] of [
+    [1.25, 1250000n],
+    [-1.25, -1250000n],
+    [1e-6, 0n],
+    [1.0000000000000002e-6, 1n],
+    [Number.MIN_VALUE, 0n],
+    [-Number.MIN_VALUE, -1n],
+    [253402300799, 253402300799000000n],
+    [NaN, null],
+    [Infinity, null],
+    ["1", null],
+  ] as const) {
+    assert.equal(floorEpochSecondsMicros(sample), expected);
   }
 });
 
