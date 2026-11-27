@@ -50,7 +50,7 @@ def verify_configuration_backup(backup: dict[str, Any]) -> dict[str, Any]:
 def compare_configuration_backups(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = effect_runtime_result("configuration.backup", {
         "action": "compare", "before": before, "after": after,
-    })
+    }, large_local_snapshot=True)
     return result
 
 

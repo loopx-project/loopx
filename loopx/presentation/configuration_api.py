@@ -84,6 +84,7 @@ class ChatConfigurationRequestMixin(
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/apply": lambda: self._storage_import(action="apply"),
             f"{storage_api.CHAT_GOAL_STORAGE_PATH}/import/recover": lambda: self._storage_import(action="readback"),
             f"{backup_api.CONFIGURATION_BACKUP_PATH}/export": self._configuration_backup_export,
+            f"{backup_api.CONFIGURATION_BACKUP_PATH}/compare": self._configuration_backup_compare,
             f"{backup_api.CONFIGURATION_BACKUP_PATH}/restore": self._configuration_backup_restore,
             f"{recovery_api.STATE_RECOVERY_PATH}/archive": lambda: self._state_recovery_upload("archive"),
             f"{recovery_api.STATE_RECOVERY_PATH}/manifest": lambda: self._state_recovery_upload("manifest"),

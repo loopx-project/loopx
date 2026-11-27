@@ -6,8 +6,19 @@ import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
 import {authorityUnicodeCompare, canonicalAuthorityJson, canonicalAuthoritySha256, hasExactAuthorityKeys, isAuthorityJsonObject} from "./coordination/authority_store_codec.ts";
 import {durableWriteJson, publishNewDirectory} from "./effect_runtime_io.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
+import {MAX_INLINE_RESPONSE_BYTES, MAX_LOCAL_SNAPSHOT_BYTES} from "./effect_runtime_snapshot.ts";
 
 const SCHEMA = "loopx_configuration_backup_v0";
+
+// Reserve a complete inline frame for the response envelope; the global
+// transport ceilings and private-file validation remain unchanged.
+export const MAX_CONFIGURATION_COMPARISON_BYTES = MAX_LOCAL_SNAPSHOT_BYTES - MAX_INLINE_RESPONSE_BYTES;
+
+export function requireConfigurationComparisonResultSize(byteCount: number): void {
+  if (byteCount > MAX_CONFIGURATION_COMPARISON_BYTES) {
+    throw new EffectRuntimeRequestError("configuration comparison exceeds the 56 MiB complete-result limit; compare smaller Goal cohorts", "request_too_large");
+  }
+}
 
 function content(value: unknown): JsonObject {
   const data = requireJsonObject(canonicalAuthorityJson(value), "configuration backup data");
@@ -81,12 +92,14 @@ export function compareConfigurationBackups(value: unknown): JsonObject {
   for (const id of [...new Set([...beforeIds, ...afterIds])].sort(authorityUnicodeCompare)) {
     compare(leftGoals.get(id), rightGoals.get(id), `/goals/${segment(id)}`, leftGoals.has(id), rightGoals.has(id));
   }
-  return {ok: true, status: "compared", before_sha256: beforeVerification.sha256, after_sha256: afterVerification.sha256,
+  const result = {ok: true, status: "compared", before_sha256: beforeVerification.sha256, after_sha256: afterVerification.sha256,
     before_goal_ids: beforeIds, after_goal_ids: afterIds,
     only_in_before: beforeIds.filter(id => !rightGoals.has(id)), only_in_after: afterIds.filter(id => !leftGoals.has(id)),
     before_machine_configuration_present: beforeVerification.machine_configuration_present,
     after_machine_configuration_present: afterVerification.machine_configuration_present,
     change_count: changes.length, changes, written: false, activation_performed: false, privacy_certified: false};
+  requireConfigurationComparisonResultSize(Buffer.byteLength(JSON.stringify(result), "utf8"));
+  return result;
 }
 
 async function requirePhysicalParent(path: string): Promise<void> {

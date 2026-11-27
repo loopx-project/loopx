@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {captureConfigurationBackup, compareConfigurationBackups, restoreConfigurationBackup, verifyConfigurationBackup} from "../../loopx/control_plane/configuration_backup.ts";
+import {captureConfigurationBackup, compareConfigurationBackups, restoreConfigurationBackup, verifyConfigurationBackup, MAX_CONFIGURATION_COMPARISON_BYTES, requireConfigurationComparisonResultSize} from "../../loopx/control_plane/configuration_backup.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 
 function snapshot() {
@@ -129,4 +129,21 @@ test("both snapshots must verify and machine absence is not an empty object", ()
   assert.deepEqual(result.changes, [{path: "/machine_configuration", before_present: true, after_present: true, before: null, after: {}}]);
   for (const request of [{before: {...before, sha256: "invalid"}, after}, {before, after: {...after, sha256: "invalid"}},
     {before: null, after}]) assert.throws(() => compareConfigurationBackups(request));
+});
+
+test("complete comparison size is bounded before a successful result is returned", (context) => {
+  assert.equal(MAX_CONFIGURATION_COMPARISON_BYTES, 56 * 1024 * 1024);
+  assert.doesNotThrow(() => requireConfigurationComparisonResultSize(MAX_CONFIGURATION_COMPARISON_BYTES));
+  assert.throws(() => requireConfigurationComparisonResultSize(MAX_CONFIGURATION_COMPARISON_BYTES + 1),
+    error => error instanceof EffectRuntimeRequestError && error.code === "request_too_large");
+  const original = Buffer.byteLength;
+  // Exercise the actual owner preflight at its byte-count boundary without
+  // allocating a large fixture. Envelope verification still uses real bytes.
+  context.mock.method(Buffer, "byteLength", (value: string, encoding?: BufferEncoding) =>
+    typeof value === "string" && value.startsWith('{"ok":true,"status":"compared"')
+      ? MAX_CONFIGURATION_COMPARISON_BYTES + 1 : original(value, encoding));
+  const backup = snapshot();
+  assert.throws(() => compareConfigurationBackups({before: backup, after: backup}),
+    error => error instanceof EffectRuntimeRequestError && error.code === "request_too_large"
+      && error.message.includes("56 MiB complete-result limit"));
 });

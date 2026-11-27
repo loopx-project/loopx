@@ -35,6 +35,21 @@ export function exportConfigurationBackup(goalIds?: string[]) {
   });
 }
 
+export type ConfigurationBackupComparison = {
+  ok: boolean; status: "compared"; before_sha256: string; after_sha256: string;
+  before_goal_ids: string[]; after_goal_ids: string[]; only_in_before: string[]; only_in_after: string[];
+  before_machine_configuration_present: boolean; after_machine_configuration_present: boolean;
+  change_count: number; changes: {path: string; before_present: boolean; after_present: boolean; before?: unknown; after?: unknown}[];
+};
+
+export function compareConfigurationSnapshots(before: Record<string, unknown>, after: Record<string, unknown>) {
+  const body = JSON.stringify({before, after});
+  if (new TextEncoder().encode(body).byteLength > 64 * 1024 * 1024) {
+    throw new Error("Combined configuration snapshots exceed the 64 MiB comparison limit.");
+  }
+  return requestJson<ConfigurationBackupComparison>("/api/chat/configuration-backup/compare", {method: "POST", body});
+}
+
 export function restoreConfigurationCheckpoint(backup: Record<string, unknown>, execute: boolean) {
   return requestJson<ConfigurationBackupResult>("/api/chat/configuration-backup/restore", {
     method: "POST", body: JSON.stringify({backup, expected_sha256: backup.sha256, execute}),
