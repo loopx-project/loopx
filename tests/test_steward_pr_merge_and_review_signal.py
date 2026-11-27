@@ -97,6 +97,41 @@ def test_parse_github_pr_target_shapes() -> None:
         parse_github_pr_target("merge PR 42 and also 43")
 
 
+@pytest.mark.parametrize(("request_at", "approval_at", "provider_decision", "last_id", "expected"), [
+    ("2030-01-01T08:00:00Z", "2030-01-01T01:00:00-08:00", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T09:00:00Z", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T15:00:00+08:00", "REVIEW_REQUIRED", "PRR_request", "REQUEST_CHANGES"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T16:00:00+08:00", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("unreadable", "2030-01-01T01:00:00-08:00", "REVIEW_REQUIRED", "PRR_request", "REQUEST_CHANGES"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T01:00:00-08:00", "CHANGES_REQUESTED", "PRR_approve", "REQUEST_CHANGES"),
+], ids=["later-offset-approval", "utc-control", "later-request", "equal-utc-instants",
+        "unreadable-actionable-time", "provider-request-still-blocks"])
+def test_exact_head_review_summary_orders_known_instants_and_retains_legacy_evidence(
+    request_at: str, approval_at: str, provider_decision: str, last_id: str, expected: str,
+) -> None:
+    head = "e" * 40
+    reviewer = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    same_reviewer = {"author": {"login": "fixture-reviewer"}, "commit": {"oid": head}}
+    reviews = [
+        {**same_reviewer, "id": "PRR_approve", "state": "APPROVED", "submittedAt": approval_at,
+         "body": _valid_bilingual_body(head_oid=head, verdict="APPROVE", reviewer=reviewer)},
+        {**same_reviewer, "id": "PRR_comment", "state": "COMMENTED", "body": "An undated comment."},
+        {**same_reviewer, "id": "PRR_request", "state": "CHANGES_REQUESTED", "submittedAt": request_at,
+         "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=reviewer)},
+    ]
+    summary = summarize_github_pr_signal(_sample_pr(
+        head_oid=head, author="fixture-author", reviews=reviews, review_decision=provider_decision,
+    ))["review_summary"]
+    exact_reviews = summary["exact_head_reviews"]
+
+    assert (summary["effective_verdict"], exact_reviews[-1]["id"]) == (expected, last_id)
+    assert exact_reviews[0]["id"] == "PRR_comment"
+    assert {review["id"]: review["submitted_at"] for review in exact_reviews} == {
+        "PRR_approve": approval_at, "PRR_request": request_at, "PRR_comment": None,
+    }
+    assert summary["has_review_conflict"] is (provider_decision == "CHANGES_REQUESTED")
+
+
 def test_summarize_pr_distinguishes_gpt_gemini_fallback_stale_casual_and_conflict() -> None:
     head = "b" * 40
     old = "0" * 40

@@ -17,7 +17,7 @@ from ..pr_review_queue.review_body import (
     english_review_verdict,
     reviewer_declaration_lines,
 )
-from ...control_plane.runtime.time import parse_timestamp
+from ...control_plane.runtime.time import chronology_key, parse_timestamp
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...registry import load_registry, registry_goals
 
@@ -420,7 +420,15 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             stale_count += 1
             continue
         exact_reviews.append(_extract_review_record(review, head_oid=head_oid, pr_author=pr_author))
-    exact_reviews.sort(key=lambda item: (item["submitted_at"] or "", item["id"] or ""))
+    timed_reviews = [(chronology_key(review["submitted_at"]), review) for review in exact_reviews]
+    # An undated verdict could supersede a dated one. Preserve the legacy
+    # decision order when the evidence cannot establish their chronology.
+    if any(not has_instant and _actor_actionable_verdict(review) is not None
+           for (has_instant, _, _), review in timed_reviews):
+        exact_reviews.sort(key=lambda review: (review["submitted_at"] or "", review["id"] or ""))
+    else:
+        timed_reviews.sort(key=lambda entry: (entry[0], entry[1]["id"] or ""))
+        exact_reviews = [review for _, review in timed_reviews]
 
     latest_by_actor: dict[tuple[str, str], str | None] = {}
     latest_record_by_actor: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
