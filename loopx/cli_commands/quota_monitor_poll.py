@@ -5,8 +5,10 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..control_plane.agents.agent_scope_frontier import AgentScopeFrontierAction
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
 from ..control_plane.capability_hooks import InteractionProjectionHookRegistration, TurnStartContextProjector
+from ..control_plane.goals.goal_vision_wait import exact_blocked_successor_wait_state
 from ..control_plane.quota.effective_action import EffectiveAction
 from ..control_plane.quota.error_codes import HeartbeatReceiptIdentityConflictError
 from ..control_plane.quota.heartbeat_receipt import (
@@ -202,9 +204,13 @@ def record_automatic_heartbeat_stall(
         turn_instance_id=turn_id,
         goal_ref=goal_ref,
     )
+    action = payload.get("effective_action")
+    automatic_wait = action == EffectiveAction.MONITOR_QUIET_SKIP.value or (
+        action == AgentScopeFrontierAction.AGENT_SCOPE_WAIT.value
+        and bool(exact_blocked_successor_wait_state(payload))
+    )
     if existing_stall is None and (
-        payload.get("effective_action") != EffectiveAction.MONITOR_QUIET_SKIP.value
-        or not monitor_quiet_stall_observation_required(payload)
+        not automatic_wait or not monitor_quiet_stall_observation_required(payload)
     ):
         return payload, status_payload, cache_metadata, "not_applicable"
     from ..capabilities.explore.composition_frontier import (

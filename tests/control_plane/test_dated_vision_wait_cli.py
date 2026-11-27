@@ -272,6 +272,75 @@ def test_watch_only_monitor_preserves_dated_successor_wait(
     assert sum(run.get("classification") == "quota_monitor_poll" for run in runs) == (scenario == "unproven")
 
 
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_heartbeat_observes_blocked_successor_once_per_turn(
+    tmp_path, isolated_effect, monkeypatch, provider,
+):
+    wait = "capacity_available:external_runner"
+    registry, runtime, state = fixture(tmp_path, wait)
+    peer, peer_todo = "agent-peer", "todo_peer_wait"
+    config = json.loads(registry.read_text())
+    config["goals"][0]["coordination"]["registered_agents"].append(peer)
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    with state.open("a", encoding="utf-8") as output:
+        output.write(
+            "\n- [ ] [P1] Retain independent peer work.\n"
+            f"  <!-- loopx:todo todo_id={peer_todo} status=deferred claimed_by={peer} "
+            f"task_class=advancement_task action_kind=validate resume_when={wait} -->\n"
+        )
+    index = runtime / f"goals/{GOAL}/runs/index.jsonl"
+    peer_vision = json.loads((index.parent / "vision.json").read_text())
+    peer_vision["agent_id"] = peer
+    peer_vision["agent_vision"].update(agent_id=peer, todo_delta=[f"retain:{peer_todo}"])
+    peer_path = index.parent / "peer-vision.json"
+    peer_path.write_text(json.dumps(peer_vision), encoding="utf-8")
+    with index.open("a", encoding="utf-8") as output:
+        output.write(json.dumps({**peer_vision, "json_path": str(peer_path)}) + "\n")
+    if provider == "sqlite":
+        monkeypatch.setenv("NODE_OPTIONS", os.environ.get("NODE_OPTIONS", "") + " --experimental-sqlite")
+    initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider=provider)
+    args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", AGENT,
+            "--turn-instance-id")
+    rc, first = cli(registry, runtime, *args, "blocked-wait-first")
+    assert rc == 0, first
+    assert first["effective_action"] == "agent_scope_wait"
+    assert first["heartbeat_receipt"]["stall_observation"] == "appended"
+    assert "settlement_identity" not in first["heartbeat_receipt"]
+    rc, replay = cli(registry, runtime, *args, "blocked-wait-first")
+    assert rc == 0, replay
+    assert replay["effective_action"] == "agent_scope_wait"
+    assert replay["heartbeat_receipt"]["event_id"] == first["heartbeat_receipt"]["event_id"]
+    for guard in (first, replay):
+        contract = guard["interaction_contract"]
+        assert contract["agent_channel"]["quiet_noop_allowed"] is True
+        assert contract["agent_channel"]["must_attempt"] is False
+        assert not any("monitor-poll" in action for action in contract["cli_channel"]["next_cli_actions"])
+
+    peer_args = ("quota", "should-run", "--codex-app", "--goal-id", GOAL, "--agent-id", peer,
+                 "--turn-instance-id")
+    rc, independent = cli(registry, runtime, *peer_args, "blocked-wait-first")
+    assert rc == 0, independent
+    assert independent["effective_action"] == "agent_scope_wait"
+    assert independent["heartbeat_receipt"]["stall_observation"] == "appended"
+    assert independent["heartbeat_receipt"]["event_id"] != first["heartbeat_receipt"]["event_id"]
+
+    rc, second = cli(registry, runtime, *args, "blocked-wait-second")
+    assert rc == 0, second
+    assert second["effective_action"] == "autonomous_replan_required"
+    trigger, = second["autonomous_replan_obligation"]["triggers"]
+    assert trigger["kind"] == "blocked_successor_no_progress_repeat"
+    assert trigger["run_count"] == 2
+    runs = [json.loads(line) for line in index.read_text().splitlines()]
+    observations = [run for run in runs if run.get("classification") == "quota_monitor_poll"]
+    assert [(run["agent_id"], run["turn_instance_id"]) for run in observations] == [
+        (AGENT, "blocked-wait-first"), (peer, "blocked-wait-first"), (AGENT, "blocked-wait-second"),
+    ]
+    assert observations[0]["monitor_target"]["frontier_identity"] == trigger["frontier_identity"]
+    assert observations[1]["monitor_target"]["frontier_identity"] != trigger["frontier_identity"]
+    assert not any(run.get("classification") == "quota_slot_spent" for run in runs)
+
+
 def test_due_vision_wait_restores_explicit_resume(tmp_path, isolated_effect):
     registry, runtime, state = fixture(tmp_path, "resume_at:2026-01-01T00:00:00Z")
     initialize_canonical_source_fixture(runtime, GOAL, state_path=state, provider="sqlite")
