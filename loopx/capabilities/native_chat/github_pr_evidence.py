@@ -371,18 +371,22 @@ def _summarize_request_changes_stall(
     earliest_comment_dt: datetime | None = None
     has_post_anchor_comment_reply = False
     post_replies: list[tuple[datetime, int, str | None]] = []
+    undated_reply_roles: set[str | None] = set()
     for comment in row.get("comments") or []:
         if not isinstance(comment, Mapping):
             continue
         parsed_ts = _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at"))
-        if parsed_ts is None:
-            continue
-        if earliest_comment_dt is None or parsed_ts[0] < earliest_comment_dt:
-            earliest_comment_dt = parsed_ts[0]
-        if parsed_ts[0] <= stalled_anchor_dt:
-            continue
+        if parsed_ts is not None:
+            if earliest_comment_dt is None or parsed_ts[0] < earliest_comment_dt:
+                earliest_comment_dt = parsed_ts[0]
+            if parsed_ts[0] <= stalled_anchor_dt:
+                continue
         role_info = _post_reply_role(comment, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
-        if role_info is not None:
+        if role_info is None:
+            continue
+        if parsed_ts is None:
+            undated_reply_roles.add(role_info[1])
+        else:
             has_post_anchor_comment_reply |= role_info[1] is not None
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
@@ -390,19 +394,28 @@ def _summarize_request_changes_stall(
         if str(review.get("state") or "").strip().upper() != "COMMENTED":
             continue
         parsed_ts = _parse_iso_timestamp(review.get("submittedAt") or review.get("submitted_at"))
-        if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
+        if parsed_ts is not None and parsed_ts[0] <= stalled_anchor_dt:
             continue
         if _extract_review_record(review, head_oid=head_oid, pr_author=pr_author)["valid_verdict_review"]:
             continue
         role_info = _post_reply_role(review, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
-        if role_info is not None:
+        if role_info is None:
+            continue
+        if parsed_ts is None:
+            undated_reply_roles.add(role_info[1])
+        else:
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
     # An unknown actor could be the PR author. A known author at the same time settles that tie.
     post_replies.sort(key=lambda item: (item[0], item[1], item[2] is not None))
     latest_reply = post_replies[-1] if post_replies else None
-    reply_role_uncertain = latest_reply is not None and latest_reply[2] is None
     author_replied = latest_reply is not None and latest_reply[2] == "author"
+    # An undated reply could precede the anchor or supersede all dated replies.
+    compatible_role = "author" if author_replied else "maintainer"
+    reply_role_uncertain = (
+        (latest_reply is not None and latest_reply[2] is None)
+        or bool(undated_reply_roles - {compatible_role})
+    )
     # GraphQL comments(last: N) returns a newest-last suffix, so coverage is complete when
     # there is no earlier page, the fetched suffix reaches the anchor, or a newer reply
     # from the PR author or a maintainer in the visible suffix supersedes older comments.
@@ -411,7 +424,7 @@ def _summarize_request_changes_stall(
         or (earliest_comment_dt is not None and earliest_comment_dt <= stalled_anchor_dt)
         or has_post_anchor_comment_reply
     )
-    return latest_rc_review_id, stalled_since, author_replied, not comments_coverage_complete
+    return latest_rc_review_id, stalled_since, author_replied and not reply_role_uncertain, not comments_coverage_complete
 
 
 def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -683,12 +696,8 @@ def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
 
 
 def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | None:
-    # An unreadable row could supersede any observed reply on this page.
-    if not isinstance(raw_nodes, list) or any(
-        not isinstance(comment, Mapping)
-        or _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at")) is None
-        for comment in raw_nodes
-    ):
+    # Structured rows can still establish the role of a reply with unreadable timing.
+    if not isinstance(raw_nodes, list) or any(not isinstance(comment, Mapping) for comment in raw_nodes):
         return None
     return raw_nodes
 

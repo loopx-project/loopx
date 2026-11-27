@@ -670,6 +670,8 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
         pytest.param("older", {"hasPreviousPage": False}, "gap-before-author", False, id="gap-before-author"),
         pytest.param("initial", {"hasPreviousPage": False}, "missing-nodes", False, id="missing-nodes"),
         pytest.param("older", {"hasPreviousPage": False}, "invalid-time", False, id="unreadable-timestamp"),
+        pytest.param("initial", {"hasPreviousPage": False}, "same-role-undated", True, id="initial-compatible-timestamp"),
+        pytest.param("older", {"hasPreviousPage": False}, "same-role-undated", True, id="older-compatible-timestamp"),
         pytest.param("initial", {"hasPreviousPage": False}, "missing-connection", False, id="missing-connection"),
         pytest.param("initial", {"hasPreviousPage": False}, None, True, id="initial-verified-empty"),
         pytest.param("initial", {"hasPreviousPage": True, "startCursor": "recent"}, "author", True, id="verified-reply"),
@@ -690,7 +692,7 @@ def test_steward_requires_readable_comment_page_for_coverage(
     rows: list[object] = []
     if evidence == "anchor":
         rows.append({"createdAt": "2030-01-01T08:00:00Z"})
-    elif evidence in {"author", "gap-before-author", "gap-after-author"}:
+    elif evidence in {"author", "gap-before-author", "gap-after-author", "invalid-time", "same-role-undated"}:
         rows.append({
             "createdAt": "2030-01-01T09:00:00Z",
             "authorAssociation": "NONE",
@@ -702,6 +704,8 @@ def test_steward_requires_readable_comment_page_for_coverage(
         rows.append(None)
     elif evidence == "invalid-time":
         rows.append({"createdAt": "invalid", "author": {"login": "maintainer"}})
+    elif evidence == "same-role-undated":
+        rows.append({"createdAt": None, "author": {"login": "member"}})
 
     response_page: dict[str, object] = {"nodes": rows, "pageInfo": page_info}
     if evidence == "missing-nodes":
@@ -729,7 +733,7 @@ def test_steward_requires_readable_comment_page_for_coverage(
     assert requested_cursors == (["before=recent"] if page_kind == "older" else [])
     assert snapshot["status"] == "ok"
     assert snapshot["items"][0]["comments_coverage_incomplete"] is (not expected_complete)
-    assert snapshot["items"][0]["author_replied_after_request_changes"] is (evidence == "author")
+    assert snapshot["items"][0]["author_replied_after_request_changes"] is (evidence in {"author", "same-role-undated"})
 
     observed = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
         "repository_snapshot": snapshot,
@@ -1087,6 +1091,48 @@ def test_steward_protected_merge_head_drift_and_crash_recovery(steward, tmp_path
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "pr_merged_recovered"
     assert recovered["receipt"]["resource_ids"]["merge_commit_oid"] == "9" * 40
+
+
+@pytest.mark.parametrize(
+    ("dated_author_reply", "undated_role", "field", "timestamp", "expected"),
+    [
+        (True, "maintainer", "comment", None, (False, True)),
+        (True, "maintainer", "comment", "invalid", (False, True)),
+        (True, "maintainer", "review", None, (False, True)),
+        (True, "author", "comment", None, (True, False)),
+        (True, "visitor", "comment", None, (True, False)),
+        (True, "unknown", "comment", None, (False, True)),
+        (False, "author", "comment", None, (False, True)),
+        (False, "maintainer", "comment", None, (False, False)),
+    ],
+)
+def test_unreadable_reply_time_only_blocks_when_it_could_change_author_reply(
+    dated_author_reply, undated_role, field, timestamp, expected,
+) -> None:
+    head = "d" * 40
+    reviewer = {"login": "maintainer"}
+    author = {"login": "contributor"}
+    roles = {
+        "maintainer": {"author": reviewer, "authorAssociation": "MEMBER"},
+        "author": {"author": author},
+        "visitor": {"author": {"login": "visitor"}, "authorAssociation": "NONE"},
+        "unknown": {"author": None},
+    }
+    reviews = [{
+        "id": "rc", "state": "CHANGES_REQUESTED", "author": reviewer,
+        "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
+    }]
+    comments = [{"author": author, "createdAt": "2030-01-01T09:00:00Z"}] if dated_author_reply else []
+    if field == "review":
+        reviews.append({
+            **roles[undated_role], "id": "reply", "state": "COMMENTED",
+            "commit": {"oid": head}, "submittedAt": timestamp,
+        })
+    else:
+        comments.append({**roles[undated_role], "createdAt": timestamp})
+    row = _sample_pr(head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=reviews)
+    summary = summarize_github_pr_signal({**row, "comments": comments, "commentsHasPreviousPage": False})
+    assert (summary["author_replied_after_request_changes"], summary["comments_coverage_incomplete"]) == expected
 
 
 def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> None:
@@ -1857,7 +1903,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     def _fail_if_backfill(node_to_return):
         def _runner(cmd, **_kw):
             if any(arg.startswith("before=") for arg in cmd):
-                raise AssertionError("backfill RPC must not run without min_stalled_hours > 0")
+                raise AssertionError("this fixture must not run a backfill RPC")
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([node_to_return])), stderr="")
         return _runner
 
@@ -2059,6 +2105,47 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     assert stale["observation_incomplete"] is False
     assert stale["material_change"] is True
     assert stale["scoped_repository_items"] == []
+
+    maintainer_reply = {
+        "author": {"__typename": "User", "login": "maintainer"},
+        "authorAssociation": "MEMBER",
+        "createdAt": "2030-01-01T10:00:00Z",
+    }
+
+    def _with_maintainer_reply(reply):
+        return {**complete_node, "comments": {
+            **complete_node["comments"], "nodes": [author_comment, reply],
+        }}
+
+    with monkeypatch.context() as clock:
+        clock.setattr(
+            "loopx.capabilities.native_chat.steward_monitor_signals.now_utc",
+            lambda: datetime(2030, 1, 1, 11, 0, tzinfo=timezone.utc),
+        )
+        known, _, _ = _collect_with_gh(
+            age_todo, _fail_if_backfill(_with_maintainer_reply(maintainer_reply)),
+        )
+        assert known["observation_incomplete"] is False
+        assert known["scoped_repository_items"] == []
+        known_snapshot = age_snapshot_path.read_bytes()
+        for timestamp in (None, "invalid"):
+            with pytest.raises(RuntimeError, match="temporarily unavailable"):
+                _collect_with_gh(
+                    {**age_todo, "result_hash": known["result_hash"]},
+                    _fail_if_backfill(_with_maintainer_reply({**maintainer_reply, "createdAt": timestamp})),
+                )
+            assert age_snapshot_path.read_bytes() == known_snapshot
+
+        undated_review = {
+            "author": maintainer_reply["author"], "authorAssociation": "MEMBER",
+            "id": "PRR_comment_undated", "state": "COMMENTED", "commit": {"oid": head}, "submittedAt": None,
+        }
+        node = {**complete_node, "reviews": {"nodes": [rc_review, undated_review]}}
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            _collect_with_gh(
+                {**age_todo, "result_hash": known["result_hash"]}, _fail_if_backfill(node),
+            )
+        assert age_snapshot_path.read_bytes() == known_snapshot
 
     with pytest.raises(RuntimeError, match="temporarily unavailable"):
         _collect_with_gh(

@@ -750,6 +750,57 @@ theorem unknown_age_comment_backfill_requires_available_reply_bypass_and_known_a
       canBypass = true ∧ authorKnown = true := by
   cases canBypass <;> cases authorKnown <;> decide
 
+/- After ordering the dated replies, an undated row can be irrelevant by time
+   or can be the latest reply. Some true represents the author, some false
+   represents a maintainer, and none could be either role. Known irrelevant
+   rows are excluded before this check. The model uses the existing coverage
+   tests for unread pages and uncertainty among the dated replies. -/
+def decideUndatedReply (dated : Bool) : List (Option Bool) → Option Bool
+  | [] => some dated
+  | role :: rest => if role = some dated then decideUndatedReply dated rest else none
+
+theorem unresolved_reply_times_agree_iff_matching_roles (dated : Bool) (undated : List (Option Bool)) :
+    decideUndatedReply dated undated = some dated ↔ ∀ role ∈ undated, role = some dated := by
+  induction undated with
+  | nil => simp [decideUndatedReply]
+  | cons role rest ih =>
+    by_cases compatible : role = some dated <;> simp [decideUndatedReply, compatible, ih]
+
+def PossibleAuthorReply (dated : Bool) (undated : List (Option Bool)) (result : Bool) : Prop :=
+  result = dated ∨ some result ∈ undated ∨ none ∈ undated
+
+theorem undated_reply_decision_is_sound_and_complete (dated : Bool) (undated : List (Option Bool)) :
+    decideUndatedReply dated undated = some dated ↔
+      ∀ result, PossibleAuthorReply dated undated result → result = dated := by
+  rw [unresolved_reply_times_agree_iff_matching_roles]
+  constructor
+  · intro agreement result possible
+    rcases possible with equal | present | unknown
+    · exact equal
+    · exact Option.some.inj (agreement (some result) present)
+    · exact False.elim (by simpa using agreement none unknown)
+  · intro agreement role present
+    cases role with
+    | none =>
+      have contradiction := agreement (!dated) (Or.inr (Or.inr present))
+      cases dated <;> simp at contradiction
+    | some role => exact congrArg some (agreement role (Or.inr (Or.inl present)))
+
+theorem same_role_undated_reply_preserves_the_known_decision (dated : Bool) :
+    decideUndatedReply dated [some dated] = some dated := by
+  simp [decideUndatedReply]
+
+theorem undated_unknown_actor_cannot_qualify_reply (dated : Bool) :
+    decideUndatedReply dated [none] = none := rfl
+
+theorem unreadable_maintainer_time_preserves_prior (prior : List Nat) (number : Nat) :
+    observeStalledScope prior number (decideUndatedReply true [some false]) = (prior, false) := rfl
+
+theorem skipping_an_undated_maintainer_can_publish_a_false_bypass :
+    observeStalledScope [] 42 (decideUndatedReply true [some false]) ≠
+      observeStalledScope [] 42 (decideUndatedReply true []) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -826,5 +877,11 @@ theorem unknown_age_comment_backfill_requires_available_reply_bypass_and_known_a
 #print axioms unknown_age_preserves_prior_without_reply_bypass
 #print axioms treating_unknown_age_as_recent_can_publish_a_false_removal
 #print axioms unknown_age_comment_backfill_requires_available_reply_bypass_and_known_author
+#print axioms unresolved_reply_times_agree_iff_matching_roles
+#print axioms undated_reply_decision_is_sound_and_complete
+#print axioms same_role_undated_reply_preserves_the_known_decision
+#print axioms undated_unknown_actor_cannot_qualify_reply
+#print axioms unreadable_maintainer_time_preserves_prior
+#print axioms skipping_an_undated_maintainer_can_publish_a_false_bypass
 
 end StewardPrSignalPagination
