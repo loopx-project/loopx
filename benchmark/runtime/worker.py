@@ -23,6 +23,7 @@ from benchmark.runtime.codex import (
     reject_retired_turn_display,
     prepare_codex_home,
     process_environment,
+    summarize_control_telemetry,
 )
 
 from benchmark.runtime.scheduler import PHASE_WORK_RESERVE_SECONDS as PHASE_WORK_RESERVE_SECONDS
@@ -516,12 +517,22 @@ def _plan_sandbox_args(env: dict[str, str], execution: Execution, stage: str) ->
 def native_command(env, execution, stage, wake, session_wake, *, native_hook_args=()):
     if session_wake is None:
         # Preserve the baseline/Goal-planning entrypoint and its transport inputs.
+        checklist_sandbox_args: list[str] = []
+        if execution.official_stop_hook_mode == "todo_checklist" and execution.sandbox == "workspace-write":
+            from benchmark.runtime.native_hooks import baseline_todo_path
+
+            checklist_dir = str(baseline_todo_path(Path(env["LOOPX_CODEX_HOME"])).parent.resolve())
+            checklist_sandbox_args = [
+                "-c",
+                f"sandbox_workspace_write.writable_roots={json.dumps([checklist_dir])}",
+            ]
         return [
             env["CODEX_BIN"], "exec", "--json", "--skip-git-repo-check",
             "--sandbox", execution.sandbox, "--cd", env["LOOPX_PROJECT"],
             *(["-c", "features.goals=false", *_plan_sandbox_args(env, execution, stage),
                "--output-schema", str(wake / "planning-schema.json"),
                "--output-last-message", str(wake / "planning-result.json")] if stage == "plan" else []),
+            *checklist_sandbox_args,
             *native_hook_args,
             "-",
         ]
@@ -575,6 +586,7 @@ def run_once(env: dict[str, str]) -> dict:
     stop_hook = env.get("LOOPX_OFFICIAL_STOP_HOOK", "0")
     if stop_hook not in {"0", "1"}:
         raise ValueError("LOOPX_OFFICIAL_STOP_HOOK must be 0 or 1")
+    stop_hook_mode = env.get("LOOPX_OFFICIAL_STOP_HOOK_MODE", "").strip() or None
     reject_retired_turn_display(env)
     execution = Execution(
         mode=env.get("LOOPX_EXECUTION_MODE", "heartbeat"),
@@ -588,6 +600,7 @@ def run_once(env: dict[str, str]) -> dict:
         native_child_limit=(int(env["LOOPX_NATIVE_CHILD_LIMIT"])
                             if env.get("LOOPX_NATIVE_CHILD_LIMIT") else None),
         official_stop_hook=stop_hook == "1",
+        official_stop_hook_mode=stop_hook_mode,
     )
     request_admission = False
     if env.get("LOOPX_PROVIDER_REQUEST_ADMISSION", "off") != "off":
@@ -639,6 +652,8 @@ def run_once(env: dict[str, str]) -> dict:
            if observation_producer is not None else {}),
         **({"context_delivery": "on"} if execution.context_delivery != "off" else {}),
         **({"official_stop_hook": True} if execution.official_stop_hook else {}),
+        **({"official_stop_hook_mode": execution.official_stop_hook_mode}
+           if execution.official_stop_hook_mode is not None else {}),
         **({"native_child_limit": execution.native_child_limit}
            if execution.native_child_limit is not None else {}),
         **({"provider_request_admission": "on"} if request_admission else {}),
@@ -659,6 +674,9 @@ def run_once(env: dict[str, str]) -> dict:
         if execution.official_stop_hook and execution.timeout_seconds is not None
         else None
     )
+    wake_started = time.monotonic()
+    hook_prepare_seconds = 0.0
+    work_wall_seconds = 0.0
     wake_context = ExitStack()
     pending_path = (
         Path(env.get("LOOPX_RUNTIME_ROOT", str(home))) / "benchmark-pending-turn.json"
@@ -708,15 +726,20 @@ def run_once(env: dict[str, str]) -> dict:
                 None if official_worker_deadline is None else official_worker_deadline - time.time()
             )
             remaining, phase_limited = _phase_timeout(worker_remaining, phase_work_deadline)
+            hook_started = time.monotonic()
             try:
                 native_hook_args = prepare_official_stop_hook(
-                    env, home, deadline=None if remaining is None else time.monotonic() + remaining
+                    env, home,
+                    deadline=None if remaining is None else time.monotonic() + remaining,
+                    mode=execution.official_stop_hook_mode,
                 )
             except subprocess.TimeoutExpired:
                 receipt["host_invoked"] = False
                 if phase_limited:
                     receipt["budget_exhausted"] = True
                 raise
+            finally:
+                hook_prepare_seconds += max(0.0, time.monotonic() - hook_started)
             receipt["official_stop_hook_verified"] = True
         if execution.mode == "heartbeat":
             # Checkpoint capture needs the LoopX control plane, which only
@@ -729,6 +752,7 @@ def run_once(env: dict[str, str]) -> dict:
         if execution.context_delivery != "off":
             from benchmark.runtime.context_delivery import prepare_context_delivery
 
+            context_hook_started = time.monotonic()
             try:
                 context_env = dict(env)
                 prepare_context_delivery(context_env, home)
@@ -741,6 +765,8 @@ def run_once(env: dict[str, str]) -> dict:
                 env.pop("LOOPX_CODEX_CONTEXT_TRUST_ARGS", None)
                 env["LOOPX_CONTEXT_DELIVERY"] = "off"
                 receipt["context_transport"] = {"available": False, **_error_tail(exc)}
+            finally:
+                hook_prepare_seconds += max(0.0, time.monotonic() - context_hook_started)
         body = "Finish the task."
         if stage == "plan":
             from benchmark.runtime.planning import render_planning_prompt, task_plan_packet
@@ -751,6 +777,10 @@ def run_once(env: dict[str, str]) -> dict:
             (wake / "planning-schema.json").write_text(json.dumps(planning_before["result_schema"]))
         elif execution.mode == "plain":
             body = Path(env["LOOPX_TASK_DOC"]).read_text(encoding="utf-8")
+            if execution.official_stop_hook_mode == "todo_checklist":
+                from benchmark.runtime.native_hooks import baseline_todo_instructions, baseline_todo_path
+
+                body += baseline_todo_instructions(baseline_todo_path(home).resolve())
         session_wake = None
         fresh_context_prefix = ""
         resumed_session_id = None
@@ -792,8 +822,12 @@ def run_once(env: dict[str, str]) -> dict:
             raise subprocess.TimeoutExpired(env["CODEX_BIN"], execution.timeout_seconds)
         with stderr_path.open("w") as stderr:
             if execution.native_goal and stage == "execute":
-                run_native_goal(env, execution, body, receipt, stderr,
-                                process_evidence_path=wake / "native-process.json")
+                work_started = time.monotonic()
+                try:
+                    run_native_goal(env, execution, body, receipt, stderr,
+                                    process_evidence_path=wake / "native-process.json")
+                finally:
+                    work_wall_seconds += max(0.0, time.monotonic() - work_started)
             else:
                 pending = {}
                 if execution.mode == "turn" and stage == "execute":
@@ -833,27 +867,35 @@ def run_once(env: dict[str, str]) -> dict:
                             timeout += allowance
                     if checkpoint_wake.listener is not None:
                         timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
-                        receipt["return_code"] = checkpoint_wake.run(
-                            execution, body, wake, session_wake, stdout, stderr, timeout,
-                            phase_limited=phase_limited)
+                        work_started = time.monotonic()
+                        try:
+                            receipt["return_code"] = checkpoint_wake.run(
+                                execution, body, wake, session_wake, stdout, stderr, timeout,
+                                phase_limited=phase_limited)
+                        finally:
+                            work_wall_seconds += max(0.0, time.monotonic() - work_started)
                         receipt["ok"] = receipt["return_code"] == 0
                     else:
-                        with native_child_process(command, env=env, stdout=stdout, stderr=stderr,
-                                session_wake=session_wake, receipt=receipt, wake=wake,
-                                timeout=timeout) as process:
-                            if session_wake is not None:
-                                receipt["host_invoked"] = True
-                            timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
-                            try:
-                                process.communicate(input=body, timeout=timeout)
-                            except subprocess.TimeoutExpired:
-                                # This specific wait selected the phase cap. A
-                                # renderer/provider/independent timeout is not it.
-                                if phase_limited:
-                                    receipt["budget_exhausted"] = True
-                                raise
-                            receipt["return_code"] = process.returncode
-                            receipt["ok"] = process.returncode == 0
+                        work_started = time.monotonic()
+                        try:
+                            with native_child_process(command, env=env, stdout=stdout, stderr=stderr,
+                                    session_wake=session_wake, receipt=receipt, wake=wake,
+                                    timeout=timeout) as process:
+                                if session_wake is not None:
+                                    receipt["host_invoked"] = True
+                                timeout, phase_limited = _phase_timeout(timeout, phase_work_deadline)
+                                try:
+                                    process.communicate(input=body, timeout=timeout)
+                                except subprocess.TimeoutExpired:
+                                    # This specific wait selected the phase cap. A
+                                    # renderer/provider/independent timeout is not it.
+                                    if phase_limited:
+                                        receipt["budget_exhausted"] = True
+                                    raise
+                                receipt["return_code"] = process.returncode
+                                receipt["ok"] = process.returncode == 0
+                        finally:
+                            work_wall_seconds += max(0.0, time.monotonic() - work_started)
                 if stage == "plan" and receipt["ok"]:
                     from benchmark.runtime.planning import task_plan_packet, validate_plan_readback
 
@@ -911,6 +953,15 @@ def run_once(env: dict[str, str]) -> dict:
                     receipt["host_failure_record_error"] = (
                         f"{type(exc).__name__}: {str(exc)[:300]}"
                     )
+            total_elapsed = max(0.0, time.monotonic() - wake_started)
+            control_overhead_seconds = max(hook_prepare_seconds, total_elapsed - work_wall_seconds)
+            receipt.update(
+                summarize_control_telemetry(
+                    hook_prepare_seconds=hook_prepare_seconds,
+                    control_overhead_seconds=control_overhead_seconds,
+                    work_wall_seconds=work_wall_seconds,
+                )
+            )
             (wake / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt
 
