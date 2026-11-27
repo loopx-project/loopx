@@ -22,21 +22,37 @@ TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION = (
 )
 
 
-def compact_planning_candidates(values: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    texts: list[str | None]
-    sources, texts = [], []
+def _prepare_planning_candidates(
+    values: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str | None]]:
+    sources: list[dict[str, Any]] = []
+    texts: list[str | None] = []
     for value in values:
         todo_id = normalize_todo_id(value.get("todo_id"))
         text = protocol_action_text(value.get("text"), limit=500)
         if todo_id and text:
             sources.append(dict(value))
             texts.append(text)
-    compacts = compact_todo_summary_items(sources, texts=texts)
+    return sources, texts
+
+
+def _attach_candidate_metadata(
+    sources: Sequence[Mapping[str, Any]],
+    compacts: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     for value, compact in zip(sources, compacts, strict=True):
         for field in ("source", "selected_by", "availability_reason"):
             if value.get(field) is not None:
                 compact[field] = value[field]
-    return compacts
+        result.append(compact)
+    return result
+
+
+def compact_planning_candidates(values: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    sources, texts = _prepare_planning_candidates(values)
+    compacts = compact_todo_summary_items(sources, texts=texts)
+    return _attach_candidate_metadata(sources, compacts)
 
 
 def compact_planning_candidate(value: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -44,13 +60,13 @@ def compact_planning_candidate(value: Mapping[str, Any]) -> dict[str, Any] | Non
     return compacts[0] if compacts else None
 
 
-def quota_runnable_action_candidates(
+def _raw_runnable_action_candidates(
     *,
     agent_id: str,
     agent_todo_summary: Mapping[str, Any] | None,
     capability_gate: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """Adapt already-gated Python eligibility facts into inventory inputs."""
+    """Adapt already-gated Python eligibility facts into raw inventory inputs."""
 
     if not isinstance(agent_todo_summary, Mapping):
         return []
@@ -91,7 +107,23 @@ def quota_runnable_action_candidates(
                 continue
             seen.add(todo_id)
             candidates.append(candidate)
-    return compact_planning_candidates(candidates)
+    return candidates
+
+
+def quota_runnable_action_candidates(
+    *,
+    agent_id: str,
+    agent_todo_summary: Mapping[str, Any] | None,
+    capability_gate: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Adapt already-gated Python eligibility facts into inventory inputs."""
+    return compact_planning_candidates(
+        _raw_runnable_action_candidates(
+            agent_id=agent_id,
+            agent_todo_summary=agent_todo_summary,
+            capability_gate=capability_gate,
+        )
+    )
 
 
 def _unavailable_reason(candidate: Mapping[str, Any]) -> str:
@@ -113,7 +145,7 @@ def _unavailable_reason(candidate: Mapping[str, Any]) -> str:
     return "not_currently_executable"
 
 
-def unavailable_higher_priority_candidates(
+def _raw_unavailable_higher_priority_candidates(
     blocked_priority_fallback: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
     if not isinstance(blocked_priority_fallback, Mapping):
@@ -126,7 +158,15 @@ def unavailable_higher_priority_candidates(
         candidate = dict(item)
         candidate["availability_reason"] = _unavailable_reason(candidate)
         unavailable.append(candidate)
-    return compact_planning_candidates(unavailable)
+    return unavailable
+
+
+def unavailable_higher_priority_candidates(
+    blocked_priority_fallback: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    return compact_planning_candidates(
+        _raw_unavailable_higher_priority_candidates(blocked_priority_fallback)
+    )
 
 
 def _source_context_count(summary: Mapping[str, Any] | None) -> int:
@@ -149,25 +189,36 @@ def build_quota_planning_inventory_request(
     """Adapt Python Todo sources into one TypeScript inventory request."""
 
     safe_agent_id = normalize_todo_claimed_by(agent_id)
-    compact_selected = (
-        compact_planning_candidate(selected) if selected is not None else None
+    selected_sources, selected_texts = _prepare_planning_candidates(
+        [selected] if selected is not None else []
     )
-    if not goal_id or not safe_agent_id or compact_selected is None:
+    if not goal_id or not safe_agent_id or not selected_sources:
         return None
-    source_items = compact_planning_candidates(agent_todo_source_items)
+    source_sources, source_texts = _prepare_planning_candidates(agent_todo_source_items)
+    runnable_sources, runnable_texts = _prepare_planning_candidates(
+        _raw_runnable_action_candidates(
+            agent_id=safe_agent_id,
+            agent_todo_summary=agent_todo_summary,
+            capability_gate=capability_gate,
+        )
+    )
+    unavail_sources, unavail_texts = _prepare_planning_candidates(
+        _raw_unavailable_higher_priority_candidates(blocked_priority_fallback)
+    )
+    all_sources = [*selected_sources, *source_sources, *runnable_sources, *unavail_sources]
+    all_texts = [*selected_texts, *source_texts, *runnable_texts, *unavail_texts]
+    all_compacts = compact_todo_summary_items(all_sources, texts=all_texts)
+    attached = _attach_candidate_metadata(all_sources, all_compacts)
+    n0 = len(selected_sources)
+    n1 = n0 + len(source_sources)
+    n2 = n1 + len(runnable_sources)
     return {
         "schema_version": TODO_PLANNING_INVENTORY_REQUEST_SCHEMA_VERSION,
         "goal_id": goal_id,
         "agent_id": safe_agent_id,
-        "selected_todo": compact_selected,
-        "source_items": source_items,
-        "runnable_candidates": quota_runnable_action_candidates(
-            agent_id=safe_agent_id,
-            agent_todo_summary=agent_todo_summary,
-            capability_gate=capability_gate,
-        ),
-        "unavailable_higher_priority": unavailable_higher_priority_candidates(
-            blocked_priority_fallback
-        ),
+        "selected_todo": attached[0],
+        "source_items": attached[n0:n1],
+        "runnable_candidates": attached[n1:n2],
+        "unavailable_higher_priority": attached[n2:],
         "source_context_todo_count": _source_context_count(agent_todo_summary),
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -26,6 +27,7 @@ from ..control_plane.quota.semantic_replan_guard_merge import (
     has_orphaned_identity_upgrade_replan_guard,
     is_malformed_settlement_state_error,
 )
+from ..control_plane.todos.quota_selection import StaleCanonicalQuotaSourceError
 from ..control_plane.turn_driver.codex_context import context_delivery_for_arguments
 from ..file_lock import LockAcquireTimeoutError
 from ..rollout_event_log import (
@@ -518,7 +520,28 @@ def execute_quota_should_run(
         "context_navigation": outcome_navigation,
         "goal_ref": goal_ref,
     }
+    fresh_status = not bool(cache_metadata and cache_metadata.get("hit") is True)
+    decision_params = inspect.signature(decision_builder).parameters
+    accepts_reuse = "reuse_fresh_canonical_snapshot" in decision_params or any(
+        param.kind is inspect.Parameter.VAR_KEYWORD
+        for param in decision_params.values()
+    )
+    if fresh_status and accepts_reuse:
+        decision_kwargs["reuse_fresh_canonical_snapshot"] = True
     try:
+        payload = decision_builder(status_payload, **decision_kwargs)
+    except StaleCanonicalQuotaSourceError:
+        status_payload = export("collect_status")(
+            registry_path=registry_path,
+            runtime_root_override=runtime_root_arg,
+            limit=context.status_limit,
+            goal_id=context.status_goal_id,
+            available_capabilities=args.available_capabilities,
+            agent_lane_id=args.agent_id,
+            include_presentation_projections=False,
+        )
+        execution.status_payload = status_payload
+        decision_kwargs.pop("reuse_fresh_canonical_snapshot", None)
         payload = decision_builder(status_payload, **decision_kwargs)
     except (ValueError, EffectRuntimeRejected) as exc:
         if (

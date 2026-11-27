@@ -870,3 +870,125 @@ test("readTodoRuntime compresses >1 MiB canonical_fields responses cleanly", asy
   const decoded = JSON.parse(gunzipSync(Buffer.from(String(piece.data), "base64")).toString("utf8"));
   assert.deepEqual(decoded, plain);
 });
+
+test("single-role todo.read query preserves cross-role lineage, full text, empty roles, and invalid role errors", async t => {
+  const todos: JsonObject[] = [
+    row("todo_user_gate", {
+      role: "user",
+      status: "done",
+      done: true,
+      completed_at: now,
+      no_followup: true,
+      task_class: "user_gate",
+      source_section: "User Todo",
+      text: "[P0] Confirm user gate release window with complete unshortened details.",
+    }),
+    row("todo_user_open", {
+      role: "user",
+      status: "open",
+      done: false,
+      global_gate: true,
+      task_class: "user_gate",
+      source_section: "User Todo",
+      text: "[P0] Open user review item with full body retained for single-role query parity.",
+    }),
+    row("todo_agent_wait", {
+      role: "agent",
+      status: "open",
+      done: false,
+      claimed_by: "antigravity",
+      resume_when: "todo_done:todo_user_gate",
+      unblocks_todo_id: "todo_user_open",
+      text: "[P1] Agent item blocked until cross-role user gate finishes.",
+    }),
+  ];
+
+  const root = await mkdtemp(join(tmpdir(), "loopx-single-role-query-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const state = join(root, "state.md"), goal = "goal-single-role";
+  await writeFile(state, "# Single Role Query Goal\n");
+  const store = await openLocalAuthorityStore(root, goal);
+  const projection = authorityProjectionFixture(goal, todos, [], "native");
+  const committed = await store.commitAuthority({
+    expected_provider_revision: null,
+    operation_id: "seed-single-role",
+    events: [],
+    next_projection: projection,
+    receipts: [],
+  });
+  assert.equal(committed.status, "applied");
+  if (committed.status !== "applied") return;
+  const fence = await engageLegacyCoordinationWriterFence({
+    schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+    runtime_root: root,
+    goal_id: goal,
+    state_path: state,
+    fence: {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0",
+      state: "engaged",
+      goal_id: goal,
+      fence_id: "single-role-fence",
+      source_version: "fixture",
+      source_projection_sha256: canonicalAuthoritySha256(projection),
+      expected_shadow_provider_revision: committed.provider_revision,
+    },
+  });
+  assert.equal(fence.status, "applied");
+
+  const makeQuery = (query: JsonObject) => ({
+    schema_version: TODO_READ_REQUEST,
+    kind: "query",
+    source: {runtime_root: root, goal_id: goal},
+    observed_at: Date.parse(now) / 1000,
+    evaluated_at: now,
+    query: {goal_id: goal, state_file: state, project: root, ...query},
+  });
+
+  const userQuery = await readTodo(makeQuery({role: "user", status: "open", full_text: true}));
+  const userProjection = userQuery.payload as JsonObject;
+  const userList = userProjection.todos as JsonObject[];
+  assert.equal(userList.length, 1);
+  assert.equal(userList[0].todo_id, "todo_user_open");
+  assert.match(String(userList[0].text), /single-role query parity/);
+  assert.equal(userProjection.agent_todos, undefined);
+
+  const agentQuery = await readTodo(makeQuery({role: "agent", todo_id: "todo_agent_wait"}));
+  const agentProjection = agentQuery.payload as JsonObject;
+  assert.equal((agentProjection.todo as JsonObject).todo_id, "todo_agent_wait");
+  assert.equal((agentProjection.todo as JsonObject).resume_ready, true);
+  assert.equal((agentProjection.todo as JsonObject).unblocks_todo_id, "todo_user_open");
+
+  const emptyRoot = await mkdtemp(join(tmpdir(), "loopx-single-role-empty-"));
+  t.after(() => rm(emptyRoot, {recursive: true, force: true}));
+  const emptyState = join(emptyRoot, "state.md");
+  await writeFile(emptyState, "# Empty Agent Role\n");
+  const emptyStore = await openLocalAuthorityStore(emptyRoot, goal);
+  const emptyProj = authorityProjectionFixture(goal, [todos[1]], [], "native");
+  const emptyCommit = await emptyStore.commitAuthority({
+    expected_provider_revision: null, operation_id: "seed-empty-agent",
+    events: [], next_projection: emptyProj, receipts: [],
+  });
+  assert.equal(emptyCommit.status, "applied");
+  if (emptyCommit.status !== "applied") return;
+  await engageLegacyCoordinationWriterFence({
+    schema_version: "loopx_legacy_coordination_writer_fence_engage_request_v0",
+    runtime_root: emptyRoot, goal_id: goal, state_path: emptyState,
+    fence: {
+      schema_version: "loopx_legacy_coordination_writer_fence_v0", state: "engaged",
+      goal_id: goal, fence_id: "empty-role-fence", source_version: "fixture",
+      source_projection_sha256: canonicalAuthoritySha256(emptyProj),
+      expected_shadow_provider_revision: emptyCommit.provider_revision,
+    },
+  });
+  const emptyAgent = await readTodo({
+    schema_version: TODO_READ_REQUEST, kind: "query", source: {runtime_root: emptyRoot, goal_id: goal},
+    observed_at: Date.parse(now) / 1000, evaluated_at: now,
+    query: {goal_id: goal, role: "agent", state_file: emptyState, project: emptyRoot},
+  });
+  assert.deepEqual((emptyAgent.payload as JsonObject).todos, []);
+
+  await assert.rejects(
+    readTodo(makeQuery({role: "bogus"})),
+    /Todo read roles must be user or agent/,
+  );
+});

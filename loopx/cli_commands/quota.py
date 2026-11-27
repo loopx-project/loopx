@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..control_plane.coordination.local_authority import CanonicalAuthorityRequired
+from ..control_plane.effect_runtime import effect_runtime_request_scope
 from ..control_plane.quota.error_codes import (
     CloseoutQueryUnavailableError,
     HeartbeatReceiptIdentityConflictError,
@@ -406,6 +407,17 @@ def handle_quota_command(
     limit = getattr(args, "max_page_output_bytes", None)
 
     def execute() -> int:
+        if args.quota_command == "should-run":
+            with effect_runtime_request_scope():
+                return _execute_quota_command(
+                    args,
+                    registry_path=registry_path,
+                    runtime_root_arg=runtime_root_arg,
+                    print_payload=print_payload,
+                    append_cli_rollout_event=append_cli_rollout_event,
+                    capture_directory=capture_directory,
+                    retained_action_selection_todo_id=retained_action_selection_todo_id,
+                )
         return _execute_quota_command(
             args,
             registry_path=registry_path,
