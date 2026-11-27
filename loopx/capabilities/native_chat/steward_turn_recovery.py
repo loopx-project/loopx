@@ -363,7 +363,7 @@ def report_selection_recovery(
         if (
             journal_status == "failed"
             and journal.get("result_kind") == "validation_failed"
-            and journal.get("validation_stage") == "host_result_contract"
+            and journal.get("validation_stage") in {"host_result_contract", "task_postcondition"}
         ):
             current_guard = host._cleared_replan_guard(actor)
             if current_guard is None:

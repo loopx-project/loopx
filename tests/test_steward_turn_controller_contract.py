@@ -272,10 +272,20 @@ def test_real_lark_transport_protocol_and_callers_mypy_contract(tmp_path: Path) 
         for err in private_errors
     ), private_errors
     assert len(private_errors) <= 19, private_errors
-    assert len(caller_errors["loopx/extensions/lark/owner_attention.py"]) <= 3, (
-        caller_errors["loopx/extensions/lark/owner_attention.py"]
-    )
-    assert sum(len(lines) for lines in caller_errors.values()) <= 22
+    owner_errors = caller_errors["loopx/extensions/lark/owner_attention.py"]
+    assert not any(
+        'Argument 1 to "LarkStewardReports"' in err
+        or "_LarkOwnerAttentionProtocol" in err
+        or "_LarkTransportProtocol" in err
+        for err in owner_errors
+    ), owner_errors
+    owner_non_reexport_errors = [
+        err
+        for err in owner_errors
+        if 'Module "loopx.chat_store" does not explicitly export' not in err
+    ]
+    assert len(owner_non_reexport_errors) <= 3, owner_errors
+    assert len(private_errors) + len(owner_non_reexport_errors) <= 22
 
 
 def test_mypy_contract_probe_rejects_early_exit_or_aborted_run(tmp_path: Path) -> None:

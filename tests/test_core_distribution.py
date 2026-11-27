@@ -67,6 +67,14 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
     assert not list((package / "cli_commands").glob("benchmark_*.py"))
     assert not (package / "presentation/research_analysis_api.py").exists()
     assert not (package / "presentation/runtime_workspace.py").exists()
+    for name in (
+        "steward_turn.py",
+        "steward_turn_common.py",
+        "steward_turn_context.py",
+        "steward_turn_execution.py",
+        "steward_turn_recovery.py",
+    ):
+        assert not (package / "capabilities/native_chat" / name).exists()
     for name in ("entrypoint.py", "chat_action_store.py", "control_plane/turn_driver/executor.py",
                  "control_plane/coordination/sqlite_authority_store.ts",
                  "extensions/lark/extension.toml"):
