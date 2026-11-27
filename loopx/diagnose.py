@@ -278,10 +278,11 @@ def collect_diagnosis(
     capability_args = render_available_capability_args(available_capabilities)
     attention_items = _attention_items(status_payload)
     goal_ids = [goal_id] if goal_id else _goal_ids_from_items(attention_items, limit=limit)
-    item_by_goal: dict[str, Mapping[str, object]] = {}
-    for item in attention_items:
-        if (gid := str(item.get("goal_id") or "")) and gid not in item_by_goal:
-            item_by_goal[gid] = item
+    item_by_goal: dict[str, Mapping[str, object]] = {
+        gid: item
+        for item in attention_items
+        if (gid := str(item.get("goal_id") or ""))
+    }
     unregistered_goals = _unregistered_goal_ids(status_payload)
     project_root = registry_project_root(registry_path) if unregistered_goals else None
 

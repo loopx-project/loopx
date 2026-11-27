@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from types import MappingProxyType
 import pytest
 
 from loopx import diagnose
+from loopx.cli import main
 from loopx.control_plane.status import contract_projection, diagnose_projection
+from loopx.control_plane.testing.canary_harness import import_fixture_authority
 from loopx.presentation.renderers import diagnose_markdown
 
 
@@ -243,3 +246,82 @@ def test_collect_diagnosis_isolates_quota_errors_and_handles_orphans(
     assert orphan_calls == ["g-orphan"]
     assert non_blocking["ok"] is True
     assert "diagnosis_blocked_by" not in non_blocking
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_diagnose_cli_keeps_active_goal_user_gate_over_health_finding(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    provider: str,
+) -> None:
+    goal_id = "diagnose-precedence-goal"
+    user_gate_text = "[P0] Confirm user gate before health alert override."
+    project = tmp_path / f"project-{provider}"
+    runtime = tmp_path / f"runtime-{provider}"
+    project.mkdir(parents=True)
+    (project / "README.md").write_text("# Fixture\n", encoding="utf-8")
+    state_rel = f".codex/goals/{goal_id}/ACTIVE_GOAL_STATE.md"
+    state_path = project / state_rel
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        "---\nstatus: active\nupdated_at: 2026-01-01T00:00:00+00:00\n---\n\n"
+        "# Fixture\n\n## User Todo\n\n"
+        f"- [ ] {user_gate_text}\n"
+        "  <!-- loopx:todo todo_id=todo_user_gate_prec status=open "
+        "task_class=user_gate action_kind=owner_decision priority=P0 -->\n",
+        encoding="utf-8",
+    )
+    registry = project / ".loopx" / "registry.json"
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {
+                        "id": goal_id,
+                        "domain": "diagnose-fixture",
+                        "status": "active",
+                        "repo": str(project),
+                        "state_file": state_rel,
+                        "adapter": {"kind": "fixture_connected_delivery_v0", "status": "connected-delivery"},
+                        "quota": {"compute": 1.0, "window_hours": 24},
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    import_fixture_authority(registry, goal_id, provider=provider)
+    (runtime / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "goals": [
+                    {
+                        "id": goal_id,
+                        "state_file": str(tmp_path / "stale-missing.md"),
+                        "source_registry": str(registry),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    assert main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", "status", "--goal-id", goal_id]) == 0
+    status_payload = json.loads(capsys.readouterr().out)
+    goal_rows = [row for row in status_payload["attention_queue"]["items"] if row.get("goal_id") == goal_id]
+    assert [row.get("status") for row in goal_rows] == ["state_file_missing", "active_state_user_gate"]
+
+    for args in (["diagnose", "--goal-id", goal_id], ["diagnose"]):
+        assert main(["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json", *args]) == 0
+        diag_payload = json.loads(capsys.readouterr().out)
+        selected = diag_payload["selected"]
+        assert selected["status"] == "active_state_user_gate"
+        assert selected["waiting_on"] == "controller"
+        assert user_gate_text in str(selected["user_question"])
