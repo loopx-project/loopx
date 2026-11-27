@@ -839,11 +839,13 @@ def observe_github_repository_prs(
             if not isinstance(nodes, list):
                 return {"status": "unavailable", "repository": repo_slug}
             for node in nodes:
+                # Dropping an unidentified row can make an open PR look removed.
                 if not isinstance(node, Mapping):
-                    continue
-                number = int(node.get("number") or 0)
-                if number > 0:
-                    raw_nodes_by_number[number] = node
+                    return {"status": "unavailable", "repository": repo_slug}
+                number = node.get("number")
+                if type(number) is not int or number <= 0:
+                    return {"status": "unavailable", "repository": repo_slug}
+                raw_nodes_by_number[number] = node
             page_info = pull_requests.get("pageInfo")
             has_next_page = page_info.get("hasNextPage") if isinstance(page_info, Mapping) else None
             if has_next_page is False:

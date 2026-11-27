@@ -374,6 +374,45 @@ def test_observe_github_repository_prs_rejects_a_cursor_cycle(monkeypatch) -> No
     assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
 
 
+@pytest.mark.parametrize(
+    "invalid_node",
+    [
+        pytest.param(None, id="null-node"),
+        pytest.param("PR-42", id="non-object"),
+        pytest.param({}, id="missing-number"),
+        pytest.param({"number": None}, id="null-number"),
+        pytest.param({"number": 0}, id="zero-number"),
+        pytest.param({"number": -2}, id="negative-number"),
+        pytest.param({"number": True}, id="boolean-number"),
+        pytest.param({"number": 42.5}, id="fractional-number"),
+        pytest.param({"number": "42"}, id="string-number"),
+    ],
+)
+def test_observe_github_repository_prs_discards_partial_list_if_a_node_is_invalid(
+    monkeypatch, invalid_node,
+) -> None:
+    first = _graphql_page([_graphql_node(_sample_pr(number=1))], has_next_page=True, end_cursor="p2")
+    terminal = _graphql_page([_graphql_node(_sample_pr(number=2))])
+    terminal["data"]["repository"]["pullRequests"]["nodes"].append(invalid_node)
+
+    def fake_run(cmd, **_kwargs):
+        payload = terminal if "cursor=p2" in cmd else first
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
+
+
+def test_observe_github_repository_prs_accepts_a_verified_empty_list(monkeypatch) -> None:
+    def fake_run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([])))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    assert _observe_github_repository_prs("org/repo") == {"status": "ok", "repository": "org/repo", "items": []}
+
+
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     head = "d" * 40
     pr_row = _sample_pr(
