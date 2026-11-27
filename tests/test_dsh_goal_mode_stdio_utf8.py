@@ -1,6 +1,6 @@
 """The DSH stdio host adapter must pin its own stdio to UTF-8.
 
-LoopX starts this adapter as a subprocess (`python -m loopx.dsh_goal_mode`, or
+LoopX starts this adapter as a subprocess (`python -m loopx.hosts.dsh`, or
 the compatible `scripts/dsh_turn_host_adapter.py`) and speaks one UTF-8
 `loopx_turn_host_request_v0` JSON object on its stdin and one UTF-8
 `loopx_turn_result_v0` object on its stdout. `sys.stdin` / `sys.stdout` default
@@ -34,7 +34,7 @@ from loopx.control_plane.quota.turn_envelope import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MODULE_ENTRY = [sys.executable, "-m", "loopx.dsh_goal_mode"]
+MODULE_ENTRY = [sys.executable, "-m", "loopx.hosts.dsh"]
 LEGACY_ENTRY = [
     sys.executable,
     str(REPO_ROOT / "scripts" / "dsh_turn_host_adapter.py"),

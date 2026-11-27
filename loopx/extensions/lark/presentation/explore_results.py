@@ -82,6 +82,14 @@ from .explore_visual_sink import (
     sync_explore_visual_to_lark as sync_explore_visual_to_lark,
     sync_explore_visuals_to_lark as sync_explore_visuals_to_lark,
 )
+from .explore_singleflight import (
+    DEFAULT_EXPLORE_BASE_NAME,
+    EXPLORE_TABLE_KEYS,
+    EXPLORE_TABLE_NAMES,
+    TABLE_EDGES,
+    TABLE_FINDINGS,
+    TABLE_NODES,
+)
 from .message_card import build_lark_markdown_reply_card
 from .sink_visibility import SINK_VISIBILITY_OWNER_ONLY, SINK_VISIBILITY_SHARED, SINK_VISIBILITIES
 
@@ -90,18 +98,6 @@ LARK_EXPLORE_LOCAL_CONFIG_VERSION = "loopx_lark_explore_local_config_v0"
 LARK_EXPLORE_SYNC_VERSION = "loopx_lark_explore_sync_v0"
 LARK_EXPLORE_READBACK_VERSION = "loopx_lark_explore_readback_v0"
 LARK_EXPLORE_CARD_VERSION = "loopx_lark_explore_card_v0"
-
-DEFAULT_EXPLORE_BASE_NAME = "LoopX Exploration Results"
-
-TABLE_NODES = "nodes"
-TABLE_EDGES = "edges"
-TABLE_FINDINGS = "findings"
-EXPLORE_TABLE_KEYS = (TABLE_NODES, TABLE_EDGES, TABLE_FINDINGS)
-EXPLORE_TABLE_NAMES = {
-    TABLE_NODES: "Nodes",
-    TABLE_EDGES: "Edges",
-    TABLE_FINDINGS: "Findings",
-}
 
 
 

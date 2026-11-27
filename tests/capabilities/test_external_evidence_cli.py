@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -533,13 +534,15 @@ def test_source_cli_preserves_receipt_clocks_and_idempotent_ledger(
     monkeypatch.setenv("LOOPX_USAGE_PING", "0")
     project = tmp_path / "research"
     project.mkdir()
+    installed_python = os.environ.get("LOOPX_RESEARCH_TEST_PYTHON")
+    interpreter = [installed_python, "-I"] if installed_python else [sys.executable]
 
     def run(*args: str):
         result = subprocess.run(
-            [sys.executable, "-m", "loopx.entrypoint", "--runtime-root",
+            [*interpreter, "-m", "loopx.entrypoint", "--runtime-root",
              str(tmp_path / "runtime"), "--registry", str(tmp_path / "registry.json"),
              "--format", "json", *args],
-            cwd=Path(__file__).resolve().parents[2], capture_output=True,
+            cwd=tmp_path if installed_python else Path(__file__).resolve().parents[2], capture_output=True,
             text=True, encoding="utf-8", check=False, timeout=30,
         )
         return result.returncode, json.loads(result.stdout)
@@ -637,7 +640,14 @@ def test_source_cli_preserves_receipt_clocks_and_idempotent_ledger(
         assert direct_row["accessed_at"]
         assert "recorded_at" not in direct_row and "publication_date" not in direct_row
     finally:
-        restart_effect_runtime()
+        if installed_python:
+            subprocess.run(
+                [*interpreter, "-c", "from loopx.control_plane.effect_runtime import restart_effect_runtime;"
+                 "restart_effect_runtime(wait_for_exit=True)"],
+                cwd=tmp_path, check=True, timeout=30,
+            )
+        else:
+            restart_effect_runtime()
 
 
 def test_zero_flag_discover_and_plan_auto_detect_local_evidence_capabilities(

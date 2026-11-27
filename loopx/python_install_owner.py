@@ -7,13 +7,16 @@ string literal rather than a command; POSIX keeps shell quoting.
 
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from collections.abc import Callable
-from importlib.metadata import Distribution, PackageNotFoundError, PackagePath
+from importlib.metadata import Distribution, PackageNotFoundError, PackagePath, distribution
+from importlib.util import find_spec
 import json
 import os
 from pathlib import Path
 import shlex
+from typing import Any
 
 
 def installed_loopx_distribution(lookup: Callable[[str], Distribution]) -> Distribution:
@@ -48,6 +51,174 @@ def verified_distribution_console(recorded: Path) -> Path | None:
     return None
 
 
+def is_distribution_artifact(path: Path) -> bool:
+    """Whether a recorded package path is an installed runtime artifact rather than bytecode."""
+    return "__pycache__" not in path.parts and path.suffix not in {".pyc", ".pyo"}
+
+
+def distribution_recorded_files(installed: Distribution) -> list[tuple[str, Path]] | None:
+    """Read raw wheel RECORD entries without filtering deleted files on disk."""
+    try:
+        record_text = installed.read_text("RECORD")
+    except (OSError, ValueError):
+        return None
+    if record_text is None:
+        if installed.files is None:
+            return None
+        return [
+            (
+                item.as_posix(),
+                distribution_record_path(item)
+                if isinstance(item, PackagePath)
+                else Path(item.locate()),
+            )
+            for item in installed.files
+        ]
+    try:
+        rows = list(csv.reader(record_text.splitlines()))
+    except csv.Error:
+        return None
+    entries: list[tuple[str, Path]] = []
+    for row in rows:
+        if not row or not row[0]:
+            continue
+        item = PackagePath(row[0])
+        item.dist = installed
+        entries.append((item.as_posix(), distribution_record_path(item)))
+    return entries
+
+
+def inspect_builtin_capability_distribution(
+    distribution_name: str,
+    modules: tuple[str, ...],
+    *,
+    builtin_cli_present: bool | None = None,
+    resources: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Inspect companion capability installation, version, and file ownership."""
+    if builtin_cli_present is None:
+        builtin_cli_present = find_spec("loopx.cli") is not None
+    if builtin_cli_present:
+        return {
+            "distribution": distribution_name,
+            "installed": True,
+            "ready": True,
+            "version": None,
+            "core_version": None,
+            "reason": None,
+            "reasons": [],
+            "missing_modules": [],
+            "missing_resources": [],
+            "unowned_modules": [],
+            "unowned_resources": [],
+        }
+    try:
+        core_version: str | None = distribution("loopx-core").version
+    except PackageNotFoundError:
+        core_version = None
+    try:
+        implementation = distribution(distribution_name)
+    except PackageNotFoundError:
+        return {
+            "distribution": distribution_name,
+            "installed": False,
+            "ready": False,
+            "version": None,
+            "core_version": core_version,
+            "reason": "not_installed",
+            "reasons": ["not_installed"],
+            "missing_modules": [],
+            "missing_resources": [],
+            "unowned_modules": [],
+            "unowned_resources": [],
+        }
+
+    direct_url = json.loads(implementation.read_text("direct_url.json") or "{}")
+    editable = bool(direct_url.get("dir_info", {}).get("editable"))
+    entries = distribution_recorded_files(implementation)
+    package_parent = Path(__file__).resolve().parent.parent
+    recorded = {path.resolve() for _name, path in entries or ()}
+    missing_recorded_assets: list[str] = []
+    unowned_recorded_assets: list[str] = []
+    if entries is None:
+        missing_recorded_assets.append("RECORD")
+    else:
+        for name, path in entries:
+            if not (name.startswith("loopx/") and is_distribution_artifact(Path(name))):
+                continue
+            target = package_parent / name
+            if ".." in Path(name).parts or target.is_symlink() or not target.is_file():
+                missing_recorded_assets.append(name)
+            elif path.resolve() != target.resolve():
+                unowned_recorded_assets.append(name)
+
+    missing_modules: list[str] = []
+    unowned_modules: list[str] = []
+    for module in modules:
+        spec = find_spec(module)
+        if spec is None or spec.origin is None or not Path(spec.origin).is_file():
+            missing_modules.append(module)
+            continue
+        if Path(spec.origin).resolve() not in recorded:
+            unowned_modules.append(module)
+    missing_resources: list[str] = list(missing_recorded_assets)
+    unowned_resources: list[str] = list(unowned_recorded_assets)
+    for resource in resources:
+        target = package_parent / resource
+        if target.is_symlink() or not target.is_file():
+            if resource not in missing_resources:
+                missing_resources.append(resource)
+        elif target.resolve() not in recorded:
+            if resource not in unowned_resources:
+                unowned_resources.append(resource)
+
+    reasons: list[str] = []
+    if core_version is None:
+        reasons.append("core_distribution_missing")
+    elif implementation.version != core_version:
+        reasons.append("version_mismatch")
+    if editable:
+        reasons.append("editable_companion_unsupported")
+    if missing_modules or missing_resources:
+        reasons.append("missing_files")
+    if unowned_modules or unowned_resources:
+        reasons.append("unowned_files")
+    return {
+        "distribution": distribution_name,
+        "installed": True,
+        "ready": not reasons,
+        "version": implementation.version,
+        "core_version": core_version,
+        "reason": reasons[0] if reasons else None,
+        "reasons": reasons,
+        "missing_modules": missing_modules,
+        "missing_resources": missing_resources,
+        "unowned_modules": unowned_modules,
+        "unowned_resources": unowned_resources,
+    }
+
+
+def builtin_capability_installed(
+    distribution_name: str,
+    modules: tuple[str, ...],
+    *,
+    builtin_cli_present: bool | None = None,
+    resources: tuple[str, ...] = (),
+) -> bool:
+    """Check import locations and matching installed wheel ownership without loading code."""
+    return bool(
+        inspect_builtin_capability_distribution(
+            distribution_name,
+            modules,
+            builtin_cli_present=builtin_cli_present,
+            resources=resources,
+        )["ready"]
+    )
+
+
+WORKSPACE_DISTRIBUTION = "loopx-workspace"
+RESEARCH_DISTRIBUTION = "loopx-capability-research"
+BENCHMARK_TOOLKIT_DISTRIBUTION = "loopx-capability-benchmark-toolkit"
 @dataclass(frozen=True)
 class PythonInstallOwner:
     manager: str

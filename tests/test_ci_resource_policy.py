@@ -29,7 +29,16 @@ def event(name: str, *, pr: int = 101, tag: str = "", backend: bool = True) -> d
         "inputs": SimpleNamespace(tag=tag),
         "cancelled": lambda: False,
         "needs": SimpleNamespace(chat_bundle=SimpleNamespace(result="success"), changes=SimpleNamespace(outputs=SimpleNamespace(**{
-            key: str(backend).lower() for key in ("backend_tests", "core_tests", "python_tests", "stage2c_tests")
+            key: str(backend).lower()
+            for key in (
+                "backend_tests",
+                "core_tests",
+                "frontend_tests",
+                "compat_tests",
+                "python_tests",
+                "stage2c_tests",
+                "presentation_tests",
+            )
         }))),
     }
 
@@ -297,9 +306,20 @@ def test_required_merge_gate_workflow_is_not_suppressed_by_path_filters() -> Non
 
 
 @pytest.mark.parametrize("name,paths,expected", [
-    ("release-artifacts", ["loopx/cli.py"], True),
+    ("release-artifacts", ["loopx/cli.py"], False),
+    ("release-artifacts", ["README.md"], False),
     ("release-artifacts", ["docs/development/testing-and-quality.md"], False),
-    ("release-artifacts", ["apps/presentation/dashboard/src/App.tsx"], True),
+    ("release-artifacts", ["apps/presentation/dashboard/src/App.tsx"], False),
+    ("release-artifacts", ["scripts/release_artifacts.py"], True),
+    ("release-artifacts", ["pyproject.toml"], True),
+    ("package-smoke", ["loopx/cli.py"], False),
+    ("package-smoke", ["README.md"], False),
+    ("package-smoke", ["packages/loopx-core/prepare.py"], True),
+    ("package-smoke", ["apps/presentation/dashboard/src/App.tsx"], True),
+    ("package-smoke", ["scripts/chat_bundle.py"], True),
+    ("package-smoke", ["tests/test_core_benchmark_distribution.py"], True),
+    ("package-smoke", ["loopx/extensions/runtime.py"], True),
+    ("package-smoke", ["pyproject.toml"], True),
     ("desktop-release-artifacts", ["loopx/cli.py"], False),
     ("desktop-release-artifacts", ["apps/desktop/loopx-control-plane/src-tauri/src/main.rs"], True),
     ("desktop-release-artifacts", ["apps/presentation/dashboard/src/App.tsx"], True),
@@ -357,3 +377,50 @@ def test_daily_smokes_keep_every_shard_and_verify_one_shared_source_artifact() -
     assert consumers["steps"].index(download) < consumers["steps"].index(verify) < consumers["steps"].index(run)
     assert "continue-on-error" not in verify
     assert jobs["smoke-fleet-health"]["needs"] == "full-public-smokes"
+
+
+def test_nightly_schedules_exist_and_release_publication_never_fires_on_schedule() -> None:
+    for name in ("python-tests", "release-artifacts", "package-smoke"):
+        triggers = workflow(name)[True]
+        assert "schedule" in triggers and triggers["schedule"], name
+
+    release = workflow("release-artifacts")
+    for job_name in ("upload-release", "publish-pypi"):
+        cond = release["jobs"][job_name]["if"]
+        assert "github.event_name == 'release'" in cond
+        assert "github.event_name == 'workflow_dispatch'" in cond
+        assert "github.event_name != 'pull_request'" not in cond
+    build_attest = next(
+        step for step in release["jobs"]["build"]["steps"]
+        if step.get("name") == "Attest release packages and checksum manifest"
+    )
+    assert "github.event_name == 'release'" in build_attest["if"]
+    assert "github.event_name == 'workflow_dispatch'" in build_attest["if"]
+
+    package_smoke = workflow("package-smoke")
+    assert package_smoke["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+
+
+def test_package_smoke_prepares_each_distribution_output_once_before_workspace() -> None:
+    steps = workflow("package-smoke")["jobs"]["core"]["steps"]
+    prepare_outputs: list[str] = []
+    for step in steps:
+        normalized = re.sub(r"\\\n\s*", " ", str(step.get("run", "")))
+        for line in normalized.splitlines():
+            if "packages/loopx-core/prepare.py" in line:
+                match = re.search(r'--output\s+"([^"]+)"|--output\s+(\S+)', line)
+                assert match is not None, line
+                prepare_outputs.append(match.group(1) or match.group(2))
+    assert len(prepare_outputs) == len(set(prepare_outputs)), prepare_outputs
+    assert prepare_outputs.count("$RUNNER_TEMP/benchmark-source") == 1
+    toolkit_indices = [
+        idx for idx, step in enumerate(steps)
+        if "loopx-capability-benchmark-toolkit" in str(step.get("run", ""))
+    ]
+    workspace_indices = [
+        idx for idx, step in enumerate(steps)
+        if "loopx-workspace" in str(step.get("run", ""))
+    ]
+    assert len(toolkit_indices) == 1
+    assert len(workspace_indices) == 1
+    assert toolkit_indices[0] < workspace_indices[0]

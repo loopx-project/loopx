@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
 from hashlib import sha256
 import json
 import os
@@ -24,6 +25,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ..content_digest import BARE_SHA256_PATTERN
+from ..quota.ledger_readback import _copied_goal_run_file_name
+from ..runtime.time import parse_timestamp
 from ...chat.completed_todos import CompletedTodoPages
 from ...status_server import is_loopback_host
 from .ssh_host_catalog import configured_ssh_host_aliases
@@ -53,6 +56,34 @@ with path.open('rb') as f: data = f.read(128 * 1024 + 1)
 if len(data) > 128 * 1024: raise ValueError('document too large')
 print(json.dumps({'text': data.decode('utf-8')}))
 """
+_READ_EXECUTION = """
+import os, pathlib, stat, sys
+root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+runs = root / 'goals' / sys.argv[2] / 'runs'
+name = sys.argv[3]
+if pathlib.Path(name).name != name or runs.resolve(strict=True) != runs:
+    raise ValueError('invalid archive location')
+path = runs / name
+before = path.lstat()
+if not stat.S_ISREG(before.st_mode):
+    raise ValueError('execution artifact must be a regular file')
+flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+with os.fdopen(os.open(path, flags), 'rb') as stream:
+    opened = os.fstat(stream.fileno())
+    if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+        raise ValueError('execution artifact changed before it was opened')
+    limit = int(sys.argv[4])
+    data = stream.read(limit + 1)
+    after = os.fstat(stream.fileno())
+    if len(data) > limit or (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise ValueError('execution artifact is too large or changed while reading')
+sys.stdout.buffer.write(data)
+"""
+_RUN_IDENTITY = ("goal_id", "generated_at", "agent_id", "classification", "turn_instance_id")
+_RUN_DETAIL_FIELDS = (
+    *_RUN_IDENTITY, "todo_id", "agent_vision", "vision_checkpoint",
+    "delivery_outcome", "delivery_batch_scale", "delivery_boundary",
+)
 
 
 class SourceScopeError(ValueError):
@@ -76,6 +107,16 @@ def _run(argv, *, env=None):
     if len(result.stdout) > _MAX_BYTES:
         raise ValueError("Source read exceeds the display limit")
     return result.stdout.decode("utf-8")
+
+
+def _source_execution_ref(namespace, goal_id, run):
+    if (not isinstance(run, dict) or run.get("goal_id") != goal_id
+            or not isinstance(run.get("generated_at"), str) or not run["generated_at"]):
+        return None
+    # The normal status projection drops file paths. Match the same stable
+    # identity against the native history window and reject ambiguous matches.
+    identity = [namespace, *(run.get(field) for field in _RUN_IDENTITY)]
+    return sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -274,15 +315,37 @@ class GoalSource:
         ] if isinstance(goal.get("authority_sources"), list) else None}
             for goal in payload["goals"] if isinstance(goal, dict) and goal.get("id") == selected]}
 
-    def read_run_history(self, goal_id):
+    def read_run_history(self, goal_id, *, window: tuple[datetime, datetime] | None = None):
         self.check_access(goal_id)
-        # Native history owns index reduction. Its returned coverage is checked
-        # by the TS projection; the existing byte/time limits fail explicitly.
-        return json.loads(self._execute([
+        # Native history owns index reduction and applies the time window before
+        # its display limit. Whole-history callers retain their existing query.
+        args = [
             self.cli, "--format", "json", "--registry", self.registry,
             "--runtime-root", self.runtime_root, "history", "--goal-id", goal_id,
             "--limit", "1000000",
-        ]))
+        ]
+        if window is not None:
+            start, end = (stamp.isoformat() for stamp in window)
+            args.extend(["--since", start, "--until", end])
+        return json.loads(self._execute(args))
+
+    def read_execution(self, goal_id, indexed_run):
+        self.check_access(goal_id)
+        recorded_path = indexed_run.get("json_path")
+        name = _copied_goal_run_file_name(recorded_path, goal_id, ".json") if isinstance(recorded_path, str) else None
+        if name is None:
+            raise SourceScopeError("The execution artifact is outside the original Goal")
+        raw = self._execute([self.python, "-c", _READ_EXECUTION, self.runtime_root, goal_id,
+                             name, str(_MAX_BYTES)])
+        record = json.loads(raw)
+        if not isinstance(record, dict) or any(
+            record.get(field) != indexed_run.get(field) for field in _RUN_IDENTITY
+        ):
+            raise SourceScopeError("The execution artifact differs from the indexed record")
+        return {
+            "sha256": sha256(raw.encode()).hexdigest(),
+            "record": {key: record[key] for key in _RUN_DETAIL_FIELDS if key in record},
+        }
 
     def read_completed_todos(self, goal_id):
         self.check_access(goal_id)
@@ -411,6 +474,40 @@ class GoalSourceReader:
         self.registered_status(goal_id, fresh=True)
         return {"ok": True, "goal_id": goal_id, "source": self.source.describe(), **projected}
 
+    def execution(self, goal_id, execution_ref, generated_at):
+        if not BARE_SHA256_PATTERN.fullmatch(execution_ref) or len(generated_at) > 128:
+            raise SourceScopeError("Choose one recorded source execution")
+        start = parse_timestamp(generated_at)
+        if start is None:
+            raise SourceScopeError("Choose one recorded source execution")
+        try:
+            end = start + timedelta(microseconds=1)
+        except OverflowError as exc:
+            raise SourceScopeError("The recorded execution timestamp is outside the history range") from exc
+        self.registered_status(goal_id, fresh=True)
+        source = self.source
+        # The timestamp narrows the lookup. The ref still binds the exact
+        # source, Goal, original timestamp text and execution identity.
+        history = source.read_run_history(goal_id, window=(start, end))
+        native, = history["goals"]
+        if (history.get("ok") is not True or history.get("goal_filter") != goal_id
+                or native.get("id") != goal_id or native.get("registry_member") is not True):
+            raise SourceScopeError("The original Goal is no longer registered")
+        candidates = native["latest_runs"]
+        filter_used = history["time_filter"]
+        if (filter_used["since_inclusive"] != start.isoformat()
+                or filter_used["until_exclusive"] != end.isoformat()
+                or native["unique_runs"] != len(candidates)):
+            raise ValueError("Incomplete native execution history window")
+        matches = [run for run in candidates if run.get("generated_at") == generated_at
+                   and _source_execution_ref(source.namespace, goal_id, run) == execution_ref]
+        if len(matches) != 1:
+            raise SourceScopeError("The selected execution is unavailable in the original source")
+        detail = source.read_execution(goal_id, matches[0])
+        self.registered_status(goal_id, fresh=True)
+        return {"ok": True, "goal_id": goal_id, "source": source.describe(),
+                "execution_ref": execution_ref, **detail}
+
     def document(self, goal_id):
         from ..effect_runtime import effect_runtime_result
 
@@ -520,6 +617,10 @@ class GoalSourceCatalog:
                             if goal["id"] == original_goal_id and goal.get("registry_member") is True), None)
         if source_goal is None:
             raise SourceScopeError("The original Goal is no longer registered")
+        for run in source_goal.get("latest_runs", []):
+            ref = _source_execution_ref(reader.source.namespace, original_goal_id, run)
+            if ref is not None:
+                run["execution_ref"] = ref
         from ..effect_runtime import effect_runtime_result
         return effect_runtime_result("presentation.goal_sources.status", {"status": status, "row": row})
 

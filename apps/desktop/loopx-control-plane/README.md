@@ -513,6 +513,276 @@ Self-service:
 serves your terminal runtime) checks that host's installation. It cannot
 diagnose this Mac App's local bootstrap; only the App's own diagnostics do.
 
+### Fresh Mac without a usable Node.js stays on the boot screen
+
+The App's automatic runtime installation can also fail with
+`runtime_install_exit_1` when no usable Node.js is reachable: the candidate's
+`doctor --deep --installation-only` validation treats the managed TypeScript
+Effect runtime as required, and it fails closed while `node` is missing or
+older than the required minimum. The App does not bundle Node; Node.js 22.22.3
+or newer is required and 24 LTS is recommended, matching the CLI installation
+guide.
+
+The installer and the owned services resolve `node` through one bounded search
+path, in this order: `~/.local/bin`, an `NVM_BIN` the inherited PATH still
+selects, `/opt/homebrew/bin`, `/usr/local/bin`, the Homebrew keg-only
+`node@24` and `node@22` prefixes, the inherited process PATH, and last the nvm
+installations found on disk. Finder does not load the interactive shell
+profile, so a Node that only fnm or volta puts on the shell PATH stays
+invisible to the App even though it works in a terminal.
+
+Self-service:
+
+1. Check the boot screen error code or Recovery & updates → Diagnostics
+   (`error_code: runtime_install_exit_1`, then `environment.node_found` and
+   `node_version`). The boot screen names the missing Node.js only when
+   `node_found` is `false`, so read the version from Diagnostics.
+2. `node_found` is `false`: no `node` is reachable. Install Node.js 22.22.3+,
+   for example `brew install node` (the keg-only `brew install node@24` is
+   also covered by the search path) or via the official nodejs.org installer.
+   An fnm/volta installation needs a plain installation or a `~/.local/bin`
+   symlink the App can resolve.
+3. `node_found` is `true` with a `node_version` older than 22.22.3: the App
+   reaches a Node that is too old, and Core reports the same
+   `node_unavailable`. Installing another version does not fix this by itself.
+   The App runs the `node` from the first search path entry that holds one,
+   for example a `~/.local/bin/node` ahead of every Homebrew location, and
+   Diagnostics report the version but not the path. Check that order, then
+   update the winning entry. Point it at a supported Node you have confirmed,
+   such as `/opt/homebrew/opt/node@24/bin/node` after `brew install node@24`
+   (`/usr/local/opt/node@24/bin/node` with Intel Homebrew) or the path your own
+   supported Node is installed at, and keep the old file. Do not use `ln -sf`
+   on its own: it succeeds even when its target is missing and leaves a
+   dangling link in place of the original.
+
+   Run the block below in one Terminal window; every line is chained, so the
+   sequence stops before anything is moved when the candidate is missing or
+   older than 22.22.3. `--version` prints the candidate for you to read, and
+   the third line re-checks the same version numerically.
+
+   ```bash
+   (
+   node=<supported node binary> &&
+   node_qualifies() {
+     normalized="$(node_trim "$1")"
+     case "$normalized" in
+       '' | *$'\n'* | *$'\r'*) return 1 ;;
+     esac
+     printf '%s\n' "$normalized" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$' || return 1
+     printf '%s\n' "$normalized" | awk '
+       {
+         sub(/^v/, "")
+         n = split($0, a, /[.+-]/)
+         if (n < 3) exit 1
+         maj = a[1] + 0; min = a[2] + 0; pat = a[3] + 0
+         if (maj < 22) exit 1
+         if (maj == 22 && min < 22) exit 1
+         if (maj == 22 && min == 22 && pat < 3) exit 1
+         if (maj == 22 && min == 22 && pat == 3) {
+           plus = index($0, "+")
+           dash = index($0, "-")
+           if (dash > 0 && (plus == 0 || dash < plus)) exit 1
+         }
+         exit 0
+       }'
+   }
+   node_trim() {
+     n="${1#"${1%%[![:space:]]*}"}"
+     printf '%s' "${n%"${n##*[![:space:]]}"}"
+   }
+   "$node" --version &&
+   raw_ver="$("$node" --version)" &&
+   node_ver="$(node_trim "$raw_ver")" &&
+   node_qualifies "$node_ver" &&
+   node="$(cd "$(dirname "$node")" && pwd)/$(basename "$node")" &&
+   raw_ver="$("$node" --version)" &&
+   node_ver="$(node_trim "$raw_ver")" &&
+   node_qualifies "$node_ver" &&
+   mkdir -p ~/.local/bin &&
+   lock=~/.local/bin/.node-loopx-repair &&
+   if mkdir "$lock" 2>/dev/null; then
+     lock_ino="$(stat -f %i "$lock")" &&
+     trap 'if [ "$(stat -f %i "$lock" 2>/dev/null)" = "$lock_ino" ]; then rm -rf "$lock"; fi' EXIT
+   else
+     echo "Another repair is in progress; nothing was changed." &&
+     echo "If no repair is actually running, remove $lock by hand and run this again." &&
+     exit 1
+   fi &&
+   backup=~/.local/bin/node.before-loopx."$(date +%Y%m%d-%H%M%S)" &&
+   if [ -e ~/.local/bin/node ] || [ -L ~/.local/bin/node ]; then
+     mkdir "$backup" &&
+     mv ~/.local/bin/node "$backup/node" &&
+     if ln -s "$node" ~/.local/bin/node &&
+        installed_ino="$(stat -f %i ~/.local/bin/node)" &&
+        installed_raw="$("$HOME/.local/bin/node" --version)" &&
+        installed_ver="$(node_trim "$installed_raw")" &&
+        node_qualifies "$installed_ver"; then
+       echo "Node launcher updated to $node (previous entry kept in $backup)"
+     else
+       # restore only when nothing else owns the entry: absent, or still
+       # this operation's own link; a later window's swap stays in place
+       if { [ ! -e ~/.local/bin/node ] && [ ! -L ~/.local/bin/node ]; } ||
+          [ "$(stat -f %i ~/.local/bin/node 2>/dev/null)" = "$installed_ino" ]; then
+         mv "$backup/node" ~/.local/bin/node &&
+         rmdir "$backup" &&
+         echo "The candidate failed the final check; the original launcher was restored."
+       else
+         echo "The candidate failed the final check; a newer launcher from another repair was kept, and the previous launcher is still in $backup."
+       fi &&
+       exit 1
+     fi
+   else
+     if ln -s "$node" ~/.local/bin/node; then
+       created_ino="$(stat -f %i ~/.local/bin/node)" &&
+       if installed_raw="$("$HOME/.local/bin/node" --version)" &&
+          installed_ver="$(node_trim "$installed_raw")" &&
+          node_qualifies "$installed_ver"; then
+         echo "Node launcher created at ~/.local/bin/node (remove the link to undo)"
+       else
+         # undo only when the entry is still this operation's own link; a
+         # later window's swap has a different inode and stays in place
+         if [ "$(stat -f %i ~/.local/bin/node 2>/dev/null)" = "$created_ino" ]; then
+           rm -f ~/.local/bin/node
+         fi &&
+         echo "The candidate failed the final check; nothing was changed." &&
+         exit 1
+       fi
+     else
+       # the entry already exists: another window's successful repair owns it
+       echo "Another repair created the launcher; nothing was changed." &&
+       exit 1
+     fi
+   fi
+   )
+   ```
+
+   `node_trim` follows `probe_node()`'s boundary handling: it removes the
+   leading and trailing whitespace of the whole captured output — including
+   CRLF endings and blank leading lines — and leaves every interior
+   character alone, so an interior carriage return fails the shape check
+   exactly as it fails Core's fullmatch. `node_qualifies` is the single
+   version judgment shared by the candidate and the installed link: the
+   normalized output must be exactly one `v?[maj.min.pat]` line with an
+   optional prerelease after `-` and an optional build after `+`; malformed
+   fields or missing segments fail. The base triple must reach 22.22.3, and
+   a base sitting exactly on the minimum is rejected when a prerelease is
+   present, while `22.22.3+build-5`, whose hyphen belongs to the build
+   metadata, still qualifies. The installed link is qualified through the
+   same function after the swap; the failure branches above are the undo
+   paths, and the `--version` lines remain as the readback prints. When
+   `~/.local/bin/node` does not exist yet — an nvm-managed old Node can be
+   first in the search order with no local launcher — the first-creation
+   branch creates the link; its `ln` failure means another window's repair
+   already created and qualified one, and that entry is left in place.
+
+  The whole repair runs inside one lock inside its own subshell. The block
+  takes `~/.local/bin/.node-loopx-repair` with an exclusive `mkdir` before
+  either branch and releases the lock when that subshell exits. The repair
+  therefore never closes your terminal, not even when a check fails, any
+  EXIT hook you had registered stays yours, and a second window stops with
+  "Another repair is in progress; nothing was changed." instead of
+  interleaving its move, install, final check or rollback between this
+  window's steps. Rerun the block after the other window finishes. There is
+  no automatic takeover: a repair interrupted without its cleanup — its
+  subshell killed outright — leaves the lock in place and every later
+  attempt stops with the message above. When nothing is actually running
+  (check with `ps` that no repair shell remains), remove that directory by
+  hand and run the block again. The cleanup is instance-targeted: it
+  removes the lock only while the directory is still the instance this
+  repair created — a lock a later window acquired after your manual removal
+  has a different inode and survives this repair's exit. The launcher-entry
+  inode checks in the two branches guard the rollback the same way.
+
+   The backup is a directory created atomically: a second repair in the same
+   second (from this window or another one) fails its `mkdir` and stops with
+  the original launcher untouched, so concurrent attempts cannot overwrite
+  each other's only copy of the original. Each attempt owns one directory
+  holding the launcher it replaced. The failure rollback respects the same
+  ownership: the original is moved back only while the entry is still absent
+  or still the failed attempt's own link — a later window's verified launcher
+  has a different inode and stays in place, and the failed attempt keeps its
+  backup for the manual restore below.
+
+   To restore a backup, replace the launcher directory entry in the way that
+   preserves the backup's own entry type, and never copy through the current
+   link — `cp` would follow it and rewrite the supported Node binary that
+   other tools share. The restore takes the same lock as the repair below,
+   so it stops while a repair is running and cannot replace a launcher that
+   another window is still checking; the same ps-confirmed manual removal
+   applies if a lock was left by an interrupted repair. A missing launcher
+   is a recoverable state too: an interrupted repair leaves only the
+   backup, and `rm -f` accepts that.
+
+   ```bash
+   (
+   mkdir -p ~/.local/bin &&
+   lock=~/.local/bin/.node-loopx-repair &&
+   if mkdir "$lock" 2>/dev/null; then
+     lock_ino="$(stat -f %i "$lock")" &&
+     trap 'if [ "$(stat -f %i "$lock" 2>/dev/null)" = "$lock_ino" ]; then rm -rf "$lock"; fi' EXIT
+   else
+     echo "Another repair is in progress; nothing was changed." &&
+     echo "If no repair is actually running, remove $lock by hand and run this again." &&
+     exit 1
+   fi &&
+   newest=$(ls -td ~/.local/bin/node.before-loopx.* 2>/dev/null | head -1) &&
+   [ -n "$newest" ] &&
+   staged=~/.local/bin/node.restored."$(date +%Y%m%d-%H%M%S)" &&
+   if [ -d "$newest" ]; then src="$newest/node"; else src="$newest"; fi &&
+   if [ -L "$src" ]; then
+     ln -s "$(readlink "$src")" "$staged"
+   else
+     cp "$src" "$staged"
+   fi &&
+   "$staged" --version &&
+   rm -f ~/.local/bin/node &&
+   mv "$staged" ~/.local/bin/node &&
+   shasum ~/.local/bin/node
+   )
+   ```
+
+   The restore builds the restored entry beside the launcher first, so a
+   backup symlink's raw value is recreated where the original launcher lived
+   and a relative link resolves exactly as it did before the repair; the
+   `--version` line then qualifies that entry where it will live. Only after
+   that does the sequence remove the current launcher and move the staged
+   entry into place. If no backup exists, the newest one is empty — an
+   interrupted repair leaves exactly that — or its entry cannot run, the
+   chain stops with the working launcher still in place and a `node.restored-*`
+   scratch entry to delete. If the newest backup is unusable but an older one
+   is complete, restore that older one by naming it instead of `newest`.
+
+   The backup keeps the launcher's own entry type and raw link value: a
+   symlink is recreated with its original target string at the original
+   location, so a relative link resolves exactly as it did before the repair
+   and a later version-manager update of its target is still followed; a
+   regular file is copied byte for byte. The final `shasum` reads the
+   restored entry through its route and is the readback that the original
+   routing works again. Removing the current entry before the copy is what
+   keeps the supported Node binary safe — nothing writes through the link
+   into a binary other tools share. To double-check the candidate itself,
+   checksum the path you chose as `<supported node binary>`; the restore
+   never writes to it.
+
+   `node_found` of `true` with no `node_version` means the App found a `node`
+   it could not read a version from: inspect that entry with `ls -l` and the
+   same `--version` call before replacing it the same way.
+4. Confirm the result through the repair block's own readback. The repair
+   qualifies the actual hit entry: its `--version` must exit 0, the raw
+   version must satisfy the floor — a plain 22.22.3, build metadata, or a
+   prerelease above the floor all qualify — and Core's `probe_node()` then
+   reads the same binary as `ready`. A blank `node_version` in Diagnostics
+   is the App's numeric display gap, not a qualification failure: when the
+   repair printed its success line, or the message that a newer launcher
+   from another repair was kept, press **Repair this version**; when it
+   printed the restore message, follow the earlier replace-or-restore steps
+   instead. The environment reading refreshes every 30 seconds, or reopen
+   the App. `node --version` in a terminal only verifies the interactive
+   shell, which can select a Node the App does not.
+5. Press **Repair this version** (or reopen the App); the environment probe
+   refreshes and the live supervisor reconnects the same window without a
+   second App restart.
+
 The updater accepts only fixed official HTTPS channels, not browser-provided
 commands, paths or download URLs. Its minisign private key
 (`TAURI_SIGNING_PRIVATE_KEY`) is confined to the release secret; the App embeds
@@ -658,7 +928,10 @@ Session 与委派受众保持不变，不混合不同私聊或扩大权限。借
 - A working Python interpreter for runtime installation; existing managed
   installations preserve their interpreter. Windows requires a separately
   installed LoopX CLI. Set `LOOPX_BIN` only for deliberate runtime overrides.
-- Node.js 20.19+ or 22.12+ for dashboard builds.
+- Node.js 22.22.3 or newer (24 LTS recommended) for the managed TypeScript
+  runtime the installed App bootstraps; Node.js 20.19+ or 22.12+ only covers
+  dashboard builds. See Known Issues when a fresh Mac stops on the boot screen
+  without it.
 - Rust stable and the platform-specific Tauri build dependencies.
 
 Linux requires WebKitGTK 4.1 and GTK 3 development packages. See the

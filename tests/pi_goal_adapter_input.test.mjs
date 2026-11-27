@@ -5,7 +5,7 @@ import { createRequire, registerHooks, syncBuiltinESMExports } from "node:module
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createBindingStore, sessionKey } from "../loopx/pi_goal_mode/pi-goal-loop-runtime.mjs";
+import { createBindingStore, sessionKey } from "../loopx/hosts/pi/pi-goal-loop-runtime.mjs";
 
 // Actual adapter and durable binding; SDK/UI and CLI admission are synthetic.
 // Pi's input contract delivers queued steer/followUp without before_agent_start.
@@ -31,7 +31,7 @@ childProcess.execFile = Object.assign(() => {}, {
   }),
 });
 syncBuiltinESMExports();
-const { default: extension } = await import("../loopx/pi_goal_mode/loopx-goal.ts");
+const { default: extension } = await import("../loopx/hosts/pi/loopx-goal.ts");
 
 async function harness(t, { prime = true } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pi-owner-input-"));

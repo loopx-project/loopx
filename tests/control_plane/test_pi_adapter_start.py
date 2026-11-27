@@ -132,7 +132,7 @@ def test_pi_start_preserves_native_identity_authority(tmp_path, monkeypatch, cas
     monkeypatch.setenv("LOOPX_BIN", str(launcher))
     completed = subprocess.run([
         node, "--input-type=module", "-e", HOST,
-        str(REPO / "loopx" / "pi_goal_mode" / "loopx-goal.ts"),
+        str(REPO / "loopx" / "hosts" / "pi" / "loopx-goal.ts"),
         str(project), "" if case == "ephemeral" else str(session),
         preview_command,
     ], capture_output=True, text=True, timeout=90, env=os.environ.copy())

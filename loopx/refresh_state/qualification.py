@@ -21,6 +21,9 @@ from ..control_plane.goals.vision_checkpoint import (
 )
 from ..control_plane.quota.blocked_retry import require_blocked_retry_wait
 from ..control_plane.quota.settlement import QuotaSettlementReadback, SettlementIdentity
+from ..control_plane.quota.settlement_workspace_causality import (
+    uses_registered_verification_workspace,
+)
 from ..control_plane.runtime.time import chronology_key, now_local_iso
 from ..control_plane.todos.active_state_todo_parser import parse_active_state_todos
 from ..control_plane.todos.completion_validation_accountability import (
@@ -504,14 +507,32 @@ def resolve_refresh_delivery_workspace(
                     break
         raw_task_repo = selected_contract.get("task_repository")
         task_repository = str(raw_task_repo) if isinstance(raw_task_repo, str) else None
-        explicit_req = goal_context.explicit_peer_worktree_requirement
+        explicit_value = goal_context.explicit_peer_worktree_requirement
+        explicit_req = explicit_value if isinstance(explicit_value, bool) else None
+        registered_verification = uses_registered_verification_workspace(
+            settlement_workspace_requirement, task_repository=task_repository,
+            explicit_peer_worktree_requirement=explicit_value,
+        )
+        if registered_verification and delivery_workspace is not None:
+            registered_project = goal_context.resolved_project
+            if registered_project is None:
+                raise ValueError("read-only verification requires a registered Goal workspace")
+            observed_path = delivery_workspace_path or Path.cwd()
+            if observed_path.resolve() != registered_project.resolve():
+                registered = capture_delivery_workspace_fn(
+                    current_path=registered_project,
+                    local_goal_id=goal_id,
+                    local_project_root=registered_project,
+                )
+                if registered is None or (
+                    registered["workspace_identity"] != delivery_workspace["workspace_identity"]
+                ):
+                    raise ValueError("read-only verification must use the registered Goal repository")
         delivery_workspace, peer_independent_worktree_required = (
             qualify_delivery_workspace_isolation(
                 delivery_workspace,
                 multi_agent_goal=goal_context.multi_agent_goal,
-                explicit_peer_worktree_requirement=(
-                    explicit_req if isinstance(explicit_req, bool) else None
-                ),
+                explicit_peer_worktree_requirement=False if registered_verification else explicit_req,
                 task_repository=task_repository,
             )
         )

@@ -254,6 +254,26 @@ def present_settled_refresh(payload: dict[str, Any], *, runtime_root: Path) -> d
             or not isinstance(progress, dict) or progress.get("state") != "settled"
             or payload.get("settlement_owed") is not None):
         return payload
+    from ..control_plane.turn_driver.decision_capture import private_capture_supported
+
+    if not private_capture_supported():
+        # This plan-composed command carries no output option to remove: the
+        # budget is implicit here. A host without a qualified private capture
+        # reader therefore keeps the already evaluated result inline instead of
+        # failing a committed settlement. The evaluated outcome still decides
+        # the exit code; this note only explains the skipped capture.
+        return {**payload, "result_delivery_error": {
+            "error_code": "quota_decision_capture_unsupported",
+            "reason": (
+                "This platform cannot validate a private context capture, so bounded result "
+                "delivery was skipped and the complete result is returned inline. "
+                + ("The exact Turn is settled; read the original Turn receipts to confirm commitment."
+                   if payload.get("ok") is True else
+                   "Use the inline failure controls and the returned recovery step.")
+            ),
+            "recommended_action": "Keep the original Turn and effect identity. Do not repeat "
+                "admission or spend for this result.",
+        }}
     from .quota_capture import budgeted_settlement_result
     from ..command_invocation import current_loopx_cli_argv
     from ..control_plane.turn_driver.native_context_profile import NATIVE_CONTEXT_PAGE_OUTPUT_BYTES

@@ -69,7 +69,6 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   };
   const [caseMode, setCaseReading] = useState(readCaseMode);
   const requestedCase = caseMode.goalId === goalId ? caseMode.requested : null;
-  const caseReading = requestedCase ?? !preferHistory;
   const hasCases = (analysis.snapshot?.catalog.packs ?? []).some(pack => pack.case_study_summary);
   // A link to a particular version stays in the case reader even when that
   // version has no study. An unpinned visit can fall back to ordinary history.
@@ -537,7 +536,9 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   </Fragment> : null;
   const emptyHistoryMessage = zh ? "这个 Goal 尚无研究历程" : "No research history for this Goal yet";
   const selectedStrategy = hasNativeSource && !emptySourceHistory ? strategies.selection : null;
-  const readingCase = caseReading && caseViewAvailable && (requestedCase === true || selectedStrategy === null);
+  // An unaddressed local visit can open its saved case once its own history is confirmed empty.
+  const readingCase = caseViewAvailable && (requestedCase === true
+    || requestedCase === null && !hasNativeSource && openedHistorySource === historySource && emptyHistory);
   const alternateReading = readingCase ? <ResearchCaseReading analysis={analysis} active={active}/>
     : selectedStrategy !== null ? <GoalSourceStrategies key={strategies.scope} goalId={goalId} originalGoalId={originalGoalId}
       sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}

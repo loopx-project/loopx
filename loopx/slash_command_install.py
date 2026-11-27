@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from enum import Enum
 from pathlib import Path
 
-from .agy_goal_mode import (
+from .hosts.agy import (
     ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
     ANTIGRAVITY_MCP_CONFIG_FILENAME,
     agy_home as _agy_home,
@@ -17,6 +17,7 @@ from .agy_goal_mode import (
 )
 from .hosts.slash_command_config_io import (
     merge_managed_json_entry as _merge_managed_json_entry,
+    read_managed_json_entry as _read_managed_json_entry,
 )
 from .hosts.slash_command_surfaces import (
     install_codex_surface as _install_codex_surface,
@@ -24,14 +25,15 @@ from .hosts.slash_command_surfaces import (
     install_pi_surface as _install_pi_surface,
     installed_entry as _installed_entry,
 )
-from .kiro_cli_goal_mode import (
+from .hosts.kiro_cli import (
     KIRO_CLI_MCP_CONFIG_SUBPATH as _KIRO_MCP_CONFIG_SUBPATH,
     SKILLS_ROOT_LABEL as _KIRO_SKILLS_ROOT_LABEL,
     kiro_home as _kiro_home,
+    mcp_server_script as _kiro_mcp_server_script,
 )
-from .pi_goal_mode import extension_source as pi_extension_source
-from .pi_goal_mode import runtime_source as pi_runtime_source
-from .pi_goal_mode.installation import (
+from .hosts.pi import extension_source as pi_extension_source
+from .hosts.pi import runtime_source as pi_runtime_source
+from .hosts.pi.installation import (
     _pi_agent_dir,
     _pi_extension_path,
     _pi_extension_root,
@@ -580,6 +582,12 @@ def _normalize_surfaces(surfaces: list[str] | None) -> list[str]:
     return normalized
 
 
+def _requests_default_all_surfaces(surfaces: list[str] | None) -> bool:
+    """Only default/``all`` installs migrate stale Kiro MCP entries; targeted selections skip Kiro."""
+    requested = surfaces or ["all"]
+    return any(item.strip().casefold() == "all" for item in requested)
+
+
 # Every surface that registers the LoopX stdio server shares one key, one
 # ownership marker file name and one merge rule; only the config location, the
 # host-specific server script and the reported status names differ.
@@ -645,9 +653,22 @@ def _loopx_mcp_command() -> tuple[str, str] | None:
 def _kiro_cli_mcp_command() -> tuple[str, str] | None:
     """The Kiro CLI server: same control plane, Kiro runtime profile and
     session-bound identity."""
-    from .kiro_cli_goal_mode import mcp_server_script
+    return _mcp_command_for_script(_kiro_mcp_server_script())
 
-    return _mcp_command_for_script(mcp_server_script())
+
+def _managed_kiro_mcp_needs_migration(config_path: Path) -> bool:
+    """Return True when a sidecar-verified LoopX entry points away from the current Kiro script."""
+    existing = _read_managed_json_entry(
+        config_path=config_path,
+        marker_path=config_path.parent / CURSOR_MCP_MARKER_NAME,
+        marker_section="servers",
+        marker_schema_version=KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+        entry_key=MANAGED_MCP_KEY,
+        container_key="mcpServers",
+    )
+    if existing is None:
+        return False
+    return existing.get("args") != [str(_kiro_mcp_server_script())]
 
 
 def _merge_managed_mcp_json(
@@ -1009,6 +1030,8 @@ def install_slash_commands(
             )
         )
 
+    kiro_mcp_config_path = kiro_root / _KIRO_MCP_CONFIG_SUBPATH
+    kiro_mcp_migrated = False
     if "kiro-cli" in effective_surfaces:
         _install_skill_facade(
             specs=facade_specs,
@@ -1026,13 +1049,45 @@ def install_slash_commands(
             surface="kiro-cli",
             host_surfaces=["kiro-cli"],
             mechanism="kiro_cli_mcp_server",
-            config_path=kiro_root / _KIRO_MCP_CONFIG_SUBPATH,
+            config_path=kiro_mcp_config_path,
             marker_schema_version=KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
             invalid_status="blocked_invalid_kiro_cli_mcp_json",
             command_factory=lambda: _kiro_cli_mcp_command(),
             uninstall=uninstall,
             execute=execute,
         )
+    elif (
+        not uninstall
+        and _requests_default_all_surfaces(surfaces)
+        and _managed_kiro_mcp_needs_migration(kiro_mcp_config_path)
+    ):
+        # Updater runs default `--install` (`surfaces=all`, without `kiro-cli`);
+        # migrate proven managed Kiro MCP entries whose server path moved.
+        kiro_mcp_migrated = True
+        if execute:
+            _install_managed_mcp_surface(
+                installed=installed,
+                surface="kiro-cli",
+                host_surfaces=["kiro-cli"],
+                mechanism="kiro_cli_mcp_server",
+                config_path=kiro_mcp_config_path,
+                marker_schema_version=KIRO_CLI_MCP_MARKER_SCHEMA_VERSION,
+                invalid_status="blocked_invalid_kiro_cli_mcp_json",
+                command_factory=lambda: _kiro_cli_mcp_command(),
+                uninstall=False,
+                execute=True,
+            )
+        else:
+            installed.append(
+                _installed_entry(
+                    surface="kiro-cli",
+                    host_surfaces=["kiro-cli"],
+                    mechanism="kiro_cli_mcp_server",
+                    command="loopx",
+                    path=kiro_mcp_config_path,
+                    status="would_write",
+                )
+            )
 
     if "cursor" in effective_surfaces:
         _install_skill_facade(
@@ -1147,7 +1202,11 @@ def install_slash_commands(
                 else None
             ),
             "kiro_cli_skill_dir": str(kiro_root / "skills") if "kiro-cli" in effective_surfaces else None,
-            "kiro_cli_mcp_path": str(kiro_root / _KIRO_MCP_CONFIG_SUBPATH) if "kiro-cli" in effective_surfaces else None,
+            "kiro_cli_mcp_path": (
+                str(kiro_mcp_config_path)
+                if ("kiro-cli" in effective_surfaces or kiro_mcp_migrated)
+                else None
+            ),
             "opencode_skill_dir": str(opencode_root / "skills") if "opencode" in effective_surfaces else None,
             "opencode_command_dir": str(opencode_root / "commands") if "opencode" in effective_surfaces else None,
             "opencode_plugin_path": str(opencode_root / "plugins" / "loopx-goal.js") if "opencode" in effective_surfaces and with_goal_bridge else None,

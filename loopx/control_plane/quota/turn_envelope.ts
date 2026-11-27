@@ -1,4 +1,7 @@
-import { EXECUTION_PREPARATION_SCHEMA_VERSION } from "../work_items/execution_preparation.ts";
+import { isDeepStrictEqual } from "node:util";
+import {
+  EXECUTION_PREPARATION_SCHEMA_VERSION, isKnownReadyLeasePreparation,
+} from "../work_items/execution_preparation.ts";
 import { leaseEpoch } from "../work_items/task_lease_record.ts";
 import { capturedContextSelection } from "./context_selection.ts";
 import {
@@ -16,16 +19,26 @@ import {
 import { prepareContextDelivery, restoreContextDelivery } from "./context_delivery.ts";
 import { updateNativeContextLifecycle } from "./native_context_lifecycle.ts";
 import {
+  buildSemanticUnitFoldSwap,
+  computeQuietTurnStateDigest,
+  evaluateEpochPrefetchPromptGate,
+  evaluateEpochPrefetchSwap,
+  evaluateQuietTurn,
+  planStageThenSwapPrefetch,
+  recordSemanticUnitAnchor,
+} from "./stage_then_swap.ts";
+import {
   contextProjectionChanges, contextSourceIdentity, omitEmptyTaskTodoLanes, projectQuotaDiagnostics,
   referenceQuotaSummaryLanes, resolveQuotaSummaryLanes,
 } from "./diagnostic_projection.ts";
 import { completeCliSettlementChannel } from "./settlement_plan.ts";
+import { compactRoutineSettlementPlan, scopeTurnGoalAcceptance } from "./turn_envelope_scoping.ts";
 import {
   interpretQuotaShouldRunPacket, assertSupportedQuotaPacket,
   settlementIdentityFromPlan, settlementIdentityPayload, type JsonObject,
 } from "../effect_program.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
-import { projectTurnStartUnavailableContext } from "../capability_hooks.ts";
+import { projectEmptyTurnStartObservations, projectTurnStartUnavailableContext } from "../capability_hooks.ts";
 import {
   jsonObject, pythonString, requireBoolean, requireJsonObject,
   requireNonEmptyString, requireStringLiteral, sourceNumberTokens,
@@ -72,6 +85,10 @@ export const ACTION_SIGNATURE_COVERAGE = ACTION_SIGNATURE_COVERAGE_V0;
 // Single owner for the should-run artifact path a child brief points at, so the
 // legacy field token stays inside this module's retirement budget.
 export const QUOTA_GOAL_BOUNDARY_ARTIFACT = "quota_should_run.goal_boundary";
+export type QuotaGoalBoundaryReference = Readonly<{
+  capture_sha256: string;
+  pointer: "/goal_boundary";
+}>;
 export const SCHEDULER_QUOTA_IDENTITY_KEYS = ["goal_id", "agent_identity.agent_id", "effective_action", "heartbeat_recommendation.recommended_mode", "interaction_contract.mode"];
 
 const PLANNING_HORIZON_DETAIL_REFS_REF = "$.detail_ref";
@@ -811,19 +828,128 @@ export function completeHostSource(request: JsonObject): {decision: JsonObject; 
   return {decision, projection};
 }
 
+/** Collapse the unconfigured recall readback. Known active, failed and extended
+ * records still carry their full context. This only classifies presentation. */
+function disabledRewardMemoryView(value: unknown): JsonObject | null {
+  const readback = jsonObject(value);
+  const experiment = jsonObject(readback?.experiment);
+  const route = jsonObject(experiment?.config_runtime_route);
+  if (!readback || readback.status !== "disabled" || !experiment || !route ||
+      typeof readback.goal_id !== "string" || typeof readback.agent_id !== "string" ||
+      typeof route.registry_role !== "string" || typeof route.runtime_scope !== "string" ||
+      !Array.isArray(experiment.host_coverage)) return null;
+  const coverage = experiment.host_coverage;
+  if (!coverage.every(value => {
+    const host = jsonObject(value);
+    return host && Object.keys(host).length === 3 && typeof host.host_id === "string" &&
+      typeof host.automatic_recall === "string" && typeof host.automatic_ingest === "string";
+  })) return null;
+  const {goal_id, agent_id, status} = readback;
+  const expected = {
+    schema_version: "agent_turn_recall_v0", ok: true, status, goal_id, agent_id,
+    surface_id: "agent_workflow.turn_admission", host_wiring: "agent_turn_admission",
+    reason_code: null, context: null, automatic_recall: false, provider_call_count: 0,
+    fail_open: true, provider_failure_is_user_gate: false, grants_new_action_authority: false,
+    quota_spend_performed: false, external_writes_performed: false, suppress_external_sinks: true,
+    experiment: {
+      schema_version: "reward_memory_experiment_status_v1", ok: true, status, goal_id, agent_id,
+      experimental: false, enabled: false, available: false, configured_for_agent: false,
+      config_pointer_registered: false, automatic_ingest: false, automatic_recall: false,
+      fail_open: true, external_writes_performed: false, host_coverage: coverage,
+      config_runtime_route: {
+        schema_version: "reward_memory_config_runtime_route_v0", registry_source: "invoked_registry",
+        registry_role: route.registry_role, runtime_scope: route.runtime_scope, goal_source: "registry.goals",
+        config_source: "goal_repo_relative_config_pointer", readback_status: "not_attempted",
+        exact_readback_verified: false,
+      },
+    },
+  };
+  return isDeepStrictEqual(value, expected) ? {status, goal_id, agent_id} : null;
+}
+
 /** Task presentation is derived only after full-source validation. Keep task
  * facts (including unknown additions) and original scalar carriers intact;
  * scheduler/effect instructions remain with the outer executor. This view is
  * not a replacement source or a permission/settlement contract. */
+const STANDARD_ONE_STEP_SPEND_POLICY =
+  "append exactly one heartbeat spend only after scope-bounded work " +
+  "is validated and written back; one_step: mode, not an operation limit";
+
+const STANDARD_TODO_WRITE_HINT_RULE =
+  "Verified owner-only blocker: add or reuse a user_gate this turn, even if noted " +
+  "in Next Action. Split mixed work; link the smallest blocked Todo. Give the owner " +
+  "the action and verification check. Before yielding, reuse a runnable independent " +
+  "Todo or check Goal acceptance for a useful independent successor to record. " +
+  "Settle any bound Turn, then rerun admission. Non-blocking requests use user_action.";
+
+function usesStandardOneStepWorkSegment(decision: JsonObject): boolean {
+  const heartbeat = object(decision.heartbeat_recommendation);
+  return decision.normal_delivery_allowed === true &&
+    heartbeat.recommended_mode === "steering_audit_then_one_step" &&
+    heartbeat.spend_policy === STANDARD_ONE_STEP_SPEND_POLICY;
+}
+
+function usesStandardOwnerBlockerGuidance(decision: JsonObject): boolean {
+  const writeHint = object(decision.todo_write_hint);
+  return decision.normal_delivery_allowed === true &&
+    decision.effective_action === EffectiveAction.NORMAL_RUN &&
+    writeHint.rule === STANDARD_TODO_WRITE_HINT_RULE;
+}
+
 function hostModelContextChanges(decision: JsonObject): JsonObject {
   const context = {...decision};
+  // Maintenance warnings are actionable in the operator's quota/status view.
   for (const field of ["schema_version", "contract_binding", "projection_envelope",
     "scheduler_hint", "automation_cadence_readback", "automation_liveness",
-    "scheduler_execution_context"]) {
+    "scheduler_execution_context", "promotion_readiness_warning", "completed_todo_archive_warning"]) {
     delete context[field];
   }
+  // Todo-authoring CLI templates and queue headings stay with the outer executor.
+  // Strip the standard rule only for admitted ordinary work (replacing it with
+  // checked Worker disposition guidance); preserve custom or non-ordinary rules.
+  const writeHint = object(decision.todo_write_hint);
+  const hintCount = Object.keys(writeHint).length;
+  const removeWriteHintKeys = usesStandardOwnerBlockerGuidance(decision)
+    ? ["rule", "section", "agent_todo_command_template",
+       "user_action_command_template", "user_gate_command_template"]
+    : ["section", "agent_todo_command_template",
+       "user_action_command_template", "user_gate_command_template"];
+  for (const key of removeWriteHintKeys) {
+    if (typeof writeHint[key] === "string") delete writeHint[key];
+  }
+  const retainedHints = Object.keys(writeHint).length;
+  if (retainedHints !== hintCount) {
+    if (retainedHints) context.todo_write_hint = writeHint;
+    else delete context.todo_write_hint;
+  }
+  // Only the standard legacy rule has a known split: accounting stays with
+  // settlement, and the built-in renderers explain the work segment. Keep
+  // unfamiliar text intact; it can carry additional execution conditions.
+  if (usesStandardOneStepWorkSegment(decision)) {
+    const heartbeat = object(decision.heartbeat_recommendation);
+    delete heartbeat.spend_policy;
+    context.heartbeat_recommendation = heartbeat;
+  }
+  const emptyObservations = projectEmptyTurnStartObservations(decision.turn_start_capability_hook_dispatch);
+  if (emptyObservations) context.turn_start_capability_hook_dispatch = emptyObservations;
+  const disabledRecall = disabledRewardMemoryView(decision.reward_memory_recall);
+  if (disabledRecall) context.reward_memory_recall = disabledRecall;
   const interaction = {...object(decision.interaction_contract)};
   const agent = object(interaction.agent_channel);
+  // Start and settlement use the original preparation. Keep unfamiliar
+  // records and disagreements visible even when the rest of the task is ready.
+  const preparation = agent.execution_preparation;
+  if (decision.ok === true && decision.should_run === true &&
+      decision.normal_delivery_allowed === true && decision.effective_action === EffectiveAction.NORMAL_RUN &&
+      agent.must_attempt === true && agent.delivery_allowed === true && object(agent.work_context).complete === true &&
+      object(interaction.user_channel).action_required === false && decision.replan_action_packet == null &&
+      object(decision.goal_boundary).handoff_mode === "hard_lease" &&
+      isKnownReadyLeasePreparation(preparation, object(decision.agent_identity).agent_id, selectedWorkTodoId(decision)) &&
+      isDeepStrictEqual(decision.execution_preparation, preparation) &&
+      isDeepStrictEqual(object(interaction.cli_channel).execution_preparation, preparation)) {
+    delete context.execution_preparation;
+    delete agent.execution_preparation;
+  }
   // The complete source may share task authoring/evidence with its effect
   // owner. Resolve those existing references before omitting that owner.
   if (Object.hasOwn(agent, "work_context")) interaction.agent_channel = {...agent,
@@ -942,17 +1068,57 @@ function checkedContextPresentationSource(request: JsonObject): JsonObject {
   return context;
 }
 
+function legacyRecommendationFallbackReferences(payload: JsonObject): JsonObject[] {
+  const rootFallback = jsonObject(payload.blocked_priority_fallback);
+  const recFallback = jsonObject(object(payload.heartbeat_recommendation).blocked_priority_fallback);
+  if (!rootFallback || !recFallback || !isDeepStrictEqual(rootFallback, recFallback)) return [];
+  return [{
+    path: ["heartbeat_recommendation", "blocked_priority_fallback"],
+    from: ["blocked_priority_fallback"],
+    value: {context_ref: "/blocked_priority_fallback"},
+  }];
+}
+
+function presentationDetailFlags(request: JsonObject): {
+  includeGoalAcceptanceDetail: boolean;
+  includeAgentTodosDetail: boolean;
+} {
+  return {
+    includeGoalAcceptanceDetail: request.include_goal_acceptance_detail === undefined ? false
+      : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail"),
+    includeAgentTodosDetail: request.include_agent_todos_detail === undefined ? false
+      : requireBoolean(request.include_agent_todos_detail, "include_agent_todos_detail"),
+  };
+}
+
+function buildContextPresentationPlan(
+  payload: JsonObject,
+  surface: unknown,
+  flags: {includeGoalAcceptanceDetail: boolean; includeAgentTodosDetail: boolean},
+): JsonObject {
+  return progressiveContextPlan(
+    {
+      payload,
+      surface,
+      ...(flags.includeGoalAcceptanceDetail ? {include_goal_acceptance_detail: true} : {}),
+      ...(flags.includeAgentTodosDetail ? {include_agent_todos_detail: true} : {}),
+    },
+    progressivePreparationScopes(payload),
+    flags.includeAgentTodosDetail ? [] : legacyRecommendationFallbackReferences(payload),
+  );
+}
+
 /** The unsigned root is used for path selection; edits and recovery still
  * address the unchanged, signed original capture. */
 function checkedContextPresentationPlan(request: JsonObject): JsonObject {
+  const flags = presentationDetailFlags(request);
   const context = checkedContextPresentationSource(request);
   if (request.surface !== "complete_turn")
-    return nativeReplanPresentation(request) ?? contextPresentationPlan(request);
+    return nativeReplanPresentation(request) ?? contextPresentationPlan(request, flags);
   const source = {...context};
   delete source.schema_version;
   delete source.contract_binding;
-  return nativeReplanPresentation(request) ??
-    progressiveContextPlan({payload: source, surface: "quota_packet"}, progressivePreparationScopes(source));
+  return nativeReplanPresentation(request) ?? buildContextPresentationPlan(source, "quota_packet", flags);
 }
 
 function completeWorkIdentity(decision: JsonObject): JsonObject {
@@ -1026,9 +1192,33 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
   const payload = requireJsonObject(request.payload, "complete Turn decision source");
   const composedSettlement = request.composed_settlement === undefined ? false
     : requireBoolean(request.composed_settlement, "composed_settlement");
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
+  const includeVisionDetail = request.include_vision_detail === undefined ? false
+    : requireBoolean(request.include_vision_detail, "include_vision_detail");
   if (typeof request.scheduler_execution_args !== "string") {
     throw new EffectRuntimeRequestError("Turn scheduler execution binding must be a string");
   }
+  const cliArgv = request.cli_argv === undefined ? ["loopx"] : executableCliArgs(request.cli_argv);
+  if (request.cli_argv !== undefined && cliArgv.length === 0) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_argv must be a non-empty list of strings");
+  }
+  const captureReferenceFile = request.capture_reference_file;
+  if (captureReferenceFile !== undefined && !isNonEmptyFilePath(captureReferenceFile)) {
+    throw new EffectRuntimeRequestError("Turn envelope capture_reference_file must be a non-empty file path");
+  }
+  if (request.cli_registry !== undefined && !isNonEmptyFilePath(request.cli_registry)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_registry must be a non-empty file path");
+  }
+  if (request.cli_runtime_root !== undefined && !isNonEmptyFilePath(request.cli_runtime_root)) {
+    throw new EffectRuntimeRequestError("Turn envelope cli_runtime_root must be a non-empty file path");
+  }
+  const coldReadOptions = {
+    cliArgv,
+    captureReferenceFile,
+    registry: request.cli_registry ?? payload.registry,
+    runtimeRoot: request.cli_runtime_root ?? payload.runtime_root,
+  };
   if (payload.schema_version === COMPLETE_TURN_DECISION_VERSION) {
     const prior = requireCompleteTurnDecision(payload, request.source_number_tokens);
     if (object(prior.contract_binding).scheduler_execution_args !== request.scheduler_execution_args) {
@@ -1083,7 +1273,13 @@ export function composeCompleteTurnDecision(value: unknown): JsonObject {
         })}}}};
     }
   }
+  if (!includeVisionDetail) {
+    source = compactRoutineSettlementPlan(source, coldReadOptions);
+  }
   source = referenceGoalAcceptance(source, sourceIdentity);
+  if (!includeGoalAcceptanceDetail) {
+    source = scopeTurnGoalAcceptance(source, coldReadOptions);
+  }
   source = referenceReplanAuthoring(source, sourceIdentity);
   source = referenceExploreGuidance(source);
   source = referenceCurrentTaskTitle(source);
@@ -1482,9 +1678,12 @@ function progressivePreparationScopes(payload: JsonObject): PreparationScopeDeta
   return scopes;
 }
 
-function contextPresentationPlan(request: JsonObject): JsonObject {
+function contextPresentationPlan(
+  request: JsonObject,
+  flags = presentationDetailFlags(request),
+): JsonObject {
   const context = requireJsonObject(request.context, "current projection");
-  return progressiveContextPlan({payload: context, surface: request.surface}, progressivePreparationScopes(context));
+  return buildContextPresentationPlan(context, request.surface, flags);
 }
 
 const resolveViewWriteback = (
@@ -1614,6 +1813,8 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return {primary_action: primaryAction, replan_admitted: replanPacket !== null,
       checkpointed_write_approval: checkpointedBoundaryAuthority(object(decision.goal_boundary)) !== null,
       execution_profile_present: Object.keys(object(decision.execution_profile)).length > 0,
+      ordinary_work_segment_guidance: usesStandardOneStepWorkSegment(decision),
+      owner_blocker_guidance: usesStandardOwnerBlockerGuidance(decision),
       ...(request.include_model_context === true
         ? {model_context_schema_version: "loopx_turn_model_context_v0",
           model_context_changes: hostModelContextChanges(decision)} : {}),
@@ -1710,6 +1911,7 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
     return prepareProgressiveContext(request, checkedContextPresentationPlan(request));
   if (operation === "context_delivery") {
     if (request.native_projection === undefined) {
+      presentationDetailFlags(request);
       if (request.surface === "complete_turn") checkedContextPresentationSource(request);
       return prepareContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
     }
@@ -1724,6 +1926,13 @@ export function evaluateTurnEnvelope(value: unknown): JsonObject {
       ? contextProjectionChanges(requireJsonObject(request.state, "native context journal"), journal)
       : journal;
   }
+  if (operation === "stage_then_swap_plan") return planStageThenSwapPrefetch(request);
+  if (operation === "stage_then_swap_evaluate") return evaluateEpochPrefetchSwap(request);
+  if (operation === "stage_then_swap_prompt_gate") return evaluateEpochPrefetchPromptGate(request);
+  if (operation === "semantic_unit_anchor_record") return recordSemanticUnitAnchor(request);
+  if (operation === "semantic_unit_fold_swap") return buildSemanticUnitFoldSwap(request);
+  if (operation === "quiet_turn_evaluate") return evaluateQuietTurn(request);
+  if (operation === "quiet_turn_state_digest") return computeQuietTurnStateDigest(request);
   if (operation === "context_recovery") return restoreContextDelivery(request, LEGACY_QUOTA_CONTEXT_FIELDS);
   if (operation === "bind_capture") return bindTurnDecisionCapture(request);
   if (operation === "scoped_settlement_identity") return {identity: turnEnvelopeScopedSettlementIdentity(

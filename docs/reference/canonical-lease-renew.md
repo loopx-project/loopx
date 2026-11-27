@@ -21,6 +21,17 @@ execution authority.
 
 For a new execution on an open, eligible Todo with no prior lease:
 
+Omitting `--ttl-seconds` now uses **3 hours (10800 seconds)** instead of
+45 minutes for managed `todo claim` and task-lease acquire/renew/transfer.
+Explicit values remain bounded to 1..86400 seconds. Upgrading does not extend
+existing leases or rewrite receipts. When replaying an older standalone lease
+operation, pass its recorded TTL explicitly so the changed default does not
+alter the original intent. Renew before expiry or release promptly when work ends: a longer default
+also delays recovery from an abandoned holder.
+
+未指定 `--ttl-seconds` 时，默认租约由 45 分钟改为 **3 小时**；显式时长仍为
+1..86400 秒。升级不修改已有租约或原操作回执。长任务仍须到期前续租，完成后及时释放。
+
 ```bash
 loopx --registry registry.json task-lease acquire \
   --goal-id example-goal --todo-id todo_work --owner agent-a \
@@ -34,6 +45,36 @@ physical worktree blocks acquisition. The decision scans retained records and
 ignores ineligible holders. Standalone acquisition records explicitly requested
 scopes. New managed claims keep the Todo's declared paths in the Todo detail
 and acquire without a per-path list.
+
+For an already admitted, unsettled Turn on canonical File/SQLite, the same
+Agent can recover an open advancement Todo through ordinary claim/acquire,
+then re-enter the original guard with the original Goal/Agent/Todo/Turn
+identity. The guard can qualify the new active lease for that Turn: its key
+must differ, its version and epoch must advance, and current provider state,
+claim ownership, repository and eligibility must all pass. A competing
+effective holder still blocks acquisition; old execution proof stays invalid.
+
+This [fenced takeover](../../loopx/control_plane/quota/heartbeat_receipt_identity.ts)
+preserves the original admission and lease lineage. It does not inherit old
+acceptance: inspect existing effects, validate the result against current
+requirements, and follow the returned settlement plan, which settles the
+original Turn only once. The [File/SQLite CLI tests](../../tests/control_plane/test_heartbeat_lease_takeover.py)
+cover progress, completion, current validation and replay. Cross-Agent and
+remote-provider takeover are outside this path. If takeover does not qualify,
+follow the guard's scoped execution-loss closeout instead of forcing delivery.
+A Turn that has not admitted execution still uses ordinary preparation.
+
+Recovery is separate from live renewal. The [leased CLI Host supervisor](local-delegation.md#use-an-existing-agent-conversation-through-its-shell)
+renews while it can prove current execution. Codex App has no integrated
+background live-renewal path; the three-hour default and same-Agent recovery
+do not provide one.
+
+中文：canonical File/SQLite 中，同一 Agent 可正常领取新租约，再用原
+Goal/Agent/Todo/Turn 重入 guard；新 key、递增 version/epoch、当前归属、仓库
+和执行资格都须核验，不能覆盖竞争持有人或复活旧 proof。接管保留原准入与代际
+来源，按当前要求重新验收已有成果，原轮次只结算一次。跨 Agent、远端 provider
+不在此路径内；未获准时遵循 guard 的失权收尾。可信 CLI Host 的存活续租与此
+恢复机制不同，Codex App 尚未接入后台自动续租。
 
 ## Repository-relative scope identity
 
@@ -106,6 +147,18 @@ leases. No workspace path or machine identifier is stored directly: only
 opaque digests and the existing public repository identity enter the private
 authority record.
 
+Regular files within the declared scopes, including direct symlink targets,
+must have a single filesystem link. Hard-linked files are rejected even when
+all aliases are inside the checkout: writes could otherwise modify another
+checkout. This check applies to every entrypoint that observes the worktree,
+including explicit `task-lease acquire --write-worktree`, ordinary managed
+`todo claim` with automatic worktree discovery and expired-claim recovery
+previews. Standalone acquisition returns `invalid_worktree_lease_request`;
+claim and recovery retain their existing rejection responses. Replace the
+hard link with an independent copy and retry the claim or acquisition. Hard
+links outside the declared scopes do not affect admission. The check does not
+prevent later filesystem changes.
+
 Renewal preserves this identity. Acquire retries must use the same worktree,
 scopes and execution key; an alias resolving to the same worktree is valid.
 To change directories or reset workspace identity, release your current
@@ -145,7 +198,14 @@ JSON 与 Markdown 读回同一仓库字段或未知状态。这是物理 checkou
 调用者的仓库、物理目录和主机身份；已确认同一物理 checkout 的冲突仍返回
 `workspace_lease_conflict` 并拒绝获取，不同 Git worktree 之间的不同 Todo 可并发获取，
 不再生成逐路径 `write_scope_conflict` 或 `integration_overlap_advisories`。
-软链接、Git 管理目录和仓库不匹配仍在入口拒绝。
+重定向软链接、Git 管理目录和仓库不匹配仍在入口拒绝。
+声明范围内的普通文件及直接软链接的目标必须只有一个文件系统链接。
+硬链接即使全部位于当前 checkout 内，也会被拒绝，因为原地写入可能同时修改
+另一 checkout。这项检查适用于所有观察 worktree 的入口，包括显式
+`task-lease acquire --write-worktree`、自动发现工作区的普通托管 `todo claim`
+及过期 claim 的恢复预览。独立获取租约返回 `invalid_worktree_lease_request`；
+claim 和恢复保留原有的拒绝响应。将硬链接替换为独立副本后重新 claim 或获取租约。
+声明范围外的硬链接不影响准入；检查不能阻止获取后的文件系统修改。
 
 这是并发租约模型的行为简化：将写锁收敛回 Todo 归属 + 物理 worktree 独占，
 不再要求独立 worktree 为静态 path glob 做跨 checkout 阻塞或生成集成提示列表。
@@ -589,13 +649,15 @@ boundary; PostgreSQL uses an isolated real server. NoKV coverage uses its
 existing test transport and is not service qualification.
 
 For a read-only Goal snapshot, compare an immutable clean legacy checkout with
-File, SQLite and real PostgreSQL through the native public lifecycle entrypoint:
+local `File` and `SQLite` providers through the native public lifecycle
+entrypoint (server-side PostgreSQL lifecycle and archive qualification live in
+`loopx-project/loopx-cloud`, while pre-split self-hosted deployments stay on
+`v2.4.0`):
 
 ```bash
-# LOOPX_TEST_POSTGRES_URL must identify a disposable server.
 uv run --extra test python examples/control_plane/authority-lease-lifecycle-rehearsal.py \
   --registry registry.json --goal-id example-goal \
-  --baseline-repo ../loopx-baseline --execute-isolated-postgresql
+  --baseline-repo ../loopx-baseline
 ```
 
 Use the source-checkout Python environment and a qualified SQLite Node runtime.
@@ -673,8 +735,9 @@ runtime 不识别新 acquire schema。fence、provider、注册源变化和 CAS 
 新领取→续约→释放→新执行→完成；complete/supersede 可在 Markdown 展示丢失时
 读取 canonical state，完成后经原 projection outbox 重建，旧路径仍要求源文件。
 
-PostgreSQL 使用已有 service-owned scoped factory 和 incarnation 检查，无新凭据
-参数或自动启用。四臂演练使用相同公共 native 入口；NoKV 仍只经过测试 transport。
+PostgreSQL 使用 `loopx-project/loopx-cloud` 中的服务端 scoped factory 与 incarnation 检查，
+`loopx-project/loopx` 本地演练只比较不可变 legacy、隔离 `File` 与隔离 `SQLite` 三组
+（无新凭据参数或自动启用；NoKV 仍只经过测试 transport）。
 L3/R5 的独立领取/接管及维护由此可用，跨外部 effect 的 executor holder/terminal
 锁和自动结果返回仍需各自验收。D2 soak、D3、默认 profile、活动 Goal 迁移和跨主机
 部署没有改变。回滚保留 canonical state/receipt/fence 并恢复兼容代码，不得复活旧

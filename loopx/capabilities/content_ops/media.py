@@ -226,14 +226,14 @@ class MediaWorkspace:
                 if binding.binding is None:
                     raise ValueError("Provider unavailable")
                 checked = _owner("plan", {"plan": record["plan"]})
-                result = execute_extension_runtime_binding(binding.binding, request={"protocol": PROTOCOL,
+                raw_result = execute_extension_runtime_binding(binding.binding, request={"protocol": PROTOCOL,
                     "plan": record["plan"], "layout_style": checked["layout_style"],
                     "plan_digest": record["plan_digest"], "frame_count": record["frame_count"],
                     "sources": record["sources"], "attempt_directory": str(_safe_path(bundle, attempt)), "cancel_file": str(cancel)})
                 spatial = [{"id": shot["id"], "frames": round(shot["seconds"] * record["plan"]["fps"])}
                            for shot in record["plan"]["shots"] if shot["kind"] == "blender"]
                 full_frame = [shot["id"] for shot in record["plan"]["shots"] if shot.get("framing") == "full_frame"]
-                result = _owner("result", {"result": result, "plan_digest": record["plan_digest"],
+                result = _owner("result", {"result": raw_result, "plan_digest": record["plan_digest"],
                     "frame_count": record["frame_count"], "narration_mode": record["plan"]["narration"]["mode"],
                     **({"blender_shots": spatial} if spatial else {}),
                     **({"full_frame_shots": full_frame} if full_frame else {}),

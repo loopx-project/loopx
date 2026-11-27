@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
 
 
 OUTPUT_LIMIT = 1800
 
 
-def _compact_text(value: Any, *, limit: int) -> str:
+def _compact_text(value: object, *, limit: int) -> str:
     text = " ".join(str(value or "").split())
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "..."
 
 
-def _command_error(command_result: dict[str, Any]) -> str:
+def _command_error(command_result: Mapping[str, object]) -> str:
     parsed = command_result.get("json")
-    if isinstance(parsed, dict):
+    if isinstance(parsed, Mapping):
         error = parsed.get("error")
-        if isinstance(error, dict):
+        if isinstance(error, Mapping):
             return str(error.get("message") or error)
         if error:
             return str(error)
@@ -31,31 +31,29 @@ def _command_error(command_result: dict[str, Any]) -> str:
 
 
 def compact_lark_kanban_sync_receipt(
-    payload: dict[str, Any],
+    payload: Mapping[str, object],
     *,
     include_command_details: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     raw_records = payload.get("records")
     raw_commands = payload.get("commands")
-    records = [item for item in (raw_records if isinstance(raw_records, list) else []) if isinstance(item, dict)]
-    commands = [item for item in (raw_commands if isinstance(raw_commands, list) else []) if isinstance(item, dict)]
-    result = dict(payload)
+    records = [item for item in (raw_records if isinstance(raw_records, list) else []) if isinstance(item, Mapping)]
+    commands = [item for item in (raw_commands if isinstance(raw_commands, list) else []) if isinstance(item, Mapping)]
+    result: dict[str, object] = dict(payload)
+    record_success_count = 0
+    record_failure_count = 0
+    for item in records:
+        item_cmd = item.get("command")
+        if isinstance(item_cmd, Mapping) and item_cmd.get("ok") is True:
+            record_success_count += 1
+        else:
+            record_failure_count += 1
     result.update(
         {
             "detail_level": "full" if include_command_details else "compact",
             "record_count": len(records),
-            "record_success_count": sum(
-                1
-                for item in records
-                if isinstance(item.get("command"), dict)
-                and item["command"].get("ok") is True
-            ),
-            "record_failure_count": sum(
-                1
-                for item in records
-                if not isinstance(item.get("command"), dict)
-                or item["command"].get("ok") is not True
-            ),
+            "record_success_count": record_success_count,
+            "record_failure_count": record_failure_count,
             "command_count": len(commands),
             "command_failure_count": sum(
                 1 for item in commands if item.get("ok") is not True
@@ -65,20 +63,28 @@ def compact_lark_kanban_sync_receipt(
     if include_command_details:
         return result
 
-    compact_records: list[dict[str, Any]] = []
+    compact_records: list[dict[str, object]] = []
     for item in records:
         raw_command = item.get("command")
         raw_values = item.get("values")
-        command = raw_command if isinstance(raw_command, dict) else {}
-        values = raw_values if isinstance(raw_values, dict) else {}
+        cmd_dict: dict[str, object] = (
+            {str(k): v for k, v in raw_command.items()}
+            if isinstance(raw_command, Mapping)
+            else {}
+        )
+        values: dict[str, object] = (
+            {str(k): v for k, v in raw_values.items()}
+            if isinstance(raw_values, Mapping)
+            else {}
+        )
         compact_records.append(
             {
                 "todo_id": item.get("todo_id"),
                 "record_id": item.get("record_id"),
-                "ok": command.get("ok") is True,
-                "executed": bool(command.get("executed")),
-                "returncode": command.get("returncode"),
-                "error": _command_error(command) if command.get("ok") is not True else None,
+                "ok": cmd_dict.get("ok") is True,
+                "executed": bool(cmd_dict.get("executed")),
+                "returncode": cmd_dict.get("returncode"),
+                "error": _command_error(cmd_dict) if cmd_dict.get("ok") is not True else None,
                 "work_item_type": values.get("Work Item Type"),
                 "repository": values.get("Repository"),
                 "issue": values.get("Issue"),
@@ -90,7 +96,7 @@ def compact_lark_kanban_sync_receipt(
     return result
 
 
-def render_lark_kanban_markdown(payload: dict[str, Any]) -> str:
+def render_lark_kanban_markdown(payload: Mapping[str, object]) -> str:
     lines = [
         "# LoopX Lark Kanban",
         "",
@@ -119,16 +125,18 @@ def render_lark_kanban_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"- {key}: `{payload.get(key)}`")
     if payload.get("error"):
         lines.append(f"- error: {payload.get('error')}")
-    if isinstance(payload.get("commands"), list):
+    raw_commands = payload.get("commands")
+    if isinstance(raw_commands, list):
         lines.extend(("", "## Commands"))
-        for item in payload["commands"]:
-            if isinstance(item, dict):
+        for item in raw_commands:
+            if isinstance(item, Mapping):
                 marker = "ran" if item.get("executed") else "dry-run"
                 lines.append(f"- `{marker}` `{item.get('command')}`")
-    if payload.get("detail_level") == "compact" and isinstance(payload.get("records"), list):
+    raw_records = payload.get("records")
+    if payload.get("detail_level") == "compact" and isinstance(raw_records, list):
         lines.extend(("", "## Records"))
-        for item in payload["records"]:
-            if not isinstance(item, dict):
+        for item in raw_records:
+            if not isinstance(item, Mapping):
                 continue
             status = "ok" if item.get("ok") else "failed"
             summary = (
@@ -142,8 +150,9 @@ def render_lark_kanban_markdown(payload: dict[str, Any]) -> str:
             if item.get("error"):
                 summary += f" error={_compact_text(item.get('error'), limit=220)}"
             lines.append(summary)
-    if isinstance(payload.get("writeback"), dict):
+    raw_writeback = payload.get("writeback")
+    if isinstance(raw_writeback, Mapping):
         lines.extend(("", "## Writeback"))
-        for key, value in payload["writeback"].items():
+        for key, value in raw_writeback.items():
             lines.append(f"- {key}: `{_compact_text(value, limit=220)}`")
     return "\n".join(lines)

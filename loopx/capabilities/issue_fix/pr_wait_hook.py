@@ -55,7 +55,8 @@ def _availability(registry_path: Path, runtime_root: Path, goal_id: str,
 
 def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
                     agent_id: str, available: Any,
-                    fetch_timeout_seconds: int = 10) -> TurnStartHookRegistration | None:
+                    fetch_timeout_seconds: int = 10,
+                    shared_agent_todos_loader: Any = None) -> TurnStartHookRegistration | None:
     # The existing typed owner resolves declarations, remembered host observations
     # and revocation. A Todo requirement is never a capability grant.
     try:
@@ -95,7 +96,8 @@ def turn_start_hook(*, registry_path: Path, runtime_root: Path, goal_id: str,
 
             readback = reconcile_pr_wait_dependencies(registry_path=registry_path,
                 runtime_root_arg=str(runtime_root), goal_id=goal_id, agent_id=agent_id,
-                fetch_timeout_seconds=fetch_timeout_seconds)
+                fetch_timeout_seconds=fetch_timeout_seconds,
+                shared_agent_todos_loader=shared_agent_todos_loader)
             count = readback["external_read_count"]
             written = count > 0
             status = "partial" if readback.get("degraded") else "observed" if count else "empty"

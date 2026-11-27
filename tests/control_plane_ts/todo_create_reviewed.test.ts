@@ -3,12 +3,9 @@ import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
-import {Pool} from "pg";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema,
-  type PostgreSqlAuthorityDatabase} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {coordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {executeCoordinationTodoCreate, decodeCoordinationTodoCreateReceipt,
@@ -31,22 +28,11 @@ test("historical creation decoding preserves the receipt and rejects mismatched 
   ]) assert.throws(() => decodeCoordinationTodoCreateReceipt(malformed, "todo-created"), /identity mismatch/);
 });
 
-for (const provider of ["file", "sqlite", "postgresql"] as const) {
-  test(`${provider}: reviewed create fences concurrent commits and recovers its bound identity`,
-    {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: reviewed create fences concurrent commits and recovers its bound identity`, async t => {
     const root = await mkdtemp(join(tmpdir(), "loopx-reviewed-create-"));
     t.after(() => rm(root, {recursive: true, force: true}));
-    let store: AuthorityStore;
-    if (provider === "postgresql") {
-      const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL});
-      t.after(() => pool.end());
-      const database: PostgreSqlAuthorityDatabase = {connect: async () => {
-        const client = await pool.connect();
-        return {query: (sql, values) => client.query(sql, values ? [...values] : undefined), release: () => client.release()};
-      }};
-      await installPostgreSqlAuthorityStoreSchema(database, "postgresql:" + "b".repeat(32));
-      store = new PostgreSqlAuthorityStore(database, {tenant_id: root, goal_id: "goal-a"});
-    } else store = provider === "file" ? new FileAuthorityStore(root, "goal-a") : new SqliteAuthorityStore(root, "goal-a");
+    const store: AuthorityStore = provider === "file" ? new FileAuthorityStore(root, "goal-a") : new SqliteAuthorityStore(root, "goal-a");
     const seed = await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
       events: [], receipts: [], next_projection: {goal_id: "goal-a", handoff_mode: "soft_claim", todos: [], leases: [],
         todo_read_model: coordinationTodoReadModel([], TODO_DOMAIN_READ_RECORD_SCHEMA)}});

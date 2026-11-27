@@ -6,9 +6,10 @@ import hashlib
 import json
 import math
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 # New benchmark runs and the product both default to six settled work Turns.
@@ -42,6 +43,98 @@ MODES = ("plain", "native-goal", "heartbeat", "turn", "loopx-goal")
 CONTEXTS = ("fresh", "resume")
 TASK_ENTRIES = ("seeded-todo", "loopx-planned")
 SANDBOXES = ("read-only", "workspace-write", "danger-full-access")
+OFFICIAL_STOP_HOOK_MODES = ("simple", "todo_checklist")
+
+
+def _finite_nonneg(value: Any) -> float | None:
+    if (
+        isinstance(value, (int, float))
+        and type(value) is not bool
+        and math.isfinite(value)
+        and value >= 0.0
+    ):
+        return float(value)
+    return None
+
+
+def summarize_control_telemetry(
+    *,
+    hook_prepare_seconds: float,
+    control_overhead_seconds: float,
+    work_wall_seconds: float,
+) -> dict[str, float]:
+    """Summarize monotonic hook, control-plane overhead, and work timings."""
+    hook_s = max(0.0, float(hook_prepare_seconds))
+    work_s = max(0.0, float(work_wall_seconds))
+    control_s = max(hook_s, float(control_overhead_seconds))
+    total_s = control_s + work_s
+    tax_ratio = (control_s / total_s) if total_s > 0.0 else 0.0
+    return {
+        "hook_prepare_seconds": round(hook_s, 6),
+        "control_overhead_seconds": round(control_s, 6),
+        "work_wall_seconds": round(work_s, 6),
+        "control_tax_ratio": round(tax_ratio, 6),
+    }
+
+
+def aggregate_control_telemetry(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    extra_control_seconds: float = 0.0,
+    missing_receipts: int = 0,
+) -> dict[str, float | bool | str | None]:
+    """Aggregate worker telemetry; preserve unknown work/ratio when timing coverage is incomplete."""
+    record_list = list(records)
+    missing_count = (
+        missing_receipts
+        if isinstance(missing_receipts, int)
+        and not isinstance(missing_receipts, bool)
+        and missing_receipts > 0
+        else 0
+    )
+    extra_s = _finite_nonneg(extra_control_seconds) or 0.0
+    hook_s = 0.0
+    control_s = extra_s
+    work_s = 0.0
+    for record in record_list:
+        hook_val = _finite_nonneg(record.get("hook_prepare_seconds"))
+        control_val = _finite_nonneg(record.get("control_overhead_seconds"))
+        work_val = _finite_nonneg(record.get("work_wall_seconds"))
+        if hook_val is not None:
+            hook_s += hook_val
+        if control_val is not None:
+            control_s += control_val
+        if work_val is not None:
+            work_s += work_val
+    all_wakes_timed = bool(record_list) and missing_count == 0 and all(
+        _finite_nonneg(record.get("work_wall_seconds")) is not None
+        and _finite_nonneg(record.get("control_overhead_seconds")) is not None
+        for record in record_list
+    )
+    if not all_wakes_timed:
+        normalized_control = max(hook_s, control_s)
+        return {
+            "hook_prepare_seconds": round(hook_s, 6),
+            "control_overhead_seconds": round(normalized_control, 6),
+            "work_wall_seconds": None,
+            "control_tax_ratio": None,
+            "control_telemetry_verified": False,
+            "control_telemetry_status": (
+                "missing_receipt"
+                if (not record_list or missing_count > 0)
+                else "untimed_receipt"
+            ),
+        }
+    summary = summarize_control_telemetry(
+        hook_prepare_seconds=hook_s,
+        control_overhead_seconds=control_s,
+        work_wall_seconds=work_s,
+    )
+    return {
+        **summary,
+        "control_telemetry_verified": True,
+        "control_telemetry_status": "verified",
+    }
 
 
 @dataclass(frozen=True)
@@ -57,6 +150,7 @@ class Execution:
     native_child_limit: int | None = None
     complete_turn: bool = False
     official_stop_hook: bool = False
+    official_stop_hook_mode: str | None = None
 
     def __post_init__(self) -> None:
         if self.native_child_limit is not None and (
@@ -73,6 +167,18 @@ class Execution:
             raise ValueError("Historical turn_envelope and complete_turn treatments require the recorded product and runner revisions")
         if type(self.official_stop_hook) is not bool or (self.official_stop_hook and self.mode != "plain"):
             raise ValueError("official_stop_hook requires plain execution and a boolean opt-in")
+        if self.official_stop_hook_mode is not None:
+            if (
+                type(self.official_stop_hook_mode) is not str
+                or self.official_stop_hook_mode not in OFFICIAL_STOP_HOOK_MODES
+            ):
+                raise ValueError(
+                    f"official_stop_hook_mode supports only {OFFICIAL_STOP_HOOK_MODES}"
+                )
+            if not self.official_stop_hook or self.mode != "plain":
+                raise ValueError(
+                    "official_stop_hook_mode requires official_stop_hook=True and plain execution"
+                )
         if self.mode not in MODES or self.context not in CONTEXTS:
             raise ValueError("unsupported execution mode or iteration context")
         if self.task_entry is None:

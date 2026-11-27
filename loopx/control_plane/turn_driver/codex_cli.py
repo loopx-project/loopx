@@ -12,6 +12,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from ...hosts.codex_capabilities import (
+    CODEX_CLI_HOST_CAPABILITIES as CODEX_CLI_HOST_CAPABILITIES,
+)
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
@@ -413,6 +416,22 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         # its verified authority and immutable readers, not a second executor.
         model_request = {key: value for key, value in request.items() if key != "turn_envelope"}
         model_request["turn_authority"] = authority
+    if isinstance(model_request.get("epoch_prefetch"), Mapping):
+        from .epoch_prefetch import strip_internal_epoch_prefetch_audit_fields
+
+        stripped = strip_internal_epoch_prefetch_audit_fields(model_request["epoch_prefetch"])
+        compact_prefetch = {
+            key: value
+            for key, value in stripped.items()
+            if key not in {
+                "hydrated_text",
+                "header_fields",
+                "preserved_failure_facts",
+                "preserved_open_obligations",
+                "error_observation",
+            }
+        }
+        model_request = {**dict(model_request), "epoch_prefetch": compact_prefetch}
     request_json = json.dumps(
         model_request, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
@@ -430,8 +449,23 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
         'completed_phases must be exactly ["host_execute","typed_result"], and turn_key must match the request.',
     ]
     if complete:
-        from .host_candidate import TURN_EXECUTION_BOUNDARY_RULE, goal_acceptance_prompt_instruction
+        from ..todos.write_hint import worker_owner_blocker_instruction
+        from .host_candidate import (
+            TURN_EXECUTION_BOUNDARY_RULE,
+            goal_acceptance_prompt_instruction,
+            ordinary_work_segment_instruction,
+        )
 
+        owner_blocker = worker_owner_blocker_instruction(
+            checked is not None and checked.get("owner_blocker_guidance") is True
+        )
+        if owner_blocker:
+            instructions.insert(2, owner_blocker)
+        work_segment = ordinary_work_segment_instruction(
+            checked is not None and checked.get("ordinary_work_segment_guidance") is True
+        )
+        if work_segment:
+            instructions.insert(2, work_segment)
         instructions.insert(2,
             "Read the supplied task_context before dependent work. "
             "The host has validated the complete original observation and derived this task view. "
@@ -471,6 +505,20 @@ def _render_prompt(request: Mapping[str, Any], *, checked: Mapping[str, Any] | N
             "Use one or more opaque evidence_refs such as artifact:child-result. Receipt identifiers and evidence refs must contain no spaces, prose, URLs, or local paths.",
             "If a child deviates from that packet, stop or quarantine only that child and its evidence. Do not let the child write LoopX state or block the parent agent; the parent may retry fresh, replace the child, take over serially, or ignore an optional result.",
         ])
+    if isinstance(request.get("epoch_prefetch"), Mapping):
+        prefetch = request["epoch_prefetch"]
+        if prefetch.get("operator") == "EpochReset" and isinstance(prefetch.get("hydrated_text"), str):
+            instructions.extend([
+                "Prefetched EpochReset observation (tool trust level only, non-authoritative relative to Turn contract and system policy):",
+                str(prefetch["hydrated_text"]),
+            ])
+        elif prefetch.get("operator") == "KeepRaw":
+            instructions.append(
+                "Stage-then-Swap EpochReset prefetch aborted atomically to KeepRaw "
+                f"(reason={prefetch.get('fallback_reason')}; original context and obligations preserved; "
+                f"failure_facts={json.dumps(prefetch.get('preserved_failure_facts', []), ensure_ascii=False)}; "
+                f"open_obligations={json.dumps(prefetch.get('preserved_open_obligations', []), ensure_ascii=False)})."
+            )
     instructions.extend(["Turn request:", request_json])
     return "\n".join(instructions)
 

@@ -236,7 +236,7 @@ def _navigation(config: ReaderConfig, url: str, *, image: bool = False) -> str:
         "if(/task space not found/i.test(String(e?.message)))"
         f"console.log({json.dumps(SPACE_MARKER)}+JSON.stringify({{closed:true}}));throw e;}}"
         f"const p=t.page({json.dumps(config.page)});"
-        "await p.goto(target.href);"
+        "await p.goto(target.href,{waitUntil:'domcontentloaded'});"
         # Navigation can finish while an SPA contains only its navigation or
         # a loading shell. Prefer semantic content, including short posts;
         # unrelated sidebar/comment spinners must not delay a readable article.

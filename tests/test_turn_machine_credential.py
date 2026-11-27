@@ -13,7 +13,7 @@ from loopx import paths
 from loopx.control_plane.agent_context import project_goal_agent_context
 from loopx.control_plane.collaboration.delegation_context import read_delegation_facts
 from loopx.control_plane.turn_driver import host_binding
-from loopx.dsh_goal_mode import turn_host_adapter
+from loopx.hosts.dsh import turn_host_adapter
 from tests.control_plane.test_delegation_context import _fixture as delegation_fixture
 from tests.test_loopx_turn_driver import _write_live_fixture
 

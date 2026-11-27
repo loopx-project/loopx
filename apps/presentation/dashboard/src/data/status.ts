@@ -537,6 +537,7 @@ export const runRecordSchema = z.object({
   generated_at: z.string(),
   goal_id: z.string(),
   turn_instance_id: z.string().nullish().catch(null),
+  execution_ref: z.string().regex(/^[a-f0-9]{64}$/).optional().catch(undefined),
   agent_vision: z.record(z.string(), z.unknown()).nullish().catch(null),
   vision_checkpoint: z.object({
     schema_version: z.literal("vision_checkpoint_v0"),
@@ -627,7 +628,7 @@ export const runGoalSchema = z.object({
       delivery_window: z.object({
         schema_version: z.string().optional(),
         state: z.enum(["fresh", "stale", "missing", "unknown"]).catch("unknown"),
-        reason: z.enum(["no_expectation", "no_observation", "unparseable_observation"]).optional().nullable(),
+        reason: z.enum(["no_expectation", "no_observation", "unparseable_observation", "unverified_activity"]).optional().nullable(),
         last_observed_at: z.string().optional().nullable(),
         age_seconds: z.number().optional().nullable(),
         age_hours: z.number().optional().nullable(),

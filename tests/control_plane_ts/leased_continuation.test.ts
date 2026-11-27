@@ -8,10 +8,8 @@ import {execFile} from "node:child_process";
 import {promisify} from "node:util";
 import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFence} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {configureGoalAcceptance} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {executeTodoContinuation} from "../../loopx/control_plane/coordination/todo_continuation.ts";
 import {executeCanonicalTaskLeaseLifecycle} from "../../loopx/control_plane/coordination/task_lease_lifecycle.ts";
@@ -33,24 +31,11 @@ async function loaded(store: AuthorityStore) {
   return head;
 }
 
-async function fixture(t: test.TestContext, provider: string) {
+async function fixture(t: test.TestContext, provider: "file" | "sqlite") {
   const root = await mkdtemp(join(tmpdir(), "leased-continuation-"));
   t.after(() => rm(root, {recursive: true, force: true}));
-  let store: AuthorityStore;
-  if (provider === "postgresql") {
-    const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
-    t.after(() => pool.end());
-    const database = {connect: async () => {
-      const client = await pool.connect();
-      return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-        release: () => client.release()};
-    }};
-    await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-    store = new PostgreSqlAuthorityStore(database, {tenant_id: `continuation-${randomUUID()}`, goal_id: "goal-a"});
-  } else {
-    if (provider === "sqlite") await selectLocalSqliteAuthority(root, "goal-a", true);
-    store = await openLocalAuthorityStore(root, "goal-a");
-  }
+  if (provider === "sqlite") await selectLocalSqliteAuthority(root, "goal-a", true);
+  const store: AuthorityStore = await openLocalAuthorityStore(root, "goal-a");
   const scale = productionScaleCoordinationFixture("goal-a", "native");
   assert.equal((await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     next_projection: scale.projection, events: [], receipts: []})).status, "applied");
@@ -81,9 +66,8 @@ async function patch(store: AuthorityStore, todoId: string, extra: JsonObject) {
     projection: head.head, mutations: [{kind: "todo_upsert", todo: {...todo, ...extra}}]}))).status, "applied");
 }
 
-for (const provider of ["file", "sqlite", "postgresql"]) {
-  test(`${provider}: leased context crosses claim transfer, durable adoption and current execution readback`,
-    {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL ? "isolated PostgreSQL URL required" : false}, async t => {
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider}: leased context crosses claim transfer, durable adoption and current execution readback`, async t => {
     const f = await fixture(t, provider);
     const before = await loaded(f.store);
     const prepared = await executeTodoContinuation(f.store, f.prepare);
@@ -125,8 +109,7 @@ for (const provider of ["file", "sqlite", "postgresql"]) {
   });
 }
 
-for (const provider of ["file", "sqlite", "postgresql"]) test(`${provider}: leased preparation requires exact proof; context cannot inject operational proof`,
-  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL ? "isolated PostgreSQL URL required" : false}, async t => {
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: leased preparation requires exact proof; context cannot inject operational proof`, async t => {
   const f = await fixture(t, provider);
   const before = await loaded(f.store);
   for (const proof of [null, {...f.sourceProof, expected_version: 999}, {...f.sourceProof, idempotency_key: "wrong"}]) {

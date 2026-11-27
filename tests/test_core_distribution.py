@@ -58,13 +58,117 @@ def test_core_staging_excludes_workspace_and_reuses_kernel_bytes(tmp_path):
     staged = _prepare_module().prepare_core_source(tmp_path / "source")
     for name in ("chat", "web", "canary", "cli.py", "chat.py"):
         assert not (staged / "loopx" / name).exists()
-    assert not list((staged / "loopx").glob("chat_*.py"))
-    for name in ("entrypoint.py", "control_plane/turn_driver/executor.py",
+    # Chat UI/store modules are excluded; the typed action authority is Core-owned.
+    assert {path.name for path in (staged / "loopx").glob("chat_*.py")} == {"chat_action_store.py"}
+    package = staged / "loopx"
+    assert {file.name for file in (package / "capabilities/benchmark_toolkit").iterdir()} == {
+        "README.md", "catalog_entry.py", "four_arm_contract.py",
+    }
+    assert not list((package / "cli_commands").glob("benchmark_*.py"))
+    assert not (package / "presentation/research_analysis_api.py").exists()
+    assert not (package / "presentation/runtime_workspace.py").exists()
+    for name in ("entrypoint.py", "chat_action_store.py", "control_plane/turn_driver/executor.py",
                  "control_plane/coordination/sqlite_authority_store.ts",
                  "extensions/lark/extension.toml"):
         assert (staged / "loopx" / name).read_bytes() == (REPOSITORY / "loopx" / name).read_bytes()
     assert not (staged / ".loopx").exists()
     assert not (staged / "tests").exists()
+    recall = staged / "loopx/capabilities/agent_turn_recall"
+    for name in ("core.py", "cli.py"):
+        assert not (recall / name).exists()
+    for name in ("catalog_entry.py", "runtime.py"):
+        assert (recall / name).is_file()
+    review = staged / "loopx/capabilities/pr_review_queue"
+    assert {path.name for path in review.iterdir()} == {
+        "__init__.py", "catalog_entry.py", "goal_configuration.py", "machine_defaults.py",
+        "order.py", "review_body.py", "scheduling.py", "README.md",
+    }
+    assert not (staged / "loopx/cli_commands/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review.py").exists()
+    assert not (staged / "loopx/pr_review_merge_readiness.py").exists()
+
+
+def test_core_staging_has_zero_unconditional_optional_wheel_imports(tmp_path):
+    import ast
+
+    prepare = _prepare_module()
+    staged = prepare.prepare_core_source(tmp_path / "source")
+    optional_sources = set().union(*prepare._optional_capability_sources(
+        prepare._tracked_loopx_sources(REPOSITORY)
+    ).values())
+
+    def _mod_name(path: Path) -> str:
+        parts = list(path.with_suffix("").parts)
+        return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+    optional_modules = {_mod_name(p) for p in optional_sources if p.suffix == ".py"}
+
+    def _imported_targets(node: ast.AST, mod_parts: list[str]) -> list[str]:
+        if isinstance(node, ast.Import):
+            return [alias.name for alias in node.names]
+        if isinstance(node, ast.ImportFrom):
+            base = mod_parts[:-node.level] if node.level else []
+            mod = ".".join([*base, *([node.module] if node.module else [])])
+            return [mod, *(f"{mod}.{a.name}" for a in node.names if mod)]
+        return []
+
+    def _scan(stmts: list[ast.stmt], mod_parts: list[str], offenders: list[str], rel: str) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                for target in _imported_targets(stmt, mod_parts):
+                    if target in optional_modules:
+                        offenders.append(f"{rel}:{stmt.lineno}->{target}")
+            elif isinstance(stmt, ast.ClassDef):
+                _scan(stmt.body, mod_parts, offenders, rel)
+            elif isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.With, ast.AsyncWith, ast.While)):
+                if isinstance(stmt, ast.If) and ast.unparse(stmt.test) in {"TYPE_CHECKING", "typing.TYPE_CHECKING"}:
+                    continue
+                _scan(stmt.body, mod_parts, offenders, rel)
+                if not isinstance(stmt, (ast.With, ast.AsyncWith)):
+                    _scan(stmt.orelse, mod_parts, offenders, rel)
+            elif isinstance(stmt, ast.Try):
+                handlers = [ast.unparse(h.type) if h.type else "" for h in stmt.handlers]
+                if any("ModuleNotFoundError" in h or "ImportError" in h for h in handlers):
+                    continue
+                _scan(stmt.body, mod_parts, offenders, rel)
+                _scan(stmt.orelse, mod_parts, offenders, rel)
+                _scan(stmt.finalbody, mod_parts, offenders, rel)
+
+    offenders: list[str] = []
+    for py_file in sorted((staged / "loopx").rglob("*.py")):
+        rel = py_file.relative_to(staged)
+        parts = list(rel.with_suffix("").parts)
+        mod_parts = parts[:-1] if parts[-1] == "__init__" else parts
+        _scan(ast.parse(py_file.read_text(encoding="utf-8")).body, mod_parts, offenders, rel.as_posix())
+    assert offenders == []
+
+
+def test_installed_core_retains_module_imports_without_optional_wheels(core_python, tmp_path):
+    script = '''
+import importlib, importlib.metadata as m
+try:
+    m.distribution("loopx-capability-issue-fix")
+except m.PackageNotFoundError:
+    pass
+else:
+    raise SystemExit(0)
+for name in (
+    "loopx.cli_commands.update_artifact",
+    "loopx.capabilities.reward_memory.cli",
+    "loopx.capabilities.content_ops.cli",
+    "loopx.extensions.lark.reviewer_notification",
+    "loopx.capabilities.issue_fix.pr_lifecycle",
+    "loopx.capabilities.native_chat.github_pr_evidence",
+):
+    importlib.import_module(name)
+from loopx.cli_commands.update_artifact import standalone_source
+assert "REPOSITORY_PATTERN = " in standalone_source()
+'''
+    checked = subprocess.run(
+        [core_python, "-I", "-c", script], cwd=tmp_path,
+        env=_environment(core_python), capture_output=True, text=True, timeout=45,
+    )
+    assert checked.returncode == 0, (checked.stdout, checked.stderr)
 
 
 @pytest.fixture
@@ -142,6 +246,12 @@ def test_installed_core_identity_help_and_unavailable_workspace(core_python, tmp
     script = '''import importlib.util as u,json,loopx
 from pathlib import Path
 for name in ('loopx.cli','loopx.chat','loopx.web','loopx.canary'):assert u.find_spec(name) is None,name
+for name in ('loopx.capabilities.benchmark_toolkit.native_codex_goal',
+             'loopx.capabilities.benchmark_toolkit.experiment_board',
+             'loopx.capabilities.benchmark_toolkit.trajectory_assessment_store',
+             'loopx.cli_commands.benchmark_dispatch','loopx.presentation.research_analysis_api',
+             'loopx.presentation.runtime_workspace'):
+    assert u.find_spec(name) is None,name
 from loopx.release_manifest import _distribution_runtime_fingerprint
 assert _distribution_runtime_fingerprint() is not None
 from loopx import doctor
@@ -158,12 +268,36 @@ print(json.dumps({'package':str(Path(loopx.__file__).resolve())}))
     reference = json.loads(_run(core_python, ["commands", "--format", "json"], tmp_path).stdout)
     commands = [entry["command"] for group in reference["groups"] for entry in group["commands"]]
     assert "loopx configure-goal --help" in commands
-    assert not any(command.startswith(("loopx dashboard", "loopx chat", "loopx canary")) for command in commands)
+    assert not any(
+        command.startswith(("loopx dashboard", "loopx chat", "loopx canary", "loopx explore"))
+        for command in commands
+    )
     _run(core_python, ["--version"], tmp_path, environment={"PATH": str(tmp_path)})
     _run(core_python, ["--format", "json", "--version"], tmp_path)
     invalid = _run(core_python, ["--format", "invalid", "--version"], tmp_path, expected=2)
     assert "invalid choice" in invalid.stderr
-    refusal = _run(core_python, ["dashboard"], tmp_path, expected=2)
+    for blocked in (["dashboard"], ["explore", "--help"], ["explore", "turn-context", "--goal-id", GOAL, "--agent-id", AGENT]):
+        refusal = _run(core_python, blocked, tmp_path, expected=2)
+        assert "unavailable in the standalone core" in refusal.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_installed_core_lists_benchmark_as_unavailable(core_python, tmp_path):
+    catalog = json.loads(_run(core_python, ["capability", "list", "--format", "json"], tmp_path,
+                             environment={"PATH": str(tmp_path)}).stdout)
+    records = {record["id"]: record for record in catalog["capabilities"]}
+    detail = json.loads(_run(core_python, ["capability", "show", "benchmark-toolkit", "--format", "json"],
+                            tmp_path).stdout)["capability"]
+    unavailable = {"declared": True, "installed": False, "enabled": False, "ready": False}
+    assert records["decision-context"]["provider_state"]["ready"] is True
+    for record in (records["benchmark-toolkit"], detail):
+        assert record["provider_id"] == "loopx-capability-benchmark-toolkit"
+        assert record["provider_state"] == unavailable
+        assert "ordinary LoopX installation" in record["next_real_step"]
+    provider = next(provider for provider in catalog["providers"]
+                    if provider["id"] == "loopx-capability-benchmark-toolkit")
+    assert {key: provider[key] for key in unavailable} == unavailable
+    refusal = _run(core_python, ["benchmark", "--help"], tmp_path, expected=2)
     assert "unavailable in the standalone core" in refusal.stderr
     assert not list(tmp_path.iterdir())
 
@@ -340,6 +474,19 @@ def test_installed_core_catalog_entries_have_executable_parsers(core_python, tmp
                         break
                     prefix.append(token)
                 _run(core_python, [*prefix, "--help"], tmp_path)
+
+
+def test_installed_core_reports_optional_turn_recall(core_python, tmp_path):
+    detail = _run(core_python, ["capability", "show", "agent-turn-recall", "--format", "json"], tmp_path)
+    record = json.loads(detail.stdout)["capability"]
+    assert record["provider_id"] == "loopx"
+    assert record["default_enabled"] is False
+    assert record["provider_state"] == {"declared": True, "installed": False, "enabled": False, "ready": False}
+    assert "loopx-capability-agent-turn-recall" in record["next_real_step"]
+    refusal = _run(core_python, ["agent-turn-recall", "--help"], tmp_path, expected=2)
+    assert "unavailable in the standalone core" in refusal.stderr
+    assert "loopx-capability-agent-turn-recall" in refusal.stderr
+    assert not list(tmp_path.iterdir())
 
 
 def test_installed_core_deep_doctor_verifies_distribution_ownership(core_python, tmp_path, monkeypatch):
@@ -611,6 +758,32 @@ def test_installed_core_goal_lifecycle_respects_outer_controller(core_python, ta
     assert _spends(runtime) == 0 and not (workspace / "host-invocations").exists()
 
 
+@pytest.mark.parametrize("ingest", [False, True])
+def test_installed_core_completes_turn_with_configured_optional_recall(core_python, task, ingest):
+    from tests.control_plane.reward_memory_host_fixture import enable_live_memory
+
+    workspace, runtime, registry, arguments = task
+    enable_live_memory(registry, ingest=ingest)
+    host_index = arguments.index("--host-adapter-command-json") + 1
+    host = workspace / "recall-host.py"
+    host.write_text(HOST_SOURCE.replace(
+        "request=json.load(sys.stdin)\n", """request=json.load(sys.stdin)
+pathlib.Path('recall-readback.json').write_text(json.dumps(request.get('reward_memory_recall')))
+""",
+    ))
+    arguments[host_index] = json.dumps([core_python, "-I", str(host)])
+    execution = subprocess.run([core_python, "-I", "-m", "loopx.entrypoint", *arguments],
+        cwd=workspace, env=_environment(core_python), capture_output=True, text=True, timeout=90)
+    assert execution.returncode == 0, (execution.stdout, execution.stderr)
+    _assert_committed(core_python, workspace, runtime, json.loads(execution.stdout))
+    recall = json.loads((workspace / "recall-readback.json").read_text())
+    assert recall["status"] == "runtime_unavailable"
+    assert recall["reason_code"] == "automatic_recall_not_installed"
+    assert recall["provider_call_count"] == 0 and recall["context"] is None
+    assert recall["experiment"]["automatic_ingest"] is ingest
+    assert ("outcome_ingest_reconciliation" in recall) is ingest
+
+
 def _assert_committed(core_python, workspace, runtime, result):
     assert result["status"] == "committed", result
     assert result["validation"]["status"] == "passed"
@@ -834,6 +1007,7 @@ def test_installed_core_rejects_unverified_artifact_without_settlement(core_pyth
 
 
 def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_python, task, tmp_path, monkeypatch):
+    from tests.control_plane.host_process_fixture import assert_host_task_context
     from tests.test_loopx_turn_codex_cli import _fake_codex
 
     workspace, runtime, registry, _ = task
@@ -846,7 +1020,9 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         "--owner", AGENT, "--idempotency-key", lease["idempotency_key"],
         "--expected-version", str(lease["version"])], workspace)
     binary, log = _fake_codex(tmp_path)
-    binary.write_text(binary.read_text().replace('output_path = ',
+    binary.write_text(binary.read_text().replace("prompt = sys.stdin.read()",
+        'prompt = sys.stdin.read()\npathlib.Path("worker-prompt.txt").write_text(prompt, encoding="utf-8")'
+    ).replace('output_path = ',
         'pathlib.Path("squares.json").write_text(json.dumps([n*n for n in range(8)]))\noutput_path = '))
     home = tmp_path / "codex-home"
     home.mkdir()
@@ -870,6 +1046,45 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
         workspace, environment=environment).stdout)
     assert result["status"] == "committed" and result["validation"]["status"] == "passed", result
     assert json.loads((workspace / "squares.json").read_text()) == [0, 1, 4, 9, 16, 25, 36, 49]
+    prompt = (workspace / "worker-prompt.txt").read_text(encoding="utf-8")
+    instructions, task_context_json = prompt.split("Turn request:\n", 1)
+    assert "one_step means one work segment, not one operation" in instructions
+    assert "largest coherent work segment you can reliably complete and verify with your capabilities" in instructions
+    assert "same verifiable outcome in one Todo" in instructions
+    assert "dependency, approval or validation boundaries" in instructions
+    assert "isolate the smallest blocked Todo" in instructions
+    assert "exact blocking action and verification check" in instructions
+    assert "continue runnable independent work" in instructions
+    model_input = json.loads(task_context_json)
+    capture = Path(model_input["detail_ref"]["captured_decision"]["path"])
+    original = json.loads(capture.read_text(encoding="utf-8"))
+    for field in ("agent_todo_command_template", "user_action_command_template", "user_gate_command_template"):
+        command_template = original["todo_write_hint"][field]
+        assert command_template.startswith("loopx todo add")
+        assert command_template not in prompt
+    assert original["promotion_readiness_warning"]["requires_readiness_run"] is True
+    spend_policy = original["heartbeat_recommendation"]["spend_policy"]
+    assert "append exactly one heartbeat spend" in spend_policy
+    assert "one_step: mode, not an operation limit" in spend_policy
+    assert "append exactly one heartbeat spend" not in prompt
+    captured_bytes = capture.read_bytes()
+    assert original["execution_preparation"]["lease_proof"]["expected_version"] > 0
+    assert original["interaction_contract"]["cli_channel"]["execution_preparation"] == original["execution_preparation"]
+    model_task = model_input["task_context"]
+    assert "promotion_readiness_warning" not in model_task
+    assert "execution_preparation" not in model_task
+    assert "execution_preparation" not in model_task["interaction_contract"]["agent_channel"]
+    context = assert_host_task_context(model_input, original)
+    assert "todo_write_hint" not in context
+    assert "spend_policy" not in context["heartbeat_recommendation"]
+    assert context["execution_profile"] == original["execution_profile"]
+    users = context["interaction_contract"]["agent_channel"]["work_context"]["user_todos"]
+    model_proof = users["authority_read"]["todo_read_model"]
+    assert model_proof["schema_version"] == "loopx_todo_domain_read_record_v0"
+    assert model_proof["records_sha256"] and "contract_fields" not in model_proof
+    original_reader = json.loads(_run(core_python, [*prefix, "todo", "list", "--goal-id", GOAL, "--role", "user",
+        "--status", "open", "--agent-id", AGENT], workspace).stdout)
+    assert original_reader["authority_read"]["todo_read_model"]["contract_fields"]
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
     resume_command = [item for index, item in enumerate(command)
                       if item != "--todo-id" and (index == 0 or command[index - 1] != "--todo-id")]
@@ -892,3 +1107,4 @@ def test_installed_core_codex_prepares_only_an_admitted_valid_request(core_pytho
     assert model_input["source_decision_hash"] == original["contract_binding"]["content_hash"]
     assert replay["replayed"] is True and all(value is False for value in replay["effects"].values())
     assert len(log.read_text().splitlines()) == 1 and _spends(runtime) == 1
+    assert capture.read_bytes() == captured_bytes

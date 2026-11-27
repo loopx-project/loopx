@@ -412,6 +412,74 @@ def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_pa
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_composed_settlement_keeps_commit_when_private_capture_is_unsupported(
+    tmp_path, monkeypatch, capsys, provider,
+):
+    from loopx.cli import main
+    from loopx.control_plane.turn_driver import decision_capture
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    project, runtime, registry = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime, provider=provider)
+    binding = ["--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+               "--todo-id", TODO_ID, "--turn-instance-id", TURN_ID]
+    rc, guard = _run_cli(registry, runtime, "quota", "should-run", "--codex-app", *binding, cwd=project)
+    assert rc == 0, guard
+    identity = guard["heartbeat_receipt"]["settlement_identity"]
+    command = ["refresh-state", *binding, "--classification", "verified_capture_boundary",
+        "--delivery-batch-scale", "implementation", "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "in_flight_continuation", "--no-global-sync", "--suppress-external-sinks",
+        "--settle-turn", "--settlement-receipt"]
+
+    def run():
+        with monkeypatch.context() as unsupported:
+            unsupported.setattr(decision_capture, "private_capture_supported", lambda: False)
+            unsupported.chdir(project)
+            code = main(["--registry", str(registry), "--runtime-root", str(runtime),
+                "--format", "json", *command])
+            return code, json.loads(capsys.readouterr().out)
+
+    code, settled = run()
+    # The plan-composed command carries no output option the caller can remove,
+    # so a host without private capture must not turn commitment into refusal.
+    assert code == 0 and settled["ok"] is True, settled
+    assert settled["settlement_progress"]["state"] == "settled"
+    assert settled["settlement_identity"] == identity
+    assert len(settled["settlement_result"]["receipts"]) == 3
+    delivery = settled["result_delivery_error"]
+    assert delivery["error_code"] == "quota_decision_capture_unsupported"
+    assert "--max-page-output-bytes" not in json.dumps(delivery)
+    assert "result_details" not in settled
+    assert _spend_run_count(runtime) == 1
+    assert not (runtime / "context-delivery").exists()
+
+    code, replay = run()
+    assert code == 0 and replay["ok"] is True, replay
+    assert replay["settlement_identity"] == identity
+    assert replay["result_delivery_error"]["error_code"] == "quota_decision_capture_unsupported"
+    assert _spend_run_count(runtime) == 1
+
+    if not decision_capture.private_capture_supported():
+        # This host cannot establish private capture privacy at all, so there is
+        # no bounded receipt to compare against. The unsupported-path assertions
+        # above are the cross-platform contract; only POSIX continues below.
+        return
+
+    # POSIX keeps the bounded receipt it already had on the same Turn.
+    private = runtime / "context-delivery"
+    private.mkdir(mode=0o700, exist_ok=True)
+    private.chmod(0o700)
+    with monkeypatch.context() as capture:
+        capture.chdir(project)
+        assert main(["--registry", str(registry), "--runtime-root", str(runtime),
+            "--format", "json", *command]) == 0
+        bounded = json.loads(capsys.readouterr().out)
+    assert "result_delivery_error" not in bounded
+    assert bounded["settlement_identity"] == identity
+    assert _spend_run_count(runtime) == 1
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_complete_turn_composition_failure_preserves_original_guard_and_recovers(tmp_path, monkeypatch, capsys, provider):
     import hashlib
     from loopx.cli import main
@@ -932,6 +1000,13 @@ def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path
     assert rc == 0 and detail["eof"], detail
     plan = json.loads(detail["content"])["selections"][0]["value"]
     writeback = next(step for step in plan["ordered_steps"] if step["kind"] == "durable_writeback")
+    assert writeback["optional_attachments"][0]["summary_only"] is True
+    assert "explore turn-context" in writeback["optional_attachments"][0]["cold_read_command"]
+    rc, detail_entry = _run_cli(registry, runtime, "quota", "should-run", "--codex-app",
+        *binding, "--context-delivery", "off", "--include-detail", "vision", cwd=project)
+    assert rc == 0, detail_entry
+    detail_writeback = next(step for step in detail_entry["interaction_contract"]["cli_channel"]["settlement_plan"]["ordered_steps"]
+                            if step["kind"] == "durable_writeback")
 
     refs = ["result:probe", "source:" + "e" * 64]
     revision = "dataset:" + "d" * 64
@@ -978,7 +1053,7 @@ def test_execution_evidence_uses_explicit_finding_binding_in_settlement(tmp_path
     assert settled["settlement_identity"] == plan["identity"]
     assert settled["quota_spend"]["ok"] and "settlement_owed" not in settled
 
-    example = writeback["optional_attachments"][0]["optional_execution_observation_example"]
+    example = detail_writeback["optional_attachments"][0]["optional_execution_observation_example"]
     assert example["execution_observation"]["schema_version"] == compact["schema_version"]
     assert compact["schema_version"] not in json.dumps(entry)
     assert settled["explore_result"]["execution_observation"] == observation

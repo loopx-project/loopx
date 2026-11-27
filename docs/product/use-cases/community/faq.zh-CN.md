@@ -68,12 +68,12 @@ Goal，LoopX 会为它创建一个 SQLite 权威数据库，保存 Todo、租约
 
 ## 多人能否共用 PostgreSQL、异步等待审批
 
-[远程任务服务](../../../reference/remote-authority-task-service-v0.md)是可主动启用的
-源码候选。客户端通过带认证的服务领取任务、提交进度、续租和读回结果，
-由 PostgreSQL 保存事务与回执。写入时用 CAS 比较当前版本，已有更新便拒绝本次
-过期写入。服务若在提交后丢了响应，先用原操作身份查回执，再决定是否重试。
-候选已有独立客户端的真实后端测试；跨机器部署仍需该宿主与服务组合的实际验收。
-[当前源码的限定读取候选](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
+出站 HTTPS [`RemoteAuthority` 协议契约与客户端](../../../../loopx/control_plane/coordination/remote_authority_contract.ts)
+在 `loopx` 中保持 Apache-2.0 开源，服务端 PostgreSQL 权威、分布式协调与多租户治理承载于
+`loopx-project/loopx-cloud`（`v2.4.0` 历史候选文档保留于 [`v2.4.0` 远程任务服务说明](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md)）。
+客户端经已校验证书的 HTTPS 提交认领、进度、续租和读取意图，服务端保存事务与回执并用 CAS
+比较当前版本，已有更新便拒绝过期写入；若在提交后丢失响应，先用原操作身份查回执再决定是否重试。
+跨机器部署仍需该宿主与服务组合的实际验收。[历史限定读取候选](https://github.com/loopx-project/loopx/blob/c3e3ac56586fbbc686e3e2d01b979fe59a62dd19/docs/reference/remote-authority-task-service-v0.md#scoped-todo-reads)
 校验明确获准的 Todo 与访问者，并拒绝写入。
 
 [PR #8747](https://github.com/loopx-project/loopx/pull/8747) 已将跨人资源访问设计合入

@@ -39,7 +39,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
   active: boolean; goal: WorkspaceGoal; items: WorkspaceTimelineItem[]; userTodos: WorkspaceModel["userTodos"];
   selectedTodoId: string | null; board: ReactNode; historyRefreshRevision: number;
   proposals: Record<string, WorkspaceActionPreview>; onPreview: (request: WorkspaceActionPreviewRequest) => Promise<WorkspaceActionPreview>;
-  readOnly: boolean; onOpenDetails: () => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
+  readOnly: boolean; onOpenDetails: (openingControl: HTMLButtonElement) => void; onSelect: (selection: WorkspaceDrawerSelection | null) => void; onView: (view: WorkspaceGoalTab) => void;
 }) {
   const { t, locale } = useWorkspaceI18n();
   const copy = locale === "zh-CN" ? {
@@ -89,7 +89,7 @@ export function GoalOverview({ active, goal, items, userTodos, readOnly, onOpenD
           {progressNote ? <div className="goal-overview-agent-note"><h3>{copy.agentSummary}</h3><p className="goal-overview-note">{progressNote}</p></div> : null}
         </details> : null}
         <div className="goal-overview-heading">
-          <button onClick={onOpenDetails} type="button"><Info aria-hidden size={14} />{copy.details}</button>
+          <button onClick={(event) => onOpenDetails(event.currentTarget)} type="button"><Info aria-hidden size={14} />{copy.details}</button>
           {run ? <button className="goal-overview-run" type="button" onClick={() => onSelect({ kind: "run", item: run.run })}>{copy.execution}<ArrowRight aria-hidden size={15} /></button> : null}
         </div>
         <WorkerReadback goal={goal} zh={locale === "zh-CN"} onViewTasks={() => onView("tasks")}/>

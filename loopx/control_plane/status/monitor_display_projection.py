@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from functools import partial
+from typing import Any, Literal
 
 from ..scheduler.monitor_display import (
     attention_item_is_monitor_quiet_display_candidate as _attention_item_is_monitor_quiet_display_candidate,
@@ -29,7 +30,8 @@ MONITOR_DISPLAY_FALLBACK_ACTION = (
     "No immediate agent work; keep the monitor quiet until a material monitor "
     "transition, regression, or concrete blocker appears."
 )
-MONITOR_SIGNAL_WAITING_ON = "monitor_signal"
+MonitorSignalWaitingOn = Literal["monitor_signal"]
+MONITOR_SIGNAL_WAITING_ON: MonitorSignalWaitingOn = "monitor_signal"
 
 
 def build_project_asset(
@@ -58,7 +60,7 @@ def build_project_asset(
 def todo_summary_open_count(summary: dict[str, Any] | None) -> int:
     return _todo_summary_open_count(
         summary,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         fallback_limit=MAX_STATUS_TODOS_PER_ROLE,
     )
@@ -71,7 +73,7 @@ def todo_summary_lane_items(summary: dict[str, Any] | None, lane: str) -> list[d
 def attention_item_is_monitor_quiet_display_candidate(item: dict[str, Any]) -> bool:
     return _attention_item_is_monitor_quiet_display_candidate(
         item,
-        open_todo_items=open_todo_items,
+        open_todo_items=partial(open_todo_items, include_handoff_note=False),
         todo_item_is_actionable_open=todo_item_is_actionable_open,
         fallback_limit=MAX_STATUS_TODOS_PER_ROLE,
     )

@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import threading
 from typing import Any, Iterator
 import uuid
@@ -25,8 +24,8 @@ from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
-from .chat.event_cache import ChatEventCache, ChatEventStreamMixin
-from .chat.journal import decode_chat_journal
+from .chat.event_cache import ChatEventCache, ChatEventStreamMixin, recover_completing_turns
+from .chat.journal import CachedJournalRows, decode_chat_journal
 from .chat.ingress import (
     ChatIngressStore,
     SESSION_QUEUE_MAX_PENDING as SESSION_QUEUE_MAX_PENDING,
@@ -37,29 +36,33 @@ from .control_plane.chat_turn_acceptance import (
     AcceptedManagedTurn,
     plan_managed_turn_acceptance,
 )
+from .control_plane.collaboration.source_chat_observation import (
+    CHAT_SESSION_SCHEMA_VERSION,
+    CHAT_TURN_SCHEMA_VERSION,
+    _opaque_id,
+    _read_json,
+)
 from .file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
 
 
 CHAT_STORE_SCHEMA_VERSION = "loopx_chat_store_v1"
-CHAT_SESSION_SCHEMA_VERSION = "loopx_chat_session_state_v1"
-CHAT_TURN_SCHEMA_VERSION = "loopx_chat_turn_state_v1"
 CHAT_EVENT_SCHEMA_VERSION = "loopx_chat_event_v1"
 CHAT_MESSAGE_SCHEMA_VERSION = "loopx_chat_message_v1"
 CHAT_INGRESS_SCHEMA_VERSION = "loopx_chat_ingress_receipt_v1"
-CHAT_SESSION_MODE_MANAGED = "managed_runtime"
-CHAT_SESSION_MODE_ATTACHED = "attached_host"
+CHAT_SESSION_MODES = ("managed_runtime", "attached_host")
+CHAT_SESSION_MODE_MANAGED = CHAT_SESSION_MODES[0]
+CHAT_SESSION_MODE_ATTACHED = CHAT_SESSION_MODES[1]
 RESUMABLE_SESSION_STATES = {"ready", "busy", "stale", "resuming"}
 TERMINAL_TURN_STATES = {"completed", "interrupted", "timed_out", "failed"}
 TERMINAL_EVENT_KINDS = {"turn.completed", "turn.failed", "turn.interrupted"}
 REPLAY_ONLY_EVENT_KINDS = {"answer.delta", "assistant.delta", "agent.phase", "turn.activity"}
 
-_OPAQUE_ID = re.compile(r"^[A-Za-z0-9._-]{1,160}$")
 _SESSION_RELEASE_UNSET = object()
 
-# Keep both active conversation journals warm within the original total budget.
-_PAGED_HISTORY_MAX_SESSIONS = 2
-_PAGED_HISTORY_MAX_BYTES = 64 * 1024 * 1024
-_PAGED_HISTORY_MAX_ROWS = 8192
+# Keep active steward and project conversation journals warm across multi-MB image histories.
+_PAGED_HISTORY_MAX_SESSIONS = 4
+_PAGED_HISTORY_MAX_BYTES = 256 * 1024 * 1024
+_PAGED_HISTORY_MAX_ROWS = 65536
 
 
 def utc_now() -> str:
@@ -73,26 +76,11 @@ def _instant(value: Any) -> datetime | None:
         return None
 
 
-def _opaque_id(value: Any, *, field: str) -> str:
-    token = str(value or "").strip()
-    if not _OPAQUE_ID.fullmatch(token):
-        raise ValueError(f"{field} must be a compact opaque id")
-    return token
-
-
 def _upstream_id(value: Any) -> str:
     token = str(value or "").strip()
     if not token or len(token) > 1024 or any(ord(character) < 32 for character in token):
         raise ValueError("upstream_thread_id must be a bounded opaque string")
     return token
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
 
 
 def _read_jsonl(
@@ -200,7 +188,7 @@ def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
     """Filesystem store kept outside project and public LoopX run history."""
 
-    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True) -> None:
+    def __init__(self, runtime_root: Path, *, startup_maintenance: bool = True, compact_on_init: bool = True) -> None:
         self.root = runtime_root.expanduser().resolve() / "chat"
         self.sessions_root = self.root / "sessions"
         self._session_lock_guard = threading.Lock()
@@ -214,10 +202,10 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         self.sessions_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root, 0o700)
         os.chmod(self.sessions_root, 0o700)
-        # A scoped lifecycle repair must not compact unrelated history or finish
-        # other pending completions merely by opening their data owner.
+        # Scoped repairs open the data owner without mutating unrelated history.
         if startup_maintenance:
-            self.compact_completed_events()
+            if compact_on_init:
+                self.compact_completed_events()
             self._recover_turn_completions()
 
     def _session_dir(self, session_id: str) -> Path:
@@ -297,10 +285,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             or normalized_mode != CHAT_SESSION_MODE_MANAGED
         ):
             raise ValueError("codex_home must be an absolute managed Codex home")
-        if normalized_mode not in {
-            CHAT_SESSION_MODE_MANAGED,
-            CHAT_SESSION_MODE_ATTACHED,
-        }:
+        if normalized_mode not in CHAT_SESSION_MODES:
             raise ValueError("session_mode must be managed_runtime or attached_host")
         normalized_host_surface = (
             _opaque_id(host_surface, field="host_surface") if host_surface else None
@@ -847,7 +832,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         rows = decode_chat_journal(lines, strict=True)
         if digest is not None and len(rows) <= _PAGED_HISTORY_MAX_ROWS:
             with suppress(RecursionError):
-                saved = deepcopy(rows)
+                saved = CachedJournalRows(deepcopy(rows), journal_sha256=digest)
                 with self._paged_history_lock:
                     self._paged_history[session_id] = (digest, size, saved)
                     self._paged_history.move_to_end(session_id)
@@ -1468,11 +1453,7 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
         return self.finalize_managed_turn_completion(session_id, turn_id)
 
     def _recover_turn_completions(self) -> None:
-        # ponytail: owner-local startup scan; add an index only if history makes it measurable.
-        for path in self.sessions_root.glob("*/turns/*.json"):
-            turn = _read_json(path)
-            if turn.get("schema_version") == CHAT_TURN_SCHEMA_VERSION and turn.get("status") == "completing":
-                self.finalize_turn_completion(str(turn["session_id"]), str(turn["turn_id"]))
+        recover_completing_turns(self)
 
     def finalize_attached_turn_completion(
         self,
@@ -1687,23 +1668,22 @@ class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):
             and payload.get("status") in RESUMABLE_SESSION_STATES,
         }
 
-    def session_snapshot(self, session_id: str, *, strict_messages: bool = False) -> dict[str, Any]:
+    def session_snapshot(
+        self, session_id: str, *, strict_messages: bool = False, copy_messages: bool = True,
+    ) -> dict[str, Any]:
         payload = self.load_session(session_id)
         if payload is None:
             raise KeyError("chat session was not found")
-        active_turn = None
-        if payload.get("active_turn_id"):
-            active_turn = self.load_turn(session_id, str(payload["active_turn_id"]))
-            if active_turn is not None:
-                active_turn = {
-                    key: value
-                    for key, value in active_turn.items()
-                    if key != "_acceptance"
-                }
+        active_turn = self.load_turn(session_id, str(payload["active_turn_id"])) if payload.get("active_turn_id") else None
+        if active_turn is not None:
+            active_turn = {key: value for key, value in active_turn.items() if key != "_acceptance"}
         return {
             "ok": True,
             "schema_version": CHAT_STORE_SCHEMA_VERSION,
             "session": self.public_session(payload),
-            "messages": self._paged_history_messages(session_id) if strict_messages else self.messages(session_id),
+            "messages": (
+                self._paged_history_messages(session_id, copy_cached=copy_messages)
+                if strict_messages else self.messages(session_id)
+            ),
             "active_turn": active_turn,
         }

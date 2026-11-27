@@ -6,7 +6,11 @@ fact validation and cadence stay with their existing TypeScript owners.
 from pathlib import Path
 from typing import Any
 
-from ..control_plane.capability_hooks import dispatch_turn_start_hooks
+from ..control_plane.capability_hooks import (
+    capability_hook_request_scope,
+    dispatch_turn_start_hooks,
+    merge_turn_start_dispatch,
+)
 from ..control_plane.todos.contract import normalize_required_capabilities
 
 
@@ -21,23 +25,22 @@ def extend_turn_start_dispatch(dispatch: dict[str, Any], *, registry_path: Path,
     factories = [("issue-fix", dependencies)]
     if normalize_required_capabilities(available):
         factories.append(("agent-capability-memory", capability_memory))
-    registrations = [hook for capability, factory in factories if (hook := factory(
-        registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-        agent_id=agent_id, available=available,
-        **(provider_options or {}).get(capability, {}),
-    )) is not None]
-    if not registrations:
-        return dispatch
-    extra = dispatch_turn_start_hooks(registrations)
-    result = dict(dispatch)
-    for key in ("results", "required_reads", "failures", "contexts"):
-        if extra.get(key):
-            result[key] = list(dispatch.get(key) or []) + list(extra[key])
-    for key in ("registered_count", "invoked_count"):
-        result[key] = int(dispatch.get(key) or 0) + int(extra.get(key) or 0)
-    if extra.get("uncertain_local_effects"):
-        result["uncertain_local_effects"] = True
-    return result
+    with capability_hook_request_scope():
+        registrations = [hook for capability, factory in factories if (hook := factory(
+            registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
+            agent_id=agent_id, available=available,
+            **(provider_options or {}).get(capability, {}),
+        )) is not None]
+        if not registrations:
+            return dispatch
+        extra = dispatch_turn_start_hooks(registrations)
+    return merge_turn_start_dispatch(
+        dispatch,
+        extra,
+        include_contexts=True,
+        only_nonempty_extra=True,
+        include_uncertain=True,
+    )
 
 
 def attach_turn_start_effects(payload: dict[str, Any], dispatch: dict[str, Any]) -> None:

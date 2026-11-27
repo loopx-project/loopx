@@ -5,8 +5,11 @@ Status: experimental contract
 ## Position
 
 Decision Context is a built-in, default-off, goal-scoped LoopX capability. It
-runs above LoopX Core, consumes Core truth, and does not enter
-`loopx/control_plane/` or alter todo, gate, quota, or authority semantics.
+runs above LoopX Core, consumes Core truth, and does not alter Core todo, gate,
+quota eligibility, or authority semantics; its optional host-local turn-start
+hook binding uses the TypeScript capability-hook owner seam under
+`loopx/control_plane/capabilities/decision_context_hook.ts` without moving
+domain scoring, source adapters, or decision recommendations into Core.
 
 ```mermaid
 flowchart TD
@@ -266,6 +269,14 @@ registering a private adapter in the public package. Activation projects only
 `runtime-bound`; the adapter name, config, locator, payload, and cursor remain
 private. Missing or mismatched runtime providers fail open without advancing a
 cursor.
+
+Host-local turn-start integration (`decision_context.turn_context`) follows the
+same default-off and read-only boundary: an explicit CAS-managed binding under
+`<runtime-root>/decision-context/agent-bindings/` opts one registered
+`(goal_id, agent_id)` into a public-safe `decision_context_hook_view_v1`
+observation on `quota should-run` and `turn run-once`, omitting private
+locators, cursors, and source bodies while leaving review settlement and cursor
+commits untouched.
 
 ### P1: first dogfood
 

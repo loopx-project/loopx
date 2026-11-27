@@ -1,28 +1,47 @@
-# CI job exemptions / 按职责免跑重型 CI
+# CI job exemptions and two-tier cadence / CI 按职责分层与双层门禁
 
 ## Policy, not a hand-maintained test selection
 
 Every PR receives the same stable merge gate. The classifier reads the complete
 NUL-delimited Git diff at immutable base/head revisions; a PR title, label or
-author description cannot claim that runtime changes are “just UI”.
+author description cannot claim that runtime changes are “just UI” or exempt
+build manifests.
 
-| Whole PR | Backend TS/lint/contracts | Full Python / Windows | Stage2c | Packaged Dashboard |
-| --- | --- | --- | --- | --- |
-| Existing Markdown-only documentation exemption | Skip | Skip | Skip | Not published by Frontstage Pages |
-| Client Dashboard source/assets only, optionally with docs | Skip | Skip | Skip | Required type-check, build, coverage, freshness and browser smoke |
-| Backend, prompt, tests, dependency, build, CI policy, mixed or unknown | Run | Run | Run | Required type-check, build, coverage and browser smoke; extra freshness for CI-policy rehearsal or forced-full UI |
-| main push / daily / manual / merge queue | Run | Run | Run | Required type-check, build, coverage and browser smoke |
+Under the repository's **zero CI waiting + two-tier CI** rule, agents and
+subagents never wait for, poll, or block on remote GitHub Actions CI when local
+deterministic gates and Goal-bound exact-head `loopx pr-review` (`wait_for_ci=false`)
+pass; see [local-first premerge gate](testing-and-quality.md#local-first-premerge-gate-vs-asynchronous-ci--本地优先门禁与异步-ci).
+Remote CI provides fast per-PR feedback (`backend`, `mixed`, `presentation`, `docs`)
+and runs heavyweight cross-OS, full 6-shard Python/coverage, Node compatibility,
+Stage 2C, and release/package dry-run matrices on Nightly `schedule`, `push` to
+`main`, `merge_group`, `workflow_dispatch`, CI-policy/manifest changes, and `ci:full`.
+
+| Whole PR / Event (`change_kind`) | Backend static/TS/contracts (`backend_tests`) | Browser / UI (`frontend_tests`, `presentation_tests`) | Node compat (`compat_tests`) | 6-shard Python / Windows (`python_tests`) | Stage 2C (`stage2c_tests`) |
+| --- | --- | --- | --- | --- | --- |
+| Allowlisted root Markdown or `docs/**/*.md` (`docs`) | Skip | Skip | Skip | Skip | Skip |
+| Client Dashboard/chat assets only, optionally with docs (`presentation`) | Skip | Run (`chat-bundle-browser`, `dashboard-browser`, `dashboard-acceptance`, `presentation`) | Skip | Skip | Skip |
+| Backend/control-plane/tests/prompts without UI or manifest edits (`backend`) | Run (`kernel-static-checks`, `kernel-contracts`, `typescript-core`, `typescript-coverage`) | Skip | Skip | Skip | Skip |
+| Backend + frontend/UI changes without CI policy or manifest edits (`mixed`) | Run | Run | Skip | Skip | Skip |
+| CI policy, packaging/dependency manifests, unknown/symlinks, `ci:full`, `main` push, Nightly `schedule`, `merge_group`, `workflow_dispatch` (`full`) | Run | Run | Run (`node-minimum-compatibility`, plus `node-forward-compatibility` on `schedule`/`workflow_dispatch`) | Run (`test-shard` x6, `pytest`, `windows-powershell`) | Run (`stage2c-suite` x4, `stage2c-correctness-e2e`) |
 
 The presentation boundary is deliberately small: Dashboard `src/`, `public/`
 and packaged `loopx/web/chat/`, with explicit client-code/image/font extensions.
-Package manifests, Vite/build configuration, native desktop code, backend Python
-and arbitrary JSON are not exempt. Both sides of renames are classified; moving
-runtime code into a UI directory stays full. Symlinks/type changes cannot qualify.
+Package manifests (`pyproject.toml`, `setup.py`, `MANIFEST.in`, `package.json`,
+`package-lock.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`,
+`tsconfig.control-plane.json`, `uv.lock`, `Cargo.toml`, `Cargo.lock`,
+subpackage/app/example manifests under `packages/`, `apps/`, and `examples/`,
+and Dashboard `vite.config.ts`), `scripts/ci/**`, `.github/**`,
+`packages/loopx-core/**`, `examples/shared-goal-authority-e2e/**`,
+`tests/requirements-*`, and unknown root files force `full` qualification on PRs. Both sides of renames are classified;
+moving runtime code into a UI directory runs backend + browser checks (`mixed`),
+and moving files into `docs/` runs backend checks rather than `docs`. Symlinks
+and nonregular Git objects always stay `full`.
 
-The new exemption is available only when the selector, gate and workflow blobs
-match the already-reviewed target branch. Changing CI policy cannot exempt its
-own PR. Missing policy or uncertain ownership runs full; missing Git revisions
-fail classification. The pre-existing documentation exemption remains supported.
+Exemption kinds (`presentation`, `backend`, `mixed`) activate only when the
+selector, gate and workflow blobs in `POLICY_PATHS` already match the reviewed
+target branch (`trusted_policy`). Changing CI policy cannot exempt its own PR.
+Missing policy or uncertain ownership runs `full`; missing Git revisions fail
+classification. The pre-existing documentation exemption remains supported.
 
 Frontstage Pages qualifies its own public artifact: homepage and projection-demo
 builds, bilingual Blog catalog, public-safe bundle, docs, analytics, search and
@@ -47,10 +66,11 @@ Frontstage Pages 只验收并发布公共网站和 projection demo，保留构�
 仍由 Python Tests 承担。新合并不会中断正在运行的正式发布，只替换等待中的下一次
 发布；同一 PR 的旧验证仍会取消。
 
-本方案是明确重型 job 的职责。纯前端变化不需要
-重跑后端持久化与崩溃恢复矩阵，但前端自己的实际构建与浏览器验收成为必需项。
-预算、静态宿主 prompt 和后端 Python/TS 逻辑暂不享受免跑；它们仍可能改变核心行为。
-新增一种豁免只需审阅其业务边界和保留的验收，不要求列举全部替代测试文件。
+本方案落实**轻量 PR / 夜间全量（Two-Tier CI）与本地优先零等待 CI**：
+- 在本地确定性测试、`loopx canary premerge` 与受管 Goal（`wait_for_ci=false`）精确头评审通过后，Agent 与子 Agent 不再等待或轮询远端 GitHub Actions CI。
+- 普通后端 PR（`backend`）只跑轻量静态、内核契约与 TypeScript 核心／覆盖率检查；涉及 UI／前端的混合 PR（`mixed`）额外运行三个浏览器验收通道；纯前端（`presentation`）与纯文档（`docs`）保留原有精确豁免；而 6 分片 Python 全量、Windows PowerShell、Node 兼容矩阵、Stage 2C E2E/mutation/wheel-sdist 安装验收仅在夜间 `schedule`、`main` push、`merge_group`、手动调度、`ci:full` 标签及 CI 策略／依赖清单／未知路径 PR 中运行。
+- 所有豁免类型均受目标分支 `trusted_policy` 约束，更改 CI 策略自身的 PR 必须全量运行。
+本方案继续按改动面清晰分工，而非逐条手工挑选单测文件。
 
 ## Six complete Python shards
 
@@ -213,18 +233,24 @@ merge-gate 的摘要记录源码 head、实际 checkout、事件 base 与本次 
 摘要不根据状态猜根因；API 不可用时明确标记证据缺口。它也会列出 advisory
 检查，但是否通过仍由原门禁规则决定，不因摘要失败而放行，不自动豁免历史失败。
 
-Specialized workflows already use GitHub's PR path filters: release artifacts
-follow packaged source/build inputs, desktop artifacts follow native/Desktop
-and shared Dashboard inputs, optional Ark follows its adapter and shared turn
-boundaries, and Frontstage follows its published content. Their filters remain
-separate from the required Python merge gate, which starts for every PR and
-decides exemptions inside the workflow. Regression fixtures cover both related
-and unrelated paths, including a mixed PR that still triggers Ark.
+Specialized workflows also follow strict PR path filters plus nightly schedules:
+`release-artifacts.yml` triggers on PRs only for release, installer, packaging
+metadata, and browser recovery harness files (removing broad `loopx/**`,
+`README.md`, and `apps/presentation/dashboard/**` triggers) and runs a
+read-only nightly verification at `21:41 UTC` (`upload-release`, `publish-pypi`,
+and attestation stay gated to `release` and `workflow_dispatch`); `package-smoke.yml`
+triggers on PRs only for `packages/**`, standalone `loopx-core`/extension distribution
+tests, extension entrypoints, and `pyproject.toml`, plus `main` pushes and a
+nightly `20:47 UTC` sweep; `postgresql-integration.yml` runs on control-plane/authority
+changes plus a nightly `21:11 UTC` sweep; `desktop-release-artifacts.yml` follows
+Desktop and Dashboard inputs; `ark-turn.yml` follows its adapter and turn
+boundaries; and `frontstage-pages.yml` follows published site/docs inputs.
 
-按需触发以整个 PR 的累计改动为输入，先判断职责，再决定运行哪些完整 job。
-文档与纯前端 PR 已有明确豁免；后端、桌面、共享依赖或混合改动仍保留完整
-Python 主门禁。桌面、发布、Ark 和 Frontstage 的专用 workflow 则继续按各自
-路径触发。当前没有实现逐个测试的依赖图选择，也不声称所有后端 PR 都能缩减。
+专用 workflow 同样遵循严格 PR 路径过滤与夜间全量日程：
+`release-artifacts.yml` 在 PR 上仅响应发布、打包与浏览器恢复脚本路径（不再因普通 `loopx/**`、`README.md` 或前端改动触发），并于每日 `21:41 UTC` 在主干执行只读干跑校验（`upload-release`、`publish-pypi` 与 provenance attestation 严格仅允许 `release` / `workflow_dispatch`）；
+`package-smoke.yml` 在 PR 上仅响应 `packages/**`、核心包分发测试、扩展入口与 `pyproject.toml`，并保留 `main` 与每日 `20:47 UTC` 夜间检查；
+`postgresql-integration.yml` 除控制面改动外每日 `21:11 UTC` 执行夜间真库校验；
+桌面、Ark 与 Frontstage 继续沿用各自专用触发规则。
 
 Stage2c retains all correctness cases: its E2E lane uses two runners with two
 workers each, while mutants and installed-package lanes remain separate. The
@@ -237,9 +263,10 @@ Stage2c E2E 从单 runner 的 4 个 worker 改为两个 runner 各 2 个 worker�
 数不增加，但不再挤在同一台机器。按完整模块分片，并保留 loadfile 与模块内顺序。
 真实回归以共享状态、顺序敏感的模块验证两路并集完整且互斥，避免盲目按单测试分片。
 
-The supported minimum-Node contract runs for full candidates. The non-blocking
-next-Node probe runs only with daily or manual Python Tests, outside the
-per-push critical path. There is no hand-maintained per-test selection list.
+The supported minimum-Node contract runs for `full` candidates (`compat_tests=true`).
+The non-blocking next-Node probe runs only with daily or manual Python Tests when
+`compat_tests=true`, outside the PR/main critical path. There is no hand-maintained
+per-test selection list.
 
 ## Resource cadence and supersession
 

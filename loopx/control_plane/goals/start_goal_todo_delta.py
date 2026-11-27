@@ -184,11 +184,10 @@ def start_goal_initial_batch_applicable(
         runtime_root=str(resolved_runtime_root),
         include_work_details=False,
     )
-    outcomes = (
-        (acceptance.get("goal_acceptance_contract") or {})
-        .get("outcome_requirements", {})
-        .get("outcomes", [])
-    )
+    contract = acceptance.get("goal_acceptance_contract")
+    reqs = contract.get("outcome_requirements") if isinstance(contract, Mapping) else None
+    raw_outcomes = reqs.get("outcomes") if isinstance(reqs, Mapping) else None
+    outcomes = raw_outcomes if isinstance(raw_outcomes, Sequence) and not isinstance(raw_outcomes, (str, bytes)) else []
     return goal_initial_batch_applicable(
         has_any_todos=False,
         outcomes=outcomes,

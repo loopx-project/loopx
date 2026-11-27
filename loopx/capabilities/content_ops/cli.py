@@ -8,10 +8,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..issue_fix.content_ops_cli import (
-    handle_content_ops_issue_fix_command,
-    register_content_ops_issue_fix_commands,
-)
 from .item_lifecycle import (
     apply_content_ops_item_event,
     build_content_ops_item_packet,
@@ -46,6 +42,16 @@ from .surface import (
 )
 
 MAX_INPUT_BYTES = 16 * 1024 * 1024
+
+
+def _optional_issue_fix_content_ops_cli() -> Any | None:
+    try:
+        from ..issue_fix import content_ops_cli
+    except ModuleNotFoundError as exc:
+        if exc.name == "loopx.capabilities.issue_fix.content_ops_cli":
+            return None
+        raise
+    return content_ops_cli
 
 
 def _input_byte_limit(text: str) -> int:
@@ -184,7 +190,11 @@ def register_content_ops_commands(
         default="2026-06-23T00:00:00Z",
         help="Public-safe generated_at timestamp for the exploration plan.",
     )
-    register_content_ops_issue_fix_commands(content_ops_sub, add_subcommand_format)
+    issue_fix_cli = _optional_issue_fix_content_ops_cli()
+    if issue_fix_cli is not None:
+        issue_fix_cli.register_content_ops_issue_fix_commands(
+            content_ops_sub, add_subcommand_format
+        )
     observe_parser = content_ops_sub.add_parser(
         "observe-public-handle",
         help="Observe a public platform handle as metadata-only source_item_v0.",
@@ -584,7 +594,12 @@ def handle_content_ops_command(
         return _load_json_object(path_text, args.max_input_bytes)
 
     try:
-        issue_fix_result = handle_content_ops_issue_fix_command(args)
+        issue_fix_cli = _optional_issue_fix_content_ops_cli()
+        issue_fix_result = (
+            issue_fix_cli.handle_content_ops_issue_fix_command(args)
+            if issue_fix_cli is not None
+            else None
+        )
         if issue_fix_result is not None:
             payload, renderer = issue_fix_result
         elif args.content_ops_command in {"media", "generation", "image"}:

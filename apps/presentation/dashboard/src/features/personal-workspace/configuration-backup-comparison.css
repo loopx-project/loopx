@@ -1,0 +1,13 @@
+.personal-backup-comparison { display: grid; gap: 0.75rem; min-width: 0; margin-block: 1.25rem; }
+.personal-backup-comparison h3, .personal-backup-comparison h4, .personal-backup-comparison p { margin: 0; overflow-wrap: anywhere; }
+.personal-backup-files { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.personal-backup-files > * { min-width: 0; }
+.personal-backup-files label { display: grid; gap: 0.5rem; }
+.personal-backup-files input { max-width: 100%; }
+.personal-backup-comparison details { margin-block: 0.5rem; }
+.personal-backup-comparison summary { overflow-wrap: anywhere; cursor: pointer; }
+.personal-backup-comparison code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.personal-backup-comparison pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
+@media (max-width: 640px) { .personal-backup-files { grid-template-columns: minmax(0, 1fr); } }
+
+.personal-configuration-preview-digest { display: block; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }

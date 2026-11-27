@@ -179,7 +179,7 @@ def build_goal_start_contract(
                     "after PR creation verify reviewer-request, then monitor one PR state bucket"
                 ),
             }
-        },
+        } if issue_fix_commands else {},
         "connected_at_preview_time": connected,
         "stop_conditions": [
             "private material requested before a public-safe todo can be written",

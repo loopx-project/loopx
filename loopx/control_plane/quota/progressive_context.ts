@@ -14,6 +14,7 @@ import {quotaSummaryReferences, contextSourceIdentity, contextProjectionChanges,
   type ProjectionSourceValues} from "./diagnostic_projection.ts";
 import {encodeContextDelivery, fileNavigationPaths} from "./context_delivery.ts";
 import {capturedContextSelection} from "./context_selection.ts";
+import {SCOPED_OUTCOME_PROJECTION_MODE, SCOPED_OUTCOME_THRESHOLD} from "./turn_envelope_scoping.ts";
 import {createHash} from "node:crypto";
 
 
@@ -31,6 +32,24 @@ const MAX_INLINE_WORK_OPENING_BYTES = 7000;
 const SETTLEMENT_PLAN_PATH = ["interaction_contract", "cli_channel", "settlement_plan"];
 const REPLAN_CONTEXT_PATH = ["autonomous_replan_obligation", "replan_context"];
 const COMPLETE_REQUIREMENTS_CLAUSE = "This view retains complete requirements and current review/check states. ";
+const PROGRESSIVE_COMPLETE_REQUIREMENTS_CLAUSE =
+  "Read the complete acceptance basis, cumulative outcome requirements, work links and current review/check states. ";
+const EXPLORE_GRAPH_BOILERPLATE_KEYS = [
+  "result_writeback_option",
+  "result_writeback_inline_option",
+  "result_writeback_inline_field",
+  "result_attachment_schema",
+  "path_delta_attachment_schema",
+  "path_delta_attachment_template",
+  "linked_question_attachment_template",
+  "optional_question_evolution_example",
+  "optional_execution_observation_example",
+  "result_writeback_guidance",
+  "result_attachment_template",
+  "optional_measurement_example",
+  "record_node_template",
+  "record_finding_template",
+] as const;
 const pointer = (path: Path): string => path.length ? "/" + path.map(key =>
   String(key).replaceAll("~", "~0").replaceAll("/", "~1")).join("/") : "";
 const at = (root: unknown, path: Path): unknown => path.reduce<unknown>((row, key) =>
@@ -196,6 +215,9 @@ function reusableFirstReadFields(context: JsonObject, exactBody?: ReusableExactB
     }
     if (source?.kind === "agent_preferences")
       return [{path, freshKeys: ["ok", "revision", "instruction"], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
+    if (source?.kind === "decision_context" && content.ok === true && content.status === "read"
+        && typeof jsonObject(content.current)?.instructions === "string")
+      return [{path: [...path, "current", "instructions"], freshKeys: [], minimumBytes: MIN_REUSABLE_BODY_BYTES}];
     if (source?.source !== "goal_acceptance") return [];
     const outcomesPath = [...path, "goal_acceptance_contract", "outcome_requirements", "outcomes"];
     const outcomes = at(context, outcomesPath);
@@ -516,7 +538,13 @@ function inlineReadSections(request: JsonObject, required: JsonObject, exactBody
 /** Return paths instead of round-tripping the caller's JSON numeric values
  * through JS. The IO adapter performs only these typed-owner-selected edits. */
 export function progressiveContextPlan(request: JsonObject,
-    scopes: readonly PreparationScopeDetail[] = []): JsonObject {
+    scopes: readonly PreparationScopeDetail[] = [],
+    extraReferences: readonly JsonObject[] = []): JsonObject {
+  const includeGoalAcceptanceDetail = request.include_goal_acceptance_detail === undefined ? false
+    : requireBoolean(request.include_goal_acceptance_detail, "include_goal_acceptance_detail");
+  if (request.include_agent_todos_detail !== undefined) {
+    requireBoolean(request.include_agent_todos_detail, "include_agent_todos_detail");
+  }
   const payload = requireJsonObject(request.payload, "captured context");
   const deferred: JsonObject[] = [], instructions: JsonObject[] = [];
   const unchanged = {deferred, instructions};
@@ -525,25 +553,102 @@ export function progressiveContextPlan(request: JsonObject,
   if (request.surface !== "quota_packet" || payload.ok !== true || payload.schema_version !== undefined
       || payload.contract_binding !== undefined || payload.context_details !== undefined
       || payload.context_reference_instruction !== undefined) return unchanged;
-  const references = quotaSummaryReferences(payload);
-  const carriers: Path[] = [
-    ["planning_horizon", "core_goal", "acceptance_contract"],
-    ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"],
-    ["agent_todo_summary", "goal_acceptance_contract"],
+  const references = [...quotaSummaryReferences(payload), ...extraReferences];
+  const carriers: {path: Path; suggestedIds?: Set<string>}[] = [
+    {path: ["planning_horizon", "core_goal", "acceptance_contract"]},
+    {path: ["agent_todo_summary", "goal_acceptance_contract"]},
+    {path: ["autonomous_replan_obligation", "replan_context", "core_goal", "acceptance_contract"]},
   ];
+  const selectedTodo = jsonObject(payload.selected_todo);
+  const relevantTodoIds = new Set<string>(
+    [selectedTodo?.todo_id, selectedTodo?.unblocks_todo_id,
+      ...(Array.isArray(selectedTodo?.dependency_todo_ids) ? selectedTodo.dependency_todo_ids : []),
+      ...(Array.isArray(selectedTodo?.successor_todo_ids) ? selectedTodo.successor_todo_ids : [])]
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
+  const gapOutcomeIds = new Set<string>(
+    (Array.isArray(jsonObject(payload.goal_frontier_projection)?.acceptance_gaps)
+      ? jsonObject(payload.goal_frontier_projection)!.acceptance_gaps as unknown[] : [])
+      .map(gap => jsonObject(gap)?.outcome_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0),
+  );
   const agent = ["interaction_contract", "agent_channel"];
   const sourcePath = [...agent, "work_context", "sources"];
+  const agentChannel = jsonObject(at(payload, agent));
+  const agentRequiredReads = Array.isArray(agentChannel?.required_reads) ? agentChannel.required_reads : [];
+  const requiredCapabilities = new Set(
+    (Array.isArray(selectedTodo?.required_capabilities) ? selectedTodo.required_capabilities : [])
+      .filter((cap): cap is string => typeof cap === "string" && cap.length > 0),
+  );
+  const allowExploreGraphDeferral = !includeGoalAcceptanceDetail
+    && !requiredCapabilities.has("explore")
+    && payload.effective_action !== EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED
+    && payload.replan_action_packet == null;
   const sources = at(payload, sourcePath);
   if (Array.isArray(sources)) sources.forEach((value, i) => {
     const source = jsonObject(value), content = jsonObject(source?.content);
     if (source?.source === "goal_acceptance" && content?.ok !== false && content?.read_complete !== false
         && (content?.status === undefined || content.status === "loaded")
-        && (source.reason === undefined || typeof source.reason === "string" && source.reason.includes(FULL_OUTCOME_READ_GUIDANCE)))
-      carriers.push([...sourcePath, i, "content", "goal_acceptance_contract"]);
+        && (source.reason === undefined || typeof source.reason === "string" && source.reason.includes(FULL_OUTCOME_READ_GUIDANCE))) {
+      const outcomeCtx = jsonObject(content?.outcome_context);
+      const suggested = Array.isArray(outcomeCtx?.suggested_outcome_ids)
+        ? new Set(outcomeCtx.suggested_outcome_ids.filter((id): id is string => typeof id === "string" && id.length > 0))
+        : undefined;
+      carriers.push({path: [...sourcePath, i, "content", "goal_acceptance_contract"], suggestedIds: suggested});
+    }
+    const agenda = requiredManagerAgenda(value, agentRequiredReads);
+    if (agenda && Buffer.byteLength(JSON.stringify(agenda.items), "utf8") >= 2048) {
+      const agendaPath = [...sourcePath, i, "content", "unfinished_delegations"];
+      deferred.push({
+        path: [...agendaPath, "items"],
+        parent: agendaPath,
+        index_key: "supporting_material_pointer",
+        read_instruction: "Full unfinished delegation request rows remain in the required manager-inbox read and at unfinished_delegations/items via context_details. ",
+      });
+    }
+    const graph = jsonObject(content?.graph);
+    if (allowExploreGraphDeferral && source?.kind === "explore_turn_context" && content?.ok === true
+        && content?.graph_enabled === true && graph) {
+      const graphPath = [...sourcePath, i, "content", "graph"];
+      let graphDeferred = false;
+      if (Array.isArray(graph.writeback_results) && graph.writeback_results.length > 0
+          && Buffer.byteLength(JSON.stringify(graph.writeback_results), "utf8") >= 1024) {
+        deferred.push({path: [...graphPath, "writeback_results"], parent: graphPath, index_key: "supporting_material_pointer"});
+        graphDeferred = true;
+      }
+      if (Array.isArray(graph.measurement_feedback) && graph.measurement_feedback.length > 0
+          && (!Array.isArray(graph.work_yardsticks) || graph.work_yardsticks.length === 0)
+          && Buffer.byteLength(JSON.stringify(graph.measurement_feedback), "utf8") >= 1024) {
+        deferred.push({path: [...graphPath, "measurement_feedback"], parent: graphPath, index_key: "supporting_material_pointer"});
+        if (typeof graph.measurement_guidance === "string") {
+          deferred.push({path: [...graphPath, "measurement_guidance"], parent: graphPath, index_key: "supporting_material_pointer"});
+        }
+        graphDeferred = true;
+      }
+      if (typeof graph.result_writeback_guidance === "string"
+          && Buffer.byteLength(graph.result_writeback_guidance, "utf8") >= 1024) {
+        for (const key of EXPLORE_GRAPH_BOILERPLATE_KEYS) {
+          if (Object.hasOwn(graph, key)) {
+            deferred.push({path: [...graphPath, key], parent: graphPath, index_key: "supporting_material_pointer"});
+          }
+        }
+        graphDeferred = true;
+      }
+      if (graphDeferred) {
+        deferred.at(-1)!.read_instruction = "Deferred Explore history and authoring templates remain readable at graph.supporting_material_pointer children or via explore turn-context. ";
+      }
+    }
   });
-  for (const carrier of carriers) {
+  let deferredHistoricalRequirements = false;
+  for (const {path: carrier, suggestedIds} of carriers) {
     const path = [...carrier, "outcome_requirements"], declaration = jsonObject(at(payload, path));
     if (declaration?.schema_version !== GOAL_OUTCOMES_SCHEMA || !Array.isArray(declaration.outcomes)) continue;
+    const isReplanObligationCarrier = carrier[0] === "autonomous_replan_obligation"
+      && payload.effective_action === EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED;
+    const deferLargeHistoricalOutcomes = !includeGoalAcceptanceDetail
+      && !isReplanObligationCarrier
+      && declaration.outcomes.length > SCOPED_OUTCOME_THRESHOLD
+      && declaration.projection_mode !== SCOPED_OUTCOME_PROJECTION_MODE;
     declaration.outcomes.forEach((value, i) => {
       const row = jsonObject(value);
       if (!row || !known(row, ["id", "owner_agent_id", "declaration_owner_agent_id", "objective", "revision", "requirements", "todo_ids", "sources", "basis_digest", "work"])
@@ -560,8 +665,9 @@ export function progressiveContextPlan(request: JsonObject,
             || typeof requirement.id !== "string" || typeof requirement.description !== "string") return;
         if (requirement.agent_review === undefined) continue;
         const review = jsonObject(requirement.agent_review);
-        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_current", "independently_verified"])
+        if (!review || !known(review, ["id", "recorded_for_agent_id", "conclusion", "note", "evidence_refs", "basis_digest", "basis_current", "independently_verified"])
             || (review.recorded_for_agent_id !== undefined && !isGoalOutcomeIdentifier(review.recorded_for_agent_id))
+            || (review.basis_digest !== undefined && typeof review.basis_digest !== "string")
             || typeof review.note !== "string" || !Array.isArray(review.evidence_refs)
             || review.evidence_refs.some(ref => typeof ref !== "string")
             || !["met", "unmet", "uncertain"].includes(String(review.conclusion))
@@ -570,11 +676,28 @@ export function progressiveContextPlan(request: JsonObject,
       }
       const parent = [...path, "outcomes", i];
       const index_key = "supporting_material_pointer";
+      const isActiveOutcome = suggestedIds?.has(row.id) === true
+        || gapOutcomeIds.has(row.id)
+        || (Array.isArray(row.todo_ids) && row.todo_ids.some(id => typeof id === "string" && relevantTodoIds.has(id)));
+      if (deferLargeHistoricalOutcomes && !isActiveOutcome) {
+        if (row.sources.length) deferred.push({path: [...parent, "sources"], parent, index_key});
+        if (row.requirements.length) {
+          deferred.push({path: [...parent, "requirements"], parent, index_key});
+          deferredHistoricalRequirements = true;
+        }
+        return;
+      }
       if (row.sources.length) deferred.push({path: [...parent, "sources"], parent, index_key});
       for (const j of reviews) for (const field of ["note", "evidence_refs"])
         deferred.push({path: [...parent, "requirements", j, "agent_review", field], parent, index_key});
     });
   }
+  const progressiveOutcomeGuidance = deferredHistoricalRequirements
+    ? PROGRESSIVE_OUTCOME_READ_GUIDANCE.replace(
+        PROGRESSIVE_COMPLETE_REQUIREMENTS_CLAUSE,
+        "Read the complete acceptance basis, work links and current review/check states. Active/suggested outcomes retain complete requirements here; historical non-selected outcome requirements remain in context_details (read via supporting_material_pointer before dependent work). ",
+      )
+    : PROGRESSIVE_OUTCOME_READ_GUIDANCE;
   // Replace only the exact source-owned obligation. Other merged obligations,
   // objective adoption, unknown provider prose and pending reads remain intact.
   for (const listPath of deferred.length ? [sourcePath, [...agent, "required_reads"]] : []) {
@@ -585,7 +708,20 @@ export function progressiveContextPlan(request: JsonObject,
       if (row?.source === "goal_acceptance" && typeof row.reason === "string"
           && row.reason.includes(FULL_OUTCOME_READ_GUIDANCE))
         instructions.push({path: [...listPath, i, "reason"], value:
-          row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, PROGRESSIVE_OUTCOME_READ_GUIDANCE)});
+          row.reason.replace(FULL_OUTCOME_READ_GUIDANCE, progressiveOutcomeGuidance)});
+    });
+  }
+  const deferredDetails = jsonObject(at(payload, ["deferred_settlement_details"]));
+  if (deferredDetails !== null) {
+    const hasGoalAcceptance = Object.hasOwn(deferredDetails, "goal_acceptance");
+    const hasOptionalAttachments = Object.hasOwn(deferredDetails, "optional_attachments");
+    deferred.push({
+      path: ["deferred_settlement_details"],
+      read_instruction: hasGoalAcceptance
+        ? (hasOptionalAttachments
+          ? "Admission-time goal_acceptance outcomes and optional settlement attachment details stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command / optional_attachments[].cold_read_command for live inspection."
+          : "Admission-time goal_acceptance outcomes stay in the original capture; use outcome_requirements.capture_read_command for immutable baseline readback, or cold_read_command for live inspection.")
+        : "Complete optional settlement attachment details stay in the original capture; use optional_attachments[].cold_read_command when needed.",
     });
   }
   for (const scope of scopes) {
@@ -603,7 +739,12 @@ export function progressiveContextPlan(request: JsonObject,
 const pathStartsWith = (path: Path, start: Path) => start.every((key, i) => path[i] === key);
 
 function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSourceValues,
-    plan = progressiveContextPlan({payload: request.context, surface: request.surface})):
+    plan = progressiveContextPlan({
+      payload: request.context,
+      surface: request.surface,
+      ...(request.include_goal_acceptance_detail === undefined ? {} : {include_goal_acceptance_detail: request.include_goal_acceptance_detail}),
+      ...(request.include_agent_todos_detail === undefined ? {} : {include_agent_todos_detail: request.include_agent_todos_detail}),
+    })):
     {context: JsonObject; tokens: [Path, string][]; projected: boolean} {
   const original = requireJsonObject(request.context, "current projection");
   const staged = jsonObject(plan.staged_context);
@@ -673,6 +814,12 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
       });
       const sourcePath: Path = ["interaction_contract", "agent_channel", "work_context", "sources"];
       const sources = at(context, sourcePath);
+      const hasDeferredOutcomeRequirements = deferred.some(
+        edit => Array.isArray(edit.path) && edit.path.at(-1) === "requirements",
+      );
+      const requirementsClause = hasDeferredOutcomeRequirements
+        ? "Active/suggested outcomes retain complete requirements and current review/check states here; historical non-selected outcome requirements are supporting material in this same capture (append /requirements alongside supporting_material_pointer or use unread_context_index.pointers). "
+        : COMPLETE_REQUIREMENTS_CLAUSE;
       required.context_details = {path: details.path, sha256: details.sha256,
         ...(typeof details.command_template === "string" ? {command_template: details.command_template} : {}),
         source_path: details.path,
@@ -688,7 +835,7 @@ function requiredNativeContext(request: JsonObject, sourceValues: ProjectionSour
         }) : [],
       },
       instruction: deferred.map(edit => typeof edit.read_instruction === "string" ? edit.read_instruction : "").join("")
-        + COMPLETE_REQUIREMENTS_CLAUSE
+        + requirementsClause
         + "Source history, review reasoning and evidence references are supporting material. "
         + "Read them from this same immutable capture when a decision, verification or review depends on them. "
         + "Use the outcome's supporting_material_pointer when shown, or remove /id from its selected JSON pointer. "
@@ -1126,8 +1273,10 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
   // remains disabled while that review is being settled.
   const replanningBeforeWork = replanRequired && context.ok === true && context.should_run === true
     && cli?.spend_allowed_now === false;
-  const requiredInboxReads = (normalWork || replanningBeforeWork) && channel?.must_attempt === true
-    && Array.isArray(channel.required_reads)
+  const recoveryReads = context.effective_action === EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY
+    && context.ok === true && Array.isArray(channel?.required_reads);
+  const requiredInboxReads = ((normalWork || replanningBeforeWork) && channel?.must_attempt === true || recoveryReads)
+    && Array.isArray(channel?.required_reads)
     ? channel.required_reads : [];
   const sources = object(channel?.work_context)?.sources;
   const sourceRows = Array.isArray(sources) ? sources.map((source, index) => ({source, index})) : [];
@@ -1248,7 +1397,23 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       && suggested.every(id => typeof id === "string"
         && outcomes.filter(value => object(value)?.id === id).length === 1);
     const expanded = new Set(expand ? suggested as string[] : []);
-    const outcomesPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements", "outcomes"];
+    const requirementsPath = [...source, "content", "goal_acceptance_contract", "outcome_requirements"];
+    if (requirements?.projection_mode === SCOPED_OUTCOME_PROJECTION_MODE) {
+      for (const field of [
+        "schema_version", "revision", "outcome_revision", "current_lifetime",
+        "projection_mode", "full_outcome_count", "inline_outcome_count",
+        "compacted_outcome_count", "full_outcomes_sha256",
+        "capture_read_command", "cold_read_command", "cold_read_instruction",
+      ]) {
+        if (Object.hasOwn(requirements, field)) include(...requirementsPath, field);
+      }
+    }
+    const outcomesPath = [...requirementsPath, "outcomes"];
+    const hasContainerOutcomeReadCommands = requirements?.projection_mode === SCOPED_OUTCOME_PROJECTION_MODE
+      && typeof requirements.capture_read_command === "string"
+      && typeof requirements.cold_read_command === "string"
+      && typeof requirements.cold_read_instruction === "string"
+      && Array.isArray(outcomes) && outcomes.length > SCOPED_OUTCOME_THRESHOLD;
     const canDeferSuggested = openingBudget !== undefined && readyIdentity !== undefined && expanded.size > 0
       && inlineSupportingDetails && details?.outcome_support_from_id === true
       && details.path === supportingSource?.path && details.sha256 === supportingSource?.sha256
@@ -1267,7 +1432,13 @@ function initialContextReadGroups(context: JsonObject, decisionFields: readonly 
       const row = object(_outcome), outcomeId = row?.id;
       const suggested = typeof outcomeId === "string" && expanded.has(outcomeId);
       if (suggested && !deferSuggested) { include(...outcome); return; }
+      if (row?.summary_only === true && hasContainerOutcomeReadCommands) return;
       include(...outcome, "id");
+      if (row?.summary_only === true) {
+        for (const key of ["owner_agent_id", "basis_digest", "revision", "todo_count", "summary_only", "capture_read_command", "read_modes", "cold_read_command"]) {
+          if (Object.hasOwn(row, key)) include(...outcome, key);
+        }
+      }
       if (suggested) {
         include(...outcome, "objective");
         include(...outcome, "revision");

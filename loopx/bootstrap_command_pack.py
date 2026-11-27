@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -384,6 +385,7 @@ def build_start_goal_host_surface_selection_packet(
 ) -> dict[str, Any]:
     """Fail closed when the caller has not identified the current Codex host."""
 
+    _require_goal_capability_route(capability_route)
     resolved_project = str(_resolve_project(project))
     registry_path = Path(resolved_project) / ".loopx" / "registry.json"
     registry_payload, _registry_error = _read_registry(registry_path)
@@ -410,7 +412,7 @@ def build_start_goal_host_surface_selection_packet(
         "agy": "agy CLI loop (/goal + schedule wakes)",
         "antigravity-app": "Antigravity App (schedule + sidecar)",
         "kiro-cli": "Kiro CLI loop via the LoopX skill facade; native /goal iteration budget",
-        "deepseek-harness": "DeepSeek Harness automation loop through loopx.dsh_goal_mode (compat: scripts/dsh_turn_host_adapter.py)",
+        "deepseek-harness": "DeepSeek Harness automation loop through loopx.hosts.dsh (compat: scripts/dsh_turn_host_adapter.py)",
         "deepseek-harness-native": "DeepSeek Harness same-session LoopX skill and plugin driver",
         "ark-managed-agent": "Ark Managed Agent with one-shot Goal submission",
         "shell": "manual shell or an explicitly configured external scheduler",
@@ -825,16 +827,30 @@ def _project_command(project: str, command: str) -> str:
     return "\n".join([f"cd {shell_arg_for_host(project)}", command])
 
 
-def _selected_goal_capability_route(
-    capability_route: str | None,
-) -> dict[str, Any] | None:
+class GoalCapabilityUnavailable(ValueError):
+    """The caller selected a workflow missing from this installation."""
+
+
+def _require_goal_capability_route(capability_route: str | None) -> None:
     if capability_route is None:
-        return None
+        return
     if capability_route not in START_GOAL_CAPABILITY_ROUTES:
         raise ValueError(
             "unsupported --capability-route; expected one of: "
             + ", ".join(START_GOAL_CAPABILITY_ROUTES)
         )
+    from .capabilities.issue_fix.catalog_entry import ISSUE_FIX_INSTALL_HINT, issue_fix_workflow_installed
+
+    if not issue_fix_workflow_installed():
+        raise GoalCapabilityUnavailable(ISSUE_FIX_INSTALL_HINT)
+
+
+def _selected_goal_capability_route(
+    capability_route: str | None,
+) -> dict[str, Any] | None:
+    if capability_route is None:
+        return None
+    _require_goal_capability_route(capability_route)
     from .capabilities.issue_fix.candidate_preflight import candidate_preflight_input_contract
 
     return {
@@ -876,6 +892,14 @@ def _selected_goal_capability_route(
 
 
 
+def _goal_issue_fix_commands(
+    *, capability_route: str | None, cli_bin: str, goal_id: str, agent_id: str = "<agent-id>",
+) -> dict[str, str]:
+    if capability_route is None and find_spec("loopx.cli") is None:
+        return {}
+    return build_issue_fix_goal_command_templates(cli_bin=cli_bin, goal_id=goal_id, agent_id=agent_id)
+
+
 def build_loopx_bootstrap_command_pack(
     *,
     project: Path,
@@ -909,9 +933,9 @@ def build_loopx_bootstrap_command_pack(
     normalized_goal_text = " ".join(goal_text.split()) if goal_text else None
     normalized_thread_id = normalize_thread_id(thread_id)
     explicit_goal_start = bool(normalized_goal_text)
-    issue_fix_hint_commands = build_issue_fix_goal_command_templates(
-        cli_bin=cli_bin,
-        goal_id="<goal-id>",
+    selected_capability_route = _selected_goal_capability_route(capability_route)
+    issue_fix_hint_commands = _goal_issue_fix_commands(
+        capability_route=capability_route, cli_bin=cli_bin, goal_id="<goal-id>",
     )
     registry_path = Path(str(inspection["registry"]))
     registry_goal = next(
@@ -987,7 +1011,8 @@ def build_loopx_bootstrap_command_pack(
     thread_binding_projection = {"status": thread_binding.get("status")}
     if thread_binding.get("agent_id"):
         thread_binding_projection["agent_id"] = thread_binding["agent_id"]
-    issue_fix_commands = build_issue_fix_goal_command_templates(
+    issue_fix_commands = _goal_issue_fix_commands(
+        capability_route=capability_route,
         cli_bin=cli_bin,
         goal_id=resolved_goal_id,
         agent_id=str(selected_agent_id) if selected_agent_id else "<agent-id>",
@@ -1115,9 +1140,7 @@ def build_loopx_bootstrap_command_pack(
         "recommended_next_step": recommended_next_step,
         "goal_start_contract": build_goal_start_contract(
             goal_text=normalized_goal_text,
-            selected_capability_route=_selected_goal_capability_route(
-                capability_route
-            ),
+            selected_capability_route=selected_capability_route,
             connected=connected,
             agent_type=agent_type,
             issue_fix_commands=issue_fix_hint_commands,
@@ -1259,9 +1282,9 @@ def _build_multi_goal_start_selection_packet(
         registry_path=registry_path,
         runtime_root_arg=runtime_root_arg,
     )
-    issue_fix_commands = build_issue_fix_goal_command_templates(
-        cli_bin=cli_bin,
-        goal_id="<selected-goal-id>",
+    selected_capability_route = _selected_goal_capability_route(capability_route)
+    issue_fix_commands = _goal_issue_fix_commands(
+        capability_route=capability_route, cli_bin=cli_bin, goal_id="<selected-goal-id>",
     )
     choices: list[dict[str, Any]] = []
     for goal in goals:
@@ -1352,9 +1375,7 @@ def _build_multi_goal_start_selection_packet(
         "recommended_next_step": recommended_next_step,
         "goal_start_contract": build_goal_start_contract(
             goal_text=normalized_goal_text,
-            selected_capability_route=_selected_goal_capability_route(
-                capability_route
-            ),
+            selected_capability_route=selected_capability_route,
             connected=True,
             agent_type=agent_type_for_host_surface(host_surface),
             issue_fix_commands=issue_fix_commands,

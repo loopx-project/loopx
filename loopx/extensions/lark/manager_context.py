@@ -94,6 +94,25 @@ def manager_failure_reply(
             observed = "期间原生助手记录了调用错误。" if type(count) is int and count > 0 else ""
             return code, (f"本次未能完成：{label}。{observed}"
                           "没有生成完整答复，本次请求不会自动重放。")
+    native_active = any(
+        event.get("kind") == "agent.phase"
+        and (
+            event.get("payload", {}).get("phase") == "native_conversation_active"
+            or event.get("payload", {}).get("method") == "native/cascade_active"
+        )
+        for event in events
+    )
+    if code == "resume_failed" and native_active:
+        if preparation_recovery:
+            return code, (
+                "已收到你的消息，但原 Antigravity 会话仍在处理其他任务，暂未注入本条输入。"
+                "请求已保留；待原会话空闲且没有后续重交时，原队列会自动按顺序接续回复"
+                "（也可在 Antigravity 中手动停止后重试）。可用 /status 查看状态。"
+            )
+        return code, (
+            "已收到你的消息，但原 Antigravity 会话仍在处理其他任务，本次未能注入。"
+            "请等待该会话空闲或在 Antigravity 中手动停止后重试。可用 /status 查看状态。"
+        )
     if code == "manager_authorization_unavailable" and preparation_recovery:
         return code, ("已收到你的消息，但本轮在准备授权上下文时失败。请求已保留；只有核验为模型调用前失败、"
                       "连接恢复且没有后续重交时，原队列才会限次接续。可用 /status 查看状态。")

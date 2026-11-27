@@ -11,10 +11,10 @@ Current groups:
   registration, extension packaging, readiness, and lifecycle boundaries.
 - [Project skill delivery](../../loopx/capabilities/project_skill_delivery/README.md): release-owned,
   project-local skill discovery and managed-copy lifecycle.
-- [PostgreSQL authority service admission v0](postgresql-authority-service-v0.md): opt-in
-  authentication, tenant authorization, and restore-incarnation rotation.
-- [Remote authority task service v0](remote-authority-task-service-v0.md): candidate
-  HTTPS task commands, scoped identity policy and durable receipt recovery.
+- [Remote authority client wire contract v0](../../loopx/control_plane/coordination/remote_authority_contract.ts):
+  Apache-2.0 outbound HTTPS task-command wire contract and TLS client in `loopx`
+  (server-side PostgreSQL authority and multi-tenant coordination live in
+  `loopx-project/loopx-cloud`).
 - [Usage ping](usage-ping.md): default-on basic usage statistics, disclosure/opt-out and exact
   payload, opt-out switches, and the published active-installation counts.
 

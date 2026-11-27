@@ -178,24 +178,32 @@ the CI, local/manual, and release-only boundaries.
 Only two checks block a merge:
 
 - `Sign-off`, the DCO check;
-- `merge-gate`, which aggregates the Python Tests workflow.
+- `merge-gate`, which aggregates the Python Tests workflow under a two-tier
+  lightweight-PR / heavy-nightly plan (agents and subagents do not wait on or
+  poll remote CI once local deterministic verification and `wait_for_ci=false`
+  exact-head review pass; see
+  [testing and quality](docs/development/testing-and-quality.md#local-first-premerge-gate-vs-asynchronous-ci--本地优先门禁与异步-ci)).
 
 `merge-gate` stays green only when these Python Tests jobs succeed or were
-correctly skipped for your paths: `checks`, `pytest`,
+correctly skipped for your tier/paths: `checks`, `pytest`,
 `node-minimum-compatibility`, `stage2c-correctness-e2e`, `windows-powershell`,
-and `presentation`. The other workflows are path-filtered, advisory, or do not
-run on pull requests. If an advisory workflow fails on a path you did not
-touch, mention it in the PR instead of fixing it there.
+and `presentation`. Normal backend PRs run fast static, contract, and TypeScript
+checks while deferring unrelated browser suites and heavy matrices (6-shard
+`pytest`, `node-minimum-compatibility`, `stage2c-correctness-e2e`,
+`windows-powershell`) to Nightly `schedule`, `main` pushes, `merge_group`,
+`ci:full` PRs, and CI-policy/manifest changes. The other workflows are
+narrowly path-filtered, scheduled nightly, advisory, or manual. If an advisory
+workflow fails on a path you did not touch, mention it in the PR instead of
+fixing it there.
 
 | Workflow file | Runs on a PR | Blocks merge | What it checks |
 | --- | --- | --- | --- |
-| `python-tests.yml` | every PR | yes (`merge-gate`) | lint, mypy, sharded pytest, TypeScript core and coverage, minimum Node.js, Windows PowerShell, dashboard presentation |
+| `python-tests.yml` | every PR (tiered: lightweight PR vs full nightly/`main`/`merge_group`/`ci:full`) | yes (`merge-gate`) | fast lint, mypy, kernel contracts, TypeScript core/coverage on PRs; browser lanes on UI changes; full 6-shard pytest, minimum Node.js, Windows PowerShell, Stage 2C on full runs |
 | `dco.yml` | every PR | yes (`Sign-off`) | `Signed-off-by` on contribution commits; verified GitHub-generated two-parent merges are exempt |
 | `ci-maintenance.yml` | opened, reopened, edited, updated or closed PR (`pull_request_target`, trusted base code only) | no | inspects potential stale PR comparisons without mutating the head or target; cancels obsolete Python qualification runs after rechecking the PR and source branch |
 | `dependency-review.yml` | every PR | no | dependency changes introduced by the PR |
-| `postgresql-integration.yml` | control-plane or npm lockfile paths | no | PostgreSQL authority store and service on a temporary instance |
-| `package-smoke.yml` | `loopx-core` and extension package paths | no | `loopx-core` and extension packages install, entrypoints, and example schemas |
-| `release-artifacts.yml` | `loopx/`, packaging, and lockfile paths | no | release identity and a release build from this source |
+| `package-smoke.yml` | `packages/**`, distribution tests, extension entrypoints, and `pyproject.toml` (plus `main` push and nightly schedule) | no | `loopx-core` and extension packages install, entrypoints, and example schemas |
+| `release-artifacts.yml` | release, installer, packaging metadata, and browser recovery paths (plus `release` and read-only nightly schedule) | no | release identity and a release build from this source |
 | `runtime-snapshots.yml` | runtime artifact, installer, and updater paths | no | qualified, revision-addressed runtime archives and the main channel pointer |
 | `ark-turn.yml` | Turn driver and collaboration paths | no | optional Ark Turn package, stdio MCP, and DSH parity |
 | `memt-turn.yml` | optional MemT package, Turn driver, lock, and packaging paths | no | explicit optional dependency installation, complete adapter workflow, stdio MCP, and driver binding |

@@ -36,7 +36,13 @@ def main() -> int:
         raise RuntimeError(
             f"missing CLI output budget test: {TEST_PATH.relative_to(REPO_ROOT)}"
         )
-    _run_budget_checks()
+    import tempfile
+
+    from tests.control_plane.cli_output_fixture import isolated_probe_host_env
+
+    with tempfile.TemporaryDirectory(prefix="loopx-budget-smoke-home-") as temp_home:
+        with isolated_probe_host_env(Path(temp_home) / "home"):
+            _run_budget_checks()
     completed = subprocess.run(
         [sys.executable, str(DIFFERENTIAL_SMOKE.relative_to(REPO_ROOT))],
         cwd=REPO_ROOT,

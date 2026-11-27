@@ -113,6 +113,7 @@ change touches.
 | `capture.py` | Opt-in source-reference capture and `capture-status` |
 | `capture_recovery.py` | Reference-preserving capture diagnosis and recovery |
 | `extension_provider.py` | Advisory context provider delivered by an extension (`decision_context_advisory_provider_v0`) |
+| `turn_start_hook.py` | Opt-in host-local Agent turn-start hook binding and public-safe freshness/change view |
 | `architecture.py` | `architecture` readback of the capability contract |
 | `catalog_entry.py` | Capability catalog record |
 | `cli.py` | Every `loopx decision-context` subcommand and its rendering |
@@ -546,6 +547,41 @@ ticked within `max(2 × interval, interval + 600s)` (for example a scheduler sti
 pointing at a deleted checkout), when the last tick failed, when the spool is
 gone, or when a recorded source is stale or failing. Remove the record of a
 deliberately retired host.
+
+### Opt-in Host-Local Turn-Start Hook Binding
+
+Decision Context remains **default off** on `quota should-run` and `turn run-once`.
+Untouched runtimes and unbound Agents make zero provider or RPC calls. An operator
+can explicitly bind a registered `(goal_id, agent_id)` lane to an existing private
+profile through the transactional host-local binding store under
+`<runtime-root>/decision-context/agent-bindings/`:
+
+```bash
+loopx decision-context hook read \
+  --goal-id <goal-id> --agent-id <agent-id> --format json
+
+loopx decision-context hook bind \
+  --goal-id <goal-id> --agent-id <agent-id> \
+  --profile <private-profile.json> \
+  [--cursor-state <reviewed-cursors.json>] \
+  [--spool <private-capture.sqlite>] \
+  [--mode prepare_evidence|source_manifest|capture_status] \
+  --expected-revision none --operation-id bind-ops-v1 \
+  --execute --format json
+```
+
+Once bound, `quota should-run` and `turn run-once` invoke the read-only
+`decision_context.turn_context` hook (`capability_id=decision-context`) and deliver
+a public-safe `decision_context_hook_view_v1` summary (`changed_source_ids`,
+`alerted_source_ids`, `uncovered_p0_source_ids`, `freshness_counts`, advisory
+recall health, and bounded follow-up commands) into `work_context.sources`.
+Private file paths, cursors, and source bodies never enter the hook receipt or
+turn packet, and turn-start observations never commit cursors. While bound,
+read-only CLI commands (`inspect-profile`, `source-manifest`, `prepare-evidence`,
+`recall-context`, `capture-status`) can omit `--profile` (and `--cursor-state` /
+`--spool`) to resolve the bound private locators in-process. Use `hook unbind`
+with the current `--expected-revision` to retire the binding and invalidate
+cached turn assumptions.
 
 ## Relationship To Other Capabilities
 

@@ -5,12 +5,10 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {spawnSync} from "node:child_process";
 import test, {type TestContext} from "node:test";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {prepareCoordinationProjectionCommit, validateCoordinationTodoReadModel} from "../../loopx/control_plane/coordination/coordination_projection.ts";
 import {openLocalAuthorityStore, selectLocalSqliteAuthority} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
@@ -202,37 +200,18 @@ async function update(store: AuthorityStore, todoId: string, patch: JsonObject) 
     mutations: [{kind: "todo_upsert", todo: previous ? {...previous, ...patch} : patch}]}));
   assert.equal(result.status, "applied");
 }
-const providers = ["file", "sqlite", "postgresql"] as const;
+const providers = ["file", "sqlite"] as const;
 // Developer runtimes outside the supported Node range may lack the WAL-reset
 // driver. CI asserts SQLite qualification and runs every provider row.
 const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
 async function fixture(t: TestContext, provider: typeof providers[number]): Promise<AuthorityStore> {
-  if (provider !== "postgresql") {
-    const dir = await mkdtemp(join(tmpdir(), "goal-acceptance-"));
-    t.after(() => rm(dir, {recursive: true, force: true}));
-    return provider === "file" ? new FileAuthorityStore(dir, goal) : new SqliteAuthorityStore(dir, goal);
-  }
-  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 4});
-  const db = {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }};
-  const tenant = `acceptance-${randomUUID()}`;
-  t.after(async () => {
-    try {
-      for (const table of ["authority_commits", "authority_heads"]) {
-        await pool.query(`DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1 AND goal_id=$2`, [tenant, goal]);
-      }
-    } finally { await pool.end(); }
-  });
-  await installPostgreSqlAuthorityStoreSchema(db, `postgresql:${"b".repeat(32)}`);
-  return new PostgreSqlAuthorityStore(db, {tenant_id: tenant, goal_id: goal});
+  const dir = await mkdtemp(join(tmpdir(), "goal-acceptance-"));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  return provider === "file" ? new FileAuthorityStore(dir, goal) : new SqliteAuthorityStore(dir, goal);
 }
 
 for (const provider of providers) {
-  const options = {skip: (provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL) ||
-    (provider === "sqlite" && !sqliteQualified)};
+  const options = {skip: provider === "sqlite" && !sqliteQualified};
   test(`${provider}: a scoped reviewed plan survives unrelated progress with exact native replay`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const doc = {...document(), scope: {kind: "selected_work", todo_ids: ["todo_first"]},
@@ -988,7 +967,7 @@ test("legacy omitted scope preserves document bytes, bindings and global admissi
 
 for (const provider of providers) {
   test(`${provider}: exact stale-declaration restoration preserves owner authority and lease lineage`,
-    {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL || provider === "sqlite" && !sqliteQualified}, async t => {
+    {skip: provider === "sqlite" && !sqliteQualified}, async t => {
       const {executeCoordinationTodoUpdate} = await import("../../loopx/control_plane/coordination/todo_update.ts");
       const store = await fixture(t, provider);
       const wait = "resume_at:2020-01-01T00:00:00Z";

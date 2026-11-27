@@ -405,6 +405,8 @@ def render_loopx_bootstrap_command_pack_markdown(payload: dict[str, Any]) -> str
     goal_start = _dict_field(payload, "goal_start_contract")
     activation = _dict_field(payload, "host_loop_activation")
     ordering = _dict_field(goal_start, "priority_ordering")
+    issue_fix_command = commands.get("issue_fix_workflow_plan_template")
+    issue_fix_block = f"\n```bash\n{issue_fix_command}\n```\n" if issue_fix_command else ""
     return f"""# /loopx Bootstrap Command Pack
 
 Canonical slash command: `{payload.get("slash_command")}`
@@ -472,11 +474,7 @@ Supported forms: `/loopx`, `/loopx <goal text>`
 ```bash
 {commands.get("goal_start_connect_if_needed", "")}
 ```
-
-```bash
-{commands.get("issue_fix_workflow_plan_template", "")}
-```
-
+{issue_fix_block}
 ## Safety Contract
 
 - read_only: `{payload.get("read_only")}`

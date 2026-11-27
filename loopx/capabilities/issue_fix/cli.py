@@ -1286,7 +1286,13 @@ def _resolve_outcome_delivery_evidence(
         return delivery_evidence, None
 
     existing_delivery = feasibility_packet.get("delivery_evidence")
-    existing_compact = compact_issue_fix_delivery_evidence(existing_delivery) if isinstance(existing_delivery, dict) else None
+    existing_compact = (
+        compact_issue_fix_delivery_evidence(
+            existing_delivery, allow_legacy_empty_containers=True
+        )
+        if isinstance(existing_delivery, dict)
+        else None
+    )
     if _comparable_delivery_evidence(existing_compact) == _comparable_delivery_evidence(delivery_evidence):
         if isinstance(existing_delivery, dict):
             delivery_evidence = existing_delivery
@@ -1407,6 +1413,10 @@ def _handle_outcome(args: argparse.Namespace, *, generated_at: str) -> tuple[Pay
         feasibility_observation=feasibility_observation,
         generated_at=generated_at,
     )
+    allow_persisted_empty = not args.delivery_evidence_json or (
+        isinstance(domain_state_write, dict)
+        and domain_state_write.get("status") == "unchanged"
+    )
     payload: Payload = build_issue_fix_outcome_projection(
         goal_id=args.goal_id,
         feasibility_packet=feasibility_packet,
@@ -1414,6 +1424,7 @@ def _handle_outcome(args: argparse.Namespace, *, generated_at: str) -> tuple[Pay
         delivery_evidence_input=delivery_evidence,
         agent_id=args.agent_id,
         generated_at=generated_at,
+        allow_legacy_empty_containers=allow_persisted_empty,
     )
     if args.write_repository_memory and provider_path is not None:
         _apply_outcome_repository_memory_writeback(

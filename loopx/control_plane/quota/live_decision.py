@@ -1,196 +1,105 @@
 from __future__ import annotations
-from .effective_action import EffectiveAction
 
-import os
-import shlex
-from collections.abc import Callable, Mapping, Sequence
-from functools import partial
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import cast
 
-from ...quota import build_quota_should_run
-from ...agent_registry import load_goal_from_registry, registered_agent_ids_for_goal
-from ...command_invocation import (
-    current_loopx_cli_argv,
-    loopx_cli_argv,
-    resolve_command_path,
+from ...agent_registry import (
+    registered_agent_ids_for_goal as registered_agent_ids_for_goal,
 )
-from ..agent_context import project_agent_context, project_goal_agent_context
-from ..agents.identity import build_quota_agent_identity
-from ..runtime.time import now_utc_iso
-from ..goals.activation import goal_owner_resume_id
-from ..goals.goal_frontier.fallback_source import live_fallback_authority_items
+from ...quota import build_quota_should_run as build_quota_should_run
 from ..capability_hooks import (
     InteractionProjectionHookRegistration,
     TurnStartContextProjector,
     dispatch_interaction_projection_hooks,
 )
-from .effect_program import (
-    ReceiptBoundReplayPhase,
-    is_turn_reference,
-    turn_reference,
-)
-from .blocked_retry import overlay_active_turn_retries
-from .settlement import (
-    QuotaSettlementReadback,
-    attach_settlement_progress,
-    read_heartbeat_settlement,
-)
-from ..work_items.interaction_contract import build_interaction_contract
+from ..scheduler.execution_context import SchedulerExecutionContextResolution
+from ..scheduler.scheduler_hint import build_scheduler_hint
+from ..scheduler.state import load_app_automation_scheduler_state
+from ..todos.contract import normalize_todo_id
 from ..work_items.action_portfolio import reconcile_retained_action_selection
 from ..work_items.autonomous_replan_obligation import (
     replan_obligation_id_from_packet,
 )
-from ..todos.contract import normalize_todo_id
-from ..scheduler.arbitration import SchedulerArbitration
-from ..scheduler.execution_context import (
-    SchedulerExecutionContextResolution,
-    resolve_scheduler_execution_context,
+from ..work_items.interaction_contract import (
+    build_interaction_contract as build_interaction_contract,
 )
-from ..scheduler.scheduler_hint import build_scheduler_hint
-from ..scheduler.state import load_app_automation_scheduler_state
+from .effect_program import ReceiptBoundReplayPhase as ReceiptBoundReplayPhase
+from .effective_action import EffectiveAction as EffectiveAction
+from .live_decision_contracts import (
+    BoundedResearchFrontierProjector as BoundedResearchFrontierProjector,
+    HostObservationResolver as HostObservationResolver,
+    OperatorInboxUrgencyProjector,
+    ProgressReviewContextReader as ProgressReviewContextReader,
+    ReconcileRetainedSelectionFn,
+    mapping_or_empty,
+    optional_json_map,
+    require_mapping,
+)
+from .live_decision_recovery import (
+    apply_live_decision_post_hooks_recovery,
+    resolve_live_decision_preflight,
+    run_remote_authority_wait_preflight,
+)
+from .live_decision_replan import (
+    _historical_ack_writeback_required as _historical_ack_writeback_required,
+    _original_replan_settlement_required as _original_replan_settlement_required,
+    _prepared_execution_needs_readback as _prepared_execution_needs_readback,
+    _project_receipt_replan_settlement as _project_receipt_replan_settlement,
+    _receipt_bound_guard_fields as _receipt_bound_guard_fields,
+    _receipt_bound_recovery_todo as _receipt_bound_recovery_todo,
+    _restore_replan_obligation_without_foreign_acks as _restore_replan_obligation_without_foreign_acks,
+    _split_receipt_bound_guard_fields,
+    prepare_live_decision_status_payload,
+    project_before_plan_agent_context,
+)
+from .live_decision_routes import (
+    _bind_followup_turn_argument as _bind_followup_turn_argument,
+    _scheduler_fallback_launcher as _scheduler_fallback_launcher,
+    bind_action_selection_cli_routes as bind_action_selection_cli_routes,
+    bind_scheduler_followup_cli_routes as bind_scheduler_followup_cli_routes,
+)
+from .live_decision_turn_reads import (
+    _fresh_operator_inbox_observation_count as _fresh_operator_inbox_observation_count,
+    _fresh_operator_inbox_read_required as _fresh_operator_inbox_read_required,
+    _fresh_read_covers_all_pending_material as _fresh_read_covers_all_pending_material,
+    _fresh_read_covers_pending_count,
+    _turn_start_required_reads,
+    merge_turn_start_required_reads,
+)
+from .settlement import (
+    QuotaSettlementReadback as QuotaSettlementReadback,
+    attach_settlement_progress as attach_settlement_progress,
+    read_heartbeat_settlement as read_heartbeat_settlement,
+)
 from .unsettled_host_turn import (
-    apply_unsettled_host_turn_recovery_if_required,
-    apply_receipt_bound_wait_recovery,
-    restore_receipt_bound_todo_source,
+    apply_receipt_bound_wait_recovery as apply_receipt_bound_wait_recovery,
+    apply_unsettled_host_turn_recovery_if_required as apply_unsettled_host_turn_recovery_if_required,
 )
-
-
-HostObservationResolver = Callable[..., Mapping[str, Any]]
-BoundedResearchFrontierProjector = Callable[..., Mapping[str, Any] | None]
-ProgressReviewContextReader = Callable[[Mapping[str, Any], Path], dict[str, Any] | None]
-
-
-def _receipt_bound_guard_fields(
-    readback: QuotaSettlementReadback | None,
-    obligation_id: str | None,
-) -> dict[str, Any]:
-    """Adapt the recorded guard identity and time for the shared decision owner."""
-    guard = getattr(readback, "semantic_replan_guard", None)
-    receipt = getattr(readback, "heartbeat_receipt", None) or {}
-    identity = readback.identity.value if readback is not None else None
-    guard_scoped = bool(
-        obligation_id and isinstance(guard, Mapping) and guard.get("scope") == "turn_guard"
-        and guard.get("selected_obligation_id") == obligation_id
-    )
-    # The effective receipt stays the latest content. The admission clock is the
-    # first bound receipt already selected by the GoalRef-filtered readback.
-    admission_recorded_at = getattr(readback, "admission_recorded_at", None)
-    return {
-        "receipt_bound_replan_guard_scoped": guard_scoped,
-        "receipt_bound_replan_execution_pending": bool(
-            guard_scoped and readback and readback.replan_execution_pending
-        ),
-        "receipt_bound_guard_recorded_at": admission_recorded_at or receipt.get("recorded_at"),
-        "receipt_bound_admission_event_id": getattr(readback, "admission_event_id", None),
-        "receipt_bound_guard_turn_instance_id": identity.turn_instance_id if identity is not None else None,
-        "receipt_bound_replan_review": guard.get("selected_review_source") if isinstance(guard, Mapping) else None,
-        "receipt_bound_successor_replan": bool(getattr(readback, "successor_replan_pending", False)),
-    }
-
-
-def _historical_ack_writeback_required(payload: Mapping[str, Any]) -> bool:
-    """Recognize the exact historical ACK closeout before durable writeback."""
-    packet = payload.get("replan_action_packet")
-    return (isinstance(packet, Mapping) and packet.get("settlement_only") is True
-            and packet.get("decision") == "historical_ack_recorded")
-
-
-def _prepared_execution_needs_readback(
-    payload: Mapping[str, Any],
-    readback: QuotaSettlementReadback | None,
-    receipt_todo_id: str | None,
-) -> bool:
-    """Ask the receipt owner to check a prepared generation missing from the current projection."""
-    if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.OPEN:
-        return False
-    prepared = readback.prepared_lease
-    if not prepared or prepared.get("prepared_lease_epoch") is None:
-        return False
-    current = payload.get("execution_preparation") or {}
-    return (
-        current.get("todo_id") != receipt_todo_id
-        or current.get("lease_epoch") != prepared["prepared_lease_epoch"]
-    )
-
-
-def _original_replan_settlement_required(
-    payload: Mapping[str, Any], readback: QuotaSettlementReadback | None,
-) -> bool:
-    if _historical_ack_writeback_required(payload):
-        return True
-    if readback is None or readback.replay_phase is not ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
-        return False
-    packet = payload.get("replan_action_packet")
-    identity = readback.identity.value
-    return (
-        isinstance(packet, Mapping) and packet.get("settlement_only") is True
-        and packet.get("decision") == readback.replay_phase.value
-        and identity is not None and identity.replan_obligation_id is not None
-        and identity.replan_obligation_id == packet.get("obligation_id")
-        and ((readback.progress or {}).get("next_step") == "quota_spend"
-             or (readback.progress or {}).get("checkpoint_recovery_required") is True)
-        and payload.get("should_run") is True
-        and payload.get("effective_action") == EffectiveAction.AUTONOMOUS_REPLAN_REQUIRED.value
-    )
-
-
-def _project_receipt_replan_settlement(
-    payload: dict[str, Any], readback: QuotaSettlementReadback | None, *,
-    available_capabilities: list[str] | None,
-    scheduler_execution_context: Mapping[str, Any] | SchedulerExecutionContextResolution | None,
-    turn_instance_id: str | None, registry_path: Path, runtime_root: Path,
-    goal_ref: Mapping[str, Any] | None,
-) -> None:
-    """Project closeout from the original readback, never the current selection."""
-    if not readback or not _original_replan_settlement_required(payload, readback):
-        return
-    attach_settlement_progress(payload, readback, registry_path=registry_path,
-        runtime_root=runtime_root, goal_ref=goal_ref)
-    identity = readback.identity.value
-    if identity is None:
-        raise ValueError("original replan settlement identity is unavailable")
-    payload["heartbeat_receipt"] = {**(readback.heartbeat_receipt or {}), "settlement_identity": identity.as_dict()}
-    if (readback.progress or {}).get("checkpoint_recovery_required") is True:
-        reason = (
-            "Read checkpoint-context for the original blocked writeback. Reassess its evidence and submit "
-            "only the original checkpoint supplement. Preserve its delivery fields and quota."
-        )
-        packet = {**payload["replan_action_packet"], "decision": "vision_outcome_checkpoint_required",
-                  "required_outcome": "durable_writeback_receipt",
-                  "writeback_contract": {"rule": reason}}
-        obligation = payload["autonomous_replan_obligation"]
-        payload["autonomous_replan_obligation"] = {**obligation, "recommended_action": reason,
-            "guidance_actions": [reason], "settlement_action_packet": packet}
-        payload.update(replan_action_packet=packet, recommended_action=reason)
-    payload["interaction_contract"] = build_interaction_contract(payload,
-        available_capabilities=available_capabilities, scheduler_execution_context=scheduler_execution_context,
-        turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root))
 
 
 def _apply_retained_action_selection_reentry(
-    payload: dict[str, Any],
+    payload: dict[str, object],
     *,
     retained_todo_id: str | None,
     available_capabilities: list[str] | None,
     scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
     ),
     turn_instance_id: str | None,
     registry_path: Path,
     runtime_root: Path,
+    reconcile_retained_fn: ReconcileRetainedSelectionFn = reconcile_retained_action_selection,
 ) -> None:
     """Fence a no-argument reentry with its last explicit Todo choice."""
 
     normalized_retained = normalize_todo_id(retained_todo_id)
     if normalized_retained is None:
         return
-    selected_value = payload.get("selected_todo")
-    selected = selected_value if isinstance(selected_value, Mapping) else {}
-    projected_todo_id = normalize_todo_id(selected.get("todo_id"))
-    verdict = reconcile_retained_action_selection(
+    selected = mapping_or_empty(payload.get("selected_todo"))
+    verdict = reconcile_retained_fn(
         retained_todo_id=normalized_retained,
-        projected_todo_id=projected_todo_id,
+        projected_todo_id=normalize_todo_id(selected.get("todo_id")),
         effective_action=str(payload.get("effective_action") or ""),
         replan_obligation_id=replan_obligation_id_from_packet(
             payload.get("replan_action_packet")
@@ -219,9 +128,7 @@ def _apply_retained_action_selection_reentry(
     elif disposition == "require_explicit_selection":
         projection = verdict.get("projection")
         if not isinstance(projection, Mapping):
-            raise RuntimeError(
-                "TypeScript retained action-selection projection is missing"
-            )
+            raise RuntimeError("TypeScript retained action-selection projection is missing")
         decision_patch = projection.get("decision_patch")
         obligation_patch = projection.get("execution_obligation_patch")
         clear_fields = projection.get("clear_fields")
@@ -231,106 +138,40 @@ def _apply_retained_action_selection_reentry(
             or not isinstance(clear_fields, list)
             or not all(isinstance(field, str) for field in clear_fields)
         ):
-            raise RuntimeError(
-                "TypeScript retained action-selection projection is malformed"
-            )
-        payload.update(decision_patch)
-        obligation = (
-            dict(payload.get("execution_obligation") or {})
-            if isinstance(payload.get("execution_obligation"), Mapping)
-            else {}
-        )
-        obligation.update(obligation_patch)
+            raise RuntimeError("TypeScript retained action-selection projection is malformed")
+        payload.update(cast(Mapping[str, object], decision_patch))
+        obligation = dict(mapping_or_empty(payload.get("execution_obligation")))
+        obligation.update(cast(Mapping[str, object], obligation_patch))
         payload["execution_obligation"] = obligation
         for field in clear_fields:
             payload.pop(field, None)
     else:
-        raise RuntimeError(
-            "TypeScript retained action-selection disposition is unsupported"
-        )
+        raise RuntimeError("TypeScript retained action-selection disposition is unsupported")
     payload["interaction_contract"] = build_interaction_contract(
-        payload,
-        available_capabilities=available_capabilities,
+        payload, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
-        registry_path=str(registry_path),
-        runtime_root=str(runtime_root),
+        registry_path=str(registry_path), runtime_root=str(runtime_root),
     )
 
 
-def _fresh_read_covers_all_pending_material(
-    dispatch: Mapping[str, Any] | None,
-    projector: Callable[..., dict[str, Any]] | None,
-) -> Callable[..., dict[str, Any]] | None:
-    if projector is None:
-        return None
-    fresh_count = _fresh_operator_inbox_observation_count(dispatch)
-
-    def project(**kwargs: Any) -> dict[str, Any]:
-        urgency = dict(projector(**kwargs))
-        pending_count = max(0, int(urgency.get("pending_count") or 0))
-        if pending_count <= fresh_count:
-            urgency["material_review_due"] = False
-        return urgency
-
-    return project
-
-
-def _turn_start_required_reads(
-    dispatch: Mapping[str, Any] | None,
-) -> list[dict[str, Any]]:
-    """Read only the generic, kernel-validated pre-work projection."""
-
-    if not isinstance(dispatch, Mapping):
-        return []
-    reads = dispatch.get("required_reads")
-    if not isinstance(reads, list):
-        return []
-    projected: list[dict[str, Any]] = []
-    seen_commands: set[str] = set()
-    for read in reads:
-        if not isinstance(read, Mapping):
-            continue
-        command = read.get("command")
-        if not isinstance(command, str) or not command.strip():
-            continue
-        normalized = command.strip()
-        if normalized in seen_commands:
-            continue
-        projected.append(
-            {
-                key: read[key]
-                for key in (
-                    "kind", "command", "reason", "source", "ordering",
-                    "hook_id", "capability_id", "prompt_budget_bytes",
-                )
-                if key in read
-            }
-        )
-        seen_commands.add(normalized)
-    return projected
-
-
 def _project_turn_start_required_reads(
-    payload: dict[str, Any],
-    dispatch: Mapping[str, Any] | None,
+    payload: dict[str, object],
+    dispatch: Mapping[str, object] | None,
     *,
     available_capabilities: list[str] | None,
     scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
     ),
     turn_instance_id: str | None,
     registry_path: Path,
     runtime_root: Path,
     context_projector: TurnStartContextProjector | None = None,
-) -> Mapping[str, Any] | None:
+) -> Mapping[str, object] | None:
     """Order evidence after selection and retain its source dispatch."""
 
     if context_projector is not None:
         dispatch = context_projector(payload, dispatch)
-
-    # Keep failure observations even when no evidence read was produced. The
-    # typed envelope projects their cache/dependent-action policy for the host.
     if dispatch:
         payload["turn_start_capability_hook_dispatch"] = {
             key: value for key, value in dispatch.items() if key != "contexts"
@@ -338,85 +179,29 @@ def _project_turn_start_required_reads(
     projected = _turn_start_required_reads(dispatch)
     if not projected:
         return dispatch
-    existing = payload.get("required_reads")
-    required_reads = (
-        [dict(item) for item in existing if isinstance(item, Mapping)]
-        if isinstance(existing, list)
-        else []
+    payload["required_reads"] = merge_turn_start_required_reads(
+        payload.get("required_reads"), projected
     )
-    seen_commands = {
-        str(item.get("command") or "").strip()
-        for item in required_reads
-        if str(item.get("command") or "").strip()
-    }
-    for required_read in projected:
-        command = str(required_read.get("command") or "").strip()
-        if command in seen_commands:
-            continue
-        required_reads.append(required_read)
-        seen_commands.add(command)
-    payload["required_reads"] = required_reads
     if _fresh_operator_inbox_read_required(dispatch):
-        recommendation = (
-            dict(payload.get("heartbeat_recommendation") or {})
-            if isinstance(payload.get("heartbeat_recommendation"), Mapping)
-            else {}
-        )
-        recommendation.update(
-            {
-                "notify": "NOTIFY",
-            }
-        )
+        recommendation = dict(mapping_or_empty(payload.get("heartbeat_recommendation")))
+        recommendation.update({"notify": "NOTIFY"})
         payload["heartbeat_recommendation"] = recommendation
     payload["interaction_contract"] = build_interaction_contract(
-        payload,
-        available_capabilities=available_capabilities,
+        payload, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
-        registry_path=str(registry_path),
-        runtime_root=str(runtime_root),
+        registry_path=str(registry_path), runtime_root=str(runtime_root),
     )
     return dispatch
 
 
-def _fresh_operator_inbox_observation_count(
-    dispatch: Mapping[str, Any] | None,
-) -> int:
-    if not isinstance(dispatch, Mapping):
-        return 0
-    required_reads = dispatch.get("required_reads")
-    results = dispatch.get("results")
-    if not isinstance(required_reads, list) or not isinstance(results, list):
-        return 0
-    operator_inbox_hook_ids = {
-        str(read.get("hook_id") or "")
-        for read in required_reads
-        if isinstance(read, Mapping)
-        and read.get("kind") == "operator_inbox"
-        and str(read.get("hook_id") or "")
-    }
-    return sum(
-        max(0, int(result.get("observation_count") or 0))
-        for result in results
-        if isinstance(result, Mapping)
-        and result.get("agent_read_required") is True
-        and result.get("hook_id") in operator_inbox_hook_ids
-    )
-
-
-def _fresh_operator_inbox_read_required(
-    dispatch: Mapping[str, Any] | None,
-) -> bool:
-    return _fresh_operator_inbox_observation_count(dispatch) > 0
-
-
 def _apply_pending_capability_intent_precedence(
-    payload: dict[str, Any],
-    projection: Mapping[str, Any] | None,
+    payload: dict[str, object],
+    projection: Mapping[str, object] | None,
     *,
-    available_capabilities: Any = None,
+    available_capabilities: object = None,
     scheduler_execution_context: (
-        Mapping[str, Any] | SchedulerExecutionContextResolution | None
+        Mapping[str, object] | SchedulerExecutionContextResolution | None
     ) = None,
     turn_instance_id: str | None = None,
     registry_path: Path | None = None,
@@ -480,8 +265,7 @@ def _apply_pending_capability_intent_precedence(
         "spend_policy": "no external delivery; exact intent receipt is authoritative",
     }
     payload["interaction_contract"] = build_interaction_contract(
-        payload,
-        available_capabilities=available_capabilities,
+        payload, available_capabilities=available_capabilities,
         scheduler_execution_context=scheduler_execution_context,
         turn_instance_id=turn_instance_id,
         registry_path=str(registry_path) if registry_path is not None else None,
@@ -490,327 +274,37 @@ def _apply_pending_capability_intent_precedence(
     return True
 
 
-def _bind_followup_turn_argument(
-    cli_args: list[Any],
-    reference: str,
-    *,
-    authoritative: bool,
-) -> str:
-    """Point a follow-up's ``--turn-instance-id`` value at ``reference`` in place.
-
-    An authoritative Turn always wins, because it owns the receipt the follow-up
-    replays. Without one only a shell reference is re-rendered, so a concrete
-    projected Turn survives untouched. Returns the value the vector now carries,
-    so a mirrored ``args`` block cannot disagree with the executed command.
-    """
-
-    index = (
-        cli_args.index("--turn-instance-id")
-        if "--turn-instance-id" in cli_args
-        else -1
-    )
-    if index < 0:
-        cli_args.extend(["--turn-instance-id", reference])
-        return reference
-    if index + 1 >= len(cli_args):
-        cli_args.append(reference)
-        return reference
-    if authoritative or is_turn_reference(cli_args[index + 1]):
-        cli_args[index + 1] = reference
-    return str(cli_args[index + 1])
-
-
-def _scheduler_fallback_launcher() -> list[str]:
-    """Keep an executable-bound replay on its selected Core installation."""
-    fallback = "loopx-apply-rrule"
-    route = current_loopx_cli_argv()
-    if route[1:] != ["--cli-bin", route[0]]:
-        return [fallback]
-    configured = route[0]
-    candidate = Path(configured)
-    resolved = candidate if candidate.is_absolute() else resolve_command_path(configured)
-    if resolved is None or not resolved.is_file():
-        return [fallback, "--loopx", configured]
-    executable = resolved.resolve()
-    companion = executable.with_name(fallback)
-    if os.name != "nt" and companion.is_file() and os.access(companion, os.X_OK):
-        fallback = str(companion)
-    return [fallback, "--loopx", str(executable)]
-
-
-def bind_scheduler_followup_cli_routes(
-    payload: dict[str, Any],
-    *,
-    registry_path: Path,
-    runtime_root: Path,
-    turn_instance_id: str | None = None,
-    source: str = "quota_cli_invocation",
-) -> None:
-    """Bind scheduler follow-ups to the registry/runtime/Turn that built the hint."""
-
-    scheduler_hint = payload.get("scheduler_hint")
-    if not isinstance(scheduler_hint, dict):
-        return
-    app_packet = scheduler_hint.get("app_automation")
-    if not isinstance(app_packet, dict):
-        return
-    launcher_args = loopx_cli_argv()[1:]
-    safe_turn_instance_id = str(turn_instance_id or "").strip()
-    for hint_name in ("ack_hint", "failure_hint", "fallback_hint"):
-        followup_hint = app_packet.get(hint_name)
-        if not isinstance(followup_hint, dict):
-            continue
-        cli_args = followup_hint.get("cli_args")
-        if not isinstance(cli_args, list) or not cli_args:
-            continue
-        if hint_name == "fallback_hint":
-            if cli_args[0] != "loopx-apply-rrule" or "--registry" in cli_args:
-                continue
-            bound_cli_args = [
-                *_scheduler_fallback_launcher(),
-                "--registry",
-                str(registry_path.expanduser().resolve()),
-                "--runtime-root",
-                str(runtime_root.expanduser().resolve()),
-                *cli_args[1:],
-            ]
-            # The fallback replays this decision through ``loopx quota
-            # should-run``, so it needs the Turn that owns the receipt.
-            # Projections leave a shell reference here; a native Windows
-            # host cannot expand the POSIX form and would replay an empty
-            # Turn instead of the decision it came from.
-            bound_turn = _bind_followup_turn_argument(
-                bound_cli_args,
-                turn_reference(safe_turn_instance_id),
-                authoritative=bool(safe_turn_instance_id),
-            )
-            followup_hint["cli_args"] = bound_cli_args
-            args_value = followup_hint.get("args")
-            if isinstance(args_value, dict) and "turn_instance_id" in args_value:
-                args_value["turn_instance_id"] = bound_turn
-            followup_hint["route_binding"] = {
-                "schema_version": "codex_app_scheduler_fallback_route_v0",
-                "source": source,
-                "registry_bound": True,
-                "runtime_root_bound": True,
-                "turn_instance_bound": bool(safe_turn_instance_id),
-            }
-            continue
-        bound_cli_args = list(cli_args)
-        # Standalone Core emits an interpreter route. Its launcher
-        # arguments must precede the CLI's global options.
-        option_index = len(launcher_args) if cli_args[:len(launcher_args)] == launcher_args else 0
-        if bound_cli_args[option_index:option_index + 1] != ["--registry"]:
-            bound_cli_args[option_index:option_index] = [
-                "--registry", str(registry_path.expanduser().resolve()),
-                "--runtime-root", str(runtime_root.expanduser().resolve()),
-            ]
-        if safe_turn_instance_id and "--turn-instance-id" not in bound_cli_args:
-            execute_index = (
-                bound_cli_args.index("--execute")
-                if "--execute" in bound_cli_args
-                else len(bound_cli_args)
-            )
-            bound_cli_args[execute_index:execute_index] = [
-                "--turn-instance-id",
-                safe_turn_instance_id,
-            ]
-            args_value = followup_hint.get("args")
-            if isinstance(args_value, dict):
-                args_value["turn_instance_id"] = safe_turn_instance_id
-        followup_hint["cli_args"] = bound_cli_args
-        followup_hint["route_binding"] = {
-            "schema_version": (
-                "scheduler_ack_cli_route_v0"
-                if hint_name == "ack_hint"
-                else "scheduler_failure_cli_route_v0"
-            ),
-            "source": source,
-            "registry_bound": True,
-            "runtime_root_bound": True,
-            "turn_instance_bound": bool(safe_turn_instance_id),
-        }
-
-
-def bind_action_selection_cli_routes(
-    payload: dict[str, Any],
-    *,
-    registry_path: Path,
-    runtime_root: Path,
-) -> None:
-    """Bind two-phase action-selection commands to this live CLI source."""
-
-    interaction_value = payload.get("interaction_contract")
-    interaction: Mapping[str, Any] = (
-        interaction_value if isinstance(interaction_value, Mapping) else {}
-    )
-    cli_channel_value = interaction.get("cli_channel")
-    if not isinstance(cli_channel_value, dict):
-        return
-    cli_channel: dict[str, Any] = cli_channel_value
-    if cli_channel.get("selection_required") is not True:
-        return
-    selection_command = cli_channel.get("selection_command")
-    if not isinstance(selection_command, dict):
-        return
-    route_prefix = selection_command.get("route_prefix")
-    if not isinstance(route_prefix, str):
-        return
-    try:
-        tokens = shlex.split(route_prefix)
-    except ValueError:
-        return
-    if len(tokens) >= 3 and tokens[0] == "loopx":
-        try:
-            format_index = tokens.index("--format")
-        except ValueError:
-            return
-        if tokens[format_index : format_index + 2] != ["--format", "json"]:
-            return
-        if "--registry" not in tokens:
-            tokens[1:1] = ["--registry", str(registry_path.expanduser().resolve())]
-        if "--runtime-root" not in tokens:
-            format_index = tokens.index("--format")
-            tokens[format_index:format_index] = [
-                "--runtime-root",
-                str(runtime_root.expanduser().resolve()),
-            ]
-        selection_command["route_prefix"] = shlex.join(tokens)
-
-
-def _receipt_bound_recovery_todo(
-    payload: Mapping[str, Any], receipt_bound_todo_id: str | None, *,
-    agent_id: str | None, turn_instance_id: str | None,
-    replay_phase: ReceiptBoundReplayPhase | None,
-) -> str | None:
-    """Keep finished/replan-only Turns out of generic Todo wait recovery."""
-    if (not receipt_bound_todo_id or not agent_id or not turn_instance_id
-            or replay_phase is ReceiptBoundReplayPhase.SETTLED
-            or _historical_ack_writeback_required(payload)
-            or payload.get("effective_action") == EffectiveAction.UNSETTLED_HOST_TURN_RECOVERY.value):
-        return None
-    if replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING:
-        return receipt_bound_todo_id
-    selected_value = payload.get("selected_todo")
-    selected = selected_value if isinstance(selected_value, Mapping) else {}
-    if (selected.get("todo_id") != receipt_bound_todo_id
-            or payload.get("normal_delivery_allowed") is not True):
-        return receipt_bound_todo_id
-    wait_kind = str(selected.get("resume_when") or "").split(":", 1)[0]
-    return receipt_bound_todo_id if wait_kind not in ("", "monitor_changed", "todo_done") else None
-
-
-def _project_unbound_work_fields(payload: dict[str, Any]) -> None:
+def _project_unbound_work_fields(payload: dict[str, object]) -> None:
     interaction = payload.get("interaction_contract")
     cli = interaction.get("cli_channel") if isinstance(interaction, dict) else None
     if not isinstance(cli, dict) or cli.get("turn_binding_required") is not True:
         return
-
-    # Reconcile the legacy work fields after hooks and recovery have chosen
-    # the final interaction. The selected work stays visible but unadmitted.
     reason = cli["spend_policy"]
+    next_actions = cli["next_cli_actions"]
+    if not isinstance(next_actions, Sequence) or isinstance(
+        next_actions, (str, bytes, bytearray)
+    ):
+        raise TypeError(
+            "Expected sequence for cli_channel.next_cli_actions, "
+            f"got {type(next_actions).__name__}"
+        )
+    recommended = next_actions[0]
     payload["normal_delivery_allowed"] = False
-    payload["recommended_action"] = cli["next_cli_actions"][0]
+    payload["recommended_action"] = recommended
     payload.pop("agent_lane_next_action", None)
     obligation = payload.get("execution_obligation")
     if isinstance(obligation, dict):
         obligation.update(must_attempt_work=False, delivery_allowed=False, reason=reason)
     lane = payload.get("work_lane_contract")
     if isinstance(lane, dict):
-        lane.update(must_attempt_work=False, action=payload["recommended_action"])
+        lane.update(must_attempt_work=False, action=recommended)
     recommendation = payload.get("heartbeat_recommendation")
     if isinstance(recommendation, dict):
         recommendation["spend_policy"] = reason
 
 
-def _restore_replan_obligation_without_foreign_acks(
-    status_payload: dict[str, Any], *, goal_id: str, agent_id: str,
-    goal_ref: Mapping[str, Any] | None,
-    registry_goal: Mapping[str, Any] | None,
-    registry_path: Path,
-    runtime_root: Path,
-    progress_review_context_reader: ProgressReviewContextReader | None,
-) -> None:
-    """Recompute the open review after removing another instance's ACK rows."""
-    from ..status.autonomous_replan_projection import autonomous_replan_obligation_from_runs
-    from ..work_items.autonomous_replan_ack import drop_unowned_recorded_replan_acks
-    from ..work_items.project_asset import attach_active_state_project_asset_fields
-    from ..work_items.replan_history_codec import effective_turn_cadence_context
-
-    run_history = status_payload.get("run_history")
-    goals = run_history.get("goals") if isinstance(run_history, dict) else None
-    goal = next(
-        (
-            item for item in goals
-            if isinstance(item, dict) and str(item.get("id") or "") == goal_id
-        ),
-        None,
-    ) if isinstance(goals, list) else None
-    if not isinstance(goal, dict) or not isinstance(goal.get("latest_runs"), list):
-        return
-    filtered, changed = drop_unowned_recorded_replan_acks(
-        goal["latest_runs"], goal_id=goal_id, goal_ref=goal_ref,
-    )
-    if not changed:
-        return
-    goal["latest_runs"] = filtered
-    kept_ack_times = {
-        run.get("generated_at")
-        for run in filtered
-        if isinstance(run.get("autonomous_replan_ack"), dict)
-    }
-    semantic = goal.get("semantic_history")
-    agents = semantic.get("agents") if isinstance(semantic, dict) else None
-    if isinstance(agents, list):
-        for context in agents:
-            if not isinstance(context, dict):
-                continue
-            ack_run = context.get("latest_autonomous_replan_ack_run")
-            if (
-                isinstance(ack_run, dict)
-                and ack_run.get("generated_at") not in kept_ack_times
-            ):
-                context.pop("latest_autonomous_replan_ack_run", None)
-    queue = status_payload.get("attention_queue")
-    items = queue.get("items") if isinstance(queue, dict) else None
-    item = next(
-        (
-            entry for entry in items
-            if isinstance(entry, dict) and entry.get("goal_id") == goal_id
-        ),
-        None,
-    ) if isinstance(items, list) else None
-    if not isinstance(item, dict):
-        return
-    for target in (item, item.get("project_asset")):
-        if not isinstance(target, dict):
-            continue
-        target.pop("autonomous_replan_obligation", None)
-        target.pop("autonomous_replan_obligations_by_agent", None)
-        target.pop("autonomous_replan_ack", None)
-    source_goal = dict(registry_goal) if isinstance(registry_goal, Mapping) else {"id": goal_id}
-    source_goal.setdefault("id", goal_id)
-    review = (
-        progress_review_context_reader(source_goal, runtime_root)
-        if progress_review_context_reader is not None else None
-    )
-    cadence_goal_ref = dict(goal_ref) if isinstance(goal_ref, Mapping) else None
-    attach_active_state_project_asset_fields(
-        item, latest_runs=filtered,
-        autonomous_replan_obligation_from_runs=autonomous_replan_obligation_from_runs,
-        external_progress_review=review,
-        effective_turn_cadence=effective_turn_cadence_context(
-            source_goal, runtime_root, registry_path=registry_path,
-            goal_ref=cadence_goal_ref if all(
-                isinstance(value, str) for value in (cadence_goal_ref or {}).values()
-            ) else None,
-        ),
-        agent_lane_id=agent_id,
-    )
-
-
 def build_live_quota_should_run_decision(
-    status_payload: dict[str, Any],
+    status_payload: dict[str, object],
     *,
     goal_id: str,
     agent_id: str | None,
@@ -822,10 +316,10 @@ def build_live_quota_should_run_decision(
     runtime_root: Path,
     host_observation_resolver: HostObservationResolver | None = None,
     route_source: str = "quota_cli_invocation",
-    scheduler_execution_context: Mapping[str, Any]
+    scheduler_execution_context: Mapping[str, object]
     | SchedulerExecutionContextResolution
     | None = None,
-    operator_inbox_urgency_projector: Callable[..., dict[str, Any]] | None = None,
+    operator_inbox_urgency_projector: OperatorInboxUrgencyProjector | None = None,
     bounded_research_frontier_projector: BoundedResearchFrontierProjector | None = None,
     progress_review_context_reader: ProgressReviewContextReader | None = None,
     receipt_bound_todo_id: str | None = None,
@@ -835,61 +329,34 @@ def build_live_quota_should_run_decision(
     turn_instance_id: str | None = None,
     interaction_projection_hooks: Sequence[InteractionProjectionHookRegistration]
     | None = None,
-    turn_start_hook_dispatch: Mapping[str, Any] | None = None,
+    turn_start_hook_dispatch: Mapping[str, object] | None = None,
     turn_context_projector: TurnStartContextProjector | None = None,
     context_navigation: bool = False,
     workspace_path: Path | None = None,
     goal_ref: Mapping[str, object] | None = None,
     inline_goal_source: bool = False,
     tolerate_malformed_settlement_history: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Build one live CLI decision while keeping host observation injectable."""
-    resolved_context = resolve_scheduler_execution_context(scheduler_execution_context)
-    from ..coordination.remote_authority_gateway import remote_authority_config
 
-    registered_goal = load_goal_from_registry(registry_path, goal_id)
-    app_automation_applicable = (
-        resolved_context.ok
-        and resolved_context.context is not None
-        and resolved_context.context.app_automation_applicable
+    (
+        resolved_context,
+        registered_goal,
+        codex_app_host,
+        observed_rrule,
+        observed_automation_id,
+        decision_status_payload,
+        remote_config,
+    ) = resolve_live_decision_preflight(
+        status_payload, goal_id=goal_id, agent_id=agent_id,
+        codex_app_current_rrule=codex_app_current_rrule,
+        registry_path=registry_path, runtime_root=runtime_root,
+        scheduler_execution_context=scheduler_execution_context,
+        host_observation_resolver=host_observation_resolver,
+        bounded_research_frontier_projector=bounded_research_frontier_projector,
     )
-    codex_app_host = bool(
-        app_automation_applicable
-        and resolved_context.context is not None
-        and resolved_context.context.host_surface.value == "codex_app"
-    )
-    observed_rrule = str(codex_app_current_rrule or "").strip()
-    observed_automation_id = ""
-    if (
-        codex_app_host
-        and not observed_rrule
-        and host_observation_resolver is not None
-    ):
-        observation = host_observation_resolver(goal_id=goal_id, agent_id=agent_id)
-        if observation.get("available") is True:
-            observed_rrule = str(observation.get("rrule") or "")
-            observed_automation_id = str(observation.get("automation_id") or "").strip()
-    decision_status_payload = {
-        **status_payload,
-        "runtime_root": str(runtime_root),
-    }
-    if bounded_research_frontier_projector is not None:
-        frontier = bounded_research_frontier_projector(
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            status_payload=status_payload,
-        )
-        if isinstance(frontier, Mapping):
-            decision_status_payload = {
-                **decision_status_payload,
-                "bounded_research_frontier": dict(frontier),
-            }
-    remote_config = remote_authority_config(registered_goal)
     if remote_config is not None:
-        # Use the same hard-pause precedence and keep fresh local selection
-        # outside the remote route, even when a TLS read succeeds.
-        payload = _build_remote_authority_wait_decision(
+        remote_payload = _build_remote_authority_wait_decision(
             decision_status_payload, configured_goal=registered_goal or {},
             goal_id=goal_id, agent_id=agent_id, remote_config=remote_config,
             registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
@@ -900,27 +367,17 @@ def build_live_quota_should_run_decision(
             receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
         )
         bind_scheduler_followup_cli_routes(
-            payload, registry_path=registry_path, runtime_root=runtime_root,
+            remote_payload, registry_path=registry_path, runtime_root=runtime_root,
             turn_instance_id=turn_instance_id, source=route_source,
         )
-        return payload
+        return remote_payload
     settlement_readback = read_heartbeat_settlement(
-        runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        todo_id=receipt_bound_todo_id,
+        runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
         turn_instance_id=turn_instance_id,
-        # A Todo-bound receipt may also carry the semantic replan generation
-        # admitted by that Turn.  Its settlement identity remains the Todo;
-        # passing both bindings makes the readback owner treat the receipt as a
-        # conflicting replan-only identity and drops its semantic guard.
         replan_obligation_id=(
-            None
-            if receipt_bound_todo_id
-            else receipt_bound_replan_obligation_id
+            None if receipt_bound_todo_id else receipt_bound_replan_obligation_id
         ),
-        registry_path=registry_path,
-        goal_ref=goal_ref,
+        registry_path=registry_path, goal_ref=goal_ref,
         tolerate_malformed_history=tolerate_malformed_settlement_history,
     )
     receipt_bound_monitor_phase = (
@@ -929,84 +386,33 @@ def build_live_quota_should_run_decision(
     receipt_bound_replay_phase = (
         settlement_readback.replay_phase if settlement_readback else None
     )
-    receipt_bound_guard_fields = _receipt_bound_guard_fields(
+    guard_kwargs, admission_event_id = _split_receipt_bound_guard_fields(
         settlement_readback, receipt_bound_replan_obligation_id,
     )
-    admission_event_id = receipt_bound_guard_fields.pop("receipt_bound_admission_event_id")
-    if (
-        receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"]
-        and receipt_bound_replay_phase is ReceiptBoundReplayPhase.OPEN
-        and receipt_bound_replan_obligation_id
-        and agent_id
-    ):
-        from ..work_items.autonomous_replan_ack import load_receipt_replan_ack_candidates
-        decision_status_payload["receipt_bound_replan_ack_candidates"] = load_receipt_replan_ack_candidates(
-            runtime_root, goal_id=goal_id, agent_id=agent_id,
-            obligation_id=receipt_bound_replan_obligation_id,
-            guard_recorded_at=receipt_bound_guard_fields["receipt_bound_guard_recorded_at"],
-            guard_turn_instance_id=receipt_bound_guard_fields["receipt_bound_guard_turn_instance_id"],
-            goal_ref=goal_ref, admission_event_id=admission_event_id)
-        _restore_replan_obligation_without_foreign_acks(
+    fresh_inbox_count = _fresh_operator_inbox_observation_count(turn_start_hook_dispatch)
+    decision_status_payload, authoritative_fallback_todo_items = (
+        prepare_live_decision_status_payload(
             decision_status_payload, goal_id=goal_id, agent_id=agent_id, goal_ref=goal_ref,
-            registry_goal=registered_goal, registry_path=registry_path, runtime_root=runtime_root,
+            registered_goal=registered_goal, registry_path=registry_path,
+            runtime_root=runtime_root, guard_kwargs=guard_kwargs,
+            admission_event_id=admission_event_id,
+            receipt_bound_replay_phase=receipt_bound_replay_phase,
+            receipt_bound_todo_id=receipt_bound_todo_id,
+            requested_action_todo_id=requested_action_todo_id,
+            retained_action_selection_todo_id=retained_action_selection_todo_id,
+            receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
             progress_review_context_reader=progress_review_context_reader,
         )
-    fresh_operator_inbox_read = _fresh_operator_inbox_read_required(
-        turn_start_hook_dispatch
     )
-    if (
-        requested_action_todo_id or retained_action_selection_todo_id
-    ) and not receipt_bound_todo_id:
-        # Candidate discovery, admission, and retained-selection reentry use the
-        # same provider-first reader.  A selection can be deferred by a hard
-        # frontier that is visible only in the complete Todo snapshot; reentry
-        # must not fall back to the earlier compact status projection and lose
-        # the obligation that caused the deferral.
-        # Keep the complete snapshot internal; presentation is bounded later.
-        from ..todos.list_readback import list_goal_todos
+    app_scheduler_state: dict[str, object] | None = None
 
-        source = list_goal_todos(
-            registry_path=registry_path, runtime_root_arg=str(runtime_root), goal_id=goal_id,
-        )
-        todo_fields = {key: source[key] for key in ("user_todos", "agent_todos")}
-        queue = decision_status_payload.get("attention_queue") or {}
-        decision_status_payload["attention_queue"] = {
-            **queue,
-            "items": [
-                {**item, **todo_fields} if item.get("goal_id") == goal_id else item
-                for item in queue.get("items") or []
-            ],
-        }
-    decision_status_payload = restore_receipt_bound_todo_source(
-        decision_status_payload, registry_path=registry_path, runtime_root=runtime_root,
-        goal_id=goal_id, todo_id=receipt_bound_todo_id,
-        replay_phase=receipt_bound_replay_phase,
-        replan_guard_scoped=receipt_bound_guard_fields["receipt_bound_replan_guard_scoped"],
-    )
-    decision_status_payload = overlay_active_turn_retries(
-        decision_status_payload,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        observed_at=now_utc_iso(),
-    )
-    authoritative_fallback_todo_items = live_fallback_authority_items(
-        decision_status_payload,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-    )
-    app_scheduler_state: dict[str, Any] | None = None
-
-    def observe_app_scheduler_state(readback: Mapping[str, Any]) -> None:
-        # A later recovery wait uses the same state this decision actually read.
+    def observe_app_scheduler_state(readback: Mapping[str, object]) -> None:
         nonlocal app_scheduler_state
-        app_scheduler_state = readback.get("state")
+        state = readback.get("state")
+        app_scheduler_state = dict(state) if isinstance(state, Mapping) else None
 
-    payload: dict[str, Any] = build_quota_should_run(
-        decision_status_payload,
-        goal_id=goal_id,
-        agent_id=agent_id,
+    payload: dict[str, object] = build_quota_should_run(
+        decision_status_payload, goal_id=goal_id, agent_id=agent_id,
         available_capabilities=available_capabilities,
         include_scheduler_detail=include_scheduler_detail,
         include_agent_todo_detail=include_agent_todo_detail,
@@ -1014,11 +420,10 @@ def build_live_quota_should_run_decision(
         codex_app_automation_id=observed_automation_id or None,
         scheduler_execution_context=resolved_context,
         operator_inbox_urgency_projector=(
-            _fresh_read_covers_all_pending_material(
-                turn_start_hook_dispatch,
-                operator_inbox_urgency_projector,
+            _fresh_read_covers_pending_count(
+                fresh_inbox_count, operator_inbox_urgency_projector,
             )
-            if fresh_operator_inbox_read
+            if fresh_inbox_count > 0
             else operator_inbox_urgency_projector
         ),
         receipt_bound_todo_id=receipt_bound_todo_id,
@@ -1027,272 +432,196 @@ def build_live_quota_should_run_decision(
         receipt_bound_monitor_phase=receipt_bound_monitor_phase,
         receipt_bound_replay_phase=receipt_bound_replay_phase,
         receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
-        **receipt_bound_guard_fields,
-        turn_instance_id=turn_instance_id,
-        runtime_root=runtime_root,
+        **guard_kwargs,
+        turn_instance_id=turn_instance_id, runtime_root=runtime_root,
         app_scheduler_state_observer=observe_app_scheduler_state,
-        workspace_path=workspace_path,
-        goal_ref=goal_ref,
+        workspace_path=workspace_path, goal_ref=goal_ref,
         authoritative_fallback_todo_items=authoritative_fallback_todo_items,
     )
-    _project_receipt_replan_settlement(payload, settlement_readback,
-        available_capabilities=available_capabilities, scheduler_execution_context=resolved_context,
-        turn_instance_id=turn_instance_id, registry_path=registry_path, runtime_root=runtime_root,
-        goal_ref=goal_ref)
-    _apply_retained_action_selection_reentry(
-        payload,
-        retained_todo_id=retained_action_selection_todo_id,
+    _project_receipt_replan_settlement(
+        payload, settlement_readback,
         available_capabilities=available_capabilities,
         scheduler_execution_context=resolved_context,
-        turn_instance_id=turn_instance_id,
-        registry_path=registry_path,
+        turn_instance_id=turn_instance_id, registry_path=registry_path,
+        runtime_root=runtime_root, goal_ref=goal_ref,
+        attach_settlement_fn=attach_settlement_progress,
+        build_interaction_contract_fn=build_interaction_contract,
+    )
+    _apply_retained_action_selection_reentry(
+        payload, retained_todo_id=retained_action_selection_todo_id,
+        available_capabilities=available_capabilities,
+        scheduler_execution_context=resolved_context,
+        turn_instance_id=turn_instance_id, registry_path=registry_path,
         runtime_root=runtime_root,
     )
-    remembered_runtime = (payload.get("agent_identity") or {}).get(
-        "runtime_available_capabilities"
+    raw_identity = payload.get("agent_identity")
+    agent_identity = (
+        require_mapping(raw_identity, label="agent_identity") if raw_identity else {}
     )
+    remembered_runtime = agent_identity.get("runtime_available_capabilities")
     if isinstance(remembered_runtime, list):
-        available_capabilities = remembered_runtime
+        available_capabilities = cast(list[str], remembered_runtime)
     if route_source.startswith("loopx_turn_"):
         payload["runtime_root"] = str(runtime_root)
     if codex_app_host and agent_id:
         from ..heartbeat.prompt_upgrade_hook import extend_prompt_upgrade_reads
 
         turn_start_hook_dispatch = extend_prompt_upgrade_reads(
-            turn_start_hook_dispatch, registry=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, agent_id=agent_id,
+            turn_start_hook_dispatch, registry=registry_path,
+            runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id,
         )
     turn_start_hook_dispatch = _project_turn_start_required_reads(
-        payload,
-        turn_start_hook_dispatch,
+        payload, turn_start_hook_dispatch,
         available_capabilities=available_capabilities,
         scheduler_execution_context=resolved_context,
-        turn_instance_id=turn_instance_id,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        context_projector=turn_context_projector,
+        turn_instance_id=turn_instance_id, registry_path=registry_path,
+        runtime_root=runtime_root, context_projector=turn_context_projector,
     )
     hook_dispatch = dispatch_interaction_projection_hooks(interaction_projection_hooks)
     projections = hook_dispatch["projections"]
     if isinstance(projections, Mapping):
         _apply_pending_capability_intent_precedence(
-            payload,
-            projections.get("pending_capability_intent"),
+            payload, projections.get("pending_capability_intent"),
             available_capabilities=available_capabilities,
             scheduler_execution_context=resolved_context,
-            turn_instance_id=turn_instance_id,
-            registry_path=registry_path,
+            turn_instance_id=turn_instance_id, registry_path=registry_path,
             runtime_root=runtime_root,
         )
         interaction = payload.get("interaction_contract")
         if isinstance(interaction, dict):
             interaction.update(projections)
-    # A settled receipt owns this host Turn until it ends.  Looking for an older
-    # unsettled Turn here can overwrite the settled-skip route with a recovery
-    # obligation and then select a successor against the immutable receipt
-    # identity.  Leave prior-Turn recovery to the next fresh Turn instead.
-    original_replan_settlement = _original_replan_settlement_required(payload, settlement_readback)
-    if receipt_bound_replay_phase is not ReceiptBoundReplayPhase.SETTLED and not original_replan_settlement:
-        apply_unsettled_host_turn_recovery_if_required(
-            payload,
-            inspect_current_execution_loss=_prepared_execution_needs_readback(
-                payload, settlement_readback, receipt_bound_todo_id
-            ),
-            registry_path=registry_path,
-            runtime_root=runtime_root,
-            goal_id=goal_id,
-            agent_id=agent_id,
-            current_turn_instance_id=turn_instance_id,
-            available_capabilities=available_capabilities,
-            project_scheduler_hint=partial(
-                build_scheduler_hint, include_detail=include_scheduler_detail,
-                scheduler_execution_context=resolved_context,
-                available_capabilities=available_capabilities,
-                codex_app_scheduler_state=app_scheduler_state,
-                codex_app_current_rrule=observed_rrule,
-                codex_app_automation_id=observed_automation_id or None,
-            ),
-            scheduler_execution_context=resolved_context,
-            goal_ref=goal_ref,
-            owner_action_id=goal_owner_resume_id(registered_goal),
-        )
-    if recovery_todo_id := _receipt_bound_recovery_todo(
-        payload, receipt_bound_todo_id, agent_id=agent_id, turn_instance_id=turn_instance_id,
-        replay_phase=receipt_bound_replay_phase,
-    ):
-        # A verified writeback seals this Turn even while its Todo stays open
-        # and selected. Let the existing typed owner project only the remaining
-        # settlement; another delivery cannot replace the immutable writeback.
-        if settlement_readback is not None:
-            attach_settlement_progress(
-                payload, settlement_readback,
-                registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
-            )
-        apply_receipt_bound_wait_recovery(
-            payload, registry_path=registry_path, runtime_root=runtime_root,
-            goal_id=goal_id, agent_id=agent_id, todo_id=recovery_todo_id,
-            turn_instance_id=turn_instance_id, available_capabilities=available_capabilities,
-            scheduler_execution_context=resolved_context,
-            monitor_phase=(receipt_bound_monitor_phase.value if receipt_bound_monitor_phase else None),
-            settlement_progress=settlement_readback.progress if settlement_readback else None,
-            replay_phase=receipt_bound_replay_phase,
-            heartbeat_receipt=settlement_readback.heartbeat_receipt if settlement_readback else None,
-        )
-    if hook_dispatch["failures"]:
-        payload["capability_hook_dispatch"] = {
-            key: value for key, value in hook_dispatch.items() if key != "projections"
-        }
+    apply_live_decision_post_hooks_recovery(
+        payload, settlement_readback=settlement_readback,
+        receipt_bound_monitor_phase=receipt_bound_monitor_phase,
+        receipt_bound_replay_phase=receipt_bound_replay_phase,
+        receipt_bound_todo_id=receipt_bound_todo_id,
+        registry_path=registry_path, runtime_root=runtime_root,
+        goal_id=goal_id, agent_id=agent_id, turn_instance_id=turn_instance_id,
+        available_capabilities=available_capabilities,
+        include_scheduler_detail=include_scheduler_detail,
+        resolved_context=resolved_context,
+        app_scheduler_state=app_scheduler_state,
+        observed_rrule=observed_rrule,
+        observed_automation_id=observed_automation_id,
+        goal_ref=goal_ref, registered_goal=registered_goal,
+        hook_dispatch=hook_dispatch,
+        apply_recovery_fn=apply_unsettled_host_turn_recovery_if_required,
+        attach_settlement_fn=attach_settlement_progress,
+        apply_wait_recovery_fn=apply_receipt_bound_wait_recovery,
+        build_scheduler_hint_fn=build_scheduler_hint,
+    )
     _project_unbound_work_fields(payload)
-    interaction = payload.get("interaction_contract")
-    if isinstance(interaction, dict) and goal_id and agent_id:
-        scope = {
-            "goal_id": goal_id,
-            "agent_id": agent_id,
-            "todo_id": (payload.get("selected_todo") or {}).get("todo_id"),
-        }
-        goal = registered_goal
-        if goal is not None:
-            context = project_goal_agent_context(
-                phase="before_plan",
-                scope=scope,
-                goal=goal,
-                registry_path=registry_path,
-                runtime_root=runtime_root,
-                observations={"capability_improvement": {
-                    "trigger": "replan" if payload.get("replan_action_packet") else "before_plan",
-                }},
-            )
-        else:
-            context = project_agent_context(
-                phase="before_plan",
-                scope=scope,
-                orchestration=(payload.get("goal_boundary") or {}).get("orchestration") or {},
-            )
-        if context is not None:
-            interaction["agent_context"] = context
+    if goal_id and agent_id:
+        raw_boundary = payload.get("goal_boundary")
+        boundary = require_mapping(raw_boundary, label="goal_boundary") if raw_boundary else {}
+        raw_orch = boundary.get("orchestration")
+        orchestration = (
+            require_mapping(raw_orch, label="goal_boundary.orchestration")
+            if raw_orch
+            else {}
+        )
+        project_before_plan_agent_context(
+            payload, goal_id=goal_id, agent_id=agent_id,
+            registered_goal=registered_goal, orchestration=orchestration,
+            registry_path=registry_path, runtime_root=runtime_root,
+        )
     bind_scheduler_followup_cli_routes(
-        payload,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
-        turn_instance_id=turn_instance_id,
-        source=route_source,
+        payload, registry_path=registry_path, runtime_root=runtime_root,
+        turn_instance_id=turn_instance_id, source=route_source,
     )
     bind_action_selection_cli_routes(
-        payload,
-        registry_path=registry_path,
-        runtime_root=runtime_root,
+        payload, registry_path=registry_path, runtime_root=runtime_root,
     )
     from ..work_items.context_readback import attach_work_context
 
-    attach_work_context(payload, registry_path=registry_path, runtime_root=runtime_root,
-        hook_dispatch=turn_start_hook_dispatch, context_navigation=context_navigation,
-        inline_goal_source=inline_goal_source)
+    attach_work_context(
+        payload, registry_path=registry_path, runtime_root=runtime_root,
+        hook_dispatch=optional_json_map(turn_start_hook_dispatch),
+        context_navigation=context_navigation, inline_goal_source=inline_goal_source,
+    )
     return payload
 
 
 def _build_remote_authority_wait_decision(
-    status_payload: dict[str, Any], *, configured_goal: dict[str, Any],
-    goal_id: str, agent_id: str | None, remote_config: Mapping[str, Any],
-    registry_path: Path, runtime_root: Path, goal_ref: Mapping[str, Any] | None,
+    status_payload: dict[str, object],
+    *,
+    configured_goal: dict[str, object],
+    goal_id: str,
+    agent_id: str | None,
+    remote_config: Mapping[str, object],
+    registry_path: Path,
+    runtime_root: Path,
+    goal_ref: Mapping[str, object] | None,
     scheduler_context: SchedulerExecutionContextResolution,
-    available_capabilities: list[str] | None, turn_instance_id: str | None,
-    include_scheduler_detail: bool, codex_app_rrule: str, codex_app_automation_id: str | None,
-    receipt_bound_todo_id: str | None, receipt_bound_replan_obligation_id: str | None,
-) -> dict[str, Any]:
-    from ...quota import _build_quota_plan_for_goal
+    available_capabilities: list[str] | None,
+    turn_instance_id: str | None,
+    include_scheduler_detail: bool,
+    codex_app_rrule: str,
+    codex_app_automation_id: str | None,
+    receipt_bound_todo_id: str | None,
+    receipt_bound_replan_obligation_id: str | None,
+) -> dict[str, object]:
+    early_payload, payload, scope_matches, settled = run_remote_authority_wait_preflight(
+        status_payload, configured_goal=configured_goal, goal_id=goal_id,
+        agent_id=agent_id, registry_path=registry_path, runtime_root=runtime_root,
+        goal_ref=goal_ref, scheduler_context=scheduler_context,
+        available_capabilities=available_capabilities,
+        turn_instance_id=turn_instance_id,
+        include_scheduler_detail=include_scheduler_detail,
+        codex_app_rrule=codex_app_rrule,
+        codex_app_automation_id=codex_app_automation_id,
+        receipt_bound_todo_id=receipt_bound_todo_id,
+        receipt_bound_replan_obligation_id=receipt_bound_replan_obligation_id,
+        read_settlement_fn=read_heartbeat_settlement,
+        attach_settlement_fn=attach_settlement_progress,
+        apply_wait_recovery_fn=apply_receipt_bound_wait_recovery,
+        apply_recovery_fn=apply_unsettled_host_turn_recovery_if_required,
+        build_scheduler_hint_fn=build_scheduler_hint,
+        load_scheduler_state_fn=load_app_automation_scheduler_state,
+    )
+    if early_payload is not None:
+        return early_payload
+
     from ..coordination.remote_authority_gateway import (
         check_remote_authority_gateway_status,
         get_remote_authority_projection,
     )
-    from .decision_summary import quota_plan_items
     from .settlement_precedence import settled_replay_fields
-    from .should_run import build_quota_paused_should_run_payload
-    from .states import quota_item_is_paused
-
-    plan, health_ok = _build_quota_plan_for_goal(status_payload, goal_id=goal_id)
-    item = next((row for row in quota_plan_items(plan) if row.get("goal_id") == goal_id), None)
-    if item is not None and quota_item_is_paused(item):
-        return build_quota_paused_should_run_payload(
-            status_payload, safe_goal_id=goal_id, requested_agent_id=agent_id, item=item, plan=plan,
-            goal_health_ok=health_ok, include_scheduler_detail=include_scheduler_detail,
-            codex_app_current_rrule=codex_app_rrule, codex_app_automation_id=codex_app_automation_id,
-            resolved_scheduler_context=scheduler_context, runtime_root=runtime_root, goal_ref=goal_ref,
-        )
-    scope_matches = (
-        (goal_ref is None or goal_ref.get("goal_instance_id") == configured_goal.get("goal_instance_id"))
-        and agent_id in registered_agent_ids_for_goal(configured_goal)
-    )
-    readback = read_heartbeat_settlement(
-        runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=receipt_bound_todo_id,
-        turn_instance_id=turn_instance_id, registry_path=registry_path, goal_ref=goal_ref,
-        replan_obligation_id=None if receipt_bound_todo_id else receipt_bound_replan_obligation_id,
-    ) if scope_matches and turn_instance_id else None
-    settled = readback is not None and readback.replay_phase is ReceiptBoundReplayPhase.SETTLED
-    payload: dict[str, Any] = {
-        "ok": True, "mode": "should-run", "goal_id": goal_id, "agent_id": agent_id,
-        "should_run": False, "normal_delivery_allowed": False, "requires_user_action": False,
-    }
-    if goal_ref is not None:
-        payload["goal_ref"] = dict(goal_ref)
-
-    def project_recovery_scheduler_hint(
-        decision: dict[str, Any], *, arbitration: SchedulerArbitration,
-    ) -> dict[str, Any]:
-        decision["agent_identity"] = build_quota_agent_identity(configured_goal, agent_id=agent_id)
-        host = scheduler_context.context
-        state = None
-        if scheduler_context.ok and host is not None and host.app_automation_applicable:
-            state = load_app_automation_scheduler_state(
-                runtime_root, goal_id=goal_id, agent_id=agent_id, surface=host.host_surface.value,
-            )
-        return build_scheduler_hint(
-            decision, arbitration=arbitration, include_detail=include_scheduler_detail,
-            available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
-            codex_app_scheduler_state=state, codex_app_current_rrule=codex_app_rrule,
-            codex_app_automation_id=codex_app_automation_id,
-        )
-
-    if scope_matches and not settled:
-        if (receipt_bound_todo_id and agent_id and turn_instance_id and readback is not None
-                and readback.replay_phase is ReceiptBoundReplayPhase.SETTLEMENT_PENDING):
-            attach_settlement_progress(payload, readback, registry_path=registry_path,
-                runtime_root=runtime_root, goal_ref=goal_ref)
-            if apply_receipt_bound_wait_recovery(
-                payload, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-                agent_id=agent_id, todo_id=receipt_bound_todo_id, turn_instance_id=turn_instance_id,
-                available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
-                monitor_phase=readback.monitor_phase.value if readback.monitor_phase else None,
-                settlement_progress=readback.progress, replay_phase=readback.replay_phase,
-                heartbeat_receipt=readback.heartbeat_receipt,
-            ):
-                return payload
-        if apply_unsettled_host_turn_recovery_if_required(
-            payload, registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-            agent_id=agent_id, current_turn_instance_id=turn_instance_id,
-            available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
-            project_scheduler_hint=project_recovery_scheduler_hint,
-            goal_ref=goal_ref,
-            owner_action_id=goal_owner_resume_id(configured_goal),
-        ):
-            return payload
 
     if settled:
-        payload.update(settled_replay_fields())
+        payload.update(cast(Mapping[str, object], settled_replay_fields()))
     else:
-        gateway = (check_remote_authority_gateway_status(goal_id, agent_id, remote_config) if scope_matches else {
-            **get_remote_authority_projection(goal_id, remote_config),
-            "status": "unavailable", "reason_code": "remote_authority_local_scope_mismatch",
-        })
-        reason_code = gateway.get("reason_code", "remote_authority_execution_not_admitted")
-        reason = ("Remote authority read verified; shared Turn admission is unavailable"
-                  if gateway["status"] == "verified" else "Waiting for a verified read from the configured remote authority")
+        gateway = (
+            check_remote_authority_gateway_status(goal_id, agent_id, remote_config)
+            if scope_matches
+            else {
+                **get_remote_authority_projection(goal_id, remote_config),
+                "status": "unavailable",
+                "reason_code": "remote_authority_local_scope_mismatch",
+            }
+        )
+        reason_code = gateway.get(
+            "reason_code", "remote_authority_execution_not_admitted"
+        )
+        reason = (
+            "Remote authority read verified; shared Turn admission is unavailable"
+            if gateway["status"] == "verified"
+            else "Waiting for a verified read from the configured remote authority"
+        )
         action = EffectiveAction.BLOCKED_WAIT.value
-        payload.update(decision="wait", state="waiting", effective_action=action,
-            remote_gateway=gateway, reason_code=reason_code, reason=reason, recommended_action=reason,
-            execution_obligation={"kind": action, "must_attempt_work": False, "delivery_allowed": False,
-                "reason": reason, "spend_policy": "no quota spend for remote authority observation"})
+        payload.update(
+            decision="wait", state="waiting", effective_action=action,
+            remote_gateway=gateway, reason_code=reason_code,
+            reason=reason, recommended_action=reason,
+            execution_obligation={
+                "kind": action, "must_attempt_work": False, "delivery_allowed": False,
+                "reason": reason,
+                "spend_policy": "no quota spend for remote authority observation",
+            },
+        )
     payload["interaction_contract"] = build_interaction_contract(
-        payload, available_capabilities=available_capabilities, scheduler_execution_context=scheduler_context,
-        turn_instance_id=turn_instance_id, registry_path=str(registry_path), runtime_root=str(runtime_root),
+        payload, available_capabilities=available_capabilities,
+        scheduler_execution_context=scheduler_context, turn_instance_id=turn_instance_id,
+        registry_path=str(registry_path), runtime_root=str(runtime_root),
     )
     return payload

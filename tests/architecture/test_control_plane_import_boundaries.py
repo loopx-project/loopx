@@ -360,7 +360,7 @@ def test_turn_run_once_defers_dsh_builders_and_preserves_exports() -> None:
 import sys
 import loopx.cli_commands.turn_run_once as command
 assert 'loopx.cli_commands.turn_dsh_host' not in sys.modules
-assert 'loopx.dsh_goal_mode.turn_host_adapter' not in sys.modules
+assert 'loopx.hosts.dsh.turn_host_adapter' not in sys.modules
 names = {'build_dsh_host_runner', 'build_dsh_operation_host_runner'}
 assert names <= set(dir(command))
 assert not hasattr(command, 'unknown_host_builder')

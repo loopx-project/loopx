@@ -155,6 +155,8 @@ class RequestControlMixin:
                 if (source_basis(current), current_goals, current_core) != proof:
                     raise ValueError("conversation authorization changed during read")
             self._send_json(_operator_payload(result))
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except (OSError, ValueError, TypeError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
             self._send_error(redact_local_paths(str(exc)), status=400, error_code="request_inventory_unavailable")
 

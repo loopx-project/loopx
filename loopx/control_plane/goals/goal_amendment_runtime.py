@@ -33,7 +33,7 @@ def _replan_readback(derived: Mapping[str, Any], inventory: list[dict[str, Any]]
     obligations: dict[str, dict[str, Any]] = {}
     for candidate in candidates:
         normalized = ensure_replan_novelty_policy(candidate)
-        obligations.setdefault(normalized["obligation_id"], normalized)
+        obligations.setdefault(str(normalized["obligation_id"]), normalized)
     rows = []
     for item in inventory:
         obligation = obligations[item["obligation_id"]]

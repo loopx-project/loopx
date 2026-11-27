@@ -55,11 +55,14 @@ def objective_revision_proposal(*, registry_path: Path, runtime_root: str | None
     proposal = service.load(proposal_id)
     if proposal is None:
         raise ValueError("Objective proposal was not found")
-    parameters = proposal["normalized_parameters"]
+    raw_parameters = proposal["normalized_parameters"]
+    raw_context = proposal["context"]
     if (proposal["action_kind"] != "goal.update"
-        or proposal["context"].get("goal_id") != goal_id
-        or parameters.get("goal_id") != goal_id
-        or not {"objective", "reason", "source_ref"}.issubset(parameters)):
+        or not isinstance(raw_context, Mapping)
+        or not isinstance(raw_parameters, Mapping)
+        or raw_context.get("goal_id") != goal_id
+        or raw_parameters.get("goal_id") != goal_id
+        or not {"objective", "reason", "source_ref"}.issubset(raw_parameters)):
         raise ValueError("Proposal is not a current-objective revision for this Goal")
     if not execute:
         return {"ok": True, "executed": False, "proposal": proposal,
@@ -184,8 +187,13 @@ class GoalObjectiveActionMixin:
         before = inspect_goal_acceptance(**route)
         document = {key: parameters[key] for key in ("objective", "reason", "source_ref")}
         preview = update_goal_objective(**route, operation="revise-objective", document=document,
-            expected_provider_revision=before["provider_revision"], operation_id=f"objective-preview:{uuid4().hex}")
-        objective = preview["goal_acceptance_contract"]["goal_objective"]
+            expected_provider_revision=str(before["provider_revision"]), operation_id=f"objective-preview:{uuid4().hex}")
+        contract = preview["goal_acceptance_contract"]
+        if not isinstance(contract, Mapping):
+            raise TypeError("Goal acceptance contract shape is invalid")
+        objective = contract["goal_objective"]
+        if not isinstance(objective, Mapping):
+            raise TypeError("Goal objective shape is invalid")
         return json.dumps({"provider_revision": before["provider_revision"], "objective_digest": objective["digest"]}, sort_keys=True), preview
 
     def _apply_objective_revision(self, proposal_id: str) -> dict[str, Any]:
@@ -195,12 +203,22 @@ class GoalObjectiveActionMixin:
                 raise KeyError("Objective proposal is unavailable")
             if proposal["status"] == "applied":
                 return {"proposal": proposal, "turn": None}
-            parameters = proposal["normalized_parameters"]
-            basis = json.loads(proposal["expected_state_fingerprint"])
+            raw_parameters = proposal["normalized_parameters"]
+            if not isinstance(raw_parameters, Mapping):
+                raise ValueError("Objective proposal parameters are malformed")
+            parameters = dict(raw_parameters)
+            expected_fingerprint = str(proposal["expected_state_fingerprint"])
+            basis = json.loads(expected_fingerprint)
             document = {key: parameters[key] for key in ("objective", "reason", "source_ref")}
             # Retain exactly the native request before its first attempt. A
             # missing reply retries that operation, never creates another edit.
-            steps = (proposal.get("checkpoint") or {}).get("steps", {})
+            raw_checkpoint = proposal.get("checkpoint")
+            raw_steps = (
+                raw_checkpoint.get("steps", {})
+                if isinstance(raw_checkpoint, Mapping)
+                else {}
+            )
+            steps = raw_steps if isinstance(raw_steps, Mapping) else {}
             if not steps.get("objective_started"):
                 fingerprint, _ = self._objective_preview(parameters)
                 if json.loads(fingerprint)["objective_digest"] != basis["objective_digest"]:
@@ -213,5 +231,5 @@ class GoalObjectiveActionMixin:
             current = inspect_goal_acceptance(**self._objective_route(parameters["goal_id"]))
             receipt = {"receipt_id": f"objective-{proposal_id}", "outcome": "objective_revised", "projection_verified": True,
                 "goal_id": parameters["goal_id"], "operation_id": saved["operation_id"]}
-            stored = self.store.apply(proposal_id, current_state_fingerprint=proposal["expected_state_fingerprint"], receipt=receipt)
+            stored = self.store.apply(proposal_id, current_state_fingerprint=expected_fingerprint, receipt=receipt)
             return {"proposal": stored, "turn": None, "current": public_goal_acceptance(current)}

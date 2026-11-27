@@ -285,20 +285,22 @@ def finalize_user_gate_notification_cooldown(
     )
     if isinstance(cooldown, dict):
         payload["user_gate_notification_cooldown"] = dict(cooldown)
-    if _user_gate_notification_suppressed(payload):
+    suppressed = _user_gate_notification_suppressed(payload)
+    if suppressed:
         payload["pending_user_action"] = bool(
             payload.get("requires_user_action")
             or user_channel_action_todo_actions(payload.get("user_todo_summary"))
         )
         payload["requires_user_action"] = False
-    payload["interaction_contract"] = build_interaction_contract(
-        payload,
-        available_capabilities=available_capabilities,
-        scheduler_execution_context=scheduler_execution_context,
-        turn_instance_id=turn_instance_id,
-        runtime_root=runtime_root,
-        registry_path=registry_path,
-    )
+    if suppressed or not isinstance(payload.get("interaction_contract"), dict):
+        payload["interaction_contract"] = build_interaction_contract(
+            payload,
+            available_capabilities=available_capabilities,
+            scheduler_execution_context=scheduler_execution_context,
+            turn_instance_id=turn_instance_id,
+            runtime_root=runtime_root,
+            registry_path=registry_path,
+        )
     attach_user_action_compat_fields(payload)
 
 

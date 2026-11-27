@@ -61,6 +61,7 @@ import {
 import {
   COORDINATION_TODO_CLAIM_RESULT_SCHEMA,
   executeCoordinationTodoClaim,
+  unqualifiedGoalRefClaimFailure,
 } from "./todo_claim.ts";
 import {
   COORDINATION_TODO_CREATE_RESULT_SCHEMA,
@@ -1048,6 +1049,11 @@ export async function claimLocalCoordinationTodo(
   let sourceAuthority = "file_v0";
   try {
     const input = requireJsonObject(value, "local coordination Todo claim request");
+    // Wire integrity lives before the field whitelist: an explicit goal_ref
+    // must be rejected, not silently dropped, on every claim wire version.
+    const scopeFailure = unqualifiedGoalRefClaimFailure(input);
+    if (scopeFailure !== null) return {...scopeFailure, source_authority: null,
+      decision_read_from_provider: false, legacy_fallback_used: false};
     const reviewed = input.schema_version === REVIEWED_MANAGED_CLAIM_REQUEST_SCHEMA;
     const managed = reviewed || input.schema_version === LOCAL_COORDINATION_TODO_MANAGED_CLAIM_REQUEST_SCHEMA;
     if (input.schema_version !== LOCAL_COORDINATION_TODO_CLAIM_REQUEST_SCHEMA &&

@@ -187,6 +187,7 @@ class _QuotaDecisionPreparation:
     delivery_continuity_anchor: dict[str, Any] | None
     delivery_continuity_todo: dict[str, Any] | None
     vision_initialization_context: dict[str, Any] | None = None
+    captured_local_workspace: dict[str, Any] | None = None
 
     @property
     def inbox_priority_due(self) -> bool:
@@ -756,6 +757,7 @@ def _prepare_quota_should_run_item(
     receipt_bound_guard_recorded_at: str | None = None,
     receipt_bound_guard_turn_instance_id: str | None = None,
     receipt_bound_replan_review: Mapping[str, Any] | None = None,
+    reuse_fresh_canonical_snapshot: bool = False,
 ) -> _QuotaDecisionPreparation:
     quota = cast(dict[str, Any], item.get("quota")) if isinstance(item.get("quota"), dict) else {}
     state = str(quota.get("state") or "unknown")
@@ -783,6 +785,7 @@ def _prepare_quota_should_run_item(
         project_asset.get("agent_todos") if project_asset else None,
         agent_identity=agent_identity,
         available_capabilities=effective_available_capabilities,
+        reuse_fresh_canonical_snapshot=reuse_fresh_canonical_snapshot,
     )
     # Only this Agent source is consumed as summary, planning and retained
     # terminal rows below. User-source and general display calls stay single-view.

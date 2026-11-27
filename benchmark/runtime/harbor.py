@@ -9,7 +9,7 @@ import shlex
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Any, Iterable
 
 from harbor.agents.installed.base import with_prompt_template
 from harbor.environments.base import BaseEnvironment
@@ -21,7 +21,12 @@ from loopx.control_plane.work_items.stride_policy_codec import LIVE_STRIDE_STRAT
 from loopx.control_plane.goals.goal_vision_policy import DEFAULT_PLANNING_HORIZON_GOAL
 
 from .codex_offline import MODEL_CATALOG_REMOTE, CodexOffline, stage_portable_python
-from .codex import DEFAULT_REPLAN_AFTER_TURNS, Execution, normalize_claim_ttl_seconds
+from .codex import (
+    DEFAULT_REPLAN_AFTER_TURNS,
+    Execution,
+    aggregate_control_telemetry,
+    normalize_claim_ttl_seconds,
+)
 from .layout import _ROOT, _SRC, _CONTROL, _CODEX_HOME, _REGISTRY, _LOOPX_RUNTIME
 from .scheduler import phase_work_reserve
 
@@ -84,6 +89,7 @@ class BenchmarkCodex(CodexOffline):
         defer_codex_home=False,
         complete_turn=False,
         official_stop_hook=False,
+        official_stop_hook_mode=None,
         claim_ttl_seconds=None,
         **kwargs,
     ):
@@ -112,6 +118,7 @@ class BenchmarkCodex(CodexOffline):
             native_child_limit,
             complete_turn=complete_turn,
             official_stop_hook=official_stop_hook,
+            official_stop_hook_mode=official_stop_hook_mode,
         )
         if type(provider_request_admission) is not bool:
             raise ValueError("provider_request_admission must be a boolean opt-in")
@@ -186,6 +193,7 @@ class BenchmarkCodex(CodexOffline):
         self._task_path = "/usr/local/bin:/usr/bin:/bin"
         self._phase_number = 0
         self._seeded_todo_id: str | None = None
+        self._last_phase_telemetry: dict[str, float | bool | str | None] | None = None
         if task_objective is not None and (not isinstance(task_objective, str)
                                           or not task_objective.strip()):
             raise ValueError("Task objective must be a non-empty string")
@@ -420,6 +428,8 @@ class BenchmarkCodex(CodexOffline):
             **self._host_context_receipt(),
             **self._planning_receipt(),
             **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
+            **({"official_stop_hook_mode": self.execution.official_stop_hook_mode}
+               if self.execution.official_stop_hook_mode is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             "loopx_usage_ping_enabled": False,
@@ -694,6 +704,7 @@ class BenchmarkCodex(CodexOffline):
                    if self.checkpoint_request_path is not None else {}),
                 "LOOPX_CONTEXT_DELIVERY": self.execution.context_delivery,
                 "LOOPX_OFFICIAL_STOP_HOOK": "1" if self.execution.official_stop_hook else "0",
+                "LOOPX_OFFICIAL_STOP_HOOK_MODE": self.execution.official_stop_hook_mode or "",
                 # A trial's explicit None must not inherit a container opt-in.
                 "LOOPX_NATIVE_CHILD_LIMIT": (
                     str(self.execution.native_child_limit)
@@ -803,6 +814,41 @@ class BenchmarkCodex(CodexOffline):
         )
         return trajectories
 
+    def _wake_dirs(self) -> set[Path]:
+        wakes_dir = self.logs_dir / "wakes"
+        if wakes_dir.is_symlink() or not wakes_dir.is_dir():
+            return set()
+        return {
+            path.resolve()
+            for path in wakes_dir.iterdir()
+            if not path.is_symlink() and path.is_dir()
+        }
+
+    def _read_wake_receipts(
+        self, *, exclude: Iterable[Path] = ()
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Collect current-phase wake receipt dicts alongside missing/corrupt wake count."""
+        seen = set(exclude)
+        receipts: list[dict[str, Any]] = []
+        missing_count = 0
+        for wake_dir in sorted(self._wake_dirs()):
+            if wake_dir in seen:
+                continue
+            path = wake_dir / "receipt.json"
+            if path.is_symlink() or not path.is_file():
+                missing_count += 1
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                missing_count += 1
+                continue
+            if not isinstance(payload, dict):
+                missing_count += 1
+                continue
+            receipts.append(payload)
+        return receipts, missing_count
+
     def _populate_context(
         self, context: AgentContext, before: dict | None = None
     ) -> None:
@@ -822,6 +868,14 @@ class BenchmarkCodex(CodexOffline):
             value = delta(key)
             return value if type(value) is int else None
 
+        telemetry = self._last_phase_telemetry
+        if telemetry is None:
+            wakes, missing_wakes = self._read_wake_receipts()
+            if wakes or missing_wakes:
+                telemetry = aggregate_control_telemetry(
+                    wakes, missing_receipts=missing_wakes,
+                )
+
         context.n_input_tokens = token_delta("prompt")
         context.n_output_tokens = token_delta("completion")
         context.n_cache_tokens = token_delta("cached")
@@ -833,10 +887,13 @@ class BenchmarkCodex(CodexOffline):
             **self._host_context_receipt(),
             **self._planning_receipt(),
             **({"official_stop_hook": True} if self.execution.official_stop_hook else {}),
+            **({"official_stop_hook_mode": self.execution.official_stop_hook_mode}
+               if self.execution.official_stop_hook_mode is not None else {}),
             **({"provider_request_admission": "on"} if self.provider_request_admission else {}),
             "home_scope": "trial",
             **self._replan_receipt(),
             "benchmark_phase": self._phase_number,
+            **(telemetry if telemetry is not None else {}),
         }
         self._write_aggregate_trajectory(trajectories)
 
@@ -853,6 +910,9 @@ class BenchmarkCodex(CodexOffline):
         if not self.model_name:
             raise ValueError("model_name is required")
         self._phase_number += 1
+        self._last_phase_telemetry = None
+        before_wakes = self._wake_dirs()
+        prep_elapsed = 0.0
         deadline = time.monotonic() + self.scheduler_timeout
         pwd = await self.exec_as_agent(environment, command="pwd", timeout_sec=30)
         cwd = (pwd.stdout or "").strip()
@@ -867,10 +927,14 @@ class BenchmarkCodex(CodexOffline):
         if not any(self.logs_dir.glob("sessions/**/*.jsonl")):
             before = None
         try:
-            if self.execution.uses_loopx:
-                await self._prepare_phase(environment, instruction, cwd=cwd)
-            else:
-                await self._write_task_document(environment, instruction)
+            prep_started = time.monotonic()
+            try:
+                if self.execution.uses_loopx:
+                    await self._prepare_phase(environment, instruction, cwd=cwd)
+                else:
+                    await self._write_task_document(environment, instruction)
+            finally:
+                prep_elapsed = max(0.0, time.monotonic() - prep_started)
             wake_command = [f"{_PYTHON}/bin/python3", "-m", _WORKER_MODULE]
             env = self._worker_env(cwd=cwd)
             if self.execution.task_entry == "loopx-planned":
@@ -941,4 +1005,13 @@ class BenchmarkCodex(CodexOffline):
                 mounted = environment.capabilities.mounted
             if not mounted:
                 await environment.download_dir("/logs/agent", self.logs_dir)
-            self._populate_context(context, before)
+            new_wakes, missing_wakes = self._read_wake_receipts(exclude=before_wakes)
+            self._last_phase_telemetry = aggregate_control_telemetry(
+                new_wakes,
+                extra_control_seconds=prep_elapsed,
+                missing_receipts=missing_wakes,
+            )
+            try:
+                self._populate_context(context, before)
+            finally:
+                self._last_phase_telemetry = None

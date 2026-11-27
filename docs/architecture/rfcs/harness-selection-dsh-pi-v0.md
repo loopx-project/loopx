@@ -241,7 +241,7 @@ LoopX's public [Ark Managed Agent host contract](../../../loopx/ark_managed_agen
 currently specifies one-shot Goal activation, native continuation and no outer
 Turn driver. A cloud governed-Turn adapter is a **separate, unqualified opt-in
 candidate**, not a reinterpretation of that profile. DSH's
-[bounded Turn adapter](../../../loopx/dsh_goal_mode/README.md) and
+[bounded Turn adapter](../../../loopx/hosts/dsh/README.md) and
 [same-session plugin](../../../packages/dsh-loopx-plugin/README.md) likewise have
 different continuation contracts; qualification cannot be borrowed between them.
 

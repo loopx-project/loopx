@@ -40,7 +40,7 @@ from .control_plane.coordination.local_authority import LocalCoordinationAuthori
 from .control_plane.todos.contract import TODO_DECISION_OUTCOME_VALUES
 from .history import load_registry
 from .host_loop_activation import build_host_loop_activation_packet
-from .kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID
+from .hosts.kiro_cli import KIRO_CLI_CHAT_AGENT_ID
 from .paths import resolve_runtime_root
 from .public_safe_text import OPAQUE_ID_PATTERN as _OPAQUE_ID
 from .quota import build_quota_should_run
@@ -1577,7 +1577,7 @@ class ChatActionService(
                 "proposal": proposal,
                 "turn": self._turn_from_receipt(proposal.get("receipt")),
             }
-        if (proposal.get("context") or {}).get("binding_id"):
+        if _as_dict(proposal.get("context")).get("binding_id"):
             if steward_context is None:
                 raise ProtectedActionGate(str(proposal["action_kind"]), gate={"kind": "authenticated_steward_confirmation_required",
                     "summary": "Confirm this proposal from its original owner private conversation.",

@@ -3,12 +3,9 @@ import test from "node:test";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {Pool} from "pg";
-import {randomUUID} from "node:crypto";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {refineGoalOutcome, GoalOutcomeValidationError, projectGoalOutcomes, serializeGoalOutcomes} from "../../loopx/control_plane/goals/outcome_requirements.ts";
 import {inspectGoalAcceptance, refineGoalAcceptanceOutcome} from "../../loopx/control_plane/goals/acceptance_authority.ts";
 import {authorityProjectionFixture} from "./authority_projection_fixture.ts";
@@ -86,20 +83,9 @@ test("review capacity measures UTF-8 bytes across all retained reviews", () => {
   assert.equal(refineGoalOutcome(head, goal, null, "author", {outcome_id: "outcome-2", review: fullReview}).outcomes.length, 3);
 });
 
-for (const provider of ["file", "sqlite", "postgresql"] as const) test(`${provider}: crowded review survives restart and replay; overflow is atomic`,
-  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: crowded review survives restart and replay; overflow is atomic`, async t => {
   const root = await mkdtemp(join(tmpdir(), "outcome-capacity-")); t.after(() => rm(root, {recursive: true, force: true}));
-  const pool = provider === "postgresql" ? new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2}) : null;
-  if (pool) t.after(() => pool.end());
-  const database = pool ? {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }} : null;
-  if (database) await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-  const scope = {tenant_id: `outcome-capacity-${randomUUID()}`, goal_id: goal};
-  const open = () => database ? new PostgreSqlAuthorityStore(database, scope)
-    : provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+  const open = () => provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
   const store = open(), head = crowded();
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null, next_projection: head, events: [], receipts: []});
   const prior = await inspectGoalAcceptance(store, goal);
@@ -197,18 +183,10 @@ test("the aggregate limit counts other outcomes while the source-count limit rem
   });
 });
 
-// The shared owner must reject before any real PostgreSQL transaction commits.
-// Run with the existing isolated integration database, never an active Goal.
-test("postgresql: rejected capacity update retains state and recovers once", {skip: !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
-  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2});
-  t.after(() => pool.end());
-  const database = {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }};
-  await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-  const store = new PostgreSqlAuthorityStore(database, {tenant_id: `capacity-${randomUUID()}`, goal_id: goal});
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: rejected capacity update retains state and recovers once`, async t => {
+  const root = await mkdtemp(join(tmpdir(), "outcome-rejected-capacity-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  const store = provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
   const state = declared();
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null,
     next_projection: {...original, goal_outcomes: state}, events: [], receipts: []});
@@ -266,20 +244,9 @@ function saturated() {
 const correction = {outcome_id: "outcome-0", storage_format: "records", requirements: [{id: "correction", description: "Preserve continuation and independently check the revised delivery."}],
   source: {ref: "owner:correction", summary: "An authorized additional acceptance condition"}};
 
-for (const provider of ["file", "sqlite", "postgresql"] as const) test(`${provider}: explicit record evolution retains a saturated Goal and subsequent adoption`,
-  {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL}, async t => {
+for (const provider of ["file", "sqlite"] as const) test(`${provider}: explicit record evolution retains a saturated Goal and subsequent adoption`, async t => {
   const root = await mkdtemp(join(tmpdir(), "outcome-records-")); t.after(() => rm(root, {recursive: true, force: true}));
-  const pool = provider === "postgresql" ? new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 2}) : null;
-  if (pool) t.after(() => pool.end());
-  const database = pool ? {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }} : null;
-  if (database) await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-  const scope = {tenant_id: `outcome-records-${randomUUID()}`, goal_id: goal};
-  const open = () => database ? new PostgreSqlAuthorityStore(database, scope)
-    : provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+  const open = () => provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
   const head = saturated(), original = structuredClone(head), store = open();
   await store.commitAuthority({operation_id: "seed", expected_provider_revision: null, next_projection: head, events: [], receipts: []});
   const seedRead = await inspectGoalAcceptance(store, goal);

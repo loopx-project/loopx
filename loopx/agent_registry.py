@@ -93,9 +93,13 @@ def agent_profile_for_goal(goal: dict[str, Any] | None, agent_id: str | None) ->
 
 
 def load_goal_from_registry(registry_path: Path, goal_id: str) -> dict[str, Any] | None:
-    from .history import load_registry
+    from .control_plane.hook_runtime.request_scope import current_hook_request_scope
+    from .control_plane.projects.registry_codec import load_registry
     from .registry import registry_goals
 
+    scope = current_hook_request_scope()
+    if scope is not None:
+        return scope.load_goal(registry_path, str(goal_id), loader=load_registry)
     if not registry_path.exists():
         return None
     registry = load_registry(registry_path)

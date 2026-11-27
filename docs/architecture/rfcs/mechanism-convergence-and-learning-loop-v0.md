@@ -347,7 +347,8 @@ now rejects unsupported providers before storage or writer-fence effects;
 [CLI controls](../../../tests/control_plane/test_canonical_authority_fixture.py)
 verify actual File/SQLite readback and preserve state on rejection. Previously,
 a PostgreSQL label silently initialized File authority. The existing
-[PostgreSQL remote task candidate](../../reference/remote-authority-task-service-v0.md)
+[outbound `RemoteAuthority` client contract](../../../loopx/control_plane/coordination/remote_authority_contract.ts)
+(and the [`v2.4.0` PostgreSQL remote task candidate](https://github.com/loopx-project/loopx/blob/v2.4.0/docs/reference/remote-authority-task-service-v0.md), whose server-side authority now lives in `loopx-project/loopx-cloud`)
 is separately qualified through real TLS, restricted roles, task lifecycle and
 read-only quota observation. It admits no ordinary host Turn. These service
 checks therefore do not qualify an ordinary PostgreSQL feedback Turn or justify

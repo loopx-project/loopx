@@ -11,6 +11,7 @@ import {
 import { normalizeRegisteredTodoAgents, normalizeTodoAgent } from "./todo_agents.ts";
 import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import {leaseWriteRepository, leaseRepositoryRejection} from "../work_items/task_lease_repository.ts";
+import {DEFAULT_TASK_LEASE_TTL_SECONDS} from "../work_items/task_lease_record.ts";
 
 export const COORDINATION_TODO_TERMINAL_DECISION_REQUEST_SCHEMA =
   "loopx_coordination_todo_terminal_decision_request_v0";
@@ -533,7 +534,7 @@ function terminalFence(
         version,
         lease_epoch: epoch,
         write_scopes: [],
-        acquire_ttl_seconds: 2700,
+        acquire_ttl_seconds: DEFAULT_TASK_LEASE_TTL_SECONDS,
       },
     });
   }

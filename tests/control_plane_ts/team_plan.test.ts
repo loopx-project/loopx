@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import {randomUUID} from "node:crypto";
 import {mkdtemp, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test, {type TestContext} from "node:test";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
+import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import {sqliteRuntimeIdentity} from "../../loopx/control_plane/coordination/sqlite_runtime.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import {TODO_DOMAIN_READ_RECORD_SCHEMA, TODO_DOMAIN_RECORD_CONTRACT} from "../../loopx/control_plane/coordination/coordination_state_contract.ts";
 import {prepareCoordinationProjectionCommit} from "../../loopx/control_plane/coordination/coordination_projection.ts";
@@ -33,25 +32,15 @@ async function seed(store: AuthorityStore) {
       todo_read_model: {schema_version: TODO_DOMAIN_READ_RECORD_SCHEMA, todo_count: 0,
         records_sha256: canonicalAuthoritySha256([]), contract_fields: [...TODO_DOMAIN_RECORD_CONTRACT.fields]}}})).status, "applied");
 }
-const providers = ["file", "postgresql"] as const;
+const providers = ["file", "sqlite"] as const;
+const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
 async function fixture(t: TestContext, provider: typeof providers[number]): Promise<AuthorityStore> {
-  if (provider === "file") {
-    const dir = await mkdtemp(join(tmpdir(), "team-plan-store-"));
-    t.after(() => rm(dir, {recursive: true, force: true}));
-    return new FileAuthorityStore(dir, goal);
-  }
-  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL, max: 4});
-  t.after(() => pool.end());
-  const db = {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-      release: () => client.release()};
-  }};
-  await installPostgreSqlAuthorityStoreSchema(db, `postgresql:${"b".repeat(32)}`);
-  return new PostgreSqlAuthorityStore(db, {tenant_id: `team-${randomUUID()}`, goal_id: goal});
+  const dir = await mkdtemp(join(tmpdir(), "team-plan-store-"));
+  t.after(() => rm(dir, {recursive: true, force: true}));
+  return provider === "file" ? new FileAuthorityStore(dir, goal) : new SqliteAuthorityStore(dir, goal);
 }
 for (const provider of providers) {
-  const options = {skip: provider === "postgresql" && !process.env.LOOPX_TEST_POSTGRES_URL};
+  const options = {skip: provider === "sqlite" && !sqliteQualified};
   test(`${provider}: equal-text lane assignments commit once; concurrent replay preserves receiver identity`, options, async t => {
     const store = await fixture(t, provider); await seed(store);
     const input = request();

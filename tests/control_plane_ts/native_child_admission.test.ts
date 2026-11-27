@@ -3,11 +3,12 @@ import {appendFile, mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
+import {createHash} from "node:crypto";
 
 import {nativeChildReportAdmission} from "../../loopx/control_plane/capabilities/native_child_admission.ts";
-import {settlementIdentity, settlementIdentityPayload} from "../../loopx/control_plane/effect_program.ts";
+import {settlementIdentity, settlementIdentityPayload, type JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import {QUOTA_SETTLEMENT_READBACK_REQUEST_SCHEMA, readQuotaSettlement} from "../../loopx/control_plane/quota/settlement_readback.ts";
-import {heartbeatWorkRequalification, projectHeartbeatReceiptSelection} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
+import {heartbeatWorkRequalification, projectHeartbeatReceiptSelection, validateHeartbeatTakeoverParent} from "../../loopx/control_plane/quota/heartbeat_receipt_identity.ts";
 
 const proof = {
   ok: true, should_run: true, must_attempt_work: true,
@@ -306,6 +307,62 @@ test("one prepared Turn admits only renewal of its original lease generation", a
     assert.equal(heartbeatWorkRequalification(historical, historicalDetails, identity, "open", false).append, false);
     assert.throws(() => heartbeatWorkRequalification(historical, renewal, identity, "open", false),
       /original task lease generation/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
+test("fenced takeover preserves admission and rejects competing or stale source facts", async () => {
+  const {root, identity, event} = await fixture();
+  try {
+    const original = {...event, recorded_at: "2026-01-01T00:00:00Z", details: {...event.details,
+      closeout_required: true, prepared_lease_required: true, prepared_lease_key_sha256: "a".repeat(64),
+      prepared_lease_version: 1, prepared_lease_epoch: 1}};
+    const source = {goal_id: goalId, todo_id: todoId, handoff_mode: "hard_lease",
+      source_authority: "sqlite_v0", provider_revision: "sqlite:fixture:3",
+      decision_read_from_provider: true, legacy_fallback_used: false,
+      observed_at: "2026-01-01T01:00:01Z", takeover_basis: {
+        acceptance_sha256: "b".repeat(64), todo: {todo_id: todoId, role: "agent", task_class: "advancement_task",
+          status: "open", archive_state: "active", done: false, claimed_by: agentId}},
+      leases: [{todo_id: todoId, owner: agentId, status: "active", idempotency_key: "current-claim",
+        version: 2, lease_epoch: 2, acquired_at: "2026-01-01T01:00:00Z",
+        updated_at: "2026-01-01T01:00:00Z", expires_at: "2026-01-01T04:00:00Z"}]};
+    const current = {...original.details, prepared_lease_key_sha256: createHash("sha256").update("current-claim").digest("hex"),
+      prepared_lease_version: 2, prepared_lease_epoch: 2, lease_takeover_source: source};
+    const result = heartbeatWorkRequalification(original, current, identity, "open", false);
+    assert.equal(result.append, true);
+    const details = result.details as JsonObject;
+    assert.equal(details.settlement_receipt_revision, "lease_takeover");
+    assert.equal(details.settlement_effect_id, identity.effect_id);
+    assert.equal(details.takeover_original_event_id, original.event_id);
+    assert.equal(details.takeover_original_epoch, 1);
+    assert.equal(details.prepared_lease_epoch, 2);
+    assert.equal(details.lease_takeover_source, undefined);
+    const resumed = {...original, event_id: "takeover-event", recorded_at: source.observed_at, details};
+    validateHeartbeatTakeoverParent(resumed, original, identity);
+    for (const mutate of [
+      (s: typeof source) => {s.leases[0]!.owner = "competing-holder";},
+      (s: typeof source) => {s.leases[0]!.status = "released";},
+      (s: typeof source) => {s.leases[0]!.expires_at = s.observed_at;},
+      (s: typeof source) => {s.leases[0]!.acquired_at = "2025-12-31T23:59:59Z";},
+      (s: typeof source) => {s.takeover_basis.todo.status = "done";},
+      (s: typeof source) => {s.takeover_basis.todo.claimed_by = "other-agent";},
+      (s: typeof source) => {s.decision_read_from_provider = false;},
+      (s: typeof source) => {s.legacy_fallback_used = true;},
+      (s: typeof source) => {s.provider_revision = "";},
+      (s: typeof source) => {s.leases.push({...s.leases[0]!});},
+    ]) {
+      const invalid = structuredClone(source); mutate(invalid);
+      assert.throws(() => heartbeatWorkRequalification(original,
+        {...current, lease_takeover_source: invalid}, identity, "open", false), /original task lease generation/);
+    }
+    for (const field of ["takeover_owner", "takeover_original_event_id", "takeover_todo_sha256", "takeover_acceptance_sha256", "takeover_expires_at"]) {
+      const corrupted = structuredClone(resumed);
+      corrupted.details[field] = "invalid";
+      assert.throws(() => validateHeartbeatTakeoverParent(corrupted, original, identity), /lease takeover/);
+    }
+    assert.throws(() => validateHeartbeatTakeoverParent({...resumed,
+      details: {...details, quota_spend_source: "changed-source"}}, original, identity), /lease takeover/);
+    assert.equal(heartbeatWorkRequalification(original, current, identity, "settlement_pending", false).append, false);
+    assert.equal(heartbeatWorkRequalification(original, current, identity, "open", true).append, false);
   } finally {await rm(root, {recursive: true, force: true});}
 });
 

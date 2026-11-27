@@ -26,6 +26,9 @@ from ...chat_agent import (
 )
 from ...chat.codex_goal import CodexGoalDriver
 from ...control_plane.content_digest import BARE_SHA256_PATTERN
+from ...hosts.codex_capabilities import (
+    CODEX_APP_SERVER_HOST_CAPABILITIES as CODEX_APP_SERVER_HOST_CAPABILITIES,
+)
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeController

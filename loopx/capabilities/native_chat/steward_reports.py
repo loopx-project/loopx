@@ -290,7 +290,9 @@ class StewardReports:
                 raise ValueError("native report configuration readback changed")
             if plan["retires_failed_window"]:
                 self._cancel_failed_window(actor, journal["window"], failure)
-            getattr(self.controller, "_steward_monitor_next_check", {}).pop(binding_id, None)
+            from .steward_monitor_pump import clear_steward_monitor_check_hints
+
+            clear_steward_monitor_check_hints(self.controller, binding_id)
             receipt = {"ok": True, "applied": True, "plan": plan, "report": self.health(binding_id),
                 "model_invoked": False, "external_writes_performed": False}
         if operation == "cancel":
