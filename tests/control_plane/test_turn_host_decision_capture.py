@@ -1531,6 +1531,51 @@ def test_task_presentation_retains_unknown_values_and_source_gate(complete_host_
             _prompt(changed)
 
 
+@pytest.mark.parametrize(("mode", "custom_policy", "expects_segment_guidance"), [
+    ("steering_audit_then_one_step", None, True),
+    ("steering_audit_then_one_step", "append once; one_step only for bounded readback", False),
+    ("monitor_quiet_until_material_transition", None, False),
+])
+def test_task_presentation_keeps_task_and_stop_guidance_inside_control_records(
+    complete_host_request, mode, custom_policy, expects_segment_guidance,
+):
+    from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
+    from loopx.control_plane.turn_driver.codex_cli import _prompt
+    from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt
+
+    request, original = complete_host_request
+    source = {key: value for key, value in original.items() if key not in {"schema_version", "contract_binding"}}
+    source["todo_write_hint"] = {
+        **source["todo_write_hint"], "task_evidence": {"instruction": "Read the result artifact before reporting."},
+    }
+    heartbeat = {**source["heartbeat_recommendation"], "recommended_mode": mode, "stop_if_unchanged": True}
+    if custom_policy is not None:
+        heartbeat["spend_policy"] = custom_policy
+    source["heartbeat_recommendation"] = heartbeat
+    source["execution_obligation"] = {
+        **source["execution_obligation"], "spend_policy": "Hold dependent work until the pending evidence is verified.",
+    }
+    contract = compose_turn_decision(source)
+    request = {**request, "work_contract": contract, "turn_envelope": build_turn_envelope(contract)}
+    codex_prompt = _prompt(request)
+    structured_prompt = render_prompt(extract_turn_authority(request))
+    codex_task = json.loads(codex_prompt.split("Turn request:\n", 1)[1])["task_context"]
+    structured_model, _ = json.JSONDecoder().raw_decode(structured_prompt.split("Turn request:\n", 1)[1])
+    assert codex_task == structured_model["task_context"]
+    task = codex_task
+    assert task["todo_write_hint"] == {"task_evidence": source["todo_write_hint"]["task_evidence"]}
+    assert task["heartbeat_recommendation"]["stop_if_unchanged"] is True
+    assert task["execution_obligation"] == source["execution_obligation"]
+    policy = source["heartbeat_recommendation"]["spend_policy"]
+    assert contract["heartbeat_recommendation"]["spend_policy"] == policy
+    if expects_segment_guidance:
+        assert "spend_policy" not in task["heartbeat_recommendation"]
+    else:
+        assert task["heartbeat_recommendation"]["spend_policy"] == policy
+    for rendered in (codex_prompt, structured_prompt):
+        assert ("one_step means one work segment, not one operation." in rendered) is expects_segment_guidance
+
+
 def test_task_view_resolves_authoring_and_explore_before_hiding_effects(complete_host_request):
     from copy import deepcopy
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
