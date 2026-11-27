@@ -70,7 +70,7 @@ def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
 
 def _is_bot_login(login: str) -> bool:
     cleaned = str(login or "").strip().casefold()
-    return not cleaned or cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
+    return cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
 
 
 def _is_bot_actor(raw_user: Any, login: str) -> bool:
@@ -320,16 +320,19 @@ def _post_reply_role(
     *,
     pr_author: str,
     rc_reviewer_logins: set[str],
-) -> tuple[int, str] | None:
+) -> tuple[int, str | None] | None:
     raw_user = entry.get("author") or entry.get("user") or {}
-    login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
+    raw_login = raw_user.get("login") if isinstance(raw_user, Mapping) else None
+    login = raw_login.strip() if isinstance(raw_login, str) else ""
     if _is_bot_actor(raw_user, login):
         return None
+    if not login:
+        return 1, None
     if pr_author and login.casefold() == pr_author.casefold():
         return 1, "author"
     assoc = str(entry.get("authorAssociation") or entry.get("author_association") or "").strip().upper()
     if assoc in _MAINTAINER_ASSOCIATIONS or (
-        bool(login) and login.casefold() in rc_reviewer_logins and assoc not in _NON_MAINTAINER_ASSOCIATIONS
+        login.casefold() in rc_reviewer_logins and assoc not in _NON_MAINTAINER_ASSOCIATIONS
     ):
         return 0, "maintainer"
     return None
@@ -370,7 +373,7 @@ def _summarize_request_changes_stall(
 
     earliest_comment_dt: datetime | None = None
     has_post_anchor_comment_reply = False
-    post_replies: list[tuple[datetime, int, str]] = []
+    post_replies: list[tuple[datetime, int, str | None]] = []
     for comment in row.get("comments") or []:
         if not isinstance(comment, Mapping):
             continue
@@ -383,7 +386,7 @@ def _summarize_request_changes_stall(
             continue
         role_info = _post_reply_role(comment, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
         if role_info is not None:
-            has_post_anchor_comment_reply = True
+            has_post_anchor_comment_reply |= role_info[1] is not None
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
     for review in raw_reviews:
@@ -398,12 +401,15 @@ def _summarize_request_changes_stall(
         if role_info is not None:
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
-    post_replies.sort(key=lambda item: (item[0], item[1]))
-    author_replied = bool(pr_author and post_replies and post_replies[-1][2] == "author")
+    # An unknown actor could be the PR author. A known author at the same time settles that tie.
+    post_replies.sort(key=lambda item: (item[0], item[1], item[2] is not None))
+    latest_reply = post_replies[-1] if post_replies else None
+    reply_role_uncertain = latest_reply is not None and latest_reply[2] is None
+    author_replied = latest_reply is not None and latest_reply[2] == "author"
     # GraphQL comments(last: N) returns a newest-last suffix, so coverage is complete when
     # there is no earlier page, the fetched suffix reaches the anchor, or a newer reply
     # from the PR author or a maintainer in the visible suffix supersedes older comments.
-    comments_coverage_complete = (
+    comments_coverage_complete = not reply_role_uncertain and (
         row.get("commentsHasPreviousPage") is not True
         or (earliest_comment_dt is not None and earliest_comment_dt <= stalled_anchor_dt)
         or has_post_anchor_comment_reply

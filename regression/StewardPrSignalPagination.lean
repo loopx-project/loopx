@@ -444,6 +444,54 @@ theorem genuine_empty_comment_page_differs_from_unreadable_row :
 theorem readable_comment_reply_still_supplies_independent_coverage :
     applyCommentPage ([], false) (some [some 9]) none true = ([9], true) := rfl
 
+/- Only post-anchor replies are considered and known bots have no role here.
+   The implementation orders replies by time and then gives known authors
+   precedence over maintainers. An unreadable identity could be an author,
+   so it outranks a maintainer at the same time, but cannot change a verified
+   author outcome at that time. -/
+inductive ReplyRole where
+  | maintainer
+  | uncertain
+  | author
+  deriving DecidableEq
+
+def replyRank : ReplyRole → Nat
+  | .maintainer => 0
+  | .uncertain => 1
+  | .author => 2
+
+def latestReply (left right : Nat × ReplyRole) : ReplyRole :=
+  if left.1 < right.1 ∨ (left.1 = right.1 ∧ replyRank left.2 < replyRank right.2)
+  then right.2
+  else left.2
+
+def replyCoverage (pageCovered : Bool) (latest : ReplyRole) : Bool :=
+  pageCovered && decide (latest ≠ .uncertain)
+
+theorem newer_unidentified_reply_keeps_the_prior_signal
+    (previous current : List Nat) (verified unknown : Nat) (later : verified < unknown) :
+    observe previous (if replyCoverage true (latestReply (verified, .author) (unknown, .uncertain))
+      then some current else none) = (previous, false) := by
+  simp [latestReply, replyCoverage, observe, later]
+
+theorem older_unidentified_reply_cannot_change_a_verified_reply
+    (unknown verified : Nat) (role : ReplyRole) (later : unknown < verified) :
+    latestReply (unknown, .uncertain) (verified, role) = role := by
+  simp [latestReply, later]
+
+theorem verified_author_at_same_time_is_decisive (clock : Nat) :
+    latestReply (clock, .uncertain) (clock, .author) = .author ∧
+    latestReply (clock, .author) (clock, .uncertain) = .author := by
+  simp [latestReply, replyRank]
+
+theorem maintainer_at_same_time_cannot_resolve_unknown_actor (clock : Nat) :
+    replyCoverage true (latestReply (clock, .maintainer) (clock, .uncertain)) = false := by
+  simp [latestReply, replyRank, replyCoverage]
+
+theorem treating_unknown_member_as_maintainer_changes_coverage :
+    replyCoverage true (latestReply (9, .author) (10, .maintainer)) = true ∧
+    replyCoverage true (latestReply (9, .author) (10, .uncertain)) = false := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -485,5 +533,10 @@ theorem readable_comment_reply_still_supplies_independent_coverage :
 #print axioms missing_comment_connection_cannot_change_coverage
 #print axioms genuine_empty_comment_page_differs_from_unreadable_row
 #print axioms readable_comment_reply_still_supplies_independent_coverage
+#print axioms newer_unidentified_reply_keeps_the_prior_signal
+#print axioms older_unidentified_reply_cannot_change_a_verified_reply
+#print axioms verified_author_at_same_time_is_decisive
+#print axioms maintainer_at_same_time_cannot_resolve_unknown_actor
+#print axioms treating_unknown_member_as_maintainer_changes_coverage
 
 end StewardPrSignalPagination

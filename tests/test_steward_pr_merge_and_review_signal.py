@@ -746,6 +746,91 @@ def test_steward_requires_readable_comment_page_for_coverage(
         assert observed["result_hash"] == "sha256:verified-prior"
 
 
+@pytest.mark.parametrize(
+    ("source", "known_login", "actor", "reply_time", "expected"),
+    [
+        pytest.param("latest", "member", None, "09:30", "uncertain", id="null-latest-actor"),
+        pytest.param("older", "member", None, "09:30", "uncertain", id="null-backfilled-actor"),
+        pytest.param("review", "member", None, "09:30", "uncertain", id="null-commented-review-actor"),
+        pytest.param("latest", "member", {"login": None}, "09:30", "uncertain", id="missing-login"),
+        pytest.param("latest", "maintainer", None, "09:00", "uncertain", id="unknown-ties-maintainer"),
+        pytest.param("latest", "member", None, "09:00", "author", id="known-author-wins-tie"),
+        pytest.param("older", "member", None, "08:30", "author", id="verified-newer-author"),
+        pytest.param("truncated", "member", None, "08:30", "author", id="verified-reply-covers-truncated-suffix"),
+        pytest.param("latest", "member", None, "08:00", "author", id="unknown-at-anchor"),
+        pytest.param("latest", "member", {"login": "member"}, "09:30", "author", id="verified-author"),
+        pytest.param("latest", "member", {"login": "maintainer"}, "09:30", "maintainer", id="verified-maintainer"),
+        pytest.param("latest", "member", {"__typename": "Bot"}, "09:30", "author", id="known-bot"),
+    ],
+)
+def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
+    source, known_login, actor, reply_time, expected,
+) -> None:
+    head = "a" * 40
+    node = _graphql_node(_sample_pr(
+        head_oid=head,
+        author="member",
+        reviews=[{
+            "id": "PRR_changes", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+            "author": {"login": "maintainer"}, "commit": {"oid": head},
+        }],
+    ))
+    replies = [{
+        "createdAt": "2030-01-01T09:00:00Z", "authorAssociation": "MEMBER",
+        "author": {"login": known_login},
+    }]
+    submitted = f"2030-01-01T{reply_time}:00Z"
+    candidate = {"author": actor, "authorAssociation": "MEMBER"}
+    if source == "review":
+        node["reviews"]["nodes"].append({
+            **candidate, "id": "PRR_comment", "state": "COMMENTED",
+            "submittedAt": submitted, "commit": {"oid": head},
+        })
+    else:
+        replies.append({**candidate, "createdAt": submitted})
+    finished = {"nodes": replies, "pageInfo": {"hasPreviousPage": False}}
+    if source == "truncated":
+        finished["pageInfo"] = {"hasPreviousPage": True, "startCursor": "recent"}
+    node["comments"] = (
+        {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}}
+        if source == "older" else finished
+    )
+    requested_cursors = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        cursor = next((arg for arg in cmd if arg.startswith("before=")), None)
+        if cursor is None:
+            response = _graphql_page([node])
+        else:
+            requested_cursors.append(cursor)
+            response = {"data": {"repository": {"pullRequest": {"comments": finished}}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=source == "older")
+    assert requested_cursors == (["before=recent"] if source == "older" else [])
+    assert snapshot["status"] == "ok"
+    assert snapshot["items"][0]["comments_coverage_incomplete"] is (expected == "uncertain")
+    assert snapshot["items"][0]["author_replied_after_request_changes"] is (expected == "author")
+
+    observed = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot,
+        "previous_hash": "sha256:verified-prior",
+        "observed_at": "2030-01-01T10:00:00Z",
+        "signal_scope": {
+            "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+            "include_inbox": False, "pr_filter": {"min_stalled_hours": 24, "author_mode": "exclude", "authors": ["other"]},
+        },
+    })
+    assert observed["observation_incomplete"] is (expected == "uncertain")
+    if expected == "uncertain":
+        assert observed["result_hash"] == "sha256:verified-prior"
+        assert observed["material_change"] is False
+    else:
+        buckets = [row["stalled_bucket"] for row in observed["scoped_repository_items"]]
+        assert buckets == (["awaiting_maintainer_reply"] if expected == "author" else [])
+
+
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     head = "d" * 40
     pr_row = _sample_pr(
