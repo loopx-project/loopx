@@ -926,6 +926,7 @@ def _backfill_pr_comments_if_needed(
     head_oid = norm_node.get("headRefOid")
     if not isinstance(head_oid, str) or not head_oid.strip():
         return summary, remaining_pages
+    seen_cursors: set[str] = set()
     for _ in range(remaining_pages):
         if summary.get("comments_coverage_incomplete") is not True:
             break
@@ -933,6 +934,7 @@ def _backfill_pr_comments_if_needed(
         remaining_seconds = deadline - monotonic()
         if not comment_cursor or remaining_seconds <= 0:
             break
+        seen_cursors.add(comment_cursor)
         remaining_pages -= 1
         pr_data = read_older_page(number, head_oid, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds)
         if pr_data is None:
@@ -944,7 +946,8 @@ def _backfill_pr_comments_if_needed(
         if older_comments is None:
             break
         next_has_prev, next_cursor = _graphql_comment_page_info(page_info)
-        if next_cursor == comment_cursor:
+        if next_cursor in seen_cursors:
+            # A cycle leaves older coverage unverified.
             next_cursor = None
         norm_node["comments"] = [*older_comments, *norm_node["comments"]]
         norm_node["commentsHasPreviousPage"] = next_has_prev

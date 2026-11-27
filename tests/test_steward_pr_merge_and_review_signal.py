@@ -856,6 +856,70 @@ def test_steward_requires_matching_pr_and_head_for_older_comments(monkeypatch, c
 
 
 @pytest.mark.parametrize(
+    ("pages", "expected_reads", "expected_prs"),
+    [
+        pytest.param([("B", None), ("A", None), (None, "contributor")], ["A", "B"], None, id="cycle"),
+        pytest.param([("A", None)], ["A"], None, id="self-loop"),
+        pytest.param([("B", None), ("A", "contributor")], ["A", "B"], [42], id="independent-reply"),
+        pytest.param([("B", None), ("C", None), (None, None)], ["A", "B", "C"], [], id="terminal-at-page-cap"),
+    ],
+)
+def test_steward_comment_backfill_never_reuses_a_cursor(monkeypatch, pages, expected_reads, expected_prs) -> None:
+    from loopx.capabilities.native_chat.steward_monitor_signals import _read_repository_snapshot
+
+    head = "a" * 40
+    observed_at = datetime(2030, 1, 1, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor_signals.now_utc", lambda: observed_at)
+    review = {
+        "id": "review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+        "author": {"login": "maintainer"}, "commit": {"oid": head},
+    }
+    node = _graphql_node(_sample_pr(
+        number=42, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=[review],
+    ))
+    node["comments"] = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "A"}}
+    scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {"effective_verdicts": ["REQUEST_CHANGES"], "min_stalled_hours": 24,
+                      "author_mode": "exclude", "authors": ["maintainer"]},
+    }
+    reads = []
+
+    def runner(cmd, **_kwargs):
+        before = next((arg.removeprefix("before=") for arg in cmd if arg.startswith("before=")), None)
+        if before is None:
+            payload = _graphql_page([node])
+        else:
+            next_cursor, login = pages[len(reads)]
+            reads.append(before)
+            replies = [{"createdAt": "2030-01-01T09:00:00Z", "author": {"login": login}}] if login else []
+            payload = {"data": {"repository": {"pullRequest": {
+                "number": 42, "headRefOid": head,
+                "comments": {"nodes": replies, "pageInfo": {
+                    "hasPreviousPage": next_cursor is not None, "startCursor": next_cursor,
+                }},
+            }}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+
+    snapshot = _read_repository_snapshot(
+        {"task_repository": "git:github.com/org/repo"}, scope,
+        partial(observe_github_repository_prs, runner=runner), ChatConversationBindings._core,
+    )
+    assert snapshot is not None and snapshot["status"] == "ok"
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "signal_scope": scope,
+        "observed_at": observed_at.isoformat(), "previous_hash": "sha256:prior",
+    })
+    assert observation["observation_incomplete"] is (expected_prs is None)
+    if expected_prs is None:
+        assert observation["result_hash"] == "sha256:prior"
+        assert observation["material_change"] is False
+    else:
+        assert [item["number"] for item in observation["scoped_repository_items"]] == expected_prs
+    assert reads == expected_reads
+
+
+@pytest.mark.parametrize(
     ("page_kind", "page_info", "evidence", "expected_complete"),
     [
         pytest.param("initial", {"startCursor": "recent"}, None, False, id="initial-missing-flag"),

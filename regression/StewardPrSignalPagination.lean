@@ -969,6 +969,48 @@ theorem ignoring_comment_head_can_publish_a_false_author_bypass :
         ([], false) := by
   decide
 
+/- Each structurally usable page describes continuation and the reply result
+   supported by the observed prefix. A dated reply or reaching the stalled
+   anchor can supply coverage independently of the continuation. -/
+structure OlderCommentEvidence where
+  metadata : PageMetadata
+  independentlyComplete : Bool
+  authorReply : Bool
+
+def collectOlderComments : Nat → List Nat → Nat → List OlderCommentEvidence → Option Bool
+  | 0, _, _, _ => none
+  | _ + 1, _, _, [] => none
+  | budget + 1, seen, cursor, page :: rest =>
+    if cursor ∈ seen then none
+    else if page.independentlyComplete || page.metadata == .terminal then some page.authorReply
+    else
+      match page.metadata with
+      | .next next => collectOlderComments budget (cursor :: seen) next rest
+      | _ => none
+
+theorem a_visited_comment_cursor_cannot_contribute_payload
+    (budget cursor : Nat) (seen : List Nat) (page : OlderCommentEvidence)
+    (rest : List OlderCommentEvidence) (visited : cursor ∈ seen) :
+    collectOlderComments (budget + 1) seen cursor (page :: rest) = none := by
+  simp [collectOlderComments, visited]
+
+theorem looping_comment_backfill_preserves_prior (prior : List Nat) :
+    observeStalledScope prior 42 (collectOlderComments 3 [] 1
+      [⟨.next 2, false, false⟩, ⟨.next 1, false, false⟩, ⟨.terminal, false, true⟩]) =
+      (prior, false) := rfl
+
+theorem independent_reply_on_fresh_page_survives_a_cyclic_continuation :
+    collectOlderComments 3 [] 1
+      [⟨.next 2, false, false⟩, ⟨.next 1, true, true⟩, ⟨.terminal, false, false⟩] =
+      some true := rfl
+
+theorem distinct_comments_can_reach_verified_end_at_budget :
+    let pages : List OlderCommentEvidence :=
+      [⟨.next 2, false, false⟩, ⟨.next 3, false, false⟩, ⟨.terminal, false, false⟩]
+    collectOlderComments 3 [] 1 pages = some false ∧
+      collectOlderComments 2 [] 1 pages = none := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1071,5 +1113,9 @@ theorem ignoring_comment_head_can_publish_a_false_author_bypass :
 #print axioms verified_matching_older_comments_preserve_their_decision
 #print axioms matching_maintainer_reply_keeps_a_verified_exclusion
 #print axioms ignoring_comment_head_can_publish_a_false_author_bypass
+#print axioms a_visited_comment_cursor_cannot_contribute_payload
+#print axioms looping_comment_backfill_preserves_prior
+#print axioms independent_reply_on_fresh_page_survives_a_cyclic_continuation
+#print axioms distinct_comments_can_reach_verified_end_at_budget
 
 end StewardPrSignalPagination
