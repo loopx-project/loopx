@@ -546,7 +546,7 @@ materialized proposal is checkpointed immediately. Monitor upserts belong to
 the pre-settlement phase; monitor completion belongs to the post-settlement
 phase. A crash between either Todo write and its checkpoint recovers by the
 proposal's stable monitor key and completion identity instead of duplicating
-work. If the journal contains start intent but no accepted provider result,
+work. If the journal contains an armed start intent but no accepted provider result,
 a second start is refused, including with the original idempotency key. A trusted
 integration may pass `read_start_result` to `start_governed_external_capability`
 with the original request and current admission to look up the original
@@ -562,6 +562,46 @@ from existing journals on first use. Quiesce older writers when upgrading
 and retain the run directory during handoff. A new independently admitted
 Turn can start after the prior invocation has committed. Separate business
 intents across Todos or run directories still need provider-level identity.
+
+**Recovery from an older backup.** `backup-state verify --execute` leaves a
+`.loopx-restored-inert` entry in each extracted runtime root. Keep it when
+copying the runtime. The verified copy grants no execution authority. The
+governed writer checks the Goal's source and invoked runtime as well as the
+journal path, including when an integration selects a different run directory.
+Ordinary fresh start and its preview on that runtime report that provider
+reconciliation is required. A running operation requires a trusted
+`read_running_result(request)` for polling on a restored runtime.
+
+A successor with current runnable admission for the same Goal, Todo and
+applicable operation can supply the original invocation arguments and
+`read_start_result`. The result retains the original effect identity for
+writeback and quota. On a restored runtime, even if the backup predates the
+journal, the trusted service lookup must return `{request_digest, target_key, result}` from its own
+records, with the original digest, admitted target, and matching typed provider
+result. An unknown result, a mismatched identity or a missing original team
+plan basis holds recovery. Readback alone never dispatches a new start.
+
+When the service can prove the prior attempt reached a terminal state without
+an effect, a trusted integration may supply `reserve_restored_start(query)`.
+The query contains the original-form provider request, the admitted target,
+a stable operation key (Goal, capability, operation and target), an intent
+digest (Goal binding, provider, context and input), the current request digest,
+invocation id and a fresh challenge. The service must check the business
+operation across all prior attempts, fence any outstanding writer, and
+atomically grant **one** conditional start. Its receipt must echo
+`operation_key`, `intent_digest`, `request_digest`, `invocation_id` and
+`challenge`, set `status` to `reserved_after_terminal_no_effect`, and include
+a bounded non-secret `reservation_ref`. The provider must validate and
+consume this grant atomically with delivery, using
+`request.lifecycle.restored_start_reservation`. An empty lookup, timeout or
+cached grant does not authorize dispatch. A lost grant needs service-side
+reconciliation. Integrations without a suitable service primitive stay held.
+
+The interlock covers runtime copies published by this verifier, including
+older compatible archives verified with the updated code. A raw filesystem
+rollback, a previously extracted unmarked copy, an omitted marker or an older
+writer does not carry this protection. Quiesce older writers and retain
+independent provider records across recovery.
 
 One settlement effect id owns exactly one
 material invocation: retrying the same request replays it, while attempting a

@@ -18,6 +18,7 @@ LEGACY_RUNTIME_ROOT = Path.home() / ".codex" / "loopx"
 DEFAULT_PROJECT_REGISTRY = Path(".loopx") / "registry.json"
 DEFAULT_PROJECT_GOALS = Path(".loopx") / "goals"
 LEGACY_PROJECT_GOALS = Path(".codex") / "goals"
+RESTORED_RUNTIME_MARKER = ".loopx-restored-inert"
 GLOBAL_REGISTRY_FILENAME = "registry.global.json"
 SHELL_DEFAULT_GLOBAL_REGISTRY = '"$HOME/.loopx/registry.global.json"'
 SHELL_LEGACY_GLOBAL_REGISTRY = '"$HOME/.codex/loopx/registry.global.json"'
