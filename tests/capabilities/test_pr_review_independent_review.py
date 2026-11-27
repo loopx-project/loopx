@@ -271,6 +271,12 @@ def test_thread_reply_only_empty_commented_review_does_not_conclude_current_head
         "in_reply_to_id": 4713301777,
     }]]
     run, calls = _provider_with_comments([[old_req, reply_wrapper]], comments, pr_author="cocolord")
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
+    scan = scan_github_pull_request_targets(repository="owner/repo", exact_heads=[f"42@{HEAD}"], wait_for_ci=False, run_gh_json=run)
+    annotated = {r["id"]: r for r in scan["pull_requests"][0]["reviews"]}
+    assert annotated[2]["comment_provenance"] == "reply_only"
+    assert annotated[2]["thread_reply_only"] is True
     row = source_packet(run)["pull_requests"][0]
     assert row["review_action_kind"] == "rereview_pull_request_exact_head"
     assert row["scheduling_lane"] != "current_head_concluded"
@@ -282,13 +288,21 @@ def test_thread_reply_only_empty_commented_review_does_not_conclude_current_head
     [[{"id": 99, "pull_request_review_id": 1}]],
     [[{"id": 99, "pull_request_review_id": 1, "in_reply_to_id": None}]],
     [[{"id": 99, "pull_request_review_id": 1}, {"id": 100, "pull_request_review_id": 1, "in_reply_to_id": 88}]],
+    [[{"id": 100, "pull_request_review_id": 1, "in_reply_to_id": 88}], [{"id": 99, "pull_request_review_id": 1, "in_reply_to_id": None}]],
+    [[{"id": 99, "pull_request_review_id": 1, "in_reply_to_id": None}], [{"id": 101}]],
 ])
 def test_inline_root_empty_commented_review_still_establishes_independent_review(comments):
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
     root_inline = rest_review(review(1, login="contributor", state="COMMENTED", head=HEAD)) | {"body": "   "}
     run, _ = _provider_with_comments([[root_inline]], comments, pr_author="author")
+    scan = scan_github_pull_request_targets(repository="owner/repo", exact_heads=[f"42@{HEAD}"], wait_for_ci=False, run_gh_json=run)
+    assert scan["pull_requests"][0]["reviews"][0]["comment_provenance"] == "inline_root"
+    assert "thread_reply_only" not in scan["pull_requests"][0]["reviews"][0]
     row = source_packet(run)["pull_requests"][0]
     assert row["review_action_kind"] is None
     assert row["independent_review"]["review_id"] == 1
+    assert row["independent_review"]["source_complete"] is True
 
 
 def test_thread_reply_wrapper_preserves_earlier_current_head_formal_opinion():
@@ -300,11 +314,13 @@ def test_thread_reply_wrapper_preserves_earlier_current_head_formal_opinion():
         "in_reply_to_id": 4713301777,
     }]]
     for ordered in ([formal, reply_wrapper], [reply_wrapper, formal]):
-        run, _ = _provider_with_comments([ordered], comments, pr_author="cocolord")
-        row = source_packet(run)["pull_requests"][0]
-        assert row["review_action_kind"] is None
-        assert row["independent_review"]["review_id"] == 10
-        assert row["independent_review"]["state"] == "CHANGES_REQUESTED"
+        for bad_or_good in (comments, OSError("comments unavailable"), [[comments[0][0]], [{"id": 999}]]):
+            run, _ = _provider_with_comments([ordered], bad_or_good, pr_author="cocolord")
+            row = source_packet(run)["pull_requests"][0]
+            assert row["review_action_kind"] is None
+            assert row["independent_review"]["review_id"] == 10
+            assert row["independent_review"]["state"] == "CHANGES_REQUESTED"
+            assert row["independent_review"]["source_complete"] is True
 
 
 @pytest.mark.parametrize("bad_comments", [
@@ -313,15 +329,26 @@ def test_thread_reply_wrapper_preserves_earlier_current_head_formal_opinion():
     [[]],
     {},
     [[123]],
+    [[{"id": 100, "pull_request_review_id": 2, "in_reply_to_id": 88}], [{"id": 101}]],
+    [[{"id": 100, "pull_request_review_id": 2, "in_reply_to_id": 88}], [{"id": 101, "pull_request_review_id": None}]],
+    [[{"id": 100, "pull_request_review_id": 2, "in_reply_to_id": 88}], [{"id": 101, "pull_request_review_id": "2"}]],
+    [[{"id": 100, "pull_request_review_id": 999, "in_reply_to_id": 88}], [{"id": 101, "pull_request_review_id": 888, "in_reply_to_id": None}]],
+    [[{"id": 100, "pull_request_review_id": 2, "in_reply_to_id": 0}]],
 ])
-def test_incomplete_or_empty_comment_fetch_fails_closed_for_thread_reply_detection(bad_comments):
-    empty_review = rest_review(review(1, login="contributor", state="COMMENTED", head=HEAD)) | {"body": ""}
-    run, _ = _provider_with_comments([[empty_review]], bad_comments)
+def test_unknown_comment_provenance_retains_rereview_and_never_claims_source_complete(bad_comments):
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
+    old_req = rest_review(review(1, login="loopx-agent", state="CHANGES_REQUESTED", head=OLD, association="MEMBER"))
+    reply_wrapper = rest_review(review(2, login="loopx-agent", state="COMMENTED", head=HEAD, association="MEMBER")) | {"body": ""}
+    run, _ = _provider_with_comments([[old_req, reply_wrapper]], bad_comments, pr_author="cocolord")
+    scan = scan_github_pull_request_targets(repository="owner/repo", exact_heads=[f"42@{HEAD}"], wait_for_ci=False, run_gh_json=run)
+    annotated = {r["id"]: r for r in scan["pull_requests"][0]["reviews"]}
+    assert annotated[2]["comment_provenance"] == "unknown"
+    assert "thread_reply_only" not in annotated[2]
     row = source_packet(run)["pull_requests"][0]
-    # Fail closed on thread_reply_only inference: do not mark thread_reply_only when
-    # comments read failed, returned 0 matched comments, or was malformed.
-    assert row["review_action_kind"] is None
-    assert row["independent_review"]["review_id"] == 1
+    assert row["review_action_kind"] == "rereview_pull_request_exact_head"
+    assert row["scheduling_lane"] != "current_head_concluded"
+    assert "independent_review" not in row
 
 
 def test_cross_model_coverage_ignores_thread_reply_only_commented_review():

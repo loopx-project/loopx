@@ -283,32 +283,58 @@ def _empty_commented_non_author_review_ids(
     return candidate_ids
 
 
-def _thread_reply_only_review_ids(
+def _empty_commented_review_provenance(
     reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
     repository: str, number: str, cwd: Path | None, run_gh_json: GitHubJsonRunner,
-) -> set[int]:
+) -> dict[int, str]:
+    """Classify current-head empty non-author COMMENTED reviews into three states:
+
+    - ``reply_only``: >=1 attributed inline comments, all valid positive-int ``in_reply_to_id``.
+    - ``inline_root``: >=1 attributed inline root comment (missing or ``None`` ``in_reply_to_id``).
+    - ``unknown``: inline comments fetch failed/empty/malformed, contained an unattributable
+      entry without a valid ``pull_request_review_id``, had malformed reply links, or yielded
+      0 comments attributed to the candidate review.
+    """
     candidate_ids = _empty_commented_non_author_review_ids(reviews, author=author, head_oid=head_oid)
     if not candidate_ids:
-        return set()
+        return {}
     comments = fetch_complete_pr_review_comments(
         repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
     )
     if comments is None:
-        return set()
+        return {review_id: "unknown" for review_id in candidate_ids}
     matched_counts: dict[int, int] = {}
-    non_reply_ids: set[int] = set()
+    root_ids: set[int] = set()
+    malformed_reply_ids: set[int] = set()
+    has_unattributable_comment = False
     for comment in comments:
         review_id = comment.get("pull_request_review_id")
-        if type(review_id) is not int or review_id not in candidate_ids:
+        if type(review_id) is not int or review_id <= 0:
+            has_unattributable_comment = True
+            continue
+        if review_id not in candidate_ids:
             continue
         matched_counts[review_id] = matched_counts.get(review_id, 0) + 1
+        if "in_reply_to_id" not in comment or comment.get("in_reply_to_id") is None:
+            root_ids.add(review_id)
+            continue
         parent_id = comment.get("in_reply_to_id")
         if type(parent_id) is not int or parent_id <= 0:
-            non_reply_ids.add(review_id)
-    return {
-        review_id for review_id, count in matched_counts.items()
-        if count >= 1 and review_id not in non_reply_ids
-    }
+            malformed_reply_ids.add(review_id)
+
+    provenance: dict[int, str] = {}
+    for review_id in candidate_ids:
+        if review_id in root_ids:
+            provenance[review_id] = "inline_root"
+        elif (
+            has_unattributable_comment
+            or review_id in malformed_reply_ids
+            or matched_counts.get(review_id, 0) == 0
+        ):
+            provenance[review_id] = "unknown"
+        else:
+            provenance[review_id] = "reply_only"
+    return provenance
 
 
 def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
@@ -345,13 +371,16 @@ def _attach_review_provenance(row: dict[str, Any], details: dict[str, Any], *,
                 "authorAssociation": review.get("author_association"), "state": review.get("state"),
                 "submittedAt": review.get("submitted_at"), "commit": {"oid": review.get("commit_id")},
                 "body": review.get("body")})
-        reply_only_ids = _thread_reply_only_review_ids(
+        provenance_by_id = _empty_commented_review_provenance(
             reviews, author=author, head_oid=row.get("headRefOid"),
             repository=repository, number=number, cwd=cwd, run_gh_json=run_gh_json,
         )
         for item, review in zip(normalized, reviews, strict=True):
-            if review["id"] in reply_only_ids:
-                item["thread_reply_only"] = True
+            provenance = provenance_by_id.get(review["id"])
+            if provenance is not None:
+                item["comment_provenance"] = provenance
+                if provenance == "reply_only":
+                    item["thread_reply_only"] = True
         after = run_gh_json(["pr", "view", number, "--json", "headRefOid,baseRefOid",
                              "--repo", repository], cwd=cwd)
         if not isinstance(after, dict) or any(after.get(key) != row.get(key)

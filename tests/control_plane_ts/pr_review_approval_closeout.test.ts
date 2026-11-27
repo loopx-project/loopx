@@ -17,6 +17,7 @@ function makeOpinion(
     isBot = false,
     valid = false,
     verdict = "COMMENT",
+    commentProvenance = undefined as string | undefined,
     threadReplyOnly = false,
     family = null as string | null,
     reviewBodyValid = false,
@@ -33,6 +34,7 @@ function makeOpinion(
     is_bot: isBot,
     submitted_at: `2026-11-26T21:16:${String(reviewId).padStart(2, "0")}Z`,
     conclusion: {valid, verdict, reviewer: login, state},
+    ...(commentProvenance !== undefined ? {comment_provenance: commentProvenance} : {}),
     ...(threadReplyOnly ? {thread_reply_only: true} : {}),
     ...(family !== null ? {review_model_family: family, review_body_valid: reviewBodyValid} : {}),
   };
@@ -126,4 +128,88 @@ test("qualified COMMENTED conclusion is preserved even if thread_reply_only flag
     ],
   });
   assert.equal((result.independent_review as {review_id: number}).review_id, 7);
+});
+
+test("unknown comment_provenance on same reply-only snapshot never certifies independent_review", () => {
+  const result = selectPrReviewConclusion({
+    author: "cocolord",
+    head: HEAD,
+    reviews_complete: true,
+    include_independent_coverage: true,
+    reviews: [
+      makeOpinion(6, {login: "loopx-agent", state: "COMMENTED", head: HEAD, commentProvenance: "unknown"}),
+      makeOpinion(4, {login: "loopx-agent", state: "CHANGES_REQUESTED", head: OLD, verdict: "REQUEST_CHANGES"}),
+    ],
+  });
+  assert.equal(result.independent_review, undefined);
+  assert.deepEqual(result.independent_review_activity_ids, []);
+  assert.deepEqual(result.independent_coverage_review_ids, []);
+});
+
+test("inline_root comment_provenance explicitly establishes independent_review while unknown preserves prior formal opinion", () => {
+  const rootResult = selectPrReviewConclusion({
+    author: "cocolord",
+    head: HEAD,
+    reviews_complete: true,
+    reviews: [
+      makeOpinion(1, {login: "contributor", association: "CONTRIBUTOR", state: "COMMENTED", head: HEAD, commentProvenance: "inline_root"}),
+    ],
+  });
+  assert.equal((rootResult.independent_review as {review_id: number}).review_id, 1);
+  assert.equal((rootResult.independent_review as {source_complete: boolean}).source_complete, true);
+
+  const priorFormal = makeOpinion(10, {
+    login: "loopx-agent",
+    state: "CHANGES_REQUESTED",
+    head: HEAD,
+    valid: true,
+    verdict: "REQUEST_CHANGES",
+    family: "gpt",
+    reviewBodyValid: true,
+  });
+  const unknownWrapper = makeOpinion(12, {
+    login: "loopx-agent",
+    state: "COMMENTED",
+    head: HEAD,
+    commentProvenance: "unknown",
+  });
+  for (const ordered of [[priorFormal, unknownWrapper], [unknownWrapper, priorFormal]]) {
+    const result = selectPrReviewConclusion({
+      author: "cocolord",
+      head: HEAD,
+      reviews_complete: true,
+      include_independent_coverage: true,
+      reviews: ordered,
+    });
+    assert.equal((result.independent_review as {review_id: number}).review_id, 10);
+    assert.equal((result.independent_review as {source_complete: boolean}).source_complete, true);
+  }
+});
+
+test("malformed or contradictory comment_provenance fails closed", () => {
+  const malformed = selectPrReviewConclusion({
+    author: "cocolord",
+    head: HEAD,
+    reviews_complete: true,
+    reviews: [
+      makeOpinion(1, {login: "contributor", state: "COMMENTED", head: HEAD, commentProvenance: "bogus"}),
+    ],
+  });
+  assert.equal(malformed.independent_review, undefined);
+
+  const contradictory = selectPrReviewConclusion({
+    author: "cocolord",
+    head: HEAD,
+    reviews_complete: true,
+    reviews: [
+      makeOpinion(1, {
+        login: "contributor",
+        state: "COMMENTED",
+        head: HEAD,
+        commentProvenance: "inline_root",
+        threadReplyOnly: true,
+      }),
+    ],
+  });
+  assert.equal(contradictory.independent_review, undefined);
 });
