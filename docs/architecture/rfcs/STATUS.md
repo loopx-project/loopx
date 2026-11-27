@@ -18,7 +18,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 
 [中文版](STATUS.zh-CN.md) is the semantic mirror of this file.
 
-## Accepted (54)
+## Accepted (55)
 
 | RFC | Header status | Supersedes / closes | Ledger |
 | --- | --- | --- | --- |
@@ -76,6 +76,7 @@ appendix may keep dated history, but no dated log heading may precede it.
 | [RFC: Single-Owner Local Daemon (v0)](single-owner-local-daemon-v0.md) | Accepted | none | — |
 | [RFC: Joint Target, Yardstick and Stride Decisions (v0)](target-yardstick-stride-decisions-v0.md) | Accepted | none | — |
 | [RFC: TypeScript Control-Plane Migration Direction v0](typescript-control-plane-migration-v0.md) | Accepted | none | [27 entries](ledger/typescript-control-plane-migration-v0/) |
+| [RFC: Verifier Hook Co-Design (v0)](verifier-hook-co-design-v0.md) | Accepted | none | — |
 
 ## Superseded (1)
 
