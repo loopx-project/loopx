@@ -1274,7 +1274,7 @@ class ChatExternalConversations(ExternalStewardCommissionMixin):
                     "summary": "本次纠正历史补答的上下文；原请求所欠实际工作或独立验收不据此结清。", "next_action": ""}}
             if answer_review.get("history_review") is True:
                 prefix = "更正之前的补答：" if answer_review.get("context_correction") else "补答你之前的问题："
-                response = {**response, "message": prefix + "\n\n" + response["message"]}
+                response = {**response, "message": prefix + "\n\n" + str(response["message"])}
             return response
         review_input = external.prepare_metadata_review_input(session, turn)
         if review_input is None:

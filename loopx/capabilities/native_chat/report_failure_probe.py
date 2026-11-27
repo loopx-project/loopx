@@ -162,7 +162,7 @@ def probe_report_failure(
         if not swallow:
             raise
         proof = None
-    return threads, cast(ProofObject | None, proof)
+    return threads, proof
 
 
 def _extract_antigravity_turn_cascade(

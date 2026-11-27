@@ -69,6 +69,43 @@ class _OpenAIRelayProvider(Protocol):
     def healthy(self, relay: object, *, consumer: str) -> bool: ...
 
 
+class _ClosedFlag(Protocol):
+    def is_set(self) -> bool: ...
+
+
+class _HistoryStore(Protocol):
+    def messages(self, session_id: str, *, strict: bool = False) -> list[JsonDict]: ...
+    def load_session(self, session_id: str) -> JsonDict | None: ...
+    def load_turn(self, session_id: str, turn_id: str) -> JsonDict | None: ...
+    def update_session(
+        self,
+        session_id: str,
+        *,
+        expected_statuses: set[str] | None = None,
+        expected_upstream_thread_id: str | None = None,
+        metadata_review: bool = False,
+        quota_recovery: bool = False,
+        answer_review_admission: bool = False,
+        **changes: object,
+    ) -> JsonDict: ...
+
+
+class _HistoryProjectContexts(Protocol):
+    @property
+    def conversation_bindings(self) -> object: ...
+
+
+class _HistoryController(Protocol):
+    @property
+    def store(self) -> _HistoryStore: ...
+    @property
+    def project_contexts(self) -> _HistoryProjectContexts: ...
+    @property
+    def lock(self) -> AbstractContextManager[object]: ...
+    @property
+    def compacting_history(self) -> set[str]: ...
+
+
 # Keep each native import bounded independently of the model's available context.
 HISTORY_RESTORE_BATCH_BYTES = 128 * 1024
 _READ_ONLY_ITEM_TYPES = frozenset({"reasoning", "webSearch", "imageView", "contextCompaction"})
@@ -189,7 +226,7 @@ class NativeWorkingContinuation:
 class NativeHistoryRestoration:
     """Live guards for unpublished model preparation."""
 
-    controller: ChatRuntimeController
+    controller: _HistoryController
     session: JsonDict
     accepted_turn_id: str | None
     commit: CommitGuard
@@ -387,7 +424,8 @@ class NativeHistoryRestoration:
             controller.compacting_history.add(sid)
         with self.commit():
             latest = controller.store.load_session(sid)
-            if (controller.closed.is_set() or latest is None or latest.get("status") == "closed"
+            closed_flag = cast("_ClosedFlag | None", getattr(controller, "closed", None))
+            if ((closed_flag is not None and closed_flag.is_set()) or latest is None or latest.get("status") == "closed"
                     or any(latest.get(key) != original.get(key) for key in _TURN_CHECK_KEYS)
                     or self.accepted_turn_id is not None and _as_dict(controller.store.load_turn(sid, self.accepted_turn_id)).get("status") != "queued"):
                 self._invalidate("Original conversation changed during history restoration")
