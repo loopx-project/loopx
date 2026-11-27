@@ -61,8 +61,12 @@ from pathlib import Path
 # Goal context is resolved PER PROJECT from the event's cwd via the registry, and
 # "armed" = the project's .claude/loop.md exists (see goal_state.py). The registry
 # is the single source of truth; there is no separate active-state file.
-from goal_state import active_context
-from stdio_utf8 import pin_utf8_stdio
+HOOKS_DIR = Path(__file__).resolve().parent
+if str(HOOKS_DIR) not in sys.path:
+    sys.path.insert(0, str(HOOKS_DIR))
+
+from goal_state import active_context  # noqa: E402
+from stdio_utf8 import pin_utf8_stdio  # noqa: E402
 
 # Read-only tools are always allowed under goal-mode. Edit/Write are scoped to
 # write_scope; Bash is gated by a destructive-command denylist. (No OS sandbox in

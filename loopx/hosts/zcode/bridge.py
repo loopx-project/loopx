@@ -11,16 +11,16 @@ import subprocess
 import sys
 from typing import Any
 
-from ...agent_registry import agent_profile_for_goal, load_goal_from_registry, registered_agent_ids_for_goal, require_registered_agent_id
-from ...control_plane.coordination.local_authority import local_authority_is_promoted
-from ...control_plane.goals.acceptance import inspect_goal_acceptance
-from ...control_plane.goals.activation import goal_is_stopped
-from ...control_plane.goals.goal_ref_validation import exact_goal_ref, require_goal_id
-from ...control_plane.runtime.goal_project_route import resolve_goal_project_route
-from ...control_plane.runtime.node_probe import node_typescript_flags
-from ...control_plane.projects.registry_codec import load_registry
-from ...host_loop_activation import normalize_agent_type
-from ...registry import registry_goals
+from loopx.agent_registry import agent_profile_for_goal, load_goal_from_registry, registered_agent_ids_for_goal, require_registered_agent_id
+from loopx.control_plane.coordination.local_authority import local_authority_is_promoted
+from loopx.control_plane.goals.acceptance import inspect_goal_acceptance
+from loopx.control_plane.goals.activation import goal_is_stopped
+from loopx.control_plane.goals.goal_ref_validation import exact_goal_ref, require_goal_id
+from loopx.control_plane.runtime.goal_project_route import resolve_goal_project_route
+from loopx.control_plane.runtime.node_probe import node_typescript_flags
+from loopx.control_plane.projects.registry_codec import load_registry
+from loopx.host_loop_activation import normalize_agent_type
+from loopx.registry import registry_goals
 
 # The bundled provider contract is the single action vocabulary for Python and TS.
 ZCODE_GOAL_ACTIONS: tuple[str, ...] = tuple(
@@ -109,7 +109,7 @@ def validate_zcode_binding(
 
 
 def _node_command() -> str:
-    from ...control_plane.effect_runtime import _node_executable, EffectRuntimeStartupError
+    from loopx.control_plane.effect_runtime import _node_executable, EffectRuntimeStartupError
     try:
         return _node_executable()
     except EffectRuntimeStartupError as exc:
