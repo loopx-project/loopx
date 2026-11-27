@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from ..control_plane.turn_driver.host_candidate import (
+from ...control_plane.turn_driver.host_candidate import (
     ACCEPTED_RESULT_KINDS as ACCEPTED_RESULT_KINDS,
     COMPLETED_PHASES as COMPLETED_PHASES,
     LOOPX_TURN_HOST_REQUEST_SCHEMA as LOOPX_TURN_HOST_REQUEST_SCHEMA,
@@ -47,7 +47,7 @@ from ..control_plane.turn_driver.host_candidate import (
     parse_model_json as parse_model_json,
     render_prompt as render_prompt,
 )
-from ..control_plane.turn_driver.execution_profile import (
+from ...control_plane.turn_driver.execution_profile import (
     MANAGED_MODEL_DEFAULT,
     MANAGED_PROVIDER_DEFAULT,
     MANAGED_REASONING_EFFORT_DEFAULT,
@@ -55,13 +55,13 @@ from ..control_plane.turn_driver.execution_profile import (
     managed_profile_unavailable_reason,
     require_supported_reasoning_effort,
 )
-from ..control_plane.turn_driver.host_binding import (
+from ...control_plane.turn_driver.host_binding import (
     DEFAULT_DSH_OUTPUT_TOKEN_LIMIT,
     dsh_output_token_budget,
 )
-from ..control_plane.turn_driver.host_failure import BuiltInHostError
-from ..entrypoint import pin_utf8_stdio
-from ..hosts.capabilities import (
+from ...control_plane.turn_driver.host_failure import BuiltInHostError
+from ...entrypoint import pin_utf8_stdio
+from ..capabilities import (
     HostHarnessCapabilities,
     _register_builtin_host_capabilities,
 )
@@ -72,7 +72,7 @@ DSH_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabili
     HostHarnessCapabilities(
         host_id="dsh",
         integration_tier="in_tree_codesigned",
-        adapter_module="loopx.dsh_goal_mode",
+        adapter_module="loopx.hosts.dsh",
         supported_capabilities=(),
         hook_events=(),
         requires_utf8_stdio=True,

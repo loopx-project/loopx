@@ -160,7 +160,7 @@ def test_explore_turn_context_with_empty_goal_id_uses_default_registry(
 def test_agy_native_input_accepts_ls_url_and_rejects_malformed_replies(
     monkeypatch, malformed_reply,
 ) -> None:
-    from loopx.agy_goal_mode import host_runtime as mod
+    from loopx.hosts.agy import host_runtime as mod
     from loopx.capabilities.native_chat import antigravity_adapter as provider
 
     monkeypatch.delenv("ANTIGRAVITY_LS_ADDRESS", raising=False)
@@ -194,7 +194,7 @@ def test_agy_native_input_accepts_ls_url_and_rejects_malformed_replies(
 
 
 def test_agy_native_input_returns_no_anchor_when_rpc_fails(monkeypatch) -> None:
-    from loopx.agy_goal_mode import host_runtime as mod
+    from loopx.hosts.agy import host_runtime as mod
     from loopx.capabilities.native_chat import antigravity_adapter as provider
     from loopx.chat_agent import CodexChatAgentError
 

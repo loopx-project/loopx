@@ -29,7 +29,7 @@ def _recording_host(tmp_path):
         "def run_dsh_turn(*, prompt, workspace, **kwargs):\n"
         "    Path(workspace, 'received.txt').write_text(prompt)\n"
         "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n")
-    return [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(tmp_path),
+    return [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(tmp_path),
         "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
 
 

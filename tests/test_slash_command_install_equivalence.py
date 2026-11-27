@@ -46,10 +46,11 @@ def _load_baseline_module(
     module = ModuleType("loopx._baseline_slash_command_install")
     module.__file__ = str(REPOSITORY_ROOT / relpath)
     module.__package__ = "loopx"
-    # Historical commit e5d5945f6 imported kiro_cli_goal_mode, opencode_goal_mode,
-    # and pi_goal_mode before those packages moved under loopx/hosts/.
+    # Historical commit e5d5945f6 imported agy_goal_mode, kiro_cli_goal_mode,
+    # opencode_goal_mode, and pi_goal_mode before those packages moved under loopx/hosts/.
     compiled_source = (
-        source.replace("from .kiro_cli_goal_mode", "from .hosts.kiro_cli")
+        source.replace("from .agy_goal_mode", "from .hosts.agy")
+        .replace("from .kiro_cli_goal_mode", "from .hosts.kiro_cli")
         .replace("from .opencode_goal_mode", "from .hosts.opencode")
         .replace("from .pi_goal_mode", "from .hosts.pi")
         if source_override is None

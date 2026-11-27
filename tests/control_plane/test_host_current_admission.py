@@ -188,7 +188,7 @@ def run_dsh_turn(**options):
 ''', encoding="utf-8")
     prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
     subject = ["--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID]
-    adapter = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(workspace),
+    adapter = [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(workspace),
         "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "dsh-home")]
     validator = [sys.executable, "-c", "from pathlib import Path; import json,sys; json.load(sys.stdin); "
         f"assert Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]

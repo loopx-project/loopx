@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Backward-compatible launcher for the LoopX DeepSeek Harness host adapter.
 
-The adapter implementation moved to the first-class goal-mode subpackage
-``loopx/dsh_goal_mode``. This launcher keeps the historical path working:
+The adapter implementation moved to the host-adapter subpackage
+``loopx/hosts/dsh``. This launcher keeps the historical path working:
 existing commands, examples, and docs that call
 ``python3 scripts/dsh_turn_host_adapter.py`` or import
 ``dsh_turn_host_adapter`` resolve to the same implementation. Prefer
-``python -m loopx.dsh_goal_mode`` in new code.
+``python -m loopx.hosts.dsh`` in new code.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from loopx.dsh_goal_mode import (  # noqa: E402,F401
+from loopx.hosts.dsh import (  # noqa: E402,F401
     ACCEPTED_RESULT_KINDS,
     COMPLETED_PHASES,
     DEFAULT_MODEL,

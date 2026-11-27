@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from loopx.agy_goal_mode import (
+from loopx.hosts.agy import (
     antigravity_app_activation_extras,
     build_antigravity_launchd_command,
     host_runtime,
@@ -475,7 +475,7 @@ def test_install_launchd_preview_execute_no_load_reload_and_uninstall(
         "-E",
         "-P",
         "-m",
-        "loopx.agy_goal_mode.host_runtime",
+        "loopx.hosts.agy.host_runtime",
         "heartbeat-tick",
     ]
 
@@ -627,7 +627,7 @@ def test_install_launchd_uninstall_verifies_launchd_readback_across_all_paths(
             [
                 sys.executable,
                 "-m",
-                "loopx.agy_goal_mode.host_runtime",
+                "loopx.hosts.agy.host_runtime",
                 "install-launchd",
                 "--goal-id",
                 "g-uninst",
@@ -816,7 +816,7 @@ def test_activation_extras_and_main_cli_json_contracts(
         "-E",
         "-P",
         "-m",
-        "loopx.agy_goal_mode.host_runtime",
+        "loopx.hosts.agy.host_runtime",
         "install-launchd",
     ]
     extras = antigravity_app_activation_extras(goal_id="g1", agent_id="a1")

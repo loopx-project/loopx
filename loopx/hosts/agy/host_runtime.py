@@ -19,9 +19,9 @@ import sys
 import time
 from typing import Any
 
-from ..command_invocation import loopx_cli_argv
-from ..entrypoint import pin_utf8_stdio
-from ..file_lock import exclusive_file_lock
+from ...command_invocation import loopx_cli_argv
+from ...entrypoint import pin_utf8_stdio
+from ...file_lock import exclusive_file_lock
 from . import AGY_HOST_CAPABILITIES as AGY_HOST_CAPABILITIES
 from .launchd_watchdog import (
     DEFAULT_LAUNCHD_INTERVAL_SECONDS,
@@ -148,8 +148,8 @@ def _reserve_retry(state: dict[str, Any], input_key: str) -> bool:
 
 def _native_input(args: argparse.Namespace, text: str) -> tuple[str, str, int] | None:
     """Freeze the native input identity, including repeated identical messages."""
-    from ..chat_agent import CodexChatAgentError
-    from ..capabilities.native_chat.antigravity_adapter import (
+    from ...chat_agent import CodexChatAgentError
+    from ...capabilities.native_chat.antigravity_adapter import (
         _local_url,
         _read_trajectory_steps,
         _rpc_post,
@@ -301,7 +301,7 @@ def _process_start_epoch(pid: int) -> float | None:
 
 
 def _discover_endpoint() -> tuple[str, str, int | None] | None:
-    from ..capabilities.native_chat.antigravity_adapter import (
+    from ...capabilities.native_chat.antigravity_adapter import (
         discover_antigravity_language_server,
     )
 
@@ -316,8 +316,8 @@ def _discover_endpoint() -> tuple[str, str, int | None] | None:
 def _probe_cascade_summary(
     url: str, csrf_token: str, conversation_id: str
 ) -> tuple[str, float | None] | None:
-    from ..capabilities.native_chat.antigravity_adapter import _local_url, _rpc_post
-    from ..chat_agent import CodexChatAgentError
+    from ...capabilities.native_chat.antigravity_adapter import _local_url, _rpc_post
+    from ...chat_agent import CodexChatAgentError
 
     try:
         resp = _rpc_post(
@@ -340,7 +340,7 @@ def _probe_cascade_summary(
 def _send_wake_message(
     url: str, csrf_token: str, conversation_id: str, prompt: str
 ) -> None:
-    from ..capabilities.native_chat.antigravity_adapter import _local_url, _rpc_post
+    from ...capabilities.native_chat.antigravity_adapter import _local_url, _rpc_post
 
     _rpc_post(
         _local_url(url),
@@ -393,7 +393,7 @@ def _wake_reason(
 
 def heartbeat_tick(args: argparse.Namespace) -> dict[str, object]:
     """Wake an idle Antigravity conversation only after LS restart or long stall."""
-    from ..chat_agent import CodexChatAgentError
+    from ...chat_agent import CodexChatAgentError
 
     endpoint = _discover_endpoint()
     if endpoint is None:

@@ -301,7 +301,7 @@ Todo として計画して、ホストの有効化をガイドします。アク
 | ZCode | `loopx slash-commands --install --surface zcode` でスキルファサードをインストールし、プロジェクトの ZCode セッションから `$loopx` スキル（または `/loopx <complex task>`）を呼び出します。 | ZCode セッション自身のターンループ。すべての継続は `quota should-run` を経由します |
 | Antigravity CLI (agy) | `loopx slash-commands --install --surface agy` でスキルファサードをインストールし、プロジェクトの `agy` セッションから `loopx` スキル（または `/loopx <complex task>`）を呼び出します。 | セッションのネイティブな `/goal` ループ（`<!-- GOAL_COMPLETE -->` まで監査されます）と、セッションが生きている間の `schedule` による自己起床。ファサードは各ターン/起床で `quota should-run` を経由して再入するよう指示します。これは助言的なペース配分であり、ホストが強制するゲートではありません |
 | Kiro CLI | `loopx slash-commands --install --surface kiro-cli` でスキルファサードをインストールし、プロジェクトの `kiro-cli` セッションから `/loopx <complex task>` を実行します。 | セッションのネイティブな `/goal --max <N> <task_body> Done when: <criteria>` ループ。ホストがゴール文から受け入れ基準を導出するため、基準はゴール文の中に記述します。ホスト自身の反復予算（デフォルトは 5）で制限され、組み込みの `goal` 完了契約によって確定されます。ファサードは各ターンと反復で `quota should-run` を経由して再入するよう指示します。これは助言的なペース配分であり、ホストが強制するゲートではありません |
-| DeepSeek Harness (dsh) | [ネイティブの DSH プラグイン](packages/dsh-loopx-plugin/README.md)をインストールし、`loopx` スキルを選択して、タスクを記述します。ヘッドレスなターンには、引き続き [dsh goal-mode アダプター](loopx/dsh_goal_mode/README.md)を利用できます。 | ネイティブな同一セッション内での継続と GoalBar、またはヘッドレスな dsh セグメント。どちらも LoopX の権限によってゲートされます |
+| DeepSeek Harness (dsh) | [ネイティブの DSH プラグイン](packages/dsh-loopx-plugin/README.md)をインストールし、`loopx` スキルを選択して、タスクを記述します。ヘッドレスなターンには、引き続き [dsh goal-mode アダプター](loopx/hosts/dsh/README.md)を利用できます。 | ネイティブな同一セッション内での継続と GoalBar、またはヘッドレスな dsh セグメント。どちらも LoopX の権限によってゲートされます |
 | Cursor、シェル、カスタムランナー | `loopx start-goal --guided --project . --goal-text "<task>"` を実行するか、ランナーから LoopX を呼び出します。 | お使いのシェル、スケジューラー、ランナー |
 
 そのままコピーできるセットアップメッセージとホストの復旧手順は、
@@ -311,7 +311,7 @@ Todo として計画して、ホストの有効化をガイドします。アク
 [Claude Code アダプター](loopx/claude_goal_mode/README.md)、
 [KunlunCode のネイティブ Goal アダプター](loopx/kunluncode_goal_mode/README.md)、
 [Kiro CLI の goal-mode アダプター](loopx/hosts/kiro_cli/README.md)、または
-[DeepSeek Harness のターンアダプター](loopx/dsh_goal_mode/README.md)を確認できます。
+[DeepSeek Harness のターンアダプター](loopx/hosts/dsh/README.md)を確認できます。
 
 ネイティブな手順については、[60 秒の DSH × LoopX Replan の録画と再現可能な
 フィクスチャ](docs/showcases/cases/dsh-loopx-replan-demo.md)をご覧ください：

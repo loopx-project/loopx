@@ -263,7 +263,7 @@ LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并
 | ZCode | 用 `loopx slash-commands --install --surface zcode` 安装 skill facade，然后在项目里的 ZCode 会话中调用 `$loopx` skill（或 `/loopx <复杂任务>`）。 | ZCode 会话自身的 turn loop；每次续跑都从 `quota should-run` 进入 |
 | Antigravity CLI（agy） | 用 `loopx slash-commands --install --surface agy` 安装 skill facade，然后在项目里的 `agy` 会话中调用 `loopx` skill（或 `/loopx <复杂任务>`）。 | 会话原生 `/goal` 循环（审计至 `<!-- GOAL_COMPLETE -->`）加 `schedule` 自唤醒，随会话存活；facade 指示每次 turn/唤醒都先过 `quota should-run`——advisory 节流，非宿主强制 gate |
 | Kiro CLI | 用 `loopx slash-commands --install --surface kiro-cli` 安装 skill facade，然后在项目里的 `kiro-cli` 会话中执行 `/loopx <复杂任务>`。 | 会话原生 `/goal --max <N> <任务> Done when: <验收条件>` 循环，验收条件写入目标语句本身（宿主由该语句推导验收标准），由宿主自己的迭代预算兜底（默认 5），并通过内置 `goal` 完成契约收口；facade 指示每次 turn 与迭代都先过 `quota should-run`——advisory 节流，非宿主强制 gate |
-| DeepSeek Harness（dsh） | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中点 `loopx`，然后直接描述任务；[dsh goal-mode adapter](loopx/dsh_goal_mode/README.md) 继续支持 headless turn。 | 原生同会话续跑与 GoalBar，或 headless dsh 工作段；两条路径都遵守 LoopX authority |
+| DeepSeek Harness（dsh） | 安装 [DSH 原生 Plugin](packages/dsh-loopx-plugin/README.md)，在技能选择器中点 `loopx`，然后直接描述任务；[dsh goal-mode adapter](loopx/hosts/dsh/README.md) 继续支持 headless turn。 | 原生同会话续跑与 GoalBar，或 headless dsh 工作段；两条路径都遵守 LoopX authority |
 | Cursor、shell、自有 runner | `loopx start-goal --guided --project . --goal-text "<任务>"`，或由你的 runner 调用 LoopX。 | 你的 shell、scheduler 或 runner |
 
 可直接粘贴的完整 setup message、host-specific 路由和故障恢复见
@@ -273,7 +273,7 @@ LoopX 会复用项目已有状态或连接项目，把工作规划成 Todo，并
 [Claude Code adapter](loopx/claude_goal_mode/README.md)、
 [KunlunCode 原生 Goal adapter](docs/guides/kunluncode-adapter.zh-CN.md)、
 [Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md)，以及
-[DeepSeek Harness turn adapter](loopx/dsh_goal_mode/README.md)。
+[DeepSeek Harness turn adapter](loopx/hosts/dsh/README.md)。
 
 可查看 [60 秒 DSH × LoopX Replan 真实录屏和可复现
 fixture](docs/showcases/cases/dsh-loopx-replan-demo.md)：安装 Plugin、选择一个

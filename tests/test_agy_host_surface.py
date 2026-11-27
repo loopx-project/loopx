@@ -42,7 +42,7 @@ from loopx.control_plane.scheduler.execution_context import (
     resolve_scheduler_execution_context,
     scheduler_execution_context_for_runtime_profile,
 )
-from loopx.agy_goal_mode import (
+from loopx.hosts.agy import (
     AGY_GOAL_CANCELLED_TOKEN,
     AGY_GOAL_COMMAND,
     AGY_GOAL_COMMAND_DESCRIPTION,
@@ -386,7 +386,7 @@ def test_antigravity_app_first_class_host_surface_and_schedule_sidecar_contract(
         "runtime_profile": "antigravity_app"
     }
 
-    from loopx.agy_goal_mode import cron_for_interval_minutes
+    from loopx.hosts.agy import cron_for_interval_minutes
     from loopx.cli import build_parser
     from loopx.cli_commands.quota_context import validate_quota_command_context_request
     from loopx.control_plane.scheduler.state import (

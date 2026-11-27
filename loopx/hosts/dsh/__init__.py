@@ -3,8 +3,8 @@
 The adapter turns one governed LoopX Turn into one bounded DeepSeek Harness
 work segment and returns a typed ``loopx_turn_result_v0`` object. Authority
 extraction, prompt rendering, result shaping, and the SDK runner live in
-:mod:`loopx.dsh_goal_mode.turn_host_adapter`; run the adapter directly with
-``python -m loopx.dsh_goal_mode``.
+:mod:`loopx.hosts.dsh.turn_host_adapter`; run the adapter directly with
+``python -m loopx.hosts.dsh``.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from .turn_host_adapter import (
     run_dsh_turn,
 )
 
-ADAPTER_MODULE = "loopx.dsh_goal_mode"
+ADAPTER_MODULE = "loopx.hosts.dsh"
 COMPAT_LAUNCHER = "scripts/dsh_turn_host_adapter.py"
 
 __all__ = [

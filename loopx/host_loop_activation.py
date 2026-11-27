@@ -8,7 +8,7 @@ from .agent_registry import normalize_registered_agents
 from .hosts.codex_capabilities import (
     CODEX_APP_HOST_CAPABILITIES as CODEX_APP_HOST_CAPABILITIES,
 )
-from .agy_goal_mode import (
+from .hosts.agy import (
     AGY_ACCEPTED_INPUTS,
     ANTIGRAVITY_APP_AGENT_TYPE_CATALOG_ENTRY,
 )
@@ -296,7 +296,7 @@ AGENT_TYPE_CATALOG: dict[str, dict[str, Any]] = {
     "deepseek-harness": {
         "display_name": "DeepSeek Harness",
         "host_loop": "DeepSeek Harness headless/automation loop gated by LoopX quota",
-        "entry": "loopx turn run-once with loopx.dsh_goal_mode (python -m loopx.dsh_goal_mode; compat: scripts/dsh_turn_host_adapter.py)",
+        "entry": "loopx turn run-once with loopx.hosts.dsh (python -m loopx.hosts.dsh; compat: scripts/dsh_turn_host_adapter.py)",
         "accepted_inputs": [
             "deepseek-harness",
             "deepseek_harness",
@@ -1152,7 +1152,7 @@ def _deepseek_harness_activation(commands: dict[str, str]) -> dict[str, Any]:
         "host_surface": "deepseek_harness_automation_loop",
         "entry_command_hint": (
             "loopx turn run-once --host dsh "
-            "(compat: --host generic-cli with python -m loopx.dsh_goal_mode or "
+            "(compat: --host generic-cli with python -m loopx.hosts.dsh or "
             "scripts/dsh_turn_host_adapter.py)"
         ),
         "activation_method": "external_loop_driver",

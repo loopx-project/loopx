@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ..command_invocation import loopx_cli_argv
-from ..hosts.capabilities import (
+from ...command_invocation import loopx_cli_argv
+from ..capabilities import (
     HostHarnessCapabilities,
     _register_builtin_host_capabilities,
 )
@@ -24,7 +24,7 @@ AGY_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabili
     HostHarnessCapabilities(
         host_id="agy",
         integration_tier="orchestrated_app",
-        adapter_module="loopx.agy_goal_mode",
+        adapter_module="loopx.hosts.agy",
         supported_capabilities=(),
         hook_events=("Stop",),
         requires_utf8_stdio=True,
@@ -253,7 +253,7 @@ def _antigravity_provider_args(
         "-E",
         "-P",
         "-m",
-        "loopx.agy_goal_mode.host_runtime",
+        "loopx.hosts.agy.host_runtime",
         operation,
         "--cli-bin",
         resolved_cli_bin,

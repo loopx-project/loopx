@@ -181,7 +181,7 @@ def test_complete_narrative_and_canonical_work_reach_signed_host(tmp_path, monke
         "def run_dsh_turn(*, prompt, workspace, **kwargs):\n"
         "    Path(workspace, 'received.txt').write_text(prompt)\n"
         "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n")
-    command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(tmp_path),
+    command = [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(tmp_path),
         "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
     request = {"schema_version": "loopx_turn_host_request_v0", "turn_key": "sha256:" + "0" * 64,
         "route": "primary_delivery", "turn_envelope": envelope}

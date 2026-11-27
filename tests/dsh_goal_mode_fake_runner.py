@@ -1,7 +1,7 @@
 """Hermetic fake dsh runner for the goal-mode adapter tests.
 
 Exposes the ``run_dsh_turn`` keyword contract of
-``loopx.dsh_goal_mode.turn_host_adapter`` without a real DeepSeek Harness
+``loopx.hosts.dsh.turn_host_adapter`` without a real DeepSeek Harness
 SDK/runtime or network access. Not a pytest module (no ``test_`` prefix).
 """
 

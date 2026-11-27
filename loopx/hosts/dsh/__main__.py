@@ -1,4 +1,4 @@
-"""Run the DeepSeek Harness host adapter with ``python -m loopx.dsh_goal_mode``."""
+"""Run the DeepSeek Harness host adapter with ``python -m loopx.hosts.dsh``."""
 
 from __future__ import annotations
 

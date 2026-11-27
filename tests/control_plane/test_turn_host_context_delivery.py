@@ -107,7 +107,7 @@ def test_captured_context_reaches_actual_host_without_readmission(tmp_path, monk
         "    Path(workspace, 'received.txt').write_text(prompt)\n"
         "    return json.dumps({'result_kind':'wait','summary':'Protocol input recorded.'})\n"
     )
-    command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
+    command = [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
     plan = build_loopx_turn_plan(envelope if mode == "legacy_reference" else source,
         host="dsh", execution_mode="isolated-headless", turn_instance_id="host-context-turn")
@@ -231,7 +231,7 @@ def test_bound_replan_reaches_actual_host_with_original_evidence(tmp_path, monke
         "    Path(workspace, 'received.txt').write_text(prompt)\n"
         "    return json.dumps({'result_kind':'wait','summary':'Replan input recorded.'})\n"
     )
-    command = [sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(project),
+    command = [sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(project),
                "--dsh-home", str(tmp_path / "host-home"), "--dsh-runner", str(runner)]
     request = build_loopx_turn_host_request(plan)
     codex_prompt, _ = prepare_codex_cli_input(request)

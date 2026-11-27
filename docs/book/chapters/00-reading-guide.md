@@ -257,7 +257,7 @@ live operation 不进入当前主线。需要这些能力时，应回到官方�
 
 接入主线只以 Codex App 与 Codex CLI 为例，因为这两条路径可以端到端复现。LoopX 的 agent type
 覆盖面更宽：`loopx/host_loop_activation.py` 的 `SUPPORTED_AGENT_TYPES` 列出 21 个类型，其中 9 个
-另有目标模式适配包（`hosts/{kiro_cli,opencode,opencode2,pi}` 已迁入 `loopx/hosts/`，其余为 `claude_goal_mode`、
-`kunluncode_goal_mode`、`zcode_goal_mode`、`agy_goal_mode`、`dsh_goal_mode` 等）。
+另有目标模式适配包（`hosts/{agy,dsh,kiro_cli,opencode,opencode2,pi}` 已迁入 `loopx/hosts/`，其余为
+`claude_goal_mode`、`kunluncode_goal_mode`、`zcode_goal_mode` 等）。
 路线选择是教学取舍：其余 harness 的接入差异，以各自适配包和
 [协议文档](/loopx/docs/reference/protocols/) 为准。

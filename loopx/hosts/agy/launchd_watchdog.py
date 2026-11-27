@@ -139,7 +139,7 @@ def build_antigravity_launchd_plist(
         "-E",
         "-P",
         "-m",
-        "loopx.agy_goal_mode.host_runtime",
+        "loopx.hosts.agy.host_runtime",
         "heartbeat-tick",
         "--cli-bin",
         resolved_cli_bin,

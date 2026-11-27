@@ -412,7 +412,7 @@ def build_start_goal_host_surface_selection_packet(
         "agy": "agy CLI loop (/goal + schedule wakes)",
         "antigravity-app": "Antigravity App (schedule + sidecar)",
         "kiro-cli": "Kiro CLI loop via the LoopX skill facade; native /goal iteration budget",
-        "deepseek-harness": "DeepSeek Harness automation loop through loopx.dsh_goal_mode (compat: scripts/dsh_turn_host_adapter.py)",
+        "deepseek-harness": "DeepSeek Harness automation loop through loopx.hosts.dsh (compat: scripts/dsh_turn_host_adapter.py)",
         "deepseek-harness-native": "DeepSeek Harness same-session LoopX skill and plugin driver",
         "ark-managed-agent": "Ark Managed Agent with one-shot Goal submission",
         "shell": "manual shell or an explicitly configured external scheduler",

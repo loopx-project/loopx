@@ -940,7 +940,7 @@ def test_complete_dsh_binds_session_and_tools_to_shared_work(
 ):
     from hashlib import sha256
     from loopx.control_plane.quota.turn_envelope import build_turn_envelope, compose_turn_decision
-    from loopx.dsh_goal_mode import turn_host_adapter
+    from loopx.hosts.dsh import turn_host_adapter
 
     request, original = complete_host_request
     source = {key: value for key, value in original.items()
@@ -1036,7 +1036,7 @@ def test_real_dsh_cli_preserves_complete_input_and_once_only_settlement(tmp_path
                  f"assert pathlib.Path({fixture.MARKER_NAME!r}).read_text() == {fixture._marker_value(1)!r}"]
     host_args = (["--host", "dsh", "--dsh-runner", str(runner)] if launch == "builtin" else [
         "--host", "generic-cli", "--host-adapter-request-schema", "loopx_turn_host_request_v1", "--host-adapter-command-json", json.dumps([
-            sys.executable, "-m", "loopx.dsh_goal_mode", "--workspace", str(workspace),
+            sys.executable, "-m", "loopx.hosts.dsh", "--workspace", str(workspace),
             "--dsh-runner", str(runner), "--dsh-home", str(tmp_path / "stdio-dsh-home")])])
     argv = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
             "turn", "run-once", "--goal-id", fixture.GOAL_ID, "--agent-id", fixture.AGENT_ID,
