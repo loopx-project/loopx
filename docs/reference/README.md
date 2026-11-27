@@ -15,6 +15,8 @@ Current groups:
   Apache-2.0 outbound HTTPS task-command wire contract and TLS client in `loopx`
   (server-side PostgreSQL authority and multi-tenant coordination live in
   `loopx-project/loopx-cloud`).
+- [Remote authority inspection](remote-authority-inspection.md): installed read-only
+  CLI checks, safe diagnostics, and execution-admission boundaries.
 - [Usage ping](usage-ping.md): default-on basic usage statistics, disclosure/opt-out and exact
   payload, opt-out switches, and the published active-installation counts.
 

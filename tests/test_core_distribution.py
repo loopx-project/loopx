@@ -224,6 +224,35 @@ def _environment(python, overrides=None):
     return env
 
 
+def test_installed_core_inspects_remote_authority_without_checkout(core_python, tmp_path):
+    from tests.control_plane.remote_authority_inspection_fixture import CREDENTIAL, remote_authority_service
+
+    registry = tmp_path / "projects.json"
+    runtime = tmp_path / "runtime"
+    with remote_authority_service(tmp_path, "fixture-actor") as (config, control):
+        # A synthetic registered binding is all inspection needs; no local task
+        # creation, cloud package, examples tree or editable source installation.
+        registry.write_text(json.dumps({"goals": [{"id": "fixture-goal",
+            "registered_agents": ["fixture-actor"], "remote_authority": config}]}), encoding="utf-8")
+        before = registry.read_bytes()
+        arguments = ["--registry", str(registry), "--runtime-root", str(runtime),
+                     "remote-authority", "inspect", "--goal-id", "fixture-goal",
+                     "--agent-id", "fixture-actor", "--format", "json"]
+        for mode, reason in (("found", "read_verified"), ("denied", "scope_denied"),
+                             ("http", "http"), ("invalid", "response_invalid")):
+            control["mode"] = mode
+            result = _run(core_python, arguments, tmp_path,
+                environment={"LOOPX_AUTHORITY_CREDENTIAL": CREDENTIAL}, expected=0 if mode == "found" else 1)
+            packet = json.loads(result.stdout)
+            assert packet["reason_code"] == f"remote_authority_{reason}"
+            assert packet["execution_admitted"] is False
+            assert CREDENTIAL not in result.stdout + result.stderr
+            assert config["endpoint"] not in result.stdout + result.stderr
+            assert registry.read_bytes() == before
+            assert not runtime.exists()
+        assert len(control["requests"]) == 4
+
+
 def _run(python, arguments, cwd, *, environment=None, expected=0):
     result = subprocess.run(_command(python, arguments), cwd=cwd,
         env=_environment(python, environment),

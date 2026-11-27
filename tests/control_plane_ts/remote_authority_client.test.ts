@@ -22,7 +22,8 @@ import {
   type RemoteAuthorityMode,
   type RemoteAuthorityRequest,
 } from "../../loopx/control_plane/coordination/remote_authority_contract.ts";
-import {callRemoteAuthority} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
+import {callRemoteAuthority, observeRemoteAuthorityCall} from "../../loopx/control_plane/coordination/remote_authority_http.ts";
+import {inspectRemoteAuthority} from "../../loopx/control_plane/coordination/remote_authority_inspection.ts";
 
 const storeIdentity = `postgresql:${"c".repeat(32)}`;
 const credential = `fixture-${"a".repeat(48)}`;
@@ -310,4 +311,105 @@ test("callRemoteAuthority, CLI client and probe verify TLS and classify transpor
   );
   assert.equal(probeResult.code, 0);
   assert.equal(probeResult.stdout, "verified\n");
+});
+
+test("inspection distinguishes safe read diagnostics and never requests a mutation or retry", async t => {
+  const tls = await tlsFixture(t);
+  let behavior = "found", requests = 0;
+  const server = createServer({key: tls.key, cert: tls.cert}, async (req, res) => {
+    requests++;
+    assert.equal(req.url, "/v0/tasks/execute");
+    assert.equal(req.headers.authorization, `Bearer ${credential}`);
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const request = decodeRemoteAuthorityRequest(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    assert.equal(request.operation, "read");
+    assert.equal(request.todo_id, "todo_one");
+    if (behavior.startsWith("http-")) {res.writeHead(Number(behavior.slice(5))).end(credential); return;}
+    if (behavior === "invalid") {res.end(`not-json-${credential}`); return;}
+    if (behavior === "oversized") {res.end("x".repeat(65537)); return;}
+    if (behavior === "timeout") return;
+    if (behavior === "truncated") {res.writeHead(200, {"content-length": "1000"}); res.write("{"); setImmediate(() => res.destroy()); return;}
+    let result: JsonObject = {status: "found", provider_revision: `${storeIdentity}:1`,
+      todo: {todo_id: request.todo_id ?? "", status: "open"}, lease: null};
+    if (behavior === "missing") result = {status: "missing", provider_revision: `${storeIdentity}:1`};
+    if (behavior === "principal_unauthenticated" || behavior === "remote_authority_scope_denied" || behavior === "unknown-rejection") {
+      result = {status: "rejected", reason_code: behavior === "unknown-rejection" ? credential : behavior};
+    }
+    if (behavior === "unavailable") result = {status: "unavailable", reason_code: "private-service-detail"};
+    let packet = remoteAuthorityResponse(request, "execute", result);
+    if (behavior === "scoped") packet = remoteAuthorityResponse(request, "execute", {
+      status: "found", todo: {todo_id: request.todo_id ?? "", status: "open"}, lease: null,
+      goal_ref: {goal_id: request.goal_id, goal_instance_id: "ginst_" + "a".repeat(32)},
+    }, REMOTE_AUTHORITY_SCOPED_READ_RESPONSE);
+    if (behavior === "wrong-correlation") packet.request_sha256 = "0".repeat(64);
+    res.end(JSON.stringify(packet));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {server.closeAllConnections(); server.close();});
+  const endpoint = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const config = {enabled: true, endpoint, tenant_id: "tenant-one", actor_id: "actor-a",
+    store_identity: storeIdentity, probe_todo_id: "todo_one", ca_file: tls.certPath,
+    operation: "claim", request_id: "must-be-ignored", rejectUnauthorized: false};
+  const input = {goal_registered: true, actor_registered: true, goal_id: "goal-one",
+    agent_id: "actor-a", credential, config};
+  const cases = [
+    ["found", "read_verified"], ["scoped", "read_verified"], ["missing", "todo_missing"],
+    ["principal_unauthenticated", "unauthenticated"], ["remote_authority_scope_denied", "scope_denied"],
+    ["unknown-rejection", "rejected"], ["unavailable", "read_unverified"],
+    ["invalid", "response_invalid"], ["wrong-correlation", "response_invalid"],
+    ["oversized", "response_too_large"], ["truncated", "connection"], ["timeout", "timeout"],
+    ["http-401", "http"], ["http-403", "http"], ["http-503", "http"],
+  ];
+  for (const [mode, reason] of cases) {
+    behavior = mode!;
+    const before = requests;
+    const result = await inspectRemoteAuthority(input);
+    assert.equal(result.reason_code, `remote_authority_${reason}`, mode);
+    assert.equal(result.ok, reason === "read_verified", mode);
+    assert.equal(result.execution_admitted, false);
+    assert.equal(requests, before + 1, "exactly one read, no automatic retry");
+    if (mode!.startsWith("http-")) assert.equal(result.http_status, Number(mode!.slice(5)));
+    for (const secret of [credential, endpoint, storeIdentity, tls.certPath, "tenant-one", "actor-a", "todo_one", "private-service-detail"]) {
+      assert.equal(JSON.stringify(result).includes(secret), false, secret);
+    }
+  }
+  const before = requests;
+  assert.equal((await inspectRemoteAuthority({...input, config: {...config, ca_file: null}})).reason_code, "remote_authority_tls");
+  assert.equal(requests, before, "untrusted certificate never reaches HTTP handler");
+
+  for (const [patch, reason] of [
+    [{goal_registered: false}, "goal_unregistered"], [{actor_registered: false}, "actor_unregistered"],
+    [{config: {...config, enabled: false}}, "disabled"], [{config: {...config, tenant_id: ""}}, "binding_incomplete"],
+    [{agent_id: "other"}, "actor_mismatch"], [{credential: null}, "credential_required"],
+    [{credential: "short"}, "credential_invalid"], [{config: {...config, endpoint: "http://localhost"}}, "endpoint_invalid"],
+    [{config: {...config, store_identity: "invalid"}}, "binding_invalid"],
+    [{config: {...config, ca_file: "relative.pem"}}, "ca_invalid"],
+  ] as const) {
+    assert.equal((await inspectRemoteAuthority({...input, ...patch})).reason_code, `remote_authority_${reason}`);
+    assert.equal(requests, before, "invalid local configuration must not contact the service");
+  }
+});
+
+test("transport observations cannot turn uncertain writes or recovery into permission to execute", async t => {
+  const tls = await tlsFixture(t);
+  let requests = 0;
+  const server = createServer({key: tls.key, cert: tls.cert}, (_req, res) => {
+    requests++; res.writeHead(401).end("untrusted-details");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {server.closeAllConnections(); server.close();});
+  const endpoint = `https://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  for (const mode of ["execute", "recover"] as const) {
+    const observed = await observeRemoteAuthorityCall(endpoint, credential, claimRequest(), {ca: tls.cert, mode});
+    assert.equal(observed.response.status, mode === "execute" ? "ambiguous" : "unavailable");
+    assert.equal(observed.response.reason_code, "remote_authority_transport_uncertain");
+    assert.deepEqual(observed.transport, {kind: "http", httpStatus: 401});
+    assert.deepEqual(await callRemoteAuthority(endpoint, credential, claimRequest(), {ca: tls.cert, mode}), observed.response);
+  }
+  assert.equal(requests, 4);
+  await new Promise<void>(resolve => server.close(() => resolve()));
+  const refused = await observeRemoteAuthorityCall(endpoint, credential, claimRequest(), {ca: tls.cert});
+  assert.equal(refused.transport?.kind, "connection_refused");
+  assert.equal(refused.response.status, "ambiguous");
 });

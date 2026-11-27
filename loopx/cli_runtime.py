@@ -64,7 +64,7 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"todo", "quota", "task-lease", "change-window", "delegation", "turn", "doctor", "commands", "version",
 	"bootstrap", "connect", "configure-goal", "start-goal", "bootstrap-command-pack",
 	"register-agent", "bind-agent-thread",
-	"authority-archive", "coordination-shadow", "extension", "slash-commands",
+	"authority-archive", "remote-authority", "coordination-shadow", "extension", "slash-commands",
 	"manager-inbox",
 	"agent-context", "agent-directory", "agent-capabilities",
 	"handoff", "handoff-mode",
@@ -518,6 +518,10 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.agent_capabilities import register_agent_capabilities
 
 		register_agent_capabilities(subparsers, add_subcommand_format)
+	elif command == "remote-authority":
+		from .cli_commands.remote_authority import register_remote_authority_command
+
+		register_remote_authority_command(subparsers, add_subcommand_format)
 	elif command == "authority-archive":
 		from .cli_commands.authority_archive import register_authority_archive_command
 
@@ -727,6 +731,12 @@ def _dispatch_common_command(
 		return handoff_handler(
 			args, registry_path=registry_path, runtime_root_arg=args.runtime_root,
 			output_format=output_format, print_payload=print_payload,
+		)
+	if args.command == "remote-authority":
+		from .cli_commands.remote_authority import handle_remote_authority_command
+
+		return handle_remote_authority_command(
+			args, registry_path=registry_path, output_format=output_format, print_payload=print_payload,
 		)
 	if args.command == "authority-archive":
 		from .cli_commands.authority_archive import handle_authority_archive_command
