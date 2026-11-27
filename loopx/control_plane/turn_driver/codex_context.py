@@ -15,6 +15,9 @@ from pathlib import Path
 import stat
 import uuid
 
+from ...hosts.codex_capabilities import (
+    CODEX_CLI_HOOKS_HOST_CAPABILITIES as CODEX_CLI_HOOKS_HOST_CAPABILITIES,
+)
 from .decision_capture import (
     write_decision_capture, capture_context_projection, CONTEXT_CAPTURE_PAGE_GUIDANCE,
     capture_page_range, read_context_capture_file, CONTEXT_CAPTURE_NAVIGATION_GUIDANCE,

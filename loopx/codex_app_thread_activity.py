@@ -20,6 +20,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .hosts.codex_capabilities import (
+    CODEX_APP_HOST_CAPABILITIES as CODEX_APP_HOST_CAPABILITIES,
+)
 from .hosts.codex_rollout_cursor import Reader, RolloutCursor
 from .hosts.codex_rollout_file import open_rollout
 from .control_plane.agents.host_thread_activity import (

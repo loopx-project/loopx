@@ -22,6 +22,7 @@ from typing import Any
 from ..command_invocation import loopx_cli_argv
 from ..entrypoint import pin_utf8_stdio
 from ..file_lock import exclusive_file_lock
+from . import AGY_HOST_CAPABILITIES as AGY_HOST_CAPABILITIES
 from .launchd_watchdog import (
     DEFAULT_LAUNCHD_INTERVAL_SECONDS,
     DEFAULT_LONG_IDLE_SECONDS,

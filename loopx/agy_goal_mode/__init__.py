@@ -15,6 +15,28 @@ from pathlib import Path
 from typing import Any
 
 from ..command_invocation import loopx_cli_argv
+from ..hosts.capabilities import (
+    HostHarnessCapabilities,
+    _register_builtin_host_capabilities,
+)
+
+AGY_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
+    HostHarnessCapabilities(
+        host_id="agy",
+        integration_tier="orchestrated_app",
+        adapter_module="loopx.agy_goal_mode",
+        supported_capabilities=(),
+        hook_events=("Stop",),
+        requires_utf8_stdio=True,
+        native_goal_primitive=True,
+        native_scheduler_primitive=True,
+        description=(
+            "Antigravity CLI and App orchestrated adapter with native /goal, "
+            "schedule wake tools, Stop EOF recovery hook, and "
+            "ANTIGRAVITY_CONVERSATION_ID binding."
+        ),
+    )
+)
 
 AGY_INSTALL_SURFACE = "agy"
 ANTIGRAVITY_APP_INSTALL_SURFACE = "antigravity-app"

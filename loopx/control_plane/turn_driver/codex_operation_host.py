@@ -18,6 +18,9 @@ from typing import Any
 
 from ...chat_agent import CodexChatAgentError, CodexChatAgentSession
 from ...extensions.codex_native_child import native_child_observer
+from ...hosts.codex_capabilities import (
+    CODEX_APP_SERVER_HOST_CAPABILITIES as CODEX_APP_SERVER_HOST_CAPABILITIES,
+)
 from ..goals.first_party_host_admission import (
     FirstPartyHostGoalAdmission,
     FirstPartyHostRuntimeRejected,

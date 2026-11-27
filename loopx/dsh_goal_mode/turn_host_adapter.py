@@ -61,8 +61,30 @@ from ..control_plane.turn_driver.host_binding import (
 )
 from ..control_plane.turn_driver.host_failure import BuiltInHostError
 from ..entrypoint import pin_utf8_stdio
+from ..hosts.capabilities import (
+    HostHarnessCapabilities,
+    _register_builtin_host_capabilities,
+)
 
 from .host_failure_map import classify_dsh_failure, classify_dsh_terminal_reason
+
+DSH_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
+    HostHarnessCapabilities(
+        host_id="dsh",
+        integration_tier="in_tree_codesigned",
+        adapter_module="loopx.dsh_goal_mode",
+        supported_capabilities=(),
+        hook_events=(),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=False,
+        description=(
+            "DeepSeek Harness in-tree Turn adapter with typed failure mapping and "
+            "per-request max_tokens output limit only (no native input/context budget "
+            "management)."
+        ),
+    )
+)
 
 # The adapter reads the managed execution profile for these three fields; the
 # constants re-export the product defaults for callers that only need the

@@ -12,6 +12,9 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import Any
 
+from ...hosts.codex_capabilities import (
+    CODEX_CLI_HOST_CAPABILITIES as CODEX_CLI_HOST_CAPABILITIES,
+)
 from ..goals.first_party_host_admission import FirstPartyHostGoalAdmission
 from .subagent_execution_topology import (
     child_execution_receipts_json_schema,
