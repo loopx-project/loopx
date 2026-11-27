@@ -53,10 +53,38 @@ export async function exerciseConfigurationComparison({page, panel, beforeBytes,
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await comparison().getByRole("status").scrollIntoViewIfNeeded();
   await page.screenshot({path: resolve(outputDir, "configuration-comparison-mobile.png"), animations: "disabled"});
-  await page.setViewportSize({width: 1512, height: 982});
   await comparison().getByRole("button", {name: "核对比较后快照以恢复"}).click();
   await panel.getByRole("button", {name: "恢复为隔离检查点"}).waitFor();
-  assert.match(await panel.getByRole("status").last().innerText(), new RegExp(after.sha256));
+  async function assertPreviewFits(sha, name) {
+    const status = panel.getByRole("status").last();
+    const digest = status.locator("code");
+    assert.equal(await digest.textContent(), `SHA-256: ${sha}`, "The complete reviewed digest must remain available");
+    await status.scrollIntoViewIfNeeded();
+    const geometry = await digest.evaluate(element => {
+      const panel = element.closest(".personal-detail-card").getBoundingClientRect();
+      const button = element.closest(".personal-detail-card").querySelector(".personal-primary-action").getBoundingClientRect();
+      const glyphs = [];
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+        for (let index = 0; index < text.textContent.length; index++) {
+          const range = document.createRange(); range.setStart(text, index); range.setEnd(text, index + 1);
+          for (const rect of range.getClientRects()) glyphs.push({left: rect.left, right: rect.right});
+        }
+      }
+      return {width: innerWidth, panel: {left: panel.left, right: panel.right}, button: {left: button.left, right: button.right}, glyphs};
+    });
+    console.log(`configuration-preview-${name}=${JSON.stringify({width: geometry.width, panel: geometry.panel, button: geometry.button, glyphCount: geometry.glyphs.length, glyphLeft: Math.min(...geometry.glyphs.map(rect => rect.left)), glyphRight: Math.max(...geometry.glyphs.map(rect => rect.right))})}`);
+    await page.screenshot({path: resolve(outputDir, `configuration-preview-${name}-mobile.png`), animations: "disabled"});
+    assert.equal(geometry.width, 390);
+    assert(geometry.panel.left >= 0 && geometry.panel.right <= geometry.width, "The preview must not widen its clipped settings panel");
+    assert(geometry.button.left >= geometry.panel.left && geometry.button.right <= geometry.panel.right, "The restore action must fit the panel");
+    assert.equal(geometry.glyphs.length, `SHA-256: ${sha}`.length);
+    assert(geometry.glyphs.every(rect => rect.left >= geometry.panel.left && rect.right <= Math.min(geometry.panel.right, geometry.width)), "Every digest glyph must be inside the visible content width");
+  }
+  await assertPreviewFits(after.sha256, "after");
+  await comparison().getByRole("button", {name: "核对比较前快照以恢复"}).click();
+  await panel.getByRole("status").last().filter({hasText: before.sha256}).waitFor();
+  await assertPreviewFits(before.sha256, "before");
   await upload("比较前文件", beforeBytes, "before-again.json");
   assert.equal(await panel.getByRole("button", {name: "恢复为隔离检查点"}).count(), 0, "Replacing either input invalidates the reviewed restore candidate");
 
@@ -83,9 +111,12 @@ export async function exerciseConfigurationComparison({page, panel, beforeBytes,
   await remountWhilePending("**/api/chat/configuration-backup/restore", () => comparison().getByRole("button", {name: "核对比较后快照以恢复"}).click());
   await fill(); await compare();
   await comparison().getByRole("button", {name: "核对比较后快照以恢复"}).click();
+  await panel.getByRole("button", {name: "恢复为隔离检查点"}).waitFor();
+  await assertPreviewFits(after.sha256, "selected-after");
   await panel.getByRole("button", {name: "恢复为隔离检查点"}).click();
   await panel.getByText("检查点已恢复并核对；当前设置及存储 provider 未改变。", {exact: false}).waitFor();
   assert.deepEqual(JSON.parse(await readFile(join(root, "runtime/backups/configuration", after.sha256, "configuration-backup.json"))), after);
+  await page.setViewportSize({width: 1512, height: 982});
   await page.getByRole("button", {name: "语言", exact: true}).click();
   await page.getByRole("radio", {name: "English", exact: true}).check();
   await page.locator(".personal-settings-tabs").getByRole("button", {name: /Capabilit/}).click();

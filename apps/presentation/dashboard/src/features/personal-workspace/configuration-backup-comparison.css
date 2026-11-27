@@ -9,3 +9,5 @@
 .personal-backup-comparison code { overflow-wrap: anywhere; white-space: pre-wrap; }
 .personal-backup-comparison pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; }
 @media (max-width: 640px) { .personal-backup-files { grid-template-columns: minmax(0, 1fr); } }
+
+.personal-configuration-preview-digest { display: block; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }

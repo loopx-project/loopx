@@ -61,7 +61,7 @@ export function ConfigurationBackupSettings({goalId}: {goalId: string | null}) {
     {result ? <p role="status">{result.status === "restored"
       ? (zh ? "检查点已恢复并核对；当前设置及存储 provider 未改变。" : "Checkpoint restored and verified. Live settings and storage provider are unchanged.")
       : (zh ? "配置备份已核对" : "Configuration backup verified")}: {result.goal_count} Goal · {result.machine_configuration_present ? (zh ? "包含设备配置" : "includes device configuration") : (zh ? "设备配置缺省" : "device configuration absent")}
-      {result.status === "preview" ? <code>SHA-256: {result.sha256}</code> : null}
+      {result.status === "preview" ? <code className="personal-configuration-preview-digest">SHA-256: {result.sha256}</code> : null}
       {result.checkpoint_ref ? <code>{result.checkpoint_ref}</code> : null}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
     </> : <StateRecoverySettings />}

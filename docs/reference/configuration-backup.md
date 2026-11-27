@@ -104,6 +104,12 @@ The two recovery buttons select a snapshot for preflight; they do not apply the
 displayed differences to live settings. The image shows the packaged browser
 App, not an installed native desktop qualification.
 
+On a narrow screen, the recovery preview wraps the complete selected SHA-256
+inside the panel. Check it against the chosen snapshot before selecting
+**Restore isolated checkpoint**; selecting a snapshot alone does not restore it.
+
+![Narrow Settings recovery preview with the complete selected digest and explicit restore button](assets/configuration-backup-preview-mobile.png)
+
 For a reviewed cohort on a host with unreachable historical source registries,
 repeat `backup-state --configuration-goal-id example` to select the embedded
 configuration checkpoint. This uses the same strict source-owner capture as
