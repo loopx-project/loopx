@@ -35,6 +35,39 @@ select several. Full `backup-state` captures its global discovery registry by
 default, or the selected project registry with `--current-project-only`. The private
 archive manifest reports configuration verification and presence separately.
 
+### Compare configuration snapshots before recovery
+
+To review stored configuration changes across an upgrade or an operator edit,
+export a snapshot before and after the change, then compare the two files:
+
+```sh
+loopx configuration-backup compare --before before.json --after after.json
+loopx --format json configuration-backup compare --before before.json --after after.json
+```
+
+Both complete envelopes and their digests must verify before any comparison is
+returned. The result names `before_sha256`, `after_sha256`, each snapshot's Goal
+IDs and machine-configuration presence, and every changed stored value.
+`before_present`/`after_present` distinguish a missing field from explicit null,
+false, zero or an empty value. Object-key and Goal declaration order do not
+create differences; nested arrays retain order and are shown as whole values.
+Paths use JSON Pointer escaping (`~0` for `~`, `~1` for `/`), with Goals keyed
+by their verified ID under `/goals`, not by the original array offset.
+
+`only_in_before` and `only_in_after` describe snapshot scope. Since backups can
+select different Goal cohorts, these are **not** claims that a live Goal was
+created or deleted. Likewise, matching configuration values do not imply equal
+snapshot hashes when Goal declaration order differs. No referenced source file
+is followed, current settings are not read, and comparison neither writes a
+checkpoint nor authorizes activation. The output contains private configuration
+values and is not certified for publication. A missing or invalid input fails
+without returning a partial comparison.
+
+After review, use the existing `restore` command with the chosen snapshot's
+reported digest and a new isolated destination, then inspect its readback.
+Comparison does not replace that digest check or the normal configuration
+editors. This is an operator CLI workflow; the Settings UI is unchanged.
+
 For a reviewed cohort on a host with unreachable historical source registries,
 repeat `backup-state --configuration-goal-id example` to select the embedded
 configuration checkpoint. This uses the same strict source-owner capture as

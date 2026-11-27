@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {captureConfigurationBackup, restoreConfigurationBackup, verifyConfigurationBackup} from "../../loopx/control_plane/configuration_backup.ts";
+import {captureConfigurationBackup, compareConfigurationBackups, restoreConfigurationBackup, verifyConfigurationBackup} from "../../loopx/control_plane/configuration_backup.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "../../loopx/control_plane/effect_runtime_errors.ts";
 
 function snapshot() {
@@ -77,4 +77,56 @@ test("dangling targets and symlink ancestors cannot redirect recovery", async ()
 test("absence remains absence rather than introducing a machine default", () => {
   const backup = captureConfigurationBackup({data: {machine_configuration: null, goals: []}});
   assert.equal(verifyConfigurationBackup(backup).machine_configuration_present, false);
+});
+
+test("comparison preserves missing, null, false and array order while aligning Goal identities", () => {
+  const capture = (machine: unknown, goals: unknown[]) => captureConfigurationBackup({data: {machine_configuration: machine, goals}});
+  const goal = (id: string, extra = {}) => ({goal_id: id, goal_configuration: {id, ...extra}});
+  const before = capture({settings: {missing: null, enabled: false, zero: 0, ordered: [1, 2]}},
+    [goal("shared", {"a/b~c": null}), goal("only-before")]);
+  const after = capture({settings: {enabled: null, zero: false, ordered: [2, 1], added: false}},
+    [goal("only-after"), goal("shared", {"a/b~c": false})]);
+  const original = JSON.stringify([before, after]);
+  const result = compareConfigurationBackups({before, after});
+  assert.equal(result.before_sha256, before.sha256);
+  assert.equal(result.after_sha256, after.sha256);
+  assert.deepEqual(result.only_in_before, ["only-before"]);
+  assert.deepEqual(result.only_in_after, ["only-after"]);
+  assert.equal(result.privacy_certified, false);
+  assert.equal(result.activation_performed, false);
+  assert.equal(result.written, false);
+  const changes = result.changes as Array<Record<string, unknown>>;
+  assert.deepEqual(changes.find(row => row.path === "/machine_configuration/settings/missing"),
+    {path: "/machine_configuration/settings/missing", before_present: true, after_present: false, before: null});
+  assert.deepEqual(changes.find(row => row.path === "/machine_configuration/settings/added"),
+    {path: "/machine_configuration/settings/added", before_present: false, after_present: true, after: false});
+  assert.deepEqual(changes.find(row => row.path === "/machine_configuration/settings/ordered")?.after, [2, 1]);
+  assert.deepEqual(changes.find(row => row.path === "/machine_configuration/settings/zero"),
+    {path: "/machine_configuration/settings/zero", before_present: true, after_present: true, before: 0, after: false});
+  assert.deepEqual(changes.find(row => row.path === "/machine_configuration/settings/enabled"),
+    {path: "/machine_configuration/settings/enabled", before_present: true, after_present: true, before: false, after: null});
+  assert.deepEqual(changes.find(row => row.path === "/goals/shared/a~1b~0c")?.before, null);
+  assert.deepEqual(changes.find(row => row.path === "/goals/shared/a~1b~0c")?.after, false);
+  assert.equal(JSON.stringify([before, after]), original);
+});
+
+test("reordered Goal declarations and object keys do not invent configuration changes", () => {
+  const a = {goal_id: "a", goal_configuration: {id: "a", values: {left: 1, right: 2}, array: [{left: 1, right: 2}]}};
+  const b = {goal_id: "b", goal_configuration: {id: "b"}};
+  const before = captureConfigurationBackup({data: {machine_configuration: null, goals: [a, b]}});
+  const after = captureConfigurationBackup({data: {machine_configuration: null,
+    goals: [b, {...a, goal_configuration: {values: {right: 2, left: 1}, array: [{right: 2, left: 1}], id: "a"}}]}});
+  assert.notEqual(before.sha256, after.sha256);
+  assert.equal(compareConfigurationBackups({before, after}).change_count, 0);
+});
+
+test("both snapshots must verify and machine absence is not an empty object", () => {
+  const before = captureConfigurationBackup({data: {machine_configuration: null, goals: []}});
+  const after = captureConfigurationBackup({data: {machine_configuration: {}, goals: []}});
+  const result = compareConfigurationBackups({before, after});
+  assert.equal(result.before_machine_configuration_present, false);
+  assert.equal(result.after_machine_configuration_present, true);
+  assert.deepEqual(result.changes, [{path: "/machine_configuration", before_present: true, after_present: true, before: null, after: {}}]);
+  for (const request of [{before: {...before, sha256: "invalid"}, after}, {before, after: {...after, sha256: "invalid"}},
+    {before: null, after}]) assert.throws(() => compareConfigurationBackups(request));
 });

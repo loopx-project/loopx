@@ -3,7 +3,7 @@ import {lstat, mkdir, mkdtemp, readFile, rm} from "node:fs/promises";
 import {dirname, isAbsolute, join, resolve} from "node:path";
 import type {JsonObject} from "./effect_program.ts";
 import {requireJsonObject, requireNonEmptyString} from "./runtime_decode.ts";
-import {canonicalAuthorityJson, canonicalAuthoritySha256, hasExactAuthorityKeys} from "./coordination/authority_store_codec.ts";
+import {authorityUnicodeCompare, canonicalAuthorityJson, canonicalAuthoritySha256, hasExactAuthorityKeys, isAuthorityJsonObject} from "./coordination/authority_store_codec.ts";
 import {durableWriteJson, publishNewDirectory} from "./effect_runtime_io.ts";
 import {EffectRuntimeConflictError, EffectRuntimeRequestError} from "./effect_runtime_errors.ts";
 
@@ -45,6 +45,48 @@ export function verifyConfigurationBackup(value: unknown): JsonObject {
   return {ok: true, schema_version: SCHEMA, sha256, goal_count: (data.goals as unknown[]).length,
     machine_configuration_present: data.machine_configuration !== null,
     privacy_certified: false, activation_performed: false, readback_verified: true};
+}
+
+/** An inert operator comparison, not an adoption plan. Goal cohorts may differ;
+ * presence in only one snapshot does not establish live creation or deletion. */
+export function compareConfigurationBackups(value: unknown): JsonObject {
+  const request = requireJsonObject(value, "configuration backup comparison");
+  const before = requireJsonObject(request.before, "before configuration backup");
+  const after = requireJsonObject(request.after, "after configuration backup");
+  const beforeVerification = verifyConfigurationBackup(before);
+  const afterVerification = verifyConfigurationBackup(after);
+  const left = content(before.data), right = content(after.data);
+  const goals = (data: JsonObject) => new Map((data.goals as JsonObject[]).map(goal =>
+    [goal.goal_id as string, goal.goal_configuration]));
+  const leftGoals = goals(left), rightGoals = goals(right);
+  const beforeIds = [...leftGoals.keys()].sort(authorityUnicodeCompare);
+  const afterIds = [...rightGoals.keys()].sort(authorityUnicodeCompare);
+  const changes: JsonObject[] = [];
+  const segment = (key: string) => key.replace(/~/g, "~0").replace(/\//g, "~1");
+  const compare = (a: unknown, b: unknown, path: string, aPresent: boolean, bPresent: boolean): void => {
+    if (aPresent && bPresent) {
+      if (isAuthorityJsonObject(a) && isAuthorityJsonObject(b)) {
+        for (const key of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort(authorityUnicodeCompare)) {
+          compare(a[key], b[key], `${path}/${segment(key)}`, Object.hasOwn(a, key), Object.hasOwn(b, key));
+        }
+        return;
+      }
+      // Arrays retain order and are compared as a whole; no inferred item identity.
+      if (JSON.stringify(a) === JSON.stringify(b)) return;
+    }
+    changes.push({path, before_present: aPresent, after_present: bPresent,
+      ...(aPresent ? {before: a} : {}), ...(bPresent ? {after: b} : {})});
+  };
+  compare(left.machine_configuration, right.machine_configuration, "/machine_configuration", true, true);
+  for (const id of [...new Set([...beforeIds, ...afterIds])].sort(authorityUnicodeCompare)) {
+    compare(leftGoals.get(id), rightGoals.get(id), `/goals/${segment(id)}`, leftGoals.has(id), rightGoals.has(id));
+  }
+  return {ok: true, status: "compared", before_sha256: beforeVerification.sha256, after_sha256: afterVerification.sha256,
+    before_goal_ids: beforeIds, after_goal_ids: afterIds,
+    only_in_before: beforeIds.filter(id => !rightGoals.has(id)), only_in_after: afterIds.filter(id => !leftGoals.has(id)),
+    before_machine_configuration_present: beforeVerification.machine_configuration_present,
+    after_machine_configuration_present: afterVerification.machine_configuration_present,
+    change_count: changes.length, changes, written: false, activation_performed: false, privacy_certified: false};
 }
 
 async function requirePhysicalParent(path: string): Promise<void> {
@@ -97,6 +139,7 @@ export async function configurationBackupOperation(value: unknown): Promise<Json
   const request = requireJsonObject(value, "configuration backup operation");
   if (request.action === "capture") return captureConfigurationBackup(request);
   if (request.action === "verify") return verifyConfigurationBackup(request.backup);
+  if (request.action === "compare") return compareConfigurationBackups(request);
   if (request.action === "restore") return restoreConfigurationBackup(request);
   throw new EffectRuntimeRequestError("unsupported configuration backup operation");
 }
