@@ -677,7 +677,7 @@ def _return_transaction(host, path, phase, request):
     observed = dict(request["facts"])
     for field, keys in {
         "session": ("session_id", "goal_id", "channel_id", "status", "project_context", "steward_context"),
-        "turn": ("turn_id", "client_turn_id", "status"),
+        "turn": ("turn_id", "client_turn_id", "status", "origin"),
         "grant": ("source_id", "targets"),
     }.items():
         if isinstance(observed.get(field), dict):
@@ -790,11 +790,13 @@ def _deliver_return(host, path, sender, frozen_route):
     record_attempt = _ReturnAttemptRecorder(transact, checkpoint, host["exact"])
 
     try:
-        store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
+        original_message = store.append_message(source["route"]["session_id"], role="agent", text=plan["text"],
             turn_id=source["turn"]["turn_id"], origin="manager_followup", message_id=plan["message_id"])
         if cancelled():
             return 0
         outcome = _return_provider(plan, source, sender, record_attempt)
+        if outcome["kind"] == "private" and source["turn"].get("origin") == "native_loopx":
+            outcome["original_message"] = original_message
     except ChatMessagePayloadConflictError as exc:
         logging.getLogger(__name__).warning("Manager return payload conflict on %s: %s", plan["message_id"], exc.field)
         outcome = {"kind": "conflict"}
