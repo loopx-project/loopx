@@ -281,7 +281,21 @@ def execute_extension_runtime_binding(
     request: Mapping[str, object],
     environment: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Execute a resolved binding after its capability authorizes the request."""
+    """Dispatch a protocol-specific binding. Profiled operations need their admission owner."""
+    provider = request.get("provider")
+    if ("integration_profile_digest" in binding or "operation" in binding
+            or (isinstance(provider, Mapping) and "profile_digest" in provider)):
+        raise ValueError("profiled external operations require capability admission")
+    return _execute_extension_runtime_binding(binding, request=request, environment=environment)
+
+
+def _execute_extension_runtime_binding(
+    binding: Mapping[str, object],
+    *,
+    request: Mapping[str, object],
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    """Run the transport after the protocol owner admits this operation."""
     argv, timeout_seconds = _runtime_binding_invocation(binding)
     request_bytes = _serialize_extension_request(request, operation="runtime")
     raw_prefix = binding.get("environment_path_prefix")

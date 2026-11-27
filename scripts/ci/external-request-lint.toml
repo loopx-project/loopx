@@ -1,0 +1,15 @@
+# Apply from the repository root. Only the two profiled operation owners can
+# prepare and dispatch a profiled provider request. The public transport rejects
+# profiled bindings; existing protocol-specific adapters use its checked entry.
+namespace-packages = ["loopx"]
+
+[lint]
+select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"loopx.extensions.runtime._execute_extension_runtime_binding".msg = "Use the admitted read-only invocation or the journaled external-write lifecycle."
+"loopx.extensions.capability_admission.prepare_external_capability_invocation".msg = "A prepared request is not dispatch authority. Use invoke_external_capability or the governed lifecycle."
+
+[lint.per-file-ignores]
+"loopx/extensions/capability_admission.py" = ["TID251"]
+"loopx/extensions/governed_capability_execution.py" = ["TID251"]

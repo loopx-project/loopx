@@ -13,7 +13,7 @@ from ..history import load_registry
 from ..registry import find_registry_goal
 from .manifest import EXTERNAL_CAPABILITY_PROFILE_SCHEMA_VERSION
 from .runtime import (
-    execute_extension_runtime_binding,
+    _execute_extension_runtime_binding,
     extension_catalog_entries,
     resolve_extension_runtime_binding,
 )
@@ -661,7 +661,7 @@ def invoke_external_capability(
     }
     if not execute:
         return receipt
-    provider_result = execute_extension_runtime_binding(
+    provider_result = _execute_extension_runtime_binding(
         binding,
         request=request,
         environment=environment,

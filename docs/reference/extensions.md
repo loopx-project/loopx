@@ -546,14 +546,39 @@ materialized proposal is checkpointed immediately. Monitor upserts belong to
 the pre-settlement phase; monitor completion belongs to the post-settlement
 phase. A crash between either Todo write and its checkpoint recovers by the
 proposal's stable monitor key and completion identity instead of duplicating
-work. A crash after an external
-effect replays with the same idempotency key and reconciles the receipt instead
-of starting an unrelated operation. One settlement effect id owns exactly one
+work. If the journal contains start intent but no accepted provider result,
+a second start is refused, including with the original idempotency key. A trusted
+integration may pass `read_start_result` to `start_governed_external_capability`
+with the original request and current admission to look up the original
+operation by provider, invocation, effect key and request digest. This callback
+must only observe the original operation. An unresolved lookup returns `None`;
+the journal is retained and no quota is spent. A matching result goes through
+the normal provider-result validation, asynchronous polling and settlement.
+For a provider without reliable lookup, the operation remains unresolved.
+In a shared run directory, an unsettled write for the same Goal, Todo,
+capability and operation also holds starts from a different Agent or Turn.
+The error identifies the original invocation. The reservation index is built
+from existing journals on first use. Quiesce older writers when upgrading
+and retain the run directory during handoff. A new independently admitted
+Turn can start after the prior invocation has committed. Separate business
+intents across Todos or run directories still need provider-level identity.
+
+One settlement effect id owns exactly one
 material invocation: retrying the same request replays it, while attempting a
 different operation or input under the same Turn receipt fails before provider
 dispatch. A new invocation also requires `should_run=true`; an existing journal
 may still be recovered with its exact typed receipt after the runnable decision
 has changed.
+
+CI checks Python dispatch with Ruff (`scripts/ci/external-request-lint.toml`).
+Production Python HTTP transports under `loopx/` and `packages/*/src/` are
+listed in `scripts/ci/external-transport-lint.toml`. For JS/TS in the same
+trees, `node scripts/ci/lint-external-transports.mjs` checks direct fetch
+and common HTTP module references. Adding a raw transport outside an existing
+owner fails the applicable check. Review new owners for operation identity,
+remote readback and recovery before allowing them. These source checks cover
+the named transports. Provider internals, dynamic loading, third-party SDKs
+and shell effects require enforcement by their respective runtime or provider.
 
 Transition proposals are deliberately narrower than arbitrary Goal mutation.
 The first version supports only continuous-monitor upsert and completion. It

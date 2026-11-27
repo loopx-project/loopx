@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import stat
 import sys
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -61,6 +64,7 @@ if "--doctor" in sys.argv:
 
 request = json.load(sys.stdin)
 phase = request["lifecycle"]["phase"]
+run_ref = request["invocation_id"]
 with Path({str(call_log)!r}).open("a", encoding="utf-8") as output:
     output.write(phase + "\\n")
 result = {{
@@ -79,17 +83,17 @@ result = {{
         "schema_version": "loopx_continuous_monitor_proposal_v0",
         "proposal_id": "fixture_monitor_upsert_1",
         "kind": "continuous_monitor_upsert",
-        "monitor_key": "fixture:material-run",
+        "monitor_key": "fixture:" + run_ref,
         "text": "Poll the synthetic material run.",
         "action_kind": "poll_material_delivery",
-        "target_key": "fixture-run:synthetic-run-1",
+        "target_key": "fixture-run:" + run_ref,
         "cadence": "5m",
         "next_due_at": "2099-01-01T00:05:00+00:00",
         "expires_at": "2099-01-02T00:00:00+00:00",
         "required_capabilities": ["network"],
     }}],
     "effect_receipt": None,
-    "follow_up": {{"kind": "poll", "ref": "synthetic-run-1"}},
+    "follow_up": {{"kind": "poll", "ref": run_ref}},
 }}
 if phase == "reconcile":
     result["domain_state_mutations"] = [{{"kind": "synthetic-update"}}]
@@ -99,16 +103,18 @@ if phase == "reconcile":
         "invocation_id": request["invocation_id"],
         "idempotency_key": request["lifecycle"]["idempotency_key"],
         "status": "committed",
-        "external_ref": "synthetic-run-1",
+        "external_ref": run_ref,
         "evidence_digest": "sha256:synthetic-evidence",
     }}
     result["transition_proposals"] = [{{
         "schema_version": "loopx_continuous_monitor_proposal_v0",
         "proposal_id": "fixture_monitor_complete_1",
         "kind": "continuous_monitor_complete",
-        "monitor_key": "fixture:material-run",
+        "monitor_key": "fixture:" + run_ref,
         "evidence": "Synthetic provider reached its terminal state.",
     }}]
+# Provider-owned lookup state persists separately from the LoopX journal.
+Path({str(call_log.parent)!r}, request["invocation_id"] + ".remote.json").write_text(json.dumps(result))
 json.dump(result, sys.stdout)
 """,
         encoding="utf-8",
@@ -205,7 +211,7 @@ integration_profile = "profile.json"
                         "repo": str(tmp_path),
                         "state_file": "ACTIVE_GOAL_STATE.md",
                         "coordination": {
-                            "registered_agents": ["fixture-agent"],
+                            "registered_agents": ["fixture-agent", "receiving-agent"],
                         },
                     }
                 ],
@@ -344,7 +350,7 @@ def test_material_start_is_previewable_and_provider_idempotent(
         role="agent",
     )["todos"]
     assert len(monitors) == 1
-    assert monitors[0]["capability_binding_ref"] == "fixture:material-run"
+    assert monitors[0]["capability_binding_ref"] == "fixture:" + started["invocation_id"]
     assert monitors[0]["status"] == "open"
     journal = Path(arguments["run_dir"]) / f"{started['invocation_id']}.json"
     assert stat.S_IMODE(journal.stat().st_mode) == 0o600
@@ -352,6 +358,129 @@ def test_material_start_is_previewable_and_provider_idempotent(
     assert started["provider_result_digest"] == governed_execution._canonical_digest(
         journal_value["provider_result"]
     )
+
+
+def test_lost_external_start_result_cannot_dispatch_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = _start_arguments(tmp_path)
+    write_journal = governed_execution._write_journal
+
+    def lose_result(path: Path, journal: Mapping[str, object]) -> None:
+        if journal.get("provider_result") is not None:
+            raise OSError("result checkpoint unavailable")
+        write_journal(path, journal)
+
+    monkeypatch.setattr(governed_execution, "_write_journal", lose_result)
+    with pytest.raises(OSError, match="result checkpoint unavailable"):
+        start_governed_external_capability(**arguments, execute=True)
+    monkeypatch.setattr(governed_execution, "_write_journal", write_journal)
+
+    with pytest.raises(ValueError, match="external write outcome unknown"):
+        start_governed_external_capability(**arguments, execute=True)
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+    journal, = Path(arguments["run_dir"]).glob("*.json")
+    saved = json.loads(journal.read_text())
+    assert saved["status"] == "starting"
+    assert saved["writeback"] is None and saved["quota_spend"] is None
+    next_turn = _identity(turn_instance_id="later-turn")
+    with pytest.raises(ValueError, match=saved["invocation_id"]):
+        start_governed_external_capability(
+            **{**arguments, "turn_instance_id": next_turn.turn_instance_id, "admission": _admission(next_turn)},
+            execute=True,
+        )
+
+    external_record = tmp_path / (saved["invocation_id"] + ".remote.json")
+    remote = json.loads(external_record.read_text())
+    with pytest.raises(ValueError, match="unknown after provider readback"):
+        start_governed_external_capability(**arguments, execute=True, read_start_result=lambda _: None)
+    with pytest.raises(EffectRuntimeRejected, match="invocation_id"):
+        start_governed_external_capability(
+            **arguments, execute=True,
+            read_start_result=lambda _: {**remote, "invocation_id": "another-operation"},
+        )
+    assert json.loads(journal.read_text()) == saved
+
+    def read_original(identity):
+        assert identity["idempotency_key"] == saved["effect_id"]
+        assert identity["request_digest"] == saved["request_digest"]
+        assert identity["provider"] == saved["request"]["provider"]
+        return json.loads((tmp_path / (identity["invocation_id"] + ".remote.json")).read_text())
+
+    with pytest.raises(ValueError, match="should_run=true"):
+        start_governed_external_capability(
+            **{**arguments, "admission": {**arguments["admission"], "should_run": False}},
+            execute=True, read_start_result=read_original,
+        )
+    recovered = start_governed_external_capability(
+        **arguments, execute=True, read_start_result=read_original,
+    )
+    assert recovered["status"] == "running"
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+@pytest.mark.parametrize("legacy_journal", [False, True])
+def test_handoff_cannot_start_an_unsettled_external_write_on_another_turn(
+    tmp_path: Path, legacy_journal: bool,
+) -> None:
+    args = _start_arguments(tmp_path)
+    original = start_governed_external_capability(**args, execute=True)
+    if legacy_journal:
+        # Older versions persisted the journal without a cross-Turn reservation.
+        runs = Path(args["run_dir"])
+        shutil.rmtree(runs / ".start-reservations-v1")
+        (runs / (original["invocation_id"] + ".json.lock.holder.json")).write_text("{}")
+    next_owner = SettlementIdentity(
+        goal_id=args["goal_id"], agent_id="receiving-agent", todo_id=args["todo_id"],
+        turn_instance_id="receiving-agent-turn",
+    )
+    with pytest.raises(ValueError, match=original["invocation_id"]):
+        start_governed_external_capability(
+            **{**args, "agent_id": next_owner.agent_id, "turn_instance_id": next_owner.turn_instance_id,
+               "admission": _admission(next_owner)}, execute=True,
+        )
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+def test_competing_handoffs_dispatch_at_most_one_provider_start(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    barrier = Barrier(2)
+
+    def attempt(turn: str) -> str:
+        identity = _identity(turn_instance_id=turn)
+        barrier.wait(timeout=10)
+        try:
+            response = start_governed_external_capability(
+                **{**args, "turn_instance_id": turn, "admission": _admission(identity)}, execute=True,
+            )
+        except ValueError as exc:
+            assert "reconcile original invocation" in str(exc)
+            return "held"
+        return response["status"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ["concurrent-one", "concurrent-two"]))
+    assert sorted(results) == ["held", "running"]
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+@pytest.mark.parametrize(("binding", "provider_request"), [
+    ({"operation": {"effect_class": "external_write"}}, {}),
+    ({"integration_profile_digest": "stored-profile"}, {}),
+    ({}, {"provider": {"profile_digest": "stored-profile"}}),
+])
+def test_generic_transport_refuses_profiled_operations_before_dispatch(binding, provider_request):
+    from loopx.extensions.runtime import execute_extension_runtime_binding
+
+    with pytest.raises(ValueError, match="require capability admission"):
+        execute_extension_runtime_binding(binding, request=provider_request)
+
+
+def test_readback_only_request_cannot_create_a_new_invocation(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    with pytest.raises(ValueError, match="no original external write invocation"):
+        start_governed_external_capability(**args, execute=True, read_start_result=lambda _: None)
+    assert not (tmp_path / "provider-calls.txt").exists()
 
 
 def test_legacy_provider_result_adapter_remains_available() -> None:
@@ -528,6 +657,24 @@ def test_material_reconcile_writes_receipt_before_spending_and_replays(
     )["todos"]
     assert len(monitors) == 1
     assert monitors[0]["status"] == "done"
+
+
+def test_new_admitted_turn_can_start_after_previous_operation_settles(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    original = start_governed_external_capability(**args, execute=True)
+    committed = reconcile_governed_external_capability(
+        run_dir=args["run_dir"], invocation_id=original["invocation_id"],
+        writeback=lambda ctx: {"ok": True, "appended": True, "settlement_identity": ctx["settlement_identity"],
+                               "effect_receipt_digest": ctx["effect_receipt_digest"]},
+        spend=lambda ctx: {"ok": True, "appended": True, "settlement_identity": ctx["settlement_identity"]},
+    )
+    assert committed["status"] == "committed"
+    another = _identity(turn_instance_id="separately-admitted-turn")
+    started = start_governed_external_capability(
+        **{**args, "turn_instance_id": another.turn_instance_id, "admission": _admission(another)}, execute=True,
+    )
+    assert started["invocation_id"] != original["invocation_id"]
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start", "reconcile", "start"]
 
 
 def test_material_start_rejects_a_different_selected_turn(tmp_path: Path) -> None:
@@ -984,7 +1131,7 @@ def test_an_operation_that_may_propose_a_team_plan_binds_the_basis_before_its_pr
 
     before = basis()
     active_state = tmp_path / "ACTIVE_GOAL_STATE.md"
-    run_provider = governed_execution.execute_extension_runtime_binding
+    run_provider = governed_execution._execute_extension_runtime_binding
 
     def provider_while_state_moves(*args, **kwargs):
         active_state.write_text(
@@ -997,7 +1144,7 @@ def test_an_operation_that_may_propose_a_team_plan_binds_the_basis_before_its_pr
 
     monkeypatch.setattr(
         governed_execution,
-        "execute_extension_runtime_binding",
+        "_execute_extension_runtime_binding",
         provider_while_state_moves,
     )
 

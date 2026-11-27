@@ -37,7 +37,7 @@ from ..control_plane.work_items.team_plan_adapter import team_plan_state_fingerp
 from ..file_lock import exclusive_file_lock
 from ..paths import select_default_runtime_root
 from .capability_admission import prepare_external_capability_invocation
-from .runtime import execute_extension_runtime_binding
+from .runtime import _execute_extension_runtime_binding
 
 GOVERNED_CAPABILITY_RUN_SCHEMA_VERSION = "loopx_governed_capability_run_v0"
 GOVERNED_CAPABILITY_RECEIPT_SCHEMA_VERSION = (
@@ -160,6 +160,58 @@ def _write_journal(path: Path, value: Mapping[str, Any]) -> None:
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def _start_scope(journal: Mapping[str, Any]) -> str:
+    # The handoff can change both actor and Turn. Neither identifies the work to repeat.
+    request = journal["request"]
+    return _canonical_digest([
+        journal["goal_id"], journal["todo_id"], request["capability_id"], request["operation"],
+    ]).removeprefix("sha256:")
+
+
+def _record_start_intent(path: Path, journal: Mapping[str, Any]) -> None:
+    """Reserve a Todo operation across Turns before letting its provider start."""
+    index = path.parent / ".start-reservations-v1"
+    index.mkdir(mode=0o700, exist_ok=True)
+    with exclusive_file_lock(index / "catalog", operation="reserve_external_start"):
+        initialized = index / "initialized"
+        if not initialized.exists():
+            # Older journals have only a per-Turn name. Index them once without changing them.
+            for previous_path in path.parent.glob("capability-" + "[0-9a-f]" * 24 + ".json"):
+                previous = _read_journal(previous_path)
+                if _journal_path(path.parent, previous["invocation_id"]) != previous_path:
+                    raise ValueError("external write journal identity mismatch during indexing")
+                group = index / _start_scope(previous)
+                group.mkdir(mode=0o700, exist_ok=True)
+                (group / previous_path.stem).touch(mode=0o600, exist_ok=True)
+            initialized.touch(mode=0o600, exist_ok=False)
+
+        group = index / _start_scope(journal)
+        group.mkdir(mode=0o700, exist_ok=True)
+        for reservation in group.iterdir():
+            previous_path = _journal_path(path.parent, reservation.name)
+            if not previous_path.exists():
+                raise ValueError(f"external start has no original journal: {reservation.name}")
+            previous = _read_journal(previous_path)
+            if (_start_scope(previous) != group.name or previous["invocation_id"] != reservation.name):
+                raise ValueError("external start reservation does not match the original request")
+            if previous.get("status") != "committed":
+                raise ValueError(f"external write is unsettled; reconcile original invocation {reservation.name}")
+            _reduce_governed_capability_journal(
+                previous, invocation_id=reservation.name, phase="inspect", dry_run=False,
+            )
+            reservation.unlink()
+        # A crash between reservation and journal creation leaves a hold, not a dispatch permit.
+        reservation = group / path.stem
+        reservation.touch(mode=0o600, exist_ok=False)
+        try:
+            _write_journal(path, journal)
+        except OSError:
+            # This process still knows dispatch has not begun; drop only its failed reservation.
+            if not path.exists():
+                reservation.unlink()
+            raise
 
 
 def _settlement_identity(transaction_plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -411,8 +463,9 @@ def start_governed_external_capability(
     admission: Mapping[str, Any],
     execute: bool = False,
     environment: Mapping[str, str] | None = None,
+    read_start_result: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Preview or idempotently start one selected-Todo material operation."""
+    """Start once, or recover the result by identity using a trusted read-only provider lookup."""
 
     transaction_plan = build_loopx_turn_transaction_plan(
         planned=True,
@@ -524,20 +577,39 @@ def start_governed_external_capability(
                     phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
                 )
                 return _receipt_with_local_effects(receipt, current)
+            if read_start_result is None:
+                raise ValueError(
+                    "external write outcome unknown; preserve the original invocation "
+                    "and supply provider readback before any new start"
+                )
             journal = current
+        elif read_start_result is not None:
+            raise ValueError("no original external write invocation for provider readback")
+
+        _require_admission(
+            admission,
+            expected_identity=identity,
+            require_should_run=True,
+        )
+        _reduce_governed_capability_journal(
+            journal,
+            invocation_id=invocation_id,
+            phase="inspect",
+            dry_run=False,
+            admission=admission,
+        )
+        if read_start_result is not None:
+            provider_result = read_start_result({
+                "invocation_id": invocation_id,
+                "idempotency_key": identity["effect_id"],
+                "request_digest": request_digest,
+                "provider": request["provider"],
+                "operation": operation,
+                "goal": request["goal"],
+            })
+            if provider_result is None:
+                raise ValueError("external write outcome unknown after provider readback")
         else:
-            _require_admission(
-                admission,
-                expected_identity=identity,
-                require_should_run=True,
-            )
-            _reduce_governed_capability_journal(
-                journal,
-                invocation_id=invocation_id,
-                phase="inspect",
-                dry_run=False,
-                admission=admission,
-            )
             # A team plan the provider proposes is settled against the state
             # this agent saw before the provider ran, not against whatever the
             # settlement later finds. The basis is bound once here, stored with
@@ -552,12 +624,12 @@ def start_governed_external_capability(
                     goal_id=goal_id,
                     basis_agent_id=agent_id,
                 )
-            _write_journal(path, journal)
-        provider_result = execute_extension_runtime_binding(
-            binding,
-            request=request,
-            environment=environment,
-        )
+            _record_start_intent(path, journal)
+            provider_result = _execute_extension_runtime_binding(
+                binding,
+                request=request,
+                environment=environment,
+            )
         journal["provider_result"] = _mapping(
             provider_result,
             "external capability result",
@@ -634,7 +706,7 @@ def reconcile_governed_external_capability(
                 "idempotency_key": identity["effect_id"],
                 "follow_up": deepcopy(provider_result.get("follow_up")),
             }
-            observed = execute_extension_runtime_binding(
+            observed = _execute_extension_runtime_binding(
                 _mapping(journal.get("provider_binding"), "provider binding"),
                 request=request,
                 environment=environment,
