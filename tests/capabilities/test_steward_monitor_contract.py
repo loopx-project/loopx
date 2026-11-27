@@ -683,6 +683,72 @@ def test_configure_steward_monitor_rejects_non_mapping_plan_todo(
     assert writes == []
 
 
+@pytest.mark.parametrize(("seconds_until_due", "expected_wait"), [(0.25, 0.25), (60, 60), (90, 60)])
+def test_idle_pumps_use_scheduler_deadlines_without_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, seconds_until_due: float, expected_wait: float,
+) -> None:
+    from loopx.capabilities.native_chat.steward_managed_mode import ManagedSessionTurn
+    from loopx.capabilities.native_chat.steward_turn import StewardTurnHost
+    from loopx.control_plane.scheduler import monitor_todo
+
+    wall_clock = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return wall_clock.astimezone(tz) if tz is not None else wall_clock.replace(tzinfo=None)
+
+    monkeypatch.setattr(steward_monitor_pump, "datetime", FixedDateTime)
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: 1000.0)
+    monkeypatch.setattr(monitor_todo, "now_utc", lambda: wall_clock)
+
+    controller = _StubController(tmp_path)
+    session = controller.store.create_session(
+        goal_id="loopx-manager", agent_id="steward", adapter_kind="codex", upstream_thread_id="fixture",
+    )
+    managed = controller.store.create_session(
+        goal_id="g-managed", agent_id="codex", adapter_kind="codex", upstream_thread_id="fixture-managed",
+        managed_agent_id="managed", managed_workspace_path=str(tmp_path), channel_id="agent.managed",
+    )
+    controller.registry_path.write_text(
+        json.dumps({"goals": [{"id": "g-managed", "repo": str(tmp_path)}]}), encoding="utf-8",
+    )
+    controller.project_contexts.conversation_bindings.bindings_rows = [{
+        "binding_id": "fixture", "enabled": True,
+        "managed_actor": {"goal_id": "g-steward", "agent_id": "steward", "session_id": session["session_id"]},
+    }]
+    soon = wall_clock + timedelta(seconds=seconds_until_due)
+    no_offset = soon.replace(tzinfo=None).isoformat()
+    later_with_offset = (soon + timedelta(seconds=10)).astimezone(timezone(timedelta(hours=-5))).isoformat()
+    common = {"status": "open", "task_class": "continuous_monitor"}
+    portfolio_todos = [
+        {**common, "todo_id": "later", "target_key": "watch-later", "claimed_by": "steward", "next_due_at": later_with_offset},
+        {**common, "todo_id": "soon", "target_key": "watch-soon", "claimed_by": "steward", "next_due_at": no_offset},
+        {**common, "todo_id": "other-lane", "target_key": "managed-session-watch.other",
+         "claimed_by": "steward", "next_due_at": (wall_clock + timedelta(microseconds=1)).isoformat()},
+    ]
+    managed_todos = [
+        {**common, "todo_id": "managed-watch", "target_key": f"managed-session-watch.{managed['session_id']}",
+         "claimed_by": "managed", "next_due_at": no_offset},
+    ]
+    monkeypatch.setattr(steward_monitor, "list_goal_todos",
+                        lambda *, goal_id, **_: {"todos": managed_todos if goal_id == "g-managed" else portfolio_todos})
+    monkeypatch.setattr(ManagedSessionTurn, "admit", lambda *_: {})
+
+    def unexpected_submit(*_args, **_kwargs):
+        pytest.fail("a future deadline must not dispatch")
+
+    monkeypatch.setattr(StewardTurnHost, "submit", unexpected_submit)
+    monkeypatch.setattr(ManagedSessionTurn, "submit", unexpected_submit)
+
+    assert pump_steward_monitors(_as_controller(controller)) == []
+    assert getattr(controller, "_steward_monitor_failure_state") == {}
+    assert getattr(controller, "_steward_monitor_next_check") == {
+        "fixture": 1000.0 + expected_wait,
+        f"session.{managed['session_id']}": 1000.0 + expected_wait,
+    }
+
+
 def test_steward_pump_failure_backoff_dedup_and_clear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
