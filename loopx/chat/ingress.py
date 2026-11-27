@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from ..chat import require_matching_message_replay, require_matching_replay
 from ..file_lock import exclusive_file_lock
 from ..capabilities.native_chat.file_discovery import FileChatDiscovery
+from ..control_plane.runtime.time import chronology_key
 
 if TYPE_CHECKING:
     from ..capabilities.native_chat.conversation_bindings import ChatConversationBindings
@@ -709,5 +710,7 @@ class ChatIngressStore:
         from ..chat_store import _read_json
 
         rows = [_read_json(path) for path in (self._session_dir(session_id) / "ingress").glob("*.json")]
-        return sorted((row for row in rows if row.get("mode") in {"loopx_queue", "loopx_inbox"}),
-                      key=lambda row: (row.get("created_at", ""), row.get("client_ingress_id", "")))
+        return sorted(
+            (row for row in rows if row.get("mode") in {"loopx_queue", "loopx_inbox"}),
+            key=lambda row: (chronology_key(row.get("created_at")), row.get("client_ingress_id", "")),
+        )
