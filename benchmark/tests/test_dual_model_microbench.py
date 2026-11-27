@@ -38,7 +38,13 @@ from benchmark.microbench.scenarios import (
     M3_CLAIM_TODO_ID,
     M3_GATE_TODO_ID,
 )
-from benchmark.microbench import tier0 as microbench_tier0, tier1 as microbench_tier1
+from benchmark.microbench import (
+    metrics as microbench_metrics,
+    models as microbench_models,
+    scenarios as microbench_scenarios,
+    tier0 as microbench_tier0,
+    tier1 as microbench_tier1,
+)
 from benchmark.microbench.tier0 import run_tier0_differential
 from benchmark.microbench.tier1 import (
     _grade_m1,
@@ -1693,3 +1699,444 @@ def test_cli_and_suite_reject_non_finite_or_non_positive_budgets_and_unhashable_
         assert "schema_valid" in bad_row["head"]["behavior_constraint"]["violations"]
         assert "no_typed_spend_action" in bad_row["head"]["behavior_constraint"]["violations"]
     assert_public_safe_payload(malformed_report)
+
+
+def test_tier1_stops_deterministic_cli_and_runners_when_budget_expires_during_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as std_time
+
+    # Case 1: 0.10s total budget expires before any deterministic CLI process spawns.
+    now = {"t": 500.0}
+
+    def _fake_monotonic() -> float:
+        now["t"] += 0.15
+        return now["t"]
+
+    cli_calls: list[tuple[Any, Any]] = []
+    runner_calls: list[str] = []
+    real_sub_run = subprocess.run
+
+    def _spy_sub_run(*args: Any, **kwargs: Any) -> Any:
+        cmd = args[0] if args else kwargs.get("args", [])
+        if any("loopx.cli" in str(part) for part in (cmd or [])):
+            cli_calls.append((cmd, kwargs.get("timeout")))
+        return real_sub_run(*args, **kwargs)
+
+    class _NeverDispatchedRunner:
+        provider = "synthetic"
+        model_id = "synthetic-never-dispatched"
+
+        def run_case(self, **kwargs: Any) -> ModelRunOutcome:
+            runner_calls.append(str(kwargs.get("scenario_id")))
+            raise AssertionError("runner must not execute when setup exhausted deadline")
+
+    monkeypatch.setattr(std_time, "monotonic", _fake_monotonic)
+    monkeypatch.setattr(microbench_scenarios.subprocess, "run", _spy_sub_run)
+
+    report = run_tier1_dual_model_suite(
+        runners=[_NeverDispatchedRunner()],
+        max_total_seconds=0.10,
+        per_call_timeout_seconds=45.0,
+    )
+    assert cli_calls == []
+    assert runner_calls == []
+    assert report["within_budget"] is False
+    assert report["passed"] is False
+    assert len(report["results"]) == 3
+    for row in report["results"]:
+        assert row["passed"] is False
+        assert row["within_budget"] is False
+        assert row["base"]["status"] == "unavailable"
+        assert row["base"]["error_code"] == "tier1_wall_budget_exhausted"
+        assert row["head"]["error_code"] == "tier1_wall_budget_exhausted"
+
+    # Case 2: real subprocess boundary passes shrinking remaining timeout (< 60s) and stops next CLI after expiry.
+    now2 = {"t": 800.0}
+    seen_cli_timeouts: list[tuple[str, float | None]] = []
+
+    def _step_monotonic() -> float:
+        return now2["t"]
+
+    def _first_cli_expires(*args: Any, **kwargs: Any) -> Any:
+        cmd = args[0] if args else kwargs.get("args", [])
+        if not any("loopx.cli" in str(part) for part in (cmd or [])):
+            return real_sub_run(*args, **kwargs)
+        seen_cli_timeouts.append((" ".join(str(x) for x in cmd), kwargs.get("timeout")))
+        result = real_sub_run(*args, **kwargs)
+        if "should-run" in seen_cli_timeouts[-1][0]:
+            now2["t"] = 815.0  # expire 10.0s suite budget as base `quota should-run` finishes
+        else:
+            now2["t"] += 1.0  # shrink remaining budget across pre-arm CLIs
+        return result
+
+    monkeypatch.setattr(std_time, "monotonic", _step_monotonic)
+    monkeypatch.setattr(microbench_scenarios.subprocess, "run", _first_cli_expires)
+
+    report2 = run_tier1_dual_model_suite(
+        runners=[_NeverDispatchedRunner()],
+        scenarios=("m1_envelope_scoped_recovery",),
+        max_total_seconds=10.0,
+        per_call_timeout_seconds=45.0,
+    )
+    assert len(seen_cli_timeouts) >= 2, "expected deterministic CLIs before expiry"
+    assert seen_cli_timeouts[0][1] == pytest.approx(10.0)
+    assert seen_cli_timeouts[-1][1] is not None and seen_cli_timeouts[-1][1] < seen_cli_timeouts[0][1]
+    assert any("should-run" in cmd for cmd, _ in seen_cli_timeouts)
+    assert not any("context-read" in cmd for cmd, _ in seen_cli_timeouts)
+    assert runner_calls == []
+    assert report2["within_budget"] is False
+    assert report2["passed"] is False
+    assert report2["results"][0]["base"]["error_code"] == "tier1_wall_budget_exhausted"
+
+
+def test_ark_runner_clamps_every_http_round_and_tool_to_arm_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import time as std_time
+
+    trial_root = tmp_path / "trial"
+    project_root = trial_root / "project"
+    proof_file = project_root / "fixture" / "m1-proof.json"
+    proof_file.parent.mkdir(parents=True)
+    proof_file.write_text(json.dumps({"proof_token": M1_PROOF_TOKEN}), encoding="utf-8")
+
+    verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m1_envelope_scoped_recovery",
+        "decision": "execute",
+        "selected_todo_id": M1_SELECTED_TODO_ID,
+        "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID],
+        "extracted_proof": M1_PROOF_TOKEN,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": None,
+        "spend_attempted": False,
+        "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
+        "tool_actions_summary": ["cat fixture/m1-proof.json"],
+    }
+
+    # Subcase 1: 1.00s arm budget; round 1 takes 0.85s -> round 2 receives exact 0.15s and passes at 0.92s.
+    clock = {"t": 100.0}
+    monkeypatch.setattr(std_time, "monotonic", lambda: clock["t"])
+    seen_timeouts_1: list[float] = []
+
+    def _transport_tight(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+        del endpoint, headers, body
+        seen_timeouts_1.append(round(timeout_seconds, 4))
+        if len(seen_timeouts_1) == 1:
+            clock["t"] = 100.85
+            return {
+                "usage": {"prompt_tokens": 110, "completion_tokens": 10, "total_tokens": 120},
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "exec_command",
+                                        "arguments": json.dumps({"cmd": "cat fixture/m1-proof.json"}),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        clock["t"] = 100.92
+        return {
+            "usage": {"prompt_tokens": 140, "completion_tokens": 20, "total_tokens": 160},
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(verdict)}}],
+        }
+
+    runner_tight = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=_transport_tight)
+    out_tight = runner_tight.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="Read fixture/m1-proof.json",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=1.0,
+    )
+    assert out_tight.status == "ok", out_tight
+    assert seen_timeouts_1 == [pytest.approx(1.0), pytest.approx(0.15)]
+    assert out_tight.efficiency.initial_turn_context_tokens == 110
+    assert out_tight.efficiency.per_turn_context_tokens == (110, 140)
+    assert out_tight.efficiency.peak_context_tokens == 140
+    assert out_tight.efficiency.occupancy_measurement_kind == "per_request_input_proxy"
+
+    # Subcase 2: 1.00s arm budget; round 1 advances clock to 1.10s -> 0 tool executions, 0 round-2 HTTP requests.
+    clock["t"] = 200.0
+    seen_timeouts_2: list[float] = []
+    tool_calls_2: list[str] = []
+    monkeypatch.setattr(
+        microbench_models,
+        "_execute_scoped_command",
+        lambda cmd, **kwargs: (tool_calls_2.append(cmd), ("read:cat", "ok"))[1],
+    )
+
+    def _transport_expired(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+        del endpoint, headers, body
+        seen_timeouts_2.append(round(timeout_seconds, 4))
+        clock["t"] = 201.10
+        return {
+            "usage": {"prompt_tokens": 115, "completion_tokens": 12, "total_tokens": 127},
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": json.dumps({"cmd": "cat fixture/m1-proof.json"}),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+        }
+
+    runner_expired = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=_transport_expired)
+    out_expired = runner_expired.run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="Read fixture/m1-proof.json",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=1.0,
+    )
+    assert seen_timeouts_2 == [pytest.approx(1.0)]
+    assert tool_calls_2 == []
+    assert out_expired.status == "error"
+    assert out_expired.error_code == "ark_budget_exhausted"
+    assert out_expired.verdict is None
+    assert out_expired.efficiency.round_trips == 1
+    assert out_expired.efficiency.per_turn_context_tokens == (115,)
+
+
+def test_codex_rollout_occupancy_extraction_validation_and_compaction(tmp_path: Path) -> None:
+    def _token_event(
+        *,
+        total_in: int,
+        total_cached: int,
+        total_out: int,
+        last_in: int | None,
+        last_cached: int = 0,
+        last_out: int = 0,
+        window: int | None = 475000,
+    ) -> dict[str, Any]:
+        info: dict[str, Any] = {
+            "total_token_usage": {
+                "input_tokens": total_in,
+                "cached_input_tokens": total_cached,
+                "output_tokens": total_out,
+                "reasoning_output_tokens": 0,
+                "total_tokens": total_in + total_out,
+            },
+        }
+        if last_in is not None:
+            info["last_token_usage"] = {
+                "input_tokens": last_in,
+                "cached_input_tokens": last_cached,
+                "output_tokens": last_out,
+                "reasoning_output_tokens": 0,
+                "total_tokens": last_in + last_out,
+            }
+        if window is not None:
+            info["model_context_window"] = window
+        return {
+            "type": "event_msg",
+            "timestamp": "2026-11-27T00:00:05Z",
+            "payload": {"type": "token_count", "info": info},
+        }
+
+    # Valid multi-turn rollout with duplicate token_count snapshot, compaction, and truncation event.
+    valid_dir = tmp_path / "valid"
+    valid_dir.mkdir()
+    rollout = valid_dir / "rollout-valid.jsonl"
+    rows = [
+        {
+            "type": "session_meta",
+            "timestamp": "2026-11-27T00:00:00Z",
+            "payload": {"id": "sess-occ-1"},
+        },
+        {
+            "type": "turn_context",
+            "timestamp": "2026-11-27T00:00:01Z",
+            "payload": {"model": "gpt-6.2-sol"},
+        },
+        _token_event(total_in=43607, total_cached=0, total_out=181, last_in=43607, last_cached=0, last_out=181),
+        _token_event(total_in=43607, total_cached=0, total_out=181, last_in=43607, last_cached=0, last_out=181),
+        {"type": "compacted", "timestamp": "2026-11-27T00:00:02Z", "payload": {"compaction_response_id": "c1"}},
+        _token_event(total_in=92793, total_cached=43392, total_out=438, last_in=49186, last_cached=43392, last_out=257),
+        {"type": "event_msg", "timestamp": "2026-11-27T00:00:03Z", "payload": {"type": "context_truncated"}},
+        _token_event(total_in=144795, total_cached=92288, total_out=610, last_in=52002, last_cached=48896, last_out=172),
+    ]
+    rollout.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    metrics = microbench_metrics.collect_codex_rollout_metrics(valid_dir)
+    assert metrics["prompt_tokens"] == 144795
+    assert metrics["initial_turn_context_tokens"] == 43607
+    assert metrics["per_turn_context_tokens"] == (43607, 49186, 52002)
+    assert metrics["peak_context_tokens"] == 52002
+    assert metrics["effective_context_window"] == 475000
+    assert metrics["min_headroom_tokens"] == 475000 - 52002
+    assert metrics["peak_window_ratio"] == pytest.approx(round(52002 / 475000, 6))
+    assert metrics["compaction_events"] == 1
+    assert metrics["truncation_events"] == 1
+    assert metrics["occupancy_measurement_kind"] == "per_request_input_proxy"
+    assert metrics["occupancy_window_source"] == "codex_model_context_window"
+
+    # Negative case: missing last_token_usage -> unknown occupancy (never fabricates per-request numbers).
+    no_last_dir = tmp_path / "no-last"
+    no_last_dir.mkdir()
+    (no_last_dir / "rollout.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                rows[0],
+                rows[1],
+                _token_event(total_in=1000, total_cached=0, total_out=20, last_in=None),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    m_nolast = microbench_metrics.collect_codex_rollout_metrics(no_last_dir)
+    assert m_nolast["prompt_tokens"] == 1000
+    assert m_nolast["occupancy_measurement_kind"] == "unknown"
+    assert m_nolast["peak_context_tokens"] is None
+    assert m_nolast["per_turn_context_tokens"] is None
+
+    # Negative case: total delta != last_token_usage (counter gap) -> fails closed to unknown.
+    gap_dir = tmp_path / "gap"
+    gap_dir.mkdir()
+    (gap_dir / "rollout.jsonl").write_text(
+        "\n".join(
+            json.dumps(r)
+            for r in [
+                rows[0],
+                rows[1],
+                _token_event(total_in=100, total_cached=0, total_out=10, last_in=100, last_out=10),
+                _token_event(total_in=300, total_cached=0, total_out=20, last_in=150, last_out=10),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    m_gap = microbench_metrics.collect_codex_rollout_metrics(gap_dir)
+    assert m_gap["occupancy_measurement_kind"] == "unknown"
+    assert m_gap["peak_context_tokens"] is None
+    assert m_gap["occupancy_error"] == "counter_gap"
+
+
+def test_ark_partial_prompt_blocks_occupancy_and_cli_pin_with_output_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    trial_root = tmp_path / "trial"
+    project_root = trial_root / "project"
+    project_root.mkdir(parents=True)
+    call_idx = 0
+    verdict = {
+        "schema_version": "microbench_model_verdict_v0",
+        "scenario_id": "m1_envelope_scoped_recovery",
+        "decision": "execute",
+        "selected_todo_id": M1_SELECTED_TODO_ID,
+        "preserved_blocked_todo_ids": [M1_BLOCKED_TODO_ID],
+        "extracted_proof": M1_PROOF_TOKEN,
+        "preserved_failure_facts": [],
+        "preserved_open_obligations": [],
+        "claim_owner": None,
+        "spend_attempted": False,
+        "spend_classification": {"observed": "none", "attempted": False, "confirmed": False},
+        "tool_actions_summary": [],
+    }
+
+    def _partial_prompt_transport(*, endpoint: str, headers: Any, body: bytes, timeout_seconds: float) -> dict[str, Any]:
+        nonlocal call_idx
+        del endpoint, headers, body, timeout_seconds
+        call_idx += 1
+        if call_idx == 1:
+            return {
+                "usage": {"prompt_tokens": 120, "completion_tokens": 10, "total_tokens": 130},
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_ls",
+                                    "type": "function",
+                                    "function": {"name": "exec_command", "arguments": json.dumps({"cmd": "ls ."})},
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        return {
+            "usage": {"completion_tokens": 15},
+            "choices": [{"message": {"role": "assistant", "content": json.dumps(verdict)}}],
+        }
+
+    r_partial = DeepSeekArkMicrobenchRunner(api_key="synthetic-key", transport=_partial_prompt_transport).run_case(
+        scenario_id="m1_envelope_scoped_recovery",
+        prompt_text="check",
+        trial_root=trial_root,
+        project_root=project_root,
+        timeout_seconds=10.0,
+    )
+    assert r_partial.status == "ok"
+    assert r_partial.efficiency.occupancy_measurement_kind == "unknown"
+    assert r_partial.efficiency.peak_context_tokens is None
+    assert r_partial.efficiency.per_turn_context_tokens is None
+
+    cmp = compare_base_vs_head_efficiency(
+        EfficiencyMetrics(
+            wire_bytes=200,
+            prompt_tokens=100,
+            initial_turn_context_tokens=100,
+            peak_context_tokens=100,
+            occupancy_measurement_kind="per_request_input_proxy",
+        ),
+        r_partial.efficiency,
+        base_behavior=BehaviorConstraintResult(passed=True, checks={"ok": True}),
+        head_behavior=BehaviorConstraintResult(passed=True, checks={"ok": True}),
+        head_telemetry_coverage=r_partial.telemetry_coverage,
+    )
+    assert cmp["deltas"]["peak_context_tokens"] is None
+    assert cmp["deltas"]["initial_turn_context_tokens"] is None
+
+    # CLI --context-delivery on + --output-json writes sanitized JSON while rendering Markdown stdout.
+    out_json = tmp_path / "nested" / "tier0-pinned.json"
+    rc = microbench_cli_main(
+        [
+            "--tier",
+            "0",
+            "--scenario",
+            "m1_envelope_scoped_recovery",
+            "--context-delivery",
+            "on",
+            "--format",
+            "markdown",
+            "--output-json",
+            str(out_json),
+        ]
+    )
+    assert rc == 0
+    stdout_md = capsys.readouterr().out
+    assert "## Dual-Model Microbenchmark (M1/M2/M3)" in stdout_md
+    saved = json.loads(out_json.read_text(encoding="utf-8"))
+    assert saved["context_delivery_mode"] == "on"
+    assert saved["tier0"]["context_delivery_mode"] == "on"
+    m1_row = saved["tier0"]["scenarios"][0]
+    assert m1_row["passed"] is True
+    assert m1_row["source_attribution"]["comparison_kind"] == "same_commit_aa"
+    assert_public_safe_payload(saved)

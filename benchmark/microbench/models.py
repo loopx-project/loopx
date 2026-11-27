@@ -39,7 +39,11 @@ from loopx.control_plane.testing.model_tool_behavior import (
 )
 from loopx.control_plane.turn_driver.codex_cli import CodexFailureObservation
 
-from .metrics import EfficiencyMetrics, collect_codex_rollout_metrics
+from .metrics import (
+    EfficiencyMetrics,
+    collect_codex_rollout_metrics,
+    compute_occupancy_summary,
+)
 
 DEFAULT_CODEX_MODEL = "gpt-6.2-sol"
 DEFAULT_CODEX_EFFORT = "low"
@@ -349,16 +353,19 @@ def _execute_scoped_command(
             )
         resolved_targets.append(str(resolved))
     argv = [cmd_name, *[arg for arg in parts[1:] if arg.startswith("-")], *resolved_targets]
-    completed = subprocess.run(
-        argv,
-        cwd=project_root,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=min(timeout_seconds, 15.0),
-    )
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=project_root,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=min(timeout_seconds, 15.0),
+        )
+    except subprocess.TimeoutExpired:
+        return "tool_timeout", json.dumps({"ok": False, "error": "tool_timeout"})
     out = completed.stdout if completed.returncode == 0 else completed.stderr
     return f"read:{cmd_name}", (out or "")[:8192]
 
@@ -473,6 +480,90 @@ class DeepSeekArkMicrobenchRunner:
         self._max_steps = max_steps
         self._source_root = (source_root or Path(__file__).resolve().parents[2]).resolve()
 
+    def _build_ark_outcome(
+        self,
+        *,
+        status: str,
+        error_code: str | None,
+        verdict: dict[str, Any] | None,
+        wire_bytes: int,
+        usage_totals: Mapping[str, int],
+        usage_reported_steps: Mapping[str, int],
+        round_trips: int,
+        per_round_prompt_tokens: Sequence[int | None],
+        compaction_events: int,
+        truncation_events: int,
+        observed_commands: Sequence[str],
+        started: float,
+    ) -> ModelRunOutcome:
+        resolved_usage, coverage = _aggregate_ark_usage_coverage(
+            usage_totals, usage_reported_steps, round_trips
+        )
+        all_rounds_have_prompt = (
+            round_trips > 0
+            and len(per_round_prompt_tokens) == round_trips
+            and all(isinstance(val, int) and not isinstance(val, bool) for val in per_round_prompt_tokens)
+        )
+        occ_summary = compute_occupancy_summary(
+            per_turn_context_tokens=(
+                [int(val) for val in per_round_prompt_tokens if isinstance(val, int)]
+                if all_rounds_have_prompt
+                else None
+            ),
+            effective_context_window=None,
+            occupancy_measurement_kind="per_request_input_proxy",
+            occupancy_window_source=None,
+            compaction_events=compaction_events,
+            truncation_events=truncation_events,
+        )
+        raw_per_turn = occ_summary.get("per_turn_context_tokens")
+        per_turn_tuple = (
+            tuple(int(v) for v in raw_per_turn if isinstance(v, int) and not isinstance(v, bool))
+            if isinstance(raw_per_turn, (list, tuple)) and raw_per_turn
+            else None
+        )
+        raw_ratio = occ_summary.get("peak_window_ratio")
+        peak_ratio = (
+            float(raw_ratio)
+            if isinstance(raw_ratio, (int, float)) and not isinstance(raw_ratio, bool)
+            else None
+        )
+        return ModelRunOutcome(
+            model_id=self.model_id,
+            provider=self.provider,
+            status=status,
+            error_code=error_code,
+            verdict=verdict,
+            efficiency=EfficiencyMetrics(
+                wire_bytes=wire_bytes,
+                prompt_tokens=resolved_usage["prompt_tokens"],
+                cached_tokens=resolved_usage["cached_tokens"],
+                completion_tokens=resolved_usage["completion_tokens"],
+                reasoning_tokens=resolved_usage["reasoning_tokens"],
+                total_tokens=resolved_usage["total_tokens"],
+                tool_calls=len(observed_commands),
+                round_trips=round_trips,
+                wall_seconds=round(time.monotonic() - started, 3),
+                initial_turn_context_tokens=_opt_int(occ_summary, "initial_turn_context_tokens"),
+                per_turn_context_tokens=per_turn_tuple,
+                peak_context_tokens=_opt_int(occ_summary, "peak_context_tokens"),
+                effective_context_window=_opt_int(occ_summary, "effective_context_window"),
+                min_headroom_tokens=_opt_int(occ_summary, "min_headroom_tokens"),
+                peak_window_ratio=peak_ratio,
+                compaction_events=_opt_int(occ_summary, "compaction_events"),
+                truncation_events=_opt_int(occ_summary, "truncation_events"),
+                occupancy_measurement_kind=str(occ_summary["occupancy_measurement_kind"]),
+                occupancy_window_source=(
+                    str(occ_summary["occupancy_window_source"])
+                    if occ_summary.get("occupancy_window_source") is not None
+                    else None
+                ),
+            ),
+            observed_commands=tuple(observed_commands),
+            telemetry_source="ark_usage",
+            telemetry_coverage=coverage,
+        )
+
     def run_case(
         self,
         *,
@@ -484,6 +575,8 @@ class DeepSeekArkMicrobenchRunner:
     ) -> ModelRunOutcome:
         timeout_seconds = require_positive_finite_float(timeout_seconds, label="timeout_seconds")
         started = time.monotonic()
+        deadline = started + timeout_seconds
+        wire_bytes = len(prompt_text.encode("utf-8"))
         key = (self._api_key or os.environ.get(ARK_API_KEY_ENV, "")).strip()
         if not key:
             return ModelRunOutcome(
@@ -492,18 +585,33 @@ class DeepSeekArkMicrobenchRunner:
                 status="unavailable",
                 error_code="missing_ark_api_key",
                 verdict=None,
-                efficiency=EfficiencyMetrics(wall_seconds=round(time.monotonic() - started, 3)),
+                efficiency=EfficiencyMetrics(
+                    wire_bytes=wire_bytes,
+                    wall_seconds=round(time.monotonic() - started, 3),
+                ),
                 telemetry_source="ark_usage",
             )
 
         usage_totals = {metric: 0 for metric in _ARK_USAGE_METRICS}
         usage_reported_steps = {metric: 0 for metric in _ARK_USAGE_METRICS}
         round_trips = 0
+        per_round_prompt_tokens: list[int | None] = []
+        compaction_events = 0
+        truncation_events = 0
 
         def _record_usage_metric(metric: str, value: object) -> None:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 usage_totals[metric] += value
                 usage_reported_steps[metric] += 1
+
+        def _require_arm_remaining() -> float:
+            rem = deadline - time.monotonic()
+            if rem <= 0.0:
+                raise DoubaoActorTransportError(
+                    "Ark arm monotonic deadline exhausted",
+                    error_code="ark_budget_exhausted",
+                )
+            return rem
 
         def tracked_transport(
             *,
@@ -512,16 +620,21 @@ class DeepSeekArkMicrobenchRunner:
             body: bytes,
             timeout_seconds: float,
         ) -> Mapping[str, Any]:
-            nonlocal round_trips
+            nonlocal round_trips, truncation_events
+            remaining = _require_arm_remaining()
             round_trips += 1
             response = self._transport(
                 endpoint=endpoint,
                 headers=headers,
                 body=body,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=min(float(timeout_seconds), remaining, 120.0),
             )
             usage = response.get("usage")
+            round_prompt: int | None = None
             if isinstance(usage, Mapping):
+                raw_prompt = usage.get("prompt_tokens")
+                if isinstance(raw_prompt, int) and not isinstance(raw_prompt, bool) and raw_prompt >= 0:
+                    round_prompt = raw_prompt
                 for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     _record_usage_metric(key, usage.get(key))
                 pt_details = usage.get("prompt_tokens_details")
@@ -530,6 +643,15 @@ class DeepSeekArkMicrobenchRunner:
                 ct_details = usage.get("completion_tokens_details")
                 if isinstance(ct_details, Mapping):
                     _record_usage_metric("reasoning_tokens", ct_details.get("reasoning_tokens"))
+            per_round_prompt_tokens.append(round_prompt)
+            choices = response.get("choices")
+            finish_reason = (
+                choices[0].get("finish_reason")
+                if isinstance(choices, list) and len(choices) == 1 and isinstance(choices[0], Mapping)
+                else None
+            )
+            if response.get("truncated") is True or finish_reason == "context_length_exceeded":
+                truncation_events += 1
             return response
 
         client = DoubaoExecToolClient(
@@ -563,6 +685,7 @@ class DeepSeekArkMicrobenchRunner:
 
         try:
             for _ in range(self._max_steps):
+                _require_arm_remaining()
                 step: ExecToolStep = client.next_step(
                     messages,
                     tool_description=(
@@ -573,16 +696,19 @@ class DeepSeekArkMicrobenchRunner:
                 if step.tool_call is None:
                     final_content = step.assistant_content
                     break
+                rem_for_tool = _require_arm_remaining()
                 label, tool_output = _execute_scoped_command(
                     step.tool_call.command,
                     trial_root=trial_root,
                     project_root=project_root,
                     source_root=self._source_root,
+                    timeout_seconds=rem_for_tool,
                 )
                 observed_commands.append(label)
                 append_exec_tool_exchange(messages, step.tool_call, tool_output)
 
             if final_content is None:
+                _require_arm_remaining()
                 final_content = client.next_final_content(
                     [
                         *messages,
@@ -592,31 +718,22 @@ class DeepSeekArkMicrobenchRunner:
                         },
                     ]
                 )
+            _require_arm_remaining()
         except DoubaoActorTransportError as exc:
-            resolved_usage, coverage = _aggregate_ark_usage_coverage(
-                usage_totals, usage_reported_steps, round_trips
-            )
             status = "quota_exhausted" if exc.error_code == "provider_authentication_failed" else "error"
-            return ModelRunOutcome(
-                model_id=self.model_id,
-                provider=self.provider,
+            return self._build_ark_outcome(
                 status=status,
                 error_code=exc.error_code,
                 verdict=None,
-                efficiency=EfficiencyMetrics(
-                    wire_bytes=len(prompt_text.encode("utf-8")),
-                    prompt_tokens=resolved_usage["prompt_tokens"],
-                    cached_tokens=resolved_usage["cached_tokens"],
-                    completion_tokens=resolved_usage["completion_tokens"],
-                    reasoning_tokens=resolved_usage["reasoning_tokens"],
-                    total_tokens=resolved_usage["total_tokens"],
-                    tool_calls=len(observed_commands),
-                    round_trips=round_trips,
-                    wall_seconds=round(time.monotonic() - started, 3),
-                ),
-                observed_commands=tuple(observed_commands),
-                telemetry_source="ark_usage",
-                telemetry_coverage=coverage,
+                wire_bytes=wire_bytes,
+                usage_totals=usage_totals,
+                usage_reported_steps=usage_reported_steps,
+                round_trips=round_trips,
+                per_round_prompt_tokens=per_round_prompt_tokens,
+                compaction_events=compaction_events,
+                truncation_events=truncation_events,
+                observed_commands=observed_commands,
+                started=started,
             )
 
         parsed_verdict = _extract_verdict(final_content)
@@ -624,31 +741,19 @@ class DeepSeekArkMicrobenchRunner:
             parsed_verdict,
             expected_scenario_id=scenario_id,
         )
-        wall = round(time.monotonic() - started, 3)
-        resolved_usage, coverage = _aggregate_ark_usage_coverage(
-            usage_totals, usage_reported_steps, round_trips
-        )
-        eff = EfficiencyMetrics(
-            wire_bytes=len(prompt_text.encode("utf-8")),
-            prompt_tokens=resolved_usage["prompt_tokens"],
-            cached_tokens=resolved_usage["cached_tokens"],
-            completion_tokens=resolved_usage["completion_tokens"],
-            reasoning_tokens=resolved_usage["reasoning_tokens"],
-            total_tokens=resolved_usage["total_tokens"],
-            tool_calls=len(observed_commands),
-            round_trips=round_trips,
-            wall_seconds=wall,
-        )
-        return ModelRunOutcome(
-            model_id=self.model_id,
-            provider=self.provider,
+        return self._build_ark_outcome(
             status=status,
             error_code=error_code,
             verdict=verdict,
-            efficiency=eff,
-            observed_commands=tuple(observed_commands),
-            telemetry_source="ark_usage",
-            telemetry_coverage=coverage,
+            wire_bytes=wire_bytes,
+            usage_totals=usage_totals,
+            usage_reported_steps=usage_reported_steps,
+            round_trips=round_trips,
+            per_round_prompt_tokens=per_round_prompt_tokens,
+            compaction_events=compaction_events,
+            truncation_events=truncation_events,
+            observed_commands=observed_commands,
+            started=started,
         )
 
 
@@ -920,6 +1025,19 @@ class CodexGptMicrobenchRunner:
                 )
 
             rec_count = _opt_int(rollout_metrics, "complete_record_count")
+            raw_per_turn = rollout_metrics.get("per_turn_context_tokens")
+            per_turn_tuple = (
+                tuple(int(v) for v in raw_per_turn if isinstance(v, int) and not isinstance(v, bool))
+                if isinstance(raw_per_turn, (list, tuple)) and raw_per_turn
+                else None
+            )
+            raw_ratio = rollout_metrics.get("peak_window_ratio")
+            peak_ratio = (
+                float(raw_ratio)
+                if isinstance(raw_ratio, (int, float)) and not isinstance(raw_ratio, bool)
+                else None
+            )
+            raw_win_src = rollout_metrics.get("occupancy_window_source")
             eff = EfficiencyMetrics(
                 wire_bytes=wire_bytes,
                 prompt_tokens=_opt_int(rollout_metrics, "prompt_tokens"),
@@ -930,6 +1048,16 @@ class CodexGptMicrobenchRunner:
                 tool_calls=tool_calls,
                 round_trips=rec_count if rec_count and rec_count > 0 else None,
                 wall_seconds=wall,
+                initial_turn_context_tokens=_opt_int(rollout_metrics, "initial_turn_context_tokens"),
+                per_turn_context_tokens=per_turn_tuple,
+                peak_context_tokens=_opt_int(rollout_metrics, "peak_context_tokens"),
+                effective_context_window=_opt_int(rollout_metrics, "effective_context_window"),
+                min_headroom_tokens=_opt_int(rollout_metrics, "min_headroom_tokens"),
+                peak_window_ratio=peak_ratio,
+                compaction_events=_opt_int(rollout_metrics, "compaction_events"),
+                truncation_events=_opt_int(rollout_metrics, "truncation_events"),
+                occupancy_measurement_kind=str(rollout_metrics.get("occupancy_measurement_kind") or "unknown"),
+                occupancy_window_source=str(raw_win_src) if raw_win_src is not None else None,
             )
             return ModelRunOutcome(
                 model_id=self.model_id,

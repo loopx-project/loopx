@@ -60,8 +60,8 @@ def render_microbench_markdown(payload: dict[str, Any]) -> str:
         lines.extend(
             [
                 "",
-                "| Scenario | Model | Scope | Base Pass | Head Pass | Wire Delta | Prompt Tok Delta | Comp Tok Delta | Wall Delta(s) |",
-                "|---|---|---|---|---:|---:|---:|---:|---:|",
+                "| Scenario | Model | Scope | Base Pass | Head Pass | Base Peak Ctx | Head Peak Ctx | Peak Ctx Delta | Window / Ratio / Kind | Wire Delta | Prompt Tok Delta | Comp Tok Delta | Wall Delta(s) |",
+                "|---|---|---|---|---:|---:|---:|---:|---|---:|---:|---:|---:|",
             ]
         )
         for row in tier1.get("results", []):
@@ -69,10 +69,19 @@ def render_microbench_markdown(payload: dict[str, Any]) -> str:
             d = cmp["deltas"]
             attr = row.get("source_attribution") if isinstance(row.get("source_attribution"), dict) else {}
             scope_lbl = str(attr.get("comparison_kind") or "unspecified")
+            base_eff = row["base"].get("efficiency", {})
+            head_eff = row["head"].get("efficiency", {})
+            base_peak = base_eff.get("peak_context_tokens")
+            head_peak = head_eff.get("peak_context_tokens")
+            win = head_eff.get("effective_context_window") or base_eff.get("effective_context_window")
+            ratio = head_eff.get("peak_window_ratio")
+            kind = str(head_eff.get("occupancy_measurement_kind") or base_eff.get("occupancy_measurement_kind") or "unknown")
+            win_str = f"{win or 'n/a'} / {ratio if ratio is not None else 'n/a'} / {kind}"
             lines.append(
                 f"| `{row['scenario_id']}` | `{row['model_id']}` | `{scope_lbl}` | "
                 f"`{row['base']['behavior_constraint']['passed']} ({row['base']['status']})` | "
                 f"`{row['head']['behavior_constraint']['passed']} ({row['head']['status']})` | "
+                f"`{base_peak}` | `{head_peak}` | `{d.get('peak_context_tokens')}` | `{win_str}` | "
                 f"`{d.get('wire_bytes')}` | `{d.get('prompt_tokens')}` | "
                 f"`{d.get('completion_tokens')}` | `{d.get('wall_seconds')}` |"
             )
@@ -128,10 +137,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-model", default=DEFAULT_CODEX_MODEL)
     parser.add_argument("--ark-model", default=DEFAULT_ARK_FLASH_MODEL)
     parser.add_argument("--codex-auth-json", type=Path, default=None)
+    parser.add_argument(
+        "--context-delivery",
+        choices=("auto", "off", "on"),
+        default="auto",
+        help="M1 context-delivery mode: auto = Base off vs Head on; off/on = pin both arms to same setting.",
+    )
     parser.add_argument("--max-total-seconds", type=_positive_finite_float, default=180.0)
     parser.add_argument("--per-call-timeout-seconds", type=_positive_finite_float, default=45.0)
     parser.add_argument("--format", choices=("json", "markdown"), default="json")
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=None,
+        help="Optional path to write public-safe JSON receipt regardless of stdout --format.",
+    )
     return parser
 
 
@@ -140,6 +161,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     report: dict[str, Any] = {
         "schema_version": "loopx_microbench_suite_run_v0",
         "passed": True,
+        "context_delivery_mode": args.context_delivery,
     }
     if args.tier in {"0", "both"}:
         tier0 = run_tier0_differential(
@@ -147,6 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             base_ref=args.base_ref,
             main_ref=args.main_ref,
             include_cli_output_differential=args.include_cli_output_differential,
+            context_delivery=args.context_delivery,
         )
         report["tier0"] = tier0
         report["passed"] = report["passed"] and bool(tier0["passed"])
@@ -185,18 +208,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 codex_auth_json_path=args.codex_auth_json,
                 max_total_seconds=args.max_total_seconds,
                 per_call_timeout_seconds=args.per_call_timeout_seconds,
+                context_delivery=args.context_delivery,
             )
             report["tier1"] = tier1
             report["passed"] = report["passed"] and bool(tier1["passed"])
 
     assert_public_safe_payload(report, label="microbench_suite_report")
-    rendered = (
-        render_microbench_markdown(report)
-        if args.format == "markdown"
-        else json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
-    )
+    json_payload = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+    rendered = render_microbench_markdown(report) if args.format == "markdown" else json_payload
     if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered + "\n", encoding="utf-8")
+    if args.output_json is not None:
+        assert_public_safe_payload(report, label="microbench_output_json")
+        args.output_json.parent.mkdir(parents=True, exist_ok=True)
+        args.output_json.write_text(json_payload + "\n", encoding="utf-8")
     print(rendered)
     return 0 if report["passed"] else 1
 

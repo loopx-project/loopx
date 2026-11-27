@@ -8,7 +8,7 @@ This suite measures whether control-plane efficiency optimizations preserve stri
 ## Scope Boundary (Strictly Disjoint From M4/M5)
 
 - **Owns (M1/M2/M3):**
-  - **M1 (`m1_envelope_scoped_recovery`):** Scoped Turn envelope & progressive recovery (`#9498`/`#9504`): selects runnable work (`todo_selected_work`), preserves blocked P0 (`todo_primary_blocked`) in `blocked_priority_fallback`, resolves pointer readback (`quota context-read --select`) cleanly, and measures delivered wire bytes + verifiable `o200k_base` prompt tokens.
+  - **M1 (`m1_envelope_scoped_recovery`):** Scoped Turn envelope & progressive recovery (`#9498`/`#9504`): selects runnable work (`todo_selected_work`), preserves blocked P0 (`todo_primary_blocked`) in `blocked_priority_fallback`, resolves pointer readback (`quota context-read --select`) cleanly, and measures delivered wire bytes, verifiable `o200k_base` prompt tokens, and Tier-1 **Peak Context Window Occupancy** (`initial_turn_context_tokens`, `per_turn_context_tokens`, `peak_context_tokens`, `effective_context_window`, `min_headroom_tokens`, `peak_window_ratio`, `compaction_events`, `truncation_events`, `occupancy_measurement_kind`). Use `--context-delivery {auto,off,on}` to run `off` vs `on` contrast (`auto`) or pin both arms to one setting (`off`/`on`) for same-config version diffs or A/A baselines.
   - **M2 (`m2_epoch_prefetch_semantic_fold`):** Stage-then-Swap Epoch Prefetch & Semantic-Unit Fold (`#9503`): verifies net-positive folding (`EpochReset` / `FoldToReceipt`) retains all `failure_facts` and `open_obligations` while failing closed to `KeepRaw` on negative token savings or missing completion receipts.
   - **M3 (`m3_claim_block_settle_invariants`):** Basic claim, gate, and settle invariants: blocking `user_gate` refuses delivery/spend; single-owner `todo claim` rejects competing peer steals; C1 settlement spends at most once and stays idempotent on replay.
 - **Excludes (M4/M5):** Long-horizon multi-task FrontierCS-2 BLC (5h), multi-wake SForge FFmpeg trials, H1C / H2 cliff-guard evaluations, and online judge containers in [`../edgebench/README.md`](../edgebench/README.md).
@@ -21,10 +21,15 @@ This suite measures whether control-plane efficiency optimizations preserve stri
 uv run --extra test python -m benchmark.microbench.run --tier 0 --format markdown
 ```
 
-Optional cross-revision check against an ancestor commit (reusing `cli-output-base-head-differential-smoke.py` Base checkout helpers):
+Optional cross-revision check against an ancestor commit (reusing `cli-output-base-head-differential-smoke.py` Base checkout helpers, optionally pinning `--context-delivery on` and saving sanitized JSON via `--output-json`):
 
 ```bash
-uv run --extra test python -m benchmark.microbench.run --tier 0 --base-ref <BASE_COMMIT> --format markdown
+uv run --extra test python -m benchmark.microbench.run \
+  --tier 0 \
+  --base-ref <BASE_COMMIT> \
+  --context-delivery on \
+  --format markdown \
+  --output-json .local/microbench-runs/tier0.json
 ```
 
 Public offline smoke (covers Tier-0 + stubbed Tier-1 conformance with zero API calls):

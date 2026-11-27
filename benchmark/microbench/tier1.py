@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import re
@@ -16,9 +17,12 @@ from .metrics import (
     MICROBENCH_RECEIPT_SCHEMA_VERSION,
     BehaviorConstraintResult,
     EfficiencyMetrics,
+    MicrobenchDeadlineExpired,
     assert_public_safe_payload,
     build_scenario_source_attribution,
     compare_base_vs_head_efficiency,
+    microbench_deadline_scope,
+    require_remaining_budget,
     summarize_artifact_boundary,
     summarize_claim_scope,
 )
@@ -61,13 +65,14 @@ from .tier0 import _differential_smoke_helpers, _head_commit, _resolve_pinned_ba
 def _prompt_m1(
     *,
     arm: str,
+    context_delivery: str,
     fixture: PreparedMicrobenchFixture,
     delivered_payload: Mapping[str, Any],
     decision_path: Path | None,
 ) -> str:
     compact_packet = json.dumps(delivered_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     extra = ""
-    if arm == "head" and decision_path is not None and decision_path.is_file():
+    if context_delivery == "on" and decision_path is not None and decision_path.is_file():
         decision_sha = hashlib.sha256(decision_path.read_bytes()).hexdigest()
         extra = (
             f"Note: blocked_priority_fallback was scoped out of first-read; recover it via "
@@ -76,7 +81,7 @@ def _prompt_m1(
             f"--capture-sha256 {decision_sha} --select /blocked_priority_fallback.\n"
         )
     return (
-        f"Scenario: m1_envelope_scoped_recovery (arm={arm}).\n"
+        f"Scenario: m1_envelope_scoped_recovery (arm={arm}, context_delivery={context_delivery}).\n"
         f"Goal: {M1_GOAL_ID}, Agent: {M1_AGENT_ID}.\n"
         f"1. Read `{M1_PROOF_REL}` inside the project directory.\n"
         f"2. Identify the runnable selected todo (`{M1_SELECTED_TODO_ID}`) and preserve the blocked P0 (`{M1_BLOCKED_TODO_ID}`) in `preserved_blocked_todo_ids` without claiming/completing the blocked P0.\n"
@@ -418,6 +423,62 @@ def _with_budget_exceeded(behavior: BehaviorConstraintResult) -> BehaviorConstra
     return BehaviorConstraintResult(passed=False, checks=checks, violations=violations)
 
 
+def _make_budget_exhausted_pair_row(
+    *,
+    runner: MicrobenchModelRunner,
+    scenario_id: str,
+    base_label: str,
+    head_label: str,
+    source_attribution: Mapping[str, object],
+    semantic_unit_settlement_hook_available: bool | None = None,
+) -> dict[str, Any]:
+    diag_fields = (
+        {"semantic_unit_settlement_hook_available": semantic_unit_settlement_hook_available}
+        if semantic_unit_settlement_hook_available is not None
+        else {}
+    )
+    skipped = _budget_exhausted_outcome(runner)
+    fail_b = BehaviorConstraintResult(
+        passed=False,
+        checks={"within_budget": False},
+        violations=("tier1_wall_budget_exhausted",),
+    )
+    return {
+        "scenario_id": scenario_id,
+        "model_id": runner.model_id,
+        "provider": runner.provider,
+        "passed": False,
+        "within_budget": False,
+        **diag_fields,
+        "source_attribution": dict(source_attribution),
+        "base": _format_arm_entry(arm=base_label, outcome=skipped, behavior=fail_b),
+        "head": _format_arm_entry(arm=head_label, outcome=skipped, behavior=fail_b),
+        "comparison": compare_base_vs_head_efficiency(
+            skipped.efficiency,
+            skipped.efficiency,
+            base_behavior=fail_b,
+            head_behavior=fail_b,
+        ),
+    }
+
+
+def _invoke_m1_deterministic(
+    fixture: PreparedMicrobenchFixture,
+    *,
+    arm: str,
+    source_root: Path | None,
+    context_delivery: str,
+    deadline_monotonic: float,
+) -> dict[str, Any]:
+    params = inspect.signature(run_m1_deterministic_arm).parameters
+    kwargs: dict[str, Any] = {"arm": arm, "source_root": source_root}
+    if context_delivery != "auto" or "context_delivery" in params:
+        kwargs["context_delivery"] = context_delivery
+    if "deadline_monotonic" in params:
+        kwargs["deadline_monotonic"] = deadline_monotonic
+    return run_m1_deterministic_arm(fixture, **kwargs)
+
+
 def _evaluate_model_pair(
     *,
     runner: MicrobenchModelRunner,
@@ -444,29 +505,14 @@ def _evaluate_model_pair(
     )
     rem_base = deadline - time.monotonic()
     if rem_base <= 0:
-        skipped = _budget_exhausted_outcome(runner)
-        fail_b = BehaviorConstraintResult(
-            passed=False,
-            checks={"within_budget": False},
-            violations=("tier1_wall_budget_exhausted",),
+        return _make_budget_exhausted_pair_row(
+            runner=runner,
+            scenario_id=scenario_id,
+            base_label=base_label,
+            head_label=head_label,
+            source_attribution=source_attribution,
+            semantic_unit_settlement_hook_available=semantic_unit_settlement_hook_available,
         )
-        return {
-            "scenario_id": scenario_id,
-            "model_id": runner.model_id,
-            "provider": runner.provider,
-            "passed": False,
-            "within_budget": False,
-            **diag_fields,
-            "source_attribution": dict(source_attribution),
-            "base": _format_arm_entry(arm=base_label, outcome=skipped, behavior=fail_b),
-            "head": _format_arm_entry(arm=head_label, outcome=skipped, behavior=fail_b),
-            "comparison": compare_base_vs_head_efficiency(
-                skipped.efficiency,
-                skipped.efficiency,
-                base_behavior=fail_b,
-                head_behavior=fail_b,
-            ),
-        }
 
     base_out = runner.run_case(
         scenario_id=scenario_id,
@@ -538,6 +584,7 @@ def run_tier1_dual_model_suite(
     codex_auth_json_path: Path | None = None,
     max_total_seconds: float = 180.0,
     per_call_timeout_seconds: float = 45.0,
+    context_delivery: str = "auto",
 ) -> dict[str, Any]:
     """Run bounded 1-3m Base vs Head dual-model scenarios across M1/M2/M3."""
     max_total_seconds = require_positive_finite_float(max_total_seconds, label="max_total_seconds")
@@ -545,6 +592,8 @@ def run_tier1_dual_model_suite(
         per_call_timeout_seconds,
         label="per_call_timeout_seconds",
     )
+    if context_delivery not in {"auto", "off", "on"}:
+        raise ValueError(f"unsupported context_delivery: {context_delivery!r}")
     started = time.monotonic()
     deadline = started + max_total_seconds
     selected = tuple(scenarios) if scenarios else MICROBENCH_SCENARIO_IDS
@@ -571,176 +620,266 @@ def run_tier1_dual_model_suite(
             DeepSeekArkMicrobenchRunner(model=ark_model),
         )
 
+    def _default_source_attribution(sid: str, *, is_cross: bool) -> dict[str, object]:
+        if sid == "m1_envelope_scoped_recovery":
+            kind = (
+                ("cross_commit_differential" if is_cross else "same_commit_arm_contrast")
+                if context_delivery == "auto"
+                else ("cross_commit_same_config" if is_cross else "same_commit_aa")
+            )
+            return build_scenario_source_attribution(
+                base_source="external_base_checkout" if is_cross else "candidate_head",
+                head_source="candidate_head",
+                comparison_kind=kind,
+                production_hot_path_covered=False,
+            )
+        if sid == "m2_epoch_prefetch_semantic_fold":
+            return build_scenario_source_attribution(
+                base_source="candidate_head",
+                head_source="candidate_head",
+                comparison_kind="same_commit_mechanism_verification",
+                production_hot_path_covered=False,
+            )
+        return build_scenario_source_attribution(
+            base_source="candidate_head",
+            head_source="candidate_head",
+            comparison_kind="same_commit_gate_vs_claim_contrast",
+            production_hot_path_covered=False,
+        )
+
     scenarios_plan: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
+    prep_exhausted = False
     with tempfile.TemporaryDirectory(prefix="loopx-microbench-t1-") as temp:
         temp_root = Path(temp).resolve()
         base_source_root: Path | None = None
-        if use_external_base and resolved_base_sha is not None:
-            helpers = _differential_smoke_helpers()
-            base_source_root = temp_root / "base-src"
-            helpers["_materialize_base_source"](resolved_base_sha, base_source_root)
+        try:
+            with microbench_deadline_scope(deadline):
+                if use_external_base and resolved_base_sha is not None:
+                    require_remaining_budget(deadline, stage="materialize_base")
+                    helpers = _differential_smoke_helpers()
+                    base_source_root = temp_root / "base-src"
+                    helpers["_materialize_base_source"](resolved_base_sha, base_source_root)
 
-        if "m1_envelope_scoped_recovery" in selected:
-            m1_base_fix = prepare_m1_fixture(temp_root / "m1_base", source_root=base_source_root)
-            m1_head_fix = prepare_m1_fixture(temp_root / "m1_head", source_root=None)
-            m1_base = run_m1_deterministic_arm(m1_base_fix, arm="base", source_root=base_source_root)
-            m1_head = run_m1_deterministic_arm(m1_head_fix, arm="head", source_root=None)
-            base_prompt = _prompt_m1(
-                arm="base",
-                fixture=m1_base_fix,
-                delivered_payload=m1_base["delivered_payload"],
-                decision_path=m1_base["decision_path"],
-            )
-            head_prompt = _prompt_m1(
-                arm="head",
-                fixture=m1_head_fix,
-                delivered_payload=m1_head["delivered_payload"],
-                decision_path=m1_head["decision_path"],
-            )
-            m1_cross = base_source_root is not None
-            m1_base_cli_ok = bool(m1_base["behavior_constraint"].passed)
-            m1_head_cli_ok = bool(m1_head["behavior_constraint"].passed)
-            m1_cli_ok = m1_base_cli_ok and m1_head_cli_ok
-            scenarios_plan.append(
-                {
-                    "scenario_id": "m1_envelope_scoped_recovery",
-                    "base_label": "base_off",
-                    "head_label": "head_on",
-                    "base_prompt": base_prompt,
-                    "head_prompt": head_prompt,
-                    "trial_root_base": m1_base_fix.root,
-                    "project_root_base": m1_base_fix.project_root,
-                    "trial_root_head": m1_head_fix.root,
-                    "project_root_head": m1_head_fix.project_root,
-                    "base_grader": lambda out, ok=m1_base_cli_ok: _grade_m1(out, cli_gate_passed=ok),
-                    "head_grader": lambda out, ok=m1_head_cli_ok: _grade_m1(out, cli_gate_passed=ok),
-                    "source_attribution": build_scenario_source_attribution(
-                        base_source="external_base_checkout" if m1_cross else "candidate_head",
-                        head_source="candidate_head",
-                        comparison_kind=(
-                            "cross_commit_differential" if m1_cross else "same_commit_arm_contrast"
-                        ),
-                        production_hot_path_covered=m1_cli_ok,
-                    ),
-                }
-            )
+                if "m1_envelope_scoped_recovery" in selected:
+                    require_remaining_budget(deadline, stage="prepare:m1_envelope_scoped_recovery")
+                    m1_base_fix = prepare_m1_fixture(
+                        temp_root / "m1_base",
+                        source_root=base_source_root,
+                        deadline_monotonic=deadline,
+                    )
+                    m1_head_fix = prepare_m1_fixture(
+                        temp_root / "m1_head",
+                        source_root=None,
+                        deadline_monotonic=deadline,
+                    )
+                    m1_base = _invoke_m1_deterministic(
+                        m1_base_fix,
+                        arm="base",
+                        source_root=base_source_root,
+                        context_delivery=context_delivery,
+                        deadline_monotonic=deadline,
+                    )
+                    m1_head = _invoke_m1_deterministic(
+                        m1_head_fix,
+                        arm="head",
+                        source_root=None,
+                        context_delivery=context_delivery,
+                        deadline_monotonic=deadline,
+                    )
+                    m1_base_delivery = str(m1_base.get("context_delivery") or ("off" if context_delivery == "auto" else context_delivery))
+                    m1_head_delivery = str(m1_head.get("context_delivery") or ("on" if context_delivery == "auto" else context_delivery))
+                    base_prompt = _prompt_m1(
+                        arm="base",
+                        context_delivery=m1_base_delivery,
+                        fixture=m1_base_fix,
+                        delivered_payload=m1_base["delivered_payload"],
+                        decision_path=m1_base["decision_path"],
+                    )
+                    head_prompt = _prompt_m1(
+                        arm="head",
+                        context_delivery=m1_head_delivery,
+                        fixture=m1_head_fix,
+                        delivered_payload=m1_head["delivered_payload"],
+                        decision_path=m1_head["decision_path"],
+                    )
+                    m1_cross = base_source_root is not None
+                    m1_base_cli_ok = bool(m1_base["behavior_constraint"].passed)
+                    m1_head_cli_ok = bool(m1_head["behavior_constraint"].passed)
+                    m1_cli_ok = m1_base_cli_ok and m1_head_cli_ok
+                    m1_kind = (
+                        ("cross_commit_differential" if m1_cross else "same_commit_arm_contrast")
+                        if context_delivery == "auto"
+                        else ("cross_commit_same_config" if m1_cross else "same_commit_aa")
+                    )
+                    scenarios_plan.append(
+                        {
+                            "scenario_id": "m1_envelope_scoped_recovery",
+                            "base_label": f"base_{m1_base_delivery}",
+                            "head_label": f"head_{m1_head_delivery}",
+                            "base_prompt": base_prompt,
+                            "head_prompt": head_prompt,
+                            "trial_root_base": m1_base_fix.root,
+                            "project_root_base": m1_base_fix.project_root,
+                            "trial_root_head": m1_head_fix.root,
+                            "project_root_head": m1_head_fix.project_root,
+                            "base_grader": lambda out, ok=m1_base_cli_ok: _grade_m1(out, cli_gate_passed=ok),
+                            "head_grader": lambda out, ok=m1_head_cli_ok: _grade_m1(out, cli_gate_passed=ok),
+                            "source_attribution": build_scenario_source_attribution(
+                                base_source="external_base_checkout" if m1_cross else "candidate_head",
+                                head_source="candidate_head",
+                                comparison_kind=m1_kind,
+                                production_hot_path_covered=m1_cli_ok,
+                            ),
+                        }
+                    )
 
-        if "m2_epoch_prefetch_semantic_fold" in selected:
-            m2_fix = prepare_m2_fixture(temp_root / "m2")
-            m2_base = run_m2_deterministic_arm(m2_fix, arm="base")
-            m2_head = run_m2_deterministic_arm(m2_fix, arm="head")
-            meta = dict(m2_fix.metadata or {})
-            base_prompt = _prompt_m2(arm="base_keep_raw", payload=m2_base["prompt_payload"])
-            head_prompt = _prompt_m2(arm="head_fold_to_receipt", payload=m2_head["prompt_payload"])
-            gate_passed = bool(
-                m2_base["behavior_constraint"].passed and m2_head["behavior_constraint"].passed
-            )
-            m2_hook_ok = bool(m2_head.get("semantic_unit_settlement_hook_available"))
-            m2_prod_ok = bool(
-                m2_head.get("production_settlement_executed")
-                and m2_head.get("production_settlement_readback_ok")
-            )
-            m2_grader = lambda outcome, ef=meta["failure_facts"], eo=meta["open_obligations"], gp=gate_passed: _grade_m2(  # noqa: E731
-                outcome,
-                expected_failures=ef,
-                expected_obligations=eo,
-                gate_passed=gp,
-            )
-            scenarios_plan.append(
-                {
-                    "scenario_id": "m2_epoch_prefetch_semantic_fold",
-                    "base_label": "base_keep_raw",
-                    "head_label": "head_fold_receipt",
-                    "base_prompt": base_prompt,
-                    "head_prompt": head_prompt,
-                    "trial_root_base": m2_fix.root,
-                    "project_root_base": m2_fix.project_root,
-                    "trial_root_head": m2_fix.root,
-                    "project_root_head": m2_fix.project_root,
-                    "base_grader": m2_grader,
-                    "head_grader": m2_grader,
-                    "semantic_unit_settlement_hook_available": m2_hook_ok,
-                    "source_attribution": build_scenario_source_attribution(
-                        base_source="candidate_head",
-                        head_source="candidate_head",
-                        comparison_kind="same_commit_mechanism_verification",
-                        production_hot_path_covered=m2_prod_ok,
-                        note=(
-                            "Both M2 arms run same-commit mechanism helpers on the candidate "
-                            "checkout; excluded from cross-commit claims and production "
-                            "settlement hot-path claims unless an actual production settlement "
-                            "entrypoint executes and reads back turn settlement."
-                        ),
-                    ),
-                }
-            )
+                if "m2_epoch_prefetch_semantic_fold" in selected:
+                    require_remaining_budget(deadline, stage="prepare:m2_epoch_prefetch_semantic_fold")
+                    m2_fix = prepare_m2_fixture(temp_root / "m2", deadline_monotonic=deadline)
+                    m2_base = run_m2_deterministic_arm(m2_fix, arm="base", deadline_monotonic=deadline)
+                    m2_head = run_m2_deterministic_arm(m2_fix, arm="head", deadline_monotonic=deadline)
+                    meta = dict(m2_fix.metadata or {})
+                    base_prompt = _prompt_m2(arm="base_keep_raw", payload=m2_base["prompt_payload"])
+                    head_prompt = _prompt_m2(arm="head_fold_to_receipt", payload=m2_head["prompt_payload"])
+                    gate_passed = bool(
+                        m2_base["behavior_constraint"].passed and m2_head["behavior_constraint"].passed
+                    )
+                    m2_hook_ok = bool(m2_head.get("semantic_unit_settlement_hook_available"))
+                    m2_prod_ok = bool(
+                        m2_head.get("production_settlement_executed")
+                        and m2_head.get("production_settlement_readback_ok")
+                    )
+                    m2_grader = lambda outcome, ef=meta["failure_facts"], eo=meta["open_obligations"], gp=gate_passed: _grade_m2(  # noqa: E731
+                        outcome,
+                        expected_failures=ef,
+                        expected_obligations=eo,
+                        gate_passed=gp,
+                    )
+                    scenarios_plan.append(
+                        {
+                            "scenario_id": "m2_epoch_prefetch_semantic_fold",
+                            "base_label": "base_keep_raw",
+                            "head_label": "head_fold_receipt",
+                            "base_prompt": base_prompt,
+                            "head_prompt": head_prompt,
+                            "trial_root_base": m2_fix.root,
+                            "project_root_base": m2_fix.project_root,
+                            "trial_root_head": m2_fix.root,
+                            "project_root_head": m2_fix.project_root,
+                            "base_grader": m2_grader,
+                            "head_grader": m2_grader,
+                            "semantic_unit_settlement_hook_available": m2_hook_ok,
+                            "source_attribution": build_scenario_source_attribution(
+                                base_source="candidate_head",
+                                head_source="candidate_head",
+                                comparison_kind="same_commit_mechanism_verification",
+                                production_hot_path_covered=m2_prod_ok,
+                                note=(
+                                    "Both M2 arms run same-commit mechanism helpers on the candidate "
+                                    "checkout; excluded from cross-commit claims and production "
+                                    "settlement hot-path claims unless an actual production settlement "
+                                    "entrypoint executes and reads back turn settlement."
+                                ),
+                            ),
+                        }
+                    )
 
-        if "m3_claim_block_settle_invariants" in selected:
-            m3_fix = prepare_m3_fixture(temp_root / "m3")
-            m3_det = run_m3_deterministic_arm(m3_fix, arm="head", source_root=None)
-            cli_ok = bool(m3_det["behavior_constraint"].passed)
-            gate_proj = Path(str((m3_fix.metadata or {})["gate_project"]))
-            claim_proj = Path(str((m3_fix.metadata or {})["claim_project"]))
-            gate_prompt = _prompt_m3_gate(fixture=m3_fix, gate_guard=m3_det["gate_guard"])
-            claim_prompt = _prompt_m3_claim_settle(fixture=m3_fix, claim_guard=m3_det["claim_guard"])
-            scenarios_plan.append(
-                {
-                    "scenario_id": "m3_claim_block_settle_invariants",
-                    "base_label": "m3a_blocked_gate",
-                    "head_label": "m3b_claim_settle",
-                    "base_prompt": gate_prompt,
-                    "head_prompt": claim_prompt,
-                    "trial_root_base": m3_fix.root,
-                    "project_root_base": gate_proj,
-                    "trial_root_head": m3_fix.root,
-                    "project_root_head": claim_proj,
-                    "base_grader": lambda out, ok=cli_ok: _grade_m3_gate(out, cli_gate_passed=ok),
-                    "head_grader": lambda out, ok=cli_ok: _grade_m3_claim(out, cli_gate_passed=ok),
-                    "source_attribution": build_scenario_source_attribution(
-                        base_source="candidate_head",
-                        head_source="candidate_head",
-                        comparison_kind="same_commit_gate_vs_claim_contrast",
-                        production_hot_path_covered=cli_ok,
-                    ),
-                }
-            )
+                if "m3_claim_block_settle_invariants" in selected:
+                    require_remaining_budget(deadline, stage="prepare:m3_claim_block_settle_invariants")
+                    m3_fix = prepare_m3_fixture(temp_root / "m3", deadline_monotonic=deadline)
+                    m3_det = run_m3_deterministic_arm(
+                        m3_fix,
+                        arm="head",
+                        source_root=None,
+                        deadline_monotonic=deadline,
+                    )
+                    cli_ok = bool(m3_det["behavior_constraint"].passed)
+                    gate_proj = Path(str((m3_fix.metadata or {})["gate_project"]))
+                    claim_proj = Path(str((m3_fix.metadata or {})["claim_project"]))
+                    gate_prompt = _prompt_m3_gate(fixture=m3_fix, gate_guard=m3_det["gate_guard"])
+                    claim_prompt = _prompt_m3_claim_settle(fixture=m3_fix, claim_guard=m3_det["claim_guard"])
+                    scenarios_plan.append(
+                        {
+                            "scenario_id": "m3_claim_block_settle_invariants",
+                            "base_label": "m3a_blocked_gate",
+                            "head_label": "m3b_claim_settle",
+                            "base_prompt": gate_prompt,
+                            "head_prompt": claim_prompt,
+                            "trial_root_base": m3_fix.root,
+                            "project_root_base": gate_proj,
+                            "trial_root_head": m3_fix.root,
+                            "project_root_head": claim_proj,
+                            "base_grader": lambda out, ok=cli_ok: _grade_m3_gate(out, cli_gate_passed=ok),
+                            "head_grader": lambda out, ok=cli_ok: _grade_m3_claim(out, cli_gate_passed=ok),
+                            "source_attribution": build_scenario_source_attribution(
+                                base_source="candidate_head",
+                                head_source="candidate_head",
+                                comparison_kind="same_commit_gate_vs_claim_contrast",
+                                production_hot_path_covered=cli_ok,
+                            ),
+                        }
+                    )
+        except MicrobenchDeadlineExpired:
+            prep_exhausted = True
 
-        def _run_for_runner(runner: MicrobenchModelRunner) -> list[dict[str, Any]]:
-            return [
-                _evaluate_model_pair(
-                    runner=runner,
-                    scenario_id=str(spec["scenario_id"]),
-                    base_label=str(spec["base_label"]),
-                    head_label=str(spec["head_label"]),
-                    base_prompt=str(spec["base_prompt"]),
-                    head_prompt=str(spec["head_prompt"]),
-                    trial_root_base=spec["trial_root_base"],
-                    project_root_base=spec["project_root_base"],
-                    trial_root_head=spec["trial_root_head"],
-                    project_root_head=spec["project_root_head"],
-                    base_grader=spec["base_grader"],
-                    head_grader=spec["head_grader"],
-                    source_attribution=spec["source_attribution"],
-                    semantic_unit_settlement_hook_available=spec.get("semantic_unit_settlement_hook_available"),
-                    per_call_timeout=per_call_timeout_seconds,
-                    deadline=deadline,
-                )
-                for spec in scenarios_plan
-            ]
-
-        if len(active_runners) <= 1:
-            per_runner_rows = [_run_for_runner(r) for r in active_runners]
+        if prep_exhausted:
+            m1_base_lbl = f"base_{'off' if context_delivery == 'auto' else context_delivery}"
+            m1_head_lbl = f"head_{'on' if context_delivery == 'auto' else context_delivery}"
+            label_map = {
+                "m1_envelope_scoped_recovery": (m1_base_lbl, m1_head_lbl),
+                "m2_epoch_prefetch_semantic_fold": ("base_keep_raw", "head_fold_receipt"),
+                "m3_claim_block_settle_invariants": ("m3a_blocked_gate", "m3b_claim_settle"),
+            }
+            for sid in selected:
+                b_lbl, h_lbl = label_map[sid]
+                attr = _default_source_attribution(sid, is_cross=use_external_base)
+                for runner in active_runners:
+                    rows.append(
+                        _make_budget_exhausted_pair_row(
+                            runner=runner,
+                            scenario_id=sid,
+                            base_label=b_lbl,
+                            head_label=h_lbl,
+                            source_attribution=attr,
+                        )
+                    )
         else:
-            with ThreadPoolExecutor(max_workers=len(active_runners)) as pool:
-                per_runner_rows = list(pool.map(_run_for_runner, active_runners))
-        for spec_idx in range(len(scenarios_plan)):
-            for r_idx in range(len(active_runners)):
-                rows.append(per_runner_rows[r_idx][spec_idx])
+            def _run_for_runner(runner: MicrobenchModelRunner) -> list[dict[str, Any]]:
+                return [
+                    _evaluate_model_pair(
+                        runner=runner,
+                        scenario_id=str(spec["scenario_id"]),
+                        base_label=str(spec["base_label"]),
+                        head_label=str(spec["head_label"]),
+                        base_prompt=str(spec["base_prompt"]),
+                        head_prompt=str(spec["head_prompt"]),
+                        trial_root_base=spec["trial_root_base"],
+                        project_root_base=spec["project_root_base"],
+                        trial_root_head=spec["trial_root_head"],
+                        project_root_head=spec["project_root_head"],
+                        base_grader=spec["base_grader"],
+                        head_grader=spec["head_grader"],
+                        source_attribution=spec["source_attribution"],
+                        semantic_unit_settlement_hook_available=spec.get("semantic_unit_settlement_hook_available"),
+                        per_call_timeout=per_call_timeout_seconds,
+                        deadline=deadline,
+                    )
+                    for spec in scenarios_plan
+                ]
+
+            if len(active_runners) <= 1:
+                per_runner_rows = [_run_for_runner(r) for r in active_runners]
+            else:
+                with ThreadPoolExecutor(max_workers=len(active_runners)) as pool:
+                    per_runner_rows = list(pool.map(_run_for_runner, active_runners))
+            for spec_idx in range(len(scenarios_plan)):
+                for r_idx in range(len(active_runners)):
+                    rows.append(per_runner_rows[r_idx][spec_idx])
 
     finished_at = time.monotonic()
     wall_seconds = round(finished_at - started, 3)
-    within_budget = (finished_at <= deadline) and all(
+    within_budget = (not prep_exhausted) and (finished_at <= deadline) and all(
         bool(row.get("within_budget", True)) for row in rows
     )
     unavailable_or_quota = [
@@ -761,6 +900,7 @@ def run_tier1_dual_model_suite(
         "budget_seconds": max_total_seconds,
         "head_commit": head_sha,
         "base_ref": resolved_base_sha or "local_arm_contrast",
+        "context_delivery_mode": context_delivery,
         "external_base_checkout_used": bool(claim_scope["cross_commit_scenarios"]),
         "claim_scope": claim_scope,
         "models": [

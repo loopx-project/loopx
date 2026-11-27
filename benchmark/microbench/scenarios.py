@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import importlib
@@ -12,6 +13,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import threading
 from typing import Any
 
 from benchmark.runtime.session_observation import collect_context_policy_telemetry
@@ -25,6 +27,7 @@ from loopx.control_plane.quota.turn_envelope import (
     evaluate_epoch_prefetch_swap,
     record_semantic_unit_anchor,
 )
+from loopx.control_plane.testing import canary_harness as _canary_harness
 from loopx.control_plane.testing.canary_harness import (
     assert_todo_read_unchanged,
     import_fixture_authority,
@@ -38,7 +41,14 @@ from loopx.control_plane.turn_driver.epoch_prefetch import (
     apply_turn_epoch_prefetch_to_request,
 )
 
-from .metrics import BehaviorConstraintResult, EfficiencyMetrics, measure_text_tokens
+from .metrics import (
+    BehaviorConstraintResult,
+    EfficiencyMetrics,
+    MicrobenchDeadlineExpired,
+    measure_text_tokens,
+    require_remaining_budget,
+    resolve_deadline,
+)
 
 MICROBENCH_SCENARIO_IDS = (
     "m1_envelope_scoped_recovery",
@@ -86,8 +96,13 @@ def _run_cli_with_source(
     source_root: Path | None = None,
     cwd: Path | None = None,
     env_overrides: Mapping[str, str | None] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    if source_root is None and env_overrides is None:
+    deadline = resolve_deadline(deadline_monotonic)
+    timeout_s = 60.0
+    if deadline is not None:
+        timeout_s = min(60.0, require_remaining_budget(deadline, stage="cli"))
+    if source_root is None and env_overrides is None and deadline is None:
         return run_json_cli_result(
             *args,
             registry_path=registry_path,
@@ -98,7 +113,9 @@ def _run_cli_with_source(
     env.pop("LOOPX_RELEASE_ROOT", None)
     if source_root is not None:
         env["PYTHONPATH"] = str(source_root)
-    if env_overrides:
+    if env_overrides is None:
+        env["LOOPX_CONTEXT_DELIVERY"] = "off"
+    else:
         for key, value in env_overrides.items():
             if value is None:
                 env.pop(key, None)
@@ -116,17 +133,22 @@ def _run_cli_with_source(
         "json",
         *args,
     ]
-    completed = subprocess.run(
-        command,
-        cwd=cwd or registry_path.parent.parent,
-        check=False,
-        env=env,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        capture_output=True,
-        timeout=60,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=cwd or registry_path.parent.parent,
+            check=False,
+            env=env,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if deadline is not None:
+            raise MicrobenchDeadlineExpired("cli_timeout") from exc
+        raise
     if not completed.stdout.strip():
         raise AssertionError(
             f"empty CLI output ({completed.returncode}) for {command!r}: {completed.stderr}"
@@ -135,6 +157,54 @@ def _run_cli_with_source(
     if not isinstance(payload, dict):
         raise AssertionError(f"expected JSON object for {command!r}: {payload!r}")
     return completed.returncode, payload
+
+
+_CANARY_CLI_PATCH_LOCK = threading.RLock()
+
+
+@contextmanager
+def _bounded_canary_cli(deadline_monotonic: float | None) -> Iterator[None]:
+    """Ensure CLI invocations inside ``canary_harness.import_fixture_authority`` obey deadlines."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is None:
+        yield
+        return
+    with _CANARY_CLI_PATCH_LOCK:
+        orig_run_json_cli = _canary_harness.run_json_cli
+
+        def _bounded_run_json_cli(
+            *args: str,
+            registry_path: Path,
+            runtime_root: Path | None = None,
+            cwd: Path | None = None,
+            include_returncode: bool = True,
+        ) -> dict[str, Any]:
+            if runtime_root is None:
+                return orig_run_json_cli(
+                    *args,
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    cwd=cwd,
+                    include_returncode=include_returncode,
+                )
+            rc, payload = _run_cli_with_source(
+                *args,
+                registry_path=registry_path,
+                runtime_root=runtime_root,
+                cwd=cwd,
+                deadline_monotonic=deadline,
+            )
+            if rc != 0:
+                raise AssertionError(json.dumps(payload))
+            if include_returncode:
+                payload["_returncode"] = rc
+            return payload
+
+        _canary_harness.run_json_cli = _bounded_run_json_cli
+        try:
+            yield
+        finally:
+            _canary_harness.run_json_cli = orig_run_json_cli
 
 
 def _mapping(value: object) -> Mapping[str, Any]:
@@ -219,8 +289,12 @@ def prepare_m1_fixture(
     *,
     historical_outcomes: int = 5,
     source_root: Path | None = None,
+    deadline_monotonic: float | None = None,
 ) -> PreparedMicrobenchFixture:
     """Create isolated M1 fixture (#9498/#9504): blocked P0 + runnable P1 + historical acceptance."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage="prepare_m1_fixture")
     project = root / "project"
     runtime = root / "runtime"
     registry_path = project / ".loopx" / "registry.json"
@@ -286,7 +360,8 @@ def prepare_m1_fixture(
         status="active",
         registered_agents=[M1_AGENT_ID, "peer-hist"],
     )
-    import_fixture_authority(registry_path, M1_GOAL_ID)
+    with _bounded_canary_cli(deadline):
+        import_fixture_authority(registry_path, M1_GOAL_ID)
 
     # Seed historical + current acceptance outcomes to exercise turn-scoped trimming (#9498).
     acceptance_outcomes: list[dict[str, Any]] = []
@@ -651,9 +726,20 @@ def run_m1_deterministic_arm(
     *,
     arm: str,
     source_root: Path | None = None,
+    context_delivery: str | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Run deterministic Base (`off`) or Head (`on`) arm for M1 (#9498/#9504)."""
-    delivery = "off" if arm == "base" else "on"
+    if context_delivery not in (None, "auto", "off", "on"):
+        raise ValueError(f"unsupported context_delivery: {context_delivery!r}")
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage=f"m1_deterministic:{arm}")
+    delivery = (
+        ("off" if arm == "base" else "on")
+        if context_delivery in (None, "auto")
+        else str(context_delivery)
+    )
     view, delivered, decision_path, behavior, efficiency = _m1_arm_capture(
         fixture,
         arm=arm,
@@ -673,8 +759,15 @@ def run_m1_deterministic_arm(
     }
 
 
-def prepare_m2_fixture(root: Path) -> PreparedMicrobenchFixture:
+def prepare_m2_fixture(
+    root: Path,
+    *,
+    deadline_monotonic: float | None = None,
+) -> PreparedMicrobenchFixture:
     """Create isolated M2 fixture (#9503 Stage-then-Swap & Semantic-Unit Fold)."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage="prepare_m2_fixture")
     project = root / "project"
     runtime = root / "runtime"
     project.mkdir(parents=True, exist_ok=True)
@@ -741,8 +834,12 @@ def run_m2_deterministic_arm(
     fixture: PreparedMicrobenchFixture,
     *,
     arm: str,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Run deterministic Base (`KeepRaw`) vs Head (`FoldToReceipt`/`EpochReset` + negative gate)."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage=f"m2_deterministic:{arm}")
     meta = dict(fixture.metadata or {})
     raw_text = str(meta["raw_text"])
     raw_path = Path(str(meta["raw_path"]))
@@ -1010,8 +1107,15 @@ def _has_todo_unit_settlement() -> bool:
     return hasattr(mod, "prepare_turn_semantic_unit_context")
 
 
-def prepare_m3_fixture(root: Path) -> PreparedMicrobenchFixture:
+def prepare_m3_fixture(
+    root: Path,
+    *,
+    deadline_monotonic: float | None = None,
+) -> PreparedMicrobenchFixture:
     """Create isolated M3 fixture: (a) blocked user_gate + (b) claim/settle lifecycle."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage="prepare_m3_fixture")
     project = root / "project"
     runtime = root / "runtime"
     captures_dir = _mkdir_private(root / "captures")
@@ -1049,7 +1153,8 @@ def prepare_m3_fixture(root: Path) -> PreparedMicrobenchFixture:
         status="active-read-only",
         registered_agents=[M3_AGENT_PRIMARY],
     )
-    import_fixture_authority(gate_registry, M3_GATE_GOAL_ID)
+    with _bounded_canary_cli(deadline):
+        import_fixture_authority(gate_registry, M3_GATE_GOAL_ID)
 
     # Goal B: unclaimed open deliverable with two registered agents.
     claim_proj = project / "claim_case"
@@ -1088,7 +1193,8 @@ def prepare_m3_fixture(root: Path) -> PreparedMicrobenchFixture:
         status="active-read-only",
         registered_agents=[M3_AGENT_PRIMARY, M3_AGENT_PEER],
     )
-    import_fixture_authority(claim_registry, M3_CLAIM_GOAL_ID)
+    with _bounded_canary_cli(deadline):
+        import_fixture_authority(claim_registry, M3_CLAIM_GOAL_ID)
 
     return PreparedMicrobenchFixture(
         scenario_id="m3_claim_block_settle_invariants",
@@ -1114,8 +1220,12 @@ def run_m3_deterministic_arm(
     *,
     arm: str = "head",
     source_root: Path | None = None,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     """Verify M3 basic claim, blocking gate, single settlement, and replay guards."""
+    deadline = resolve_deadline(deadline_monotonic)
+    if deadline is not None:
+        require_remaining_budget(deadline, stage=f"m3_deterministic:{arm}")
     meta = dict(fixture.metadata or {})
     gate_registry = Path(str(meta["gate_registry"]))
     claim_registry = Path(str(meta["claim_registry"]))

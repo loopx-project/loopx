@@ -67,6 +67,7 @@ def _head_commit() -> str:
         check=True,
         capture_output=True,
         text=True,
+        timeout=10.0,
     )
     return completed.stdout.strip()
 
@@ -102,8 +103,11 @@ def run_tier0_differential(
     base_ref: str | None = None,
     main_ref: str = "origin/main",
     include_cli_output_differential: bool = False,
+    context_delivery: str = "auto",
 ) -> dict[str, Any]:
     """Run deterministic Base vs Head Tier-0 M1/M2/M3 differential checks (<15s target)."""
+    if context_delivery not in {"auto", "off", "on"}:
+        raise ValueError(f"unsupported context_delivery: {context_delivery!r}")
     started = time.monotonic()
     selected = tuple(scenarios) if scenarios else MICROBENCH_SCENARIO_IDS
     unknown = sorted(set(selected) - set(MICROBENCH_SCENARIO_IDS))
@@ -131,7 +135,14 @@ def run_tier0_differential(
 
         def _run_m1_arm_pair(arm_name: str, src_root: Path | None) -> dict[str, Any]:
             fix = prepare_m1_fixture(temp_root / f"m1_{arm_name}", source_root=src_root)
-            return run_m1_deterministic_arm(fix, arm=arm_name, source_root=src_root)
+            if context_delivery == "auto":
+                return run_m1_deterministic_arm(fix, arm=arm_name, source_root=src_root)
+            return run_m1_deterministic_arm(
+                fix,
+                arm=arm_name,
+                source_root=src_root,
+                context_delivery=context_delivery,
+            )
 
         def _run_m2_pair() -> dict[str, Any]:
             m2_root = temp_root / "m2"
@@ -259,21 +270,28 @@ def run_tier0_differential(
                 base_behavior=m1_base["behavior_constraint"],
                 head_behavior=m1_head["behavior_constraint"],
             )
-            # Head slim delivery (`on`) must shrink delivered wire/tokens vs `off` while keeping invariants.
             m1_deltas = m1_cmp["deltas"]
             wire_delta = m1_deltas.get("wire_bytes") if isinstance(m1_deltas, Mapping) else None
-            head_ok = bool(m1_cmp["behavior_preserved"]) and isinstance(wire_delta, int) and wire_delta < 0
+            if context_delivery == "auto":
+                # Head slim delivery (`on`) must shrink delivered wire/tokens vs `off` while keeping invariants.
+                head_ok = bool(m1_cmp["behavior_preserved"]) and isinstance(wire_delta, int) and wire_delta < 0
+            else:
+                head_ok = bool(m1_cmp["behavior_preserved"])
             m1_cross = base_source_root is not None
+            m1_comparison_kind = (
+                ("cross_commit_differential" if m1_cross else "same_commit_arm_contrast")
+                if context_delivery == "auto"
+                else ("cross_commit_same_config" if m1_cross else "same_commit_aa")
+            )
             results.append(
                 {
                     "scenario_id": "m1_envelope_scoped_recovery",
                     "passed": head_ok,
+                    "context_delivery_mode": context_delivery,
                     "source_attribution": build_scenario_source_attribution(
                         base_source="external_base_checkout" if m1_cross else "candidate_head",
                         head_source="candidate_head",
-                        comparison_kind=(
-                            "cross_commit_differential" if m1_cross else "same_commit_arm_contrast"
-                        ),
+                        comparison_kind=m1_comparison_kind,
                         production_hot_path_covered=True,
                     ),
                     "base": {
@@ -362,6 +380,7 @@ def run_tier0_differential(
         "wall_seconds": wall_seconds,
         "head_commit": head_sha,
         "base_ref": resolved_base_sha or "local_arm_contrast",
+        "context_delivery_mode": context_delivery,
         "external_base_checkout_used": bool(claim_scope["cross_commit_scenarios"]),
         "claim_scope": claim_scope,
         "scenarios": results,

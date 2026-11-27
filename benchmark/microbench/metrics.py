@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+import contextvars
 from dataclasses import asdict, dataclass, field
 import json
 import math
 from pathlib import Path
 import re
+import time
 
 from benchmark.runtime.session_observation import (
     CodexSessionObservationError,
@@ -33,6 +36,50 @@ _EXTRA_SECRET_RE = re.compile(
     r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|Bearer\s+[A-Za-z0-9._-]{12,})"
 )
 _USER_HOME_RE = re.compile(r"(?:/Users/|/home/|C:\\Users\\)[^\s\"',;]+")
+_CODEX_COUNTER_KEYS = ("input_tokens", "cached_input_tokens", "output_tokens")
+_TRUNCATION_EVENT_TYPES = frozenset(
+    {"truncated", "context_truncated", "history_truncated", "prompt_truncated"}
+)
+_ACTIVE_DEADLINE_MONOTONIC: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "microbench_active_deadline_monotonic",
+    default=None,
+)
+
+
+class MicrobenchDeadlineExpired(TimeoutError):
+    """Raised when a bounded microbenchmark phase exceeds its monotonic deadline."""
+
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+        super().__init__(f"tier1_wall_budget_exhausted:{stage}")
+
+
+@contextmanager
+def microbench_deadline_scope(deadline_monotonic: float | None) -> Iterator[None]:
+    """Bind an active monotonic wall deadline across nested scenario/CLI helpers."""
+    token = _ACTIVE_DEADLINE_MONOTONIC.set(deadline_monotonic)
+    try:
+        yield
+    finally:
+        _ACTIVE_DEADLINE_MONOTONIC.reset(token)
+
+
+def resolve_deadline(deadline_monotonic: float | None) -> float | None:
+    """Return the tighter of an explicit deadline and any active context deadline."""
+    active = _ACTIVE_DEADLINE_MONOTONIC.get()
+    if deadline_monotonic is None:
+        return active
+    if active is None:
+        return deadline_monotonic
+    return min(deadline_monotonic, active)
+
+
+def require_remaining_budget(deadline_monotonic: float, *, stage: str) -> float:
+    """Return positive seconds remaining before ``deadline_monotonic`` or fail closed."""
+    remaining = float(deadline_monotonic) - time.monotonic()
+    if remaining <= 0.0:
+        raise MicrobenchDeadlineExpired(stage)
+    return remaining
 
 
 @dataclass(frozen=True)
@@ -61,7 +108,7 @@ class BehaviorConstraintResult:
 
 @dataclass(frozen=True)
 class EfficiencyMetrics:
-    """Explicit token, wire-byte, turn, and latency metrics (None = unknown)."""
+    """Explicit token, context-window occupancy, byte, turn, and latency metrics."""
 
     wire_bytes: int | None = None
     prompt_tokens: int | None = None
@@ -72,9 +119,23 @@ class EfficiencyMetrics:
     tool_calls: int | None = None
     round_trips: int | None = None
     wall_seconds: float | None = None
+    initial_turn_context_tokens: int | None = None
+    per_turn_context_tokens: tuple[int, ...] | None = None
+    peak_context_tokens: int | None = None
+    effective_context_window: int | None = None
+    min_headroom_tokens: int | None = None
+    peak_window_ratio: float | None = None
+    compaction_events: int | None = None
+    truncation_events: int | None = None
+    occupancy_measurement_kind: str = "unknown"
+    occupancy_window_source: str | None = None
 
-    def to_dict(self) -> dict[str, int | float | None]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, object]:
+        payload = asdict(self)
+        per_turn = payload.get("per_turn_context_tokens")
+        if isinstance(per_turn, tuple):
+            payload["per_turn_context_tokens"] = list(per_turn)
+        return payload
 
 
 def measure_text_tokens(
@@ -88,6 +149,158 @@ def measure_text_tokens(
         return None, None
     tokens, metadata = counted
     return tokens, dict(metadata)
+
+
+def _valid_counter_map(raw: object) -> dict[str, int] | None:
+    if not isinstance(raw, Mapping):
+        return None
+    parsed: dict[str, int] = {}
+    for key in _CODEX_COUNTER_KEYS:
+        val = raw.get(key)
+        if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+            return None
+        parsed[key] = val
+    return parsed
+
+
+def compute_occupancy_summary(
+    *,
+    per_turn_context_tokens: Sequence[int] | None,
+    effective_context_window: int | None = None,
+    occupancy_measurement_kind: str | None = None,
+    occupancy_window_source: str | None = None,
+    compaction_events: int | None = None,
+    truncation_events: int | None = None,
+) -> dict[str, object]:
+    """Compute typed initial/peak context-window occupancy and headroom summary."""
+    valid_window = (
+        effective_context_window
+        if isinstance(effective_context_window, int)
+        and not isinstance(effective_context_window, bool)
+        and effective_context_window > 0
+        else None
+    )
+    resolved_window_source = occupancy_window_source if valid_window is not None else None
+    per_turn_tuple: tuple[int, ...] | None = None
+    if per_turn_context_tokens:
+        cleaned: list[int] = []
+        valid_seq = True
+        for val in per_turn_context_tokens:
+            if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                valid_seq = False
+                break
+            cleaned.append(val)
+        if valid_seq and cleaned:
+            per_turn_tuple = tuple(cleaned)
+
+    if per_turn_tuple is None:
+        return {
+            "initial_turn_context_tokens": None,
+            "per_turn_context_tokens": None,
+            "peak_context_tokens": None,
+            "effective_context_window": valid_window,
+            "min_headroom_tokens": None,
+            "peak_window_ratio": None,
+            "compaction_events": compaction_events,
+            "truncation_events": truncation_events,
+            "occupancy_measurement_kind": "unknown",
+            "occupancy_window_source": resolved_window_source,
+        }
+
+    initial_ctx = per_turn_tuple[0]
+    peak_ctx = max(per_turn_tuple)
+    min_headroom = (valid_window - peak_ctx) if valid_window is not None else None
+    peak_ratio = round(peak_ctx / valid_window, 6) if valid_window is not None else None
+    return {
+        "initial_turn_context_tokens": initial_ctx,
+        "per_turn_context_tokens": per_turn_tuple,
+        "peak_context_tokens": peak_ctx,
+        "effective_context_window": valid_window,
+        "min_headroom_tokens": min_headroom,
+        "peak_window_ratio": peak_ratio,
+        "compaction_events": compaction_events,
+        "truncation_events": truncation_events,
+        "occupancy_measurement_kind": occupancy_measurement_kind or "per_request_input_proxy",
+        "occupancy_window_source": resolved_window_source,
+    }
+
+
+def _parse_codex_rollout_occupancy(rollout: Path) -> dict[str, object]:
+    """Validate per-request ``last_token_usage`` against ``total_token_usage`` deltas."""
+    per_turn_inputs: list[int] = []
+    windows: set[int] = set()
+    compaction_events = 0
+    truncation_events = 0
+    previous = {key: 0 for key in _CODEX_COUNTER_KEYS}
+    samples = 0
+    per_request_valid = True
+    token_count_events = 0
+    occupancy_error: str | None = None
+
+    with rollout.open("r", encoding="utf-8", errors="replace") as stream:
+        for raw_line in stream:
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                item = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(item, Mapping):
+                continue
+            kind = str(item.get("type") or "")
+            raw_payload = item.get("payload")
+            payload = raw_payload if isinstance(raw_payload, Mapping) else {}
+            ptype = str(payload.get("type") or "")
+            if kind == "compacted" or (kind == "event_msg" and ptype == "compacted"):
+                compaction_events += 1
+                continue
+            if (
+                kind in _TRUNCATION_EVENT_TYPES
+                or (kind == "event_msg" and ptype in _TRUNCATION_EVENT_TYPES)
+                or payload.get("truncated") is True
+            ):
+                truncation_events += 1
+            if kind != "event_msg" or ptype != "token_count":
+                continue
+            token_count_events += 1
+            raw_info = payload.get("info")
+            info = raw_info if isinstance(raw_info, Mapping) else {}
+            win = info.get("model_context_window")
+            if isinstance(win, int) and not isinstance(win, bool) and win > 0:
+                windows.add(win)
+            total = _valid_counter_map(info.get("total_token_usage"))
+            last = _valid_counter_map(info.get("last_token_usage"))
+            if total is None or last is None:
+                per_request_valid = False
+                occupancy_error = occupancy_error or "missing_last_token_usage"
+                continue
+            delta = {key: total[key] - previous[key] for key in _CODEX_COUNTER_KEYS}
+            if samples == 0 and any(total[key] != last[key] for key in _CODEX_COUNTER_KEYS):
+                per_request_valid = False
+                occupancy_error = occupancy_error or "missing_initial_usage_prefix"
+                continue
+            if any(delta[key] < 0 for key in _CODEX_COUNTER_KEYS):
+                per_request_valid = False
+                occupancy_error = occupancy_error or "counter_reset"
+                continue
+            if any(delta[key] != 0 for key in _CODEX_COUNTER_KEYS):
+                if any(delta[key] != last[key] for key in _CODEX_COUNTER_KEYS):
+                    per_request_valid = False
+                    occupancy_error = occupancy_error or "counter_gap"
+                    continue
+                per_turn_inputs.append(last["input_tokens"])
+                previous = total
+                samples += 1
+
+    return {
+        "per_turn_inputs": per_turn_inputs if (per_request_valid and token_count_events > 0) else [],
+        "windows": windows,
+        "compaction_events": compaction_events,
+        "truncation_events": truncation_events,
+        "per_request_valid": per_request_valid and token_count_events > 0,
+        "occupancy_error": occupancy_error,
+    }
 
 
 def collect_codex_rollout_metrics(
@@ -117,6 +330,7 @@ def collect_codex_rollout_metrics(
                 "total_tokens": total_tok,
                 "rollout_count": None,
                 "error": None,
+                **compute_occupancy_summary(per_turn_context_tokens=None),
             }
         except ImportError:
             pass
@@ -132,6 +346,7 @@ def collect_codex_rollout_metrics(
             "total_tokens": None,
             "rollout_count": 0,
             "error": "missing_rollout",
+            **compute_occupancy_summary(per_turn_context_tokens=None),
         }
 
     prompt_total = 0
@@ -140,11 +355,18 @@ def collect_codex_rollout_metrics(
     reasoning_total: int | None = 0
     grand_total: int | None = 0
     complete_records = 0
+    all_per_turn_inputs: list[int] = []
+    all_windows: set[int] = set()
+    total_compactions = 0
+    total_truncations = 0
+    occupancy_valid = True
+    occupancy_error: str | None = None
 
     for rollout in rollouts:
         try:
             usage = read_codex_session_usage(rollout)
             tail = observe_codex_session_tail(rollout)
+            occ = _parse_codex_rollout_occupancy(rollout)
         except (CodexSessionUsageError, CodexSessionObservationError, OSError, ValueError) as exc:
             return {
                 "source": "codex_session_usage",
@@ -155,6 +377,7 @@ def collect_codex_rollout_metrics(
                 "total_tokens": None,
                 "rollout_count": len(rollouts),
                 "error": type(exc).__name__,
+                **compute_occupancy_summary(per_turn_context_tokens=None),
             }
         prompt_val = usage.get("input_tokens")
         comp_val = usage.get("output_tokens")
@@ -173,6 +396,7 @@ def collect_codex_rollout_metrics(
                 "total_tokens": None,
                 "rollout_count": len(rollouts),
                 "error": "incomplete_usage_fields",
+                **compute_occupancy_summary(per_turn_context_tokens=None),
             }
         prompt_total += prompt_val
         completion_total += comp_val
@@ -192,7 +416,34 @@ def collect_codex_rollout_metrics(
             grand_total += t_val
         else:
             grand_total = None
+        raw_comp = occ.get("compaction_events")
+        raw_trunc = occ.get("truncation_events")
+        if isinstance(raw_comp, int):
+            total_compactions += raw_comp
+        if isinstance(raw_trunc, int):
+            total_truncations += raw_trunc
+        raw_wins = occ.get("windows")
+        if isinstance(raw_wins, set):
+            all_windows.update(w for w in raw_wins if isinstance(w, int))
+        if not occ.get("per_request_valid"):
+            occupancy_valid = False
+            if occupancy_error is None:
+                raw_err = occ.get("occupancy_error")
+                occupancy_error = str(raw_err) if raw_err else "invalid_per_request_usage"
+        else:
+            raw_inputs = occ.get("per_turn_inputs")
+            if isinstance(raw_inputs, list):
+                all_per_turn_inputs.extend(int(x) for x in raw_inputs)
 
+    single_window = next(iter(all_windows)) if len(all_windows) == 1 else None
+    occ_summary = compute_occupancy_summary(
+        per_turn_context_tokens=all_per_turn_inputs if (occupancy_valid and all_per_turn_inputs) else None,
+        effective_context_window=single_window,
+        occupancy_measurement_kind="per_request_input_proxy",
+        occupancy_window_source="codex_model_context_window" if single_window is not None else None,
+        compaction_events=total_compactions,
+        truncation_events=total_truncations,
+    )
     return {
         "source": "codex_session_usage",
         "prompt_tokens": prompt_total,
@@ -203,6 +454,8 @@ def collect_codex_rollout_metrics(
         "rollout_count": len(rollouts),
         "complete_record_count": complete_records,
         "error": None,
+        **({"occupancy_error": occupancy_error} if occupancy_error and not occupancy_valid else {}),
+        **occ_summary,
     }
 
 
@@ -246,6 +499,15 @@ def compare_base_vs_head_efficiency(
         | _incomplete_metrics_from_coverage(head_telemetry_coverage)
     )
     excluded_set = set(excluded_partial)
+    if "prompt_tokens" in excluded_set:
+        excluded_set.update(
+            {
+                "initial_turn_context_tokens",
+                "peak_context_tokens",
+                "min_headroom_tokens",
+                "peak_window_ratio",
+            }
+        )
     deltas: dict[str, int | float | None] = {}
     pct_changes: dict[str, float | None] = {}
     for field_name in (
@@ -258,6 +520,13 @@ def compare_base_vs_head_efficiency(
         "tool_calls",
         "round_trips",
         "wall_seconds",
+        "initial_turn_context_tokens",
+        "peak_context_tokens",
+        "effective_context_window",
+        "min_headroom_tokens",
+        "peak_window_ratio",
+        "compaction_events",
+        "truncation_events",
     ):
         base_val = getattr(base_eff, field_name)
         head_val = getattr(head_eff, field_name)
