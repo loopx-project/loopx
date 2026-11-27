@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import {posix, win32} from "node:path";
 import type { JsonObject } from "../runtime_decode.ts";
 import { jsonObject, requireJsonObject, requireNonEmptyString } from "../runtime_decode.ts";
+import { floorEpochSecondsMicros, parseTodoTimestampMicros } from "../runtime_timestamp.ts";
 import { EffectRuntimeRequestError } from "../effect_runtime_errors.ts";
 import { ENVELOPED_SHA256_PATTERN } from "../content_digest.ts";
 import {boundConversationExecutorMatches, goalAgentConversationIdentity, resolveConversationScope} from "./conversation_scope.ts";
@@ -26,7 +27,7 @@ const WORKER_EXITED_ERROR =
   "The LoopX Chat execution worker exited before this turn finished. Your conversation is saved; execution may have occurred. This turn was not retried automatically.";
 const FILE_LOCK_TIMEOUT_ERROR_PATTERN =
   /^file lock acquisition timed out \((?:recorded holder pid [1-9]\d*|lock busy, current holder unknown)\)$/;
-const MONITOR_RECOVERY_RETRY_COOLDOWN_MS = 300_000;
+const MONITOR_RECOVERY_RETRY_COOLDOWN_MICROS = 300_000_000n;
 const REPORT_VALIDATOR_PREFIX =
   "from pathlib import Path; from loopx.capabilities.periodic_report.private_generation import validate_private_generation; "
   + "validate_private_generation(Path(";
@@ -133,12 +134,12 @@ function admitMonitorRestartRecovery(
       || (typeof original.error === "string" && FILE_LOCK_TIMEOUT_ERROR_PATTERN.test(original.error))
     )
   );
-  const completedAtMs = typeof original.completed_at === "string" ? Date.parse(original.completed_at) : NaN;
-  const observedAtMs = typeof basis.observed_at === "number" && Number.isFinite(basis.observed_at)
-    ? basis.observed_at * 1000 : NaN;
+  const completedAt = typeof original.completed_at === "string"
+    ? parseTodoTimestampMicros(original.completed_at.trim()) : null;
+  const observedAt = floorEpochSecondsMicros(basis.observed_at);
   const chainedPostContextWatchRecoverable = postContextWatchRecoverable
-    && Number.isFinite(completedAtMs) && Number.isFinite(observedAtMs)
-    && observedAtMs - completedAtMs >= MONITOR_RECOVERY_RETRY_COOLDOWN_MS;
+    && completedAt !== null && observedAt !== null
+    && observedAt - completedAt >= MONITOR_RECOVERY_RETRY_COOLDOWN_MICROS;
   const effectiveQueuedCount = queuedTurnCount !== undefined ? queuedTurnCount : params.queued_turn_count;
   const originalSessionMatches = original.session_id === session.session_id
     || (legacySessionId !== undefined && original.session_id === legacySessionId);
