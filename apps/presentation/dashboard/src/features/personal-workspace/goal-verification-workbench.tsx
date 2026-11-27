@@ -78,7 +78,7 @@ export function GoalVerificationWorkbench({zh, goalId, finding: defaultFinding, 
   const copy = goalAcceptanceContractCopy[zh ? "zh-CN" : "en"];
   const labels = zh ? {
     proxy: "局部快尺", final: liveAcceptance ? "权威终评" : "存档终评", fidelity: "快慢尺保真", guards: "证据缺口",
-    baseline: "冻结基线与版本", negative: "已证伪路线", comparison: "快尺与终评对账", costs: "成本",
+    baseline: "冻结基线与版本", negative: "已证伪路线", comparison: "快尺与终评对账", decisionRefs: "判定引用", costs: "成本",
     frozen: "冻结基线", environment: "运行环境", source: "源码版本", candidate: "候选产物", host: "实际宿主", depth: liveAcceptance ? "已验证档位" : "存档验证档位",
     warm: "温缓存 token", cold: "冷缓存 token", duration: "核验耗时（秒）", humans: "人工确认次数", hooks: "工具拦截次数",
     same: "在匹配样本中排序一致", different: "在匹配样本中排序不同", relation: "排序仅适用于此对照，因果增益仍未知。",
@@ -88,7 +88,7 @@ export function GoalVerificationWorkbench({zh, goalId, finding: defaultFinding, 
     selected: "研究记录", retry: "重试读取终评", finalUnavailable: "当前权威回执暂不可读",
   } : {
     proxy: "Local yardstick", final: liveAcceptance ? "Authoritative verifier" : "Archived verifier", fidelity: "Proxy fidelity", guards: "Evidence gaps",
-    baseline: "Frozen baseline and versions", negative: "Refuted alternatives", comparison: "Proxy and verifier comparison", costs: "Costs",
+    baseline: "Frozen baseline and versions", negative: "Refuted alternatives", comparison: "Proxy and verifier comparison", decisionRefs: "Decision references", costs: "Costs",
     frozen: "Frozen baseline", environment: "Run environment", source: "Source revision", candidate: "Candidate artifact", host: "Observed host", depth: liveAcceptance ? "Verified tier" : "Archived tier",
     warm: "Warm-cache tokens", cold: "Cold-cache tokens", duration: "Verifier time (seconds)", humans: "Human confirmations", hooks: "Tool interceptions",
     same: "Same ordering on the matched pair", different: "Different ordering on the matched pair", relation: "The ordering applies to this matched pair. The causal gain is unknown.",
@@ -108,6 +108,7 @@ export function GoalVerificationWorkbench({zh, goalId, finding: defaultFinding, 
   ] as const;
   const format = new Intl.NumberFormat(zh ? "zh-CN" : "en");
   const alternativeRefs = new Set(p?.alternatives.flatMap(item => item.evidence_refs));
+  const decisionRefs = p?.decision?.counterevidence_refs.filter(ref => !alternativeRefs.has(ref)) ?? [];
   return <div className="goal-verification-body" aria-busy={Boolean(liveAcceptance && !current)}>
     {stage ? <p role="status">{stage}</p> : null}
     {candidates.length > 1 ? <label className="goal-verification-select">{labels.selected}
@@ -143,7 +144,6 @@ export function GoalVerificationWorkbench({zh, goalId, finding: defaultFinding, 
         {p?.alternatives.length ? <ul>{p.alternatives.map(row => <li key={row.event_id}><strong>{row.title}</strong>
           {row.summary ? <div>{row.summary}</div> : null}
           {row.evidence_refs.length ? row.evidence_refs.map(ref => <code key={ref}>{ref}</code>) : unknown}</li>)}</ul> : <p>{unknown}</p>}
-        {p?.decision?.counterevidence_refs.filter(ref => !alternativeRefs.has(ref)).map(ref => <code key={ref}>{ref}</code>)}
       </section>
       <section><h3>{labels.comparison}</h3><dl>
         {([["proxy", labels.proxy], ["authoritative", labels.final]] as const).map(([key, label]) => {
@@ -153,6 +153,9 @@ export function GoalVerificationWorkbench({zh, goalId, finding: defaultFinding, 
             <code>{pair.before.evidence_ref} → {pair.after.evidence_ref}</code>
           </> : unknown}</EvidenceRow>;
         })}
+        {decisionRefs.length ? <EvidenceRow label={labels.decisionRefs}>
+          {decisionRefs.map(ref => <code key={ref}>{ref}</code>)}
+        </EvidenceRow> : null}
       </dl>{p?.authoritative && p.proxy ? <p>{labels.relation}</p> : null}
         {checked.map(({evidence, criterionId}) => <GoalOracleEvidence key={criterionId} evidence={evidence} zh={zh}/>)}
       </section>

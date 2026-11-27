@@ -6,6 +6,7 @@ from loopx.capabilities.explore.result_log import build_explore_finding_event, b
 
 GOAL = "research-verification-fixture"
 BASELINE_REF = "artifact:baseline"
+REJECTED_REF = "artifact:rejected-variant"
 RESULT_REF = "artifact:result"
 RECEIPT_REF = "receipt:external-verifier"
 BASELINE_SHA = "a" * 64
@@ -22,7 +23,7 @@ def measurements(sha, ref, exact, proxy):
             for profile, value in ((EXACT, exact), (PROXY, proxy))]
 
 
-def add_case(events, label, node_id, *, baseline_author="worker", late=False, revise=False):
+def add_case(events, label, node_id, *, baseline_author="worker", late=False, revise=False, refuted=False):
     events.append(build_explore_node_event(
         goal_id=GOAL, node_id=node_id, title=label, agent_id="worker", recorded_at="2026-11-21T11:00:00Z",
     ))
@@ -37,9 +38,17 @@ def add_case(events, label, node_id, *, baseline_author="worker", late=False, re
     )
     if not late:
         events.append(reference)
+    decision_refs = [BASELINE_REF]
+    if refuted:
+        events.append(build_explore_finding_event(
+            goal_id=GOAL, node_id=node_id, finding_id=f"{node_id}-refuted",
+            title="Rejected reference variant", status="refuted", agent_id="worker",
+            recorded_at="2026-11-21T11:20:00Z", evidence_refs=[REJECTED_REF],
+        ))
+        decision_refs.append(REJECTED_REF)
     ids = json.dumps([event["event_id"] for event in events], ensure_ascii=False, separators=(",", ":"))
     binding = {"goal_id": GOAL, "agent_id": "worker", "todo_id": f"todo_{node_id}", "turn_instance_id": "turn-1"}
-    refs = [RESULT_REF, RECEIPT_REF, BASELINE_REF]
+    refs = [RESULT_REF, RECEIPT_REF, *decision_refs]
     events.append(build_explore_finding_event(
         goal_id=GOAL, node_id=node_id, finding_id=f"{node_id}-candidate",
         title=label, status="confirmed", agent_id="worker", evidence_refs=refs, recorded_at="2026-11-21T12:00:00Z",
@@ -60,7 +69,7 @@ def add_case(events, label, node_id, *, baseline_author="worker", late=False, re
             "decision": {
                 "schema_version": "work_yardstick_decision_v0",
                 "target": {"summary": "Reduce loss", "scope": "Frozen input", "acceptance_ref": "check:exact"},
-                "authoritative": EXACT, "proxy": PROXY, "counterevidence_refs": [BASELINE_REF], "prior_finding_id": None,
+                "authoritative": EXACT, "proxy": PROXY, "counterevidence_refs": decision_refs, "prior_finding_id": None,
                 "next_action": {"method_id": "verify", "reason": "Compare fixed inputs", "cost_bound": "One evaluation"},
             },
             "source_snapshot": {"event_count": len(events), "event_ids_sha256": hashlib.sha256(ids.encode()).hexdigest()},
@@ -79,6 +88,6 @@ def add_case(events, label, node_id, *, baseline_author="worker", late=False, re
 if __name__ == "__main__":
     events = []
     add_case(events, "Original matched measurements", "matched", revise=True)
-    add_case(events, "Reference from another worker", "foreign", baseline_author="other-worker")
+    add_case(events, "Reference from another worker", "foreign", baseline_author="other-worker", refuted=True)
     add_case(events, "Reference received later", "late", late=True)
     print(json.dumps({"goal_id": GOAL, "display_name": "Candidate verification", "events": events}))

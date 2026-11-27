@@ -106,7 +106,9 @@ export async function verifyResearchAcceptanceReadback(browser, start) {
     await read(() => entry.press("Enter"));
     await retry.waitFor();
     await unknown();
-    assert.equal(await panel.getByText(result.sha256, {exact: true}).count(), 1, "Keep the original candidate readable");
+    const originalCandidate = panel.getByText(result.sha256, {exact: true});
+    await originalCandidate.waitFor();
+    assert.equal(await originalCandidate.count(), 1, "Keep the original candidate readable");
     mode = "other-instance";
     await read(() => retry.press("Enter"));
     await retry.waitFor();
@@ -117,12 +119,27 @@ export async function verifyResearchAcceptanceReadback(browser, start) {
     assert.equal(await tier.textContent(), "L0");
     const selected = panel.getByRole("combobox", {name: "Research record"});
     const fidelity = panel.locator("dl > div").filter({has: page.getByText("Proxy fidelity", {exact: true})}).locator("dd");
+    const negative = panel.locator("section").filter({
+      has: page.getByRole("heading", {name: "Refuted alternatives", exact: true}),
+    });
+    const decisionRefs = panel.locator("dl > div").filter({has: page.getByText("Decision references", {exact: true})});
+    const confirmedBaseline = "artifact:baseline";
+    const refutedEvidence = "artifact:rejected-variant";
     await selected.selectOption({label: "Original matched measurements"});
     assert.equal(await fidelity.textContent(), "Different ordering on the matched pair");
     assert.equal(await panel.getByText("9 → 5 points", {exact: false}).count(), 1);
     assert.equal(await panel.getByText("4 → 8 points", {exact: false}).count(), 1);
+    assert.equal(await negative.getByText("Unknown", {exact: true}).count(), 1);
+    assert.equal(await negative.getByText(confirmedBaseline, {exact: true}).count(), 0);
+    assert.equal(await decisionRefs.getByText(confirmedBaseline, {exact: true}).count(), 1);
 
     await page.setViewportSize({width: 390, height: 900});
+    await selected.selectOption({label: "Reference from another worker"});
+    assert.equal(await negative.getByText("Rejected reference variant", {exact: true}).count(), 1);
+    assert.equal(await negative.getByText(refutedEvidence, {exact: true}).count(), 1);
+    assert.equal(await negative.getByText(confirmedBaseline, {exact: true}).count(), 0);
+    assert.equal(await decisionRefs.getByText(confirmedBaseline, {exact: true}).count(), 1);
+    assert.equal(await decisionRefs.getByText(refutedEvidence, {exact: true}).count(), 0);
     for (const label of ["Reference from another worker", "Reference received later"]) {
       await selected.selectOption({label});
       assert.equal(await fidelity.textContent(), "Unknown");
@@ -130,6 +147,8 @@ export async function verifyResearchAcceptanceReadback(browser, start) {
       assert.equal(await verified.count(), 1, "The separate authoritative proof remains available");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     }
+    assert.equal(await negative.getByText(refutedEvidence, {exact: true}).count(), 0,
+      "Another research question's refuted finding does not cross into the selected one");
     mode = "unrelated-result";
     await page.goto(url);
     await entry.waitFor();
