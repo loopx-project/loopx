@@ -361,6 +361,50 @@ def test_runtime_producer_cli_streams_large_history_before_bounded_window(
     assert payload["producer_receipt"]["todo_completed_count"] == 0
 
 
+@pytest.mark.parametrize(
+    ("start_at", "allowed"),
+    [
+        pytest.param("2026-08-17T12:00:00.000001Z", True, id="one-microsecond-inside"),
+        pytest.param("2026-08-17T20:00:00+08:00", True, id="exactly-at-limit"),
+        pytest.param("2026-08-17T11:59:59.999999Z", False, id="one-microsecond-over"),
+        pytest.param("2026-08-17T11:59:59Z", False, id="one-second-over"),
+    ],
+)
+def test_runtime_producer_cli_enforces_exact_window_limit(
+    tmp_path, capsys, start_at: str, allowed: bool
+) -> None:
+    request = _request()
+    segment = request["segment"]
+    assert isinstance(segment, dict)
+    segment["start_at"] = start_at
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    event_log = tmp_path / "rollout-event-log.jsonl"
+    append_rollout_event(
+        event_log,
+        _event(
+            "refresh_state",
+            event_at="2026-08-21T09:00:00Z",
+            stage_transition="goal_terminal",
+        ),
+    )
+
+    code = main([
+        "--format", "json", "periodic-report", "evaluate-runtime-trigger",
+        "--request-json", str(request_path), "--rollout-events-jsonl", str(event_log),
+    ])
+    decision = json.loads(capsys.readouterr().out)
+    assert code == (0 if allowed else 1)
+    assert decision["ok"] is allowed
+    if allowed:
+        assert decision["eligible"] is True
+        assert decision["producer_receipt"]["status"] == "promoted"
+    else:
+        assert decision["error"] == (
+            "segment window exceeds trigger_policy.aggregation.window_seconds"
+        )
+
+
 def test_runtime_producer_rejects_relevant_window_over_capacity() -> None:
     event = _event(
         "todo_complete",
