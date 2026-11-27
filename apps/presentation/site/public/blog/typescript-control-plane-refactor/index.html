@@ -273,12 +273,12 @@ Existing replay:   TS reduction / original-result recovery
 </tbody></table></div>
 
 <h2 id="peer-handoff-semantics">9. Peer collaboration: why “returned” is not “finished”</h2>
-<p>When an Agent delegates a slice to a peer worker, message delivery is only transport—neither proof that the delegated work is finished nor proof that the requester has adopted it. Building on revision-guarded claims and handoffs (<a href="https://github.com/loopx-project/loopx/pull/3529">#3529</a>, <a href="https://github.com/loopx-project/loopx/pull/3669">#3669</a>, <a href="https://github.com/loopx-project/loopx/pull/4032">#4032</a>, <a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>), LoopX separates transport delivery, unfinished remainder declarations, requester adoption, and outcome custody:</p>
-<figure class="diagram" aria-label="Peer collaboration separates transport delivery from requester adoption and outcome custody">
-<p class="diagram-label">Peer return &amp; custody contract · transport delivery ≠ requester adoption</p>
+<p>When an Agent delegates a slice to a peer worker, message delivery is only transport—neither proof that the delegated work is finished nor proof that the requester has adopted it. Building on revision-guarded claims and handoffs (<a href="https://github.com/loopx-project/loopx/pull/3529">#3529</a>, <a href="https://github.com/loopx-project/loopx/pull/3669">#3669</a>, <a href="https://github.com/loopx-project/loopx/pull/4032">#4032</a>, <a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>), LoopX keeps transport delivery, inbox reply completion, per-update requester consumption, and goal acceptance separate:</p>
+<figure class="diagram" aria-label="Peer collaboration separates transport delivery from reply completion, requester consumption, and outcome custody">
+<p class="diagram-label">Peer return &amp; custody contract · transport delivery ≠ reply completion ≠ requester adoption</p>
 <div class="diagram-pair">
 <div class="diagram-node"><b>1. Transport delivery</b><span>A locked four-phase send state machine confirms the message reached the inbox, ordered strictly so newer updates cannot overtake unverified sends.</span><strong>Transport status: delivered</strong></div>
-<div class="diagram-node kernel"><b>2. Semantic completion &amp; adoption</b><span>Any conclusion declaring unfinished remaining work stays open in the inbox until the requester explicitly records a turn-bound adoption or rejection receipt.</span><strong>Semantic state: awaiting adoption</strong></div>
+<div class="diagram-node kernel"><b>2. Reply completion, consumption &amp; acceptance</b><span>A request whose latest conclusion declares remaining work stays open in the inbox until the peer publishes a final conclusion with zero remaining work; turn-bound requester consumption only acknowledges an individual update so it stops re-alerting, while goal acceptance remains separate.</span><strong>Semantic state: open until final conclusion</strong></div>
 </div>
 <p class="return-path">Custody handoff (<a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>, <a href="https://github.com/loopx-project/loopx/pull/9308">#9308</a>): original authorship and historical review provenance remain immutable when active ownership transfers under a roster-fenced commit.</p>
 </figure>
@@ -550,7 +550,7 @@ Existing replay:   TS reduction / original-result recovery
 <p>Public-safe <a href="../images/typescript-control-plane-refactor/core-pr-cohort.csv">PR records</a>, <a href="../images/typescript-control-plane-refactor/core-mainline-commits.csv">core mainline commits</a>, and <a href="../images/typescript-control-plane-refactor/core-statistics.json">metric JSON</a> accompany the draft. The PR cohort joins mainline commits touching the directory to GitHub merge metadata, counting each PR once. Two mainline commits have no verifiable merged-PR association; their commits and churn remain included.</p>
 <p>The research enumerated public PRs, then checked against mainline Git history. Direct reads supplemented 14 PR metadata records missed by search indexing. Source snapshots and processing scripts remain in the research materials. This inventory does not estimate tokens, model cost, CI compute, engineer-hours, or benchmark gains.</p>
 <h3>103-day convergence snapshot (August 15 – November 27, 2026)</h3>
-<p>Re-running the exact <code>method_version: 1</code> Git stock and first-parent <code>--no-renames</code> churn formulas from <code>d1fe05932a</code> through <code>953377fd7b</code> (<a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...953377fd7ba8235adf5da08012e593e1798e6ab5">103-day source comparison</a>) captures the post-cutover unified turn loop, task-semantics, Agent-CLI, zero-<code>Any</code>, and cloud storage SPI waves:</p>
+<p>Re-running the exact <code>method_version: 1</code> Git stock and first-parent <code>--no-renames</code> churn formulas from <code>d1fe05932a</code> through <code>953377fd7b</code> (<a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...953377fd7ba8235adf5da08012e593e1798e6ab5">103-day source comparison</a>) captures the post-cutover unified turn loop, task-semantics, Agent-CLI, zero-<code>Any</code>, and cloud storage SPI waves using strictly Git-reproducible counts (the committed <code>core-pr-cohort.csv</code> and <code>core-statistics.json</code> artifacts remain frozen at the October 16 API snapshot):</p>
 <div class="table-scroll" role="region" tabindex="0" aria-label="103-day core control-plane convergence telemetry"><table>
 <thead>
 <tr>
@@ -569,11 +569,11 @@ Existing replay:   TS reduction / original-result recovery
 <td align="right"><strong>103 days</strong> (104 / 105)</td>
 </tr>
 <tr>
-<td>Whole-repo merged PRs (all-time at Nov 27)</td>
+<td>Whole-repo 1st-parent mainline commits (at Nov 27)</td>
 <td align="right">—</td>
 <td align="right">—</td>
 <td align="right">—</td>
-<td align="right"><strong>8,476</strong> (9,024 1st-parent commits)</td>
+<td align="right"><strong>9,024</strong> (7,741 with <code>#N</code> in subject)</td>
 </tr>
 <tr>
 <td>Whole-repo 1st-parent commits since Aug 15</td>
@@ -590,11 +590,11 @@ Existing replay:   TS reduction / original-result recovery
 <td align="right"><strong>2,195</strong> (2,759 all-time)</td>
 </tr>
 <tr>
-<td><code>loopx/control_plane/</code> associated merged PRs (since Aug 15)</td>
+<td><code>loopx/control_plane/</code> unique <code>#N</code> PRs in Git subjects (since Aug 15)</td>
 <td align="right">0</td>
-<td align="right">1,121</td>
-<td align="right">+1,005 (0 overlap)</td>
-<td align="right"><strong>2,126</strong> (2,678+ all-time)</td>
+<td align="right">1,058 (86 unnumbered; 1,121 in Oct 16 API CSV)</td>
+<td align="right">+962 (90 unnumbered; 0 overlap)</td>
+<td align="right"><strong>2,020</strong> (176 unnumbered; 2,575 all-time)</td>
 </tr>
 <tr>
 <td><code>loopx/control_plane/</code> Python stock</td>

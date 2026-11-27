@@ -273,12 +273,12 @@
 </tbody></table></div>
 
 <h2 id="peer-handoff-semantics">9. 对等协作：为什么“已返回”不等于“已完结”</h2>
-<p>当一个 Agent 把子任务委派给对等同伴时，消息送达只是传输层事件——既不证明子任务已经完结，也不证明委托方已经采纳该结果。在版本受控的认领与交接基础（<a href="https://github.com/loopx-project/loopx/pull/3529">#3529</a>、<a href="https://github.com/loopx-project/loopx/pull/3669">#3669</a>、<a href="https://github.com/loopx-project/loopx/pull/4032">#4032</a>、<a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>）之上，LoopX 将传输投递、未完余量声明、委托方采纳与成果托管权严格拆开：</p>
-<figure class="diagram" aria-label="对等协作将传输层送达与委托方采纳及成果托管权严格分离">
-<p class="diagram-label">对等返回与成果托管合同 · 传输送达 ≠ 委托方采纳</p>
+<p>当一个 Agent 把子任务委派给对等同伴时，消息送达只是传输层事件——既不证明子任务已经完结，也不证明委托方已经采纳该结果。在版本受控的认领与交接基础（<a href="https://github.com/loopx-project/loopx/pull/3529">#3529</a>、<a href="https://github.com/loopx-project/loopx/pull/3669">#3669</a>、<a href="https://github.com/loopx-project/loopx/pull/4032">#4032</a>、<a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>）之上，LoopX 将传输送达、收件箱答复完结、逐条结果消费与目标验收严格拆开：</p>
+<figure class="diagram" aria-label="对等协作将传输层送达与答复完结、委托方逐条消费及成果托管权严格分离">
+<p class="diagram-label">对等返回与成果托管合同 · 传输送达 ≠ 答复完结 ≠ 委托方采纳</p>
 <div class="diagram-pair">
 <div class="diagram-node"><b>1. 传输层投递</b><span>加锁的四阶段发送状态机确认消息进入收件箱，并由前驱顺序门禁阻止后续更新抢跑未确认的前序发送。</span><strong>传输状态：已送达（仅限传输层）</strong></div>
-<div class="diagram-node kernel"><b>2. 语义完结与委托方采纳</b><span>只要阶段性结论仍声明存在未完余量与唤醒条件，收件箱即保持待结状态，直至委托方写入绑定轮次的采纳或拒绝回执。</span><strong>语义状态：等待采纳完结</strong></div>
+<div class="diagram-node kernel"><b>2. 答复完结、单条消费与目标验收</b><span>只要最新结论仍声明存在未完余量，原请求在收件箱中就保持未结清，唯有对等方发布无剩余事项的完整结论才满足答复义务；委托方绑定轮次的消费记录仅确认单条进展不再重复提醒，目标级验收亦独立判定。</span><strong>语义状态：待完整结论结清</strong></div>
 </div>
 <p class="return-path">成果托管移交（<a href="https://github.com/loopx-project/loopx/pull/4094">#4094</a>、<a href="https://github.com/loopx-project/loopx/pull/9308">#9308</a>）：在成员表版本围栏下移交当前负责人时，原始声明归属与历史审查归因保持不可变。</p>
 </figure>
@@ -550,7 +550,7 @@
 <p>公开安全的<a href="../../images/typescript-control-plane-refactor/core-pr-cohort.csv">PR 清单</a>、<a href="../../images/typescript-control-plane-refactor/core-mainline-commits.csv">核心主干提交清单</a>和<a href="../../images/typescript-control-plane-refactor/core-statistics.json">指标 JSON</a>随稿提供。PR 集合来自触及该目录的主干提交与 GitHub 合并元数据的对应关系；同一 PR 只计一次。2 次主干提交没有可核验的合并 PR 对应，仍计入提交和代码变化量。</p>
 <p>取证中先枚举公开 PR，再用 Git 主干反查；直接读取补齐了搜索索引漏掉的 14 个 PR 元数据。源数据与处理脚本保留在本次调研材料中。没有从这份盘点推算 token、模型费用、CI 算力、研发工时或 benchmark 收益。</p>
 <h3>103 天收敛快照（2026 年 8 月 15 日至 11 月 27 日）</h3>
-<p>沿用完全一致的 <code>method_version: 1</code> 源码存量与第一父链 <code>--no-renames</code> 累计变更公式，从 <code>d1fe05932a</code> 复算至 <code>953377fd7b</code>（见 <a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...953377fd7ba8235adf5da08012e593e1798e6ab5">103 天起止源码对照</a>），可完整刻画 <code>#6396</code> 之后的统一轮次闭环、长程任务原语组合、面向 Agent 的 CLI、零 <code>Any</code> 棘轮以及云端存储 SPI 抽离阶段：</p>
+<p>沿用完全一致的 <code>method_version: 1</code> 源码存量与第一父链 <code>--no-renames</code> 累计变更公式，从 <code>d1fe05932a</code> 复算至 <code>953377fd7b</code>（见 <a href="https://github.com/loopx-project/loopx/compare/d1fe05932ac28690d393a38c78b4738ac12c78c0...953377fd7ba8235adf5da08012e593e1798e6ab5">103 天起止源码对照</a>），以下纯 Git 历史可复算指标完整刻画了 <code>#6396</code> 之后的统一轮次闭环、长程任务原语组合、面向 Agent 的 CLI、零 <code>Any</code> 棘轮以及云端存储 SPI 抽离阶段（随仓提交的 <code>core-pr-cohort.csv</code> 与 <code>core-statistics.json</code> 保持冻结在 10 月 16 日 API 快照）：</p>
 <div class="table-scroll" role="region" tabindex="0" aria-label="103 天核心控制面收敛统计表"><table>
 <thead>
 <tr>
@@ -569,11 +569,11 @@
 <td align="right"><strong>103 天</strong>（104 / 105）</td>
 </tr>
 <tr>
-<td>全仓累计合并 PR（截至 11-27）</td>
+<td>全仓第一父链主干提交（截至 11-27）</td>
 <td align="right">—</td>
 <td align="right">—</td>
 <td align="right">—</td>
-<td align="right"><strong>8,476</strong>（9,024 次第一父提交）</td>
+<td align="right"><strong>9,024</strong>（7,741 次提交标题含 <code>#N</code>）</td>
 </tr>
 <tr>
 <td>8 月 15 日以来全仓第一父链提交</td>
@@ -590,11 +590,11 @@
 <td align="right"><strong>2,195</strong>（全历史 2,759）</td>
 </tr>
 <tr>
-<td><code>loopx/control_plane/</code> 关联合并 PR（08-15 起）</td>
+<td><code>loopx/control_plane/</code> 提交标题去重 <code>#N</code> PR（08-15 起）</td>
 <td align="right">0</td>
-<td align="right">1,121</td>
-<td align="right">+1,005（零重叠）</td>
-<td align="right"><strong>2,126</strong>（全历史 2,678+）</td>
+<td align="right">1,058（86 次无编号；10-16 API 清单为 1,121）</td>
+<td align="right">+962（90 次无编号；零重叠）</td>
+<td align="right"><strong>2,020</strong>（176 次无编号；全历史 2,575）</td>
 </tr>
 <tr>
 <td><code>loopx/control_plane/</code> Python 源码存量</td>
