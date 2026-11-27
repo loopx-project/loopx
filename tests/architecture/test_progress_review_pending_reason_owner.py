@@ -24,8 +24,8 @@ from pathlib import Path
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -74,7 +74,7 @@ def modules_holding_the_reason() -> list[str]:
     for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
             source = read_text_cached(path)
-            if not has_char_escape(source) and REASON_VALUE not in source:
+            if not may_split_or_escape_literal(source) and REASON_VALUE not in source:
                 continue
             held = _reason_assignments_tree(parse_python_cached(path))
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - guarded tree

@@ -26,7 +26,6 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
     parse_python_cached,
     read_text_cached,
@@ -357,8 +356,6 @@ def collect_shape_definitions(root: pathlib.Path) -> list[dict[str, object]]:
         except (OSError, UnicodeDecodeError):
             continue
         if not any(token in source for token in PRESCREEN_TOKENS):
-            continue
-        if "A-Za-z0-9" not in source and not has_char_escape(source):
             continue
         name = path.relative_to(REPO_ROOT).as_posix()
         rows.extend(_shape_rows_in_tree(parse_python_cached(path), name))

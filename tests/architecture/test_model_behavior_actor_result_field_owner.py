@@ -42,8 +42,8 @@ import sys
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -162,7 +162,7 @@ def _package_same_value_candidates() -> dict[str, list[int]]:
         if relative == OWNER_PATH:
             continue
         source = read_text_cached(path)
-        if not has_char_escape(source) and "actor_ref" not in source:
+        if not may_split_or_escape_literal(source) and "actor_ref" not in source:
             continue
         sites = _field_literal_sites_tree(parse_python_cached(path))
         if sites:

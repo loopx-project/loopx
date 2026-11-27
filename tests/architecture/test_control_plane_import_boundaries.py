@@ -650,7 +650,7 @@ def test_internal_consumers_bypass_status_and_quota_reexport_routes() -> None:
         source = read_text_cached(path)
         if (
             ("status" not in source and "quota" not in source)
-            or "from " not in source
+            or "from" not in source
             or (
                 _FACADE_IMPORT_HINT.search(source) is None
                 and _RELATIVE_FACADE_HINT.search(source) is None

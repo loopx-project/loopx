@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -58,7 +58,7 @@ def _sites(root: Path) -> dict[str, int]:
     found: dict[str, int] = {}
     for path in iter_python_sources(root / "loopx"):
         source = read_text_cached(path)
-        if not has_char_escape(source) and "goal id is required" not in source:
+        if not may_split_or_escape_literal(source) and "goal id is required" not in source:
             continue
         relative = path.relative_to(root).as_posix()
         tree = parse_python_cached(path)

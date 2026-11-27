@@ -43,8 +43,8 @@ import pytest
 
 from tests.architecture._repo_ast_cache import (
     check_python_syntax_cached,
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -211,7 +211,7 @@ def _repository_scan():
     for path in iter_python_sources(PACKAGE_ROOT):
         source = read_text_cached(path)
         if (
-            not has_char_escape(source)
+            not may_split_or_escape_literal(source)
             and not any(hint in source for hint in _SCHEMA_VALUE_HINTS)
             and not any(k in source for k in names)
         ):
@@ -464,6 +464,8 @@ def test_the_scan_leaves_a_folded_consumer_alone(label: str, source: str) -> Non
 
 @pytest.mark.parametrize("source,owner,named,inline", [
     ('REQUEST_SCHEMA = "semantic_preference_provider_request_v0"\n', False, 1, 1),
+    ('REQUEST_SCHEMA = "semantic_preference_" "provider_request_v0"\n', False, 1, 1),
+    ('help = (\n    "Public-safe semantic_preference_"\n    # comment\n    "provider_request_v0 here"\n)\n', False, 0, 1),
     ('help = "Public-safe semantic_preference_provider_request_v0 here"\n', False, 0, 1),
     ('REQUEST_SCHEMA = "a_different_document_v0"\n', False, 0, 0),
     ('REQUEST_SCHEMA = "semantic_preference_provider_request_v0"\n', True, 0, 0),

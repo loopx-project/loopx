@@ -24,8 +24,8 @@ import pathlib
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -141,7 +141,7 @@ def collect(root: pathlib.Path) -> list[dict[str, object]]:
             continue
         if (
             "receipt_v1" not in source
-            and not has_char_escape(source)
+            and not may_split_or_escape_literal(source, include_plus=True)
         ):
             continue
         rows.extend(_version_rows_tree(parse_python_cached(path), path.relative_to(root).as_posix()))

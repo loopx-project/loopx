@@ -41,7 +41,11 @@ from typing import Any
 
 import pytest
 
-from tests.architecture._repo_ast_cache import iter_python_sources, read_text_cached
+from tests.architecture._repo_ast_cache import (
+    iter_python_sources,
+    may_split_or_escape_literal,
+    read_text_cached,
+)
 
 from loopx.control_plane import content_digest
 from loopx.control_plane.content_digest import (
@@ -786,16 +790,16 @@ def _analyse(source: str, name: str = "<module>") -> dict[str, Any]:
 
 
 _REPO_SCAN: list[dict[str, Any]] | None = None
-_SHAPE_ESCAPE_RE = re.compile(r"\\(?:[xXuUN\r\n]|[0-7]{2,3})")
-
 
 _CONTENT_DIGEST_IMPORT_RE = re.compile(
-    r"\b(?:from\s+[\w.]*content_digest\b|import\s+(?:[^\n]*|\([^)]*\))\bcontent_digest\b)"
+    r"\b(?:from\s+[\w.]*content_digest\b|import\s+(?:[^\n]*|\([^)]*)\bcontent_digest\b)"
 )
 
 
 def _needs_digest_scan(source: str) -> bool:
     if "content_digest" in source and _CONTENT_DIGEST_IMPORT_RE.search(source) is not None:
+        return True
+    if may_split_or_escape_literal(source, include_plus=True):
         return True
     if (
         "{" in source
@@ -803,8 +807,6 @@ def _needs_digest_scan(source: str) -> bool:
         and ("64}" in source or "{64" in source or '"6"' in source or "'6'" in source)
         and ("a-f" in source or "0-9" in source or "f0" in source or "9a" in source)
     ):
-        return True
-    if _SHAPE_ESCAPE_RE.search(source) is not None:
         return True
     return False
 
@@ -1824,3 +1826,17 @@ def test_benchmark_dynamic_regex_exemption_stays_in_the_marker_reader() -> None:
     assert len(unreadable) == 1, "the marker exception must not hide another matcher"
     assert marker_reader.lineno <= unreadable[0]["line"] <= marker_reader.end_lineno
     assert unreadable[0]["construction"] == "search", "not a whole-value reader"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        'import re\nPAT = re.compile(r"^[0-9a-f]{6" r"4}$")\n',
+        'import re\nPAT = re.compile(\n    r"^[0-9a-f]{"\n    # wrapped across lines\n    r"64}$"\n)\n',
+        'import re\nPAT = re.compile(\n    r"^sha"\n    # wrapped comment\n    r"256:[0-9a-f]{64}$"\n)\n',
+    ],
+)
+def test_digest_prescreen_retains_implicit_split_literals(source: str) -> None:
+    assert _needs_digest_scan(source) is True
+    analysis = _analyse(source)
+    assert analysis["constructions"]

@@ -23,8 +23,8 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -115,7 +115,7 @@ def _time_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
 
 
 def time_rows(source: str, name: str) -> list[dict[str, object]]:
-    if ":" not in source:
+    if ":" not in source and not may_split_or_escape_literal(source, include_plus=True):
         return []
     return _time_rows_tree(ast.parse(source), name)
 
@@ -131,7 +131,9 @@ def _unfoldable_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]
 
 
 def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
-    if ":" not in source or "[0-3]" not in source:
+    if (":" not in source or "[0-3]" not in source) and not may_split_or_escape_literal(
+        source, include_plus=True
+    ):
         return []
     return _unfoldable_rows_tree(ast.parse(source), name)
 
@@ -143,11 +145,15 @@ def collect(root: pathlib.Path) -> list[dict[str, object]]:
             source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        if ":" not in source or not (
-            "[0-5]" in source
-            or "[01]" in source
-            or "2[0-3]" in source
-            or has_char_escape(source)
+        if not any(matcher in source for matcher in MATCHERS):
+            continue
+        if not may_split_or_escape_literal(source, include_plus=True) and (
+            ":" not in source
+            or not (
+                "[0-5]" in source
+                or "[01]" in source
+                or "2[0-3]" in source
+            )
         ):
             continue
         rows.extend(_time_rows_tree(parse_python_cached(path), path.relative_to(root).as_posix()))
@@ -161,7 +167,11 @@ def collect_unfoldable(root: pathlib.Path) -> list[dict[str, object]]:
             source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        if ":" not in source or "[0-3]" not in source:
+        if not any(matcher in source for matcher in MATCHERS):
+            continue
+        if not may_split_or_escape_literal(source, include_plus=True) and (
+            ":" not in source or "[0-3]" not in source
+        ):
             continue
         rows.extend(
             _unfoldable_rows_tree(

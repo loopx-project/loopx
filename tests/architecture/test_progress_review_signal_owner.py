@@ -24,8 +24,8 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -76,7 +76,7 @@ def literal_value(node: ast.AST) -> tuple[str, ...] | None:
 
 
 def signal_rows(source: str, name: str) -> list[dict[str, object]]:
-    if "noul" not in source:
+    if "noul" not in source and not may_split_or_escape_literal(source):
         return []
     tree = ast.parse(source)
     return [
@@ -93,7 +93,7 @@ def collect(root: pathlib.Path) -> list[dict[str, object]]:
             source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        if "noul" not in source and not has_char_escape(source):
+        if "noul" not in source and not may_split_or_escape_literal(source):
             continue
         tree = parse_python_cached(path)
         relative = path.relative_to(root).as_posix()

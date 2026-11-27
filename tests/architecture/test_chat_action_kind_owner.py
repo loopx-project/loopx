@@ -21,8 +21,8 @@ import pytest
 
 from loopx import chat_action_store, chat_actions
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -101,7 +101,7 @@ def modules_holding_the_vocabulary() -> list[str]:
     for path in iter_python_sources(REPO_ROOT / "loopx"):
         try:
             source = read_text_cached(path)
-            if not has_char_escape(source) and "operation.execute" not in source:
+            if not may_split_or_escape_literal(source) and "operation.execute" not in source:
                 continue
             held = _vocabulary_assignments_tree(parse_python_cached(path))
         except (SyntaxError, UnicodeDecodeError):  # pragma: no cover - guarded tree
@@ -141,3 +141,17 @@ def test_the_census_reads_a_reintroduced_copy_whatever_it_is_called_or_annotated
 @pytest.mark.parametrize("action_kind", sorted(KIND_VALUE))
 def test_every_declared_kind_is_dispatchable(action_kind: str) -> None:
     assert action_kind in chat_actions.SUPPORTED_ACTION_KINDS
+
+
+def test_repo_prescreen_catches_implicit_split_action_kind_literals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "loopx").mkdir()
+    sample = tmp_path / "loopx" / "shadow.py"
+    members = ", ".join(
+        '"operation." "execute"' if value == "operation.execute" else repr(value)
+        for value in sorted(KIND_VALUE)
+    )
+    sample.write_text(f"SHADOW = {{{members}}}\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "REPO_ROOT", tmp_path)
+    assert modules_holding_the_vocabulary() == ["loopx/shadow.py"]

@@ -19,11 +19,41 @@ from functools import lru_cache
 import os
 from pathlib import Path
 import re
+from typing import Protocol
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MAX_CACHE_ENTRIES = 4096
 # Matches escapes that can construct arbitrary ASCII characters or join split literals.
-_CHAR_ESCAPE_RE = re.compile(r"\\(?:[xXuUN\r\n]|[0-7]{2,3})")
+_CHAR_ESCAPE_RE = re.compile(r"\\(?:[xXuUN\r\n]|[0-7]{1,3})")
+# Matches Python string literals without backtracking, then detects adjacent literals
+# (implicit concatenation across whitespace/comments) or `+` / f-string interpolation.
+_PY_STRING_PATTERN = (
+    r"[rRuUbBfF]{0,2}(?:"
+    + r'"""[^"\\]*(?:(?:\\.|"(?!""))[^"\\]*)*"""'
+    + r"|'''[^'\\]*(?:(?:\\.|'(?!''))[^'\\]*)*'''"
+    + r'|"(?!"")[^"\\\r\n]*(?:\\.[^"\\\r\n]*)*"'
+    + r"|'(?!'')[^'\\\r\n]*(?:\\.[^'\\\r\n]*)*'"
+    + r")"
+)
+_ADJACENT_STRING_SCAN_RE = re.compile(
+    rf"#[^\r\n]*|(?P<adj>{_PY_STRING_PATTERN}(?:[ \t\r\n\f]|#[^\r\n]*)*{_PY_STRING_PATTERN})|{_PY_STRING_PATTERN}"
+)
+_PLUS_OR_FSTRING_SCAN_RE = re.compile(
+    rf"#[^\r\n]*|(?P<concat>{_PY_STRING_PATTERN}(?:[ \t\r\n\f]|#[^\r\n]*)*\+|(?:\+[ \t\r\n\f]*[rRuUbBfF]{{0,2}}['\"]|[fF][rRuUbB]?['\"]))|{_PY_STRING_PATTERN}"
+)
+
+
+class CacheStats(Protocol):
+    """Typed view of ``functools.lru_cache.cache_info()`` tuples."""
+
+    @property
+    def hits(self) -> int: ...
+    @property
+    def misses(self) -> int: ...
+    @property
+    def maxsize(self) -> int | None: ...
+    @property
+    def currsize(self) -> int: ...
 
 
 def clear_caches() -> None:
@@ -33,21 +63,44 @@ def clear_caches() -> None:
     _read_text_cached.cache_clear()
     _check_python_syntax_cached.cache_clear()
     _parse_python_cached.cache_clear()
+    may_split_or_escape_literal.cache_clear()
 
 
-def cache_info() -> dict[str, object]:
+def cache_info() -> dict[str, CacheStats]:
     """Return ``lru_cache`` statistics for tests and diagnostics."""
     return {
         "sources": _iter_repo_python_sources.cache_info(),
         "text": _read_text_cached.cache_info(),
         "syntax": _check_python_syntax_cached.cache_info(),
         "ast": _parse_python_cached.cache_info(),
+        "split_literal": may_split_or_escape_literal.cache_info(),
     }
 
 
 def has_char_escape(source: str) -> bool:
-    """Return True if ``source`` uses hex, unicode, multi-digit octal, or line escapes."""
+    """Return True if ``source`` uses hex, unicode, octal, or line escapes."""
     return _CHAR_ESCAPE_RE.search(source) is not None
+
+
+@lru_cache(maxsize=_MAX_CACHE_ENTRIES)
+def may_split_or_escape_literal(source: str, *, include_plus: bool = False) -> bool:
+    """Return True when ``source`` can assemble a target literal without spelling it whole.
+
+    Detects non-trivial escape sequences, line continuations, and implicit adjacent
+    string literal concatenation (for example ``"a" "b"``, ``r"a" r"b"``, or multiline
+    literals separated by whitespace/comments). When ``include_plus=True``, also flags
+    ``+`` string concatenation and f-string literals for suites that fold ``BinOp``/``JoinedStr``.
+    """
+    if _CHAR_ESCAPE_RE.search(source) is not None:
+        return True
+    for match in _ADJACENT_STRING_SCAN_RE.finditer(source):
+        if match.lastgroup == "adj":
+            return True
+    if include_plus:
+        for match in _PLUS_OR_FSTRING_SCAN_RE.finditer(source):
+            if match.lastgroup == "concat":
+                return True
+    return False
 
 
 @lru_cache(maxsize=_MAX_CACHE_ENTRIES)

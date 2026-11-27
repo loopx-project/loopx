@@ -27,8 +27,8 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -188,7 +188,7 @@ def _identity_rows_from_tree(
     tree: ast.Module, source: str, name: str
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    if ARM_PRESCREEN in source:
+    if ARM_PRESCREEN in source or may_split_or_escape_literal(source):
         for node in ast.walk(tree):
             elements = string_elements(node)
             if elements is None or set(elements) != ARM_NAMES:
@@ -231,7 +231,11 @@ def _identity_rows_from_tree(
 def identity_rows(source: str, name: str) -> list[dict[str, object]]:
     """Rows for every arm-vocabulary or token-shape decision inside ``source``."""
 
-    if ARM_PRESCREEN not in source and not any(token in source for token in PRESCREEN_TOKENS):
+    if (
+        ARM_PRESCREEN not in source
+        and not may_split_or_escape_literal(source)
+        and not any(token in source for token in PRESCREEN_TOKENS)
+    ):
         return []
     return _identity_rows_from_tree(ast.parse(source), source, name)
 
@@ -252,8 +256,6 @@ def _unfoldable_rows_from_tree(tree: ast.Module, name: str) -> list[dict[str, ob
 def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     if not any(token in source for token in PRESCREEN_TOKENS):
         return []
-    if "A-Za-z0-9" not in source:
-        return []
     return _unfoldable_rows_from_tree(ast.parse(source), name)
 
 
@@ -266,12 +268,9 @@ def collect(root: pathlib.Path, scan_dir: str) -> list[dict[str, object]]:
             continue
         has_arm_candidate = (
             ARM_PRESCREEN in source
-            and (has_char_escape(source) or all(w in source for w in ARM_NAMES))
+            or may_split_or_escape_literal(source)
         )
-        has_token_candidate = (
-            any(token in source for token in PRESCREEN_TOKENS)
-            and (("A-Za-z0-9" in source and "127" in source) or has_char_escape(source))
-        )
+        has_token_candidate = any(token in source for token in PRESCREEN_TOKENS)
         if not has_arm_candidate and not has_token_candidate:
             continue
         rows.extend(
@@ -604,3 +603,23 @@ def parser_arm_choices() -> list[str]:
                     assert keyword.value.id == "ARM_ROLE_CHOICES"
                     return list(benchmark_concurrency.ARM_ROLE_CHOICES)
     raise AssertionError("no argparse choices= argument found")
+
+
+def test_collect_prescreen_catches_implicit_split_arm_and_token_literals(
+    tmp_path: pathlib.Path,
+) -> None:
+    pkg = tmp_path / "loopx"
+    pkg.mkdir()
+    (pkg / "split_arm.py").write_text(
+        'ARMS = {"base" "line", "control", "treatment", "explore"}\n',
+        encoding="utf-8",
+    )
+    (pkg / "split_token.py").write_text(
+        'import re\nPAT = re.compile(r"^[A-Za-z0-9]" r"[A-Za-z0-9_.:@+-]{0,127}$")\n',
+        encoding="utf-8",
+    )
+    rows = collect(tmp_path, "loopx")
+    assert {(str(row["file"]), str(row["kind"])) for row in rows} == {
+        ("loopx/split_arm.py", "arm_vocabulary"),
+        ("loopx/split_token.py", "token_shape"),
+    }

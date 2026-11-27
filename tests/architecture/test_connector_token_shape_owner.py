@@ -164,7 +164,7 @@ def _shape_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]]:
 
 
 def shape_rows(source: str, name: str) -> list[dict[str, object]]:
-    if not any(token in source for token in PRESCREEN_TOKENS) or MARKER not in source:
+    if not any(token in source for token in PRESCREEN_TOKENS):
         return []
     return _shape_rows_tree(ast.parse(source), name)
 
@@ -180,7 +180,7 @@ def _unfoldable_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]
 
 
 def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
-    if not any(token in source for token in PRESCREEN_TOKENS) or MARKER not in source:
+    if not any(token in source for token in PRESCREEN_TOKENS):
         return []
     return _unfoldable_rows_tree(ast.parse(source), name)
 
@@ -193,7 +193,7 @@ def collect() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             source = read_text_cached(path)
         except (OSError, UnicodeDecodeError):
             continue
-        if not any(token in source for token in PRESCREEN_TOKENS) or MARKER not in source:
+        if not any(token in source for token in PRESCREEN_TOKENS):
             continue
         relative = path.relative_to(REPO_ROOT).as_posix()
         tree = parse_python_cached(path)

@@ -31,8 +31,8 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -86,7 +86,7 @@ def _module_level_definitions() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {name: [] for name in OWNED_NAMES}
     for path in _product_sources():
         source = read_text_cached(path)
-        if not any(name in source for name in OWNED_NAMES):
+        if source.isascii() and not any(name in source for name in OWNED_NAMES):
             continue
         tree = parse_python_cached(path)
         for node in tree.body:
@@ -103,7 +103,7 @@ def _any_depth_definitions() -> list[tuple[str, int, str]]:
     hits: list[tuple[str, int, str]] = []
     for path in _product_sources():
         source = read_text_cached(path)
-        if not any(name in source for name in OWNED_NAMES):
+        if source.isascii() and not any(name in source for name in OWNED_NAMES):
             continue
         tree = parse_python_cached(path)
         rel = _rel(path.relative_to(REPO_ROOT))
@@ -131,7 +131,7 @@ def _sdk_literal_sites(value: object) -> list[str]:
     for path in _product_sources():
         if str_value is not None:
             source = read_text_cached(path)
-            if not has_char_escape(source) and str_value not in source:
+            if not may_split_or_escape_literal(source) and str_value not in source:
                 continue
         tree = parse_python_cached(path)
         for node in ast.walk(tree):

@@ -36,8 +36,8 @@ from loopx.control_plane import progress_scope as owner
 from loopx.control_plane.agents import agent_lane_recommendation
 from loopx.control_plane.status import run_projection
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -184,7 +184,7 @@ def inline_value_sites(tree: pathlib.Path) -> dict[str, int]:
     sites: dict[str, int] = {}
     for path in _python_sources(tree):
         source = read_text_cached(path)
-        if not has_char_escape(source) and (
+        if not may_split_or_escape_literal(source) and (
             SCOPE_VALUE not in source or "progress" not in source
         ):
             continue

@@ -13,6 +13,7 @@ from tests.architecture._repo_ast_cache import (
     check_python_syntax_cached,
     clear_caches,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -76,3 +77,33 @@ def test_iter_python_sources_excludes_pycache_and_sees_new_tmp_files(
     assert iter_python_sources(tmp_path) == (first, second)
 
     clear_caches()
+
+
+@pytest.mark.parametrize(
+    ("source", "include_plus", "expected"),
+    [
+        ('X = "plain"\n', False, False),
+        ('X = ""\nY = """docstring\n"quoted"\n"""\n', False, False),
+        ('# comment with "unmatched\nX = "ok"\n', False, False),
+        ('X = "periodic_" "report_trigger_decision_v0"\n', False, True),
+        ('X = r"^[0-9a-f]{6" r"4}$"\n', False, True),
+        ('X = (\n    "sha"\n    # wrapped across lines\n    "256:"\n)\n', False, True),
+        ('X = "a""b"\n', False, True),
+        ('X = "a"\'b\'\n', False, True),
+        ('X = "sha\\x3256:"\n', False, True),
+        ('X = "a\\12b"\n', False, True),
+        ('X = "a" \\\n    "b"\n', False, True),
+        ('X = "a" + y\n', False, False),
+        ('X = "a" + y\n', True, True),
+        ('X = PREFIX + "256:"\n', True, True),
+        ('X = f"sha{suffix}"\n', True, True),
+        ('X = "a + b"\n', True, False),
+    ],
+)
+def test_may_split_or_escape_literal_detects_concat_and_escapes(
+    source: str, include_plus: bool, expected: bool
+) -> None:
+    assert may_split_or_escape_literal(source, include_plus=include_plus) is expected
+    before_hits = cache_info()["split_literal"].hits
+    assert may_split_or_escape_literal(source, include_plus=include_plus) is expected
+    assert cache_info()["split_literal"].hits == before_hits + 1

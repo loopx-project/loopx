@@ -32,8 +32,8 @@ import pathlib
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -124,7 +124,7 @@ def tree_offenders() -> dict[str, list[int]]:
         if relative == OWNER_PATH:
             continue
         source = read_text_cached(path)
-        if not has_char_escape(source) and "issue_close_recommended" not in source:
+        if not may_split_or_escape_literal(source) and "issue_close_recommended" not in source:
             continue
         sites = _close_type_literal_sites_tree(parse_python_cached(path))
         if sites:

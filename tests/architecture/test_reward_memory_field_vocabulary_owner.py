@@ -56,8 +56,8 @@ import pytest
 
 from tests.architecture._repo_ast_cache import (
     check_python_syntax_cached,
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -255,7 +255,7 @@ def _repository_scan():
     for path in iter_python_sources(PACKAGE_ROOT):
         source = read_text_cached(path)
         if (
-            not has_char_escape(source)
+            not may_split_or_escape_literal(source)
             and not any(tok in source for tok in _REWARD_SCAN_TOKENS)
         ):
             # Validate syntax without pinning full-tree ASTs into the shared cache.

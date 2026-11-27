@@ -50,8 +50,8 @@ from loopx.control_plane.content_digest import (
     ENVELOPED_SHA256_PATTERN,
 )
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
+    may_split_or_escape_literal,
     parse_python_cached,
     read_text_cached,
 )
@@ -96,8 +96,7 @@ def _fold_joined_prefix(node: ast.JoinedStr, scope: Any) -> str | None:
     return prefix
 
 
-def _hand_built_envelopes(source: str) -> list[str]:
-    tree = ast.parse(source)
+def _hand_built_envelopes_tree(tree: ast.Module) -> list[str]:
     root = _collect_scopes(tree)
     hits: list[str] = []
     for node in ast.walk(tree):
@@ -132,6 +131,10 @@ def _hand_built_envelopes(source: str) -> list[str]:
     return hits
 
 
+def _hand_built_envelopes(source: str) -> list[str]:
+    return _hand_built_envelopes_tree(ast.parse(source))
+
+
 def _scan_source(relative: str, source: str) -> list[str]:
     if relative == PRODUCTION_OWNER:
         return []
@@ -143,10 +146,9 @@ def _scan_surface(directory: str) -> dict[str, list[str]]:
     root = REPOSITORY_ROOT / directory
     for path in iter_python_sources(root):
         relative = path.relative_to(REPOSITORY_ROOT).as_posix()
-        source = read_text_cached(path)
-        if ENVELOPE not in source and not has_char_escape(source):
+        if relative == PRODUCTION_OWNER:
             continue
-        hits = _scan_source(relative, source)
+        hits = _hand_built_envelopes_tree(parse_python_cached(path))
         if hits:
             offenders[relative] = hits
     return offenders
@@ -275,7 +277,7 @@ def test_the_owner_is_the_only_module_that_states_the_prefix_rule() -> None:
         if relative in {PRODUCTION_OWNER, "loopx/control_plane/content_digest.py"}:
             continue
         source = read_text_cached(path)
-        if not has_char_escape(source) and ENVELOPE not in source:
+        if not may_split_or_escape_literal(source) and ENVELOPE not in source:
             continue
         tree = parse_python_cached(path)
         prefixed = [
@@ -434,3 +436,23 @@ def test_a_valid_bare_digest_still_matches_the_bare_shape() -> None:
     digest = hashlib.sha256(b"x").hexdigest()
     assert BARE_SHA256_PATTERN.fullmatch(digest)
     assert digest_envelope.sha256_envelope(b"x") == f"sha256:{digest}"
+
+
+def test_scan_surface_catches_multiline_and_adjacent_split_envelopes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    surface = tmp_path / "loopx" / "capabilities" / "periodic_report"
+    surface.mkdir(parents=True)
+    (surface / "split.py").write_text(
+        'def build(digest: str) -> str:\n'
+        '    return (\n'
+        '        "sha"\n'
+        '        # comment inside wrap\n'
+        '        "256:"\n'
+        '        + digest\n'
+        '    )\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(globals(), "REPOSITORY_ROOT", tmp_path)
+    offenders = _scan_surface("loopx/capabilities/periodic_report")
+    assert list(offenders) == ["loopx/capabilities/periodic_report/split.py"]

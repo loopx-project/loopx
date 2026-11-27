@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
+from pathlib import Path
+import subprocess
+import time
+
 import pytest
 
 from loopx.semantics import python_production
 from loopx.semantics.production import collect_production, validate_production, quota_action_domain
 from loopx.semantics.python_production import Production
 from loopx.semantics.inventory import SourceFile
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SITE = 'loopx/control_plane/quota/probe.py::emit'
@@ -442,3 +447,237 @@ def test_typescript_batch_scan_matches_single_queries_and_preserves_syntax_bound
     with pytest.raises(ValueError, match=r'broken_batch\.ts:3: invalid TypeScript source') as err:
         finish()
     assert 'secret' not in str(err.value)
+
+
+def test_resident_ts_server_times_out_reaps_worker_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.semantics import production
+
+    scripts_dir = tmp_path / 'scripts'
+    scripts_dir.mkdir()
+    pid_file = tmp_path / 'hung.pid'
+    stub = scripts_dir / 'semantic_production_scan.mjs'
+    stub.write_text(
+        'import fs from "node:fs";\n'
+        f'fs.writeFileSync({json.dumps(str(pid_file))}, String(process.pid), "utf8");\n'
+        'if (process.argv.includes("--server")) {\n'
+        '  process.stdin.on("data", () => {});\n'
+        '  setInterval(() => {}, 1000);\n'
+        '}\n',
+        encoding='utf-8',
+    )
+    valid = SourceFile(
+        'loopx/control_plane/quota/recovery_probe.ts',
+        '.ts',
+        'export function decide(ok: boolean) { return {effective_action: ok ? "run" : "wait"}; }\n',
+    )
+    query = {'mode': 'literal_uses', 'field': 'effective_action', 'return_functions': []}
+
+    production._shutdown_ts_server()
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.25)
+            started = time.monotonic()
+            with pytest.raises(subprocess.TimeoutExpired):
+                production.run_typescript_scan(tmp_path, [valid], query)
+            elapsed = time.monotonic() - started
+        assert elapsed < 2.0, f'timeout exceeded bounded deadline: {elapsed:.2f}s'
+        assert production._TS_SERVER is None
+        assert not production._TS_SERVER_LOCK.locked()
+        hung_pid = int(pid_file.read_text(encoding='utf-8'))
+        with pytest.raises(ProcessLookupError):
+            os.kill(hung_pid, 0)
+
+        recovered = production.run_typescript_scan(ROOT, [valid], query)
+        assert recovered and recovered[0]['values'] == ['run', 'wait']
+        assert not production._TS_SERVER_LOCK.locked()
+    finally:
+        production._shutdown_ts_server()
+
+
+def test_resident_ts_server_rebuilds_after_corrupt_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.semantics import production
+
+    scripts_dir = tmp_path / 'scripts'
+    scripts_dir.mkdir()
+    stub = scripts_dir / 'semantic_production_scan.mjs'
+    stub.write_text(
+        'process.stdout.write("not-json\\n");\n'
+        'process.stderr.write("broken worker stderr");\n'
+        'process.exit(0);\n',
+        encoding='utf-8',
+    )
+    valid = SourceFile(
+        'loopx/control_plane/quota/corrupt_recovery_probe.ts',
+        '.ts',
+        'export function decide() { return {effective_action: "run"}; }\n',
+    )
+    query = {'mode': 'literal_uses', 'field': 'effective_action', 'return_functions': []}
+
+    production._shutdown_ts_server()
+    try:
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            with pytest.raises(ValueError, match='TypeScript production parser failed'):
+                production.run_typescript_scan(tmp_path, [valid], query)
+        assert production._TS_SERVER is None
+        assert not production._TS_SERVER_LOCK.locked()
+
+        recovered = production.run_typescript_scan(ROOT, [valid], query)
+        assert recovered and recovered[0]['values'] == ['run']
+    finally:
+        production._shutdown_ts_server()
+
+
+def test_resident_ts_server_trickle_stdout_respects_deadline_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.semantics import production
+
+    scripts_dir = tmp_path / 'scripts'
+    scripts_dir.mkdir()
+    pid_file = tmp_path / 'trickle.pid'
+    stub = scripts_dir / 'semantic_production_scan.mjs'
+    stub.write_text(
+        'import fs from "node:fs";\n'
+        'import readline from "node:readline";\n'
+        f'fs.writeFileSync({json.dumps(str(pid_file))}, String(process.pid), "utf8");\n'
+        'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });\n'
+        'rl.on("line", (line) => {\n'
+        '  const req = JSON.parse(line);\n'
+        '  const slow = req.field === "slow_trickle";\n'
+        '  process.stdout.write("{\\"ok\\":true,");\n'
+        '  if (!slow) {\n'
+        '    setTimeout(() => {\n'
+        '      process.stdout.write("\\"result\\":[{\\"site\\":\\"s\\",\\"line\\":1,\\"form\\":\\"dict\\",\\"values\\":[\\"run\\"],\\"unresolved\\":false}]}\\n");\n'
+        '    }, 30);\n'
+        '    return;\n'
+        '  }\n'
+        '  const timer = setInterval(() => { process.stdout.write(" "); }, 25);\n'
+        '  setTimeout(() => clearInterval(timer), 3000);\n'
+        '});\n',
+        encoding='utf-8',
+    )
+    valid = SourceFile(
+        'loopx/control_plane/quota/trickle_probe.ts',
+        '.ts',
+        'export function decide() { return {effective_action: "run"}; }\n',
+    )
+    fast_query = {'mode': 'literal_uses', 'field': 'effective_action', 'return_functions': []}
+    slow_query = {'mode': 'literal_uses', 'field': 'slow_trickle', 'return_functions': []}
+
+    production._shutdown_ts_server()
+    try:
+        # Positive case: multi-chunk trickle response completing inside deadline succeeds.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.4)
+            ok = production.run_typescript_scan(tmp_path, [valid], fast_query)
+            assert ok and ok[0]['values'] == ['run']
+
+        # Negative case 1: continuous trickle without newline fails at deadline and reaps worker.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.2)
+            started = time.monotonic()
+            with pytest.raises(subprocess.TimeoutExpired):
+                production.run_typescript_scan(tmp_path, [valid], slow_query)
+            assert time.monotonic() - started < 1.5
+        assert production._TS_SERVER is None
+        assert not production._TS_SERVER_LOCK.locked()
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid_file.read_text(encoding='utf-8')), 0)
+
+        # Negative case 2: complete readable stdout returning after deadline still fails bounded.
+        clock = {'now': 0.0}
+        real_read = os.read
+
+        def advancing_stdout_read(fd: int, n: int) -> bytes:
+            data = real_read(fd, n)
+            proc = production._TS_SERVER
+            if proc is not None and proc.stdout is not None and fd == proc.stdout.fileno() and data:
+                clock['now'] += 0.40
+            return data
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.25)
+            scoped.setattr(production.time, 'monotonic', lambda: clock['now'])
+            scoped.setattr(production.os, 'read', advancing_stdout_read)
+            with pytest.raises(subprocess.TimeoutExpired):
+                production.run_typescript_scan(tmp_path, [valid], fast_query)
+        assert production._TS_SERVER is None
+        assert not production._TS_SERVER_LOCK.locked()
+
+        recovered = production.run_typescript_scan(ROOT, [valid], fast_query)
+        assert recovered and recovered[0]['values'] == ['run']
+    finally:
+        production._shutdown_ts_server()
+
+
+def test_resident_ts_server_stderr_drain_respects_deadline_and_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.semantics import production
+
+    scripts_dir = tmp_path / 'scripts'
+    scripts_dir.mkdir()
+    pid_file = tmp_path / 'stderr.pid'
+    stub = scripts_dir / 'semantic_production_scan.mjs'
+    stub.write_text(
+        'import fs from "node:fs";\n'
+        'import readline from "node:readline";\n'
+        f'fs.writeFileSync({json.dumps(str(pid_file))}, String(process.pid), "utf8");\n'
+        'const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });\n'
+        'rl.on("line", () => {\n'
+        '  process.stderr.write("diagnostic-noise-line\\n");\n'
+        '  process.stdout.write("{\\"ok\\":true,\\"result\\":[{\\"site\\":\\"s\\",\\"line\\":1,\\"form\\":\\"dict\\",\\"values\\":[\\"run\\"],\\"unresolved\\":false}]}\\n");\n'
+        '});\n',
+        encoding='utf-8',
+    )
+    valid = SourceFile(
+        'loopx/control_plane/quota/stderr_probe.ts',
+        '.ts',
+        'export function decide() { return {effective_action: "run"}; }\n',
+    )
+    query = {'mode': 'literal_uses', 'field': 'effective_action', 'return_functions': []}
+
+    production._shutdown_ts_server()
+    try:
+        # Positive case: small stderr alongside valid response succeeds inside deadline.
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.5)
+            ok = production.run_typescript_scan(tmp_path, [valid], query)
+            assert ok and ok[0]['values'] == ['run']
+
+        # Negative case: final stderr drain crossing shared deadline raises TimeoutExpired and reaps.
+        clock = {'now': 0.0}
+        real_read = os.read
+
+        def advancing_stderr_read(fd: int, n: int) -> bytes:
+            proc = production._TS_SERVER
+            if proc is not None and proc.stderr is not None and fd == proc.stderr.fileno():
+                clock['now'] += 0.65
+            return real_read(fd, n)
+
+        with monkeypatch.context() as scoped:
+            scoped.setattr(production, '_REPO_SCAN_SCRIPT', stub)
+            scoped.setattr(production, '_DEFAULT_TS_SCAN_TIMEOUT_SECONDS', 0.5)
+            scoped.setattr(production.time, 'monotonic', lambda: clock['now'])
+            scoped.setattr(production.os, 'read', advancing_stderr_read)
+            with pytest.raises(subprocess.TimeoutExpired):
+                production.run_typescript_scan(tmp_path, [valid], query)
+        assert production._TS_SERVER is None
+        assert not production._TS_SERVER_LOCK.locked()
+        with pytest.raises(ProcessLookupError):
+            os.kill(int(pid_file.read_text(encoding='utf-8')), 0)
+
+        recovered = production.run_typescript_scan(ROOT, [valid], query)
+        assert recovered and recovered[0]['values'] == ['run']
+    finally:
+        production._shutdown_ts_server()

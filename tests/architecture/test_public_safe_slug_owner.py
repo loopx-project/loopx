@@ -27,7 +27,6 @@ from types import ModuleType
 import pytest
 
 from tests.architecture._repo_ast_cache import (
-    has_char_escape,
     iter_python_sources,
     parse_python_cached,
     read_text_cached,
@@ -214,8 +213,6 @@ def _unfoldable_rows_tree(tree: ast.Module, name: str) -> list[dict[str, object]
 def unfoldable_rows(source: str, name: str) -> list[dict[str, object]]:
     if not any(token in source for token in PRESCREEN_TOKENS):
         return []
-    if "[a-z" not in source:
-        return []
     return _unfoldable_rows_tree(ast.parse(source), name)
 
 
@@ -227,8 +224,6 @@ def collect(root: pathlib.Path) -> list[dict[str, object]]:
         except (OSError, UnicodeDecodeError):
             continue
         if not any(token in source for token in PRESCREEN_TOKENS):
-            continue
-        if "[a-z" not in source and not has_char_escape(source):
             continue
         relative = path.relative_to(root).as_posix()
         rows.extend(_shape_rows_tree(parse_python_cached(path), relative))
