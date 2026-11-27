@@ -10,6 +10,7 @@ import {resolve} from "node:path";
 import {createInterface} from "node:readline";
 import {resolveTestPython} from "../../../../scripts/test-python.mjs";
 import {launchBrowser, loadPlaywright} from "../../../../examples/dashboard-browser-smoke-support.mjs";
+import {verifyResearchAcceptanceReadback} from "./research-verification-readback.mjs";
 
 const repo = resolve(import.meta.dirname, "../../../..");
 const root = await mkdtemp(resolve(tmpdir(), "loopx-evidence-version-"));
@@ -395,6 +396,7 @@ try {
   assert.deepEqual(caseHistoryReads, [], "Explicit case links do not read the case's research history");
   assert.equal(afterRecovery.mutation_attempts, beforeRecovery.mutation_attempts);
   assert.equal(afterRecovery.source_unchanged, true);
+  await verifyResearchAcceptanceReadback(browser, start);
   console.log("research evidence version: study and history navigation, saved excerpts and chapter position restored");
 } finally {
   releaseOriginal?.();

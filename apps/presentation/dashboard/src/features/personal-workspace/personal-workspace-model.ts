@@ -7,7 +7,7 @@ import type { ActionReviewPlan } from "../../../../../../loopx/control_plane/pre
 import type { GoalAcceptanceObservation } from "../../data/goal-acceptance-observation";
 import type { AttentionDetails } from "./attention-details";
 import type { WorkspaceLoadError, WorkspaceReadScope } from "../../data/workspace-progressive-status";
-import type { RunRecord, TodoItem } from "../../data/status";
+import type { GoalArtifactLifecycle, RunRecord, TodoItem } from "../../data/status";
 import type { TodoUpdateSourceBasis } from "../../data/action-source-basis";
 import { goalWorkKind, type GoalHostThreadActivity, type WorkspaceGoalExecution } from "./goal-activity";
 import { receiptRetryReadback } from "./monitor-readback";
@@ -176,6 +176,7 @@ export type WorkspaceGoal = {
   /** Bounded, safe text from this Goal's declared source document. */
   objective?: string | null;
   acceptanceObservation?: GoalAcceptanceObservation | null;
+  artifactLifecycle?: GoalArtifactLifecycle | null;
   /** Driver readback only; it never changes Goal activation or grants work. */
   workerObservations?: {
     read_status: "read" | "stale" | "unreadable";

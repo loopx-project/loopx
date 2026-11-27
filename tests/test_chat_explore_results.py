@@ -1,5 +1,7 @@
 """Real HTTP readback of saved Explore evidence without worker authority."""
 import json
+from pathlib import Path
+from runpy import run_path
 import threading
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -249,6 +251,86 @@ def test_saved_findings_survive_unavailable_task_associations(tmp_path, monkeypa
         worker.join()
 
 
+@pytest.mark.parametrize("use_local_snapshot", [False, True], ids=["inline", "local-snapshot"])
+def test_populated_history_preserves_pages_and_original_comparisons(tmp_path, monkeypatch, use_local_snapshot):
+    from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority, isolate_sqlite_runtime
+    from loopx.control_plane import effect_runtime
+    from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
+    from loopx.control_plane.work_items import yardstick_decision as transport
+
+    fixture_path = Path(__file__).resolve().parents[1] / "apps/presentation/dashboard/smoke/research-verification-fixture.py"
+    fixture = run_path(str(fixture_path))
+    goal_id = fixture["GOAL"]
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    runtime, registry, state = (tmp_path / name for name in ("runtime", "registry.json", "active.md"))
+    state.write_text("# Synthetic research history\n")
+    registry.write_text(json.dumps({"common_runtime_root": str(runtime), "goals": [
+        {"id": goal_id, "repo": str(tmp_path), "state_file": state.name,
+         "coordination": {"registered_agents": ["worker"]}},
+    ]}))
+    initialize_canonical_authority(runtime, goal_id,
+        build_todo_runtime_shadow_projection(goal_id=goal_id, todos=[], handoff_mode="soft_claim"),
+        state_path=state, provider="sqlite")
+    events = fixture["populated_history"]()
+    log = explore_result_log_path(runtime, goal_id)
+    before = b"".join(json.dumps(event).encode() + b"\n" for event in events)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_bytes(before)
+
+    invoke, bytes_sent = transport.effect_runtime_projection_result, []
+
+    def observe(operation, params):
+        bytes_sent.append(len(json.dumps(params, ensure_ascii=False, separators=(",", ":")).encode()))
+        return invoke(operation, params)
+
+    monkeypatch.setattr(transport, "effect_runtime_projection_result", observe)
+    invocations = []
+    if use_local_snapshot:
+        invoke_effect = effect_runtime.effect_runtime_result
+
+        def observe_effect(operation, params, **kwargs):
+            if operation == "work_item.yardstick.presentation":
+                invocations.append(kwargs.get("large_local_snapshot", False))
+            return invoke_effect(operation, params, **kwargs)
+
+        monkeypatch.setattr(effect_runtime, "MAX_REQUEST_BYTES", 128 * 1024)
+        monkeypatch.setattr(effect_runtime, "effect_runtime_result", observe_effect)
+    server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
+    server.registry_path, server.runtime_root_override, server.runtime_root = registry, str(runtime), runtime
+    server.verbose = False
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    url = f"http://127.0.0.1:{server.server_port}/api/chat/explore-results?goal_id={goal_id}&view=history"
+    try:
+        cursor, items = "", []
+        for size in (40, 40, 40, 31):
+            with urlopen(url + "&cursor=" + quote(cursor), timeout=20) as response:
+                page = json.load(response)
+            assert page["total"] == 151 and len(page["items"]) == size
+            items.extend(page["items"])
+            cursor = page["next_cursor"]
+            assert bool(cursor) == (len(items) < 151)
+        assert [row["event_id"] for row in items] == [event["event_id"] for event in events]
+        assert len(bytes_sent) == 1 and bytes_sent[0] < 1024 * 1024
+        if use_local_snapshot:
+            assert invocations == [False, True]
+        candidates = [row for row in items if "work_yardstick" in row]
+        assert len(candidates) == 75
+        for attempt, row in enumerate(candidates):
+            assert set(row["work_yardstick"]) == {"decision", "binding"}
+            if attempt == 31:
+                assert "yardstick_measurements" not in row
+                continue
+            pair = row["yardstick_measurements"]
+            assert [item["value"] for item in pair] == [9, 5, 4, 8]
+            assert pair[0]["evidence_ref"] == pair[2]["evidence_ref"] == f"artifact:baseline-{attempt}"
+        assert log.read_bytes() == before
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provider, monkeypatch):
     from tests.control_plane.test_work_yardstick_cli import (
@@ -269,12 +351,12 @@ def test_server_source_snapshot_keeps_legacy_capture_wire_shape(tmp_path, provid
         title="Another captured declaration", evidence_refs=attachment()["evidence_refs"], work_yardstick=capture))
     original = log.read_bytes()
     import loopx.control_plane.work_items.yardstick_decision as transport
-    invoke, batches = transport.effect_runtime_result, []
+    invoke, batches = transport.effect_runtime_projection_result, []
     def observe(operation, params):
         if operation == "work_item.yardstick.presentation":
             batches.append(len(params["captures"]))
         return invoke(operation, params)
-    monkeypatch.setattr(transport, "effect_runtime_result", observe)
+    monkeypatch.setattr(transport, "effect_runtime_projection_result", observe)
     server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
     server.registry_path, server.runtime_root_override, server.runtime_root = registry, str(runtime), runtime
     server.verbose = False

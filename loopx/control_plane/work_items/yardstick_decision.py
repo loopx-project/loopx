@@ -5,7 +5,7 @@ from functools import lru_cache
 import json
 from typing import Any, cast
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_projection_result, effect_runtime_result
 from ..runtime.public_safety import validate_public_safe_value
 
 
@@ -25,15 +25,23 @@ def normalize_work_yardstick_capture(capture: Any, *, goal_id: str, agent_id: st
 
 
 def project_work_yardstick_presentations(
-    rows: list[dict[str, Any]], *, goal_id: str | None = None,
+    rows: list[dict[str, Any]], *, goal_id: str | None = None, history_sources: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """One typed projection call for the captures in an entire read snapshot."""
     requests = [{"capture": row["work_yardstick"], "goal_id": goal_id or row["goal_id"],
-        "agent_id": row.get("agent_id", ""), "evidence_refs": row.get("evidence_refs", [])}
+        "agent_id": row.get("agent_id", ""), "evidence_refs": row.get("evidence_refs", []),
+        **({"event_id": row["event_id"]} if history_sources else {})}
         for row in rows if "work_yardstick" in row]
     if not requests:
         return rows
-    params = {"captures": requests}
+    params = {"captures": requests, **({"history_sources": history_sources} if history_sources else {})}
     validate_public_safe_value(params, path="work_yardsticks")
-    projected = iter(effect_runtime_result("work_item.yardstick.presentation", params)["captures"])
-    return [{**row, "work_yardstick": next(projected)} if "work_yardstick" in row else row for row in rows]
+    result = effect_runtime_projection_result("work_item.yardstick.presentation", params)
+    projected = iter(result["captures"])
+    comparisons = result.get("comparisons", {})
+    return [
+        {**row, "work_yardstick": next(projected),
+         **({"yardstick_measurements": comparisons[row["event_id"]]} if row.get("event_id") in comparisons else {})}
+        if "work_yardstick" in row else row
+        for row in rows
+    ]

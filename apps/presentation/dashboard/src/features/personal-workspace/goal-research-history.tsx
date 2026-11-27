@@ -2,6 +2,7 @@ import {ExecutionObservationReadback, WorkYardstickReadback} from "./work-yardst
 import {GoalSourceStrategies, useGoalStrategyLocation} from "./goal-source-strategies";
 import {exploreFindingCopy} from "./explore-finding-copy";
 import {AlertCircle, ArrowLeft, ArrowRight, Circle, CircleHelp, FlaskConical, GitBranch, RefreshCw, Search} from "lucide-react";
+import {GoalVerificationWorkbench, type GoalVerificationSources} from "./goal-verification-workbench";
 import {Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {defaultParseSearch} from "@tanstack/react-router";
 import {ResearchRecordSearch, useResearchRecordsLocation} from "./research-record-browser";
@@ -53,9 +54,11 @@ const viewFromUrl = (goal: string) => {
 
 /** An effect-free history consumer. Its source is Explore, not raw sessions or
  * a judge. All recorded updates survive; unsupported analysis stays unavailable. */
-export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl, onOpenSourceTasks}: {
+export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHistory = false, active, zh, refreshRevision = 0, readSourceUrl, onOpenSourceTasks, verification, showVerification}: {
   goalId: string; originalGoalId?: string; preferHistory?: boolean; active: boolean; zh: boolean; refreshRevision?: number; readSourceUrl?: string;
   onOpenSourceTasks?: () => void;
+  verification?: GoalVerificationSources;
+  showVerification?: number;
 }) {
   const strategies = useGoalStrategyLocation(goalId, readSourceUrl);
   const analysis = useResearchAnalysis(goalId, active, zh, readSourceUrl);
@@ -74,7 +77,15 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
   const deferHistory = requestedCase === true && caseViewAvailable;
   const historySource = JSON.stringify([goalId, originalGoalId, readSourceUrl]);
   const [openedHistorySource, setOpenedHistorySource] = useState<string | null>(null);
-  const readHistory = active && (!deferHistory || openedHistorySource === historySource);
+  const [openVerificationSource, setOpenVerificationSource] = useState<string | null>(null);
+  const verificationOpen = openVerificationSource === historySource;
+  const verificationEntry = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!active || !showVerification) return;
+    setOpenVerificationSource(historySource);
+    verificationEntry.current?.querySelector("summary")?.focus();
+  }, [active, showVerification, historySource]);
+  const readHistory = active && (verificationOpen || !deferHistory || openedHistorySource === historySource);
   useEffect(() => {
     const changed = () => setCaseReading(readCaseMode());
     changed(); window.addEventListener("popstate", changed);
@@ -302,6 +313,11 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
     ? findingVersions.find(finding => finding.event_id === selection.event && (!selection.finding || finding.result_id === selection.finding))
     : selection.finding ? selected.findings.find(finding => finding.result_id === selection.finding)
     : defaultFinding(selected));
+  const verificationFinding = selectedFinding
+    ? history.canonical?.events.find(item => item.event_id === selectedFinding.event_id)
+    : !selection.nodes.length && selection.day === null
+      ? history.canonical?.findings.filter(item => item.status === "confirmed" && (item.work_yardstick || item.execution_observation)).at(-1)
+      : undefined;
   const hasSeparateQuestion = Boolean(selected?.findings.length && selectedFinding?.title !== selected.latest.title);
   const selectedGroup = selection.day !== null ? grouped.groups.find(group => group.day === selection.day) : undefined;
   const selectedMembers = selectedGroup?.nodes ?? (selection.nodes.length > 1 ? value?.nodes.filter(node => selection.nodes.includes(node.id)) : undefined);
@@ -528,6 +544,13 @@ export function GoalResearchHistory({goalId, originalGoalId = goalId, preferHist
       sourceUrl={readSourceUrl} zh={zh} selection={selectedStrategy}
       onSelect={strategies.choose} onClose={() => strategies.choose(null)}/> : null;
   return <>
+    {verification ? <details className="goal-verification-entry" ref={verificationEntry} key={historySource} open={verificationOpen}
+      onToggle={event => setOpenVerificationSource(event.currentTarget.open ? historySource : null)}>
+      <summary>{zh ? "验证证据包" : "Verification evidence packet"}</summary>
+      {verificationOpen ? <GoalVerificationWorkbench key={selectedFinding?.event_id ?? historySource} {...verification} zh={zh} goalId={goalId}
+        finding={verificationFinding} findings={history.canonical?.findings ?? []} complete={read.complete && !busy}
+        unavailable={Boolean(error || history.error)}/> : null}
+    </details> : null}
     {caseViewAvailable ? <div className="research-reading-views" role="group" aria-label={zh ? "研究视图" : "Research view"}>
       <button type="button" aria-pressed={!readingCase} onClick={() => {
         if (readingCase) {analysis.closeCitation(); setCaseMode(false);}

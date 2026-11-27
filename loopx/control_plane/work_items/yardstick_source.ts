@@ -2,11 +2,11 @@
  * share the pure decision/capture normalizers without importing Node hashing. */
 import {createHash} from "node:crypto";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
-import {requireJsonObject, type JsonObject} from "../runtime_decode.ts";
+import {jsonObject, requireJsonObject, type JsonObject} from "../runtime_decode.ts";
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {currentWorkYardstickFinding, normalizeWorkYardstickCapture,
-  normalizeWorkYardstickDecision, normalizeWorkYardstickSourceSnapshot,
-  workYardstickTodos} from "./yardstick_decision.ts";
+  normalizeWorkYardstickDecision, normalizeWorkYardstickSourceSnapshot, projectHistoricalYardstickMeasurements,
+  workYardstickTodos, type WorkYardstickCapture} from "./yardstick_decision.ts";
 
 /** The adapter supplies strictly validated canonical events, never attachment fields.
  * Event ids bind the complete event contents through the existing log validator. */
@@ -26,6 +26,66 @@ function committedSourceSnapshot(params: JsonObject, binding: JsonObject) {
   }
   return {event_count: count, event_ids_sha256: digest};
 }
+
+/** Keep capture wire compatibility. Only graph history supplies candidate
+ * events and canonical, content-addressed prefix replay for display pairs. */
+export function projectWorkYardstickPresentations(params: JsonObject): JsonObject {
+  if (!Array.isArray(params.captures)) throw new EffectRuntimeRequestError("yardstick presentation requires capture requests");
+  const requests = params.captures.map(value => {
+    const request = requireJsonObject(value, "capture request");
+    return {
+      eventId: typeof request.event_id === "string" ? request.event_id : "",
+      capture: normalizeWorkYardstickCapture(request),
+    };
+  });
+  const captures = requests.map(({capture: {decision, binding}}) => ({decision, binding}));
+  const history = jsonObject(params.history_sources);
+  return {captures, ...(history ? {comparisons: historyComparisons(history.source_events, requests)} : {})};
+}
+
+function historyComparisons(
+  value: unknown, requests: ReadonlyArray<{eventId: string; capture: WorkYardstickCapture}>,
+): JsonObject {
+  if (!Array.isArray(value)) return {};
+  const events = value.map(jsonObject);
+  const goalId = events[0]?.goal_id;
+  if (typeof goalId !== "string" || events.some(row => row?.goal_id !== goalId || typeof row.event_id !== "string")) return {};
+  const sources = new Map<unknown, JsonObject>();
+  const findings = events.map((row, order) => {
+    const finding = jsonObject(row?.finding);
+    if (!finding) return null;
+    const source: JsonObject = {...finding, recorded_order: order};
+    if (!sources.has(row!.event_id)) sources.set(row!.event_id, source);
+    return source;
+  });
+  const ordered = requests.flatMap(({eventId, capture}) => {
+    const source = sources.get(eventId);
+    const snapshot = capture.source_snapshot;
+    if (!source || !snapshot || capture.binding.goal_id !== goalId
+        || snapshot.event_count > Number(source.recorded_order)) return [];
+    return [{eventId, capture, source, snapshot}];
+  }).sort((left, right) => left.snapshot.event_count - right.snapshot.event_count);
+
+  // Reuse the same fold and hash across candidates while checking each
+  // original prefix independently. The hash is of the JSON event-id array.
+  const prefix = createHash("sha256").update("[");
+  const folded = new Map<unknown, JsonObject>();
+  const comparisons = new Map<string, unknown>();
+  let order = 0;
+  for (const {eventId, capture, source, snapshot} of ordered) {
+    while (order < snapshot.event_count) {
+      if (order) prefix.update(",");
+      prefix.update(JSON.stringify(events[order]!.event_id));
+      const finding = findings[order++];
+      if (finding) folded.set(finding.finding_id, finding);
+    }
+    if (prefix.copy().update("]").digest("hex") !== snapshot.event_ids_sha256) continue;
+    const measurements = projectHistoricalYardstickMeasurements(source, capture, [...folded.values()]);
+    if (measurements.length) comparisons.set(eventId, measurements);
+  }
+  return Object.fromEntries(comparisons);
+}
+
 /** Select only current captures; the transport replays their already-read log prefixes. */
 export function projectWorkYardstickSourceRequests(params: JsonObject): JsonObject {
   const findings = (params.findings ?? []) as JsonObject[];

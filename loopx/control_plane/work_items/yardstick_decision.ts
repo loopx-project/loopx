@@ -7,7 +7,7 @@ import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {jsonObject, requireJsonObject, requireStringArray, type JsonObject} from "../runtime_decode.ts";
 import {isExploreEvidenceRef} from "../capabilities/explore_evidence_ref.ts";
 import {projectExploreMeasurementFeedback, type ExploreMeasurementFeedback,
-  type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
+  type ExploreMeasurement, type ExploreMeasurementPoint} from "../capabilities/explore_measurements.ts";
 
 export const WORK_YARDSTICK_DECISION_SCHEMA = "work_yardstick_decision_v0";
 export type WorkYardstickProfile = {metric: string; unit: string; higher_is_better: boolean;
@@ -89,10 +89,6 @@ export function projectWorkYardstickPresentation(params: JsonObject): Pick<WorkY
   const {decision, binding} = normalizeWorkYardstickCapture(params);
   return {decision, binding};
 }
-export function projectWorkYardstickPresentations(params: JsonObject): JsonObject {
-  if (!Array.isArray(params.captures)) throw new EffectRuntimeRequestError("yardstick presentation requires capture requests");
-  return {captures: params.captures.map(row => projectWorkYardstickPresentation(requireJsonObject(row, "capture request")))};
-}
 export function normalizeWorkYardstickSourceSnapshot(value: unknown): NonNullable<WorkYardstickCapture["source_snapshot"]> {
   const row = object(value, ["event_count", "event_ids_sha256"], "yardstick source snapshot");
   if (!Number.isSafeInteger(row.event_count) || Number(row.event_count) < 0
@@ -155,8 +151,26 @@ function measuredPair(row: ExploreMeasurementFeedback | undefined) {
   return {previous_best: previous, latest: recent, preferred_candidate_ref: preferred};
 }
 
-function matchesProfile(row: ExploreMeasurementFeedback, profile: WorkYardstickProfile): boolean {
+function matchesProfile(row: WorkYardstickProfile, profile: WorkYardstickProfile): boolean {
   return Object.entries(profile).every(([key, value]) => row[key as keyof WorkYardstickProfile] === value);
+}
+
+/** A display pair has exactly one recorded point per artifact and profile. */
+export function workYardstickObservedPair(
+  measurements: readonly ExploreMeasurement[],
+  profile: WorkYardstickProfile,
+  baseline: string,
+  candidate: string,
+) {
+  const matching = measurements.filter(row => matchesProfile(row, profile));
+  const point = (sha: string) => {
+    const items = matching.filter(row => row.candidate_ref === `sha256:${sha}` && row.value !== null);
+    return items.length === 1 ? items[0] : undefined;
+  };
+  const before = point(baseline), after = point(candidate);
+  if (!before || !after || before.value === null || after.value === null) return null;
+  const delta = (after.value - before.value) * (profile.higher_is_better ? 1 : -1);
+  return Number.isFinite(delta) ? {before, after, delta} : null;
 }
 
 /** Both declared pairs and first measurements support the same local choice.
@@ -192,6 +206,50 @@ function recordedBefore(row: JsonObject, sourceOrder: unknown): boolean {
   const order = row.recorded_order;
   return typeof sourceOrder === "number" && Number.isSafeInteger(sourceOrder)
     && typeof order === "number" && Number.isSafeInteger(order) && order >= 0 && order < sourceOrder;
+}
+
+function sameDecisionScope(row: JsonObject, source: JsonObject, capture: WorkYardstickCapture, cited: ReadonlySet<string>): boolean {
+  if (row.node_id !== source.node_id) return false;
+  const bound = jsonObject(row.work_binding) !== null;
+  if (bound && (!belongsToWork(row, capture.binding) || row.status !== "confirmed")) return false;
+  if (row.work_yardstick === undefined) {
+    if (bound) return true;
+    // An earlier unbound finding keeps its original Agent and visibility.
+    return recordedBefore(row, capture.source_snapshot?.event_count)
+      && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
+      && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
+  }
+  const target = (row.work_yardstick as WorkYardstickCapture).decision?.target;
+  const decision = capture.decision.target;
+  return belongsToWork(row, capture.binding) && target !== undefined
+    && target.summary === decision.summary && target.scope === decision.scope
+    && target.acceptance_ref === decision.acceptance_ref;
+}
+
+/** Select observations from the verified original prefix and the chosen event. */
+export function projectHistoricalYardstickMeasurements(
+  source: JsonObject, capture: WorkYardstickCapture, priorFindings: readonly JsonObject[],
+): ExploreMeasurement[] {
+  const execution = jsonObject(source.execution_observation);
+  const verification = jsonObject(execution?.verification_evidence);
+  const baseline = jsonObject(verification?.baseline)?.sha256;
+  const candidate = execution?.candidate_sha256;
+  if (typeof baseline !== "string" || typeof candidate !== "string" || baseline === candidate) return [];
+  const cited = new Set([...(source.evidence_refs as string[]), ...(execution?.evidence_refs as string[] ?? [])]);
+  const counterevidence = new Set(capture.decision.counterevidence_refs);
+  const prior = priorFindings.filter(row => row.status === "confirmed"
+    && recordedBefore(row, capture.source_snapshot?.event_count)
+    && sameDecisionScope(row, source, capture, counterevidence));
+  const measurements = [source, ...prior].flatMap(row => {
+    const bound = row === source || row.work_binding !== undefined || row.work_yardstick !== undefined;
+    return ((row.measurements ?? []) as ExploreMeasurement[]).filter(item =>
+      cited.has(item.evidence_ref) && (bound || counterevidence.has(item.evidence_ref)));
+  });
+  const {authoritative, proxy} = capture.decision;
+  return [authoritative, ...(proxy ? [proxy] : [])].flatMap(profile => {
+    const pair = workYardstickObservedPair(measurements, profile, baseline, candidate);
+    return pair ? [pair.before, pair.after] : [];
+  });
 }
 
 function committedInWorkWindow(row: JsonObject, startOrder: number, decisionTime: bigint | null): boolean {
@@ -307,23 +365,8 @@ export function projectWorkYardstickCue(params: JsonObject): JsonObject | null {
   const plainFindings = Array.isArray(priorSource?.findings) ? priorSource.findings as JsonObject[] : [];
   const scopedFindings = [...findings.filter(row => row.work_yardstick !== undefined
       || row.work_binding !== undefined && committedInWorkWindow(row, workObservationStart, decisionTime)),
-    ...plainFindings.filter(row => row.work_yardstick === undefined)].filter(row => {
-    if (row.node_id !== source.node_id) return false;
-    const bound = jsonObject(row.work_binding) !== null;
-    if (bound && (!belongsToWork(row, params) || row.status !== "confirmed")) return false;
-    // A decision can cite the agent's earlier measurements on this linked
-    // question without changing their provenance or assigning earlier work.
-    if (row.work_yardstick === undefined) {
-      if (bound) return true;
-      // A repeated reference appended later cannot change the decision's evidence.
-      return cited.size > 0 && recordedBefore(row, sourceOrder)
-        && row.agent_id === capture.binding.agent_id && Array.isArray(row.evidence_refs)
-        && row.evidence_refs.some(ref => typeof ref === "string" && cited.has(ref));
-    }
-    const target = (row.work_yardstick as WorkYardstickCapture | undefined)?.decision?.target;
-    return belongsToWork(row, params) && target !== undefined && target.summary === decision.target.summary
-      && target.scope === decision.target.scope && target.acceptance_ref === decision.target.acceptance_ref;
-  });
+    ...plainFindings.filter(row => row.work_yardstick === undefined)]
+    .filter(row => sameDecisionScope(row, source, capture, cited));
   const searchComparison = measuredSearchComparison(scopedFindings, decision, cited, sourceOrder, workObservationStart, decisionTime);
   return {source_finding_id: source.finding_id, node_id: source.node_id, binding: capture.binding, ...decision,
     ...(capture.source_snapshot ? {source_snapshot: capture.source_snapshot} : {}),
