@@ -310,7 +310,7 @@ Todo として計画して、ホストの有効化をガイドします。アク
 [Codex CLI のパッケージインストール手順](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md)、
 [Claude Code アダプター](loopx/claude_goal_mode/README.md)、
 [KunlunCode のネイティブ Goal アダプター](loopx/kunluncode_goal_mode/README.md)、
-[Kiro CLI の goal-mode アダプター](loopx/kiro_cli_goal_mode/README.md)、または
+[Kiro CLI の goal-mode アダプター](loopx/hosts/kiro_cli/README.md)、または
 [DeepSeek Harness のターンアダプター](loopx/dsh_goal_mode/README.md)を確認できます。
 
 ネイティブな手順については、[60 秒の DSH × LoopX Replan の録画と再現可能な

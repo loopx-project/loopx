@@ -71,7 +71,7 @@ from ..control_plane.collaboration import conversation_scope
 from ..control_plane.turn_driver.execution_profile import managed_execution_profile
 from ..control_plane.turn_driver.host_binding import MANAGED_TURN_HOST
 from ..file_lock import exclusive_cross_runtime_file_lock
-from ..kiro_cli_goal_mode import KIRO_CLI_CHAT_AGENT_ID, kiro_cli_chat_command
+from ..hosts.kiro_cli import KIRO_CLI_CHAT_AGENT_ID, kiro_cli_chat_command
 from .coordination import PROJECT_CONTEXT_VERSION
 
 if TYPE_CHECKING:

@@ -127,7 +127,7 @@ native-goal body and its blocked-state rules do not apply to Kiro.
 
 ## MCP control plane
 
-The kiro-cli surface registers `loopx/kiro_cli_goal_mode/mcp_server.py` in
+The kiro-cli surface registers `loopx/hosts/kiro_cli/mcp_server.py` in
 `<KIRO_HOME>/settings/mcp.json`, which Kiro's default agent loads, so the
 session that runs `/loopx` also gets the typed `should_run`, `list_todos`,
 `claim_task`, `complete_task` and `review_task_vision` tools. It is the shared

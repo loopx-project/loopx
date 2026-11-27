@@ -42,7 +42,7 @@ from loopx.host_loop_activation import (
     normalize_agent_type,
     scheduler_command_binding_for_agent_type,
 )
-from loopx.kiro_cli_goal_mode import (
+from loopx.hosts.kiro_cli import (
     KIRO_CLI_CHAT_AGENT_ID,
     KIRO_CLI_GOAL_CLEAR_COMMAND,
     KIRO_CLI_GOAL_COMMAND,
@@ -219,7 +219,7 @@ def test_every_actionable_consumer_renders_the_complete_goal_command() -> None:
 
     # Public docs are consumers too: a reader copies the row, not the module.
     for doc in (
-        "loopx/kiro_cli_goal_mode/README.md",
+        "loopx/hosts/kiro_cli/README.md",
         "README.md",
         "README.zh-CN.md",
     ):

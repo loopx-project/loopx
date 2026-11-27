@@ -71,7 +71,7 @@ Bindings are private per-session JSON files under
 and use mode `0600`. OpenCode's one-shot `opencode run` process cannot own
 timers after exit; recurring operation requires the visible TUI or a
 persistent OpenCode server. OpenCode 2 runs a persistent goal worker instead;
-see `loopx/opencode2_goal_mode/README.md`.
+see `loopx/hosts/opencode2/README.md`.
 
 Quota probes carry `--record-host-poll`, so LoopX writes a compact poll
 receipt beside the goal state file and `loopx global-risks` can flag a loop

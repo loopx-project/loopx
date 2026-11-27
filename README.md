@@ -324,7 +324,7 @@ the [Codex App host command registry contract](docs/reference/protocols/codex-ap
 the [Codex CLI packaged install path](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md),
 the [Claude Code adapter](loopx/claude_goal_mode/README.md), the
 [KunlunCode native Goal adapter](loopx/kunluncode_goal_mode/README.md), the
-[Kiro CLI goal-mode adapter](loopx/kiro_cli_goal_mode/README.md), or the
+[Kiro CLI goal-mode adapter](loopx/hosts/kiro_cli/README.md), or the
 [DeepSeek Harness turn adapter](loopx/dsh_goal_mode/README.md).
 
 See the [60-second DSH × LoopX Replan recording and reproducible

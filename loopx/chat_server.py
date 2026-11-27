@@ -108,7 +108,7 @@ from .presentation.explore_results_api import ExploreResultsRequestMixin
 from .presentation.research_analysis_api import RESEARCH_ANALYSIS_PATH, ResearchAnalysisRequestMixin
 from .presentation.goal_source_routing import GOAL_SOURCE_LINKS_PATH, GOAL_SOURCE_STRATEGIES_PATH, GOAL_SOURCE_DOCUMENT_PATH, GoalSourceRequestMixin
 from .chat.todo_detail import TodoDetailRequestMixin
-from .kiro_cli_goal_mode import KIRO_CLI_BIN
+from .hosts.kiro_cli import KIRO_CLI_BIN
 from .paths import resolve_runtime_root
 from .release_manifest import release_runtime_identity
 from .control_plane.projects.registry_codec import load_registry

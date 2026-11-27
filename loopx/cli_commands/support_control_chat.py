@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ..chat_server import DEFAULT_CHAT_HOST, DEFAULT_CHAT_PORT
-from ..kiro_cli_goal_mode import KIRO_CLI_BIN
+from ..hosts.kiro_cli import KIRO_CLI_BIN
 from ..paths import default_public_scan_root
 from .support_control_agent_runtime import (
     ensure_agent_runtime_path,

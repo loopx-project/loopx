@@ -19,13 +19,13 @@ from .host_loop_activation import (
 )
 from .history import load_registry
 from .install_contract import NO_CLONE_INSTALL_URL
-from .kiro_cli_goal_mode import (
+from .hosts.kiro_cli import (
     KIRO_CLI_GOAL_CLEAR_COMMAND,
     KIRO_CLI_GOAL_COMPLETION_TOOL,
     KIRO_CLI_GOAL_DEFAULT_MAX_ITERATIONS,
     kiro_cli_goal_invocation,
 )
-from .kiro_cli_goal_mode import (
+from .hosts.kiro_cli import (
     SKILLS_ROOT_LABEL as KIRO_CLI_SKILLS_ROOT_LABEL,
 )
 from .project_prompt import (

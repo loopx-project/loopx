@@ -1021,7 +1021,7 @@ provider 新增忙碌回合输入能力。
 - [Extensions](../../reference/extensions.md)
 - [LoopX Turn v0](../../reference/protocols/loopx-turn-v0.md)
 - [DeepSeek Harness connector](../../integrations/deepseek-harness-connector.md)
-- [Pi Goal mode](../../../loopx/pi_goal_mode/README.md)
+- [Pi Goal mode](../../../loopx/hosts/pi/README.md)
 - [Goal Channel collaboration v0](goal-channel-collaboration-v0.md)
 - [Volcengine Ark Agent Plan documentation](https://www.volcengine.com/docs/82379/1928262)
 - [Volcengine Ark API overview](https://api.volcengine.com/api-docs/view?serviceCode=ark&version=2024-01-01)

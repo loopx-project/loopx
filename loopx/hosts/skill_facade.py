@@ -8,8 +8,8 @@ or wake primitive, and how honest the quota claim can be — which is why they
 live together here instead of each growing `host_loop_activation.py`, whose
 module budget is already spent on the agent-type catalog and identity rules.
 
-Each host's facts stay in its own `*_goal_mode` package; this module only
-binds them to the shared packet shape.
+Each host's facts stay in its host adapter module (`loopx/hosts/*` or remaining
+`*_goal_mode` packages); this module only binds them to the shared packet shape.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from ..agy_goal_mode import (
     agy_activation_extras,
     antigravity_app_activation_extras,
 )
-from ..kiro_cli_goal_mode import (
+from .kiro_cli import (
     KIRO_CLI_INSTALL_SURFACE,
     SKILLS_ROOT_LABEL as KIRO_CLI_SKILLS_ROOT_LABEL,
     kiro_cli_activation_extras,

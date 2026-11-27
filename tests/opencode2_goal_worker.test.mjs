@@ -21,7 +21,7 @@ import {
   shouldRunNow,
   turnVerdict,
   waitPlan,
-} from "../loopx/opencode2_goal_mode/opencode2-goal-worker.mjs"
+} from "../loopx/hosts/opencode2/opencode2-goal-worker.mjs"
 
 
 const execFile = promisify(execFileCallback)
@@ -686,7 +686,7 @@ test("createApiTransport surfaces a wait failure that is not a missing route", a
 
 test("worker entry runs main() even when argv[1] goes through a symlinked path", async () => {
   const workerFile = path.resolve(
-    path.join(import.meta.dirname, "..", "loopx", "opencode2_goal_mode", "opencode2-goal-worker.mjs"),
+    path.join(import.meta.dirname, "..", "loopx", "hosts", "opencode2", "opencode2-goal-worker.mjs"),
   )
   const linkDir = path.join(os.tmpdir(), `loopx-worker-entry-${process.pid}`)
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "loopx-worker-entry-state-"))
@@ -744,7 +744,7 @@ test("parseWorkerArgs maps repeated capabilities and rejects unknown flags", () 
 
 
 test("createQuotaProbe reads a denied decision that exits non-zero", async () => {
-  const { createQuotaProbe } = await import("../loopx/opencode2_goal_mode/opencode2-goal-worker.mjs")
+  const { createQuotaProbe } = await import("../loopx/hosts/opencode2/opencode2-goal-worker.mjs")
   const denied = JSON.stringify({
     ok: false,
     should_run: false,

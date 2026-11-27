@@ -190,11 +190,10 @@ top-level packages:
   fence fidelity—never claiming autonomous execution or budget enforcement a host
   cannot verify.
 - **Consolidating `loopx/*_goal_mode/` into `loopx/hosts/`:** migrate the `9`
-  remaining top-level `loopx/*_goal_mode/` packages (`agy_goal_mode`,
-  `claude_goal_mode`, `dsh_goal_mode`, `kiro_cli_goal_mode`,
-  `kunluncode_goal_mode`, `opencode2_goal_mode`, `opencode_goal_mode`,
-  `pi_goal_mode`, `zcode_goal_mode`) into `loopx/hosts/` under shared
-  `HostHarnessCapabilities` projections per
+  top-level `loopx/*_goal_mode/` packages (`4` migrated into `loopx/hosts/`:
+  `hosts/kiro_cli`, `hosts/opencode`, `hosts/opencode2`, `hosts/pi`; `5` remaining:
+  `agy_goal_mode`, `claude_goal_mode`, `dsh_goal_mode`, `kunluncode_goal_mode`,
+  `zcode_goal_mode`) under shared `HostHarnessCapabilities` projections per
   [the unified contract's retirement gate](controller-executor-unified-contract-v0.md#3-normative-retirement-backlog-and-ratchet-rules)
   and [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json),
   keeping CLI compatibility aliases strictly until caller cutover completes.

@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
-from ..opencode_goal_mode import plugin_source, runtime_source
+from .opencode import plugin_source, runtime_source
 from ..skill_install_readback import retire_duplicate_managed_skills
 from ..slash_command_files import (
     CommandFacadeSpec,

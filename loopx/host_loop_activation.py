@@ -18,7 +18,7 @@ from .hosts.skill_facade import (
     kiro_cli_activation,
     zcode_activation,
 )
-from .kiro_cli_goal_mode import KIRO_CLI_AGENT_TYPE_CATALOG_ENTRY
+from .hosts.kiro_cli import KIRO_CLI_AGENT_TYPE_CATALOG_ENTRY
 from .control_plane.todos.contract import (
     normalize_required_capabilities,
     normalize_todo_claimed_by,
