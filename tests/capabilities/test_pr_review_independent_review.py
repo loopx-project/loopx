@@ -364,3 +364,154 @@ def test_cross_model_coverage_ignores_thread_reply_only_commented_review():
     row = data["pull_requests"][0]
     assert row["review_action_kind"] == "rereview_pull_request_exact_head"
     assert "independent_review" not in row
+
+
+def test_old_head_reply_wrapper_preserves_current_head_formal_opinion_across_queues():
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
+    formal_body = (
+        "Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · effort_unavailable\n\n"
+        "Looks solid overall.\n\n"
+        "Verdict: APPROVE"
+    )
+    head_formal = rest_review(
+        review(10, login="peer", state="APPROVED", head=HEAD, association="MEMBER")
+        | {"body": formal_body, "submittedAt": "2026-10-01T10:00:00Z"}
+    )
+    old_reply = rest_review(
+        review(11, login="peer", state="COMMENTED", head=OLD, association="MEMBER")
+        | {"body": "", "submittedAt": "2026-10-01T11:00:00Z"}
+    )
+    reply_comments = [[{
+        "id": 4713500001,
+        "pull_request_review_id": 11,
+        "in_reply_to_id": 4713400001,
+    }]]
+
+    for ordered in ([head_formal, old_reply], [old_reply, head_formal]):
+        for family in (None, "gpt"):
+            run, calls = _provider_with_comments([ordered], reply_comments, pr_author="cocolord")
+            scan = scan_github_pull_request_targets(
+                repository="owner/repo",
+                exact_heads=[f"42@{HEAD}"],
+                wait_for_ci=False,
+                run_gh_json=run,
+            )
+            annotated = {r["id"]: r for r in scan["pull_requests"][0]["reviews"]}
+            assert annotated[11]["comment_provenance"] == "reply_only"
+            assert any("pulls/42/comments" in str(part) for args in calls for part in args)
+
+            kwargs = {"reviewer_model_family": family} if family else {}
+            packet_data = build_pr_review_packet(
+                pull_requests=scan["pull_requests"],
+                source="github_cli_exact_targets",
+                source_scan=scan,
+                repository="owner/repo",
+                limit=10,
+                state_filter="all",
+                reviewer_login="loopx-agent",
+                wait_for_ci=False,
+                **kwargs,
+            )
+            row = packet_data["pull_requests"][0]
+            assert row["review_action_kind"] is None
+            assert row["independent_review"]["review_id"] == 10
+            assert row["independent_review"]["state"] == "APPROVED"
+            assert row["independent_review"]["source_complete"] is True
+            assert row.get("cross_model_review_needed") is not True
+
+
+def test_old_head_inline_root_dismissed_and_unknown_still_retire_current_head_coverage():
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
+    formal_body = (
+        "Reviewer: model_agent · GPT-6 · OpenAI · runtime_reported · effort_unavailable\n\n"
+        "Looks solid overall.\n\n"
+        "Verdict: APPROVE"
+    )
+    head_formal = rest_review(
+        review(10, login="peer", state="APPROVED", head=HEAD, association="MEMBER")
+        | {"body": formal_body, "submittedAt": "2026-10-01T10:00:00Z"}
+    )
+    old_empty = rest_review(
+        review(11, login="peer", state="COMMENTED", head=OLD, association="MEMBER")
+        | {"body": "", "submittedAt": "2026-10-01T11:00:00Z"}
+    )
+    old_dismissed = rest_review(
+        review(12, login="peer", state="DISMISSED", head=OLD, association="MEMBER")
+        | {"body": "", "submittedAt": "2026-10-01T11:00:00Z"}
+    )
+
+    root_comments = [[{"id": 4713500002, "pull_request_review_id": 11, "in_reply_to_id": None}]]
+    for page, bad_or_root, expected_prov in (
+        ([head_formal, old_empty], root_comments, "inline_root"),
+        ([head_formal, old_empty], OSError("comments unavailable"), "unknown"),
+        ([head_formal, old_dismissed], OSError("should not fetch comments"), None),
+    ):
+        run, _ = _provider_with_comments([page], bad_or_root, pr_author="cocolord")
+        scan = scan_github_pull_request_targets(
+            repository="owner/repo",
+            exact_heads=[f"42@{HEAD}"],
+            wait_for_ci=False,
+            run_gh_json=run,
+        )
+        if expected_prov is not None:
+            annotated = {r["id"]: r for r in scan["pull_requests"][0]["reviews"]}
+            assert annotated[11]["comment_provenance"] == expected_prov
+
+        for family in (None, "gpt"):
+            kwargs = {"reviewer_model_family": family} if family else {}
+            packet_data = build_pr_review_packet(
+                pull_requests=scan["pull_requests"],
+                source="github_cli_exact_targets",
+                source_scan=scan,
+                repository="owner/repo",
+                limit=10,
+                state_filter="all",
+                reviewer_login="loopx-agent",
+                wait_for_ci=False,
+                **kwargs,
+            )
+            row = packet_data["pull_requests"][0]
+            assert row["review_action_kind"] is not None
+            assert "independent_review" not in row
+
+
+def test_earlier_or_unrelated_old_head_empty_commented_skips_comments_fetch():
+    from loopx.capabilities.pr_review_queue.github_source import scan_github_pull_request_targets
+
+    earlier_old = rest_review(
+        review(9, login="peer", state="COMMENTED", head=OLD, association="MEMBER")
+        | {"body": "", "submittedAt": "2026-10-01T09:00:00Z"}
+    )
+    head_formal = rest_review(
+        review(10, login="peer", state="APPROVED", head=HEAD, association="MEMBER")
+        | {"body": "Looks good.", "submittedAt": "2026-10-01T10:00:00Z"}
+    )
+    unrelated_old = rest_review(
+        review(8, login="other", state="COMMENTED", head=OLD, association="CONTRIBUTOR")
+        | {"body": "", "submittedAt": "2026-10-01T11:00:00Z"}
+    )
+
+    for page in ([head_formal], [earlier_old, head_formal], [earlier_old, head_formal, unrelated_old]):
+        run, calls = _provider_with_comments([page], OSError("unexpected comments call"), pr_author="cocolord")
+        scan = scan_github_pull_request_targets(
+            repository="owner/repo",
+            exact_heads=[f"42@{HEAD}"],
+            wait_for_ci=False,
+            run_gh_json=run,
+        )
+        assert not any("pulls/42/comments" in str(part) for args in calls for part in args)
+        row = build_pr_review_packet(
+            pull_requests=scan["pull_requests"],
+            source="github_cli_exact_targets",
+            source_scan=scan,
+            repository="owner/repo",
+            limit=10,
+            state_filter="all",
+            reviewer_login="loopx-agent",
+            wait_for_ci=False,
+        )["pull_requests"][0]
+        assert row["review_action_kind"] is None
+        assert row["independent_review"]["review_id"] == 10
+        assert row["independent_review"]["source_complete"] is True

@@ -213,3 +213,74 @@ test("malformed or contradictory comment_provenance fails closed", () => {
   });
   assert.equal(contradictory.independent_review, undefined);
 });
+
+test("later OLD-head reply_only wrapper retains current-head formal opinion while inline_root and newer unknown retire it", () => {
+  const headFormal = makeOpinion(10, {
+    login: "peer",
+    state: "APPROVED",
+    head: HEAD,
+    valid: true,
+    verdict: "APPROVE",
+    family: "gpt",
+    reviewBodyValid: true,
+  });
+
+  const oldReplyOnly = makeOpinion(11, {
+    login: "peer",
+    state: "COMMENTED",
+    head: OLD,
+    commentProvenance: "reply_only",
+  });
+  for (const ordered of [[headFormal, oldReplyOnly], [oldReplyOnly, headFormal]]) {
+    const result = selectPrReviewConclusion({
+      author: "cocolord",
+      head: HEAD,
+      reviews_complete: true,
+      include_independent_coverage: true,
+      reviews: ordered,
+    });
+    assert.equal((result.independent_review as {review_id: number}).review_id, 10);
+    assert.equal((result.independent_review as {source_complete: boolean}).source_complete, true);
+    assert.deepEqual(result.independent_coverage_review_ids, [10]);
+    assert.deepEqual(result.independent_review_activity_ids, [10]);
+  }
+
+  for (const provenance of ["inline_root", "unknown"] as const) {
+    const oldDisplacement = makeOpinion(11, {
+      login: "peer",
+      state: "COMMENTED",
+      head: OLD,
+      commentProvenance: provenance,
+    });
+    for (const ordered of [[headFormal, oldDisplacement], [oldDisplacement, headFormal]]) {
+      const result = selectPrReviewConclusion({
+        author: "cocolord",
+        head: HEAD,
+        reviews_complete: true,
+        include_independent_coverage: true,
+        reviews: ordered,
+      });
+      assert.equal(result.independent_review, undefined);
+      assert.deepEqual(result.independent_coverage_review_ids, []);
+    }
+  }
+
+  const earlierOldUnknown = makeOpinion(9, {
+    login: "peer",
+    state: "COMMENTED",
+    head: OLD,
+    commentProvenance: "unknown",
+  });
+  for (const ordered of [[earlierOldUnknown, headFormal], [headFormal, earlierOldUnknown]]) {
+    const result = selectPrReviewConclusion({
+      author: "cocolord",
+      head: HEAD,
+      reviews_complete: true,
+      include_independent_coverage: true,
+      reviews: ordered,
+    });
+    assert.equal((result.independent_review as {review_id: number}).review_id, 10);
+    assert.equal((result.independent_review as {source_complete: boolean}).source_complete, true);
+    assert.deepEqual(result.independent_coverage_review_ids, [10]);
+  }
+});

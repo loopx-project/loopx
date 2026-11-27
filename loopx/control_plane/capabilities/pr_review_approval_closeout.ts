@@ -62,13 +62,17 @@ function independentReviewEvidence(reviews: readonly ProviderOpinion[],
     const provenance = rawProvenance as CommentProvenance | undefined;
     if (provenance === "inline_root" && source.thread_reply_only === true) return {};
     if (provenance === "reply_only" && source.thread_reply_only === false) return {};
-    // GraphQL thread-reply wrappers and unknown comment provenance have no verified formal
-    // or inline-root review activity and must not establish source_complete coverage or retire prior reviews.
+    // GraphQL thread-reply wrappers have no verified formal or inline-root review activity
+    // and must never establish or retire coverage. Unknown provenance on the current head
+    // cannot certify coverage; unknown provenance on an older head fails closed if newer.
     if (
       row.state === "COMMENTED"
       && row.conclusion.valid !== true
-      && (provenance === "reply_only" || provenance === "unknown"
-        || (provenance === undefined && source.thread_reply_only === true))
+      && (
+        provenance === "reply_only"
+        || (provenance === undefined && source.thread_reply_only === true)
+        || (provenance === "unknown" && row.head === head)
+      )
     ) {
       continue;
     }

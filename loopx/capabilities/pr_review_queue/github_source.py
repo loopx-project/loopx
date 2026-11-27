@@ -10,6 +10,7 @@ import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .selection_execution import normalize_fresh_audit_exact_heads
@@ -259,6 +260,21 @@ def fetch_complete_pr_review_comments(*, repository: str, number: str, cwd: Path
     return comments
 
 
+def _parse_review_epoch_ms(value: object) -> int | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(round(parsed.timestamp() * 1000))
+
+
 def _empty_commented_non_author_review_ids(
     reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
 ) -> set[int]:
@@ -266,6 +282,31 @@ def _empty_commented_non_author_review_ids(
         return set()
     expected_head = head_oid.strip().casefold()
     author_key = author.strip().casefold()
+    min_head_sort_key: dict[str, tuple[int, int]] = {}
+    unbounded_head_actors: set[str] = set()
+    for review in reviews:
+        review_id = review.get("id")
+        user = review.get("user")
+        login = user.get("login") if isinstance(user, Mapping) else None
+        commit_id = review.get("commit_id")
+        state = str(review.get("state") or "").strip().upper()
+        if (
+            type(review_id) is int and review_id > 0
+            and isinstance(login, str) and login.strip()
+            and login.strip().casefold() != author_key
+            and isinstance(commit_id, str) and commit_id.strip().casefold() == expected_head
+            and state not in {"PENDING", "DISMISSED"}
+        ):
+            actor_key = login.strip().casefold()
+            epoch_ms = _parse_review_epoch_ms(review.get("submitted_at"))
+            if epoch_ms is None:
+                unbounded_head_actors.add(actor_key)
+            else:
+                sort_key = (epoch_ms, review_id)
+                existing = min_head_sort_key.get(actor_key)
+                if existing is None or sort_key < existing:
+                    min_head_sort_key[actor_key] = sort_key
+
     candidate_ids: set[int] = set()
     for review in reviews:
         review_id = review.get("id")
@@ -275,11 +316,26 @@ def _empty_commented_non_author_review_ids(
         state = str(review.get("state") or "").strip().upper()
         body = review.get("body")
         body_text = body if isinstance(body, str) else str(body or "")
-        if (type(review_id) is int and review_id > 0
-                and isinstance(login, str) and login.strip().casefold() != author_key
-                and isinstance(commit_id, str) and commit_id.strip().casefold() == expected_head
-                and state == "COMMENTED" and not body_text.strip()):
+        if not (
+            type(review_id) is int and review_id > 0
+            and isinstance(login, str) and login.strip()
+            and login.strip().casefold() != author_key
+            and isinstance(commit_id, str) and commit_id.strip()
+            and state == "COMMENTED" and not body_text.strip()
+        ):
+            continue
+        if commit_id.strip().casefold() == expected_head:
             candidate_ids.add(review_id)
+            continue
+        # Only inspect older-head empty COMMENTED wrappers when the same reviewer
+        # has current-head activity that this later/tied review could displace.
+        actor_key = login.strip().casefold()
+        if actor_key in unbounded_head_actors:
+            candidate_ids.add(review_id)
+        elif actor_key in min_head_sort_key:
+            epoch_ms = _parse_review_epoch_ms(review.get("submitted_at"))
+            if epoch_ms is None or (epoch_ms, review_id) > min_head_sort_key[actor_key]:
+                candidate_ids.add(review_id)
     return candidate_ids
 
 
@@ -287,7 +343,7 @@ def _empty_commented_review_provenance(
     reviews: Sequence[Mapping[str, Any]], *, author: str, head_oid: object,
     repository: str, number: str, cwd: Path | None, run_gh_json: GitHubJsonRunner,
 ) -> dict[int, str]:
-    """Classify current-head empty non-author COMMENTED reviews into three states:
+    """Classify candidate empty non-author COMMENTED reviews into three states:
 
     - ``reply_only``: >=1 attributed inline comments, all valid positive-int ``in_reply_to_id``.
     - ``inline_root``: >=1 attributed inline root comment (missing or ``None`` ``in_reply_to_id``).
