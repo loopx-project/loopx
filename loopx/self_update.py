@@ -1199,7 +1199,7 @@ def _execute_python_distribution_update(
     runtime_ready = runtime_ready and identity_verified
     updated["changes_applied"] = changes_applied and identity_verified
     updated["ok"] = runtime_ready and extension_ready
-    if _retain_pending_service_activation(updated):
+    if identity_verified and _retain_pending_service_activation(updated):
         return updated
     if updated["ok"]:
         updated["recommended_action"] = (

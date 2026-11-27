@@ -78,6 +78,9 @@ updater rechecks the package after extension validation and inside the managed
 service handoff. If identity cannot be verified, the update retains the
 package-manager result and directs you to `loopx doctor --installation-only` in
 the owning Python environment before retrying.
+An unbound service can restart through its verified launcher and needs matching
+HTTP readiness before activation succeeds. A mismatched route or response
+leaves activation pending.
 
 For contributors, keep the clone-plus-canary path:
 

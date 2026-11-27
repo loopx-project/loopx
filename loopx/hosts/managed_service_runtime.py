@@ -137,13 +137,13 @@ def has_runtime_binding() -> bool:
     return False
 
 
-def _service_command(payload: dict) -> tuple[dict[str, str], list[str]]:
+def _service_command(payload: dict, *, expected_command: str | None = None) -> tuple[dict[str, str], list[str]]:
     arguments, _ = _launcher(payload)
     #  Parse the command
     # position, rather than finding a word that could be an option's value.
     # This adapter accepts the installer's global options; custom invocations
     # remain under their original owner without any signal or persistent edit.
-    expected = {"com.loopx.status": "serve-status", "com.loopx.chat": "chat"}.get(payload.get("Label"))
+    expected = expected_command or {"com.loopx.status": "serve-status", "com.loopx.chat": "chat"}.get(payload.get("Label"))
     if expected is None or Path(arguments[0]).name != "loopx":
         raise ValueError("service_runtime_route_unverified")
     index = 1
@@ -160,8 +160,8 @@ def _service_command(payload: dict) -> tuple[dict[str, str], list[str]]:
     return options, arguments[index + 1:]
 
 
-def _endpoint(payload: dict) -> int:
-    _, arguments = _service_command(payload)
+def _endpoint(payload: dict, *, expected_command: str | None = None) -> int:
+    _, arguments = _service_command(payload, expected_command=expected_command)
     def option(flag):
         values = [word.split("=", 1)[1] if word.startswith(flag + "=")
             else arguments[i + 1] if i + 1 < len(arguments) else ""
@@ -178,6 +178,23 @@ def _endpoint(payload: dict) -> int:
     if not 1 <= port <= 65535:
         raise ValueError("service_runtime_route_unverified")
     return port
+
+
+def legacy_restart_endpoint(plist: Path, launcher: Path) -> int:
+    """Verify the loaded legacy route without retargeting its installation."""
+    if plist.is_symlink():
+        raise ValueError("service_runtime_route_unverified")
+    payload = plistlib.loads(plist.read_bytes())
+    if not isinstance(payload, dict) or payload.get("Label") != plist.stem:
+        raise ValueError("service_runtime_route_unverified")
+    arguments, _ = _launcher(payload)
+    if Path(arguments[0]).resolve(strict=True) != launcher:
+        raise ValueError("service_runtime_route_unverified")
+    loaded, _ = activation._managed_service_state(plist, payload=payload)
+    if not loaded:
+        raise ValueError("service_runtime_route_unverified")
+    command = "chat" if plist.stem.endswith(".chat") else "serve-status"
+    return _endpoint(payload, expected_command=command)
 
 
 def _observer_route(payload: dict) -> Path:

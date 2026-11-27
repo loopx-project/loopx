@@ -32,6 +32,10 @@ class RuntimeActivationDeferred(Exception):
 class RuntimeActivationIdentityUnverified(Exception):
     """Service activation could no longer verify the selected Python package."""
 
+    def __init__(self, pending: list[str] | None = None) -> None:
+        super().__init__()
+        self.pending = pending or []
+
 
 class RuntimeActivationFailed(Exception):
     def __init__(self, restarted: list[str], pending: list[str]) -> None:
@@ -292,13 +296,9 @@ def restart_managed_loopx_services(
     """
     if sys.platform != "darwin":
         return []
-    labels: list[str] = []
-    chat_plists: list[Path] = []
-    for plist in _managed_service_plists() if plists is None else plists:
-        stem = plist.stem.lower()
-        labels.append(plist.stem)
-        if stem.endswith(".chat"):
-            chat_plists.append(plist)
+    service_plists = _managed_service_plists() if plists is None else plists
+    labels = [plist.stem for plist in service_plists]
+    chat_plists = [plist for plist in service_plists if plist.stem.lower().endswith(".chat")]
     restarted: list[str] = []
     uid = os.getuid() if hasattr(os, "getuid") else 0
     try:
@@ -307,10 +307,23 @@ def restart_managed_loopx_services(
             # Existing workers need no new lock: any accepted queued/active work
             # was checked above, including completing and orphaned queued Turns.
             if labels and expected_python_installation is not None:
-                from .hosts.managed_service_runtime import qualify_expected_python_runtime
+                from .hosts.managed_service_runtime import (
+                    _verify_services, legacy_restart_endpoint, qualify_expected_python_runtime,
+                )
 
-                qualify_expected_python_runtime(*expected_python_installation)
-            for label in labels:
+                try:
+                    launcher, identity, _ = qualify_expected_python_runtime(*expected_python_installation)
+                except RuntimeActivationIdentityUnverified as exc:
+                    raise RuntimeActivationIdentityUnverified(labels) from exc
+                try:
+                    endpoints = {plist: legacy_restart_endpoint(plist, launcher) for plist in service_plists}
+                except (OSError, ValueError, plistlib.InvalidFileException, ExpatError,
+                        subprocess.SubprocessError) as exc:
+                    raise RuntimeActivationDeferred("service_runtime_route_unverified", labels) from exc
+            else:
+                endpoints = {}
+            for plist in service_plists:
+                label = plist.stem
                 try:
                     result = subprocess.run(
                         ["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
@@ -324,8 +337,10 @@ def restart_managed_loopx_services(
                         raise RuntimeActivationFailed(
                             restarted, [s for s in labels if s not in restarted]
                         )
+                    if plist in endpoints:
+                        _verify_services({plist: endpoints[plist]}, identity)
                     restarted.append(label)
-                except (OSError, subprocess.SubprocessError) as exc:
+                except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
                     raise RuntimeActivationFailed(
                         restarted, [s for s in labels if s not in restarted]
                     ) from exc
@@ -380,6 +395,7 @@ def restart_services_for_runtime_activation(
             "restarted_services": [],
             "restart_status": "skipped_custom_installation",
         }
+    aligned_restarts: list[str] = []
     try:
         from .hosts.managed_service_runtime import (
             align_managed_runtime,
@@ -404,9 +420,14 @@ def restart_services_for_runtime_activation(
             aligned = align_managed_runtime(
                 str(installed_bin), expected_python_identity=installed_python_identity,
             )
+            aligned_restarts = aligned["restarted_services"]
             other = [p for p in plists if p.stem not in {"com.loopx.status", "com.loopx.chat"}]
-            restarted = restart_managed_loopx_services(plists=other) if other else []
-            restarted = [*aligned["restarted_services"], *restarted]
+            expected = (installed_bin, installed_python_identity) if installed_python_identity is not None else None
+            restarted = list(aligned_restarts)
+            if other:
+                restarted.extend(restart_managed_loopx_services(
+                    plists=other, expected_python_installation=expected,
+                ))
             no_restart_status = "already_active" if aligned["readiness_verified"] else "not_running"
             return {"restarted_services": restarted, "activation_pending": False,
                 "restart_status": "restarted" if restarted else no_restart_status}
@@ -424,16 +445,18 @@ def restart_services_for_runtime_activation(
             "restart_status": "restarted" if restarted else "not_running",
             "activation_pending": False,
         }
-    except RuntimeActivationIdentityUnverified:
+    except RuntimeActivationIdentityUnverified as exc:
         return {
-            "restarted_services": [],
+            "restarted_services": aligned_restarts,
+            "deferred_services": exc.pending,
             "restart_status": "skipped_runtime_not_activated",
             "restart_reason": "service_runtime_unverified",
             "package_identity_verified": False,
+            "activation_pending": bool(exc.pending),
         }
     except RuntimeActivationDeferred as exc:
         return {
-            "restarted_services": [],
+            "restarted_services": aligned_restarts,
             "deferred_services": exc.labels,
             "restart_status": "deferred",
             "restart_reason": str(exc),
@@ -441,12 +464,12 @@ def restart_services_for_runtime_activation(
         }
     except RuntimeActivationFailed as exc:
         return {
-            "restarted_services": exc.restarted,
+            "restarted_services": [*aligned_restarts, *exc.restarted],
             "deferred_services": exc.pending,
             "restart_status": "failed",
             "restart_reason": str(exc),
             "activation_pending": True,
         }
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-        return {"restarted_services": [], "restart_status": "failed",
+        return {"restarted_services": aligned_restarts, "restart_status": "failed",
             "restart_reason": "service_runtime_alignment_failed", "activation_pending": True}
