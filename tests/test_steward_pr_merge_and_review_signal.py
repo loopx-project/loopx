@@ -97,6 +97,41 @@ def test_parse_github_pr_target_shapes() -> None:
         parse_github_pr_target("merge PR 42 and also 43")
 
 
+@pytest.mark.parametrize(("request_at", "approval_at", "provider_decision", "last_id", "expected"), [
+    ("2030-01-01T08:00:00Z", "2030-01-01T01:00:00-08:00", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T09:00:00Z", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T15:00:00+08:00", "REVIEW_REQUIRED", "PRR_request", "REQUEST_CHANGES"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T16:00:00+08:00", "REVIEW_REQUIRED", "PRR_approve", "APPROVE"),
+    ("unreadable", "2030-01-01T01:00:00-08:00", "REVIEW_REQUIRED", "PRR_request", "REQUEST_CHANGES"),
+    ("2030-01-01T08:00:00Z", "2030-01-01T01:00:00-08:00", "CHANGES_REQUESTED", "PRR_approve", "REQUEST_CHANGES"),
+], ids=["later-offset-approval", "utc-control", "later-request", "equal-utc-instants",
+        "unreadable-actionable-time", "provider-request-still-blocks"])
+def test_exact_head_review_summary_orders_known_instants_and_retains_legacy_evidence(
+    request_at: str, approval_at: str, provider_decision: str, last_id: str, expected: str,
+) -> None:
+    head = "e" * 40
+    reviewer = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    same_reviewer = {"author": {"login": "fixture-reviewer"}, "commit": {"oid": head}}
+    reviews = [
+        {**same_reviewer, "id": "PRR_approve", "state": "APPROVED", "submittedAt": approval_at,
+         "body": _valid_bilingual_body(head_oid=head, verdict="APPROVE", reviewer=reviewer)},
+        {**same_reviewer, "id": "PRR_comment", "state": "COMMENTED", "body": "An undated comment."},
+        {**same_reviewer, "id": "PRR_request", "state": "CHANGES_REQUESTED", "submittedAt": request_at,
+         "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES", reviewer=reviewer)},
+    ]
+    summary = summarize_github_pr_signal(_sample_pr(
+        head_oid=head, author="fixture-author", reviews=reviews, review_decision=provider_decision,
+    ))["review_summary"]
+    exact_reviews = summary["exact_head_reviews"]
+
+    assert (summary["effective_verdict"], exact_reviews[-1]["id"]) == (expected, last_id)
+    assert exact_reviews[0]["id"] == "PRR_comment"
+    assert {review["id"]: review["submitted_at"] for review in exact_reviews} == {
+        "PRR_approve": approval_at, "PRR_request": request_at, "PRR_comment": None,
+    }
+    assert summary["has_review_conflict"] is (provider_decision == "CHANGES_REQUESTED")
+
+
 def test_summarize_pr_distinguishes_gpt_gemini_fallback_stale_casual_and_conflict() -> None:
     head = "b" * 40
     old = "0" * 40
@@ -363,6 +398,164 @@ def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     assert exact["url"] == "https://github.com/org/repo/pull/42#pullrequestreview-998877"
 
 
+def _review_page_stdout(rows, link=None) -> str:
+    fields = ["HTTP/2 200 OK", "Content-Type: application/json"]
+    if link is not None:
+        fields.append(f"Link: {link}")
+    return "\r\n".join(fields) + "\r\n\r\n" + json.dumps(rows)
+
+
+@pytest.mark.parametrize(("views", "rest", "expected"), [
+    ([("view-a", "offset", None)], [(None, "utc", "101")], {"view-a": "101"}),
+    ([("view-a", "offset", None)], [("view-a", "later", "101"), (None, "offset", "102")], {"view-a": "101"}),
+    ([("view-a", "utc", None)], [(None, "utc", "101"), (None, "offset", "102")], {"view-a": None}),
+    ([("view-a", "utc", None)], [(None, "utc", "101"), (None, "offset", None)], {"view-a": None}),
+    ([("view-a", "utc", None), ("view-b", "offset", None)], [(None, "utc", "101")],
+     {"view-a": None, "view-b": None}),
+    ([("view-a", "utc", None)], [("rest-b", "utc", "101")], {"view-a": None}),
+    ([("view-a", "invalid", None)], [(None, "invalid", "101")], {"view-a": None}),
+    ([("view-a", "utc", "100"), ("view-b", "later", None)],
+     [("view-a", "utc", "101"), (None, "later", "102")], {"view-a": "100", "view-b": "102"}),
+    ([("view-a", "utc", None)], [("view-a", "utc", "101"), ("view-a", "offset", "102")], {"view-a": None}),
+    ([("view-a", "utc", None), ("rest-0", "later", None)],
+     [(None, "utc", "101")] + [(f"rest-{index}", "later", str(200 + index)) for index in range(99)],
+     {"view-a": None, "rest-0": "200"}),
+], ids=["equivalent-offset", "direct-id-precedence", "multiple-rest-matches", "unlinked-rest-candidate",
+        "multiple-view-matches", "different-known-node", "unreadable-time", "preserve-source-link",
+        "conflicting-direct-links", "full-page-holds-fallback"])
+def test_inspect_github_pull_request_correlates_only_unique_review_links(views, rest, expected) -> None:
+    head = "d" * 40
+    timestamps = {
+        "utc": "2030-01-01T08:30:00Z",
+        "offset": "2030-01-01T16:30:00+08:00",
+        "later": "2030-01-01T08:30:01Z",
+        "invalid": "unreadable",
+    }
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    pr_row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit": {"oid": head}, "submittedAt": timestamps[stamp], "url": prefix + link if link else None}
+        for node, stamp, link in views
+    ])
+    rest_rows = [
+        {"node_id": node, "user": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit_id": head, "submitted_at": timestamps[stamp], "html_url": prefix + link if link else None}
+        for node, stamp, link in rest
+    ]
+
+    def runner(cmd, **_kwargs):
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(pr_row))
+        if cmd[:2] == ["gh", "api"]:
+            if "--include" not in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(rest_rows))
+            if "page=2" in cmd[2].split("&"):
+                raise subprocess.TimeoutExpired(cmd, _kwargs["timeout"])
+            link = '<https://api.github.com/repositories/42/pulls/42/reviews?page=2>; rel="next"' if len(rest_rows) == 100 else None
+            return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(rest_rows, link))
+        raise AssertionError(cmd)
+
+    inspected = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert inspected is not None
+    reviews = inspected["review_summary"]["exact_head_reviews"]
+    assert {review["id"]: review["url"] for review in reviews} == {
+        node: prefix + link if link else None for node, link in expected.items()
+    }
+    assert {review["id"]: review["submitted_at"] for review in reviews} == {
+        node: timestamps[stamp] for node, stamp, _ in views
+    }
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_inspect_github_pull_request_reads_later_ids_before_correlating_fallback(ambiguous) -> None:
+    head = "d" * 40
+    stamp = "2030-01-01T08:30:00Z"
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": lookup}, "state": "COMMENTED", "commit": {"oid": head},
+         "submittedAt": stamp}
+        for node, lookup in (("fallback", "fixture-author"), ("later-id", "fixture-maintainer"))
+    ])
+    candidate = {"html_url": prefix + "101", "user": {"login": "fixture-author"},
+                 "state": "COMMENTED", "commit_id": head, "submitted_at": stamp}
+    later_page = [{"node_id": "later-id", "html_url": prefix + "102"}]
+    if ambiguous:
+        later_page.append({**candidate, "html_url": prefix + "103"})
+    paths = []
+
+    def runner(cmd, **_kwargs):
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(row))
+        assert cmd[:2] == ["gh", "api"]
+        paths.append(cmd[2])
+        if len(paths) == 2:
+            return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(
+                later_page, '<https://api.github.com/repositories/42/pulls/42/reviews?page=1>; rel="prev"',
+            ))
+        if "--include" not in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([candidate]))
+        return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(
+            [candidate], '<https://api.github.com/repositories/42/pulls/42/reviews?page=2>; rel="next"',
+        ))
+
+    result = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert result is not None
+    assert {review["id"]: review["url"] for review in result["review_summary"]["exact_head_reviews"]} == {
+        "fallback": None if ambiguous else prefix + "101", "later-id": prefix + "102",
+    }
+    assert paths == ["repos/org/repo/pulls/42/reviews?per_page=100&page=1",
+                     "repos/org/repo/pulls/42/reviews?per_page=100&page=2"]
+
+
+@pytest.mark.parametrize(("stop", "expected_reads"), [
+    ("page-cap", 3), ("timeout", 2), ("wall-budget", 1), ("malformed-link", 1), ("body-only", 1),
+])
+def test_inspect_github_pull_request_keeps_direct_links_when_pages_are_incomplete(
+    stop: str, expected_reads: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "d" * 40
+    stamp = "2030-01-01T08:30:00Z"
+    prefix = "https://github.com/org/repo/pull/42#pullrequestreview-"
+    row = _sample_pr(number=42, head_oid=head, reviews=[
+        {"id": node, "author": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit": {"oid": head}, "submittedAt": review_time}
+        for node, review_time in (("direct", "2030-01-01T08:30:01Z"), ("fallback", stamp))
+    ])
+    first_page = [
+        {"node_id": "direct", "html_url": prefix + "101"},
+        {"html_url": prefix + "102", "user": {"login": "fixture-reviewer"}, "state": "COMMENTED",
+         "commit_id": head, "submitted_at": stamp},
+    ]
+    clock, budgets = 0.0, []
+    monkeypatch.setattr(github_pr_evidence, "monotonic", lambda: clock, raising=False)
+
+    def runner(cmd, **kwargs):
+        nonlocal clock
+        if cmd[:3] == ["gh", "pr", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(row))
+        assert cmd[:2] == ["gh", "api"]
+        budgets.append(kwargs["timeout"])
+        if stop == "timeout" and len(budgets) == 2:
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+        clock += 10 if stop == "wall-budget" else 2
+        candidates = first_page if len(budgets) == 1 else []
+        if stop == "body-only" or "--include" not in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(candidates))
+        link = "incomplete header" if stop == "malformed-link" else (
+            f'<https://api.github.com/repositories/42/pulls/42/reviews?page={len(budgets) + 1}>; rel="next"'
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=_review_page_stdout(candidates, link))
+
+    result = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert result is not None
+    assert {review["id"]: review["url"] for review in result["review_summary"]["exact_head_reviews"]} == {
+        "direct": prefix + "101", "fallback": None,
+    }
+    assert budgets == [10.0, 8.0, 6.0][:expected_reads]
+
+
 def _steward_with_repo(steward_comp, tmp_path):
     store, runtime, *_ = steward_comp
     _project, registry, _ = _fixture(tmp_path / "canonical", runtime_root=store.root.parent)
@@ -564,6 +757,45 @@ def test_steward_protected_merge_head_drift_and_crash_recovery(steward, tmp_path
     assert recovered["status"] == "applied"
     assert recovered["receipt"]["outcome"] == "pr_merged_recovered"
     assert recovered["receipt"]["resource_ids"]["merge_commit_oid"] == "9" * 40
+
+
+@pytest.mark.parametrize(("anchor_suffix", "replies", "expected"), [
+    ("Z", [("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+    ("Z", [("author", "2030-01-01T08:00:00.000001z")], (True, False)),
+    ("Z", [("author", "2030-01-01T08:00:00.000001Z"), ("maintainer", "2030-01-01T08:00:00.000002z")], (False, False)),
+    ("Z", [("author", "2030-01-01T16:00:00+08:00")], (False, False)),
+    ("Z", [("author", "0001-01-01T00:00:00+01:00"), ("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+    ("Z", [("author", "0001-01-01T00:00:00+01:00")], (False, True)),
+    ("Z", [("author", "unreadable")], (False, True)),
+    ("z", [("author", "2030-01-01T08:00:00.000001Z")], (True, False)),
+], ids=[
+    "uppercase-author", "lowercase-author", "lowercase-maintainer", "equal-offset-anchor",
+    "underflow-with-valid-reply", "underflow-only", "unreadable-only", "raw-lowercase-anchor",
+])
+def test_review_timestamp_parity_preserves_reply_and_comment_coverage(
+    anchor_suffix: str, replies: list[tuple[str, str]], expected: tuple[bool, bool],
+) -> None:
+    head = "e" * 40
+    anchor = f"2030-01-01T08:00:00{anchor_suffix}"
+    fixture = _sample_pr(
+        head_oid=head, author="fixture-contributor", review_decision="CHANGES_REQUESTED",
+        reviews=[{
+            "id": "PRR_fixture", "author": {"login": "fixture-maintainer"}, "state": "CHANGES_REQUESTED",
+            "commit": {"oid": head}, "submittedAt": anchor,
+            "body": _valid_bilingual_body(head_oid=head, verdict="REQUEST_CHANGES",
+                                         reviewer="model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"),
+        }],
+    )
+    comments = [
+        {"createdAt": stamp, "author": {"login": "fixture-contributor" if role == "author" else "fixture-maintainer"},
+         "authorAssociation": "CONTRIBUTOR" if role == "author" else "MEMBER"}
+        for role, stamp in replies
+    ]
+    summary = summarize_github_pr_signal({**fixture, "comments": comments, "commentsHasPreviousPage": True})
+
+    assert (summary["author_replied_after_request_changes"], summary["comments_coverage_incomplete"]) == expected
+    assert summary["stalled_since"] == anchor
+    assert summary["review_summary"]["latest_request_changes_review_id"] == "PRR_fixture"
 
 
 def test_summarize_pr_stalled_since_and_author_reply_detection(monkeypatch) -> None:

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import configparser
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime
+from email.parser import HeaderParser
 import json
 from pathlib import Path
 import re
 import subprocess
+from time import monotonic
 from typing import Any, Callable, Mapping, Sequence
 
 from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
@@ -17,6 +20,7 @@ from ..pr_review_queue.review_body import (
     english_review_verdict,
     reviewer_declaration_lines,
 )
+from ...control_plane.runtime.time import chronology_key, parse_timestamp
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...registry import load_registry, registry_goals
 
@@ -53,18 +57,8 @@ _NON_MAINTAINER_ASSOCIATIONS = frozenset(
 
 def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
     raw = str(value or "").strip()
-    if not raw:
-        return None
-    normalized = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
-    try:
-        dt = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt, raw
+    parsed = parse_timestamp(raw)
+    return None if parsed is None else (parsed, raw)
 
 
 def _is_bot_login(login: str) -> bool:
@@ -429,7 +423,15 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             stale_count += 1
             continue
         exact_reviews.append(_extract_review_record(review, head_oid=head_oid, pr_author=pr_author))
-    exact_reviews.sort(key=lambda item: (item["submitted_at"] or "", item["id"] or ""))
+    timed_reviews = [(chronology_key(review["submitted_at"]), review) for review in exact_reviews]
+    # An undated verdict could supersede a dated one. Preserve the legacy
+    # decision order when the evidence cannot establish their chronology.
+    if any(not has_instant and _actor_actionable_verdict(review) is not None
+           for (has_instant, _, _), review in timed_reviews):
+        exact_reviews.sort(key=lambda review: (review["submitted_at"] or "", review["id"] or ""))
+    else:
+        timed_reviews.sort(key=lambda entry: (entry[0], entry[1]["id"] or ""))
+        exact_reviews = [review for _, review in timed_reviews]
 
     latest_by_actor: dict[tuple[str, str], str | None] = {}
     latest_record_by_actor: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
@@ -871,6 +873,67 @@ def observe_github_repository_prs(
         return {"status": "unavailable", "repository": repo_slug}
 
 
+def _review_link_signature(review: Mapping[str, Any]) -> tuple[str, str, str, datetime] | None:
+    author = review.get("author") or review.get("user")
+    login = str((author.get("login") if isinstance(author, Mapping) else None) or "").strip().casefold()
+    state = str(review.get("state") or "").strip().upper()
+    commit = review.get("commit")
+    head = str((commit.get("oid") if isinstance(commit, Mapping) else review.get("commit_id")) or "").strip().casefold()
+    instant = parse_timestamp(review.get("submittedAt") or review.get("submitted_at"))
+    return (login, state, head, instant) if login and state and head and instant is not None else None
+
+
+_REVIEW_PAGE_LINK = re.compile(r'<[^<>\r\n]+>\s*;\s*rel="(next|prev|first|last)"')
+
+
+def _rest_review_page(stdout: str) -> tuple[list[Any], bool | None]:
+    if not stdout.startswith("HTTP/"):
+        rows = json.loads(stdout)
+        return (rows, None) if isinstance(rows, list) else ([], None)
+    headers, separator, body = stdout.replace("\r\n", "\n").partition("\n\n")
+    status, _, fields = headers.partition("\n")
+    if not separator or not re.fullmatch(r"HTTP/\S+ 200(?: .*)?", status):
+        return [], None
+    rows = json.loads(body)
+    if not isinstance(rows, list):
+        return [], None
+    parsed = HeaderParser().parsestr(fields)
+    if parsed.defects:
+        return rows, None
+    relations = []
+    for link in parsed.get_all("Link", []):
+        found = _REVIEW_PAGE_LINK.findall(link)
+        if not found or _REVIEW_PAGE_LINK.sub("", link).strip(" ,\t\n"):
+            return rows, None
+        relations.extend(found)
+    return rows, "next" in relations
+
+
+def _read_rest_review_pages(repo_slug: str, pr_number: int, *, runner: Callable[..., Any]) -> tuple[list[Any], bool]:
+    deadline = monotonic() + 10
+    rows: list[Any] = []
+    for page in range(1, 4):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            break
+        try:
+            completed = runner(
+                ["gh", "api", f"repos/{repo_slug}/pulls/{pr_number}/reviews?per_page=100&page={page}", "--include"],
+                capture_output=True, text=True, check=False, timeout=remaining,
+            )
+            if completed.returncode != 0:
+                break
+            page_rows, has_next = _rest_review_page(completed.stdout or "")
+        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+            break
+        rows.extend(page_rows)
+        if has_next is False:
+            return rows, all(isinstance(review, Mapping) for review in rows)
+        if has_next is None:
+            break
+    return rows, False
+
+
 def _enrich_review_urls(
     row: dict[str, Any],
     repo_slug: str,
@@ -883,50 +946,40 @@ def _enrich_review_urls(
         return
     if all(isinstance(r, Mapping) and r.get("url") for r in reviews):
         return
-    try:
-        completed = runner(
-            ["gh", "api", f"repos/{repo_slug}/pulls/{pr_number}/reviews?per_page=100"],
-            capture_output=True, text=True, check=False, timeout=10,
-        )
-        if completed.returncode != 0:
-            return
-        rest_rows = json.loads(completed.stdout or "[]")
-        if not isinstance(rest_rows, list):
-            return
-        by_node = {
-            str(r.get("node_id")): str(r.get("html_url"))
-            for r in rest_rows
-            if isinstance(r, Mapping) and r.get("node_id") and r.get("html_url")
-        }
-        by_sig = {
-            (
-                str((r.get("user") or {}).get("login") or "").casefold(),
-                str(r.get("state") or "").upper(),
-                str(r.get("commit_id") or "").casefold(),
-                str(r.get("submitted_at") or ""),
-            ): str(r.get("html_url"))
-            for r in rest_rows
-            if isinstance(r, Mapping) and r.get("html_url")
-        }
-        for review in reviews:
-            if not isinstance(review, dict) or review.get("url"):
-                continue
-            node_id = str(review.get("id") or "")
-            if node_id and node_id in by_node:
-                review["url"] = by_node[node_id]
-                continue
-            author = review.get("author") or {}
-            commit = review.get("commit") or {}
-            sig = (
-                str(author.get("login") if isinstance(author, Mapping) else "").casefold(),
-                str(review.get("state") or "").upper(),
-                str(commit.get("oid") if isinstance(commit, Mapping) else "").casefold(),
-                str(review.get("submittedAt") or ""),
-            )
-            if sig in by_sig:
-                review["url"] = by_sig[sig]
-    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
-        return
+    rest_rows, complete = _read_rest_review_pages(repo_slug, pr_number, runner=runner)
+    by_node: dict[str, set[str]] = {}
+    by_signature: dict[tuple[str, str, str, datetime], list[tuple[str, str]]] = {}
+    for rest_review in rest_rows:
+        if not isinstance(rest_review, Mapping):
+            continue
+        node_id = str(rest_review.get("node_id") or "").strip()
+        url = str(rest_review.get("html_url") or "")
+        if node_id:
+            links = by_node.setdefault(node_id, set())
+            if url:
+                links.add(url)
+        signature = _review_link_signature(rest_review)
+        if signature is not None:
+            by_signature.setdefault(signature, []).append((node_id, url))
+
+    view_reviews = [(review, _review_link_signature(review)) for review in reviews if isinstance(review, dict)]
+    view_counts = Counter(signature for _, signature in view_reviews)
+    for review, signature in view_reviews:
+        if review.get("url"):
+            continue
+        node_id = str(review.get("id") or "").strip()
+        if node_id in by_node:
+            links = by_node[node_id]
+            if len(links) == 1:
+                review["url"] = next(iter(links))
+            continue
+        if not complete or signature is None or view_counts[signature] != 1:
+            continue
+        candidates = by_signature.get(signature, [])
+        if len(candidates) == 1:
+            rest_node_id, url = candidates[0]
+            if url and (not node_id or not rest_node_id):
+                review["url"] = url
 
 
 def inspect_github_pull_request(
