@@ -27,7 +27,7 @@ SHIM_TARGETS: dict[str, tuple[set[str], str]] = {
         "loopx.hosts.agy",
     ),
     "dsh_goal_mode": (
-        {"__init__.py", "__main__.py", "turn_host_adapter.py"},
+        {"__init__.py", "__main__.py", "host_failure_map.py", "turn_host_adapter.py"},
         "loopx.hosts.dsh",
     ),
 }
@@ -231,6 +231,7 @@ def test_agy_and_dsh_canonical_surfaces_and_compat_launcher(tmp_path: Path) -> N
         "loopx/agy_goal_mode/launchd_watchdog.py",
         "loopx/dsh_goal_mode/__init__.py",
         "loopx/dsh_goal_mode/__main__.py",
+        "loopx/dsh_goal_mode/host_failure_map.py",
         "loopx/dsh_goal_mode/turn_host_adapter.py",
         "loopx/hosts/agy/__init__.py",
         "loopx/hosts/agy/README.md",
@@ -245,9 +246,36 @@ def test_agy_and_dsh_canonical_surfaces_and_compat_launcher(tmp_path: Path) -> N
         assert (staged / rel).is_file(), rel
 
 
+def _build_pre_consolidation_stub_wheel(out_dir: Path) -> Path:
+    meta = "loopx-0.0.0.dist-info"
+    contents = {
+        "loopx/__init__.py": b'__version__ = "0.0.0"\n',
+        "loopx/agy_goal_mode/__init__.py": b"",
+        "loopx/agy_goal_mode/host_runtime.py": b"def main() -> int:\n    return 0\n",
+        "loopx/agy_goal_mode/launchd_watchdog.py": b"",
+        "loopx/dsh_goal_mode/__init__.py": b"",
+        "loopx/dsh_goal_mode/__main__.py": b"def main() -> int:\n    return 0\n",
+        "loopx/dsh_goal_mode/host_failure_map.py": b"",
+        "loopx/dsh_goal_mode/turn_host_adapter.py": b"def main() -> int:\n    return 0\n",
+        f"{meta}/METADATA": b"Metadata-Version: 2.1\nName: loopx\nVersion: 0.0.0\n",
+        f"{meta}/WHEEL": (
+            b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+        ),
+    }
+    contents[f"{meta}/RECORD"] = "".join(
+        f"{name},,\n" for name in [*contents, f"{meta}/RECORD"]
+    ).encode("utf-8")
+    wheel_path = out_dir / "loopx-0.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+    return wheel_path
+
+
 def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
     tmp_path: Path,
 ) -> None:
+    pre_wheel = _build_pre_consolidation_stub_wheel(tmp_path)
     wheel = _build_pure_loopx_wheel(tmp_path)
     venv_dir = tmp_path / "isolated-venv"
     venv.EnvBuilder(with_pip=True, symlinks=os.name != "nt").create(venv_dir)
@@ -263,6 +291,24 @@ def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
             "--no-index",
             "--no-deps",
             "--disable-pip-version-check",
+            str(pre_wheel),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    subprocess.run(
+        [
+            str(py_bin),
+            "-I",
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
+            "--no-deps",
+            "--disable-pip-version-check",
+            "--upgrade",
             str(wheel),
         ],
         check=True,
@@ -282,10 +328,13 @@ def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
                 "import importlib.resources as r\n"
                 "from loopx.agy_goal_mode import AGY_HOST_CAPABILITIES as LEGACY_AGY\n"
                 "from loopx.dsh_goal_mode import DSH_HOST_CAPABILITIES as LEGACY_DSH\n"
+                "from loopx.dsh_goal_mode.host_failure_map import classify_dsh_failure as LEGACY_CLASSIFY\n"
                 "from loopx.dsh_goal_mode.turn_host_adapter import DSH_HOST_CAPABILITIES as LEGACY_DSH_ADAPTER\n"
                 "from loopx.hosts.agy import AGY_HOST_CAPABILITIES as CANONICAL_AGY\n"
+                "from loopx.hosts.dsh.host_failure_map import classify_dsh_failure as CANONICAL_CLASSIFY\n"
                 "from loopx.hosts.dsh.turn_host_adapter import DSH_HOST_CAPABILITIES as CANONICAL_DSH\n"
                 "assert LEGACY_AGY is CANONICAL_AGY\n"
+                "assert LEGACY_CLASSIFY is CANONICAL_CLASSIFY\n"
                 "assert LEGACY_DSH is CANONICAL_DSH and LEGACY_DSH_ADAPTER is CANONICAL_DSH\n"
                 "assert 'Antigravity' in r.files('loopx.hosts.agy').joinpath('README.md').read_text(encoding='utf-8')\n"
                 "assert 'DeepSeek Harness' in r.files('loopx.hosts.dsh').joinpath('README.md').read_text(encoding='utf-8')\n"
@@ -338,11 +387,16 @@ def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
         agy_outputs.append(json.loads(proc.stdout))
     assert agy_outputs[0] == {} and agy_outputs[0] == agy_outputs[1]
 
-    # Legacy DSH generic-cli fallback must emit the exact same typed result as loopx.hosts.dsh.
+    # Legacy DSH package and direct submodule entrypoints must emit the exact same typed result.
+    call_log = work_dir / "runner_calls.log"
     runner = work_dir / "fake_dsh_runner.py"
     runner.write_text(
         "import json\n"
+        "from pathlib import Path\n"
+        f"CALL_LOG = Path({str(call_log)!r})\n"
         "def run_dsh_turn(**_kwargs):\n"
+        "    with CALL_LOG.open('a', encoding='utf-8') as handle:\n"
+        "        handle.write('called\\n')\n"
         "    return json.dumps({\n"
         "        'result_kind': 'validated_progress',\n"
         "        'classification': 'fake dsh typed result',\n"
@@ -354,8 +408,23 @@ def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
         encoding="utf-8",
     )
     request_json = json.dumps(_signed_request())
+    dsh_modules = (
+        "loopx.dsh_goal_mode",
+        "loopx.dsh_goal_mode.turn_host_adapter",
+        "loopx.hosts.dsh",
+        "loopx.hosts.dsh.turn_host_adapter",
+    )
     dsh_outputs: list[dict[str, object]] = []
-    for mod in ("loopx.dsh_goal_mode", "loopx.hosts.dsh"):
+    for mod in dsh_modules:
+        help_proc = subprocess.run(
+            [str(py_bin), "-I", "-m", mod, "--help"],
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert help_proc.returncode == 0, f"{mod} --help: {help_proc.stderr}"
+        assert "--dsh-runner" in help_proc.stdout
         proc = subprocess.run(
             [
                 str(py_bin),
@@ -374,6 +443,8 @@ def test_isolated_wheel_preserves_legacy_hooks_and_dsh_entrypoints(
             check=False,
         )
         assert proc.returncode == 0, f"{mod}: {proc.stderr}"
+        assert proc.stdout.strip(), f"{mod} emitted empty stdout"
         dsh_outputs.append(json.loads(proc.stdout))
     assert dsh_outputs[0]["result_kind"] == "validated_progress"
-    assert dsh_outputs[0] == dsh_outputs[1]
+    assert all(output == dsh_outputs[0] for output in dsh_outputs[1:])
+    assert call_log.read_text(encoding="utf-8").splitlines() == ["called"] * len(dsh_modules)
