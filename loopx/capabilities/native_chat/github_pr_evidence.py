@@ -804,8 +804,9 @@ def observe_github_repository_prs(
     owner, name = normalized.split("/", 1)
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
     cursor: str | None = None
+    seen_cursors: set[str] = set()
     try:
-        for page_index in range(_GITHUB_PR_LIST_MAX_PAGES):
+        for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
             cmd = [
                 "gh",
                 "api",
@@ -844,14 +845,19 @@ def observe_github_repository_prs(
                 if number > 0:
                     raw_nodes_by_number[number] = node
             page_info = pull_requests.get("pageInfo")
-            if not isinstance(page_info, Mapping) or page_info.get("hasNextPage") is not True:
+            has_next_page = page_info.get("hasNextPage") if isinstance(page_info, Mapping) else None
+            if has_next_page is False:
                 break
-            next_cursor = str(page_info.get("endCursor") or "").strip()
-            if not next_cursor or next_cursor == cursor:
-                if page_index < _GITHUB_PR_LIST_MAX_PAGES - 1:
-                    return {"status": "unavailable", "repository": repo_slug}
-                break
+            if has_next_page is not True:
+                return {"status": "unavailable", "repository": repo_slug}
+            next_cursor = page_info.get("endCursor")
+            if not isinstance(next_cursor, str) or not next_cursor.strip() or next_cursor in seen_cursors:
+                return {"status": "unavailable", "repository": repo_slug}
+            seen_cursors.add(next_cursor)
             cursor = next_cursor
+        else:
+            # A partial list can make the monitor report PRs as removed.
+            return {"status": "unavailable", "repository": repo_slug}
         items: list[dict[str, Any]] = []
         for number in sorted(raw_nodes_by_number):
             norm_node = _normalize_graphql_pr_node(raw_nodes_by_number[number])

@@ -320,6 +320,60 @@ def test_observe_github_repository_prs_fails_closed_on_page_error(monkeypatch) -
     assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
 
 
+@pytest.mark.parametrize("terminal_page", [True, False])
+def test_observe_github_repository_prs_requires_completion_at_page_cap(monkeypatch, terminal_page) -> None:
+    requested_cursors = []
+
+    def fake_run(cmd, **kwargs):
+        assert cmd[:3] == ["gh", "api", "graphql"]
+        assert kwargs["timeout"] == 20
+        requested_cursors.append(next((arg for arg in cmd if arg.startswith("cursor=")), None))
+        page_number = len(requested_cursors)
+        assert page_number <= 5
+        body = _graphql_page(
+            [_graphql_node(_sample_pr(number=page_number))],
+            has_next_page=page_number < 5 or not terminal_page,
+            end_cursor=f"page-{page_number}",
+        )
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+    observed = _observe_github_repository_prs("org/repo", backfill_comments=True)
+
+    assert requested_cursors == [None, "cursor=page-1", "cursor=page-2", "cursor=page-3", "cursor=page-4"]
+    if terminal_page:
+        assert observed["status"] == "ok"
+        assert [item["number"] for item in observed["items"]] == [1, 2, 3, 4, 5]
+    else:
+        assert observed == {"status": "unavailable", "repository": "org/repo"}
+
+
+@pytest.mark.parametrize("page_info", [None, {}, {"hasNextPage": "false"}, {"hasNextPage": True, "endCursor": 3}])
+def test_observe_github_repository_prs_rejects_unverified_page_info(monkeypatch, page_info) -> None:
+    def fake_run(cmd, **_kwargs):
+        assert not any(arg.startswith("cursor=") for arg in cmd)
+        body = _graphql_page([_graphql_node(_sample_pr())])
+        body["data"]["repository"]["pullRequests"]["pageInfo"] = page_info
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
+
+
+def test_observe_github_repository_prs_rejects_a_cursor_cycle(monkeypatch) -> None:
+    remaining_cursors = iter(["cursor-a", "cursor-b", "cursor-a"])
+
+    def fake_run(cmd, **_kwargs):
+        cursor = next(remaining_cursors)
+        body = _graphql_page([_graphql_node(_sample_pr())], has_next_page=True, end_cursor=cursor)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
+
+    monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
+
+    assert _observe_github_repository_prs("org/repo") == {"status": "unavailable", "repository": "org/repo"}
+
+
 def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     head = "d" * 40
     pr_row = _sample_pr(
