@@ -382,3 +382,209 @@ def test_runtime_projection_diagnostics_bound_one_stalled_source_and_retry(
 
     assert second["counts"]["unavailable"] == 0
     assert second["counts"]["single_runtime"] == 2
+
+
+def test_collect_companion_distribution_diagnostics_covers_all_core_companions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.util
+    from types import SimpleNamespace
+
+    from loopx import release_candidate, release_manifest
+    from loopx.capabilities.agent_turn_recall import catalog_entry as recall_catalog
+    from loopx.capabilities.benchmark_toolkit import catalog_entry as benchmark_catalog
+    from loopx.capabilities.deep_research import catalog_entry as research_catalog
+    from loopx.capabilities.issue_fix import catalog_entry as issue_fix_catalog
+    from loopx.capabilities.pr_review_queue import catalog_entry as pr_review_catalog
+    from loopx import cli_runtime
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *args, **kwargs: None if name == "loopx.cli" else real_find_spec(name, *args, **kwargs),
+    )
+    monkeypatch.setattr(
+        release_candidate,
+        "installed_loopx_distribution",
+        lambda _lookup: SimpleNamespace(name="loopx-core"),
+    )
+
+    def _stub(
+        dist: str,
+        *,
+        installed: bool = False,
+        ready: bool = False,
+        version: str | None = None,
+        core_version: str | None = "0.1.0",
+        reasons: list[str] | None = None,
+        missing_modules: list[str] | None = None,
+    ) -> dict[str, object]:
+        actual_reasons = list(reasons or ([] if ready else ["not_installed"]))
+        return {
+            "distribution": dist,
+            "installed": installed,
+            "ready": ready,
+            "version": version,
+            "core_version": core_version,
+            "reason": actual_reasons[0] if actual_reasons else None,
+            "reasons": actual_reasons,
+            "missing_modules": list(missing_modules or []),
+            "missing_resources": [],
+            "unowned_modules": [],
+            "unowned_resources": [],
+        }
+
+    states: dict[str, dict[str, object]] = {}
+    recorded_order: list[str] = []
+
+    def _bind(module: object, attr: str, dist: str) -> None:
+        def _inspect(*, builtin_cli_present: bool | None = None) -> dict[str, object]:
+            assert builtin_cli_present is False
+            recorded_order.append(dist)
+            return states[dist]
+
+        monkeypatch.setattr(module, attr, _inspect)
+
+    bindings = (
+        (cli_runtime, "inspect_workspace_distribution", "loopx-workspace"),
+        (benchmark_catalog, "inspect_benchmark_toolkit_distribution", "loopx-capability-benchmark-toolkit"),
+        (recall_catalog, "inspect_agent_turn_recall_distribution", "loopx-capability-agent-turn-recall"),
+        (pr_review_catalog, "inspect_pull_request_review_distribution", "loopx-capability-pull-request-review"),
+        (issue_fix_catalog, "inspect_issue_fix_workflow_distribution", "loopx-capability-issue-fix"),
+        (research_catalog, "inspect_research_workflow_distribution", "loopx-capability-research"),
+    )
+    assert tuple(dist for _, _, dist in bindings) == release_manifest._CORE_COMPANION_DISTRIBUTIONS
+    for module, attr, dist in bindings:
+        _bind(module, attr, dist)
+
+    # 1. Bare loopx-core: no companions installed, healthy fingerprint.
+    states = {dist: _stub(dist) for dist in release_manifest._CORE_COMPANION_DISTRIBUTIONS}
+    companions, checks, fix = release_candidate.collect_companion_distribution_diagnostics(
+        runtime_identity={"package_fingerprint": "sha256:abc"},
+    )
+    assert recorded_order == list(release_manifest._CORE_COMPANION_DISTRIBUTIONS)
+    assert companions == []
+    assert fix is None
+    assert {c["id"]: c for c in checks}["companion_distributions_compatible"] == {
+        "id": "companion_distributions_compatible",
+        "required": False,
+        "ok": True,
+        "applicable": False,
+        "detail": "no optional companion distributions installed",
+    }
+
+    # 2. [standard] installed cleanly + missing fingerprint -> fix names installed companions, not research.
+    for dist in (
+        "loopx-capability-agent-turn-recall",
+        "loopx-capability-pull-request-review",
+        "loopx-capability-issue-fix",
+    ):
+        states[dist] = _stub(dist, installed=True, ready=True, version="0.1.0", core_version="0.1.0")
+    companions, checks, fix = release_candidate.collect_companion_distribution_diagnostics(
+        runtime_identity={},
+    )
+    assert [c["distribution"] for c in companions] == [
+        "loopx-capability-agent-turn-recall",
+        "loopx-capability-pull-request-review",
+        "loopx-capability-issue-fix",
+    ]
+    checks_by_id = {c["id"]: c for c in checks}
+    assert checks_by_id["companion_distributions_compatible"]["required"] is True
+    assert checks_by_id["companion_distributions_compatible"]["ok"] is True
+    assert checks_by_id["package_runtime_fingerprint"]["required"] is True
+    assert checks_by_id["package_runtime_fingerprint"]["ok"] is False
+    assert fix is not None
+    assert "loopx-core" in fix
+    assert "loopx-capability-research" not in fix
+    for dist in (
+        "loopx-capability-agent-turn-recall",
+        "loopx-capability-pull-request-review",
+        "loopx-capability-issue-fix",
+    ):
+        assert dist in fix
+
+    # 3. Failing non-research companion -> companion_distributions_compatible fails with exact distribution & fix.
+    states["loopx-capability-issue-fix"] = _stub(
+        "loopx-capability-issue-fix",
+        installed=True,
+        ready=False,
+        version="0.0.9",
+        core_version="0.1.0",
+        reasons=["version_mismatch", "missing_files"],
+        missing_modules=["loopx.capabilities.issue_fix.workflow_plan"],
+    )
+    companions, checks, fix = release_candidate.collect_companion_distribution_diagnostics(
+        runtime_identity={},
+    )
+    checks_by_id = {c["id"]: c for c in checks}
+    assert checks_by_id["companion_distributions_compatible"]["required"] is True
+    assert checks_by_id["companion_distributions_compatible"]["ok"] is False
+    assert "loopx-capability-issue-fix==0.0.9" in checks_by_id["companion_distributions_compatible"]["detail"]
+    assert "loopx.capabilities.issue_fix.workflow_plan" in checks_by_id["companion_distributions_compatible"]["detail"]
+    assert fix == "Reinstall matching `loopx-capability-issue-fix==0.1.0` or uninstall `loopx-capability-issue-fix`."
+
+
+@pytest.mark.parametrize(
+    "raw_direct_url",
+    [
+        "{corrupt-json",
+        "",
+        "[]",
+        json.dumps({"dir_info": "invalid"}),
+        OSError("unreadable"),
+    ],
+)
+def test_inspect_builtin_capability_distribution_handles_corrupt_direct_url_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_direct_url: str | Exception,
+) -> None:
+    from types import SimpleNamespace
+
+    from loopx import python_install_owner
+
+    package_parent = Path(python_install_owner.__file__).resolve().parent.parent
+    module_path = package_parent / "loopx" / "capabilities" / "issue_fix" / "workflow_plan.py"
+    assert module_path.is_file()
+
+    def _read_text(name: str) -> str | None:
+        if name == "direct_url.json":
+            if isinstance(raw_direct_url, Exception):
+                raise raw_direct_url
+            return raw_direct_url
+        if name == "RECORD":
+            return "loopx/capabilities/issue_fix/workflow_plan.py,,\n"
+        return None
+
+    fake_dist = SimpleNamespace(
+        version="2.4.1",
+        read_text=_read_text,
+        files=[],
+        locate_file=lambda path: package_parent / str(path),
+    )
+    monkeypatch.setattr(
+        python_install_owner,
+        "distribution",
+        lambda name: fake_dist if name in {"loopx-core", "loopx-capability-issue-fix"} else (_ for _ in ()).throw(KeyError(name)),
+    )
+    monkeypatch.setattr(
+        python_install_owner,
+        "find_spec",
+        lambda module: SimpleNamespace(origin=str(module_path)) if module == "loopx.capabilities.issue_fix.workflow_plan" else None,
+    )
+
+    state = python_install_owner.inspect_builtin_capability_distribution(
+        "loopx-capability-issue-fix",
+        ("loopx.capabilities.issue_fix.workflow_plan",),
+        builtin_cli_present=False,
+    )
+
+    assert state["installed"] is True
+    assert state["ready"] is False
+    assert "invalid_companion_metadata" in state["reasons"]
+    assert state["reason"] == "invalid_companion_metadata"
+    assert not python_install_owner.builtin_capability_installed(
+        "loopx-capability-issue-fix",
+        ("loopx.capabilities.issue_fix.workflow_plan",),
+        builtin_cli_present=False,
+    )

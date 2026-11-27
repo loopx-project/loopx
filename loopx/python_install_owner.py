@@ -88,6 +88,21 @@ def distribution_recorded_files(installed: Distribution) -> list[tuple[str, Path
     return entries
 
 
+def read_editable_direct_url(installed: Distribution) -> bool | None:
+    """Inspect ``direct_url.json`` for editable metadata, returning ``None`` when malformed."""
+    try:
+        raw_direct_url = installed.read_text("direct_url.json")
+        direct_url = json.loads(raw_direct_url) if raw_direct_url is not None else {}
+    except (OSError, ValueError):
+        return None
+    if not isinstance(direct_url, dict):
+        return None
+    dir_info = direct_url.get("dir_info")
+    if dir_info is not None and not isinstance(dir_info, dict):
+        return None
+    return bool(dir_info.get("editable")) if isinstance(dir_info, dict) else False
+
+
 def inspect_builtin_capability_distribution(
     distribution_name: str,
     modules: tuple[str, ...],
@@ -133,8 +148,9 @@ def inspect_builtin_capability_distribution(
             "unowned_resources": [],
         }
 
-    direct_url = json.loads(implementation.read_text("direct_url.json") or "{}")
-    editable = bool(direct_url.get("dir_info", {}).get("editable"))
+    editable_flag = read_editable_direct_url(implementation)
+    invalid_metadata = editable_flag is None
+    editable = bool(editable_flag)
     entries = distribution_recorded_files(implementation)
     package_parent = Path(__file__).resolve().parent.parent
     recorded = {path.resolve() for _name, path in entries or ()}
@@ -177,6 +193,8 @@ def inspect_builtin_capability_distribution(
         reasons.append("core_distribution_missing")
     elif implementation.version != core_version:
         reasons.append("version_mismatch")
+    if invalid_metadata:
+        reasons.append("invalid_companion_metadata")
     if editable:
         reasons.append("editable_companion_unsupported")
     if missing_modules or missing_resources:
