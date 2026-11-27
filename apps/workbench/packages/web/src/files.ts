@@ -26,6 +26,18 @@ export interface Crumb {
   path: string;
 }
 
+/** One item in the rendered breadcrumb bar: either a visible step or collapsed middle folders. */
+export type CrumbEntry = Crumb | { hidden: Crumb[] };
+
+/**
+ * Deep paths collapse middle folders into a single ellipsis menu so the root, immediate parent,
+ * and file name stay readable on one line.
+ */
+export function collapseCrumbs(crumbs: Crumb[]): CrumbEntry[] {
+  if (crumbs.length <= 4) return crumbs;
+  return [crumbs[0]!, { hidden: crumbs.slice(1, -2) }, crumbs[crumbs.length - 2]!, crumbs[crumbs.length - 1]!];
+}
+
 /** From `root` down to `path`, one step per folder; `root` itself first. A path outside `root` is just itself. */
 export function crumbsOf(root: string, path: string): Crumb[] {
   const base = root.replace(/\/+$/, '') || '/';

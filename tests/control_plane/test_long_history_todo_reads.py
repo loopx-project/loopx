@@ -1,4 +1,5 @@
 """Synthetic long-history shapes, without copying any live text or identities."""
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -7,12 +8,18 @@ from loopx.control_plane.coordination.authority_source_capture import (
     build_runtime_shadow_source_snapshot,
     todo_partition_projector,
 )
+from loopx.control_plane.coordination.local_authority_shadow_projection import canonical_bytes
+from loopx.control_plane.coordination.runtime_shadow import build_todo_runtime_shadow_projection
 from loopx.control_plane.testing.canary_harness import write_fixture_registry, run_json_cli_result
 from loopx.control_plane.todos.active_state_todo_parser import parse_active_state_todos, parse_todo_source
 from loopx.control_plane.todos.goal_todo_projection import todo_summaries_from_fields
+from loopx.control_plane.todos.list_readback import list_goal_todos
 from loopx.control_plane.todos.todo_summary import compact_evaluated_todo_group
 from loopx.history import load_registry
-from tests.control_plane.canonical_authority_fixture import initialize_canonical_authority
+from tests.control_plane.canonical_authority_fixture import (
+    initialize_canonical_authority,
+    isolate_sqlite_runtime,
+)
 
 
 def _initialize_source_authority(
@@ -113,3 +120,103 @@ def test_capture_preserves_archived_dependency_for_real_canonical_cli_read(tmp_p
     assert code == 0, completed
     assert completed["todos"] == []
     assert not state.exists()
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_list_goal_todos_include_acceptance_false_keeps_parity(tmp_path: Path, monkeypatch, provider: str) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    state, runtime, registry = tmp_path / "STATE.md", tmp_path / "runtime", tmp_path / "registry.json"
+    state.write_text("# Synthetic goal\n\n## Agent Todo\n\n- [ ] Active item\n", encoding="utf-8")
+    write_fixture_registry(
+        project=tmp_path,
+        runtime_root=runtime,
+        registry_path=registry,
+        goal_id="goal-a",
+        domain="acceptance-skip",
+        adapter_kind="generic_project_goal_v0",
+        state_file=str(state),
+        registered_agents=["agent-a"],
+        quota_allowed_slots=None,
+    )
+    records = [{
+        "schema_version": "todo_item_v0",
+        "todo_id": "todo_work",
+        "index": 1,
+        "role": "agent",
+        "status": "open",
+        "done": False,
+        "text": "Deliver verified feature",
+        "task_class": "advancement_task",
+        "archive_state": "active",
+        "source_section": "Agent Todo",
+    }]
+    projection = build_todo_runtime_shadow_projection(goal_id="goal-a", todos=records)
+    document = {
+        "objective": "Keep Todo parity while skipping acceptance payloads",
+        "non_goals": [],
+        "bindings": [],
+        "criteria": [{
+            "id": "criterion-a",
+            "description": "Check stays enabled",
+            "validation_argv": ["true"],
+            "validation_timeout_seconds": 5,
+            "validation_files": [],
+        }],
+    }
+    projection["goal_acceptance"] = {
+        "schema_version": "loopx_goal_acceptance_v0",
+        "enabled": True,
+        "revision": 1,
+        "digest": hashlib.sha256(canonical_bytes(document)).hexdigest(),
+        "document": document,
+        "bindings": [],
+        "verification": None,
+    }
+    initialize_canonical_authority(runtime, "goal-a", projection, state_path=state, provider=provider)
+    state.unlink()
+
+    for role in ("agent", None):
+        with_acceptance = list_goal_todos(
+            goal_id="goal-a",
+            role=role,
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            include_acceptance=True,
+        )
+        without_acceptance = list_goal_todos(
+            goal_id="goal-a",
+            role=role,
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            include_acceptance=False,
+        )
+        assert "goal_acceptance_contract" in with_acceptance["agent_todos"]
+        assert "goal_acceptance_contract" not in without_acceptance["agent_todos"]
+        def _stable(payload: dict) -> dict:
+            copied = dict(payload)
+            for lane in ("agent_todos", "user_todos"):
+                if lane in copied and isinstance(copied[lane], dict):
+                    copied[lane] = {
+                        key: value for key, value in copied[lane].items() if key != "goal_acceptance_contract"
+                    }
+            envelope = dict(copied.get("projection_envelope") or {})
+            for key in ("observed_at", "served_at"):
+                envelope.pop(key, None)
+            envelope["sources"] = [
+                {k: v for k, v in source.items() if k != "last_read_at"}
+                for source in envelope.get("sources", [])
+            ]
+            copied["projection_envelope"] = envelope
+            return copied
+
+        assert _stable(without_acceptance) == _stable(with_acceptance)
+
+    with pytest.raises(ValueError, match="include_acceptance"):
+        list_goal_todos(
+            goal_id="goal-a",
+            role="agent",
+            registry_path=registry,
+            runtime_root_arg=str(runtime),
+            include_acceptance="false",  # type: ignore[arg-type]
+        )

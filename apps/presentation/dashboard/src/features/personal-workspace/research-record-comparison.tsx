@@ -1,22 +1,17 @@
 import {useEffect, useRef, useState, type ReactNode} from "react";
 import type {ExploreHistoryEvent} from "../../../../../../loopx/control_plane/presentation/explore_history.ts";
-import {changedResearchFields, researchComparisonFields, researchRecordVersions, type ResearchComparisonField} from "./research-record-versions.ts";
+import {changedResearchFields, researchComparisonFields, researchComparisonLabels, researchRecordVersions, type ResearchComparisonField} from "./research-record-versions.ts";
 import {ExploreMeasurements} from "./explore-measurements";
 import {ContextHelp} from "./context-help";
+import {exportResearchComparison} from "./research-comparison-export";
+import {downloadReport} from "./report-download";
 
-const labels: Record<ResearchComparisonField, [string, string]> = {
-  title: ["Title", "标题"], summary: ["Original text", "原文"], status: ["Recorded status", "记录状态"],
-  blocked_reason: ["Blocked reason", "受阻原因"], evidence_refs: ["Evidence references", "证据引用"],
-  measurements: ["Measurements", "测量"], confidence: ["Recorded confidence", "记录置信度"],
-  run_id: ["Run ID", "运行 ID"], agent_id: ["Agent ID", "Agent ID"], node_kind: ["Node kind", "节点类型"],
-  node_id: ["Node ID", "问题 ID"], parent_id: ["Source group", "来源分组"],
-  from_node: ["Link source", "关联起点"], to_node: ["Link target", "关联终点"], edge_type: ["Link type", "关联类型"],
-  supersedes: ["Supersedes", "取代记录"], execution_observation: ["Execution observation", "执行观察"],
-};
+
 
 /** Requested original-source detail; no analysis, acceptance or write path. */
-export function ResearchRecordComparison({events, selected, displayed, renderSummary, zh, stateLabel, timeLabel}: {
+export function ResearchRecordComparison({events, selected, displayed, renderSummary, complete, stale, busy, zh, stateLabel, timeLabel}: {
   events: readonly ExploreHistoryEvent[]; selected: ExploreHistoryEvent; zh: boolean;
+  complete: boolean; stale: boolean; busy: boolean;
   displayed?: ReadonlyMap<string, ExploreHistoryEvent>; renderSummary?: (event: ExploreHistoryEvent) => ReactNode;
   stateLabel: (status: string) => string; timeLabel: (at: string) => string;
 }) {
@@ -26,6 +21,7 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
   const [chosen, setChosen] = useState("");
   const [showAll, setShowAll] = useState(false);
   const [open, setOpen] = useState(false);
+  const [failedPair, setFailedPair] = useState<string | null>(null);
   const disclosure = useRef<HTMLDetailsElement>(null);
   const returnFrame = useRef<number | null>(null);
   useEffect(() => () => {if (returnFrame.current !== null) cancelAnimationFrame(returnFrame.current);}, []);
@@ -45,6 +41,15 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
   const comparison = alternatives.find(event => event.event_id === chosen)
     ?? versions[index - 1] ?? alternatives[0];
   if (!comparison) return null;
+  const pair = JSON.stringify([selected.event_id, comparison.event_id]);
+  const download = (format: "json" | "md") => {
+    setFailedPair(null);
+    try {
+      const text = exportResearchComparison({events, selectedId: selected.event_id, comparisonId: comparison.event_id,
+        complete, stale, exportedAt: new Date().toISOString()}, format, zh);
+      downloadReport(`research-comparison-${selected.goal_id}.${format}`, "", text);
+    } catch {setFailedPair(pair);}
+  };
   const changed = changedResearchFields(selected, comparison);
   const value = (event: ExploreHistoryEvent, field: ResearchComparisonField) => {
     const raw = event[field];
@@ -92,11 +97,16 @@ export function ResearchRecordComparison({events, selected, displayed, renderSum
         </ContextHelp>
         <label><input type="checkbox" checked={showAll} onChange={event => setShowAll(event.target.checked)}/>{zh ? "包括相同字段" : "Include unchanged fields"}</label>
       </div>
+      <div className="research-comparison-controls">
+        <button type="button" disabled={busy} onClick={() => download("json")}>{zh ? "下载对照记录（JSON）" : "Download comparison (JSON)"}</button>
+        <button type="button" disabled={busy} onClick={() => download("md")}>{zh ? "下载对照报告（Markdown）" : "Download comparison report (Markdown)"}</button>
+      </div>
+      {failedPair === pair ? <p role="alert">{zh ? "无法开始下载，记录未改变。请重试下载。" : "Could not start the download. Records are unchanged; try downloading again."}</p> : null}
       <div className="research-comparison-pair research-comparison-identities">
         {[selected, comparison].map((event, i) => <div key={event.event_id}><strong>{i === 0 ? (zh ? "所选记录" : "Selected record") : (zh ? "对照记录" : "Comparison record")}</strong><p>{timeLabel(event.recorded_at)}</p></div>)}
       </div>
       {(showAll ? researchComparisonFields : changed).map(field => <section key={field} className="research-comparison-field">
-        <h4>{field === "summary" && renderSummary ? (zh ? "记录正文" : "Recorded text") : labels[field][zh ? 1 : 0]}</h4>
+        <h4>{field === "summary" && renderSummary ? (zh ? "记录正文" : "Recorded text") : researchComparisonLabels[field][zh ? 1 : 0]}</h4>
         <div className="research-comparison-pair">{[selected, comparison].map((event, i) => <div key={event.event_id}>
           <span className="research-comparison-side">{i === 0 ? (zh ? "所选记录" : "Selected record") : (zh ? "对照记录" : "Comparison record")}</span>
           <div>{value(event, field)}</div>

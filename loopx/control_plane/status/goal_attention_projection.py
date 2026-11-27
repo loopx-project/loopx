@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, get_args
 
 from ...operator_gate import (
     DEFAULT_OPERATOR_GATE,
@@ -47,12 +47,13 @@ from .run_projection import latest_run
 PLANNED_CONTROLLER_OPT_IN_RECOMMENDED_ACTION = (
     "先在 LoopX 完成 operator 判断；同意后项目 Agent 只执行 read-only map dry-run"
 )
-REGISTRY_WAITING_ON_OVERRIDES = {
+RegistryWaitingOnOverride = Literal[
     "user_or_controller",
     "controller",
     "codex",
     "external_evidence",
-}
+]
+REGISTRY_WAITING_ON_OVERRIDES = set(get_args(RegistryWaitingOnOverride))
 LEGACY_EXTERNAL_EVIDENCE_CLASSIFICATION_PREFIXES = (
     "await_",
     "external_evidence_observation_",

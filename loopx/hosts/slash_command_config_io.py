@@ -111,7 +111,7 @@ def opencode_direct_goal_plugin_conflicts(
             if path.suffix == ".jsonc":
                 content = strip_jsonc_trailing_commas(strip_jsonc_comments(content))
             payload_obj: object = json.loads(content)
-        except (json.JSONDecodeError, OSError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             invalid.append(str(path))
             continue
         if not isinstance(payload_obj, dict):
@@ -150,7 +150,7 @@ def target_package_dependencies(
     if path.exists():
         try:
             payload_obj: object = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return "blocked_invalid_user_package_json"
         if not isinstance(payload_obj, dict):
             return "blocked_invalid_user_package_json"
@@ -200,12 +200,50 @@ def read_json_marker_section(marker_path: Path, section: str) -> dict[str, objec
     """Read one mapping section from a LoopX ownership marker, failing closed to ``{}``."""
     try:
         payload_obj: object = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
     if not isinstance(payload_obj, dict):
         return {}
     entries_obj = cast(dict[str, object], payload_obj).get(section)
     return cast(dict[str, object], entries_obj) if isinstance(entries_obj, dict) else {}
+
+
+def read_managed_json_entry(
+    *,
+    config_path: Path,
+    marker_path: Path,
+    marker_section: str,
+    marker_schema_version: str,
+    entry_key: str,
+    container_key: str | None,
+) -> dict[str, object] | None:
+    """Return the existing entry when proven LoopX-managed by its sidecar, else ``None``."""
+    try:
+        marker_obj: object = json.loads(marker_path.read_text(encoding="utf-8"))
+        config_obj: object = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(marker_obj, dict) or not isinstance(config_obj, dict):
+        return None
+    marker = cast(dict[str, object], marker_obj)
+    if marker.get("schema_version") != marker_schema_version:
+        return None
+    section = marker.get(marker_section)
+    if not isinstance(section, dict):
+        return None
+    recorded = cast(dict[str, object], section).get(entry_key)
+    config = cast(dict[str, object], config_obj)
+    container_obj: object = config if container_key is None else config.get(container_key)
+    if not isinstance(container_obj, dict):
+        return None
+    existing = cast(dict[str, object], container_obj).get(entry_key)
+    if (
+        not isinstance(recorded, dict)
+        or not isinstance(existing, dict)
+        or existing != recorded
+    ):
+        return None
+    return cast(dict[str, object], existing)
 
 
 def merge_managed_json_entry(
@@ -229,7 +267,7 @@ def merge_managed_json_entry(
     try:
         text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
         raw_obj: object = json.loads(text) if text.strip() else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return invalid_status
     if not isinstance(raw_obj, dict):
         return invalid_status

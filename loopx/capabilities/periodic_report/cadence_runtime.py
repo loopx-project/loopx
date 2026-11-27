@@ -7,7 +7,11 @@ import shlex
 
 from ...agent_registry import registered_agent_ids_for_goal
 from ...control_plane.capability_hooks import (
-    TURN_START_HOOK_RESULT_SCHEMA_VERSION, TurnStartHookRegistration, dispatch_turn_start_hooks,
+    TURN_START_HOOK_RESULT_SCHEMA_VERSION,
+    TurnStartHookRegistration,
+    dispatch_turn_start_hooks,
+    load_scoped_registry,
+    merge_turn_start_dispatch,
 )
 from ...history import load_registry
 from ...registry import find_registry_goal
@@ -26,7 +30,10 @@ def periodic_report_cadence_hooks(
 ) -> tuple[TurnStartHookRegistration, ...]:
     if not agent_id:
         return ()
-    goal = find_registry_goal(load_registry(registry_path), goal_id)
+    goal = find_registry_goal(
+        load_scoped_registry(registry_path, loader=load_registry),
+        goal_id,
+    )
     subscription = resolve_active_goal_periodic_report_subscription(
         goal, read_periodic_report_machine_defaults(runtime_root))
     if subscription is None or subscription.get("schedule") is None:
@@ -116,14 +123,10 @@ def periodic_report_cadence_hooks(
 
 def extend_cadence_turn_start_dispatch(dispatch: dict, **kwargs) -> dict:
     """Same optional composition for quota and the managed turn driver."""
+    extra: dict[str, object]
     try:
         extra = dispatch_turn_start_hooks(periodic_report_cadence_hooks(**kwargs))
     except (OSError, TypeError, ValueError):
         extra = {"failures": [{"hook_id": "periodic_report.cadence",
             "capability_id": "periodic-report", "error_code": "cadence_configuration_unavailable"}]}
-    result = dict(dispatch)
-    for key in ("results", "required_reads", "failures"):
-        result[key] = list(dispatch.get(key) or []) + list(extra.get(key) or [])
-    for key in ("registered_count", "invoked_count"):
-        result[key] = int(dispatch.get(key) or 0) + int(extra.get(key) or 0)
-    return result
+    return merge_turn_start_dispatch(dispatch, extra, include_contexts=False)

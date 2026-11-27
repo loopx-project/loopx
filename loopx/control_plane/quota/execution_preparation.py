@@ -70,14 +70,14 @@ def project_selected_todo_execution_preparation(
 
 
 def _read_execution_snapshot(
-    runtime_root: str | Path, goal_id: str, todo_id: str,
+    runtime_root: str | Path, goal_id: str, todo_id: str, *, include_takeover_basis: bool = False,
 ) -> dict[str, Any] | None:
     response = effect_runtime_result(
         "todo.read",
         {"schema_version": "todo_read_request_v0", "kind": "execution_preparation_source",
          "source": {"runtime_root": str(Path(runtime_root).expanduser().resolve(strict=False)),
                     "goal_id": goal_id},
-         "todo_id": todo_id},
+         "todo_id": todo_id, **({"include_takeover_basis": True} if include_takeover_basis else {})},
         timeout=LOCAL_COORDINATION_TODO_LIST_TIMEOUT_SECONDS,
     )
     snapshot = (

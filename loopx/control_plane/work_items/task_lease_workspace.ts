@@ -26,7 +26,7 @@ export class LeaseWorktreeObservationError extends EffectRuntimeRequestError {}
 
 async function requireInternalFileLink(root: string, full: string, overlaps: (path: string) => boolean): Promise<void> {
   const message = "worktree file links must point directly to a regular file within the declared checkout scopes; "
-    + "directory, chained, unresolved, external and Git administration links are unsupported";
+    + "directory, chained, unresolved, external, hard-linked and Git administration links are unsupported";
   try {
     const link = await readlink(full);
     const absolute = isAbsolute(link);
@@ -44,13 +44,14 @@ async function requireInternalFileLink(root: string, full: string, overlaps: (pa
       }
     }
     const target = resolve(dirname(full), link);
+    const targetInfo = await lstat(target);
     const child = relative(root, target);
     // Direct regular-file targets suffice for npm executable links. Requiring
     // physical == lexical also detects changed parents; do not turn internal
     // directory aliases into new write scopes.
     if (!child || child === ".." || child.startsWith(`..${sep}`) || isAbsolute(child)
         || child.split(sep).includes(".git") || !overlaps(child.split(sep).join("/"))
-        || !(await lstat(target)).isFile() || await realpath(full) !== target) {
+        || !targetInfo.isFile() || targetInfo.nlink > 1 || await realpath(full) !== target) {
       throw new LeaseWorktreeObservationError(message);
     }
   } catch {
@@ -125,6 +126,10 @@ export async function observeLeaseWorktree(path: string, overlaps: (path: string
       const full = resolve(root, scopePath);
       try {
         const info = await lstat(full);
+        if (info.isFile() && info.nlink > 1) {
+          throw new LeaseWorktreeObservationError(
+            "worktree scopes contain a hard-linked file; replace it with an independent copy before acquiring a lease");
+        }
         if (info.isSymbolicLink()) {
           await requireInternalFileLink(root, full, overlaps);
         } else {

@@ -86,7 +86,7 @@ def test_dashboard_acceptance_and_kernel_checks_run_independently() -> None:
     ) in aggregate
 
 
-@pytest.mark.parametrize("kind", ["full", "presentation"])
+@pytest.mark.parametrize("kind", ["full", "mixed", "backend", "presentation"])
 @pytest.mark.parametrize("kernel", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("typescript", ["success", "failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("dashboard", ["success", "failure", "cancelled", "skipped"])
@@ -98,12 +98,18 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
     command = gate.split("run: ", 1)[1].splitlines()[0]
     args = shlex.split(command)
     args[0] = sys.executable
-    backend = kind == "full"
+    backend = kind in {"full", "mixed", "backend"}
+    frontend = kind in {"full", "mixed", "presentation"}
+    heavy = kind == "full"
     needs = {
         "changes": {"result": "success", "outputs": {
             "change_kind": kind, "core_tests": "true",
-            "backend_tests": str(backend).lower(), "python_tests": str(backend).lower(),
-            "stage2c_tests": str(backend).lower(), "presentation_tests": str(not backend).lower(),
+            "backend_tests": str(backend).lower(),
+            "frontend_tests": str(frontend).lower(),
+            "compat_tests": str(heavy).lower(),
+            "python_tests": str(heavy).lower(),
+            "stage2c_tests": str(heavy).lower(),
+            "presentation_tests": str(kind in {"presentation", "mixed"}).lower(),
         }},
         "kernel-static-checks": {"result": kernel},
         "kernel-contracts": {"result": kernel},
@@ -117,8 +123,9 @@ def test_checks_aggregate_requires_every_planned_parallel_lane(
         capture_output=True, check=False,
     )
     required_backend = "success" if backend else "skipped"
+    required_frontend = "success" if frontend else "skipped"
     assert (result.returncode == 0) == (
-        kernel == typescript == required_backend and dashboard == browser == "success"
+        kernel == typescript == required_backend and dashboard == browser == required_frontend
     )
 
 
@@ -283,7 +290,7 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
     assert producer.index("chat_bundle.py verify --source") < producer.index("actions/upload-artifact")
     assert "smoke:" not in producer
     assert "needs: [changes, chat-bundle]" in browser
-    assert "if: needs.changes.outputs.core_tests == 'true'" in browser
+    assert "if: needs.changes.outputs.frontend_tests == 'true'" in browser
     assert "name: chat-bundle-${{ github.sha }}" in browser
     assert "chat_bundle.py build" not in browser
     assert (
@@ -293,11 +300,14 @@ def test_presentation_exemption_retains_real_frontend_checks_and_force_full() ->
         < browser.index("npm run smoke:chat-upgrade")
     )
     assert "continue-on-error" not in browser
-    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage", "node-minimum-compatibility"):
+    for name in ("kernel-static-checks", "kernel-contracts", "typescript-core", "typescript-coverage"):
         header = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
         assert "if: needs.changes.outputs.backend_tests == 'true'" in header
-    dashboard = WORKFLOW.split("  dashboard-acceptance:\n", 1)[1].split("    steps:", 1)[0]
-    assert "if: needs.changes.outputs.core_tests == 'true'" in dashboard
+    compat_header = WORKFLOW.split("  node-minimum-compatibility:\n", 1)[1].split("    steps:", 1)[0]
+    assert "if: needs.changes.outputs.compat_tests == 'true'" in compat_header
+    for name in ("dashboard-browser", "dashboard-acceptance"):
+        dashboard = WORKFLOW.split(f"  {name}:\n", 1)[1].split("    steps:", 1)[0]
+        assert "if: needs.changes.outputs.frontend_tests == 'true'" in dashboard
     assert "scripts/chat_bundle.py verify --source" in job
     assert "status --short --untracked-files=all -- loopx/web/chat" not in job
     assert "continue-on-error" not in job
@@ -404,6 +414,7 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
     env = {
         key: value for key, value in os.environ.items()
         if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
+        and key not in ("LOOPX_SHARD_JOB_START_EPOCH", "GITHUB_ACTIONS")
     }
     env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     seen: list[set[str]] = []
@@ -444,8 +455,10 @@ def test_six_shards_execute_each_test_once_and_merge_portable_coverage(
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert "LOOPX_PYTEST_STACK " in result.stdout + result.stderr
+        diag = json.loads((root / "ci-shard-diagnostics.json").read_text(encoding="utf-8"))
+        assert diag["execution_complete"] is True and diag["deadline_exceeded"] is False
         cases = ET.parse(root / "results.xml").findall(".//testcase")
-        seen.append({case.attrib["name"] for case in cases})
+        seen.append({name for case in cases if (name := case.attrib.get("name"))})
         partial = subprocess.run(
             [sys.executable, "-m", "coverage", "report", "--fail-under=100"],
             cwd=root, env=env, capture_output=True, check=False,
@@ -512,8 +525,11 @@ def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Pa
         "    while not Path('release').exists():\n        time.sleep(0.01)\n"
         "    assert value(case) >= 4\n",
     )
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))}
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith(("COVERAGE", "COV_CORE", "PYTEST"))
+        and key not in ("LOOPX_SHARD_JOB_START_EPOCH", "GITHUB_ACTIONS")
+    }
     env["PYTHONPATH"] = str(WORKFLOW_ROOT)
     log = tmp_path / "progress.log"
     with log.open("w") as output:
@@ -541,6 +557,44 @@ def test_shard_names_failed_cases_before_the_remaining_tests_finish(tmp_path: Pa
     cases = ET.parse(tmp_path / "junit.xml").findall(".//testcase")
     assert len(cases) == 2
     assert len([case for case in cases if case.find("failure") is not None]) == 1
+
+
+def test_python_shards_preserve_two_workers_and_deadline_diagnostics() -> None:
+    shard_job = yaml.safe_load(WORKFLOW)["jobs"]["test-shard"]
+    assert shard_job["timeout-minutes"] == 60
+    steps = {step.get("name", f"idx-{idx}"): step for idx, step in enumerate(shard_job["steps"])}
+    start_step = shard_job["steps"][0]
+    assert start_step["name"] == "Record job start time"
+    assert "LOOPX_SHARD_JOB_START_EPOCH=" in start_step["run"]
+    assert "GITHUB_ENV" in start_step["run"]
+    isolation = steps["Prepare native shell isolation"]["run"]
+    assert "if ! command -v bwrap >/dev/null 2>&1; then" in isolation
+    run_args = shlex.split(steps["Run test shard"]["run"])
+    sep_index = run_args.index("--")
+    wrapper_args, pytest_args = run_args[:sep_index], run_args[sep_index + 1 :]
+    assert wrapper_args[:3] == ["python", "-m", "scripts.ci.shard_budget"]
+    assert wrapper_args[wrapper_args.index("--job-budget-seconds") + 1] == "3600"
+    assert wrapper_args[wrapper_args.index("--upload-reserve-seconds") + 1] == "300"
+    assert wrapper_args[wrapper_args.index("--min-session-seconds") + 1] == "300"
+    assert wrapper_args[wrapper_args.index("--diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    assert "--ci-session-deadline" not in " ".join(pytest_args)
+    assert pytest_args[pytest_args.index("-n") + 1] == "2"
+    assert pytest_args[pytest_args.index("-p") + 1] == "scripts.ci.pytest_timing"
+    assert pytest_args[pytest_args.index("--ci-stall-after") + 1] == "120"
+    assert pytest_args[pytest_args.index("--ci-diagnostics-file") + 1] == "ci-shard-diagnostics.json"
+    assert pytest_args[pytest_args.index("--splits") + 1] == "6"
+    group_idx = pytest_args.index("--group")
+    assert pytest_args[group_idx + 1 : group_idx + 4] == ["${{", "matrix.shard", "}}"]
+    assert "--junitxml=junit.xml" in pytest_args
+    assert "--cov=loopx" in pytest_args
+    junit_upload = steps["Upload full-shard outcomes for selection audit"]
+    assert junit_upload["if"] == "${{ !cancelled() }}"
+    assert junit_upload["with"]["path"] == "junit.xml"
+    diag_upload = steps["Upload shard timeout and progress diagnostics"]
+    assert diag_upload["if"] == "always()"
+    assert diag_upload["with"]["name"] == "python-diagnostics-${{ matrix.shard }}"
+    assert diag_upload["with"]["path"] == "ci-shard-diagnostics.json"
+    assert diag_upload["with"]["if-no-files-found"] == "warn"
 
 
 def test_backend_and_mixed_prs_require_the_browser_qualified_artifact() -> None:

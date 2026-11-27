@@ -169,7 +169,7 @@ LoopX はそのオープンでハーネス非依存のコントロールレイ�
 | 規模 | LoopX の動かし方 | 権限、連携、ガバナンスの姿勢 |
 | --- | --- | --- |
 | **個人開発者とローカルエージェント** | 外部インフラなしで `python3 -m pip install --upgrade loopx`。既存の CLI/デスクトップのランタイムを接続します | ハードリースを備えた正規のローカル **SQLite** ストア（既存の File セットアップも利用可）。アイドル時のトークン消費ゼロで、再起動やコンパクションを乗り越えます |
-| **エンジニアリングチームとエンタープライズへの道筋** | 対等なワーカーが todo を claim し、Desktop Workspace、GitHub、Lark を通じて共有ゴール上でレビュー済みの成果物を返します（[3 エージェントのデモ](examples/collaboration-delivery/README.md)） | ワーカーのオーナーシップと人間の承認ゲートを維持します。段階的な **PostgreSQL** リモート権限（[プロバイダー](loopx/control_plane/coordination/postgresql_authority_store.ts)）や、計画中の組織ガバナンス（RBAC、SSO、クォータ、署名付き監査）へと拡張できます。詳しくは[導入と SaaS のロードマップ](docs/product/roadmaps/saas-opportunity-assessment.md)をご覧ください |
+| **エンジニアリングチームとエンタープライズへの道筋** | 対等なワーカーが todo を claim し、Desktop Workspace、GitHub、Lark を通じて共有ゴール上でレビュー済みの成果物を返します（[3 エージェントのデモ](examples/collaboration-delivery/README.md)） | ワーカーのオーナーシップと人間の承認ゲートを維持します。ローカルの **File**/**SQLite** 権限およびアウトバウンド HTTPS **RemoteAuthority** クライアント契約（[ワイヤー契約](loopx/control_plane/coordination/remote_authority_contract.ts)）は `loopx` 内で Apache-2.0 のまま維持され、サーバーサイドの PostgreSQL 権限、分散コーディネーション、マルチテナント組織ガバナンス（RBAC、SSO、クォータ、署名付き監査）は `loopx-project/loopx-cloud` に配置されます。詳しくは[ライセンス境界](docs/project/licensing.md#open-core-and-commercial-boundaries)と[導入と SaaS のロードマップ](docs/product/roadmaps/saas-opportunity-assessment.md)をご覧ください |
 
 ## LoopX の動作を見る
 
@@ -301,7 +301,7 @@ Todo として計画して、ホストの有効化をガイドします。アク
 | ZCode | `loopx slash-commands --install --surface zcode` でスキルファサードをインストールし、プロジェクトの ZCode セッションから `$loopx` スキル（または `/loopx <complex task>`）を呼び出します。 | ZCode セッション自身のターンループ。すべての継続は `quota should-run` を経由します |
 | Antigravity CLI (agy) | `loopx slash-commands --install --surface agy` でスキルファサードをインストールし、プロジェクトの `agy` セッションから `loopx` スキル（または `/loopx <complex task>`）を呼び出します。 | セッションのネイティブな `/goal` ループ（`<!-- GOAL_COMPLETE -->` まで監査されます）と、セッションが生きている間の `schedule` による自己起床。ファサードは各ターン/起床で `quota should-run` を経由して再入するよう指示します。これは助言的なペース配分であり、ホストが強制するゲートではありません |
 | Kiro CLI | `loopx slash-commands --install --surface kiro-cli` でスキルファサードをインストールし、プロジェクトの `kiro-cli` セッションから `/loopx <complex task>` を実行します。 | セッションのネイティブな `/goal --max <N> <task_body> Done when: <criteria>` ループ。ホストがゴール文から受け入れ基準を導出するため、基準はゴール文の中に記述します。ホスト自身の反復予算（デフォルトは 5）で制限され、組み込みの `goal` 完了契約によって確定されます。ファサードは各ターンと反復で `quota should-run` を経由して再入するよう指示します。これは助言的なペース配分であり、ホストが強制するゲートではありません |
-| DeepSeek Harness (dsh) | [ネイティブの DSH プラグイン](packages/dsh-loopx-plugin/README.md)をインストールし、`loopx` スキルを選択して、タスクを記述します。ヘッドレスなターンには、引き続き [dsh goal-mode アダプター](loopx/dsh_goal_mode/README.md)を利用できます。 | ネイティブな同一セッション内での継続と GoalBar、またはヘッドレスな dsh セグメント。どちらも LoopX の権限によってゲートされます |
+| DeepSeek Harness (dsh) | [ネイティブの DSH プラグイン](packages/dsh-loopx-plugin/README.md)をインストールし、`loopx` スキルを選択して、タスクを記述します。ヘッドレスなターンには、引き続き [dsh goal-mode アダプター](loopx/hosts/dsh/README.md)を利用できます。 | ネイティブな同一セッション内での継続と GoalBar、またはヘッドレスな dsh セグメント。どちらも LoopX の権限によってゲートされます |
 | Cursor、シェル、カスタムランナー | `loopx start-goal --guided --project . --goal-text "<task>"` を実行するか、ランナーから LoopX を呼び出します。 | お使いのシェル、スケジューラー、ランナー |
 
 そのままコピーできるセットアップメッセージとホストの復旧手順は、
@@ -310,8 +310,8 @@ Todo として計画して、ホストの有効化をガイドします。アク
 [Codex CLI のパッケージインストール手順](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md)、
 [Claude Code アダプター](loopx/claude_goal_mode/README.md)、
 [KunlunCode のネイティブ Goal アダプター](loopx/kunluncode_goal_mode/README.md)、
-[Kiro CLI の goal-mode アダプター](loopx/kiro_cli_goal_mode/README.md)、または
-[DeepSeek Harness のターンアダプター](loopx/dsh_goal_mode/README.md)を確認できます。
+[Kiro CLI の goal-mode アダプター](loopx/hosts/kiro_cli/README.md)、または
+[DeepSeek Harness のターンアダプター](loopx/hosts/dsh/README.md)を確認できます。
 
 ネイティブな手順については、[60 秒の DSH × LoopX Replan の録画と再現可能な
 フィクスチャ](docs/showcases/cases/dsh-loopx-replan-demo.md)をご覧ください：

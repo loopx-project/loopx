@@ -251,7 +251,10 @@ def _carriers(source: SourceFile | None) -> dict[tuple[str, str], dict[str, Any]
     inventory = build_inventory(Path("."), sources=[source])
     found: dict[tuple[str, str], dict[str, Any]] = {}
     for kind, section in SUPPORTED_CARRIERS:
-        for item in inventory[section]:
+        entries = inventory.get(section)
+        if not isinstance(entries, list):
+            continue
+        for item in entries:
             found[(kind, item["name"])] = {
                 "kind": kind,
                 "name": item["name"],

@@ -328,9 +328,13 @@ def _apply_selected_todo_guards(
     # A compact legacy projection may legitimately omit every boundary field.
     # Observe the selected workspace without inventing a write grant.
     goal_boundary = prepared.goal_boundary or {}
+    captured_workspace: dict[str, Any] = {}
     local_workspace = observe_goal_local_workspace(
-        prepared.item, selected_todo, goal_boundary.get("write_scope", [])
+        prepared.item, selected_todo, goal_boundary.get("write_scope", []),
+        captured_out=captured_workspace,
     )
+    if captured_workspace:
+        prepared.captured_local_workspace = captured_workspace
     if direct_sources is not None:
         direct_sources["delivery_workspace"] = source_fact(
             "delivery_workspace",
@@ -587,6 +591,7 @@ def build_quota_should_run(
     authoritative_fallback_todo_items: FallbackTodoSource = None,
     replan_explore_reader: Callable[[str, str | None], Mapping[str, Any] | None] | None = None,
     app_scheduler_state_observer: Callable[[Mapping[str, Any]], None] | None = None,
+    reuse_fresh_canonical_snapshot: bool = False,
 ) -> dict[str, Any]:
     safe_goal_id = str(goal_id or "").strip()
     direct_sources: dict[str, dict[str, Any]] = {}
@@ -681,6 +686,7 @@ def build_quota_should_run(
             receipt_bound_guard_recorded_at=receipt_bound_guard_recorded_at,
             receipt_bound_guard_turn_instance_id=receipt_bound_guard_turn_instance_id,
             receipt_bound_replan_review=receipt_bound_replan_review,
+            reuse_fresh_canonical_snapshot=reuse_fresh_canonical_snapshot,
         )
         if runtime_root is not None and turn_instance_id and prepared.agent_frontier_id:
             prepared.vision_initialization_context = {

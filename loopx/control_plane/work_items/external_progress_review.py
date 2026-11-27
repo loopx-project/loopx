@@ -387,7 +387,7 @@ def external_progress_review_trigger(
             continue
         if baseline_run is None:
             baseline_run = run
-        window_fingerprints.add(observation["fingerprint"])
+        window_fingerprints.add(str(observation["fingerprint"]))
         window.append(observation)
     if baseline_run is None or not window:
         return None

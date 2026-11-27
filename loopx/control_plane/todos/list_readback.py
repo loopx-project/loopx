@@ -8,12 +8,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
+from ..hook_runtime.request_scope import (
+    current_hook_registry_snapshots,
+    load_scoped_registry,
+)
 from ..projects.registry_codec import load_registry
 from ..runtime.runtime_projection_route import resolve_goal_source_runtime_route
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
 from ..goals.state_resolution import resolve_goal_state
 from .contract import normalize_todo_claimed_by, normalize_todo_id, normalize_todo_status
-from .todo_index import MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL
 from .resume_condition import TodoResumeRolloutEvents
 
 
@@ -37,7 +39,10 @@ def list_goal_todos(
     include_archived: bool = False,
     read_scope: Literal["active", "completed_history"] = "active",
     json_references: bool = False,
+    include_acceptance: bool = True,
 ) -> dict[str, Any]:
+    if not isinstance(include_acceptance, bool):
+        raise ValueError("Todo include_acceptance must be a boolean")
     if full_text and (thin or json_references or summary):
         raise ValueError("Full Todo body reads cannot use compact presentation")
     if read_scope not in {"active", "completed_history"}:
@@ -58,8 +63,15 @@ def list_goal_todos(
         raise ValueError("agent_id must be a public-safe agent token such as codex-main-control")
     if limit is not None and limit < 1:
         raise ValueError("todo list --limit must be at least 1")
-    source_snapshots: dict[Path, bytes | None] = {}
-    registry = load_registry(registry_path, source_snapshots=source_snapshots)
+    scoped_snapshots = current_hook_registry_snapshots()
+    source_snapshots: dict[Path, bytes | None] | None = (
+        None if scoped_snapshots is not None else {}
+    )
+    registry = (
+        load_scoped_registry(registry_path, loader=load_registry)
+        if scoped_snapshots is not None
+        else load_registry(registry_path, source_snapshots=source_snapshots)
+    )
     route = resolve_goal_source_runtime_route(
         registry_path=registry_path, goal_id=goal_id,
         runtime_root_override=runtime_root_arg, registry=registry,
@@ -67,7 +79,11 @@ def list_goal_todos(
     )
     source_registry = Path(route["source_registry"])
     if route["routed_to_source_registry"]:
-        registry = load_registry(source_registry, source_snapshots=source_snapshots)
+        registry = (
+            load_scoped_registry(source_registry, loader=load_registry)
+            if scoped_snapshots is not None
+            else load_registry(source_registry, source_snapshots=source_snapshots)
+        )
     goal, resolved_project, resolved_state_file = resolve_goal_state(
         registry=registry,
         goal_id=goal_id,
@@ -78,12 +94,7 @@ def list_goal_todos(
         raise ValueError(f"goal {goal_id!r} is not present in the registry")
 
     runtime_root = Path(route["source_runtime_root"])
-    rollout_events = load_rollout_events(
-        rollout_event_log_path(runtime_root, goal_id),
-        limit=MAX_TODO_INDEX_ROLLOUT_EVENTS_PER_GOAL,
-    )
-
-    rollout_events = TodoResumeRolloutEvents(rollout_events, runtime_root=runtime_root, goal_id=goal_id)
+    rollout_events = TodoResumeRolloutEvents([], runtime_root=runtime_root, goal_id=goal_id)
 
     from ..coordination.local_authority import CanonicalAuthorityRequired, LocalCoordinationAuthorityUnavailable
     from .goal_todo_projection import project_todo_read
@@ -102,6 +113,8 @@ def list_goal_todos(
             "state_file": str(resolved_state_file), "project": str(resolved_project) if resolved_project else None}}
     if summary:
         params["query"]["summary"] = True
+    if not include_acceptance:
+        params["query"]["include_acceptance"] = False
     result = project_todo_read(params)
     if "payload" not in result:
         failure = result["canonical"]
@@ -114,7 +127,7 @@ def list_goal_todos(
     payload = result["payload"]
     if full_text and payload.get("full_text") is not True:
         raise ValueError("Complete Todo body delivery is unsupported by this runtime")
-    if "canonical_acceptance" in result:
+    if include_acceptance and "canonical_acceptance" in result:
         from .goal_todo_projection import observe_todo_acceptance
         payload = observe_todo_acceptance(payload, result["canonical_acceptance"],
             registry_path=source_registry, goal_id=goal_id)

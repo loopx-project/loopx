@@ -10,6 +10,19 @@ from typing import Any
 from ....file_lock import try_exclusive_file_lock
 
 
+DEFAULT_EXPLORE_BASE_NAME = "LoopX Exploration Results"
+
+TABLE_NODES = "nodes"
+TABLE_EDGES = "edges"
+TABLE_FINDINGS = "findings"
+EXPLORE_TABLE_KEYS = (TABLE_NODES, TABLE_EDGES, TABLE_FINDINGS)
+EXPLORE_TABLE_NAMES = {
+    TABLE_NODES: "Nodes",
+    TABLE_EDGES: "Edges",
+    TABLE_FINDINGS: "Findings",
+}
+
+
 def default_lark_explore_config_path(registry_path: Path | None = None) -> Path:
     if registry_path is not None:
         expanded = registry_path.expanduser()

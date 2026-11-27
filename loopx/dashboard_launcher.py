@@ -13,7 +13,7 @@ from urllib.parse import quote
 import webbrowser
 
 from .cli_commands.support_control_agent_runtime import ensure_agent_runtime_path
-from .kiro_cli_goal_mode import KIRO_CLI_BIN
+from .hosts.kiro_cli import KIRO_CLI_BIN
 from .release_manifest import release_runtime_identity
 
 

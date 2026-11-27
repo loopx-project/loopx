@@ -735,7 +735,8 @@ function parseCorePreparationEvents(rawEvents: unknown[], failed: JsonObject, la
   if (!ids.every(isNonEmptyStr) || !allUnique(ids) || events[0].kind !== "turn.queued"
       || terminal.kind !== "turn.failed" || terminal.error_code !== failed.error_code
       || events.slice(1, -1).some(item => item.kind !== "manager.context"
-        && !(item.kind === "agent.phase" && item.phase === "manager_context"))) return null;
+        && !(item.kind === "agent.phase"
+          && (item.phase === "manager_context" || item.phase === "native_conversation_active")))) return null;
   return events;
 }
 

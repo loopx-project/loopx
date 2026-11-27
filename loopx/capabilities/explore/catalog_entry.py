@@ -44,6 +44,16 @@ EXPLORE_CATALOG_ENTRY: dict[str, Any] = {
             "purpose": "Fold canonical result events into the bounded operator projection.",
             "write_boundary": "read-only projection over the goal result log",
         },
+        {
+            "command": "loopx explore observe-external --goal-id <goal-id> --node <node-id> --plan-json <plan.json> --receipt-json <receipt.json> --admission-json <admission.json> --format json",
+            "purpose": "Preview or record sanitized external-evidence admissions onto an existing same-goal Explore node without auto-executing providers.",
+            "write_boundary": "read-only preview unless --execute; writes sanitized refs to the goal result log only",
+        },
+        {
+            "command": "loopx explore import-citations --goal-id <goal-id> --node <node-id> --project <project> --format json",
+            "purpose": "Preview or export sanitized references from authorized answered deepresearch citations without mutating the source ledger.",
+            "write_boundary": "read-only deepresearch read; writes sanitized citation refs to the goal result log only when --execute is set",
+        },
     ],
     "implemented_protocols": [
         {

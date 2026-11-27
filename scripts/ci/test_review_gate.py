@@ -16,13 +16,17 @@ from review_gate import CHECK_OUTPUT, JOB_OUTPUT, requires_core_tests, verify, v
 # Independent acceptance: client-only work retains compiled frontend/browser
 # qualification but does not claim backend conformance or coverage.
 PROFILE_FLAGS = {
-    "docs": dict(core_tests=False, backend_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=False),
-    "presentation": dict(core_tests=True, backend_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=True),
-    "full": dict(core_tests=True, backend_tests=True, python_tests=True, stage2c_tests=True, presentation_tests=False),
+    "docs": dict(core_tests=False, backend_tests=False, frontend_tests=False, compat_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=False),
+    "presentation": dict(core_tests=True, backend_tests=False, frontend_tests=True, compat_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=True),
+    "backend": dict(core_tests=True, backend_tests=True, frontend_tests=False, compat_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=False),
+    "mixed": dict(core_tests=True, backend_tests=True, frontend_tests=True, compat_tests=False, python_tests=False, stage2c_tests=False, presentation_tests=True),
+    "full": dict(core_tests=True, backend_tests=True, frontend_tests=True, compat_tests=True, python_tests=True, stage2c_tests=True, presentation_tests=False),
 }
 PROFILE_JOBS = {
     "docs": set(),
     "presentation": {"checks", "presentation", "dashboard-acceptance", "chat-bundle-browser"},
+    "backend": {"checks", "kernel-static-checks", "kernel-contracts", "typescript-coverage"},
+    "mixed": {"checks", "presentation", "kernel-static-checks", "kernel-contracts", "typescript-coverage", "dashboard-acceptance", "chat-bundle-browser"},
     "full": {"checks", "pytest", "node-minimum-compatibility", "stage2c-correctness-e2e",
              "windows-powershell", "kernel-static-checks", "kernel-contracts", "typescript-coverage",
              "dashboard-acceptance", "chat-bundle-browser"},
@@ -30,7 +34,7 @@ PROFILE_JOBS = {
 
 
 def needs(kind="full", *, presentation=False, jobs=JOB_OUTPUT):
-    flags = {**PROFILE_FLAGS[kind], "presentation_tests": kind == "presentation" or presentation}
+    flags = {**PROFILE_FLAGS[kind], "presentation_tests": kind in {"presentation", "mixed"} or presentation}
     required = PROFILE_JOBS[kind] | ({"presentation"} if presentation else set())
     return {"changes": {"result": "success", "outputs": {"change_kind": kind,
         **{key: str(value).lower() for key, value in flags.items()}}},
@@ -296,7 +300,7 @@ for (const unavailable of [false, true]) {
                            "GATE_RESULT": "failure", "NEEDS_JSON": json.dumps(needs())})
 
     def test_legal_profiles_and_policy_rehearsal(self):
-        for kind in ("docs", "presentation", "full"):
+        for kind in ("docs", "presentation", "backend", "mixed", "full"):
             verify(needs(kind))
             verify_checks(needs(kind, jobs=CHECK_OUTPUT))
         verify(needs("full", presentation=True))
@@ -309,7 +313,7 @@ for (const unavailable of [false, true]) {
         self.check_results(CHECK_OUTPUT, verify_checks)
 
     def check_results(self, jobs, verifier):
-        for kind in ("docs", "presentation", "full"):
+        for kind in ("docs", "presentation", "backend", "mixed", "full"):
             good = needs(kind, jobs=jobs)
             for job in jobs:
                 for state in ("success", "skipped", "failure", "cancelled", "neutral", None):
@@ -326,8 +330,8 @@ for (const unavailable of [false, true]) {
                     verifier(value)
 
     def test_bad_and_contradictory_classification_cannot_skip_work(self):
-        for kind in ("docs", "presentation", "full"):
-            for field in ("change_kind", "core_tests", "backend_tests", "python_tests", "stage2c_tests", "presentation_tests"):
+        for kind in ("docs", "presentation", "backend", "mixed", "full"):
+            for field in ("change_kind", "core_tests", "backend_tests", "frontend_tests", "compat_tests", "python_tests", "stage2c_tests", "presentation_tests"):
                 for replacement in (None, "", True, "unknown"):
                     value = needs(kind)
                     value["changes"]["outputs"][field] = replacement
@@ -346,7 +350,7 @@ for (const unavailable of [false, true]) {
             verify({**needs(), "extra": {"result": "success"}})
 
     def test_backend_flag_cannot_waive_a_full_pr_or_create_client_coverage(self):
-        for kind in ("docs", "presentation", "full"):
+        for kind in ("docs", "presentation", "backend", "mixed", "full"):
             for jobs, verifier in ((JOB_OUTPUT, verify), (CHECK_OUTPUT, verify_checks)):
                 value = needs(kind, jobs=jobs)
                 outputs = value["changes"]["outputs"]
@@ -396,13 +400,14 @@ class PythonShardAdmissionTests(unittest.TestCase):
         self.assertEqual(bundle["needs"], ["changes", "kernel-static-checks"])
         self.assertIn("!cancelled()", bundle["if"])
         for event in ("pull_request", "push", "merge_group", "schedule", "workflow_dispatch"):
-            for kind in PROFILE_FLAGS:
+            for kind, flags in PROFILE_FLAGS.items():
                 for state in ("success", "failure", "cancelled", "skipped", ""):
                     for cancelled in (False, True):
-                        expected = not cancelled and (
-                            (kind == "presentation" and state == "skipped") or
-                            (kind == "full" and (state == "success" or
-                             state == "failure" and event in {"schedule", "workflow_dispatch"})))
+                        static_ok = (not flags["backend_tests"] and state == "skipped") or (
+                            flags["backend_tests"]
+                            and (state == "success" or (state == "failure" and event in {"schedule", "workflow_dispatch"}))
+                        )
+                        expected = not cancelled and flags["core_tests"] and static_ok
                         with self.subTest(event=event, kind=kind, state=state, cancelled=cancelled):
                             self.assertEqual(self.admitted("chat-bundle", event,
                                 {"kernel-static-checks": state}, kind=kind, cancelled=cancelled), expected)
@@ -417,10 +422,10 @@ class PythonShardAdmissionTests(unittest.TestCase):
 
     def test_every_heavy_lane_uses_the_admitted_bundle_and_retains_its_scope(self):
         lanes = {"kernel-contracts": "backend_tests", "typescript-core": "backend_tests",
-            "chat-bundle-browser": "core_tests", "dashboard-browser": "core_tests",
+            "chat-bundle-browser": "frontend_tests", "dashboard-browser": "frontend_tests",
             "test-shard": "python_tests", "stage2c-suite": "stage2c_tests",
             "windows-powershell": "python_tests", "presentation": "presentation_tests",
-            "node-minimum-compatibility": "backend_tests", "node-forward-compatibility": "backend_tests"}
+            "node-minimum-compatibility": "compat_tests", "node-forward-compatibility": "compat_tests"}
         for name, output in lanes.items():
             job = self.workflow["jobs"][name]
             self.assertEqual(job["needs"], ["changes", "chat-bundle"])

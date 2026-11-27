@@ -52,7 +52,7 @@ export function useGoalWorkspaceDigest(goal: WorkspaceGoal | null, userTodos: Wo
   }, [goal, userTodos, items, map]);
 }
 
-export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: { goal: WorkspaceGoal; onOpenWorkspace: () => void; onOpenDetails?: () => void }) {
+export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: { goal: WorkspaceGoal; onOpenWorkspace: () => void; onOpenDetails?: (openingControl: HTMLButtonElement) => void }) {
   const { t } = useWorkspaceI18n();
   const agents = (goal.agentLanes ?? []).map((lane) => lane.label);
   const context = [
@@ -69,7 +69,11 @@ export function GoalMastheadIdentity({ goal, onOpenWorkspace, onOpenDetails }: {
         <span className="personal-sr-only" aria-current="page">{goal.title}</span>
 
       </nav>
-      <div className="goal-masthead-title"><h1>{goal.title}</h1>{onOpenDetails ? <button type="button" onClick={onOpenDetails} aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}</div>
+      <div className="goal-masthead-title">
+        <h1>{goal.title}</h1>
+        {onOpenDetails ? <button type="button" onClick={(event) => onOpenDetails(event.currentTarget)}
+          aria-label={t("masthead.completeTitle")} title={t("masthead.completeTitle")}><Info aria-hidden size={16} /></button> : null}
+      </div>
       {context.length ? <p className="goal-masthead-context" title={agents.join(", ")}>{context.join(" · ")}</p> : null}
     </>
   );

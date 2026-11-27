@@ -150,7 +150,7 @@ def _pi_plan(
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required for Pi scheduler-consumer parity")
-    runtime_uri = (REPO_ROOT / "loopx/pi_goal_mode/pi-goal-loop-runtime.mjs").as_uri()
+    runtime_uri = (REPO_ROOT / "loopx/hosts/pi/pi-goal-loop-runtime.mjs").as_uri()
     probe = f"""
 import {{ waitPlan }} from {json.dumps(runtime_uri)}
 let raw = ""

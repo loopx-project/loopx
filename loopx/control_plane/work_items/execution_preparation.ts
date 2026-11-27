@@ -1,9 +1,11 @@
+import {isDeepStrictEqual} from "node:util";
 import {HANDOFF_MODES} from "../coordination/handoff_mode_vocabulary.ts";
 import {HANDOFF_MODE_RETIRED_REASON, retiredHandoffModeRejection} from "../coordination/handoff_mode_policy.ts";
 import type {JsonObject} from "../effect_program.ts";
 import {leaseEpoch} from "./task_lease_record.ts";
 import {EffectRuntimeRequestError} from "../effect_runtime_errors.ts";
 import {
+  jsonObject,
   optionalNonEmptyString,
   requireBoolean,
   requireJsonObject,
@@ -52,6 +54,32 @@ function claimAction(goalId: string, todoId: string, agentId: string): JsonObjec
     postcondition: "rerun quota should-run and require execution_preparation.state=ready",
     safety: "ordinary managed claim atomically rechecks current ownership, write scopes, workspace isolation, and lease generation",
   };
+}
+
+function readyLeasePreparation(
+  base: JsonObject, leaseProof: unknown, leaseEpochValue: unknown,
+): JsonObject {
+  return {...base, state: "ready", delivery_allowed: true,
+    reason_code: "matching_active_task_lease",
+    // Capture the admitted generation once. Recovery must not borrow a replacement.
+    ...(leaseProof === undefined ? {} : {lease_proof: leaseProof, lease_epoch: leaseEpochValue})};
+}
+
+/** The Worker does not need the launcher's lease transaction record after admission. */
+export function isKnownReadyLeasePreparation(
+  value: unknown, agentId: unknown, todoId: string | null,
+): boolean {
+  const record = jsonObject(value);
+  const proof = jsonObject(record?.lease_proof);
+  const key = proof?.idempotency_key, version = proof?.expected_version, epoch = record?.lease_epoch;
+  if (typeof agentId !== "string" || !agentId || !todoId || typeof key !== "string" ||
+      !key || key !== key.trim() || typeof version !== "number" ||
+      !Number.isSafeInteger(version) || version < 1 ||
+      typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch < 1) return false;
+  return isDeepStrictEqual(record, readyLeasePreparation({
+    schema_version: EXECUTION_PREPARATION_SCHEMA_VERSION,
+    todo_id: todoId, agent_id: agentId, handoff_mode: "hard_lease",
+  }, {idempotency_key: key, expected_version: version}, epoch));
 }
 
 /** Decide whether the selected Todo can execute under its current hard lease.
@@ -132,12 +160,7 @@ export function projectExecutionPreparation(value: unknown): JsonObject {
         reason_code: "active_lease_owned_by_other_agent", ...(owner ? {owner} : {}),
         reason: "The selected Todo has an active lease owned by another agent; do not take over its execution."};
     }
-    return {...base, state: "ready", delivery_allowed: true,
-      reason_code: "matching_active_task_lease",
-      // Capture the admitted generation once. Recovery must not borrow a
-      // replacement lease after the original Host result was produced.
-      ...(active[0].lease_proof === undefined ? {} :
-        {lease_proof: active[0].lease_proof, lease_epoch: active[0].lease_epoch})};
+    return readyLeasePreparation(base, active[0].lease_proof, active[0].lease_epoch);
   }
 
   const prior = leases[0];

@@ -1,17 +1,15 @@
-/** Inspection is observational; all three real providers share admission facts. */
+/** Inspection is observational; local canonical providers share admission facts. */
 import assert from "node:assert/strict";
-import {createHash, randomUUID} from "node:crypto";
+import {createHash} from "node:crypto";
 import {writeFileSync, unlinkSync} from "node:fs";
 import {mkdtemp, mkdir, writeFile, readFile, readdir, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import test from "node:test";
-import {Pool} from "pg";
 import type {JsonObject} from "../../loopx/control_plane/effect_program.ts";
 import type {AuthorityStore} from "../../loopx/control_plane/coordination/authority_store.ts";
 import {FileAuthorityStore} from "../../loopx/control_plane/coordination/file_authority_store.ts";
 import {SqliteAuthorityStore} from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} from "../../loopx/control_plane/coordination/postgresql_authority_store.ts";
 import {selectLocalSqliteAuthority, type LocalAuthorityProviderDependencies} from "../../loopx/control_plane/coordination/local_authority_provider.ts";
 import {engageLegacyCoordinationWriterFence, legacyCoordinationWriterFencePath} from "../../loopx/control_plane/coordination/legacy_writer_fence.ts";
 import {canonicalAuthoritySha256} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
@@ -22,16 +20,8 @@ import {productionScaleLeaseLifecycleFixture} from "./production_scale_coordinat
 
 const NOW = new Date("2026-09-13T10:05:00Z");
 const sqliteQualified = sqliteRuntimeIdentity().sqlite_authority_qualified === true;
-const pool = process.env.LOOPX_TEST_POSTGRES_URL ? new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL}) : null;
-const database = pool ? {connect: async () => {
-  const client = await pool.connect();
-  return {query: async (sql: string, values?: readonly unknown[]) => client.query(sql, values ? [...values] : undefined),
-    release: (error?: Error) => client.release(error)};
-}} : null;
-const installed = database ? installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`) : null;
-test.after(async () => {await pool?.end();});
 
-type Provider = "legacy" | "file" | "sqlite" | "postgresql";
+type Provider = "legacy" | "file" | "sqlite";
 async function fixture(t: test.TestContext, provider: Provider, schema: "native" | "legacy" = "native", mode = "hard_lease") {
   const root = await mkdtemp(join(tmpdir(), "lease-inspect-")), goal = "inspect-goal";
   t.after(() => rm(root, {recursive: true, force: true}));
@@ -83,7 +73,7 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
   const authority = {handoff_mode: "hard_lease", registered_agent_candidates: [fixture.registered_agents],
     todos: todos.filter(row => row.archive_state === "active"), todo_projection_error: null,
     source_receipts: [{source_id: "registry", path: registry, state: "file", sha256: createHash("sha256").update(registryText).digest("hex")}]};
-  let store: AuthorityStore | null = null, authorityProvider: LocalAuthorityProviderDependencies = {};
+  let store: AuthorityStore | null = null; const authorityProvider: LocalAuthorityProviderDependencies = {};
   if (provider === "legacy") {
     const directory = join(root, "goals", goal, "task-leases"); await mkdir(directory, {recursive: true});
     for (const row of leases) await writeFile(join(directory, `${row.todo_id}.json`), JSON.stringify(row));
@@ -91,21 +81,6 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
     if (provider === "sqlite") {
       assert.equal((await selectLocalSqliteAuthority(root, goal, true)).ok, true);
       store = new SqliteAuthorityStore(join(root, "authority/sqlite-v0"), goal);
-    } else if (provider === "postgresql") {
-      await installed;
-      const tenant = `inspection-${randomUUID()}`;
-      store = new PostgreSqlAuthorityStore(database!, {tenant_id: tenant, goal_id: goal});
-      t.after(async () => {
-        for (const table of ["authority_receipts", "authority_events", "authority_commits", "authority_heads"]) {
-          await pool!.query(`DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1`, [tenant]);
-        }
-      });
-      const identity = await store.storeIdentity(); assert.equal(identity.status, "available");
-      if (identity.status !== "available") throw new Error("fixture identity missing");
-      await mkdir(join(root, "authority"), {recursive: true});
-      await writeFile(join(root, "authority", `provider-${createHash("sha256").update(goal).digest("hex")}.json`), JSON.stringify({
-        schema_version: "loopx_local_authority_provider_v0", provider, goal_id: goal, tenant_id: tenant, store_identity: identity.store_identity}));
-      const selected = store; authorityProvider = {openPostgresqlStore: () => selected};
     } else store = new FileAuthorityStore(join(root, "authority/file-v0"), goal);
     assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed",
       next_projection: projection, events: [], receipts: []})).status, "applied");
@@ -122,9 +97,9 @@ async function fixture(t: test.TestContext, provider: Provider, schema: "native"
   return {root, goal, registry, store, request, authorityProvider, cases};
 }
 
-for (const provider of ["legacy", "file", "sqlite", "postgresql"] as const) {
+for (const provider of ["legacy", "file", "sqlite"] as const) {
   for (const schema of provider === "legacy" ? ["legacy"] as const : ["legacy", "native"] as const) {
-    const skip = (provider === "postgresql" && !pool) || (provider === "sqlite" && !sqliteQualified);
+    const skip = provider === "sqlite" && !sqliteQualified;
     test(`${provider} ${schema} full mixed head reports effective ownership without writes`, {skip}, async t => {
       const {request, store, authorityProvider, cases, root, goal} = await fixture(t, provider, schema);
       const before = await store?.loadAuthority();
@@ -184,9 +159,9 @@ test("retained source inspection ignores retired Todo admission and validates th
   assert.equal((await inspectTaskLease(request, {now: () => NOW})).error_code, "corrupt_lease");
 });
 
-for (const provider of ["file", "sqlite", "postgresql"] as const) {
+for (const provider of ["file", "sqlite"] as const) {
   test(`${provider} retired legacy policy reports retained leases without effective execution`,
-    {skip: (provider === "postgresql" && !pool) || (provider === "sqlite" && !sqliteQualified)}, async t => {
+    {skip: provider === "sqlite" && !sqliteQualified}, async t => {
       const {request, store, authorityProvider} = await fixture(t, provider, "native", "legacy");
       const before = await store!.loadAuthority();
       const result = await inspectTaskLease(request, {now: () => NOW, authorityProvider});

@@ -40,14 +40,16 @@ test('attentionCount counts waiting threads and unread ones that are not on scre
   assert.equal(pageTitle('(13) LoopX', 0), 'LoopX');
 });
 
-test('threadMark picks one dot: waiting, then running, then error, then unread', () => {
-  assert.equal(threadMark(thread('a', { waiting: true, status: 'running', unread: true }), false), 'waiting');
-  assert.equal(threadMark(thread('a', { status: 'running', unread: true }), false), 'running');
-  assert.equal(threadMark(thread('a', { status: 'error', unread: true }), false), 'error');
+test('threadMark picks one dot: waiting, then running, then error, then unread, then draft', () => {
+  assert.equal(threadMark(thread('a', { waiting: true, status: 'running', unread: true }), false, true), 'waiting');
+  assert.equal(threadMark(thread('a', { status: 'running', unread: true }), false, true), 'running');
+  assert.equal(threadMark(thread('a', { status: 'error', unread: true }), false, true), 'error');
   assert.equal(threadMark(thread('a', { status: 'error' }), false), null, 'a failure already looked at keeps no dot');
   assert.equal(threadMark(thread('a', { status: 'error', unread: true }), true), null, 'the open thread shows its error itself');
-  assert.equal(threadMark(thread('a', { unread: true }), false), 'unread');
+  assert.equal(threadMark(thread('a', { unread: true }), false, true), 'unread');
   assert.equal(threadMark(thread('a', { unread: true }), true), null, 'the open thread is not shown as unread');
+  assert.equal(threadMark(thread('a', { unread: true }), true, true), 'draft', 'the open thread shows its draft dot once unread clears');
+  assert.equal(threadMark(thread('a'), false, true), 'draft');
   assert.equal(threadMark(thread('a'), false), null);
 });
 

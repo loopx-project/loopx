@@ -7,6 +7,7 @@ preparation only validates a document and cannot configure or run it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -45,9 +46,11 @@ def _saved_check(store: ChatActionStore, parameters: dict[str, Any],
     for proposal in store.list(goal_id=parameters["goal_id"], context_kind="goal"):
         if proposal["idempotency_key"] != operation_id:
             continue
+        raw_params = proposal["normalized_parameters"]
         if (proposal["action_kind"] != "goal.acceptance.check"
                 or proposal["context"] != {"kind": "goal", "goal_id": parameters["goal_id"]}
-                or {key: value for key, value in proposal["normalized_parameters"].items()
+                or not isinstance(raw_params, Mapping)
+                or {key: value for key, value in raw_params.items()
                     if key != "resolved_document"} not in accepted_intents):
             raise ActionConflictError("The operation belongs to another check request")
         return proposal
@@ -67,7 +70,7 @@ def prepare_acceptance_check(*, registry_path: Path, runtime_root: str | None,
         route = goal_acceptance_route(registry_path, goal_id, runtime_root)
         before = inspect_goal_acceptance(**route, agent_id=agent_id)
         preview = configure_goal_acceptance(**route, document=document,
-            expected_provider_revision=before["provider_revision"],
+            expected_provider_revision=str(before["provider_revision"]),
             operation_id=f"acceptance-preview:{uuid4().hex}", execute=False)
         return {**public_goal_acceptance(preview), "prepared": False, "executed": False}
     service = ChatActionService(store=ChatActionStore(root / "chat" / "actions"),
@@ -113,7 +116,7 @@ class GoalAcceptanceActionMixin:
         before = inspect_goal_acceptance(**route)
         preview = configure_goal_acceptance(
             **route, document=parameters["document"],
-            expected_provider_revision=before["provider_revision"],
+            expected_provider_revision=str(before["provider_revision"]),
             operation_id=f"acceptance-preview:{uuid4().hex}", execute=False,
         )
         if preview.get("status") != "planned":
@@ -132,13 +135,23 @@ class GoalAcceptanceActionMixin:
                 raise KeyError("Check plan was not found")
             if proposal["status"] == "applied":
                 return {"proposal": proposal, "turn": None}
-            parameters = proposal["normalized_parameters"]
+            raw_params = proposal["normalized_parameters"]
+            if not isinstance(raw_params, Mapping):
+                raise ValueError("Check plan parameters are malformed")
+            parameters = dict(raw_params)
             route = self._acceptance_route(parameters["goal_id"])
-            steps = (proposal.get("checkpoint") or {}).get("steps", {})
+            raw_checkpoint = proposal.get("checkpoint")
+            raw_steps = (
+                raw_checkpoint.get("steps", {})
+                if isinstance(raw_checkpoint, Mapping)
+                else {}
+            )
+            steps = raw_steps if isinstance(raw_steps, Mapping) else {}
             configured = steps.get("acceptance_configured")
             operation_id = f"acceptance-check:{proposal_id}"
+            expected_fingerprint = str(proposal["expected_state_fingerprint"])
             if configured is None:
-                basis = _review_basis(proposal["expected_state_fingerprint"])
+                basis = _review_basis(expected_fingerprint)
                 expected = basis["provider_revision"]
                 try:
                     # Its native idempotency receipt also recovers a lost
@@ -153,24 +166,33 @@ class GoalAcceptanceActionMixin:
                     current = inspect_goal_acceptance(**route)
                     if current["provider_revision"] != expected:
                         stored = self.store.apply(proposal_id,
-                            current_state_fingerprint=current["provider_revision"], receipt={})
+                            current_state_fingerprint=str(current["provider_revision"]), receipt={})
                         return {"proposal": stored, "turn": None}
                     raise
+                saved_contract = saved["goal_acceptance_contract"]
+                if not isinstance(saved_contract, Mapping):
+                    raise TypeError("Goal acceptance contract shape is invalid")
                 configured = {"provider_revision": saved["provider_revision"],
-                    "digest": saved["goal_acceptance_contract"]["digest"],
+                    "digest": saved_contract["digest"],
                     **({"review_context_digest": saved["review_context_digest"]}
                        if "review_context_digest" in saved else {})}
                 self.store.save_checkpoint(proposal_id, step="acceptance_configured", receipt=configured)
             current = inspect_goal_acceptance(**route)
             contract = current["goal_acceptance_contract"]
-            observed = contract.get("verification") or {}
+            if not isinstance(contract, Mapping):
+                raise TypeError("Goal acceptance contract shape is invalid")
+            raw_observed = contract.get("verification")
+            observed = raw_observed if isinstance(raw_observed, Mapping) else {}
             if steps.get("acceptance_check_started"):
                 # A native committed receipt may recover a lost HTTP result.
                 # Missing receipt is uncertainty, never permission to rerun.
                 if observed.get("operation_id") != operation_id:
                     raise ActionConflictError("The previous check result is unconfirmed. Read current evidence before explicitly running another check.")
+                results = observed["results"]
+                if not isinstance(results, list):
+                    raise TypeError("Acceptance check results are malformed")
                 result = {**public_goal_acceptance(current), "executed": True,
-                          "checks_passed": all(row["passed"] for row in observed["results"])}
+                          "checks_passed": all(isinstance(row, Mapping) and row["passed"] for row in results)}
             else:
                 expected = configured["provider_revision"]
                 if "review_context_digest" in configured:
@@ -188,5 +210,5 @@ class GoalAcceptanceActionMixin:
                 "projection_verified": True, "goal_id": parameters["goal_id"],
                 "operation_id": operation_id, "checks_passed": result["checks_passed"]}
             stored = self.store.apply(proposal_id,
-                current_state_fingerprint=proposal["expected_state_fingerprint"], receipt=receipt)
+                current_state_fingerprint=expected_fingerprint, receipt=receipt)
             return {"proposal": stored, "turn": None}

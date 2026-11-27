@@ -429,3 +429,34 @@ def test_return_ledger_failure_replays_the_immutable_publication(h, monkeypatch,
         # Advance the head without also reactivating a completed checks monitor.
         h.run_json(metadata={**retry_observation, "headRefOid": "c" * 40}, correction=None)
         assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2
+
+
+def test_temporary_unreadable_origin_request_preserves_saved_return_delivery(h):
+    event = _event("314")
+    h.run_json(metadata=observation([event]), correction=_correction_v1(event), origin=h.request_id)
+    h.mark_done(h.entries()[0]["todo_id"])
+    first = h.run_json(metadata=observation([event], "b" * 40), correction=None)
+    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 1
+    assert first["return_delivery"] == [
+        {
+            "operation_id": h.entries()[0]["operation_id"],
+            "update_id": h.entries()[0]["returns"][0]["update_id"],
+            "status": "queued",
+        }
+    ]
+    saved_returns = list(h.entries()[0]["returns"])
+
+    req_path = next((h.runtime / ".local/manager-context/entries").glob(f"*/{h.request_id}.json"))
+    req_bytes = req_path.read_bytes()
+    req_path.unlink()
+
+    replayed = h.run_json(metadata=observation([event], "c" * 40), correction=None)
+    assert len(h.replies()) == 1
+    assert h.entries()[0]["returns"] == saved_returns
+    assert replayed["return_delivery"] == first["return_delivery"]
+
+    req_path.write_bytes(req_bytes)
+    restored = h.run_json(metadata=observation([event], "c" * 40), correction=None)
+    assert len(h.replies()) == len(h.entries()[0]["returns"]) == 2
+    assert [r["head_sha"] for r in h.entries()[0]["returns"]] == ["b" * 40, "c" * 40]
+    assert [r["status"] for r in restored["return_delivery"]] == ["queued", "queued"]

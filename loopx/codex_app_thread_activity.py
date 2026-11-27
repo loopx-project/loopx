@@ -10,6 +10,7 @@ only record types and timestamps; message content is never projected.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -19,6 +20,9 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+from .hosts.codex_capabilities import (
+    CODEX_APP_HOST_CAPABILITIES as CODEX_APP_HOST_CAPABILITIES,
+)
 from .hosts.codex_rollout_cursor import Reader, RolloutCursor
 from .hosts.codex_rollout_file import open_rollout
 from .control_plane.agents.host_thread_activity import (
@@ -406,6 +410,17 @@ def _automation_rrule_interval_minutes(rrule: Any) -> int | None:
 def _installed_automation_intervals(
     homes: list[Path] | None = None,
 ) -> dict[tuple[str, str, str], int]:
+    values: dict[tuple[str, str, str], int] = {}
+    for key, entry in _installed_automations(homes).items():
+        interval = entry.get("interval_minutes")
+        if isinstance(interval, int):
+            values[key] = interval
+    return values
+
+
+def _installed_automations(
+    homes: list[Path] | None = None,
+) -> dict[tuple[str, str, str], dict[str, object]]:
     """Map each installed heartbeat automation to the lane it serves.
 
     A lane is identified the way the canonical resolver identifies it
@@ -416,9 +431,13 @@ def _installed_automation_intervals(
     instead of being measured against another lane's cadence.
     """
 
-    from .upgrade import infer_agent_id_from_prompt, infer_goal_id_from_prompt
+    from .upgrade import (
+        infer_agent_id_from_prompt,
+        infer_goal_id_from_prompt,
+        prompt_digest,
+    )
 
-    intervals: dict[tuple[str, str, str], int] = {}
+    intervals: dict[tuple[str, str, str], dict[str, object]] = {}
     ambiguous: set[tuple[str, str, str]] = set()
     identities: set[tuple[int, int]] = set()
     for home in codex_homes() if homes is None else homes:
@@ -455,6 +474,9 @@ def _installed_automation_intervals(
             interval = _automation_rrule_interval_minutes(item.get("rrule"))
             if not goal_id or not agent_id or not target_thread_id or interval is None:
                 continue
+            # The digest, not the body, is what reaches an evidence comparison:
+            # the installed prompt is the only text a scheduled delivery must
+            # reproduce byte-for-byte, and a digest never leaves this process.
             key = (goal_id, agent_id, target_thread_id)
             if key in intervals:
                 # Two automations claim one lane: neither is that lane's cadence.
@@ -462,8 +484,310 @@ def _installed_automation_intervals(
                 ambiguous.add(key)
                 continue
             if key not in ambiguous:
-                intervals[key] = interval
+                intervals[key] = {
+                    "interval_minutes": interval,
+                    # The id names which automation's envelope may claim this
+                    # lane; a sibling automation's tick is not this one's. The
+                    # installer falls back to the directory name the same way.
+                    "automation_id": str(item.get("id") or path.parent.name).strip(),
+                    # A scheduled tick wraps the installed prompt in the host's
+                    # heartbeat envelope, so the envelope is stripped before the
+                    # digest is taken and compared against each message the same
+                    # way.
+                    "prompt_sha256": prompt_digest(prompt.strip()),
+                }
     return intervals
+
+
+# The backward scan mirrors the activity observer's budget: a heartbeat turn can
+# append hundreds of tool records, so a record count would stop long before the
+# `task_started` that opens it. A turn larger than this budget is reported as
+# unattributed rather than guessed.
+_EVIDENCE_TAIL_BYTES = 8 * 1024 * 1024
+_INSTRUCTIONS_OPEN = "<instructions>"
+_INSTRUCTIONS_CLOSE = "</instructions>"
+_AUTOMATION_ID_OPEN = "<automation_id>"
+_AUTOMATION_ID_CLOSE = "</automation_id>"
+# The host's own labels for a turn it started from an installed automation. The
+# canonical heartbeat transport contract
+# (``loopx_codex_provider_routing.contract.qualify_heartbeat_transport``) names
+# ``automation_heartbeat``; a current Codex App rollout records the same turn as
+# ``automation_heartbeat_scheduled``. Both describe a scheduled delivery, while
+# a ``composer`` turn, a ``guardian_review`` and a resumed turn do not. The set
+# stays closed on purpose: a value this adapter has not seen is reported
+# unverified rather than assumed to be the automation, because a wrong ``fresh``
+# hides exactly the fault this readback exists to name.
+_HEARTBEAT_TURN_TRIGGERS = frozenset(
+    {"automation_heartbeat", "automation_heartbeat_scheduled"}
+)
+_HEARTBEAT_TRANSPORT_FIELDS = {
+    "payload_kind": "heartbeat_xml",
+    "delivery_kind": "user_input",
+    "message_role": "user",
+}
+
+
+def _message_text(payload: Mapping[str, Any]) -> str | None:
+    """Return one user message's text, or ``None`` for any other record shape."""
+
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    parts = [
+        item.get("text")
+        for item in content
+        if isinstance(item, Mapping) and item.get("type") == "input_text"
+    ]
+    if not parts or not all(isinstance(part, str) for part in parts):
+        return None
+    return "".join(parts)
+
+
+def _heartbeat_automation_id(text: str) -> tuple[bool, str]:
+    """Return whether a message names an automation, and which one.
+
+    A malformed or empty element still counts as naming one: it is not the
+    lane's automation, so it cannot be read as "the envelope omitted the id".
+    """
+
+    start = text.find(_AUTOMATION_ID_OPEN)
+    if start < 0:
+        return False, ""
+    start += len(_AUTOMATION_ID_OPEN)
+    end = text.find(_AUTOMATION_ID_CLOSE, start)
+    if end < 0:
+        return True, ""
+    return True, text[start:end].strip()
+
+
+def _delivered_prompt_digests(payload: Mapping[str, Any]) -> list[tuple[str, bool, str]]:
+    """Return the (digest, automation id) pairs one message can carry.
+
+    Codex App injects a scheduled prompt either verbatim or inside its
+    ``<heartbeat>`` envelope, where the installed body sits in
+    ``<instructions>`` and ``<automation_id>`` names the installation. Both
+    spellings compare equal by digest; the envelope also has to name this lane's
+    automation, and a message with neither spelling is a hand-written one and
+    matches nothing here.
+    """
+
+    text = _message_text(payload)
+    if text is None:
+        return []
+    found: list[tuple[str, bool, str]] = []
+    stripped = text.strip()
+    if stripped:
+        # A verbatim prompt names no automation; whether it may count is the
+        # turn's to say.
+        found.append((_prompt_digest_of(stripped), False, ""))
+    start = text.find(_INSTRUCTIONS_OPEN)
+    if start >= 0:
+        start += len(_INSTRUCTIONS_OPEN)
+        end = text.find(_INSTRUCTIONS_CLOSE, start)
+        if end > start:
+            inner = text[start:end].strip()
+            if inner:
+                named, automation = _heartbeat_automation_id(text)
+                found.append((_prompt_digest_of(inner), named, automation))
+    return found
+
+
+def _heartbeat_turn(payload: Mapping[str, Any]) -> bool:
+    """Return whether the host attributes this turn to a scheduled heartbeat.
+
+    A turn's own ``turn_attribution.turn_trigger`` is the host's testimony that
+    an automation started it. Text that happens to equal the installed prompt
+    is only a pointer: a hand-typed message in a ``composer`` turn, or a
+    guardian review, must never be read as a scheduled delivery. The two
+    triggers a release has been observed to publish for a scheduled turn are
+    both accepted, so the adapter does not read a real tick as a manual one.
+    Transport fields the rollout carries are checked against the same contract
+    when present; the rollout is not required to repeat fields it does not
+    record.
+    """
+
+    attribution = payload.get("turn_attribution")
+    if not isinstance(attribution, Mapping):
+        return False
+    trigger = attribution.get("turn_trigger")
+    if not isinstance(trigger, str) or trigger not in _HEARTBEAT_TURN_TRIGGERS:
+        return False
+    turn_id = attribution.get("turn_id")
+    if isinstance(turn_id, str) and turn_id:
+        started = payload.get("turn_id")
+        if isinstance(started, str) and started and started != turn_id:
+            # One record claiming two turns cannot attribute either of them.
+            return False
+    for field, expected in _HEARTBEAT_TRANSPORT_FIELDS.items():
+        observed = attribution.get(field)
+        if observed is None:
+            observed = payload.get(field)
+        if observed is not None and observed != expected:
+            return False
+    return True
+
+
+def _rollout_prompt_evidence(
+    path: Path, digest: str, automation_id: str = ""
+) -> str | None:
+    """Return when this thread's newest turn received the installed prompt.
+
+    Walks a bounded tail of the thread's own rollout backward. The newest
+    ``task_started`` opens the turn under examination, and that turn must carry
+    one of the host's automation triggers before anything inside it counts; a
+    user message whose prompt (or heartbeat-envelope body) hashes to
+    the installed prompt is then its scheduled delivery. A hand-written message
+    -- even one that repeats the installed text verbatim -- a resumed turn or an
+    empty turn produces no match, so none of them can make a silent lane look
+    healthy.
+    """
+
+    try:
+        with open_rollout(path) as handle:
+            size = os.fstat(handle.fileno()).st_size
+            truncated = size > _EVIDENCE_TAIL_BYTES
+            handle.seek(max(0, size - _EVIDENCE_TAIL_BYTES))
+            tail = handle.read()
+    except OSError:
+        return None
+    lines = tail.split(b"\n")
+    if truncated:
+        # The first fragment starts mid-record; drop it.
+        lines = lines[1:]
+    delivered_at: str | None = None
+    trailing = True
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            # The host appends while this runs, so the last line can be a
+            # record still being written. It carries no delivery yet; one
+            # unreadable record anywhere else is a broken store, not evidence.
+            if trailing:
+                trailing = False
+                continue
+            return None
+        trailing = False
+        if not isinstance(row, Mapping):
+            return None
+        payload = row.get("payload")
+        timestamp = row.get("timestamp")
+        if not isinstance(payload, Mapping) or not isinstance(timestamp, str):
+            return None
+        if row.get("type") == "event_msg" and payload.get("type") == "task_started":
+            # The newest turn decides twice: the host must attribute it to a
+            # scheduled heartbeat, and a message inside it must match. Text
+            # alone is a pointer, so a manual turn repeating the prompt stays
+            # unverified.
+            return delivered_at if _heartbeat_turn(payload) else None
+        if row.get("type") == "response_item":
+            for carried_digest, named_automation, envelope_automation in (
+                _delivered_prompt_digests(payload)
+            ):
+                if carried_digest != digest:
+                    continue
+                if named_automation and envelope_automation != automation_id:
+                    # Another installation's envelope body is not this lane's.
+                    continue
+                # A prompt repeated inside one turn is still that turn's delivery.
+                delivered_at = delivered_at or timestamp
+                break
+    # The whole bounded tail belongs to one turn that never showed its start.
+    return None
+
+
+def _prompt_digest_of(text: str) -> str:
+    from .upgrade import prompt_digest
+
+    return prompt_digest(text)
+
+
+def _thread_rollouts(
+    thread_ids: Iterable[str], homes: list[Path] | None
+) -> dict[str, Path]:
+    """Map each thread this local store records to its rollout file."""
+
+    remaining = sorted(set(thread_ids))
+    paths: dict[str, Path] = {}
+    for home in codex_homes() if homes is None else homes:
+        if not remaining:
+            break
+        try:
+            db = _state_db(home)
+            if db is None:
+                continue
+            rows = _thread_rows(db, remaining)
+        except _UnrecognizedStore:
+            continue
+        except (OSError, sqlite3.Error):
+            continue
+        root = Path(os.path.realpath(home))
+        for thread_id, (rollout_path, archived) in rows.items():
+            if archived not in (0, False) or not isinstance(rollout_path, str):
+                continue
+            if not rollout_path:
+                continue
+            path = Path(os.path.realpath(rollout_path))
+            # The same boundary the activity observer keeps: a store row is not
+            # a license to read a file outside the home that records it.
+            if not path.is_relative_to(root):
+                continue
+            paths[thread_id] = path
+            remaining = [item for item in remaining if item != thread_id]
+    return paths
+
+
+def codex_delivery_evidence(
+    scopes: Iterable[HostDeliveryScope],
+    *,
+    homes: list[Path] | None = None,
+) -> dict[HostDeliveryScope, str | None]:
+    """Resolve when each lane last received its installed heartbeat prompt.
+
+    Only an installed ``heartbeat`` automation names a prompt a scheduled tick
+    must reproduce, and only the thread it targets can hold that delivery. A
+    lane without one is omitted, so its window stays unverified rather than
+    being measured against another lane's prompt. This reads the thread's own
+    rollout read-only and never starts a turn or writes the host store.
+    """
+
+    wanted = [
+        scope
+        for scope in scopes
+        if scope.host_surface == CODEX_APP_BINDING_SURFACE and scope.thread_id
+    ]
+    if not wanted:
+        return {}
+    automations = _installed_automations(homes)
+    placements: dict[HostDeliveryScope, Mapping[str, object]] = {}
+    for scope in wanted:
+        entry = automations.get((scope.goal_id, scope.agent_id, scope.thread_id or ""))
+        if entry is not None:
+            placements[scope] = entry
+    if not placements:
+        return {}
+    rollouts = _thread_rollouts(
+        (scope.thread_id or "" for scope in placements), homes
+    )
+    cache: dict[tuple[Path, str, str], str | None] = {}
+    evidence: dict[HostDeliveryScope, str | None] = {}
+    for scope, entry in placements.items():
+        path = rollouts.get(scope.thread_id or "")
+        if path is None:
+            continue
+        digest = str(entry.get("prompt_sha256") or "")
+        if not digest:
+            continue
+        automation_id = str(entry.get("automation_id") or "")
+        key = (path, digest, automation_id)
+        if key not in cache:
+            cache[key] = _rollout_prompt_evidence(path, digest, automation_id)
+        evidence[scope] = cache[key]
+    return evidence
 
 
 def codex_delivery_expectations(

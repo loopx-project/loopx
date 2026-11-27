@@ -21,4 +21,29 @@ The retired benchmark-only baseline contract remains in Git history and is
 no longer part of the working tree or a LoopX runtime module.
 """
 
-__all__: list[str] = []
+from __future__ import annotations
+
+from ..hosts.capabilities import (
+    HostHarnessCapabilities,
+    _register_builtin_host_capabilities,
+)
+
+CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities = _register_builtin_host_capabilities(
+    HostHarnessCapabilities(
+        host_id="claude",
+        integration_tier="boundary_cli",
+        adapter_module="loopx.claude_goal_mode",
+        supported_capabilities=("verifier_hook",),
+        hook_events=("PreToolUse",),
+        requires_utf8_stdio=True,
+        native_goal_primitive=False,
+        native_scheduler_primitive=True,
+        description=(
+            "Claude Code boundary CLI adapter driven by native /loop, MCP "
+            "control-plane tools, and opt-in PreToolUse should_run/write_scope "
+            "policy verification."
+        ),
+    )
+)
+
+__all__: list[str] = ["CLAUDE_HOST_CAPABILITIES"]

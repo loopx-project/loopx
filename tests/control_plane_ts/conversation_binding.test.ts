@@ -2203,6 +2203,7 @@ test("antigravity steward pre-dispatch active-cascade resume_failed after manage
       {event_id: "1", kind: "turn.queued", delivery_mode: "session_queue"},
       {event_id: "2", kind: "agent.phase", phase: "manager_context"},
       {event_id: "3", kind: "manager.context", schema_version: "manager_turn_context_v1"},
+      {event_id: "3b", kind: "agent.phase", phase: "native_conversation_active"},
       {event_id: "4", kind: "turn.failed", error_code: failed.error_code, message: activeError},
     ]};
   const packet = {
@@ -2232,5 +2233,8 @@ test("antigravity steward pre-dispatch active-cascade resume_failed after manage
   }
   assert.equal(planBoundConversationRequest({...packet,
     context_recovery: {...packet.context_recovery,
-      preparation_observation: {...proof, events: [proof.events[0], proof.events[1], proof.events[3]]}}}).recovery_candidate, false);
+      preparation_observation: {...proof, events: [proof.events[0], proof.events[1], proof.events[4]]}}}).recovery_candidate, false);
+  assert.equal(planBoundConversationRequest({...packet,
+    context_recovery: {...packet.context_recovery,
+      preparation_observation: {...proof, events: [proof.events[0], proof.events[1], proof.events[2], proof.events[4]]}}}).recovery_candidate, true);
 });

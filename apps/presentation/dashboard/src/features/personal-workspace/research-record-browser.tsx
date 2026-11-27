@@ -105,7 +105,7 @@ export function ResearchRecordSearch({goalId, events, nodes, displayEvents, disp
         {event.evidence_refs.map(ref => <code key={ref}>{ref}</code>)}
       </details>
       <ResearchRecordComparison events={events} selected={event} displayed={displayed} renderSummary={renderSummary}
-        zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/>
+        complete={complete} stale={stale} busy={busy} zh={zh} stateLabel={stateLabel} timeLabel={timeLabel}/>
     </>;
   };
   return <div className="research-record-search" ref={root}>

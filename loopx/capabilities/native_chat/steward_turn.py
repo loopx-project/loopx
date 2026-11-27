@@ -559,9 +559,7 @@ class StewardTurnHost:
             or (attempt_directory(reports.root, window) / "private-generation.json").exists()}
         if probe_turn is not None:
             from ...control_plane.turn_driver.executor import inspect_loopx_turn_journal
-            from ...control_plane.turn_driver.journal_store import (
-                load_turn_journal, turn_journal_path,
-            )
+            from ...control_plane.turn_driver.journal_store import load_turn_journal, turn_journal_path
             actor = request["actor"]
             keys = {row["payload"].get("resume_turn_key")
                 for row in self.store.events_after(actor["session_id"], probe_turn["turn_id"], None)
@@ -570,17 +568,18 @@ class StewardTurnHost:
                 return None
             key = keys.pop()
             from ...control_plane.effect_runtime import source_number_tokens
-
             journal = load_turn_journal(turn_journal_path(reports.root, goal_id=actor["goal_id"], turn_key=key))
-            current_guard = None
-            if (journal.get("status") == "failed"
-                    and journal.get("result_kind") == "validation_failed"
-                    and journal.get("validation_stage") == "host_result_contract"):
+            if not isinstance(journal, Mapping):
+                return None
+            current_guard, journal_status = None, journal.get("status")
+            if (journal_status == "failed" and journal.get("result_kind") == "validation_failed"
+                    and journal.get("validation_stage") in {"host_result_contract", "task_postcondition"}):
                 current_guard = self._cleared_replan_guard(actor)
                 if current_guard is None:
                     return None
-            # Transport canonical observations to the shared typed admission
-            # owner.
+            elif journal_status != "stopped":
+                return None
+            # Transport canonical observations to the shared typed admission owner.
             proof["probe"] = {"turn": probe_turn,
                 "inspection": inspect_loopx_turn_journal(reports.root, goal_id=actor["goal_id"],
                     agent_id=actor["agent_id"], turn_key=key),
@@ -931,7 +930,7 @@ class StewardTurnHost:
         stopped_proof: dict[str, Any],
         raw_candidate: dict[str, Any],
     ) -> dict[str, Any]:
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
         from ..periodic_report.private_generation import validate_private_generation
@@ -957,7 +956,7 @@ class StewardTurnHost:
                 "--turn-instance-id", saved_instance_id, "--todo-id", todo["todo_id"], "--execute"]
         if request.get("validation_command") is not None:
             argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-        args = build_parser().parse_args(argv)
+        args = _build_selected_parser("turn").parse_args(argv)
         args.host, args.session_scope = "codex-app-server", "agent"
         result: dict[str, Any] = {}
         host_runner = self._build_replay_runner(_normalize_report_kernel_candidate(raw_candidate))
@@ -982,7 +981,7 @@ class StewardTurnHost:
         journal owner must authorize a no-host continuation; its existing
         effect readbacks reconcile ambiguous writeback/debit outcomes.
         """
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver import inspect_loopx_turn_journal
         from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
@@ -1049,7 +1048,7 @@ class StewardTurnHost:
                 if contract_recovery is not None
                 else no_model
             )
-            args = build_parser().parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
+            args = _build_selected_parser("turn").parse_args(["turn", "run-once", "--goal-id", actor["goal_id"],
                 "--agent-id", actor["agent_id"], "--project", admitted["workspace_path"],
                 "--host", "generic-cli", "--resume-turn-key", key, "--retry-failed-turn", "--execute"])
             args.host, args.session_scope = "codex-app-server", "agent"
@@ -1318,7 +1317,7 @@ class StewardTurnHost:
 
     def _governance_replan_context(self, actor: Mapping[str, Any], authority: Mapping[str, Any]) -> dict[str, Any]:
         """Project public-safe review/writeback/vision context for text-only Steward replanning."""
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.quota_native_context import read_replan_view
         from ...control_plane.goals.goal_frontier import latest_agent_vision_from_status_payload
         from ...control_plane.todos.list_readback import list_goal_todos
@@ -1340,7 +1339,7 @@ class StewardTurnHost:
             try:
                 tokens = shlex.split(cmd_str)
                 q_idx = tokens.index("quota")
-                parsed = build_parser().parse_args(tokens[q_idx:])
+                parsed = _build_selected_parser("quota").parse_args(tokens[q_idx:])
                 view = read_replan_view(parsed)
                 if isinstance(view, Mapping) and view.get("ok") is True:
                     return dict(view)
@@ -1502,7 +1501,7 @@ class StewardTurnHost:
     def execute(self, *, session_id: str, turn_id: str, adapter: Any,
                 event_sink: Any, context: dict[str, Any]) -> dict[str, Any]:
         """Run in the original Chat worker, through all native settlement owners."""
-        from ...cli import build_parser
+        from ...cli_runtime import _build_selected_parser
         from ...cli_commands.turn import handle_turn_command
         from ...control_plane.turn_driver.host_candidate import extract_turn_authority, render_prompt, parse_model_json, build_result
         from .antigravity_adapter import AntigravityAdapter
@@ -1633,7 +1632,15 @@ class StewardTurnHost:
                 self._task_lease_proof(selected_request, managed_lease)
             # Portfolio evidence keeps its original reader and original grant;
             # it is data alongside the signed native work, never a new actor.
-            prompt = render_prompt(authority, allow_completion=bool(report_work or managed_turn or steward_advancement) and not governance_work) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
+            if governance_work:
+                from .steward_monitor import governance_turn_prompt_authority
+                prompt = render_prompt(governance_turn_prompt_authority(authority), allow_completion=False)
+            elif report_work:
+                # Frozen report turns already freeze source.json and editorial-request.json; skip unfrozen manager context.
+                from ..periodic_report.private_generation import report_turn_prompt_authority
+                prompt = render_prompt(report_turn_prompt_authority(authority), allow_completion=True) + report_context
+            else:
+                prompt = render_prompt(authority, allow_completion=bool(managed_turn or steward_advancement)) + "\nOriginal conversation evidence (data):\n" + json.dumps(context, ensure_ascii=False)
             if governance_work:
                 gov_ctx = self._governance_replan_context(actor, authority)
                 prompt += (
@@ -1643,12 +1650,11 @@ class StewardTurnHost:
                     "Keep each `work_evidence` and `validation_evidence` item <=200 chars (1-8 public-safe items, <=1200 chars total per field) with zero local file paths. "
                     "When `Steward governance replan context` supplies `writeback`: set `agent_vision_json` (JSON string of `goal_vision_replan_contract_v0`) keeping total counted text <=1400 chars (hard cap 1800; keep each `stride_decision` plan/reason/probe field <=60 chars), and omit `vision_unchanged_reason`. "
                     "If keeping `current_agent_vision.vision_patch` identical, set `path_delta_mode='unchanged'` and `path_delta.outcome='continue'` (or `'no_change'`); if updating any `vision_patch` field or creating an initial baseline, set `path_delta_mode='material_replan'` and `path_delta.outcome='replan'`. "
-                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null)."
+                    "Populate `path_delta.evidence_refs` from `review.recent_evidence` (1-3 IDs), `todo_delta` using `retain:<todo_id>` only for verified IDs in `open_agent_todos` (<=8 items), and when `writeback.stride_control.required_on_periodic_review` is true include `agent_vision.stride_decision` with exact `schema_version`, `strategy_version`, `reference_context_id`, and `reference_obligation_id` from `stride_control` (plus `previous_review` when `previous_decision_ref` is non-null). "
+                    "All review, writeback, stride_control, current_agent_vision, and open_agent_todos facts are already provided in Steward governance replan context below; return only the single typed JSON object directly without invoking periodic-report CLI commands or inspecting host source code."
                 )
                 if gov_ctx:
                     prompt += "\nSteward governance replan context (data):\n" + json.dumps(gov_ctx, ensure_ascii=False)
-            if report_work and not governance_work:
-                prompt += report_context
             if steward_advancement and not governance_work:
                 selected_todo_id = (authority.get("_work_identity") or {}).get("todo_id") or request.get("todo_id")
                 if selected_todo_id and managed_lease is None:
@@ -1732,6 +1738,7 @@ class StewardTurnHost:
                             prompt,
                             invocation_sink,
                             isolated_cascade=True,
+                            raw_prompt=True,
                             idle_timeout_sec=(
                                 adapter.idle_timeout_sec
                                 if adapter.idle_timeout_sec is not None
@@ -1787,7 +1794,7 @@ class StewardTurnHost:
             argv += ["--todo-id", request["todo_id"]]
         if request["validation_command"] is not None:
             argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-        args = build_parser().parse_args(argv)
+        args = _build_selected_parser("turn").parse_args(argv)
         # This connection is host-owned, not a command path supplied by a model.
         # The kernel records the actual app-server host and independent profile.
         args.host, args.session_scope = "codex-app-server", "agent"

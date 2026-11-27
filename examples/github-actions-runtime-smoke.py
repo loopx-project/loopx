@@ -70,10 +70,6 @@ def main() -> int:
                 FORWARD_NODE_VERSION,
                 SQLITE_NODE_VERSION,
             }
-        elif name == "postgresql-integration.yml":
-            # The authority ladder drives the same kernel runtime as the
-            # SQLite-dependent jobs, so it pins the one qualified 22.x build.
-            expected = {PRIMARY_NODE_VERSION, SQLITE_NODE_VERSION}
         else:
             expected = {PRIMARY_NODE_VERSION}
         assert set(versions) <= expected, (name, versions)
@@ -90,10 +86,6 @@ def main() -> int:
     ))
     for name in ("typescript-core", "node-minimum-compatibility", "dashboard-acceptance", "windows-powershell"):
         assert SQLITE_NODE_VERSION in node_version_pattern.findall(jobs[name]), name
-    postgresql_versions = node_version_pattern.findall(
-        workflows["postgresql-integration.yml"]
-    )
-    assert postgresql_versions == [SQLITE_NODE_VERSION], postgresql_versions
     assert "node-forward-compatibility:" in python_workflow
     assert "continue-on-error: true" in python_workflow
     assert "needs: [changes, checks, pytest, node-minimum-compatibility," in python_workflow

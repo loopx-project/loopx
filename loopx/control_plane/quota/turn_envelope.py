@@ -79,9 +79,9 @@ def pack_turn_source(
 ) -> dict[str, str] | None:
     """Use the lossless wire for bounded sources that compress well."""
     raw = _encode_rpc_json(source)
-    if 16 * 1024 <= len(raw) <= 1024 * 1024:
+    if 16 * 1024 <= len(raw) <= 16 * 1024 * 1024:
         data = base64.b64encode(zlib.compress(raw, level=1)).decode("ascii")
-        if len(data) + 128 < len(raw) * max_encoded_fraction:
+        if len(data) <= 2 * 1024 * 1024 and len(data) + 128 < len(raw) * max_encoded_fraction:
             return {"encoding": "deflate-base64-json-v0", "data": data}
     return None
 
@@ -339,6 +339,12 @@ def compose_turn_decision(
         Mapping[str, Any] | SchedulerExecutionContextResolution | None
     ) = None,
     composed_settlement: bool = False,
+    include_vision_detail: bool = False,
+    include_goal_acceptance_detail: bool = False,
+    cli_argv: tuple[str, ...] | list[str] | None = None,
+    capture_reference_file: str | None = None,
+    cli_registry: str | None = None,
+    cli_runtime_root: str | None = None,
 ) -> dict[str, Any]:
     """Transport complete source facts to the existing typed composition owner."""
     resolution = resolve_scheduler_execution_context(scheduler_execution_context)
@@ -346,7 +352,13 @@ def compose_turn_decision(
     source = dict(payload)
     result = _turn_envelope_result("compose_complete", payload=source,
         scheduler_execution_args=args, source_edits=True,
-        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}))
+        **({"composed_settlement": composed_settlement} if composed_settlement is not False else {}),
+        **({"include_vision_detail": True} if include_vision_detail else {}),
+        **({"include_goal_acceptance_detail": True} if include_goal_acceptance_detail else {}),
+        **({"cli_argv": list(cli_argv)} if cli_argv is not None else {}),
+        **({"capture_reference_file": capture_reference_file} if capture_reference_file is not None else {}),
+        **({"cli_registry": cli_registry} if cli_registry is not None else {}),
+        **({"cli_runtime_root": cli_runtime_root} if cli_runtime_root is not None else {}))
     return _apply_context_projection_changes(source, result)
 
 
@@ -451,6 +463,8 @@ def prepare_context_delivery(
     surface: str = "work_context", native_projection: Mapping[str, Any] | None = None,
     consumed_pointers: Mapping[str, str] | None = None, observe_first_read: bool = False,
     include_initial_read_plan: bool = False,
+    include_goal_acceptance_detail: bool = False,
+    include_agent_todos_detail: bool = False,
 ) -> dict[str, Any]:
     """Prepare under the Host's explicit continuity basis, not a model assertion.
 
@@ -467,6 +481,10 @@ def prepare_context_delivery(
         source["native_projection"] = dict(native_projection)
         if include_initial_read_plan:
             source["include_initial_read_plan"] = True
+    if include_goal_acceptance_detail:
+        source["include_goal_acceptance_detail"] = True
+    if include_agent_todos_detail:
+        source["include_agent_todos_detail"] = True
     if consumed_pointers is not None:
         source["consumed_pointers"] = dict(consumed_pointers)
         if consumed_pointers and observe_first_read:
@@ -482,9 +500,15 @@ def prepare_context_delivery(
 
 
 def prepare_progressive_context(context: Mapping[str, Any], *, source_reference: Mapping[str, Any],
-                                surface: str = "quota_packet") -> dict[str, Any]:
+                                surface: str = "quota_packet",
+                                include_goal_acceptance_detail: bool = False,
+                                include_agent_todos_detail: bool = False) -> dict[str, Any]:
     """Stateless IO adapter to the same typed presentation owner; no Delta identity."""
-    source = dict(context=dict(context), native_projection=dict(source_reference), surface=surface)
+    source: dict[str, Any] = dict(
+        context=dict(context), native_projection=dict(source_reference), surface=surface,
+        **({"include_goal_acceptance_detail": True} if include_goal_acceptance_detail else {}),
+        **({"include_agent_todos_detail": True} if include_agent_todos_detail else {}),
+    )
     return _apply_context_projection_changes(source,
         _turn_envelope_result("progressive_context_delivery", **source, source_edits=True))
 
@@ -493,12 +517,16 @@ def update_native_context_lifecycle(state: Mapping[str, Any], event: Mapping[str
                                     new_epoch: str, pages: list[dict[str, Any]],
                                     pages_verified: bool = False,
                                     resume_verified: bool = False,
-                                    resume_sections: Mapping[str, str] | None = None) -> dict[str, Any]:
+                                    resume_sections: Mapping[str, str] | None = None,
+                                    semantic_unit_anchor: Mapping[str, Any] | None = None,
+                                    semantic_unit_fold: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Native IO adapter; the shared typed owner reduces continuity assumptions."""
     source = dict(state)
     result = _turn_envelope_result("native_context_lifecycle", state=source, source_edits=True,
         event=dict(event), new_epoch=new_epoch, pages=pages, pages_verified=pages_verified,
-        resume_verified=resume_verified, **({"resume_sections": dict(resume_sections)} if resume_sections else {}))
+        resume_verified=resume_verified, **({"resume_sections": dict(resume_sections)} if resume_sections else {}),
+        **({"semantic_unit_anchor": dict(semantic_unit_anchor)} if semantic_unit_anchor is not None else {}),
+        **({"semantic_unit_fold": dict(semantic_unit_fold)} if semantic_unit_fold is not None else {}))
     try:
         return _apply_context_projection_changes(source, result)
     except RuntimeError as error:
@@ -515,3 +543,233 @@ def restore_context_delivery(
         current=dict(current))
     result = _turn_envelope_result("context_recovery", **source, source_edits=True)
     return _apply_context_projection_changes(source, result)
+
+
+def plan_stage_then_swap_prefetch(
+    *,
+    epoch_prefetch: Any = None,
+) -> dict[str, Any]:
+    """Validate default-off Stage-then-Swap EpochReset prefetch configuration via TS."""
+    return _turn_envelope_result(
+        "stage_then_swap_plan",
+        epoch_prefetch=dict(epoch_prefetch) if isinstance(epoch_prefetch, Mapping) else epoch_prefetch,
+    )
+
+
+def evaluate_epoch_prefetch_swap(
+    *,
+    epoch_prefetch: Mapping[str, Any],
+    context_epoch: str,
+    reclaimed_turns: int = 0,
+    dropped_failures: int = 0,
+    failure_facts: list[str] | tuple[str, ...] = (),
+    open_obligations: list[str] | tuple[str, ...] = (),
+    source_ref: Mapping[str, str] | None = None,
+    exit_code: int | None = None,
+    timed_out: bool = False,
+    truncated: bool = False,
+    raw_bytes_read: int = 0,
+    prefetched_output: str = "",
+    baseline_bytes: int | None = None,
+    baseline_tokens: int | None = None,
+    hydrated_tokens: int | None = None,
+    tokenizer: Mapping[str, Any] | None = None,
+    require_token_gate: bool = False,
+    latency_ms: int = 0,
+    error_observation: str | None = None,
+) -> dict[str, Any]:
+    """Evaluate bounded prefetch output and anti-whitewashing receipt via TS."""
+    payload: dict[str, Any] = {
+        "epoch_prefetch": dict(epoch_prefetch),
+        "context_epoch": context_epoch,
+        "reclaimed_turns": reclaimed_turns,
+        "dropped_failures": dropped_failures,
+        "failure_facts": list(failure_facts),
+        "open_obligations": list(open_obligations),
+        "source_ref": dict(source_ref) if source_ref is not None else None,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "truncated": truncated,
+        "raw_bytes_read": raw_bytes_read,
+        "prefetched_output": prefetched_output,
+        "baseline_bytes": baseline_bytes,
+        "latency_ms": latency_ms,
+        "require_token_gate": require_token_gate,
+    }
+    if baseline_tokens is not None:
+        payload["baseline_tokens"] = baseline_tokens
+    if hydrated_tokens is not None:
+        payload["hydrated_tokens"] = hydrated_tokens
+    if tokenizer is not None:
+        payload["tokenizer"] = dict(tokenizer)
+    if error_observation:
+        payload["error_observation"] = error_observation
+    return _turn_envelope_result("stage_then_swap_evaluate", **payload)
+
+
+def evaluate_epoch_prefetch_prompt_gate(
+    *,
+    epoch_prefetch: Mapping[str, Any] | None = None,
+    has_inline_exploratory: bool,
+    replace_exploratory_context: bool,
+    host_input_measurable: bool = True,
+    rendered_prompt_baseline_bytes: int | None,
+    rendered_prompt_delivered_bytes: int | None,
+    rendered_prompt_baseline_tokens: int | None,
+    rendered_prompt_delivered_tokens: int | None,
+    external_baseline_bytes: int | None = None,
+    external_baseline_tokens: int | None = None,
+    potential_bytes_saved: int | None = None,
+    tokenizer: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Adjudicate EpochReset vs KeepRaw on delivered prompt bytes, tokens, and cold prefill."""
+    payload: dict[str, Any] = {
+        "has_inline_exploratory": has_inline_exploratory,
+        "replace_exploratory_context": replace_exploratory_context,
+        "host_input_measurable": host_input_measurable,
+        "rendered_prompt_baseline_bytes": rendered_prompt_baseline_bytes,
+        "rendered_prompt_delivered_bytes": rendered_prompt_delivered_bytes,
+        "rendered_prompt_baseline_tokens": rendered_prompt_baseline_tokens,
+        "rendered_prompt_delivered_tokens": rendered_prompt_delivered_tokens,
+        "external_baseline_bytes": external_baseline_bytes,
+        "external_baseline_tokens": external_baseline_tokens,
+        "potential_bytes_saved": potential_bytes_saved,
+        "tokenizer": dict(tokenizer) if tokenizer is not None else None,
+    }
+    if epoch_prefetch is not None:
+        payload["epoch_prefetch"] = dict(epoch_prefetch)
+    return _turn_envelope_result("stage_then_swap_prompt_gate", **payload)
+
+
+def compute_quiet_turn_state_digest(
+    *,
+    goal_id: str,
+    agent_id: str,
+    route: Mapping[str, Any] | None = None,
+    work_contract: Mapping[str, Any] | None = None,
+    turn_envelope: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compute canonical volatile-free Quiet-Turn state digest and contract eligibility via TS."""
+    payload: dict[str, Any] = {
+        "goal_id": goal_id,
+        "agent_id": agent_id,
+        "route": dict(route) if isinstance(route, Mapping) else None,
+        "work_contract": dict(work_contract) if isinstance(work_contract, Mapping) else None,
+        "turn_envelope": dict(turn_envelope) if isinstance(turn_envelope, Mapping) else None,
+    }
+    return _turn_envelope_result("quiet_turn_state_digest", **payload)
+
+
+def evaluate_quiet_turn(
+    *,
+    enabled: bool = True,
+    quiet_noop_allowed: bool = True,
+    must_attempt: bool = False,
+    state_changed: bool | None = None,
+    current_state_digest: str | None = None,
+    previous_state_digest: str | None = None,
+    work_contract: Mapping[str, Any] | None = None,
+    turn_envelope: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Evaluate Quiet-Turn zero-tax skip metadata via TS."""
+    payload: dict[str, Any] = {
+        "enabled": enabled,
+        "quiet_noop_allowed": quiet_noop_allowed,
+        "must_attempt": must_attempt,
+    }
+    if state_changed is not None:
+        payload["state_changed"] = state_changed
+    if current_state_digest is not None:
+        payload["current_state_digest"] = current_state_digest
+    if previous_state_digest is not None:
+        payload["previous_state_digest"] = previous_state_digest
+    if work_contract is not None:
+        payload["work_contract"] = dict(work_contract)
+    if turn_envelope is not None:
+        payload["turn_envelope"] = dict(turn_envelope)
+    return _turn_envelope_result("quiet_turn_evaluate", **payload)
+
+
+def record_semantic_unit_anchor(
+    *,
+    todo_id: str,
+    turn_instance_id: str,
+    anchor_step_index: int,
+    prefix_digest: str,
+    context_epoch: str,
+    anchor_surface_seq: int | None = None,
+    goal_id: str | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Bind a Todo semantic-unit anchor to an exact parent KV prefix digest and epoch via TS."""
+    payload: dict[str, Any] = {
+        "todo_id": todo_id,
+        "turn_instance_id": turn_instance_id,
+        "anchor_step_index": anchor_step_index,
+        "prefix_digest": prefix_digest,
+        "context_epoch": context_epoch,
+    }
+    if anchor_surface_seq is not None:
+        payload["anchor_surface_seq"] = anchor_surface_seq
+    if goal_id is not None:
+        payload["goal_id"] = goal_id
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    return _turn_envelope_result("semantic_unit_anchor_record", **payload)
+
+
+def build_semantic_unit_fold_swap(
+    *,
+    enabled: bool = False,
+    anchor: Mapping[str, Any] | None = None,
+    todo_id: str,
+    turn_instance_id: str,
+    context_epoch: str,
+    prefix_digest: str | None = None,
+    now_step_index: int | None = None,
+    now_surface_seq: int | None = None,
+    completion_receipt: Mapping[str, Any] | None = None,
+    baseline_tokens: int | None = None,
+    replacement_tokens: int | None = None,
+    baseline_bytes: int | None = None,
+    min_net_savings_tokens: int | None = None,
+    cold_prefill_amortization_tokens: int | None = None,
+    tokenizer_encoding: str | None = None,
+    tokenizer: Mapping[str, Any] | None = None,
+    obs_next_cmd: Mapping[str, Any] | None = None,
+    surface_prefix_intact: bool = True,
+    tool_pairing_valid: bool = True,
+    quiescent_boundary: bool = True,
+    failure_facts: list[str] | tuple[str, ...] = (),
+    open_obligations: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Evaluate a receipt-gated Todo-unit suffix fold swap or fail closed to KeepRaw via TS."""
+    payload: dict[str, Any] = {
+        "enabled": enabled,
+        "anchor": dict(anchor) if anchor is not None else None,
+        "todo_id": todo_id,
+        "turn_instance_id": turn_instance_id,
+        "context_epoch": context_epoch,
+        "prefix_digest": prefix_digest,
+        "now_step_index": now_step_index,
+        "completion_receipt": dict(completion_receipt) if completion_receipt is not None else None,
+        "baseline_tokens": baseline_tokens,
+        "replacement_tokens": replacement_tokens,
+        "baseline_bytes": baseline_bytes,
+        "tokenizer": dict(tokenizer) if tokenizer is not None else None,
+        "obs_next_cmd": dict(obs_next_cmd) if obs_next_cmd is not None else None,
+        "surface_prefix_intact": surface_prefix_intact,
+        "tool_pairing_valid": tool_pairing_valid,
+        "quiescent_boundary": quiescent_boundary,
+        "failure_facts": list(failure_facts),
+        "open_obligations": list(open_obligations),
+    }
+    if now_surface_seq is not None:
+        payload["now_surface_seq"] = now_surface_seq
+    if min_net_savings_tokens is not None:
+        payload["min_net_savings_tokens"] = min_net_savings_tokens
+    if cold_prefill_amortization_tokens is not None:
+        payload["cold_prefill_amortization_tokens"] = cold_prefill_amortization_tokens
+    if tokenizer_encoding is not None:
+        payload["tokenizer_encoding"] = tokenizer_encoding
+    return _turn_envelope_result("semantic_unit_fold_swap", **payload)

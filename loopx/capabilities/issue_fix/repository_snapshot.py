@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
+from .github_public import _REPO_PATTERN as _REPO_PATTERN
 from .metrics_supplement import SUPPLEMENT_SCHEMA_VERSION
 
 
@@ -16,7 +17,6 @@ COLLECTION_SCHEMA_VERSION = "issue_fix_repository_snapshot_collection_v0"
 RECORD_SCHEMA_VERSION = "issue_fix_repository_snapshot_record_v0"
 ISSUE_CLOSE_ACTIVITY_SCHEMA_VERSION = "issue_fix_issue_close_activity_v0"
 
-_REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _REF_NUMBER_PATTERN = re.compile(r"(?:issues|pull)_(\d+)")
 _FAILED_CHECK_CONCLUSIONS = {
     "ACTION_REQUIRED",

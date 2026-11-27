@@ -1710,7 +1710,7 @@ export function PersonalWorkspacePage({
     if (selection?.kind === "attention") return { kind: "attention", item: refreshAttention(selection.item, model.attentionHistory ?? model.userTodos) };
     if (selection?.kind === "goal") {
       const currentGoal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
-      return currentGoal ? { item: currentGoal, kind: "goal" } : selection;
+      return currentGoal ? { ...selection, item: currentGoal } : selection;
     }
     if (selection?.kind === "todo") {
       const goal = workspaceGoals.find((goal) => goal.goalId === selection.item.goalId);
@@ -3021,7 +3021,7 @@ export function PersonalWorkspacePage({
             mobileNavigationOpen={mobileSidebarOpen}
             allWorkOpen={railScope === selectionScope}
             onOpenAllWork={selectedGoal ? () => {setSelectedGoalTab("overview"); setRailScope(selectionScope);} : undefined}
-            onOpenGoalDetails={selectedGoal ? () => setSelection({ kind: "goal", item: selectedGoal }) : undefined}
+            onOpenGoalDetails={selectedGoal ? (openingControl) => setSelection({ kind: "goal", item: selectedGoal, openingControl }) : undefined}
             onOpenGoalCapabilities={selectedGoal && !readOnly ? () => openSettings({ goalId: selectedGoal.goalId, kind: "settings", tab: "capabilities" }) : undefined}
             onOpenManagerSettings={!readOnly ? () => openSettings({ kind: "settings", tab: "steward" }) : undefined}
             onRefresh={callbacks.onRefresh && !runtimeSourceUnavailable ? () => void refreshWorkspace() : undefined}
@@ -3111,7 +3111,7 @@ export function PersonalWorkspacePage({
                   overview: null, tasks: null, research: researchPanel, files: null, chat: null,
                 } : {
                   overview: <GoalOverview sinceYouLooked={sinceYouLooked?.goalId === selectedGoal.goalId ? sinceYouLooked.delta : null} onMarkSeen={markSeen} onOpenAgentConversation={callbacks.onSelectWorkAgent} railOpen={railScope === selectionScope} onCloseRail={() => setRailScope(null)} digest={workspaceDigest} review={workspaceReview} active={!settingsOpen && selectedGoalTab === "overview"} goal={selectedGoal} items={items} userTodos={model.userTodos} readOnly={readOnly}
-                    onOpenDetails={() => setSelection({ kind: "goal", item: selectedGoal })} onSelect={setSelection} onView={setSelectedGoalTab}
+                    onOpenDetails={(openingControl) => setSelection({ kind: "goal", item: selectedGoal, openingControl })} onSelect={setSelection} onView={setSelectedGoalTab}
                     selectedTodoId={drawerSelection?.kind === "todo" ? drawerSelection.item.todoId : null}
                     board={taskBoard(!settingsOpen && selectedGoalTab === "overview")}
                     historyRefreshRevision={historyRefreshRevision} proposals={proposals} onPreview={createPreview} />,

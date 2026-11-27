@@ -72,7 +72,7 @@ def reconcile_without_provider(
     url: str = PR_URL,
 ) -> dict[str, Any]:
     with patch(
-        "loopx.capabilities.issue_fix.pr_gate_reconcile."
+        "loopx.capabilities.issue_fix.pr_lifecycle."
         "build_issue_fix_pr_lifecycle_monitor_packet",
         side_effect=AssertionError("invalid acknowledgement must not read provider"),
     ):
@@ -215,7 +215,7 @@ def check_reconciliation(provider: str) -> None:
             first_ack["binding"]["todo_revision"]
         )
         with patch(
-            "loopx.capabilities.issue_fix.pr_gate_reconcile."
+            "loopx.capabilities.issue_fix.pr_lifecycle."
             "build_issue_fix_pr_lifecycle_monitor_packet",
             side_effect=ValueError("private provider detail"),
         ):
@@ -236,7 +236,7 @@ def check_reconciliation(provider: str) -> None:
         assert "error" not in degraded["results"][0], degraded
 
         with patch(
-            "loopx.capabilities.issue_fix.pr_gate_reconcile."
+            "loopx.capabilities.issue_fix.pr_lifecycle."
             "build_issue_fix_pr_lifecycle_monitor_packet",
             return_value={
                 "observation": {
@@ -267,7 +267,7 @@ def check_reconciliation(provider: str) -> None:
         assert todo(state_file, "todo_github_review")["status"] == "done"
 
         with patch(
-            "loopx.capabilities.issue_fix.pr_gate_reconcile."
+            "loopx.capabilities.issue_fix.pr_lifecycle."
             "build_issue_fix_pr_lifecycle_monitor_packet",
             side_effect=AssertionError(
                 "completed acknowledgement must not read provider"

@@ -5,6 +5,7 @@ queue: dependencies are selected from the complete current canonical Todo head.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from subprocess import TimeoutExpired
 from typing import Any
@@ -13,20 +14,20 @@ from ...agent_registry import registered_agent_ids_from_registry
 from ...control_plane.effect_runtime import effect_runtime_result
 from ...control_plane.runtime.time import now_utc_iso
 from ...control_plane.todos.resume_condition import compact_todo_resume_items
-from ...history import load_registry
+from ...control_plane.projects.registry_codec import load_registry
 from ...file_lock import exclusive_file_lock, LockAcquisitionPolicy, LockAcquireTimeoutError
 from ...paths import resolve_runtime_root
 from ...rollout_event_log import (
     append_rollout_event, build_rollout_event, rollout_event_log_path,
 )
 from ...control_plane.todos.list_readback import list_goal_todos
-from . import pr_lifecycle
 from .pr_lifecycle_rollout import append_pr_merge_rollout_event
 
 
 def reconcile_pr_wait_dependencies(
     *, registry_path: Path, runtime_root_arg: str | None, goal_id: str,
     agent_id: str, fetch_timeout_seconds: int = 10,
+    shared_agent_todos_loader: Callable[[], Sequence[Mapping[str, Any]] | None] | None = None,
 ) -> dict[str, Any]:
     if agent_id not in registered_agent_ids_from_registry(registry_path, goal_id):
         raise ValueError("PR dependency observation requires a registered agent")
@@ -40,7 +41,8 @@ def reconcile_pr_wait_dependencies(
                                  policy=LockAcquisitionPolicy.SINGLE_FLIGHT,
                                  agent_id=agent_id, operation="pr_wait_observation"):
             return _reconcile_locked(registry_path=registry_path, runtime_root_arg=str(runtime),
-                goal_id=goal_id, agent_id=agent_id, fetch_timeout_seconds=fetch_timeout_seconds)
+                goal_id=goal_id, agent_id=agent_id, fetch_timeout_seconds=fetch_timeout_seconds,
+                shared_agent_todos_loader=shared_agent_todos_loader)
     except LockAcquireTimeoutError:
         return {"ok": True, "degraded": False, "failure_count": 0, "external_read_count": 0,
                 "observation_in_progress": True, "merged_count": 0, "results": [],
@@ -50,13 +52,24 @@ def reconcile_pr_wait_dependencies(
 def _reconcile_locked(
     *, registry_path: Path, runtime_root_arg: str | None, goal_id: str,
     agent_id: str, fetch_timeout_seconds: int,
+    shared_agent_todos_loader: Callable[[], Sequence[Mapping[str, Any]] | None] | None = None,
 ) -> dict[str, Any]:
     runtime = (Path(runtime_root_arg).expanduser() if runtime_root_arg
                else resolve_runtime_root(load_registry(registry_path), None))
     # Deliberately omit list --agent-id and display limits. The typed owner must
     # see archived/deferred/claimed facts before choosing this actor's subjects.
-    todos = list_goal_todos(registry_path=registry_path, runtime_root_arg=str(runtime),
-        goal_id=goal_id, role="agent")["todos"]
+    prefetched = shared_agent_todos_loader() if shared_agent_todos_loader is not None else None
+    todos = (
+        [dict(item) for item in prefetched]
+        if prefetched is not None
+        else list_goal_todos(
+            registry_path=registry_path,
+            runtime_root_arg=str(runtime),
+            goal_id=goal_id,
+            role="agent",
+            include_acceptance=False,
+        )["todos"]
+    )
     compact = compact_todo_resume_items(todos)
     for row, original in zip(compact, todos, strict=True):
         if "excluded_agents" in original:
@@ -70,6 +83,8 @@ def _reconcile_locked(
     })
     results: list[dict[str, Any]] = []
     for target in plan["targets"]:
+        from . import pr_lifecycle
+
         reference = {"repo": target["repo"], "number": target["number"]}
         result = {"pr_ref": target["pr_ref"], "todo_ids": target["todo_ids"],
                   "state": "FAILED", "merge_event_recorded": False}

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-workspace"
+dynamic = ["version", "dependencies"]
+description = "Local Chat and Dashboard for a matching standalone LoopX Core."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+dependencies = {file = "requires-core.txt"}
+
+[tool.setuptools.packages.find]
+include = [
+    "loopx", "loopx.chat", "loopx.chat.*", "loopx.cli_commands", "loopx.presentation",
+    "loopx.capabilities.native_chat", "loopx.control_plane.collaboration", "loopx.extensions.lark",
+]
+
+[tool.setuptools.package-data]
+loopx = ["web/chat/*.html", "web/chat/*.json", "web/chat/assets/*", "web/chat/manifest.webmanifest", "web/chat/pwa/*"]
+"loopx.control_plane.collaboration" = ["steward_reports.ts"]

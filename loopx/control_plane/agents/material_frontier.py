@@ -1,58 +1,88 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from datetime import datetime, timezone
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime
+from typing import cast
 
 from ..runtime.public_safety import public_safe_compact_text
 from ..runtime.time import now_utc_iso, parse_timestamp
 
+Payload = dict[str, object]
+PayloadView = Mapping[str, object]
 
 AGENT_MATERIAL_FRONTIER_SCHEMA_VERSION = "agent_material_frontier_v0"
 MATERIAL_USAGE_RECEIPT_SCHEMA_VERSION = "material_usage_receipt_v0"
 
-_PUBLIC_BOUNDARIES = {"public", "public_safe"}
-_BLOCKED_GATE_STATES = {
-    "blocked",
-    "denied",
-    "forbidden",
-    "missing_authority",
-    "owner_gate",
-    "owner_review_required",
-    "private_read_required",
-    "unavailable",
-    "user_gate",
+_PUBLIC_BOUNDARIES = frozenset({"public", "public_safe"})
+_BLOCKED_GATE_STATES = frozenset({
+    "blocked", "denied", "forbidden", "missing_authority", "owner_gate",
+    "owner_review_required", "private_read_required", "unavailable", "user_gate",
+})
+_STALE_FRESHNESS = frozenset({"needs_refresh", "outdated", "stale", "unknown"})
+_RELATIONS = frozenset({"required", "producer", "reviewer", "maintainer", "watcher"})
+_RECEIPT_OUTCOMES = frozenset({"read", "unavailable", "used", "verified"})
+_RECEIPT_CURRENT_OUTCOMES = frozenset({"read", "used", "verified"})
+_REQUIREMENT_FIELDS = ("material_refs", "required_material_refs", "required_materials")
+_TOPIC_FIELDS = ("material_topics", "required_material_topics", "topic_defaults")
+_SOURCE_PRIORITY: dict[str, int] = {"profile": 10, "vision": 20, "todo": 30, "handoff": 30}
+_STATE_RANK: dict[str, int] = {
+    "missing": 0, "inaccessible": 1, "stale": 2, "required_unread": 3, "current": 4,
 }
-_STALE_FRESHNESS = {"needs_refresh", "outdated", "stale", "unknown"}
-_RELATIONS = {"required", "producer", "reviewer", "maintainer", "watcher"}
-_RECEIPT_OUTCOMES = {"read", "unavailable", "used", "verified"}
-_RECEIPT_CURRENT_OUTCOMES = {"read", "used", "verified"}
-_REQUIREMENT_FIELDS = (
-    "material_refs",
-    "required_material_refs",
-    "required_materials",
-)
-_TOPIC_FIELDS = (
-    "material_topics",
-    "required_material_topics",
-    "topic_defaults",
-)
-_SOURCE_PRIORITY = {
-    "profile": 10,
-    "vision": 20,
-    "todo": 30,
-    "handoff": 30,
+_REQUIRED_READ_REASONS: dict[str, str] = {
+    "missing": "material is not registered in canonical goal authority",
+    "inaccessible": "material boundary or gate does not allow the current read",
+    "stale": "observed revision or authority freshness is stale",
+    "required_unread": "no matching material usage receipt exists",
 }
-_STATE_RANK = {
-    "missing": 0,
-    "inaccessible": 1,
-    "stale": 2,
-    "required_unread": 3,
-    "current": 4,
+_TRUTH_CONTRACT: dict[str, bool] = {
+    "authority_is_goal_owned": True,
+    "projection_is_read_only": True,
+    "introduces_task_runtime": False,
+    "grants_cross_agent_authority": False,
+    "evidence_log_implies_material_read": False,
+    "raw_source_body_recorded": False,
 }
 
 
-def _safe_text(value: Any, *, field: str, limit: int = 180) -> str | None:
+@dataclass(frozen=True, slots=True)
+class _RequirementBinding:
+    """Normalized material requirement emitted from one owner record."""
+
+    material_id: str
+    relation: str
+    bound_by: dict[str, str]
+    source_priority: int
+    purpose: str | None = None
+    todo_id: str | None = None
+    required_revision_hint: str | None = None
+    topic: str | None = None
+
+
+@dataclass(slots=True)
+class _MergedRequirement:
+    """Merged material requirement accumulator per material_id."""
+
+    material_id: str
+    relation: str
+    bound_by: list[dict[str, str]]
+    source_priority: int
+    topics: list[str]
+    purpose: str | None = None
+    todo_id: str | None = None
+    required_revision_hint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedReceipt:
+    """Pre-validated receipt with pre-parsed chronological tie-breaker."""
+
+    receipt: PayloadView
+    sort_key: tuple[datetime, str]
+    receipt_id: str
+
+
+def _safe_text(value: object, *, field: str, limit: int = 180) -> str | None:
     text = " ".join(str(value or "").strip().split())
     if not text:
         return None
@@ -63,22 +93,26 @@ def _safe_text(value: Any, *, field: str, limit: int = 180) -> str | None:
     return text
 
 
-def _required_text(value: Any, *, field: str, limit: int = 180) -> str:
+def _required_text(value: object, *, field: str, limit: int = 180) -> str:
     text = _safe_text(value, field=field, limit=limit)
     if not text:
         raise ValueError(f"{field} is required")
     return text
 
 
-def _mapping_list(value: Any) -> list[Mapping[str, Any]]:
+def _opt_text(row: PayloadView | None, key: str, *, field: str, limit: int = 180) -> str | None:
+    return _safe_text(row.get(key) if row is not None else None, field=field, limit=limit)
+
+
+def _mapping_list(value: object) -> list[PayloadView]:
     if isinstance(value, Mapping):
-        return [value]
+        return [cast(PayloadView, value)]
     if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-        return [item for item in value if isinstance(item, Mapping)]
+        return [cast(PayloadView, item) for item in value if isinstance(item, Mapping)]
     return []
 
 
-def _project_materials(authority_registry: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def _project_materials(authority_registry: PayloadView) -> dict[str, PayloadView]:
     if "project_materials" not in authority_registry:
         raise ValueError(
             "agent material frontier requires canonical authority_registry.project_materials; "
@@ -86,49 +120,49 @@ def _project_materials(authority_registry: Mapping[str, Any]) -> dict[str, dict[
         )
     raw = authority_registry.get("project_materials")
     if isinstance(raw, Mapping):
-        if any(not isinstance(raw_item, Mapping) for raw_item in raw.values()):
-            raise ValueError("authority_registry.project_materials values must be objects")
-        items = list(raw.items())
+        raw_pairs: list[tuple[object, object]] = list(raw.items())
+        err_msg = "authority_registry.project_materials values must be objects"
     elif isinstance(raw, list):
-        if any(not isinstance(raw_item, Mapping) for raw_item in raw):
-            raise ValueError("authority_registry.project_materials entries must be objects")
-        items = [
-            (item.get("id") or item.get("source_id"), item)
-            for item in raw
-            if isinstance(item, Mapping)
-        ]
+        raw_pairs = [(None, item) for item in raw]
+        err_msg = "authority_registry.project_materials entries must be objects"
     else:
         raise ValueError("authority_registry.project_materials must be a map or list")
 
-    materials: dict[str, dict[str, Any]] = {}
-    for raw_id, raw_item in items:
+    # Validate element shapes across the full collection before id checks so error precedence matches.
+    if any(not isinstance(raw_item, Mapping) for _, raw_item in raw_pairs):
+        raise ValueError(err_msg)
+
+    materials: dict[str, PayloadView] = {}
+    for raw_id, raw_item in raw_pairs:
+        item = cast(PayloadView, raw_item)
         material_id = _required_text(
-            raw_item.get("id") or raw_item.get("source_id") or raw_id,
+            item.get("id") or item.get("source_id") or raw_id,
             field="authority material_id",
         )
         if material_id in materials:
             raise ValueError(f"duplicate authority material_id: {material_id}")
-        materials[material_id] = dict(raw_item)
+        materials[material_id] = item
     return materials
 
 
-def _topic_material_ids(value: Any) -> list[str]:
-    raw_items: list[Any]
-    if isinstance(value, list):
-        raw_items = value
-    else:
-        raw_items = [value]
+def _topic_material_ids(value: object) -> list[str]:
+    raw_items: list[object] = value if isinstance(value, list) else [value]
     material_ids: list[str] = []
     for raw in raw_items:
-        if isinstance(raw, Mapping):
-            raw = raw.get("material_id") or raw.get("id") or raw.get("source_id")
-        material_id = _safe_text(raw, field="topic material_id")
+        candidate = (
+            raw.get("material_id") or raw.get("id") or raw.get("source_id")
+            if isinstance(raw, Mapping)
+            else raw
+        )
+        material_id = _safe_text(candidate, field="topic material_id")
         if material_id and material_id not in material_ids:
             material_ids.append(material_id)
     return material_ids
 
 
-def authority_topic_index(authority_registry: Mapping[str, Any]) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+def authority_topic_index(
+    authority_registry: PayloadView,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Interpret registered string/object/list references for every material reader."""
     raw_topics = authority_registry.get("topic_authority")
     if not isinstance(raw_topics, Mapping):
@@ -146,31 +180,20 @@ def authority_topic_index(authority_registry: Mapping[str, Any]) -> tuple[dict[s
     return by_topic, by_material
 
 
-def _requirement_refs(owner: Mapping[str, Any]) -> list[Any]:
-    refs: list[Any] = []
-    for field in _REQUIREMENT_FIELDS:
+def _owner_field_values(owner: PayloadView, fields: tuple[str, ...]) -> list[tuple[str, object]]:
+    """Collect ``(field, value)`` pairs across canonical single/list owner keys."""
+    pairs: list[tuple[str, object]] = []
+    for field in fields:
         raw = owner.get(field)
         if isinstance(raw, list):
-            refs.extend(raw)
+            pairs.extend((field, item) for item in raw)
         elif raw not in (None, ""):
-            refs.append(raw)
-    return refs
+            pairs.append((field, raw))
+    return pairs
 
 
-def _topic_refs(owner: Mapping[str, Any]) -> list[str]:
-    topics: list[str] = []
-    for field in _TOPIC_FIELDS:
-        raw = owner.get(field)
-        values = raw if isinstance(raw, list) else [raw] if raw not in (None, "") else []
-        for value in values:
-            topic = _safe_text(value, field=f"{field} topic", limit=120)
-            if topic and topic not in topics:
-                topics.append(topic)
-    return topics
-
-
-def _owner_ref(owner: Mapping[str, Any], *, kind: str, agent_id: str) -> str:
-    candidates = {
+def _owner_ref(owner: PayloadView, *, kind: str, agent_id: str) -> str:
+    candidates: tuple[object, ...] = {
         "profile": (owner.get("agent_id"), agent_id),
         "todo": (owner.get("todo_id"),),
         "vision": (owner.get("vision_id"), owner.get("state"), agent_id),
@@ -184,15 +207,15 @@ def _owner_ref(owner: Mapping[str, Any], *, kind: str, agent_id: str) -> str:
 
 
 def _normalize_requirement(
-    raw: Any,
+    raw: object,
     *,
     kind: str,
-    owner: Mapping[str, Any],
+    owner: PayloadView,
     agent_id: str,
     default_relation: str,
     topic: str | None = None,
-) -> dict[str, Any]:
-    payload = dict(raw) if isinstance(raw, Mapping) else {"material_id": raw}
+) -> _RequirementBinding:
+    payload: PayloadView = cast(PayloadView, raw) if isinstance(raw, Mapping) else {"material_id": raw}
     material_id = _required_text(
         payload.get("material_id") or payload.get("id") or payload.get("source_id"),
         field=f"{kind} material_id",
@@ -200,65 +223,50 @@ def _normalize_requirement(
     relation = str(payload.get("relation") or default_relation).strip().lower()
     if relation not in _RELATIONS:
         raise ValueError(f"{kind} material relation must be one of {sorted(_RELATIONS)}")
-    todo_id = _safe_text(
-        payload.get("todo_id") or owner.get("todo_id"),
-        field=f"{kind} todo_id",
-    )
-    requirement: dict[str, Any] = {
-        "material_id": material_id,
-        "relation": relation,
-        "bound_by": {
-            "kind": kind,
-            "ref": _owner_ref(owner, kind=kind, agent_id=agent_id),
-        },
-        "purpose": _safe_text(payload.get("purpose"), field=f"{kind} purpose", limit=220),
-        "todo_id": todo_id,
-        "required_revision_hint": _safe_text(
-            payload.get("required_revision"),
-            field=f"{kind} required_revision",
+    todo_id = _safe_text(payload.get("todo_id") or owner.get("todo_id"), field=f"{kind} todo_id")
+    bound_by = {"kind": kind, "ref": _owner_ref(owner, kind=kind, agent_id=agent_id)}
+    return _RequirementBinding(
+        material_id=material_id,
+        relation=relation,
+        bound_by=bound_by,
+        source_priority=_SOURCE_PRIORITY[kind],
+        purpose=_safe_text(payload.get("purpose"), field=f"{kind} purpose", limit=220),
+        todo_id=todo_id,
+        required_revision_hint=_safe_text(
+            payload.get("required_revision"), field=f"{kind} required_revision"
         ),
-        "topic": topic,
-        "source_priority": _SOURCE_PRIORITY[kind],
-    }
-    return {
-        key: value
-        for key, value in requirement.items()
-        if value not in (None, "", [], {})
-    }
+        topic=topic,
+    )
 
 
 def _requirements_from_owner(
-    owner: Mapping[str, Any],
+    owner: PayloadView,
     *,
     kind: str,
     agent_id: str,
     topic_materials: Mapping[str, list[str]],
     default_relation: str,
-) -> list[dict[str, Any]]:
+) -> list[_RequirementBinding]:
     requirements = [
         _normalize_requirement(
-            raw,
-            kind=kind,
-            owner=owner,
-            agent_id=agent_id,
-            default_relation=default_relation,
+            raw, kind=kind, owner=owner, agent_id=agent_id, default_relation=default_relation
         )
-        for raw in _requirement_refs(owner)
+        for _, raw in _owner_field_values(owner, _REQUIREMENT_FIELDS)
     ]
-    for topic in _topic_refs(owner):
+    seen_topics: list[str] = []
+    for field, value in _owner_field_values(owner, _TOPIC_FIELDS):
+        topic = _safe_text(value, field=f"{field} topic", limit=120)
+        if topic and topic not in seen_topics:
+            seen_topics.append(topic)
+    topic_relation = "watcher" if kind == "profile" else default_relation
+    for topic in seen_topics:
         if topic not in topic_materials:
-            raise ValueError(
-                f"{kind} material topic is not registered in goal authority: {topic}"
-            )
-        for material_id in topic_materials.get(topic, []):
+            raise ValueError(f"{kind} material topic is not registered in goal authority: {topic}")
+        for material_id in topic_materials[topic]:
             requirements.append(
                 _normalize_requirement(
-                    material_id,
-                    kind=kind,
-                    owner=owner,
-                    agent_id=agent_id,
-                    default_relation="watcher" if kind == "profile" else default_relation,
-                    topic=topic,
+                    material_id, kind=kind, owner=owner, agent_id=agent_id,
+                    default_relation=topic_relation, topic=topic,
                 )
             )
     return requirements
@@ -268,143 +276,125 @@ def _collect_requirements(
     *,
     agent_id: str,
     topic_materials: Mapping[str, list[str]],
-    agent_profile: Mapping[str, Any] | None,
-    todos: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None,
-    vision: Mapping[str, Any] | None,
-    handoffs: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None,
-) -> dict[str, dict[str, Any]]:
-    raw_requirements: list[dict[str, Any]] = []
-    if isinstance(agent_profile, Mapping):
-        profile_agent = _safe_text(
-            agent_profile.get("agent_id"),
-            field="profile agent_id",
-        )
-        if profile_agent and profile_agent != agent_id:
-            raise ValueError("agent profile must belong to the selected agent_id")
-        raw_requirements.extend(
-            _requirements_from_owner(
-                agent_profile,
-                kind="profile",
-                agent_id=agent_id,
-                topic_materials=topic_materials,
-                default_relation="watcher",
+    agent_profile: PayloadView | None,
+    todos: Iterable[PayloadView] | PayloadView | None,
+    vision: PayloadView | None,
+    handoffs: Iterable[PayloadView] | PayloadView | None,
+) -> dict[str, _MergedRequirement]:
+    raw_requirements: list[_RequirementBinding] = []
+    for kind, owner, default_relation in (
+        ("profile", agent_profile, "watcher"),
+        ("vision", vision, "required"),
+    ):
+        if isinstance(owner, Mapping):
+            owner_agent = _safe_text(owner.get("agent_id"), field=f"{kind} agent_id")
+            if owner_agent and owner_agent != agent_id:
+                raise ValueError(f"agent {kind} must belong to the selected agent_id")
+            raw_requirements.extend(
+                _requirements_from_owner(
+                    owner, kind=kind, agent_id=agent_id,
+                    topic_materials=topic_materials, default_relation=default_relation,
+                )
             )
-        )
-    if isinstance(vision, Mapping):
-        vision_agent = _safe_text(vision.get("agent_id"), field="vision agent_id")
-        if vision_agent and vision_agent != agent_id:
-            raise ValueError("agent vision must belong to the selected agent_id")
-        raw_requirements.extend(
-            _requirements_from_owner(
-                vision,
-                kind="vision",
-                agent_id=agent_id,
-                topic_materials=topic_materials,
-                default_relation="required",
-            )
-        )
-    for todo in _mapping_list(todos):
-        todo_agent = _safe_text(
-            todo.get("claimed_by") or todo.get("agent_id"),
-            field="todo agent_id",
-        )
-        if todo_agent and todo_agent != agent_id:
-            continue
-        raw_requirements.extend(
-            _requirements_from_owner(
-                todo,
-                kind="todo",
-                agent_id=agent_id,
-                topic_materials=topic_materials,
-                default_relation="required",
-            )
-        )
-    for handoff in _mapping_list(handoffs):
-        handoff_target = _safe_text(handoff.get("to_agent"), field="handoff target")
-        if handoff_target and handoff_target != agent_id:
-            continue
-        raw_requirements.extend(
-            _requirements_from_owner(
-                handoff,
-                kind="handoff",
-                agent_id=agent_id,
-                topic_materials=topic_materials,
-                default_relation="required",
-            )
-        )
 
-    merged: dict[str, dict[str, Any]] = {}
-    for requirement in raw_requirements:
-        material_id = requirement["material_id"]
-        row = merged.setdefault(
-            material_id,
-            {
-                "material_id": material_id,
-                "relation": requirement["relation"],
-                "bound_by": [],
-                "source_priority": -1,
-                "topics": [],
-            },
-        )
-        binding = requirement["bound_by"]
-        if binding not in row["bound_by"]:
-            row["bound_by"].append(binding)
-        topic = requirement.get("topic")
-        if topic and topic not in row["topics"]:
-            row["topics"].append(topic)
-        if requirement["source_priority"] >= row["source_priority"]:
-            row["source_priority"] = requirement["source_priority"]
-            row["relation"] = requirement["relation"]
-            for field in ("purpose", "todo_id", "required_revision_hint"):
-                if requirement.get(field):
-                    row[field] = requirement[field]
+    for kind, owners, field_name, agent_keys in (
+        ("todo", todos, "todo agent_id", ("claimed_by", "agent_id")),
+        ("handoff", handoffs, "handoff target", ("to_agent",)),
+    ):
+        for owner in _mapping_list(owners):
+            raw_agent = next((cand for key in agent_keys if (cand := owner.get(key))), None)
+            owner_agent = _safe_text(raw_agent, field=field_name)
+            if owner_agent and owner_agent != agent_id:
+                continue
+            raw_requirements.extend(
+                _requirements_from_owner(
+                    owner, kind=kind, agent_id=agent_id,
+                    topic_materials=topic_materials, default_relation="required",
+                )
+            )
+
+    merged: dict[str, _MergedRequirement] = {}
+    for req in raw_requirements:
+        row = merged.get(req.material_id)
+        if row is None:
+            row = _MergedRequirement(
+                material_id=req.material_id, relation=req.relation,
+                bound_by=[], source_priority=-1, topics=[],
+            )
+            merged[req.material_id] = row
+        if req.bound_by not in row.bound_by:
+            row.bound_by.append(req.bound_by)
+        if req.topic and req.topic not in row.topics:
+            row.topics.append(req.topic)
+        if req.source_priority >= row.source_priority:
+            row.source_priority = req.source_priority
+            row.relation = req.relation
+            if req.purpose:
+                row.purpose = req.purpose
+            if req.todo_id:
+                row.todo_id = req.todo_id
+            if req.required_revision_hint:
+                row.required_revision_hint = req.required_revision_hint
     return merged
 
 
-def _receipt_sort_key(receipt: Mapping[str, Any]) -> tuple[datetime, str]:
+def _validate_receipt(
+    receipt: PayloadView, *, goal_id: str, agent_id: str, material_id: str, todo_id: str | None
+) -> _ValidatedReceipt | None:
+    if str(receipt.get("schema_version") or "") != MATERIAL_USAGE_RECEIPT_SCHEMA_VERSION:
+        return None
+    if str(receipt.get("goal_id") or "") != goal_id or str(receipt.get("agent_id") or "") != agent_id:
+        return None
+    if str(receipt.get("material_id") or "") != material_id:
+        return None
+    if todo_id and str(receipt.get("todo_id") or "") != todo_id:
+        return None
+    receipt_id = _safe_text(receipt.get("receipt_id"), field="receipt_id")
+    if not receipt_id or str(receipt.get("outcome") or "").strip().lower() not in _RECEIPT_OUTCOMES:
+        return None
     recorded_at = parse_timestamp(receipt.get("recorded_at"))
-    return (
-        recorded_at or datetime.min.replace(tzinfo=timezone.utc),
-        str(receipt.get("receipt_id") or ""),
+    if recorded_at is None:
+        return None
+    return _ValidatedReceipt(
+        receipt=receipt,
+        sort_key=(recorded_at, str(receipt.get("receipt_id") or "")),
+        receipt_id=receipt_id,
     )
 
 
-def _matching_receipt(
-    receipts: Iterable[Mapping[str, Any]],
+def _index_matching_receipts(
+    receipts: Iterable[PayloadView],
     *,
     goal_id: str,
     agent_id: str,
-    material_id: str,
-    todo_id: str | None,
-) -> Mapping[str, Any] | None:
-    matches: list[Mapping[str, Any]] = []
+    required_todos: Mapping[str, str | None],
+) -> tuple[dict[str, _ValidatedReceipt], dict[str, ValueError]]:
+    """Index the latest matching receipt and first validation error per material."""
+    if not required_todos:
+        return {}, {}
+    indexed: dict[str, _ValidatedReceipt] = {}
+    errors: dict[str, ValueError] = {}
     for receipt in receipts:
-        if str(receipt.get("schema_version") or "") != MATERIAL_USAGE_RECEIPT_SCHEMA_VERSION:
+        material_id = str(receipt.get("material_id") or "")
+        if material_id not in required_todos or material_id in errors:
             continue
-        if str(receipt.get("goal_id") or "") != goal_id:
+        try:
+            validated = _validate_receipt(
+                receipt, goal_id=goal_id, agent_id=agent_id,
+                material_id=material_id, todo_id=required_todos[material_id],
+            )
+        except ValueError as exc:
+            errors[material_id] = exc
             continue
-        if str(receipt.get("agent_id") or "") != agent_id:
+        if validated is None:
             continue
-        if str(receipt.get("material_id") or "") != material_id:
-            continue
-        if todo_id and str(receipt.get("todo_id") or "") != todo_id:
-            continue
-        if not _safe_text(receipt.get("receipt_id"), field="receipt_id"):
-            continue
-        outcome = str(receipt.get("outcome") or "").strip().lower()
-        if outcome not in _RECEIPT_OUTCOMES:
-            continue
-        if parse_timestamp(receipt.get("recorded_at")) is None:
-            continue
-        matches.append(receipt)
-    return max(matches, key=_receipt_sort_key) if matches else None
+        current = indexed.get(material_id)
+        if current is None or validated.sort_key > current.sort_key:
+            indexed[material_id] = validated
+    return indexed, errors
 
 
-def _material_is_accessible(
-    material: Mapping[str, Any],
-    *,
-    available_boundaries: set[str],
-) -> bool:
+def _material_is_accessible(material: PayloadView, *, available_boundaries: frozenset[str]) -> bool:
     boundary = str(material.get("boundary") or "unknown").strip().lower()
     gate_status = str(material.get("gate_status") or "").strip().lower()
     if gate_status in _BLOCKED_GATE_STATES:
@@ -414,50 +404,39 @@ def _material_is_accessible(
 
 def _frontier_state(
     *,
-    material: Mapping[str, Any] | None,
-    receipt: Mapping[str, Any] | None,
+    material: PayloadView | None,
+    receipt: PayloadView | None,
     required_revision: str | None,
-    available_boundaries: set[str],
+    available_boundaries: frozenset[str],
 ) -> str:
     if material is None:
         return "missing"
     if not _material_is_accessible(material, available_boundaries=available_boundaries):
         return "inaccessible"
-    if receipt and str(receipt.get("outcome") or "").strip().lower() == "unavailable":
-        return "inaccessible"
     if receipt is None:
         return "required_unread"
     outcome = str(receipt.get("outcome") or "").strip().lower()
+    if outcome == "unavailable":
+        return "inaccessible"
     if outcome not in _RECEIPT_CURRENT_OUTCOMES:
         return "stale"
     freshness = str(material.get("freshness") or material.get("status") or "").strip().lower()
-    observed_revision = _safe_text(
-        receipt.get("observed_revision"),
-        field="receipt observed_revision",
-    )
+    observed_revision = _safe_text(receipt.get("observed_revision"), field="receipt observed_revision")
     if freshness in _STALE_FRESHNESS:
         return "stale"
-    if required_revision and observed_revision == required_revision:
-        return "current"
-    return "stale"
+    return "current" if required_revision and observed_revision == required_revision else "stale"
 
 
-def _required_read(item: Mapping[str, Any]) -> dict[str, Any] | None:
+def _required_read(item: PayloadView) -> Payload | None:
     state = str(item.get("state") or "")
     if state == "current":
         return None
-    reasons = {
-        "missing": "material is not registered in canonical goal authority",
-        "inaccessible": "material boundary or gate does not allow the current read",
-        "stale": "observed revision or authority freshness is stale",
-        "required_unread": "no matching material usage receipt exists",
-    }
     return {
         "kind": "material_frontier_item",
         "material_id": item.get("material_id"),
         "required_revision": item.get("required_revision"),
         "state": state,
-        "reason": reasons.get(state, "material requires inspection"),
+        "reason": _REQUIRED_READ_REASONS.get(state, "material requires inspection"),
     }
 
 
@@ -465,131 +444,94 @@ def build_agent_material_frontier(
     *,
     goal_id: str,
     agent_id: str,
-    authority_registry: Mapping[str, Any],
-    agent_profile: Mapping[str, Any] | None = None,
-    todos: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None = None,
-    vision: Mapping[str, Any] | None = None,
-    handoffs: Iterable[Mapping[str, Any]] | Mapping[str, Any] | None = None,
-    receipts: Iterable[Mapping[str, Any]] | None = None,
+    authority_registry: PayloadView,
+    agent_profile: PayloadView | None = None,
+    todos: Iterable[PayloadView] | PayloadView | None = None,
+    vision: PayloadView | None = None,
+    handoffs: Iterable[PayloadView] | PayloadView | None = None,
+    receipts: Iterable[PayloadView] | PayloadView | None = None,
     available_boundaries: Iterable[str] = (),
     generated_at: str | None = None,
-) -> dict[str, Any]:
+) -> Payload:
     """Derive one agent's material consumption frontier from goal-owned facts.
 
     The builder is deliberately read-only. Requirements may be attached to an
     agent profile, todo, vision, or handoff, while revision consumption is
     proven only by an agent-scoped ``material_usage_receipt_v0`` row.
     """
-
     safe_goal_id = _required_text(goal_id, field="goal_id")
     safe_agent_id = _required_text(agent_id, field="agent_id")
     safe_generated_at = _safe_text(generated_at, field="generated_at")
     if safe_generated_at and parse_timestamp(safe_generated_at) is None:
         raise ValueError("generated_at must be an ISO timestamp")
+
     materials = _project_materials(authority_registry)
     topic_materials, material_topics = authority_topic_index(authority_registry)
     requirements = _collect_requirements(
-        agent_id=safe_agent_id,
-        topic_materials=topic_materials,
-        agent_profile=agent_profile,
-        todos=todos,
-        vision=vision,
-        handoffs=handoffs,
+        agent_id=safe_agent_id, topic_materials=topic_materials,
+        agent_profile=agent_profile, todos=todos, vision=vision, handoffs=handoffs,
     )
-    safe_boundaries = {
+    safe_boundaries = frozenset(
         boundary.lower()
         for raw in available_boundaries
         if (boundary := _safe_text(raw, field="available boundary", limit=80))
-    }
-    receipt_rows = _mapping_list(receipts)
+    )
+    receipts_by_material, receipt_errors = _index_matching_receipts(
+        _mapping_list(receipts),
+        goal_id=safe_goal_id,
+        agent_id=safe_agent_id,
+        required_todos={mid: req.todo_id for mid, req in requirements.items()},
+    )
 
-    items: list[dict[str, Any]] = []
+    sortable_items: list[tuple[tuple[int, int, str], Payload]] = []
+    state_counts = {state: 0 for state in _STATE_RANK}
     for material_id, requirement in requirements.items():
         material = materials.get(material_id)
-        authority_revision = _safe_text(
-            material.get("revision") if material else None,
-            field="authority revision",
-        )
-        required_revision = authority_revision or requirement.get("required_revision_hint")
-        todo_id = requirement.get("todo_id")
-        receipt = _matching_receipt(
-            receipt_rows,
-            goal_id=safe_goal_id,
-            agent_id=safe_agent_id,
-            material_id=material_id,
-            todo_id=todo_id,
-        )
+        authority_revision = _opt_text(material, "revision", field="authority revision")
+        required_revision = authority_revision or requirement.required_revision_hint
+        if (receipt_error := receipt_errors.get(material_id)) is not None:
+            raise receipt_error
+        validated = receipts_by_material.get(material_id)
+        receipt = validated.receipt if validated is not None else None
         state = _frontier_state(
-            material=material,
-            receipt=receipt,
-            required_revision=required_revision,
-            available_boundaries=safe_boundaries,
+            material=material, receipt=receipt,
+            required_revision=required_revision, available_boundaries=safe_boundaries,
         )
+        state_counts[state] = state_counts.get(state, 0) + 1
         topics = list(material_topics.get(material_id, []))
-        for topic in requirement.get("topics") or []:
+        for topic in requirement.topics:
             if topic not in topics:
                 topics.append(topic)
-        item: dict[str, Any] = {
+        raw_item: Payload = {
             "material_id": material_id,
             "topics": topics,
-            "relation": requirement["relation"],
-            "bound_by": requirement["bound_by"],
-            "purpose": requirement.get("purpose"),
-            "todo_id": todo_id,
+            "relation": requirement.relation,
+            "bound_by": requirement.bound_by,
+            "purpose": requirement.purpose,
+            "todo_id": requirement.todo_id,
             "required_revision": required_revision,
-            "observed_revision": _safe_text(
-                receipt.get("observed_revision") if receipt else None,
-                field="receipt observed_revision",
-            ),
+            "observed_revision": _opt_text(receipt, "observed_revision", field="receipt observed_revision"),
             "state": state,
-            "boundary": _safe_text(
-                material.get("boundary") if material else None,
-                field="material boundary",
-                limit=80,
-            ),
-            "gate_status": _safe_text(
-                material.get("gate_status") if material else None,
-                field="material gate_status",
-                limit=80,
-            ),
-            "receipt_ref": (
-                f"material_receipt:{_required_text(receipt.get('receipt_id'), field='receipt_id')}"
-                if receipt and receipt.get("receipt_id")
-                else None
-            ),
-            "last_verified_at": _safe_text(
-                receipt.get("recorded_at") if receipt else None,
-                field="receipt recorded_at",
-            ),
-            "_source_priority": requirement["source_priority"],
+            "boundary": _opt_text(material, "boundary", field="material boundary", limit=80),
+            "gate_status": _opt_text(material, "gate_status", field="material gate_status", limit=80),
+            "receipt_ref": f"material_receipt:{validated.receipt_id}" if validated else None,
+            "last_verified_at": _opt_text(receipt, "recorded_at", field="receipt recorded_at"),
         }
-        items.append(
-            {
-                key: value
-                for key, value in item.items()
-                if value not in (None, "", [], {})
-            }
-        )
+        compact_item = {k: v for k, v in raw_item.items() if v not in (None, "", [], {})}
+        sort_key = (-requirement.source_priority, _STATE_RANK.get(state, 9), material_id)
+        sortable_items.append((sort_key, compact_item))
 
-    items.sort(
-        key=lambda item: (
-            -int(item.get("_source_priority") or 0),
-            _STATE_RANK.get(str(item.get("state") or ""), 9),
-            str(item.get("material_id") or ""),
-        )
-    )
-    for item in items:
-        item.pop("_source_priority", None)
-
+    sortable_items.sort(key=lambda entry: entry[0])
+    items = [entry[1] for entry in sortable_items]
+    required_reads = [read for item in items if (read := _required_read(item))]
     summary = {
         "required_count": len(items),
-        "current_count": sum(item.get("state") == "current" for item in items),
-        "stale_count": sum(item.get("state") == "stale" for item in items),
-        "missing_count": sum(item.get("state") == "missing" for item in items),
-        "inaccessible_count": sum(item.get("state") == "inaccessible" for item in items),
-        "required_unread_count": sum(item.get("state") == "required_unread" for item in items),
+        "current_count": state_counts["current"],
+        "stale_count": state_counts["stale"],
+        "missing_count": state_counts["missing"],
+        "inaccessible_count": state_counts["inaccessible"],
+        "required_unread_count": state_counts["required_unread"],
     }
-    required_reads = [read for item in items if (read := _required_read(item))]
     return {
         "schema_version": AGENT_MATERIAL_FRONTIER_SCHEMA_VERSION,
         "goal_id": safe_goal_id,
@@ -598,12 +540,5 @@ def build_agent_material_frontier(
         "summary": summary,
         "items": items,
         "required_reads": required_reads,
-        "truth_contract": {
-            "authority_is_goal_owned": True,
-            "projection_is_read_only": True,
-            "introduces_task_runtime": False,
-            "grants_cross_agent_authority": False,
-            "evidence_log_implies_material_read": False,
-            "raw_source_body_recorded": False,
-        },
+        "truth_contract": _TRUTH_CONTRACT.copy(),
     }

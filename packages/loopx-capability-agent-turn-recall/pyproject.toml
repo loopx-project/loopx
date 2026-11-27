@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopx-capability-agent-turn-recall"
+dynamic = ["version", "dependencies"]
+description = "Built-in agent turn recall implementation for a matching LoopX Core installation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "LICENSE-MIT"]
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+dependencies = {file = "requires-core.txt"}
+
+[tool.setuptools.packages.find]
+include = ["loopx.capabilities.agent_turn_recall"]

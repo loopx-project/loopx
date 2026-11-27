@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 import uuid
 
 from ..file_lock import exclusive_file_lock
@@ -232,31 +235,230 @@ class ChatEventStreamMixin:
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=max(0.0, older_than_hours))
         compacted = 0
-        for turn_path in self.sessions_root.glob("*/turns/*.json"):
-            turn = _store._read_json(turn_path)
-            if turn.get("status") not in _store.TERMINAL_TURN_STATES:
+        try:
+            session_entries = list(os.scandir(self.sessions_root))
+        except OSError:
+            return 0
+        for session_entry in session_entries:
+            if not session_entry.is_dir(follow_symlinks=False):
                 continue
-            completed = _store._instant(turn.get("completed_at"))
-            if completed is None or completed > cutoff:
+            session_id = session_entry.name
+            turns_dir = Path(session_entry.path) / "turns"
+            try:
+                entries = list(os.scandir(turns_dir))
+            except OSError:
                 continue
-            session_id = turn_path.parent.parent.name
-            turn_id = turn_path.stem
-            self.flush_events(session_id, turn_id)
-            event_path = turn_path.with_name(f"{turn_path.stem}.events.jsonl")
-            revision = self._event_revision(event_path)
-            if turn.get("event_compaction_revision") == list(revision or ()):
-                continue
-            with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
-                rows = self._event_rows_locked(session_id, turn_id)
-                retained = [row for row in rows if row.get("kind") not in _store.REPLAY_ONLY_EVENT_KINDS]
-                if len(retained) != len(rows):
-                    _store._replace_jsonl(event_path, retained)
-                    compacted += 1
+            event_revisions: dict[str, EventRevision] = {}
+            turn_entries: list[tuple[Path, int]] = []
+            for entry in entries:
+                name = entry.name
+                if name.endswith(".events.jsonl"):
+                    with suppress(OSError):
+                        st = entry.stat(follow_symlinks=False)
+                        event_revisions[name[: -len(".events.jsonl")]] = (
+                            st.st_ino,
+                            st.st_size,
+                            st.st_mtime_ns,
+                        )
+                elif name.endswith(".json"):
+                    with suppress(OSError):
+                        st = entry.stat(follow_symlinks=False)
+                        turn_entries.append((Path(entry.path), st.st_size))
+            for turn_path, turn_size in turn_entries:
+                turn_id = turn_path.stem
+                with self._event_lock:
+                    has_pending = bool(self._event_pending.get((session_id, turn_id)))
+                if not has_pending and _turn_already_compacted_for_revision(
+                    turn_path, turn_size, event_revisions.get(turn_id)
+                ):
+                    continue
+                turn = _store._read_json(turn_path)
+                if turn.get("status") not in _store.TERMINAL_TURN_STATES:
+                    continue
+                completed = _store._instant(turn.get("completed_at"))
+                if completed is None or completed > cutoff:
+                    continue
+                self.flush_events(session_id, turn_id)
+                event_path = turn_path.with_name(f"{turn_id}.events.jsonl")
                 revision = self._event_revision(event_path)
-                self._event_cache.drop((session_id, turn_id))
-            with exclusive_file_lock(turn_path, agent_id="loopx-chat", operation="mark_chat_events_compacted"):
-                current = _store._read_json(turn_path)
-                if current.get("status") in _store.TERMINAL_TURN_STATES:
-                    current["event_compaction_revision"] = list(revision or ())
-                    _store._atomic_write_json(turn_path, current, preserve_mode=True)
+                if turn.get("event_compaction_revision") == list(revision or ()):
+                    continue
+                with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
+                    rows = self._event_rows_locked(session_id, turn_id)
+                    retained = [row for row in rows if row.get("kind") not in _store.REPLAY_ONLY_EVENT_KINDS]
+                    if len(retained) != len(rows):
+                        _store._replace_jsonl(event_path, retained)
+                        compacted += 1
+                    revision = self._event_revision(event_path)
+                    self._event_cache.drop((session_id, turn_id))
+                with exclusive_file_lock(turn_path, agent_id="loopx-chat", operation="mark_chat_events_compacted"):
+                    current = _store._read_json(turn_path)
+                    if current.get("status") in _store.TERMINAL_TURN_STATES:
+                        current["event_compaction_revision"] = list(revision or ())
+                        _store._atomic_write_json(turn_path, current, preserve_mode=True)
         return compacted
+
+    def start_background_compaction(self) -> None:
+        """Run startup replay-delta compaction off the critical HTTP readiness path."""
+
+        def _worker() -> None:
+            with suppress(OSError):
+                self.compact_completed_events()
+
+        threading.Thread(
+            target=_worker,
+            name="loopx-chat-startup-compaction",
+            daemon=True,
+        ).start()
+
+
+class _RecoverableTurnStore(Protocol):
+    sessions_root: Path
+
+    def finalize_turn_completion(self, session_id: str, turn_id: str) -> object: ...
+
+
+def recover_completing_turns(store: _RecoverableTurnStore) -> None:
+    """Finalize interrupted ``completing`` turns while skipping terminal payloads."""
+    from .. import chat_store as _store
+
+    try:
+        session_entries = list(os.scandir(store.sessions_root))
+    except OSError:
+        return
+    for session_entry in session_entries:
+        if not session_entry.is_dir(follow_symlinks=False):
+            continue
+        turns_dir = Path(session_entry.path) / "turns"
+        try:
+            turn_entries = list(os.scandir(turns_dir))
+        except OSError:
+            continue
+        for turn_entry in turn_entries:
+            if not turn_entry.name.endswith(".json") or turn_entry.name.endswith(".events.jsonl"):
+                continue
+            path = Path(turn_entry.path)
+            peeked = peek_turn_status(path)
+            if peeked is not None and peeked != "completing":
+                continue
+            turn = _store._read_json(path)
+            if (
+                turn.get("schema_version") == _store.CHAT_TURN_SCHEMA_VERSION
+                and turn.get("status") == "completing"
+            ):
+                store.finalize_turn_completion(str(turn["session_id"]), str(turn["turn_id"]))
+
+
+def _json_string_end(text: str, quote_index: int) -> int:
+    index = quote_index + 1
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "\\":
+            index += 2
+        elif char == '"':
+            return index + 1
+        else:
+            index += 1
+    return -1
+
+
+def peek_turn_status(path: Path, *, max_bytes: int = 1024) -> str | None:
+    """Decode top-level ``status`` from the JSON prefix without reading multi-MB attachments."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        raw = os.read(fd, max_bytes)
+    except OSError:
+        return None
+    finally:
+        with suppress(OSError):
+            os.close(fd)
+    text = raw.decode("utf-8", errors="ignore")
+    length = len(text)
+    index = 0
+    while index < length and text[index] in " \t\r\n":
+        index += 1
+    if index >= length or text[index] != "{":
+        return None
+    index += 1
+    while index < length:
+        while index < length and text[index] in " \t\r\n":
+            index += 1
+        if index >= length or text[index] != '"':
+            return None
+        key_end = _json_string_end(text, index)
+        if key_end < 0:
+            return None
+        try:
+            key = json.loads(text[index:key_end])
+        except json.JSONDecodeError:
+            return None
+        index = key_end
+        while index < length and text[index] in " \t\r\n":
+            index += 1
+        if index >= length or text[index] != ":":
+            return None
+        index += 1
+        while index < length and text[index] in " \t\r\n":
+            index += 1
+        if index >= length:
+            return None
+        char = text[index]
+        if char == '"':
+            val_end = _json_string_end(text, index)
+            if val_end < 0:
+                return None
+            try:
+                value = json.loads(text[index:val_end])
+            except json.JSONDecodeError:
+                return None
+            index = val_end
+            if key == "status" and isinstance(value, str):
+                while index < length and text[index] in " \t\r\n":
+                    index += 1
+                return value if index < length and text[index] in ",}" else None
+        elif text.startswith("null", index) or text.startswith("true", index):
+            index += 4
+        elif text.startswith("false", index):
+            index += 5
+        elif char in "-0123456789":
+            while index < length and text[index] in "-+0123456789.eE":
+                index += 1
+            if index >= length:
+                return None
+        else:
+            return None
+        while index < length and text[index] in " \t\r\n":
+            index += 1
+        if index < length and text[index] == ",":
+            index += 1
+        else:
+            return None
+    return None
+
+
+def _turn_already_compacted_for_revision(
+    turn_path: Path, turn_size: int, revision: EventRevision
+) -> bool:
+    """Fast tail check matching compact top-level ``event_compaction_revision``."""
+    rev_text = f"{revision[0]},{revision[1]},{revision[2]}" if revision is not None else ""
+    expected_suffix = f',"event_compaction_revision":[{rev_text}]}}'.encode("ascii")
+    if turn_size < len(expected_suffix) + 2:
+        return False
+    read_len = min(turn_size, max(128, len(expected_suffix) + 16))
+    try:
+        fd = os.open(turn_path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        os.lseek(fd, max(0, turn_size - read_len), os.SEEK_SET)
+        tail = os.read(fd, read_len)
+    except OSError:
+        return False
+    finally:
+        with suppress(OSError):
+            os.close(fd)
+    return tail.rstrip().endswith(expected_suffix)

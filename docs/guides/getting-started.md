@@ -100,7 +100,7 @@ can discover user-installed skills:
   loop runs through the persistent `loopx opencode2-goal-worker` process,
   which drives the session over the OpenCode 2 HTTP API and owns the loop
   timers, so long runs survive TUI close. OpenCode 1 plugins do not run under
-  OpenCode 2; see `loopx/opencode2_goal_mode/README.md`.
+  OpenCode 2; see `loopx/hosts/opencode2/README.md`.
 - Pi: the self-contained goal extension exposes `/loopx` after `/reload` or a
   restart and runs the quota-gated goal loop through `loopx_goal_activate`.
   `loopx slash-commands --install --surface pi` installs it for the current
@@ -171,6 +171,31 @@ project state. The legacy `codex-ide` value remains an accepted compatibility
 alias but is no longer advertised. This prevents an upgrade from silently
 routing an IDE plugin or terminal start to a desktop-app heartbeat.
 
+## Find Goals in the selected registry
+
+Use `registry` to discover Goal IDs before choosing a Goal-specific command:
+
+```bash
+loopx registry --query research --limit 10
+loopx --format json registry --query research --limit 10 --offset 10
+loopx registry --goal-id <goal-id>
+```
+
+The query is a case-insensitive, Unicode-normalized literal substring of the
+Goal ID, repository path, domain, status, or adapter kind. Exact `--goal-id` and
+`--query` filters compose. Filtering happens before pagination, in registry
+declaration order. Any selection option enables a default page size of 20;
+`--limit` must be positive and `--offset` non-negative. JSON `selection` reports
+matching and returned counts and `next_offset` (null at the end). Offsets apply
+to the current registry snapshot; edits between requests can change pages.
+
+Without selection options, `registry` keeps its complete existing output.
+Selection only narrows displayed Goal rows: registry-wide totals, status counts,
+diagnostics, and failure exit status remain complete. An unknown exact Goal ID
+fails, while a query with no matches returns an empty selection. Inspection still
+reads and validates the whole selected registry; pagination does not bound scan
+work or follow entries into their source registries.
+
 ## Inspect an earlier run-history window
 
 To investigate an earlier day without dumping all newer runs, select a time
@@ -198,6 +223,22 @@ This is a read-only CLI investigation view over the retained local run indexes,
 not an archive restore or a bounded-cost index query. It reads those indexes;
 it cannot recover pruned or externally archived events. The research workspace
 retains its separate source-record browser and day-group navigation.
+
+## Save a research record comparison
+
+In a Goal's Research history, search for a record, expand it, then open
+**Compare recorded versions**. Choose the comparison version and use
+**Download comparison (JSON)** or **Download comparison report (Markdown)**.
+Both files contain that exact pair, including a comparison version excluded
+by the search filters. The ordinary reading-report download still exports
+only matching records.
+
+The comparison preserves original text, record identities, evidence references,
+zero and unknown measurements, and the same field differences shown in the
+panel. It discloses incomplete history or a failed refresh; it does not certify
+a matched evaluation, acceptance, or research quality improvement. Source files
+behind references are not downloaded. Keep the report as private as its source
+research. If a download fails, retry without changing the records.
 
 ## Local State Backup
 

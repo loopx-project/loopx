@@ -35,6 +35,81 @@ select several. Full `backup-state` captures its global discovery registry by
 default, or the selected project registry with `--current-project-only`. The private
 archive manifest reports configuration verification and presence separately.
 
+### Compare configuration snapshots before recovery
+
+To review stored configuration changes across an upgrade or an operator edit,
+export a snapshot before and after the change, then compare the two files:
+
+```sh
+loopx configuration-backup compare --before before.json --after after.json
+loopx --format json configuration-backup compare --before before.json --after after.json
+```
+
+Both complete envelopes and their digests must verify before any comparison is
+returned. The result names `before_sha256`, `after_sha256`, each snapshot's Goal
+IDs and machine-configuration presence, and every changed stored value.
+`before_present`/`after_present` distinguish a missing field from explicit null,
+false, zero or an empty value. Object-key and Goal declaration order do not
+create differences; nested arrays retain order and are shown as whole values.
+Paths use JSON Pointer escaping (`~0` for `~`, `~1` for `/`), with Goals keyed
+by their verified ID under `/goals`, not by the original array offset.
+
+`only_in_before` and `only_in_after` describe snapshot scope. Since backups can
+select different Goal cohorts, these are **not** claims that a live Goal was
+created or deleted. Likewise, matching configuration values do not imply equal
+snapshot hashes when Goal declaration order differs. No referenced source file
+is followed, current settings are not read, and comparison neither writes a
+checkpoint nor authorizes activation. The output contains private configuration
+values and is not certified for publication. A missing or invalid input fails
+without returning a partial comparison.
+
+Comparison uses the existing private local-snapshot transport when the two
+inputs exceed the ordinary 8 MiB request frame. The combined serialized
+parameters remain limited to 64 MiB. The complete comparison result is limited
+to 56 MiB, reserving one 8 MiB frame for the response envelope within the
+existing 64 MiB private-response limit. These are byte limits, not file-count or
+change-count limits; no values are silently truncated. An oversized result is
+rejected with a size error; export smaller, explicitly selected Goal cohorts
+when appropriate. Capture, standalone verification and isolated restore retain
+their existing transport behavior and limits.
+
+Private transport verifies the complete response's byte count and digest before
+returning it. If readback cannot be verified, comparison fails rather than
+presenting a partial report. Comparison is read-only: such an error does not
+mean that settings were changed or that recovery was activated. The transport
+owns its temporary files; the comparison accepts snapshots, not paths for the
+runtime to follow.
+
+After review, use the existing `restore` command with the chosen snapshot's
+reported digest and a new isolated destination, then inspect its readback.
+Comparison does not replace that digest check or the normal configuration
+editors.
+
+In **Settings → Configuration backup and recovery**, choose the before and after
+JSON files and select **Compare files**. Open the hash/cohort and changed-value
+details to inspect scope and exact values. Invalid files show an error without
+enabling recovery from an unverified comparison. Choose **Review before snapshot
+for recovery** or **Review after snapshot for recovery** to use the existing
+recovery preview, then explicitly select **Restore isolated checkpoint**. The
+comparison itself never performs this write, and the checkpoint still does not
+activate settings. Replacing a comparison input clears the previous comparison
+and recovery selection.
+
+![Settings comparison: hashes and Goal cohorts above the changed values and explicit recovery choices](assets/configuration-backup-comparison.png)
+
+The illustrated example uses synthetic snapshots: the after file includes an
+additional Goal and a different stored default. Expand **Hash and cohort** to
+check which Goals were captured, and expand a changed path to read both values.
+The two recovery buttons select a snapshot for preflight; they do not apply the
+displayed differences to live settings. The image shows the packaged browser
+App, not an installed native desktop qualification.
+
+On a narrow screen, the recovery preview wraps the complete selected SHA-256
+inside the panel. Check it against the chosen snapshot before selecting
+**Restore isolated checkpoint**; selecting a snapshot alone does not restore it.
+
+![Narrow Settings recovery preview with the complete selected digest and explicit restore button](assets/configuration-backup-preview-mobile.png)
+
 For a reviewed cohort on a host with unreachable historical source registries,
 repeat `backup-state --configuration-goal-id example` to select the embedded
 configuration checkpoint. This uses the same strict source-owner capture as

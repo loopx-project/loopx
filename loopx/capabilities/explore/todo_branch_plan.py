@@ -23,8 +23,9 @@ from ...control_plane.work_items.task_lease import scope_root, write_scopes_over
 from .harness_gate import (
     GATE_STATE_ANALYSIS_ONLY,
     GATE_STATE_DISABLED,
+    MAX_BRANCH_WIDTH as MAX_BRANCH_WIDTH,
     explore_harness_required_contract,
-    resolve_explore_harness_gate as _resolve_explore_harness_gate,
+    resolve_todo_branch_plan_gate as resolve_todo_branch_plan_gate,
 )
 from .speculative_scheduler import (
     build_branch_plan_ab_result,
@@ -42,7 +43,6 @@ from .todo_evidence import build_todo_typed_evidence_audit
 
 TODO_BRANCH_PLAN_SCHEMA_VERSION = "loopx_explore_todo_branch_plan_v0"
 DEFAULT_BRANCH_WIDTH = 3
-MAX_BRANCH_WIDTH = 8
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_:\-]{3,}")
 SHARED_DEPENDENCY_CAPABILITY_PREFIXES = (
     "shared_artifact:",
@@ -246,21 +246,6 @@ def _claim_command(*, goal_id: str, todo_id: str, agent_id: str | None) -> str |
     return (
         f"loopx todo claim --goal-id {goal_id} --todo-id {todo_id} "
         f"--claimed-by {owner} --agent-id {owner}"
-    )
-
-
-def resolve_todo_branch_plan_gate(
-    orchestration: Mapping[str, Any] | None,
-    *,
-    requested_width: int,
-) -> dict[str, Any]:
-    """Resolve the shared explore-harness gate with this planner's lane ceiling."""
-
-    return _resolve_explore_harness_gate(
-        orchestration,
-        requested_width=requested_width,
-        max_lanes=MAX_BRANCH_WIDTH,
-        max_lanes_label="max_branch_width",
     )
 
 

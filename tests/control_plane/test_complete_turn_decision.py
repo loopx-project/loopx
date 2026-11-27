@@ -356,7 +356,7 @@ def test_host_transports_preserve_complete_contract_presence(tmp_path, transfer,
     from loopx.control_plane.turn_driver.driver import build_loopx_turn_plan
     from loopx.control_plane.turn_driver.host_candidate import extract_turn_authority
     from loopx.control_plane.turn_driver.host_failure import BuiltInHostError
-    from loopx.dsh_goal_mode.turn_host_adapter import DshHostConfig, run_dsh_host
+    from loopx.hosts.dsh.turn_host_adapter import DshHostConfig, run_dsh_host
     from tests.test_turn_envelope import _full_decision
 
     source = _full_decision()
@@ -644,7 +644,7 @@ def test_real_turn_preview_reaches_complete_codex_input(tmp_path, monkeypatch, p
         _prompt(tampered)
     with pytest.raises(ValueError, match="complete Turn contract rejected"):
         extract_turn_authority(tampered)
-    from loopx.dsh_goal_mode.turn_host_adapter import DshHostConfig, run_dsh_host
+    from loopx.hosts.dsh.turn_host_adapter import DshHostConfig, run_dsh_host
     from loopx.control_plane.turn_driver.host_failure import BuiltInHostError
     with pytest.raises(BuiltInHostError, match="dsh_turn_authority_rejected"):
         run_dsh_host(tampered, config=DshHostConfig(workspace=workspace,

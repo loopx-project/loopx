@@ -1,34 +1,37 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentMention, Api, ProjectDirectoryInfo, Thread } from '../api';
-import type { ContextReference } from '../context-references';
+import { referenceThreads, type ContextReference } from '../context-references';
 import { t } from '../i18n';
 import { Dialog } from './Dialog';
 import { IconAgents, IconChevron, IconClose, IconFolder, IconPaperclip, IconQuote } from './icons';
 
-export function ReferenceChips({ references, onRemove }: { references: ContextReference[]; onRemove?: (id: string) => void }) {
-  const [detail, setDetail] = useState<ContextReference | null>(null);
+export function ReferenceChips({ references, onRemove, disabled }: { references: ContextReference[]; onRemove?: (id: string) => void; disabled?: boolean }) {
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = references.find(reference => reference.id === detailId);
   if (!references.length) return null;
   return <><div className="context-references" aria-label={t('references.title')}>
     {references.map(reference => <div className="context-reference" key={reference.id}>
-      <button type="button" onClick={() => setDetail(reference)} title={reference.path}>
-        {reference.kind === 'thread' ? <IconQuote size={14} /> : reference.kind === 'message' ? <IconPaperclip size={14} /> : <IconFolder size={14} />}<span>{reference.kind === 'message' ? t('references.message', reference.title) : reference.title}{reference.kind === 'directory' ? '/' : ''}</span>
+      <button type="button" onClick={() => setDetailId(reference.id)} title={reference.pending ? t('references.pending') : reference.path} aria-busy={reference.pending || undefined}>
+        {reference.kind === 'thread' ? <IconQuote size={14} /> : reference.kind === 'message' ? <IconPaperclip size={14} /> : <IconFolder size={14} />}<span>{reference.automatic ? t('references.from', reference.title) : reference.kind === 'message' ? t('references.message', reference.title) : reference.title}{reference.kind === 'directory' ? '/' : ''}</span>
       </button>
-      {onRemove && <button type="button" aria-label={t('references.remove', reference.title)} onClick={() => onRemove(reference.id)}><IconClose size={13} /></button>}
+      {onRemove && <button type="button" disabled={disabled} aria-label={t('references.remove', reference.title)} onClick={() => onRemove(reference.id)}><IconClose size={13} /></button>}
     </div>)}
-  </div>{detail && createPortal(<Dialog title={detail.title} className="reference-detail" confirmLabel={t('common.close')} hideCancel onConfirm={() => setDetail(null)} onCancel={() => setDetail(null)}>
+  </div>{detail && createPortal(<Dialog title={detail.title} className="reference-detail" confirmLabel={t('common.close')} hideCancel onConfirm={() => setDetailId(null)} onCancel={() => setDetailId(null)}>
     <p className="reference-path">{detail.path}</p>
     <p>{t(detail.kind === 'thread' ? 'references.threadHint' : detail.kind === 'message' ? 'references.messageHint' : 'references.directoryHint')}</p>
-    {detail.kind !== 'directory' && <p className="muted">{t('references.snapshot', new Date(detail.at).toLocaleString())}</p>}
+    {detail.pending ? <p className="muted" role="status">{t('references.pending')}</p> : detail.kind === 'thread' && detail.pointer && !detail.turnId
+      ? <p className="muted">{t('references.live')}</p> : detail.kind !== 'directory' && <p className="muted">{t('references.snapshot', new Date(detail.at).toLocaleString())}</p>}
   </Dialog>, document.body)}</>;
 }
 
-export interface ReferenceSource { api: Api; cwd: string; threadId?: string }
+export interface ReferenceSource { api: Api; cwd: string; threadId?: string; sourceId?: string }
 
 /** Mounted only while the picker is open; never preload transcripts or recursive trees. */
-export function ReferencePicker({ source, initialQuery, agents, onAgent, onPick }: {
-  source: ReferenceSource; initialQuery: string; agents: AgentMention[];
+export function ReferencePicker({ source, scope = '', initialQuery, agents, onAgent, onPick, onPending }: {
+  source: ReferenceSource; scope?: string; initialQuery: string; agents: AgentMention[];
   onAgent: (agent: AgentMention) => void; onPick: (reference: ContextReference) => void;
+  onPending?: (pending: boolean) => void;
 }) {
   const [query, setQuery] = useState(initialQuery);
   // One kind of reference at a time: sessions first, folders when an address is typed, agents
@@ -43,9 +46,20 @@ export function ReferencePicker({ source, initialQuery, agents, onAgent, onPick 
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
-  const mounted = useRef(true);
+  const mounted = useRef(false);
+  const request = useRef(0);
+  const picking = useRef(false);
+  const current = useRef({ api: source.api, scope, onPick, onPending });
+  current.current = { api: source.api, scope, onPick, onPending };
   const search = useRef<HTMLInputElement>(null);
-  useEffect(() => { mounted.current = true; search.current?.focus(); return () => { mounted.current = false; }; }, []);
+  useLayoutEffect(() => {
+    mounted.current = true; request.current++; picking.current = false;
+    setBusy(false); search.current?.focus();
+    return () => {
+      mounted.current = false; request.current++; picking.current = false;
+      onPending?.(false);
+    };
+  }, [source.api, scope]);
   useEffect(() => {
     let live = true;
     setThreadError('');
@@ -57,6 +71,7 @@ export function ReferencePicker({ source, initialQuery, agents, onAgent, onPick 
   const path = typed ? typed.startsWith('/') || typed.startsWith('~/') ? typed : `${folder}/${typed}` : folder;
   const filter = (slash >= 0 ? query.slice(slash + 1) : query).toLowerCase();
   useEffect(() => {
+    if (tab !== 'dirs') return;
     let live = true;
     setLoading(true); setFolderError(''); setListing(null);
     const timer = setTimeout(() => {
@@ -64,16 +79,26 @@ export function ReferencePicker({ source, initialQuery, agents, onAgent, onPick 
         .finally(() => { if (live) setLoading(false); });
     }, 120);
     return () => { live = false; clearTimeout(timer); };
-  }, [source.api, path, retry]);
+  }, [source.api, path, tab, retry]);
   const pick = async (input: { kind: 'thread'; sourceId: string } | { kind: 'directory'; path: string }) => {
-    if (busy) return;
+    if (picking.current) return;
+    picking.current = true;
+    const ticket = ++request.current;
+    const api = source.api;
+    const live = () => mounted.current && request.current === ticket && current.current.api === api && current.current.scope === scope;
+    current.current.onPending?.(true);
     setBusy(true); setPickError('');
-    try { const reference = await source.api.createReference(input); if (mounted.current) onPick(reference); }
-    catch (error) { if (mounted.current) setPickError(error instanceof Error ? error.message : t('references.loadFailed')); }
-    finally { if (mounted.current) setBusy(false); }
+    try {
+      const reference = await api.createReference(input.kind === 'thread' ? { ...input, pointer: true } : input);
+      if (live()) current.current.onPick(reference);
+    } catch (error) {
+      if (live()) setPickError(error instanceof Error ? error.message : t('references.loadFailed'));
+    } finally {
+      if (live()) { picking.current = false; setBusy(false); current.current.onPending?.(false); }
+    }
   };
   const go = (next: string) => { setFolder(next); setQuery(''); };
-  const matches = (threads ?? []).filter(thread => thread.id !== source.threadId && `${thread.title} ${thread.cwd}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
+  const matches = referenceThreads(threads ?? [], source, query);
   const options = agents.filter(agent => `${agent.label} ${agent.id}`.toLowerCase().includes(query.toLowerCase())).slice(0, 8);
   const tabs = [
     { id: 'threads' as const, label: t('references.tab.threads'), count: threads === null ? null : matches.length },

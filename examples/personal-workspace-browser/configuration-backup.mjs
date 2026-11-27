@@ -5,6 +5,7 @@ import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 import {repoRoot, outputDir} from "./fixture.mjs";
 import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
+import {exerciseConfigurationComparison} from "./configuration-backup-comparison.mjs";
 import {resolveTestPython} from "../../scripts/test-python.mjs";
 
 // Only the backup routes use a real disposable server. Other workspace state
@@ -18,6 +19,12 @@ r=pathlib.Path(sys.argv[1]); runtime=r/'runtime'; registry=r/'registry.json'
 registry.write_text(json.dumps({'common_runtime_root':str(runtime),'goals':[{'id':'fixture','repo':str(r),'control_plane':{'optional':{'context':'complete '*10000}}}]}))
 p=runtime/'machine/configuration.json';p.parent.mkdir(parents=True)
 p.write_text(json.dumps({'schema_version':'loopx_machine_configuration_v0','namespaces':{'goal_storage':{'schema_version':'loopx_goal_storage_defaults_v0','new_goal_provider':'sqlite'}}}))
+from loopx.capabilities.configuration_backup import capture_configuration_backup
+from loopx.control_plane.effect_runtime import effect_runtime_result
+comparison_data=capture_configuration_backup(registry_path=registry,runtime_root=runtime)['data']
+comparison_data['machine_configuration']['namespaces']['goal_storage']['new_goal_provider']='file'
+comparison_data['goals'].append({'goal_id':'synthetic-next','goal_configuration':{'id':'synthetic-next','name':'Reviewed next study'}})
+(r/'comparison-after.json').write_text(json.dumps(effect_runtime_result('configuration.backup',{'action':'capture','data':comparison_data})))
 source_project=r/'source-project';source_project.mkdir()
 source_runtime=r/'source-runtime';source_registry=r/'source-registry.json'
 (source_project/'ACTIVE.md').write_text('# Original Goal\\n\\nPreserve every unfinished commitment.\\n')
@@ -99,6 +106,7 @@ export const configurationBackupScenario = {
       const backup = JSON.parse(bytes);
       assert.equal(backup.data.machine_configuration.namespaces.goal_storage.new_goal_provider, "sqlite");
       assert.equal(backup.data.goals[0].goal_configuration.control_plane.optional.context.length, 90000);
+      await exerciseConfigurationComparison({page, panel, beforeBytes: bytes, afterBytes: await readFile(join(root, "comparison-after.json")), root});
       const input = panel.getByLabel("恢复备份文件");
       await input.setInputFiles({name: "backup.json", mimeType: "application/json", buffer: bytes});
       await panel.getByRole("button", {name: "恢复为隔离检查点"}).click();

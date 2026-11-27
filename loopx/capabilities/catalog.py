@@ -1,29 +1,46 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
 from ..extensions.runtime import extension_catalog_entries
-from .benchmark_toolkit.catalog_entry import BENCHMARK_TOOLKIT_CATALOG_ENTRY
+from ..python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION, RESEARCH_DISTRIBUTION
+from .benchmark_toolkit.catalog_entry import (
+    BENCHMARK_TOOLKIT_CATALOG_ENTRY,
+    BENCHMARK_TOOLKIT_INSTALL_HINT,
+    benchmark_toolkit_installed,
+)
 from .integration_branch.catalog_entry import INTEGRATION_BRANCH_CATALOG_ENTRY
 from .repository_change_window.catalog_entry import (
     REPOSITORY_CHANGE_WINDOW_CATALOG_ENTRY,
 )
 from .change_quality.catalog_entry import CHANGE_QUALITY_CATALOG_ENTRY
-from .pr_review_queue.catalog_entry import PR_REVIEW_CATALOG_ENTRY
-from .issue_fix.catalog_entry import ISSUE_FIX_CATALOG_ENTRY
+from .pr_review_queue.catalog_entry import (
+    PR_REVIEW_CATALOG_ENTRY, PR_REVIEW_INSTALL_HINT, pull_request_review_installed,
+)
+from .issue_fix.catalog_entry import (
+    ISSUE_FIX_CATALOG_ENTRY, ISSUE_FIX_CORE_CATALOG_ENTRY, ISSUE_FIX_INSTALL_HINT,
+    issue_fix_workflow_installed,
+)
 from .decision_context.catalog_entry import DECISION_CONTEXT_CATALOG_ENTRY
 from .project_skill_delivery.catalog_entry import PROJECT_SKILL_DELIVERY_CATALOG_ENTRY
 from .material_lifecycle.catalog_entry import MATERIAL_LIFECYCLE_CATALOG_ENTRY
-from .agent_turn_recall.catalog_entry import AGENT_TURN_RECALL_CATALOG_ENTRY
+from .agent_turn_recall.catalog_entry import (
+    AGENT_TURN_RECALL_CATALOG_ENTRY, RECALL_INSTALL_HINT, agent_turn_recall_installed,
+)
 from .semantic_preference.catalog_entry import SEMANTIC_PREFERENCE_CATALOG_ENTRY
 from .reward_memory.catalog_entry import REWARD_MEMORY_CATALOG_ENTRY
 from .periodic_report.catalog_entry import PERIODIC_REPORT_CATALOG_ENTRY
 from .content_ops.catalog_entry import CONTENT_OPS_CATALOG_ENTRY
 from .value_connectors.catalog_entry import VALUE_CONNECTORS_CATALOG_ENTRY
 from .explore.catalog_entry import EXPLORE_CATALOG_ENTRY
-from .deep_research.catalog_entry import DEEP_RESEARCH_CATALOG_ENTRY
+from .deep_research.catalog_entry import (
+    DEEP_RESEARCH_CATALOG_ENTRY,
+    RESEARCH_INSTALL_HINT,
+    inspect_research_workflow_distribution,
+)
 from .public_safe_outbound.catalog_entry import PUBLIC_SAFE_OUTBOUND_CATALOG_ENTRY
 from .connector_registry.catalog_entry import CONNECTOR_REGISTRY_CATALOG_ENTRY
 from .external_research.catalog_entry import EXTERNAL_RESEARCH_CATALOG_ENTRY
@@ -139,6 +156,42 @@ def _register_declared_implementation_providers(
         )
 
 
+def _record_for_installed_capability(
+    registry: CapabilityRegistry,
+    record: Mapping[str, object],
+    *,
+    builtin_cli_present: bool,
+) -> Mapping[str, object]:
+    if record is BENCHMARK_TOOLKIT_CATALOG_ENTRY and not builtin_cli_present:
+        installed = benchmark_toolkit_installed(builtin_cli_present=False)
+        if not any(provider["id"] == BENCHMARK_TOOLKIT_DISTRIBUTION for provider in registry.providers()):
+            registry.register_provider(
+                {"id": BENCHMARK_TOOLKIT_DISTRIBUTION, "origin": "builtin", "installed": installed}
+            )
+        updated = dict(record) | {"provider_id": BENCHMARK_TOOLKIT_DISTRIBUTION}
+        if not installed:
+            updated["next_real_step"] = BENCHMARK_TOOLKIT_INSTALL_HINT
+        return updated
+    if record is AGENT_TURN_RECALL_CATALOG_ENTRY:
+        installed = agent_turn_recall_installed(builtin_cli_present=builtin_cli_present)
+        hint = RECALL_INSTALL_HINT
+    elif record is PR_REVIEW_CATALOG_ENTRY:
+        installed = pull_request_review_installed(builtin_cli_present=builtin_cli_present)
+        hint = PR_REVIEW_INSTALL_HINT
+    elif record is ISSUE_FIX_CATALOG_ENTRY:
+        installed = issue_fix_workflow_installed(builtin_cli_present=builtin_cli_present)
+        hint = ISSUE_FIX_INSTALL_HINT
+        if not builtin_cli_present:
+            record = ISSUE_FIX_CORE_CATALOG_ENTRY
+    else:
+        return record
+    if installed:
+        return record
+    if not any(provider["id"] == "loopx" for provider in registry.providers()):
+        registry.register_provider({"id": "loopx", "origin": "builtin", "installed": False})
+    return dict(record) | {"provider_id": "loopx", "next_real_step": hint}
+
+
 def build_capability_registry(
     extension_manifest_paths: Iterable[str | Path] = (),
     *,
@@ -155,8 +208,47 @@ def build_capability_registry(
             "ready": True,
         }
     )
+    builtin_cli_present = find_spec("loopx.cli") is not None
+    research_state = (
+        inspect_research_workflow_distribution(builtin_cli_present=False)
+        if not builtin_cli_present
+        else None
+    )
+    research_ready = bool(research_state and research_state["ready"])
+    if not builtin_cli_present and research_state is not None:
+        optional_fields = {
+            key: value
+            for key, value in (
+                ("version", research_state["version"]),
+                ("core_version", research_state["core_version"]),
+                ("unavailable_reason", research_state["reason"]),
+            )
+            if value is not None
+        }
+        registry.register_provider(
+            {
+                "id": RESEARCH_DISTRIBUTION,
+                "origin": "builtin",
+                "installed": bool(research_state["installed"]),
+                "enabled": bool(research_state["installed"]),
+                "ready": research_ready,
+                **optional_fields,
+            }
+        )
     for record in BUILTIN_CAPABILITIES:
-        registry.register_capability(record)
+        if not builtin_cli_present and (
+            record is EXPLORE_CATALOG_ENTRY
+            or record is DEEP_RESEARCH_CATALOG_ENTRY
+            or record is EXTERNAL_RESEARCH_CATALOG_ENTRY
+        ):
+            adapted = dict(record) | {"provider_id": RESEARCH_DISTRIBUTION}
+            if not research_ready:
+                adapted["next_real_step"] = RESEARCH_INSTALL_HINT
+            registry.register_capability(adapted)
+        else:
+            registry.register_capability(_record_for_installed_capability(
+                registry, record, builtin_cli_present=builtin_cli_present,
+            ))
     for record in BUILTIN_CAPABILITIES:
         _register_declared_implementation_providers(registry, record)
     for manifest in extension_catalog_entries(

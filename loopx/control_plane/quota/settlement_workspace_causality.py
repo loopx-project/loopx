@@ -17,6 +17,7 @@ from ..coordination.coordination_state_contract_generated import (
 )
 from ..todos.contract import (
     normalize_required_write_scopes,
+    normalize_todo_action_kind,
     normalize_todo_continuation_policy,
     normalize_todo_id,
     normalize_todo_task_repository,
@@ -128,9 +129,8 @@ def build_delivery_workspace_causality(
     if not todo_id:
         return None
     task_repository = normalize_todo_task_repository(todo.get("task_repository"))
-    required_write_scopes = normalize_required_write_scopes(
-        todo.get("required_write_scopes") or todo.get("required_write_scope")
-    )
+    raw_write_scopes = todo.get("required_write_scopes") or todo.get("required_write_scope")
+    required_write_scopes = normalize_required_write_scopes(raw_write_scopes)
     capabilities = todo.get("required_capabilities")
     required_capabilities = sorted(
         {
@@ -150,12 +150,33 @@ def build_delivery_workspace_causality(
             expected_todo_id=None,
             normalized_todo_contract={
                 "todo_id": todo_id,
+                "action_kind": normalize_todo_action_kind(todo.get("action_kind")),
                 "task_repository": task_repository,
                 "required_write_scopes": required_write_scopes,
+                "write_scope_declared": bool(raw_write_scopes),
                 "required_capabilities": required_capabilities,
                 "continuation_policy": continuation_policy,
                 "source": source,
             },
+        )
+    )
+
+
+def uses_registered_verification_workspace(
+    causality: Mapping[str, object] | None,
+    *,
+    task_repository: str | None,
+    explicit_peer_worktree_requirement: object,
+) -> bool:
+    """Apply the admitted read-only classification under current workspace policy."""
+    return (
+        causality is not None
+        and causality.get("requirement") == "required"
+        and causality.get("reason") == "declared_read_only_verification"
+        and not task_repository
+        and (
+            explicit_peer_worktree_requirement is None
+            or explicit_peer_worktree_requirement is False
         )
     )
 

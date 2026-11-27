@@ -7,7 +7,7 @@ import re
 from typing import Any, Mapping
 
 from ..agent_registry import registered_agent_ids_for_goal
-from ..capabilities.issue_fix.repository_snapshot import _REPO_PATTERN
+from ..capabilities.issue_fix.github_public import _REPO_PATTERN
 from ..control_plane.content_digest import BARE_SHA256_PATTERN
 from ..control_plane.runtime.time import now_utc, parse_timestamp, utc_isoformat
 from ..control_plane.todos.contract import require_supported_todo_resume_when

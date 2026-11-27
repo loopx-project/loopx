@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 from collections.abc import Callable, Iterable
 
-from ..opencode2_goal_mode import worker_source
+from ..hosts.opencode2 import worker_source
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],

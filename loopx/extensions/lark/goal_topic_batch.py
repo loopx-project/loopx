@@ -205,9 +205,9 @@ def upgrade_lark_goal_topics(
         if connection.get("provider") != "lark" or not connection.get("enabled"):
             continue
         ref = str(connection["connection_id"])
-        if (connection.get("routing") or {}).get(
-            "ingress_mode", "direct_session"
-        ) != "direct_session":
+        raw_routing = connection.get("routing")
+        routing = raw_routing if isinstance(raw_routing, Mapping) else {}
+        if routing.get("ingress_mode", "direct_session") != "direct_session":
             results.append(
                 {"connection_id": ref, "status": "already_current", "ok": True}
             )

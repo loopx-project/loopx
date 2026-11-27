@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from ...dsh_goal_mode.turn_host_adapter import (
+from ...hosts.dsh.turn_host_adapter import (
     build_result,
     build_sdk_config,
     normalize_runner_outcome,

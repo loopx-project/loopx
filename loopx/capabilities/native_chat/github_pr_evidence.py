@@ -10,7 +10,7 @@ import re
 import subprocess
 from typing import Any, Callable, Mapping, Sequence
 
-from ..issue_fix.repository_snapshot import _REPO_PATTERN as _REPO_SLUG_RE
+from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
 from ..pr_review_queue.review_body import (
     author_owned_review_title_matches,
     check_review_body,

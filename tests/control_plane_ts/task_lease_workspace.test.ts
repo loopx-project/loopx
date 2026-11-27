@@ -397,22 +397,21 @@ test("worktree identity cannot weaken Todo ownership or repository identity", ()
   assert.throws(() => leaseWorkspace({...workspace, unchecked_path: "/tmp"}));
 });
 
-test("PostgreSQL retains worktree identity and overlap receipts across reload", {skip: !process.env.LOOPX_TEST_POSTGRES_URL}, async () => {
-  const {Pool} = await import("pg");
-  const {randomUUID} = await import("node:crypto");
-  const {PostgreSqlAuthorityStore, installPostgreSqlAuthorityStoreSchema} = await import("../../loopx/control_plane/coordination/postgresql_authority_store.ts");
-  const {executeCanonicalTaskLeaseAcquire} = await import("../../loopx/control_plane/coordination/task_lease_acquire.ts");
-  const {authorityProjectionFixture} = await import("./authority_projection_fixture.ts");
-  const pool = new Pool({connectionString: process.env.LOOPX_TEST_POSTGRES_URL});
-  const database = {connect: async () => {
-    const client = await pool.connect();
-    return {query: async (text: string, values?: readonly unknown[]) => client.query(text, values ? [...values] : undefined),
-      release: () => client.release()};
-  }};
-  const goal = `workspace-${randomUUID()}`, options = {goal_id: goal, tenant_id: `tenant-${randomUUID()}`};
-  try {
-    await installPostgreSqlAuthorityStoreSchema(database, `postgresql:${"b".repeat(32)}`);
-    const store = new PostgreSqlAuthorityStore(database, options);
+for (const provider of ["file", "sqlite"] as const) {
+  test(`${provider} retains worktree identity and overlap receipts across reload`, async t => {
+    const {randomUUID} = await import("node:crypto");
+    const {mkdtemp, rm} = await import("node:fs/promises");
+    const {tmpdir} = await import("node:os");
+    const {join} = await import("node:path");
+    const {FileAuthorityStore} = await import("../../loopx/control_plane/coordination/file_authority_store.ts");
+    const {SqliteAuthorityStore} = await import("../../loopx/control_plane/coordination/sqlite_authority_store.ts");
+    const {executeCanonicalTaskLeaseAcquire} = await import("../../loopx/control_plane/coordination/task_lease_acquire.ts");
+    const {authorityProjectionFixture} = await import("./authority_projection_fixture.ts");
+    const root = await mkdtemp(join(tmpdir(), "workspace-reload-"));
+    t.after(() => rm(root, {recursive: true, force: true}));
+    const goal = `workspace-${randomUUID()}`;
+    const open = () => provider === "file" ? new FileAuthorityStore(root, goal) : new SqliteAuthorityStore(root, goal);
+    const store = open();
     const todos = ["alpha", "beta", "legacy"].map(key => ({todo_id: `todo_${key}`, role: "agent", status: "open", done: false,
       archive_state: "active", task_class: "advancement_task", text: "Independent code edits", claimed_by: "agent-a", task_repository: repo}));
     assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed", events: [], receipts: [],
@@ -425,7 +424,7 @@ test("PostgreSQL retains worktree identity and overlap receipts across reload", 
     const first = await executeCanonicalTaskLeaseAcquire(store, command);
     assert.equal(first.status, "applied");
     assert.equal(first.integration_overlap_advisories, undefined);
-    const reopened = new PostgreSqlAuthorityStore(database, options);
+    const reopened = open();
     const replay = await executeCanonicalTaskLeaseAcquire(reopened, command);
     assert.deepEqual(replay.original_receipt, first.original_receipt);
     assert.deepEqual(replay.lease, first.lease);
@@ -436,10 +435,5 @@ test("PostgreSQL retains worktree identity and overlap receipts across reload", 
     const retained = await executeCanonicalTaskLeaseAcquire(reopened, legacyCommand);
     assert.deepEqual(retained.original_receipt, legacy.original_receipt);
     assert.deepEqual(retained.lease, legacy.lease);
-  } finally {
-    for (const table of ["authority_receipts", "authority_events", "authority_commits", "authority_heads"]) {
-      await pool.query(`DELETE FROM loopx_control_plane.${table} WHERE tenant_id=$1 AND goal_id=$2`, [options.tenant_id, goal]);
-    }
-    await pool.end();
-  }
-});
+  });
+}

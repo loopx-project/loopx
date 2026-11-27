@@ -2079,6 +2079,134 @@ def test_long_path_budget_is_independent_of_runner_temp_prefix(
     test_brief_budget_retains_full_commands_on_real_long_paths()
 
 
+def test_brief_prunes_duplicate_non_command_metadata_and_smoke_isolates_host(tmp_path: Path) -> None:
+    from tests.control_plane.cli_output_fixture import isolated_probe_host_env
+
+    payload = build_heartbeat_prompt(
+        goal_id=GOAL_ID,
+        active_state=tmp_path / "ACTIVE_GOAL_STATE.md",
+        brief=True,
+        agent_id="codex-alpha",
+        registered_agents=["codex-alpha"],
+        agent_scopes=["Public CLI output qualification."],
+        agent_profile={"schema_version": "agent_profile_v1", "profile_role": "fixture"},
+        runtime_root=tmp_path / "runtime",
+        registry_path=tmp_path / "registry.json",
+        reward_memory_enabled=True,
+    )
+    for removed in (
+        "material_queue_rule",
+        "permission_rule",
+        "agent_profile",
+        "registered_agents",
+        "reward_memory_enabled",
+    ):
+        assert removed not in payload
+    for retained in (
+        "agent_model",
+        "agent_role",
+        "agent_scopes",
+        "active_state_source",
+        "resolved_active_state",
+        "cli_preflight",
+        "brief_prompt_command",
+        "quota_guard_command",
+        "quota_spend_command",
+        "refresh_state_command",
+        "progress_refresh_state_command",
+    ):
+        assert retained in payload
+
+    empty_home = tmp_path / "isolated-home"
+    with isolated_probe_host_env(empty_home):
+        assert os.environ["HOME"] == str(empty_home)
+        assert os.environ["USERPROFILE"] == str(empty_home)
+        assert os.environ["XDG_CONFIG_HOME"] == str(empty_home / ".config")
+        assert os.environ["APPDATA"] == str(empty_home / "AppData" / "Roaming")
+        for cleared in (
+            "CODEX_HOME",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "LOOPX_CHAT_CODEX_MODEL_PROVIDER",
+            "GH_CONFIG_DIR",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_ENTERPRISE_TOKEN",
+            "GH_ENTERPRISE_TOKEN",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "LOOPX_OFFLINE",
+            "LOOPX_AUTO_CAPABILITY_PROBE",
+        ):
+            assert cleared not in os.environ
+
+
+@pytest.mark.parametrize(
+    ("auth_kind", "env_key"),
+    [
+        ("token", "GH_TOKEN"),
+        ("token", "GITHUB_TOKEN"),
+        ("token", "GITHUB_ENTERPRISE_TOKEN"),
+        ("token", "GH_ENTERPRISE_TOKEN"),
+        ("hosts_dir", "GH_CONFIG_DIR"),
+        ("xdg_hosts", "XDG_CONFIG_HOME"),
+        ("appdata_hosts", "APPDATA"),
+    ],
+)
+def test_isolated_probe_host_env_ignores_ambient_github_auth_and_keeps_brief_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_kind: str,
+    env_key: str,
+) -> None:
+    from loopx.control_plane.agents.capability_probe import probe_host_runtime_capabilities
+    from tests.control_plane.cli_output_fixture import isolated_probe_host_env
+
+    clean_home = tmp_path / "clean-home"
+    dirty_home = tmp_path / "dirty-home"
+    with isolated_probe_host_env(clean_home):
+        baseline_caps = probe_host_runtime_capabilities()
+        assert baseline_caps == []
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+
+    for cleared in (
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GH_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "APPDATA",
+    ):
+        monkeypatch.delenv(cleared, raising=False)
+    monkeypatch.delenv("CODEX_SANDBOX_NETWORK_DISABLED", raising=False)
+    monkeypatch.delenv("LOOPX_OFFLINE", raising=False)
+    monkeypatch.setenv("LOOPX_AUTO_CAPABILITY_PROBE", "1")
+
+    if auth_kind == "token":
+        expected_value = "ghp_synthetic_probe_token_fixture"
+    else:
+        auth_root = tmp_path / "synthetic-auth" / env_key.lower()
+        if auth_kind == "hosts_dir":
+            hosts_path = auth_root / "hosts.yml"
+        elif auth_kind == "xdg_hosts":
+            hosts_path = auth_root / "gh" / "hosts.yml"
+        else:
+            hosts_path = auth_root / "GitHub CLI" / "hosts.yml"
+        hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        hosts_path.write_text("github.com:\n  user: synthetic-fixture\n", encoding="utf-8")
+        expected_value = str(auth_root)
+    monkeypatch.setenv(env_key, expected_value)
+
+    with isolated_probe_host_env(dirty_home):
+        assert env_key not in os.environ or os.environ[env_key] in {
+            str(dirty_home / ".config"),
+            str(dirty_home / "AppData" / "Roaming"),
+        }
+        assert probe_host_runtime_capabilities() == baseline_caps
+        test_brief_budget_retains_full_commands_on_real_long_paths()
+
+    assert os.environ.get(env_key) == expected_value
+
+
 @pytest.mark.parametrize("nested_temp", [False, True])
 def test_long_path_budget_uses_native_temp_without_a_drive_root_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested_temp: bool,

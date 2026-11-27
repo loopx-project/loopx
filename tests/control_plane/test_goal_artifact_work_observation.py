@@ -147,8 +147,10 @@ def test_persisted_work_observation_coverage_before_display_trimming(
 def test_work_observation_rejects_foreign_or_untyped_projection(field, value):
     from loopx.control_plane.runtime.session_runtime import session_runtime_work_observation
 
-    projection = build_session_runtime_readonly_projection(
-        goal_id="demo", decision_results=[{"recommended_action": "Continue verification"}],
+    projection: dict[str, object] = dict(
+        build_session_runtime_readonly_projection(
+            goal_id="demo", decision_results=[{"recommended_action": "Continue verification"}],
+        )
     )
     projection[field] = value
     before = copy.deepcopy(projection)

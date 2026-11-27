@@ -34,7 +34,7 @@ inbox, same-session execution, and UI-transport authority.
   and compact web GoalBar. The Host and Client are a thin projection and
   interaction layer over LoopX; they do not introduce model tools, a second
   control plane, or plugin-owned durable business state.
-- Existing `loopx/dsh_goal_mode` remains the separate external/headless
+- Existing `loopx/hosts/dsh` remains the separate external/headless
   `deepseek-harness` Turn adapter.
 
 ## Public Host Names

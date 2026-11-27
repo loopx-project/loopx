@@ -75,6 +75,10 @@ def execution_payload(
         "effects": dict(effects),
         **({"admission": dict(journal["admission"])}
            if isinstance(journal.get("admission"), Mapping) else {}),
+        **({"epoch_prefetch": dict(journal["epoch_prefetch"])}
+           if isinstance(journal.get("epoch_prefetch"), Mapping) else {}),
+        **({"quiet_turn": dict(journal["quiet_turn"])}
+           if isinstance(journal.get("quiet_turn"), Mapping) else {}),
         "quota_slot_spend_count": 1 if quota_spent else 0,
         **(
             {"settlement_result": journal["settlement_result"]}

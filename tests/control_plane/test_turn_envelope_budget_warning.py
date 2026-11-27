@@ -2,12 +2,14 @@
 
 from copy import deepcopy
 import json
+import os
 import subprocess
 import sys
 
 import pytest
 
 from loopx.cli_commands.turn_rendering import render_loopx_turn_plan_markdown
+from loopx.control_plane.quota import turn_envelope as turn
 from loopx.control_plane.quota.turn_envelope import (
     build_turn_envelope,
     quota_action_signature_document,
@@ -18,7 +20,9 @@ from loopx.presentation.renderers.turn_envelope_markdown import (
     render_turn_envelope_markdown,
 )
 from loopx.workflow_skill_install import workflow_skill_install
+from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
 from tests.control_plane.test_agent_context import POLICY, SCOPE, context
+from tests.control_plane.test_replan_host_context_projection import _quota_payload
 from tests.test_loopx_turn_driver import _write_live_fixture
 from tests.test_turn_envelope import _full_decision
 
@@ -226,3 +230,39 @@ def test_interaction_and_native_envelope_keep_hooks_and_one_exact_todo_read(
     assert quota_action_signature_document(
         source
     ) != turn_envelope_action_signature_document(tampered)
+
+
+def test_pack_turn_source_and_compose_complete_handle_over_1_mib_sources(tmp_path, monkeypatch):
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    source = deepcopy(_quota_payload())
+    source["observations"] = [f"obs-{index}-" + "x" * 160 for index in range(7500)]
+    raw_bytes = len(_wire(source))
+    assert raw_bytes > 1024 * 1024
+
+    packed = turn.pack_turn_source(source)
+    assert packed is not None
+    assert packed["encoding"] == "deflate-base64-json-v0"
+    assert len(packed["data"]) < 2 * 1024 * 1024
+
+    seen_calls = []
+    original_rpc = turn.effect_runtime_projection_result
+
+    def capture_rpc(method, params, **kwargs):
+        seen_calls.append((method, dict(params)))
+        return original_rpc(method, params, **kwargs)
+
+    monkeypatch.setattr(turn, "effect_runtime_projection_result", capture_rpc)
+    compressed_composed = turn.compose_turn_decision(source)
+    assert len(seen_calls) == 1
+    method, sent_params = seen_calls[0]
+    assert method == "quota.turn_envelope.evaluate"
+    assert sent_params["operation"] == "compose_complete"
+    assert "source_transport" in sent_params
+    assert "payload" not in sent_params
+
+    monkeypatch.setattr(turn, "pack_turn_source", lambda *args, **kwargs: None)
+    inline_composed = turn.compose_turn_decision(source)
+    assert compressed_composed == inline_composed
+
+    incompressible = {"blob": os.urandom(2 * 1024 * 1024).hex()}
+    assert turn.pack_turn_source(incompressible) is None

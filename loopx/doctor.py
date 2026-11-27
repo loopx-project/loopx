@@ -874,7 +874,7 @@ def collect_doctor(
             f"--zcode-home {home_arg}"
         )
     elif canonical_agent_type in {"agy", "antigravity-app"}:
-        from .agy_goal_mode import antigravity_config_home
+        from .hosts.agy import antigravity_config_home
         from .slash_command_install import inspect_skill_facades
 
         agy_cfg_skills = antigravity_config_home() / "skills"
@@ -1045,6 +1045,11 @@ def collect_doctor(
         ),
     }
     default_global_registry = global_registry_path(selected_runtime_root)
+    # The caller may have selected its registry explicitly; every diagnostic
+    # below reads that same file, so a moved registry is not reported empty.
+    diagnostic_registry_path = (
+        registry_path if registry_path is not None else default_global_registry
+    )
     global_registry_writability = (
         probe_registry_write_path(default_global_registry, create_parent=True)
         if local_state_route["status"] not in {"conflict", "invalid"}
@@ -1052,13 +1057,14 @@ def collect_doctor(
     )
     runtime_projection_routes = (
         collect_runtime_projection_route_diagnostics(
-            registry_path=default_global_registry,
+            registry_path=diagnostic_registry_path,
             runtime_root=selected_runtime_root,
         )
-        if default_global_registry.exists() and local_state_route["status"] not in {"conflict", "invalid"}
+        if diagnostic_registry_path.exists()
+        and local_state_route["status"] not in {"conflict", "invalid"}
         else {
             "schema_version": "runtime_projection_route_diagnostics_v0",
-            "registry": str(default_global_registry.resolve()),
+            "registry": str(diagnostic_registry_path.resolve()),
             "runtime_root": str(selected_runtime_root.resolve()),
             "goal_filter": None,
             "activation_state_filter": None,
@@ -1072,6 +1078,15 @@ def collect_doctor(
     from .capabilities.decision_context.freshness import (
         capture_host_diagnostics_detail,
         collect_capture_host_diagnostics,
+    )
+    from .control_plane.agents.host_delivery_diagnosis import (
+        collect_host_delivery_diagnosis_route,
+        host_delivery_diagnosis_check,
+    )
+
+    host_delivery_diagnosis = collect_host_delivery_diagnosis_route(
+        registry_path=diagnostic_registry_path,
+        route_status=str(local_state_route["status"]),
     )
 
     decision_context_capture = collect_capture_host_diagnostics(selected_runtime_root)
@@ -1221,6 +1236,7 @@ def collect_doctor(
                 sort_keys=True,
             ),
         },
+        host_delivery_diagnosis_check(host_delivery_diagnosis),
         {
             "id": "decision_context_capture_hosts_healthy",
             "required": False,
@@ -1246,10 +1262,17 @@ def collect_doctor(
         })
     if deep_validation:
         checks.extend(deep_validation["checks"])
+    from .release_candidate import collect_companion_distribution_diagnostics
+
+    runtime_identity = release_runtime_identity()
+    companions, companion_checks, companion_fix = collect_companion_distribution_diagnostics(
+        runtime_identity=runtime_identity,
+    )
+    checks.extend(companion_checks)
     payload: dict[str, Any] = {
         "ok": all(check["ok"] for check in checks if check["required"]),
         "mode": "deep" if deep else "standard",
-        "service_runtime_identity": release_runtime_identity(),
+        "service_runtime_identity": runtime_identity,
         "agent_type": canonical_agent_type,
         "python": {
             "executable": sys.executable,
@@ -1289,6 +1312,7 @@ def collect_doctor(
         "global_registry_writability": global_registry_writability,
         "runtime_projection_routes": runtime_projection_routes,
         "decision_context_capture": decision_context_capture,
+        "host_prompt_delivery": host_delivery_diagnosis,
         "typescript_control_plane": typescript_control_plane,
         "install_freshness": install_freshness,
         "upgrade_hint": install_freshness,
@@ -1347,6 +1371,10 @@ def collect_doctor(
             )
         ),
     }
+    if companions:
+        payload["companion_distributions"] = companions
+    if companion_fix:
+        payload["fix"] = f"{companion_fix}\n{payload['fix']}"
     if canonical_agent_type == "zcode":
         from .zcode_goal_mode.diagnostics import collect_zcode_host_diagnostics
 
@@ -1366,7 +1394,7 @@ def collect_doctor(
         else:
             payload["fix"] += "\nAfter restoring the LoopX installation/runtime, " + skill_fix
     if canonical_agent_type in {"agy", "antigravity-app"}:
-        from .agy_goal_mode import (
+        from .hosts.agy import (
             ANTIGRAVITY_HOOKS_CONFIG_FILENAME,
             ANTIGRAVITY_MCP_CONFIG_FILENAME,
             ANTIGRAVITY_SIDECAR_FILENAME,
@@ -1454,6 +1482,28 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         if isinstance(typescript_control_plane.get("runtime_lifecycle"), dict)
         else {}
     )
+    # Installation-only scope never reads host state, so the section is absent
+    # there rather than rendered as an empty value a reader would misread.
+    host_prompt_delivery = (
+        payload.get("host_prompt_delivery")
+        if isinstance(payload.get("host_prompt_delivery"), dict)
+        else None
+    )
+    host_prompt_delivery_lines: list[str] = []
+    if host_prompt_delivery:
+        stale_ticks = [
+            str(lane.get("last_observed_at"))
+            for lane in host_prompt_delivery.get("lanes") or []
+            if isinstance(lane, dict) and lane.get("window_state") == "stale"
+        ]
+        host_prompt_delivery_lines = [
+            f"- host_prompt_delivery: `{host_prompt_delivery.get('status')}`"
+            f" (reason=`{host_prompt_delivery.get('reason')}`,"
+            f" lanes=`{host_prompt_delivery.get('lane_count')}`,"
+            f" stale=`{(host_prompt_delivery.get('counts') or {}).get('stale')}`)"
+            f" last_ticks=`{','.join(stale_ticks) or 'none'}`"
+            f" labels_withheld=`{bool(host_prompt_delivery.get('labels_withheld'))}`"
+        ]
     lines = [
         "# LoopX Doctor",
         "",
@@ -1479,6 +1529,7 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
         f" (registry=`{(payload.get('runtime_projection_routes') or {}).get('registry')}`,"
         f" goals=`{(payload.get('runtime_projection_routes') or {}).get('goal_count')}`,"
         f" counts=`{json.dumps((payload.get('runtime_projection_routes') or {}).get('counts') or {}, sort_keys=True)}`)",
+        *host_prompt_delivery_lines,
         f"- decision_context_capture_hosts_healthy: `{(payload.get('decision_context_capture') or {}).get('healthy')}`"
         f" (hosts=`{(payload.get('decision_context_capture') or {}).get('host_count')}`,"
         f" unhealthy=`{(payload.get('decision_context_capture') or {}).get('unhealthy_count')}`)",
@@ -1497,6 +1548,17 @@ def render_doctor_markdown(payload: dict[str, Any]) -> str:
     for check in payload.get("checks") or []:
         required = "required" if check.get("required") else "optional"
         lines.append(f"- {check.get('id')} ({required}): `{check.get('ok')}` - {check.get('detail')}")
+    companions = payload.get("companion_distributions")
+    if isinstance(companions, list) and companions:
+        lines.extend(["", "## Companion Distributions"])
+        for item in companions:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                f"- {item.get('distribution')}: version=`{item.get('version')}`, "
+                f"core_version=`{item.get('core_version')}`, ready=`{item.get('ready')}`, "
+                f"reason=`{item.get('reason')}`"
+            )
     provenance = cast(dict[str, Any], payload.get("release_provenance")) if isinstance(payload.get("release_provenance"), dict) else {}
     if provenance:
         default_release = cast(dict[str, Any], provenance.get("default_release")) if isinstance(provenance.get("default_release"), dict) else {}

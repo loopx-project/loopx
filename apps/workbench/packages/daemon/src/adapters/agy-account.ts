@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs';
 import { cp, lstat, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startCodeLogin } from './code-login.js';
 import { configDirectory } from './session-location.js';
@@ -7,6 +9,28 @@ import type { LoginSession } from './types.js';
 export const AGY_AUTH_ENV = ['GOOGLE_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS',
   'GOOGLE_CLOUD_ACCESS_TOKEN', 'AGY_ADC_AUTH', 'AGY_ACP_ENABLE_GATEWAY_AUTH',
   'AGY_LLM_GATEWAY_URL', 'AGY_LLM_GATEWAY_PROXY_URL', 'AGY_LLM_GATEWAY_CLIENT_CERT', 'AGY_LLM_GATEWAY_CLIENT_KEY'];
+
+function resolveHostGitConfig(home: string, xdgConfig: string): string {
+  const legacy = join(home, '.gitconfig');
+  if (existsSync(legacy)) return legacy;
+  const xdg = join(xdgConfig, 'git', 'config');
+  return existsSync(xdg) ? xdg : legacy;
+}
+
+/**
+ * Antigravity isolates HOME and XDG_CONFIG_HOME per account; pin GH_CONFIG_DIR and
+ * GIT_CONFIG_GLOBAL back to the host user so `gh` and `git` keep their signed-in identity.
+ */
+export function withHostGitEnv(env: Record<string, string>, hostHome = process.env.HOME ?? homedir()): Record<string, string> {
+  if (!env.HOME && !env.XDG_CONFIG_HOME) return env;
+  if (env.GH_CONFIG_DIR && env.GIT_CONFIG_GLOBAL) return env;
+  const sameHost = hostHome === (process.env.HOME ?? homedir());
+  const xdgConfig = (sameHost && process.env.XDG_CONFIG_HOME) || join(hostHome, '.config');
+  if (env.HOME === hostHome && (!env.XDG_CONFIG_HOME || env.XDG_CONFIG_HOME === xdgConfig)) return env;
+  const ghConfigDir = env.GH_CONFIG_DIR || (sameHost ? process.env.GH_CONFIG_DIR : undefined) || join(xdgConfig, 'gh');
+  const gitConfigGlobal = env.GIT_CONFIG_GLOBAL || (sameHost ? process.env.GIT_CONFIG_GLOBAL : undefined) || resolveHostGitConfig(hostHome, xdgConfig);
+  return { ...env, GH_CONFIG_DIR: ghConfigDir, GIT_CONFIG_GLOBAL: gitConfigGlobal };
+}
 
 export async function copyAgyAccount(source: string, home: string, target: string, env: Record<string, string>): Promise<Record<string, string>> {
   const config = join(target, '.gemini', 'antigravity-cli');
@@ -43,9 +67,9 @@ export async function copyAgyAccount(source: string, home: string, target: strin
     ['colorScheme', 'useTerminalCursor', 'seasonalThemesOff', 'toolFormatterType', 'model', 'effort', 'permissions']);
   await copyJson(join(home, '.gemini', 'config', 'mcp_config.json'), join(target, '.gemini', 'config', 'mcp_config.json'), ['mcpServers']);
   // Print mode ignores LOOCHAT_AGY_HOME: native CLI and its sidecars need their own actual home.
-  return { ...env, ...Object.fromEntries(AGY_AUTH_ENV.map(key => [key, ''])), HOME: target,
+  return withHostGitEnv({ ...env, ...Object.fromEntries(AGY_AUTH_ENV.map(key => [key, ''])), HOME: target,
     XDG_CONFIG_HOME: join(target, '.config'), XDG_DATA_HOME: join(target, '.local', 'share'), XDG_CACHE_HOME: join(target, '.cache'),
-    LOOCHAT_AGY_HOME: config };
+    LOOCHAT_AGY_HOME: config }, home);
 }
 
 export function startAgyLogin(command: string[], extraEnv: Record<string, string>, onSuccess: (account?: string) => Promise<void>, timeoutMs = 10 * 60_000): LoginSession {

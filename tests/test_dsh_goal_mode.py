@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopx import dsh_goal_mode
+from loopx.hosts import dsh as dsh_goal_mode
 from loopx.cli_commands import turn_dsh_host
 from loopx.control_plane.quota.turn_envelope import (
     turn_envelope_action_signature_document,
@@ -21,7 +21,7 @@ from loopx.control_plane.turn_driver.host_failure import (
     BuiltInHostError,
     build_host_failure_record,
 )
-from loopx.dsh_goal_mode import host_failure_map, turn_host_adapter
+from loopx.hosts.dsh import host_failure_map, turn_host_adapter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPAT_LAUNCHER = REPO_ROOT / "scripts" / "dsh_turn_host_adapter.py"
@@ -314,7 +314,7 @@ def test_turn_runner_projects_only_the_resolved_operator_provider_pair(
 def test_dsh_goal_mode_is_a_first_class_subpackage() -> None:
     # The subpackage owns the adapter constants and API surface, following the
     # pi/opencode/kunluncode goal-mode packaging pattern.
-    assert dsh_goal_mode.ADAPTER_MODULE == "loopx.dsh_goal_mode"
+    assert dsh_goal_mode.ADAPTER_MODULE == "loopx.hosts.dsh"
     assert dsh_goal_mode.LOOPX_TURN_HOST_REQUEST_SCHEMA == "loopx_turn_host_request_v0"
     assert dsh_goal_mode.LOOPX_TURN_RESULT_SCHEMA == "loopx_turn_result_v0"
     assert callable(dsh_goal_mode.main)
@@ -951,14 +951,14 @@ def test_legacy_null_candidate_text_still_uses_the_existing_absent_field_behavio
 
 
 def test_adapter_runs_hermetically_through_the_module_entry() -> None:
-    # `python -m loopx.dsh_goal_mode` must drive the same stdin/stdout
+    # `python -m loopx.hosts.dsh` must drive the same stdin/stdout
     # contract as the legacy script, using a fake dsh runner.
     runner = Path(__file__).parent / "dsh_goal_mode_fake_runner.py"
     completed = subprocess.run(
         [
             sys.executable,
             "-m",
-            "loopx.dsh_goal_mode",
+            "loopx.hosts.dsh",
             "--dsh-runner",
             str(runner),
         ],
@@ -999,7 +999,7 @@ def test_module_entry_delivers_complete_signed_boundary_and_refuses_tampering(tm
         encoding="utf-8",
     )
     request = _signed_request(boundary=boundary)
-    argv = [sys.executable, "-m", "loopx.dsh_goal_mode", "--dsh-runner", str(runner)]
+    argv = [sys.executable, "-m", "loopx.hosts.dsh", "--dsh-runner", str(runner)]
     completed = subprocess.run(argv, input=json.dumps(request), text=True,
                                capture_output=True, cwd=REPO_ROOT, check=False)
     assert completed.returncode == 0, completed.stderr
@@ -1578,7 +1578,7 @@ def test_subprocess_terminal_error_keeps_the_legacy_wait_contract() -> None:
         [
             sys.executable,
             "-m",
-            "loopx.dsh_goal_mode",
+            "loopx.hosts.dsh",
             "--dsh-runner",
             str(runner),
         ],

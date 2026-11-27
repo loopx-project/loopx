@@ -290,7 +290,7 @@ def test_deepseek_harness_is_an_exact_host_type_with_external_loop_activation() 
     assert packet["activation_method"] == "external_loop_driver", packet
     assert "--runtime-profile generic_cli" in packet["commands"]["heartbeat_prompt"], packet
     assert "--host dsh" in packet["entry_command_hint"], packet
-    assert "loopx.dsh_goal_mode" in packet["entry_command_hint"], packet
+    assert "loopx.hosts.dsh" in packet["entry_command_hint"], packet
     # The historical launcher stays a documented compatibility path.
     assert "scripts/dsh_turn_host_adapter.py" in packet["entry_command_hint"], packet
 
@@ -315,7 +315,7 @@ def test_deepseek_harness_native_is_distinct_same_session_host() -> None:
     assert packet["activation_method"] == "same_session_plugin_driver"
     assert packet["host_mutation"]["host_loop_primitive"] == "exact live Agent.followup"
     assert "/loopx-init" in packet["entry_command_hint"]
-    assert "loopx.dsh_goal_mode" not in packet["entry_command_hint"]
+    assert "loopx.hosts.dsh" not in packet["entry_command_hint"]
 
     from loopx.agent_onboarding import _skill_delivery_contract
 

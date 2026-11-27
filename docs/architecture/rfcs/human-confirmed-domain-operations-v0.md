@@ -642,7 +642,7 @@ The current [`projectManagedOperationTransport`](../../../loopx/control_plane/wo
 accepts only `codex-cli`. A configured `dsh` executor can pass the existing
 runtime, credential and model-profile checks while a request for operation
 tools returns `operation_transport_host_unsupported`. The
-[`DSH Turn adapter`](../../../loopx/dsh_goal_mode/turn_host_adapter.py) runs the
+[`DSH Turn adapter`](../../../loopx/hosts/dsh/turn_host_adapter.py) runs the
 model through the SDK; it does not install the owned `loopx_operation`
 connection described above. SDK built-in tools, a successful model response,
 `unrestricted` permission mode, or a registered source thread cannot replace

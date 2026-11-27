@@ -1,25 +1,37 @@
+"""Public-safe text validators and human reward overlay recording."""
+
 from __future__ import annotations
 
-from typing import Any, cast
-
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import nullcontext
 from importlib import import_module as _import_module
-
-from .file_lock import exclusive_cross_runtime_file_lock
-
-import re
-from datetime import datetime, timezone
 from pathlib import Path
+import re
 
-from .control_plane.runtime.time import chronology_key
-from .paths import resolve_runtime_root
-from .public_safe_text import (
-    PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS,
-    TEXT_OWNER_CATEGORIES,
-    classify_private_text,
-)
-from .registry import registry_goals, resolve_state_file
 from .control_plane.actor_identity import normalize_owner_controller_actor
+from .control_plane.runtime.reward_rendering import (
+    LESSON_KINDS as LESSON_KINDS,
+    REWARD_VALUES as REWARD_VALUES,
+    _compact_reward_lesson_scope_value as _compact_reward_lesson_scope_value,
+    build_active_state_entry as build_active_state_entry,
+    build_reward_coordination as build_reward_coordination,
+    compact_reward as compact_reward,
+    compact_reward_lesson as compact_reward_lesson,
+    describe_active_state_effect as describe_active_state_effect,
+    describe_run_overlay_effect as describe_run_overlay_effect,
+    insert_progress_ledger_entry as insert_progress_ledger_entry,
+    now_local as now_local,
+    now_utc as now_utc,
+    public_safe_text_guidance as public_safe_text_guidance,
+    render_reward_markdown as render_reward_markdown,
+    update_frontmatter_timestamp as update_frontmatter_timestamp,
+    validate_public_safe_text as validate_public_safe_text,
+)
+from .control_plane.runtime.time import chronology_key
+from .file_lock import exclusive_cross_runtime_file_lock
+from .paths import resolve_runtime_root
+from .public_safe_text import PRIVATE_TEXT_PATTERNS as SHARED_PRIVATE_TEXT_PATTERNS
+from .registry import registry_goals, resolve_state_file
 
 
 _MUTATION_ADAPTERS = {
@@ -34,11 +46,11 @@ _LAZY_IMPORTS = {
 }
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     owner = _LAZY_IMPORTS.get(name)
     if owner is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(_import_module(owner), name)
+    value: object = getattr(_import_module(owner), name)
     globals()[name] = value
     return value
 
@@ -47,9 +59,16 @@ def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_LAZY_IMPORTS))
 
 
-def _mutation_adapter(name: str) -> Any:
+def _mutation_adapter(name: str) -> object:
     # Preserve the released module-level patch points and original objects.
     return globals()[name] if name in globals() else __getattr__(name)
+
+
+def _callable_adapter(name: str) -> Callable[..., object]:
+    adapter = _mutation_adapter(name)
+    if not callable(adapter):
+        raise TypeError(f"feedback adapter {name!r} must be callable")
+    return adapter
 
 
 GOAL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -69,14 +88,6 @@ def validate_goal_id(goal_id: str) -> str:
     return goal_id
 
 
-REWARD_VALUES = {"positive", "negative", "mixed", "neutral"}
-LESSON_KINDS = {
-    "route",
-    "priority",
-    "benchmark_protocol",
-    "safety_boundary",
-    "operating_rule",
-}
 # Owned by loopx.public_safe_text so every real validator owner shares one
 # contract; re-exported here because callers already import this name.
 PRIVATE_TEXT_PATTERNS = SHARED_PRIVATE_TEXT_PATTERNS
@@ -120,48 +131,6 @@ RUN_OVERLAY_FIELDS = (
 )
 
 
-def public_safe_text_guidance(label: str) -> str:
-    normalized = label.lower().replace("-", "_")
-    if "next_action" in normalized or "recommended_action" in normalized:
-        return (
-            "this field is usually local-control state; use validate_local_control_text "
-            "for private project routing, or a public-safe alias only on exported surfaces"
-        )
-    if "todo" in normalized:
-        return (
-            "use a compact public-safe todo alias or summary here; keep raw local "
-            "paths, private URLs, task bodies, and logs in evidence/private payloads"
-        )
-    if "evidence" in normalized:
-        return (
-            "use a compact public-safe evidence pointer here; keep raw logs, local "
-            "paths, and private URLs in private payloads"
-        )
-    return (
-        "use a public-safe summary or alias here; keep raw local paths, private "
-        "URLs, and raw evidence in private payloads"
-    )
-
-
-def now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def now_local() -> str:
-    return datetime.now(timezone.utc).astimezone().replace(microsecond=0).isoformat()
-
-
-def validate_public_safe_text(label: str, value: str | None) -> None:
-    # The named policy, not a bare pattern sweep: this is LoopX's own state, so a
-    # mention of "Bearer"/"password"/"secret" is a fact about a credential, not
-    # one. Value and assignment shapes stay rejected (Refs #5136, direction 2).
-    if classify_private_text(value, categories=TEXT_OWNER_CATEGORIES) is not None:
-        raise ValueError(
-            f"{label} contains a private-looking value; "
-            + public_safe_text_guidance(label)
-        )
-
-
 def validate_local_control_text(label: str, value: str | None) -> None:
     """Validate text for local control-plane state, not public export.
 
@@ -180,95 +149,50 @@ def validate_local_control_text(label: str, value: str | None) -> None:
             )
 
 
-def compact_reward(
-    *,
-    recorded_at: str | None,
-    decision: str,
-    reward: str,
-    reason_summary: str,
-    follow_up: str | None,
-    lesson: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    if reward not in REWARD_VALUES:
-        raise ValueError(f"reward must be one of: {', '.join(sorted(REWARD_VALUES))}")
-    validate_public_safe_text("decision", decision)
-    validate_public_safe_text("reason_summary", reason_summary)
-    validate_public_safe_text("follow_up", follow_up)
-    payload: dict[str, Any] = {
-        "recorded_at": recorded_at or now_utc(),
-        "decision": decision,
-        "reward": reward,
-        "reason_summary": reason_summary,
-    }
-    if follow_up:
-        payload["follow_up"] = follow_up
-    if lesson:
-        payload["lesson"] = compact_reward_lesson(lesson)
-    return payload
-
-
-def compact_reward_lesson(lesson: dict[str, Any]) -> dict[str, Any]:
-    kind = str(lesson.get("kind") or "").strip()
-    summary = str(lesson.get("summary") or "").strip()
-    if kind not in LESSON_KINDS:
-        raise ValueError(f"lesson kind must be one of: {', '.join(sorted(LESSON_KINDS))}")
-    if not summary:
-        raise ValueError("lesson summary is required when lesson metadata is provided")
-    validate_public_safe_text("lesson summary", summary)
-    payload: dict[str, Any] = {
-        "schema_version": "human_reward_lesson_v0",
-        "kind": kind,
-        "summary": summary,
-    }
-    for field in ("avoid", "prefer"):
-        raw_items = lesson.get(field) or []
-        if isinstance(raw_items, str):
-            raw_items = [raw_items]
-        items: list[str] = []
-        for raw_item in raw_items:
-            item = str(raw_item or "").strip()
-            if not item:
-                continue
-            validate_public_safe_text(f"lesson {field}", item)
-            if item not in items:
-                items.append(item)
-        if items:
-            payload[field] = items[:5]
-    return payload
-
-
-def select_run(runs: list[dict[str, Any]], run_generated_at: str | None) -> dict[str, Any]:
+def select_run(
+    runs: Sequence[Mapping[str, object]],
+    run_generated_at: str | None,
+) -> dict[str, object]:
+    """Select the requested run or latest chronological run from compacted history."""
     if not runs:
         raise ValueError("no compact run records found for goal")
     if run_generated_at:
         for run in runs:
             if str(run.get("generated_at") or "") == run_generated_at:
-                return run
+                return run if isinstance(run, dict) else dict(run)
         raise ValueError(f"run not found for generated_at={run_generated_at}")
-    return max(
+    selected = max(
         enumerate(runs),
         key=lambda item: (
             *chronology_key(item[1].get("generated_at")),
             item[0],
         ),
     )[1]
+    return selected if isinstance(selected, dict) else dict(selected)
 
 
-def find_registry_goal(registry: dict[str, Any], goal_id: str) -> dict[str, Any] | None:
-    for goal in registry_goals(registry):
+def find_registry_goal(
+    registry: Mapping[str, object],
+    goal_id: str,
+) -> dict[str, object] | None:
+    """Return the matching goal entry from a registry mapping when registered."""
+    normalized = registry if isinstance(registry, dict) else dict(registry)
+    for goal in registry_goals(normalized):
         if str(goal.get("id") or "") == goal_id:
-            return goal
+            return dict(goal)
     return None
 
 
 def resolve_reward_state_file(
     *,
-    registry: dict[str, Any],
+    registry: Mapping[str, object],
     goal_id: str,
     state_file_override: Path | None,
 ) -> Path | None:
+    """Resolve the active-state file path for optional reward summary writeback."""
     goal = find_registry_goal(registry, goal_id)
-    repo = Path(str(goal.get("repo") or "")).expanduser() if goal and goal.get("repo") else None
+    raw_repo = goal.get("repo") if goal else None
+    repo = Path(str(raw_repo)).expanduser() if raw_repo else None
     if state_file_override:
         state_file = state_file_override.expanduser()
         if state_file.is_absolute():
@@ -276,112 +200,26 @@ def resolve_reward_state_file(
         return (repo or Path.cwd()) / state_file
     if not goal or not repo:
         return None
-    return resolve_state_file(repo, goal.get("state_file"))
-
-
-def build_reward_coordination(
-    *,
-    goal_id: str,
-    selected_run: dict[str, Any],
-    reward: dict[str, Any],
-    dry_run: bool,
-) -> dict[str, Any]:
-    run_generated_at = str(selected_run.get("generated_at") or "unknown-run")
-    reward_value = str(reward.get("reward") or "unknown")
-    decision = str(reward.get("decision") or "unknown_decision")
-    verb = "dry-run：将记录" if dry_run else "已记录"
-    reason_summary = reward.get("reason_summary")
-    summary = (
-        f"{verb}目标 `{goal_id}` 的 run `{run_generated_at}` "
-        f"human_reward={reward_value}，decision=`{decision}`。"
-        "权威来源是 run-bound `human_reward` overlay；"
-        "active state 只摘要这个指针和下一步。"
+    raw_state_file = goal.get("state_file")
+    return resolve_state_file(
+        repo,
+        raw_state_file if isinstance(raw_state_file, str) else None,
     )
-    if reason_summary:
-        summary = f"{summary} reason_summary：{reason_summary}"
-    follow_up = reward.get("follow_up")
-    if follow_up:
-        summary = f"{summary} follow_up：{follow_up}"
-    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
-    if lesson:
-        summary = (
-            f"{summary} lesson[{lesson.get('kind')}]: "
-            f"{lesson.get('summary')}"
-        )
-    visibility = {
-        "source_of_truth": "run_bound_human_reward_overlay",
-        "history_command": f"loopx history --goal-id {goal_id} --limit 3",
-        "active_state_role": "summary_only",
-        "review_packet_role": "optional_handoff_only",
-    }
-    if lesson:
-        visibility["lesson_role"] = "route_warning_only_not_write_control"
-    return {
-        "active_state_summary": summary,
-        "project_agent_visibility": visibility,
-    }
-
-
-def build_active_state_entry(
-    *,
-    reward: dict[str, Any],
-    active_state_summary: str,
-    project_agent_visibility: dict[str, Any],
-) -> str:
-    recorded_at = str(reward.get("recorded_at") or now_local())
-    history_command = project_agent_visibility.get("history_command")
-    lines = [f"- {recorded_at}: {active_state_summary}"]
-    if history_command:
-        lines.append(f"  - project_agent_visibility: `{history_command}`")
-    return "\n".join(lines)
-
-
-def update_frontmatter_timestamp(text: str, updated_at: str) -> str:
-    if not text.startswith("---\n"):
-        return text
-    end = text.find("\n---", 4)
-    if end < 0:
-        return text
-    frontmatter = text[:end]
-    body = text[end:]
-    if re.search(r"^updated_at:\s*.*$", frontmatter, flags=re.M):
-        frontmatter = re.sub(r"^updated_at:\s*.*$", f"updated_at: {updated_at}", frontmatter, flags=re.M)
-    else:
-        frontmatter = f"{frontmatter}\nupdated_at: {updated_at}"
-    return frontmatter + body
-
-
-def insert_progress_ledger_entry(text: str, entry: str, updated_at: str) -> tuple[str, bool]:
-    text = update_frontmatter_timestamp(text, updated_at)
-    if entry in text:
-        return text, False
-
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if line.strip() != "## Progress Ledger":
-            continue
-        insert_at = index + 1
-        while insert_at < len(lines) and not lines[insert_at].strip():
-            insert_at += 1
-        lines[insert_at:insert_at] = entry.splitlines() + [""]
-        return "\n".join(lines).rstrip() + "\n", True
-
-    separator = "" if text.endswith("\n") else "\n"
-    return f"{text}{separator}\n## Progress Ledger\n\n{entry}\n", True
 
 
 def plan_active_state_update(
     *,
-    registry: dict[str, Any],
+    registry: Mapping[str, object],
     goal_id: str,
     state_file_override: Path | None,
     active_state_summary: str,
-    project_agent_visibility: dict[str, Any],
-    reward: dict[str, Any],
+    project_agent_visibility: Mapping[str, object],
+    reward: Mapping[str, object],
     requested: bool,
     dry_run: bool,
-) -> tuple[dict[str, Any], Path | None, str | None]:
-    update: dict[str, Any] = {
+) -> tuple[dict[str, object], Path | None, str | None]:
+    """Plan optional Progress Ledger writeback without bypassing prose-write guards."""
+    update: dict[str, object] = {
         "requested": requested,
         "written": False,
         "would_write": False,
@@ -395,7 +233,9 @@ def plan_active_state_update(
         state_file_override=state_file_override,
     )
     if state_file is None:
-        raise ValueError("active state summary write requested, but the registry goal has no state_file")
+        raise ValueError(
+            "active state summary write requested, but the registry goal has no state_file"
+        )
     if not state_file.exists():
         raise FileNotFoundError(f"active state file does not exist: {state_file}")
 
@@ -429,53 +269,106 @@ class HumanRewardSummaryWriteError(RuntimeError):
     payload = {"appended": True, "active_state_summary_written": False}
 
 
+def _select_reward_run(
+    index_path: Path,
+    run_generated_at: str | None,
+) -> tuple[dict[str, object], int]:
+    """Select one target run without stat'ing unselected historical artifacts."""
+    history_mod = _import_module("loopx.history")
+    patched_loader = globals().get("load_index")
+    original_loader: object = getattr(history_mod, "load_index", None)
+    observe_selected = False
+    if patched_loader is not None and patched_loader is not original_loader:
+        if not callable(patched_loader):
+            raise TypeError("feedback adapter 'load_index' must be callable")
+        loaded = patched_loader(index_path)
+        if not isinstance(loaded, tuple) or len(loaded) != 2:
+            raise ValueError("load_index adapter must return (runs, raw_count)")
+        raw_runs, raw_count_obj = loaded
+        if not isinstance(raw_runs, Sequence) or isinstance(raw_runs, (str, bytes)):
+            raise ValueError("load_index returned invalid runs")
+        runs: Sequence[Mapping[str, object]] = [
+            row for row in raw_runs if isinstance(row, Mapping)
+        ]
+        raw_count = int(raw_count_obj)
+    else:
+        snapshot_loader: object = getattr(history_mod, "load_index_snapshot", None)
+        if not callable(snapshot_loader):
+            raise AttributeError("loopx.history has no callable 'load_index_snapshot'")
+        snapshot = snapshot_loader(index_path, include_artifact_status=False)
+        raw_records: object = getattr(snapshot, "records", ())
+        if not isinstance(raw_records, Sequence) or isinstance(raw_records, (str, bytes)):
+            raise ValueError("load_index_snapshot returned invalid records")
+        runs = [row for row in raw_records if isinstance(row, Mapping)]
+        raw_count = int(getattr(snapshot, "raw_count", 0))
+        observe_selected = True
+
+    selected = select_run(runs, run_generated_at)
+    missing_paths = [
+        field for field in ("json_path", "markdown_path") if not selected.get(field)
+    ]
+    if missing_paths:
+        raise ValueError(
+            f"selected run is missing required index path fields: {', '.join(missing_paths)}"
+        )
+
+    if observe_selected:
+        context_fn: object = getattr(history_mod, "_goal_run_index_context", None)
+        observe_fn: object = getattr(history_mod, "_observe_run_artifacts", None)
+        inferred = context_fn(index_path) if callable(context_fn) else None
+        if callable(observe_fn):
+            runs_dir = inferred[0] if isinstance(inferred, tuple) and len(inferred) >= 1 else None
+            goal_id = inferred[1] if isinstance(inferred, tuple) and len(inferred) >= 2 else None
+            observe_fn(
+                [selected],
+                artifact_root=None,
+                runs_dir=runs_dir,
+                goal_id=goal_id,
+            )
+    return selected, raw_count
+
+
 def append_human_reward(
     *,
     registry_path: Path,
     runtime_root_override: str | None,
     goal_id: str,
     run_generated_at: str | None,
-    reward: dict[str, Any],
+    reward: Mapping[str, object],
     actor_kind: str | None = None,
     dry_run: bool = False,
     state_file_override: Path | None = None,
     write_active_state_summary: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
+    """Validate and append one run-bound human reward overlay (with optional dry-run)."""
     # Resolve before registry reads or any append. An unavailable adapter must
     # fail before the reward index can commit; TS still owns the write check.
-    _mutation_adapter("require_prose_state_write_allowed")
-    _mutation_adapter("atomic_write_state_text")
+    _callable_adapter("require_prose_state_write_allowed")
+    _callable_adapter("atomic_write_state_text")
     actor = normalize_owner_controller_actor(actor_kind, required=not dry_run)
     validate_goal_id(goal_id)
-    registry = _mutation_adapter("load_registry")(registry_path)
-    runtime_root = resolve_runtime_root(registry, runtime_root_override, registry_path=registry_path)
+    raw_registry = _callable_adapter("load_registry")(registry_path)
+    if not isinstance(raw_registry, Mapping):
+        raise ValueError("registry payload must be an object")
+    registry = raw_registry if isinstance(raw_registry, dict) else dict(raw_registry)
+    runtime_root = resolve_runtime_root(
+        registry, runtime_root_override, registry_path=registry_path
+    )
     index_path = runtime_root / "goals" / goal_id / "runs" / "index.jsonl"
-    runs, raw_count = _mutation_adapter("load_index")(index_path)
-    selected = select_run(runs, run_generated_at)
+    selected, raw_count = _select_reward_run(index_path, run_generated_at)
 
-    missing_paths = [
-        field
-        for field in ("json_path", "markdown_path")
-        if not selected.get(field)
-    ]
-    if missing_paths:
-        raise ValueError(f"selected run is missing required index path fields: {', '.join(missing_paths)}")
-
-    index_record = {
-        field: selected[field]
-        for field in RUN_OVERLAY_FIELDS
-        if field in selected
+    index_record: dict[str, object] = {
+        field: selected[field] for field in RUN_OVERLAY_FIELDS if field in selected
     }
     index_record["goal_id"] = str(index_record.get("goal_id") or goal_id)
-    index_record["human_reward"] = {
-        field: reward[field]
-        for field in HUMAN_REWARD_FIELDS
-        if field in reward
+    human_reward: dict[str, object] = {
+        field: reward[field] for field in HUMAN_REWARD_FIELDS if field in reward
     }
     if actor is not None:
-        index_record["human_reward"]["actor_kind"] = actor.value
+        human_reward["actor_kind"] = actor.value
+    index_record["human_reward"] = human_reward
 
-    selected_run = {
+    selected_run: dict[str, object] = {
         "generated_at": selected.get("generated_at"),
         "classification": selected.get("classification"),
         "recommended_action": selected.get("recommended_action"),
@@ -485,49 +378,61 @@ def append_human_reward(
     coordination = build_reward_coordination(
         goal_id=goal_id,
         selected_run=selected_run,
-        reward=index_record["human_reward"],
+        reward=human_reward,
         dry_run=dry_run,
     )
-    project_agent_visibility = (
-        cast(dict[str, Any], coordination.get("project_agent_visibility"))
-        if isinstance(coordination.get("project_agent_visibility"), dict)
-        else {}
+    raw_visibility = coordination.get("project_agent_visibility")
+    project_agent_visibility: Mapping[str, object] = (
+        raw_visibility if isinstance(raw_visibility, Mapping) else {}
     )
-    active_state_update, state_file_to_write, state_text_to_write = plan_active_state_update(
-        registry=registry,
-        goal_id=goal_id,
-        state_file_override=state_file_override,
-        active_state_summary=str(coordination.get("active_state_summary") or ""),
-        project_agent_visibility=project_agent_visibility,
-        reward=index_record["human_reward"],
-        requested=write_active_state_summary,
-        dry_run=dry_run,
+    active_state_update, state_file_to_write, state_text_to_write = (
+        plan_active_state_update(
+            registry=registry,
+            goal_id=goal_id,
+            state_file_override=state_file_override,
+            active_state_summary=str(coordination.get("active_state_summary") or ""),
+            project_agent_visibility=project_agent_visibility,
+            reward=human_reward,
+            requested=write_active_state_summary,
+            dry_run=dry_run,
+        )
     )
 
     if not dry_run:
         state_lock = (
-            exclusive_cross_runtime_file_lock(state_file_to_write, operation="reward_summary")
-            if state_file_to_write is not None else nullcontext()
+            exclusive_cross_runtime_file_lock(
+                state_file_to_write, operation="reward_summary"
+            )
+            if state_file_to_write is not None
+            else nullcontext()
         )
         # Match refresh/history: index first, then the source state lock.
         from .file_lock import exclusive_run_index_lock
+
         with exclusive_run_index_lock(index_path, operation="reward_append"), state_lock:
             if state_file_to_write is not None:
                 original = state_file_to_write.read_text(encoding="utf-8")
                 planned, changed = insert_progress_ledger_entry(
-                    original, str(active_state_update["entry"]),
-                    updated_at=str(reward.get("recorded_at") or now_local()),
+                    original,
+                    str(active_state_update["entry"]),
+                    updated_at=str(human_reward.get("recorded_at") or now_local()),
                 )
-                _mutation_adapter("require_prose_state_write_allowed")(
-                    registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id,
-                    state_path=state_file_to_write, original_text=original, planned_text=planned,
+                _callable_adapter("require_prose_state_write_allowed")(
+                    registry_path=registry_path,
+                    runtime_root=runtime_root,
+                    goal_id=goal_id,
+                    state_path=state_file_to_write,
+                    original_text=original,
+                    planned_text=planned,
                 )
                 state_text_to_write = planned if changed else None
             index_path.parent.mkdir(parents=True, exist_ok=True)
-            _mutation_adapter("append_run_index_record")(index_path, index_record)
+            _callable_adapter("append_run_index_record")(index_path, index_record)
             if state_file_to_write and state_text_to_write is not None:
                 try:
-                    _mutation_adapter("atomic_write_state_text")(state_file_to_write, state_text_to_write)
+                    _callable_adapter("atomic_write_state_text")(
+                        state_file_to_write, state_text_to_write
+                    )
                 except OSError as error:
                     raise HumanRewardSummaryWriteError(str(error)) from error
                 active_state_update["written"] = True
@@ -542,118 +447,13 @@ def append_human_reward(
         "raw_index_records_before": raw_count,
         "dry_run": dry_run,
         "selected_run": selected_run,
-        "human_reward": index_record["human_reward"],
+        "human_reward": human_reward,
         "actor_kind": actor.value if actor is not None else None,
         **coordination,
         "active_state_update": active_state_update,
         "index_record": index_record,
         "appended": not dry_run,
     }
-
-
-def describe_active_state_effect(state_update: dict[str, Any], *, dry_run: bool) -> str:
-    if not state_update or not state_update.get("requested"):
-        return "未请求 active-state 摘要写回"
-    state_file = state_update.get("state_file") or "unknown state file"
-    if state_update.get("already_present"):
-        return f"摘要已存在，未重复写入 `{state_file}`"
-    if dry_run and state_update.get("would_write"):
-        return f"预览：会把摘要写入 `{state_file}` 的 Progress Ledger"
-    if state_update.get("written"):
-        return f"已把摘要写入 `{state_file}` 的 Progress Ledger"
-    return f"未写入 active state；检查 `{state_file}`"
-
-
-def describe_run_overlay_effect(*, appended: bool, dry_run: bool, index_path: str | None) -> str:
-    target = f"`{index_path}`" if index_path else "run index"
-    if dry_run:
-        return f"预览：不会写 {target}"
-    if appended:
-        return f"已追加 human_reward overlay 到 {target}"
-    return f"未写 {target}"
-
-
-def render_reward_markdown(payload: dict[str, Any]) -> str:
-    lines = [
-        "# LoopX Human Reward",
-        "",
-        f"- ok: `{payload.get('ok')}`",
-        f"- goal: `{payload.get('goal_id')}`",
-        f"- index: `{payload.get('index_path')}`",
-        f"- appended: `{payload.get('appended')}`",
-        f"- dry_run: `{payload.get('dry_run')}`",
-    ]
-    if payload.get("error"):
-        lines.append(f"- error: {payload.get('error')}")
-        return "\n".join(lines)
-
-    selected = cast(dict[str, Any], payload.get("selected_run")) if isinstance(payload.get("selected_run"), dict) else {}
-    reward = cast(dict[str, Any], payload.get("human_reward")) if isinstance(payload.get("human_reward"), dict) else {}
-    state_update = cast(dict[str, Any], payload.get("active_state_update")) if isinstance(payload.get("active_state_update"), dict) else {}
-    visibility = cast(dict[str, Any], payload.get("project_agent_visibility")) if isinstance(payload.get("project_agent_visibility"), dict) else {}
-    lines.extend(
-        [
-            "",
-            "## Write Effect",
-            f"- selected_run: `{selected.get('generated_at')}`",
-            f"- run_overlay: {describe_run_overlay_effect(appended=bool(payload.get('appended')), dry_run=bool(payload.get('dry_run')), index_path=payload.get('index_path'))}",
-            f"- active_state: {describe_active_state_effect(state_update, dry_run=bool(payload.get('dry_run')))}",
-        ]
-    )
-    if visibility.get("history_command"):
-        lines.append(f"- project_agent_visibility: `{visibility.get('history_command')}`")
-    lines.extend(
-        [
-            "",
-            "## Selected Run",
-            f"- generated_at: `{selected.get('generated_at')}`",
-            f"- classification: `{selected.get('classification')}`",
-            f"- artifacts: `{selected.get('json_exists')}/{selected.get('markdown_exists')}`",
-            "",
-            "## Reward",
-            f"- recorded_at: `{reward.get('recorded_at')}`",
-            f"- actor_kind: `{reward.get('actor_kind')}`",
-            f"- decision: `{reward.get('decision')}`",
-            f"- reward: `{reward.get('reward')}`",
-            f"- reason_summary: {reward.get('reason_summary')}",
-        ]
-    )
-    if reward.get("follow_up"):
-        lines.append(f"- follow_up: {reward.get('follow_up')}")
-    lesson = cast(dict[str, Any], reward.get("lesson")) if isinstance(reward.get("lesson"), dict) else {}
-    if lesson:
-        lines.append(f"- lesson_kind: `{lesson.get('kind')}`")
-        lines.append(f"- lesson_summary: {lesson.get('summary')}")
-        for field in ("avoid", "prefer"):
-            values = cast(list[Any], lesson.get(field)) if isinstance(lesson.get(field), list) else []
-            if values:
-                lines.append(f"- lesson_{field}: {', '.join(str(value) for value in values[:5])}")
-    if payload.get("active_state_summary"):
-        lines.extend(["", "## Active-State Summary", str(payload.get("active_state_summary"))])
-    if state_update:
-        lines.extend(
-            [
-                "",
-                "## Active-State Writeback",
-                f"- requested: `{state_update.get('requested')}`",
-                f"- state_file: `{state_update.get('state_file')}`",
-                f"- would_write: `{state_update.get('would_write')}`",
-                f"- written: `{state_update.get('written')}`",
-                f"- already_present: `{state_update.get('already_present')}`",
-            ]
-        )
-    if visibility:
-        lines.extend(
-            [
-                "",
-                "## Project-Agent Visibility",
-                f"- source_of_truth: `{visibility.get('source_of_truth')}`",
-                f"- history_command: `{visibility.get('history_command')}`",
-                f"- active_state_role: `{visibility.get('active_state_role')}`",
-                f"- review_packet_role: `{visibility.get('review_packet_role')}`",
-            ]
-        )
-    return "\n".join(lines)
 
 
 # Keep the historical star-import surface, including the deferred adapters.

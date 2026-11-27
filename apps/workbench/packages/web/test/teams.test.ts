@@ -23,8 +23,9 @@ test('team recipients and team API use the dedicated dispatch route with web sou
   await api.importTeam(team); await api.exportTeam('1'); await api.deleteTeam('1');
   await api.dispatchTeam('1', 'Build', '/project');
   assert.deepEqual(requests.map(r => r.slice(0, 2)), [['GET', '/api/teams'], ['GET', '/api/teams/1'], ['GET', '/api/teams/template'], ['POST', '/api/teams'], ['PUT', '/api/teams/1'], ['POST', '/api/teams/import'], ['GET', '/api/teams/1/export'], ['DELETE', '/api/teams/1'], ['POST', '/api/teams/1/tasks']]);
-  assert.deepEqual(requests.at(-1)[2], { text: 'Build', cwd: '/project', source: { kind: 'web' } });
+  // The dispatch route always names its attachments, so a send without references says so explicitly.
+  assert.deepEqual(requests.at(-1)[2], { text: 'Build', cwd: '/project', references: [], source: { kind: 'web' } });
   const images = [{ mimeType: 'image/png', data: 'aGVsbG8=' }];
   await api.dispatchTeam('1', '', '/project', images);
-  assert.deepEqual(requests.at(-1), ['POST', '/api/teams/1/tasks', { text: '', images, cwd: '/project', source: { kind: 'web' } }]);
+  assert.deepEqual(requests.at(-1), ['POST', '/api/teams/1/tasks', { text: '', images, references: [], cwd: '/project', source: { kind: 'web' } }]);
 });
