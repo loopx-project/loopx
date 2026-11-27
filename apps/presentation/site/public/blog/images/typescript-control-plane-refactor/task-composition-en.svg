@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="640" viewBox="0 0 1100 640" role="img" aria-labelledby="t d">
-  <title id="t">Long-horizon task primitives compose over one kernel</title>
-  <desc id="d">Per-target conditional continuation, non-blocking background observation, and self-consistent replanning compose over a single TypeScript task state kernel backed by AuthorityStore and an append-only execution journal.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="820" viewBox="0 0 1100 820" role="img" aria-labelledby="t d">
+  <title id="t">Orthogonal Task Primitives Composing Over One TypeScript Effect Kernel</title>
+  <desc id="d">Six orthogonal primitive domains—User Gate × Fallback, Lineage × Successor, Acceptance × Cadence, Scoped Resume × Lease, Background Monitor, and Vision × Replan—compose as product state machines over one TypeScript Effect and Task Semantics Kernel backed by AuthorityStore and an append-only execution journal.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
       <path d="M0 0 L10 5 L0 10 Z" fill="#0070f3"/>
@@ -15,65 +15,94 @@
     .on-dark-sub { fill: #e5e5e5; }
     .on-dark-sky { fill: #93c5fd; }
     .mono { font-family: "Geist Mono", "SFMono-Regular", monospace; }
+    .tag { font-family: "Geist Mono", "SFMono-Regular", monospace; fill: #0070f3; letter-spacing: -0.15px; }
+    .tray { fill: #f3f6fb; stroke: #dbeafe; stroke-width: 1.2; }
     .box { fill: #fff; stroke: #d5d5d5; stroke-width: 1.2; }
     .box-hi { fill: #f3f8ff; stroke: #93c5fd; stroke-width: 1.4; }
     .kernel { fill: #171717; stroke: #171717; }
     .flow { fill: none; stroke: #0070f3; stroke-width: 1.8; marker-end: url(#arrow); }
   </style>
 
-  <text x="42" y="52" font-size="29" font-weight="600">Long-horizon task primitives compose over one kernel</text>
-  <text x="42" y="86" font-size="17" class="sub">Per-target wakeups, isolated background watches, and lineage replans share atomic revisions and leases</text>
+  <text x="42" y="50" font-size="25" font-weight="600">Orthogonal Task Primitives Composing Over One TypeScript Effect Kernel</text>
+  <text x="42" y="82" font-size="15.5" class="sub">Product state machines (×) preserve non-collapsible commit truths without static-DAG locks or cross-turn deadlocks</text>
 
-  <!-- Primitive 1: conditional wakeup & continuation -->
-  <rect class="box" x="42" y="114" width="320" height="160" rx="12"/>
-  <text x="62" y="144" font-size="12" font-weight="500" class="mono blue">WAKEUP · #4094 #6874 #8231 #9488</text>
-  <text x="62" y="174" font-size="18.5" font-weight="600">Per-target continuation</text>
-  <text x="62" y="203" font-size="14.5" class="sub">Full-graph readiness read (#6874)</text>
-  <text x="62" y="228" font-size="14.5" class="sub">Per-target wakeups, &lt;=128 (#8231)</text>
-  <text x="62" y="253" font-size="14.5" class="sub">Cross-lease continuation (#9488)</text>
+  <!-- 2x3 Orthogonal Primitive Domains Tray -->
+  <rect class="tray" x="30" y="100" width="1040" height="364" rx="16"/>
 
-  <!-- Primitive 2: background observation -->
+  <!-- Card 1: User Gate × Fallback (Centerpiece) -->
+  <rect class="box-hi" x="42" y="114" width="320" height="160" rx="12"/>
+  <text x="56" y="142" font-size="10.1" font-weight="500" class="tag">USER GATE × FALLBACK · #4292 #5277 #6327 #8844</text>
+  <text x="56" y="170" font-size="17.5" font-weight="600">Scoped gate × dual channels</text>
+  <text x="56" y="198" font-size="13.8" class="sub">Typed decision-scope gates (#4292)</text>
+  <text x="56" y="223" font-size="13.8" class="sub">0-spend ask + scoped fallback (#6327)</text>
+  <text x="56" y="248" font-size="13.8" class="sub">Consume covered scopes only (#8844)</text>
+
+  <!-- Card 2: Lineage × Successor -->
   <rect class="box" x="390" y="114" width="320" height="160" rx="12"/>
-  <text x="410" y="144" font-size="12" font-weight="500" class="mono blue">MONITOR · #4178 #4335 #5450 #9320</text>
-  <text x="410" y="174" font-size="18.5" font-weight="600">Non-blocking observation</text>
-  <text x="410" y="203" font-size="14.5" class="sub">Edits keep done watches off (#4178)</text>
-  <text x="410" y="228" font-size="14.5" class="sub">Quiet vs. bound receipts (#5450)</text>
-  <text x="410" y="253" font-size="14.5" class="sub">Isolated watch sessions (#9320)</text>
+  <text x="404" y="142" font-size="10.1" font-weight="500" class="tag">LINEAGE × SUCCESSOR · #4184 #5698 #5831 #8896</text>
+  <text x="404" y="170" font-size="17.5" font-weight="600">Dynamic lineage × successor</text>
+  <text x="404" y="198" font-size="13.8" class="sub">Atomic supersede + lease drop (#5698)</text>
+  <text x="404" y="223" font-size="13.8" class="sub">Mandatory successor replan (#5831)</text>
+  <text x="404" y="248" font-size="13.8" class="sub">Compensating rollback history (#4184)</text>
 
-  <!-- Primitive 3: lineage-preserving replan -->
+  <!-- Card 3: Acceptance × Cadence -->
   <rect class="box" x="738" y="114" width="320" height="160" rx="12"/>
-  <text x="758" y="144" font-size="12" font-weight="500" class="mono blue">REPLAN · #4902 #5698 #8588 #8854</text>
-  <text x="758" y="174" font-size="18.5" font-weight="600">Self-consistent replanning</text>
-  <text x="758" y="203" font-size="14.5" class="sub">Atomic swap + lease release (#5698)</text>
-  <text x="758" y="228" font-size="14.5" class="sub">Keep trigger on watch exit (#8854)</text>
-  <text x="758" y="253" font-size="14.5" class="sub">Settle turn before stop (#8588)</text>
+  <text x="752" y="142" font-size="10.1" font-weight="500" class="tag">ACCEPTANCE × CADENCE · #3058 #6357 #6784 #9165</text>
+  <text x="752" y="170" font-size="17.5" font-weight="600">Acceptance × adaptive cadence</text>
+  <text x="752" y="198" font-size="13.8" class="sub">External acceptance oracles (#6784)</text>
+  <text x="752" y="223" font-size="13.8" class="sub">Live edits &amp; Yardstick guard (#9165)</text>
+  <text x="752" y="248" font-size="13.8" class="sub">8-tier backoff &amp; reset token (#6787)</text>
+
+  <!-- Card 4: Scoped Resume × Lease -->
+  <rect class="box" x="42" y="290" width="320" height="160" rx="12"/>
+  <text x="56" y="318" font-size="10.1" font-weight="500" class="tag">SCOPED RESUME × LEASE · #4094 #6874 #8231 #9488</text>
+  <text x="56" y="346" font-size="17.5" font-weight="600">Per-target resume × lease</text>
+  <text x="56" y="374" font-size="13.8" class="sub">Atomic full-graph readiness (#6874)</text>
+  <text x="56" y="399" font-size="13.8" class="sub">Per-target wakes, &lt;=128 cap (#8231)</text>
+  <text x="56" y="424" font-size="13.8" class="sub">Fenced same-Agent takeover (#9488)</text>
+
+  <!-- Card 5: Background Monitor -->
+  <rect class="box" x="390" y="290" width="320" height="160" rx="12"/>
+  <text x="404" y="318" font-size="10.1" font-weight="500" class="tag">BACKGROUND MONITOR · #4178 #4335 #5450 #9320</text>
+  <text x="404" y="346" font-size="17.5" font-weight="600">Isolated background monitor</text>
+  <text x="404" y="374" font-size="13.8" class="sub">Edits keep done watches off (#4178)</text>
+  <text x="404" y="399" font-size="13.8" class="sub">Quiet vs. bound poll receipts (#5450)</text>
+  <text x="404" y="424" font-size="13.8" class="sub">No-LLM isolated watch lane (#9320)</text>
+
+  <!-- Card 6: Vision × Replan -->
+  <rect class="box" x="738" y="290" width="320" height="160" rx="12"/>
+  <text x="752" y="318" font-size="10.1" font-weight="500" class="tag">VISION × REPLAN · #4902 #5633 #8588 #8854</text>
+  <text x="752" y="346" font-size="17.5" font-weight="600">Goal-first Vision × replan</text>
+  <text x="752" y="374" font-size="13.8" class="sub">Vision ahead of local quiet (#5633)</text>
+  <text x="752" y="399" font-size="13.8" class="sub">Keep trigger on watch exit (#8854)</text>
+  <text x="752" y="424" font-size="13.8" class="sub">Settle active turn pre-stop (#8588)</text>
 
   <!-- Arrows into TS Kernel -->
-  <path class="flow" d="M202 274 V308"/>
-  <path class="flow" d="M550 274 V308"/>
-  <path class="flow" d="M898 274 V308"/>
+  <path class="flow" d="M202 464 V492"/>
+  <path class="flow" d="M550 464 V492"/>
+  <path class="flow" d="M898 464 V492"/>
 
-  <!-- Central TypeScript Kernel -->
-  <rect class="kernel" x="42" y="314" width="1016" height="116" rx="12"/>
-  <text x="66" y="350" font-size="20" font-weight="600" class="on-dark">TypeScript Task State Kernel</text>
-  <text x="66" y="380" font-size="15" class="on-dark-sub">Evaluates task dependencies (#6874), goal wait coverage (#7298), and replan settlement in one state machine</text>
-  <text x="66" y="408" font-size="13.5" class="mono on-dark-sky">Invariants: revision CAS · 3h lease-epoch fencing (#9487) · self-referential trigger &amp; stop-order safety</text>
+  <!-- Central TypeScript Effect & Task Semantics Kernel -->
+  <rect class="kernel" x="42" y="498" width="1016" height="116" rx="12"/>
+  <text x="66" y="532" font-size="19.5" font-weight="600" class="on-dark">TypeScript Effect &amp; Task Semantics Kernel</text>
+  <text x="66" y="561" font-size="13.8" class="mono on-dark-sky">GoalState =&gt; F[Decision] (#2905) · Todo done ≠ Turn settled ≠ Peer delivered ≠ Goal accepted</text>
+  <text x="66" y="589" font-size="13.8" class="on-dark-sub">Product composition (#6874, #7298, #9176): revision CAS · 3h lease fencing (#9487) · dual channels · settle-before-stop</text>
 
   <!-- Arrows into Storage & Journal -->
-  <path class="flow" d="M290 430 V462"/>
-  <path class="flow" d="M810 430 V462"/>
+  <path class="flow" d="M290 614 V646"/>
+  <path class="flow" d="M810 614 V646"/>
 
   <!-- Bottom Left: AuthorityStore -->
-  <rect class="box-hi" x="42" y="468" width="494" height="106" rx="12"/>
-  <text x="66" y="501" font-size="18" font-weight="600">Transactional State Store (AuthorityStore)</text>
-  <text x="66" y="529" font-size="14.5" class="sub">Atomic state head, active leases, archive &amp; receipts</text>
-  <text x="66" y="555" font-size="13" class="mono sub">#3798 · #4121 · #5805 · #7834</text>
+  <rect class="box-hi" x="42" y="652" width="494" height="106" rx="12"/>
+  <text x="66" y="685" font-size="18" font-weight="600">Transactional State Store (AuthorityStore)</text>
+  <text x="66" y="713" font-size="14.5" class="sub">Atomic state head, active leases, archive &amp; receipts</text>
+  <text x="66" y="739" font-size="13" class="mono sub">#3798 · #4121 · #5805 · #7834 · #9223</text>
 
   <!-- Bottom Right: Execution Journal -->
-  <rect class="box" x="564" y="468" width="494" height="106" rx="12"/>
-  <text x="588" y="501" font-size="18" font-weight="600">Append-Only Execution Journal</text>
-  <text x="588" y="529" font-size="14.5" class="sub">Two-phase external effect preflight &amp; crash recovery</text>
-  <text x="588" y="555" font-size="13" class="mono sub">#3416 · #3464 · #3485</text>
+  <rect class="box" x="564" y="652" width="494" height="106" rx="12"/>
+  <text x="588" y="685" font-size="18" font-weight="600">Append-Only Execution Journal</text>
+  <text x="588" y="713" font-size="14.5" class="sub">Two-phase external effect preflight &amp; crash recovery</text>
+  <text x="588" y="739" font-size="13" class="mono sub">#3416 · #3464 · #3485 · #4286</text>
 
-  <text x="42" y="610" font-size="16" class="sub">Composing task primitives on one typed state machine eliminates cross-turn deadlocks missed by isolated happy paths.</text>
+  <text x="42" y="794" font-size="15.2" class="sub">Orthogonal primitives compose in one transaction—keeping user gates non-blocking and plans malleable mid-flight.</text>
 </svg>
