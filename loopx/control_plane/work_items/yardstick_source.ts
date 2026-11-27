@@ -6,7 +6,7 @@ import {jsonObject, requireJsonObject, type JsonObject} from "../runtime_decode.
 import {parseTodoTimestampMicros} from "../runtime_timestamp.ts";
 import {currentWorkYardstickFinding, normalizeWorkYardstickCapture,
   normalizeWorkYardstickDecision, normalizeWorkYardstickSourceSnapshot, projectHistoricalYardstickMeasurements,
-  workYardstickTodos} from "./yardstick_decision.ts";
+  workYardstickTodos, type WorkYardstickCapture} from "./yardstick_decision.ts";
 
 /** The adapter supplies strictly validated canonical events, never attachment fields.
  * Event ids bind the complete event contents through the existing log validator. */
@@ -31,33 +31,59 @@ function committedSourceSnapshot(params: JsonObject, binding: JsonObject) {
  * events and canonical, content-addressed prefix replay for display pairs. */
 export function projectWorkYardstickPresentations(params: JsonObject): JsonObject {
   if (!Array.isArray(params.captures)) throw new EffectRuntimeRequestError("yardstick presentation requires capture requests");
-  const history = jsonObject(params.history_sources);
-  const candidates = jsonObject(history?.candidates);
-  const prefixes = jsonObject(history?.findings_by_prefix);
-  const sourceEvents = Array.isArray(history?.source_events) ? history.source_events as JsonObject[] : [];
-  const comparisons: JsonObject = {};
-  const captures = params.captures.map(value => {
+  const requests = params.captures.map(value => {
     const request = requireJsonObject(value, "capture request");
-    const capture = normalizeWorkYardstickCapture(request);
-    const {decision, binding, source_snapshot: snapshot} = capture;
-    const eventId = typeof request.event_id === "string" ? request.event_id : "";
-    const source = jsonObject(candidates?.[eventId]);
-    const prefix = snapshot ? prefixes?.[String(snapshot.event_count)] : undefined;
-    if (source && snapshot && Array.isArray(prefix) && Number.isSafeInteger(source.recorded_order)
-        && snapshot.event_count <= Number(source.recorded_order)
-        && sourceEvents[Number(source.recorded_order)]?.event_id === eventId) {
-      try {
-        committedSourceSnapshot({source_events: sourceEvents, source_snapshot: snapshot}, binding);
-      } catch (error) {
-        if (!(error instanceof EffectRuntimeRequestError)) throw error;
-        return {decision, binding};
-      }
-      const measurements = projectHistoricalYardstickMeasurements(source, capture, prefix as JsonObject[]);
-      if (measurements.length) comparisons[eventId] = measurements;
-    }
-    return {decision, binding};
+    return {
+      eventId: typeof request.event_id === "string" ? request.event_id : "",
+      capture: normalizeWorkYardstickCapture(request),
+    };
   });
-  return {captures, ...(history ? {comparisons} : {})};
+  const captures = requests.map(({capture: {decision, binding}}) => ({decision, binding}));
+  const history = jsonObject(params.history_sources);
+  return {captures, ...(history ? {comparisons: historyComparisons(history.source_events, requests)} : {})};
+}
+
+function historyComparisons(
+  value: unknown, requests: ReadonlyArray<{eventId: string; capture: WorkYardstickCapture}>,
+): JsonObject {
+  if (!Array.isArray(value)) return {};
+  const events = value.map(jsonObject);
+  const goalId = events[0]?.goal_id;
+  if (typeof goalId !== "string" || events.some(row => row?.goal_id !== goalId || typeof row.event_id !== "string")) return {};
+  const sources = new Map<unknown, JsonObject>();
+  const findings = events.map((row, order) => {
+    const finding = jsonObject(row?.finding);
+    if (!finding) return null;
+    const source: JsonObject = {...finding, recorded_order: order};
+    if (!sources.has(row!.event_id)) sources.set(row!.event_id, source);
+    return source;
+  });
+  const ordered = requests.flatMap(({eventId, capture}) => {
+    const source = sources.get(eventId);
+    const snapshot = capture.source_snapshot;
+    if (!source || !snapshot || capture.binding.goal_id !== goalId
+        || snapshot.event_count > Number(source.recorded_order)) return [];
+    return [{eventId, capture, source, snapshot}];
+  }).sort((left, right) => left.snapshot.event_count - right.snapshot.event_count);
+
+  // Reuse the same fold and hash across candidates while checking each
+  // original prefix independently. The hash is of the JSON event-id array.
+  const prefix = createHash("sha256").update("[");
+  const folded = new Map<unknown, JsonObject>();
+  const comparisons = new Map<string, unknown>();
+  let order = 0;
+  for (const {eventId, capture, source, snapshot} of ordered) {
+    while (order < snapshot.event_count) {
+      if (order) prefix.update(",");
+      prefix.update(JSON.stringify(events[order]!.event_id));
+      const finding = findings[order++];
+      if (finding) folded.set(finding.finding_id, finding);
+    }
+    if (prefix.copy().update("]").digest("hex") !== snapshot.event_ids_sha256) continue;
+    const measurements = projectHistoricalYardstickMeasurements(source, capture, [...folded.values()]);
+    if (measurements.length) comparisons.set(eventId, measurements);
+  }
+  return Object.fromEntries(comparisons);
 }
 
 /** Select only current captures; the transport replays their already-read log prefixes. */

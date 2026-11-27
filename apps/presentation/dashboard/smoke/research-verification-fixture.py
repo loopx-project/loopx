@@ -23,35 +23,42 @@ def measurements(sha, ref, exact, proxy):
             for profile, value in ((EXACT, exact), (PROXY, proxy))]
 
 
-def add_case(events, label, node_id, *, baseline_author="worker", late=False, revise=False, refuted=False):
-    events.append(build_explore_node_event(
-        goal_id=GOAL, node_id=node_id, title=label, agent_id="worker", recorded_at="2026-11-21T11:00:00Z",
-    ))
+def add_case(events, label, node_id, *, baseline_author="worker", late=False, revise=False, refuted=False, attempt=None):
+    if attempt in (None, 0):
+        events.append(build_explore_node_event(
+            goal_id=GOAL, node_id=node_id, title=label, agent_id="worker", recorded_at="2026-11-21T11:00:00Z",
+        ))
+    case_id = node_id if attempt is None else f"{node_id}-{attempt}"
+    baseline_ref = BASELINE_REF if attempt is None else f"{BASELINE_REF}-{attempt}"
+    # A normal retained description makes repeated whole-row transport exceed
+    # the inline Effect frame on the 151-event pagination regression.
+    summary = "" if attempt is None else ("Measured on the same retained input and evaluation scope. " * 27).strip()
     control = {
-        "goal_id": GOAL, "node_id": node_id, "finding_id": f"{node_id}-baseline",
-        "title": "Reference measurements", "status": "confirmed", "agent_id": baseline_author,
-        "evidence_refs": [BASELINE_REF],
+        "goal_id": GOAL, "node_id": node_id, "finding_id": f"{case_id}-baseline",
+        "title": "Reference measurements", "status": "confirmed", "agent_id": baseline_author, "summary": summary,
+        "evidence_refs": [baseline_ref],
     }
     reference = build_explore_finding_event(
         **control, recorded_at="2026-11-21T11:10:00Z",
-        measurements=measurements(BASELINE_SHA, BASELINE_REF, 9, 4),
+        measurements=measurements(BASELINE_SHA, baseline_ref, 9, 4),
     )
     if not late:
         events.append(reference)
-    decision_refs = [BASELINE_REF]
+    decision_refs = [baseline_ref]
     if refuted:
         events.append(build_explore_finding_event(
-            goal_id=GOAL, node_id=node_id, finding_id=f"{node_id}-refuted",
+            goal_id=GOAL, node_id=node_id, finding_id=f"{case_id}-refuted",
             title="Rejected reference variant", status="refuted", agent_id="worker",
             recorded_at="2026-11-21T11:20:00Z", evidence_refs=[REJECTED_REF],
         ))
         decision_refs.append(REJECTED_REF)
     ids = json.dumps([event["event_id"] for event in events], ensure_ascii=False, separators=(",", ":"))
-    binding = {"goal_id": GOAL, "agent_id": "worker", "todo_id": f"todo_{node_id}", "turn_instance_id": "turn-1"}
+    binding = {"goal_id": GOAL, "agent_id": "worker", "todo_id": f"todo_{case_id}", "turn_instance_id": "turn-1"}
     refs = [RESULT_REF, RECEIPT_REF, *decision_refs]
     events.append(build_explore_finding_event(
-        goal_id=GOAL, node_id=node_id, finding_id=f"{node_id}-candidate",
-        title=label, status="confirmed", agent_id="worker", evidence_refs=refs, recorded_at="2026-11-21T12:00:00Z",
+        goal_id=GOAL, node_id=node_id, finding_id=f"{case_id}-candidate",
+        title=label, summary=summary, status="confirmed", agent_id="worker", evidence_refs=refs,
+        recorded_at="2026-11-21T12:00:00Z",
         execution_observation={
             "schema_version": "explore_execution_observation_v0",
             "candidate_sha256": RESULT_SHA, "result_candidate_sha256": RESULT_SHA, "result_ref": RESULT_REF,
@@ -59,7 +66,7 @@ def add_case(events, label, node_id, *, baseline_author="worker", late=False, re
             "change_reason": None, "elapsed_seconds": 1, "limit_seconds": None, "search_iterations": None,
             "stop_reason": None, "evidence_refs": refs,
             "verification_evidence": {
-                "host": "local-cli", "baseline": {"ref": BASELINE_REF, "sha256": BASELINE_SHA},
+                "host": "local-cli", "baseline": {"ref": baseline_ref, "sha256": BASELINE_SHA},
                 "proofs": {"external_verifier": {"criterion_id": "verify", "ref": RECEIPT_REF, "sha256": "c" * 64}},
             },
         },
@@ -81,8 +88,16 @@ def add_case(events, label, node_id, *, baseline_author="worker", late=False, re
     if revise:
         events.append(build_explore_finding_event(
             **control, recorded_at="2026-11-21T12:10:00Z",
-            measurements=measurements(BASELINE_SHA, BASELINE_REF, 2, 10),
+            measurements=measurements(BASELINE_SHA, baseline_ref, 2, 10),
         ))
+
+
+def populated_history():
+    events = []
+    for attempt in range(75):
+        add_case(events, f"Comparison {attempt}", "same-question", attempt=attempt,
+                 baseline_author="other-worker" if attempt == 31 else "worker")
+    return events
 
 
 if __name__ == "__main__":

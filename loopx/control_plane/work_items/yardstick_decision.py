@@ -5,7 +5,7 @@ from functools import lru_cache
 import json
 from typing import Any, cast
 
-from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
+from ..effect_runtime import EffectRuntimeRejected, effect_runtime_projection_result, effect_runtime_result
 from ..runtime.public_safety import validate_public_safe_value
 
 
@@ -36,7 +36,7 @@ def project_work_yardstick_presentations(
         return rows
     params = {"captures": requests, **({"history_sources": history_sources} if history_sources else {})}
     validate_public_safe_value(params, path="work_yardsticks")
-    result = effect_runtime_result("work_item.yardstick.presentation", params)
+    result = effect_runtime_projection_result("work_item.yardstick.presentation", params)
     projected = iter(result["captures"])
     comparisons = result.get("comparisons", {})
     return [

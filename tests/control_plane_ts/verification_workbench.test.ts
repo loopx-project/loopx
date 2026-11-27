@@ -87,23 +87,20 @@ test("Yardstick history pins its paired observations to the original work and ev
   const foreign = {...control, goal_id: "other"};
   const nearby = {...negative, node_id: "nearby"};
   const binding = selected.work_yardstick!.binding;
-  const history = (rows: Record<string, unknown>[], {count = 1, broken = false, legacy = false} = {}) => {
-    const digest = createHash("sha256").update(JSON.stringify(count ? ["control"] : [])).digest("hex");
+  const history = (rows: Record<string, unknown>[], {count = rows.length, broken = false, legacy = false} = {}) => {
+    const events = [...rows, selected].map(row => ({goal_id: row.goal_id, event_id: row.event_id, finding: row}));
+    const digest = createHash("sha256").update(JSON.stringify(events.slice(0, count).map(event => event.event_id))).digest("hex");
     const capture = {...selected.work_yardstick, ...(legacy ? {} : {source_snapshot: {
       event_count: count, event_ids_sha256: broken ? "0".repeat(64) : digest,
     }})};
     const result = projectWorkYardstickPresentations({
       captures: [{capture, goal_id: "goal", agent_id: "worker", event_id: "selected", evidence_refs: evidenceRefs}],
-      history_sources: {
-        candidates: {selected: {...selected, recorded_order: 1}},
-        findings_by_prefix: {[count]: rows},
-        source_events: [{goal_id: "goal", event_id: "control"}, {goal_id: "goal", event_id: "selected"}],
-      },
+      history_sources: {source_events: events},
     });
     assert.deepEqual(result.captures, [selected.work_yardstick], "The original prefix stays on the server");
     return (result.comparisons as Record<string, unknown>).selected;
   };
-  const earlier = {...control, recorded_order: 0};
+  const earlier = {...control, finding_id: "original-control"};
   const projected = finding("selected", {...selected, yardstick_measurements: history([earlier])});
   const projection = projectVerificationWorkbench(projected, [projected, negative, nearby])!;
   assert.equal(projection.fidelity, "different_order");
@@ -114,10 +111,14 @@ test("Yardstick history pins its paired observations to the original work and ev
   assert.deepEqual(history([{...earlier, work_binding: binding}]), projected.yardstick_measurements);
   assert.equal(history([{...earlier, agent_id: "another-worker"}]), undefined);
   assert.equal(history([{...earlier, work_binding: {...binding, todo_id: "todo_other"}}]), undefined);
-  assert.equal(history([{...earlier, recorded_order: 2}]), undefined);
+  assert.equal(history([foreign]), undefined);
+  assert.equal(history([earlier], {count: 2}), undefined);
   assert.equal(history([earlier], {count: 0}), undefined);
   assert.equal(history([earlier], {broken: true}), undefined);
   assert.equal(history([earlier], {legacy: true}), undefined);
-  assert.equal(history([earlier, {...earlier, event_id: "duplicate"}]), undefined);
+  assert.equal(history([earlier, {...earlier, event_id: "duplicate", finding_id: "other-control"}]), undefined);
   assert.equal(history([{...earlier, measurements: control.measurements?.map(row => ({...row, evidence_ref: "uncited"}))}]), undefined);
+  const revised = {...earlier, event_id: "revision", status: "refuted", measurements: undefined};
+  assert.deepEqual(history([earlier, revised], {count: 1}), projected.yardstick_measurements);
+  assert.equal(history([earlier, revised]), undefined, "A later revision without measurements retires the measured row");
 });
