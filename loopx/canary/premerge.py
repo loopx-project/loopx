@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable
 
 from ..contract import scan_public_boundary
 from .planner import REPO_ROOT, resolve_canary_catalog_path
-from .runner import MAINTAINABILITY_RATCHET_SCRIPT, build_canary_smoke_suite_run, check_output_tail
+from .runner import (
+    MAINTAINABILITY_RATCHET_SCRIPT,
+    _coerce_parallel_jobs,
+    _run_scoped_node_compile_cache,
+    build_canary_smoke_suite_run,
+    check_output_tail,
+    premerge_check_reuse_key,
+)
 
 
 PREMERGE_GATE_SCHEMA_VERSION = "loopx_premerge_validation_gate_v0"
@@ -123,6 +132,7 @@ def _synthetic_smoke_suite_run(
         "matched_check_count": len(selected_checks),
         "selected_check_count": len(selected_checks),
         "executed_check_count": len(executed_checks),
+        "reused_check_count": 0,
         "failure_count": len(failures),
         "git_required_skip_count": 0,
         "timeout_count": 0,
@@ -726,13 +736,31 @@ def _run_summary(run: dict[str, Any] | None) -> dict[str, Any] | None:
     executed_checks = [
         check for check in selected_checks
         if str(check.get("status") or "") not in {"", "ready", "skipped"}
+        and not check.get("reused")
     ]
+    reused_checks = [check for check in selected_checks if check.get("reused")]
     failures = [check for check in selected_checks if check.get("ok") is False]
+    executed_count = (
+        int(run["executed_check_count"])
+        if run.get("executed_check_count") is not None
+        else len(executed_checks)
+    )
+    reused_count = (
+        int(run["reused_check_count"])
+        if run.get("reused_check_count") is not None
+        else len(reused_checks)
+    )
+    failure_count = (
+        int(run["failure_count"])
+        if run.get("failure_count") is not None
+        else len(failures)
+    )
     return {
         "ok": bool(run.get("ok")),
         "selected_check_count": int(run.get("selected_check_count") or len(selected_checks)),
-        "executed_check_count": int(run.get("executed_check_count") or len(executed_checks)),
-        "failure_count": int(run.get("failure_count") or len(failures)),
+        "executed_check_count": executed_count,
+        "reused_check_count": reused_count,
+        "failure_count": failure_count,
         "warning_count": int(run.get("warning_count") or 0),
         "advisory_failure_count": int(run.get("advisory_failure_count") or 0),
         "selected_commands": [_check_command(check) for check in selected_checks],
@@ -746,6 +774,7 @@ def build_validation_summary(
     catalog_run: dict[str, Any],
     risk_profile_run: dict[str, Any] | None,
     boundary_run: dict[str, Any] | None,
+    parallel_jobs: int | None = None,
 ) -> dict[str, Any]:
     direct_failures = [check for check in direct_checks if check.get("ok") is False]
     direct_commands = [str(check.get("command") or "") for check in direct_checks]
@@ -764,7 +793,10 @@ def build_validation_summary(
         selected_commands.extend(summary["selected_commands"])
         failed_commands.extend(summary["failed_commands"])
     failed_commands.extend(str(check.get("command") or "") for check in direct_failures)
-    return {
+    reused_check_count = sum(
+        int(summary.get("reused_check_count") or 0) for summary in active_run_summaries
+    )
+    summary_payload: dict[str, Any] = {
         "schema_version": PREMERGE_VALIDATION_SUMMARY_SCHEMA_VERSION,
         "direct_check_count": len(direct_checks),
         "direct_failure_count": len(direct_failures),
@@ -774,6 +806,7 @@ def build_validation_summary(
         "executed_check_count": sum(
             int(summary["executed_check_count"]) for summary in active_run_summaries
         ),
+        "reused_check_count": reused_check_count,
         "failure_count": len(direct_failures)
         + sum(int(summary["failure_count"]) for summary in active_run_summaries),
         "warning_count": sum(int(summary["warning_count"]) for summary in active_run_summaries),
@@ -786,6 +819,9 @@ def build_validation_summary(
         "failed_commands": [command for command in failed_commands if command],
         "runs": run_summaries,
     }
+    if parallel_jobs is not None:
+        summary_payload["parallel_jobs"] = _coerce_parallel_jobs(parallel_jobs)
+    return summary_payload
 
 
 def apply_change_quality_verification(
@@ -906,6 +942,71 @@ def _tier_limits(tier: str) -> dict[str, int | bool]:
     return {"catalog_limit": 10, "profile_limit": 8, "deep": False}
 
 
+_REUSABLE_PREMERGE_STATUSES = frozenset({
+    "passed",
+    "failed",
+    "advisory_inherited_failure",
+    "timed_out",
+})
+
+
+def default_premerge_parallel_jobs(*, fail_fast: bool = False) -> int:
+    """Return bounded default parallelism for premerge canary smoke sections."""
+    if fail_fast:
+        return 1
+    return min(4, max(1, (os.cpu_count() or 2) // 2))
+
+
+def _reusable_results_from_run(
+    run: Mapping[str, Any] | None,
+    *,
+    section: str,
+    cli_output_base_ref: str,
+) -> dict[tuple[tuple[str, ...], str], dict[str, Any]]:
+    if not isinstance(run, Mapping):
+        return {}
+    reusable: dict[tuple[tuple[str, ...], str], dict[str, Any]] = {}
+    for check in run.get("selected_checks", []):
+        if not isinstance(check, dict):
+            continue
+        if check.get("status") not in _REUSABLE_PREMERGE_STATUSES:
+            continue
+        if check.get("tracked_side_effects"):
+            continue
+        normalized = check.get("normalized")
+        if (
+            not isinstance(normalized, dict)
+            or not normalized.get("ok")
+            or not normalized.get("argv")
+        ):
+            continue
+        key = premerge_check_reuse_key(
+            normalized,
+            cli_output_base_ref=cli_output_base_ref,
+        )
+        reusable[key] = {**check, "section": check.get("section") or section}
+    return reusable
+
+
+def _attach_compile_cache_cleanup_failures(
+    cleanup_failures: list[dict[str, object]],
+    *,
+    target_run: dict[str, Any] | None,
+) -> None:
+    if not cleanup_failures or not isinstance(target_run, dict):
+        return
+    existing_cleanup = target_run.get("cleanup_failures")
+    cleanup_list = list(existing_cleanup) if isinstance(existing_cleanup, list) else []
+    cleanup_list.extend(cleanup_failures)
+    target_run["cleanup_failures"] = cleanup_list
+    existing_failures = target_run.get("failures")
+    failure_list = list(existing_failures) if isinstance(existing_failures, list) else []
+    failure_list.extend(cleanup_failures)
+    target_run["failures"] = failure_list
+    target_run["failure_count"] = int(target_run.get("failure_count") or 0) + len(cleanup_failures)
+    target_run["ok"] = False
+
+
 def build_premerge_validation_gate(
     *,
     changed_files: list[str] | None = None,
@@ -915,6 +1016,7 @@ def build_premerge_validation_gate(
     timeout_seconds: float = 120.0,
     fail_fast: bool = False,
     include_deep_checks: bool | None = None,
+    parallel_jobs: int | None = None,
     progress_callback: ProgressCallback | None = None,
     repo_root: Path | None = None,
     catalog_path: Path | None = None,
@@ -927,6 +1029,15 @@ def build_premerge_validation_gate(
     classification = classify_premerge_surfaces(files, repo_root=target_repo_root)
     limits = _tier_limits(tier)
     include_deep = bool(limits["deep"] if include_deep_checks is None else include_deep_checks)
+    effective_parallel_jobs = (
+        1
+        if fail_fast
+        else (
+            _coerce_parallel_jobs(parallel_jobs)
+            if parallel_jobs is not None
+            else default_premerge_parallel_jobs(fail_fast=False)
+        )
+    )
     if progress_callback and execute:
         progress_callback(
             {
@@ -966,100 +1077,124 @@ def build_premerge_validation_gate(
         direct_checks.append(module_colocation)
 
     catalog_run: dict[str, Any]
-    if files:
-        catalog_progress = _section_progress_callback(
-            progress_callback,
-            section="catalog_canaries",
-        )
-        _emit_section_progress(
-            catalog_progress,
-            event="section_started",
-            selected_hint=int(limits["catalog_limit"]),
-        )
-        catalog_run = build_canary_smoke_suite_run(
-            suite="catalog-plan",
-            repo_root=target_repo_root,
-            catalog_path=catalog_path,
-            changed_files=files,
-            include_deep_checks=include_deep,
-            max_checks_per_family=3,
-            max_checks_per_profile=4,
-            limit=int(limits["catalog_limit"]),
-            execute=execute,
-            timeout_seconds=timeout_seconds,
-            fail_fast=fail_fast,
-            progress_callback=catalog_progress if execute else None,
-            cli_output_base_ref=base_ref,
-        )
-        _emit_section_progress(
-            catalog_progress,
-            event="section_finished",
-            status="passed" if catalog_run.get("ok") else "failed",
-            ok=bool(catalog_run.get("ok")),
-            selected_check_count=catalog_run.get("selected_check_count"),
-            executed_check_count=catalog_run.get("executed_check_count"),
-            failure_count=catalog_run.get("failure_count"),
-        )
-        adjusted_catalog_run = downgrade_inherited_baseline_failures(
-            catalog_run,
-            changed_files=files,
-        )
-        assert adjusted_catalog_run is not None  # A dictionary input retains a result.
-        catalog_run = adjusted_catalog_run
-    else:
-        catalog_run = _empty_smoke_suite_run(
-            suite="catalog-plan",
-            reason=(
-                "No changed files were provided, so premerge only runs direct "
-                "diff hygiene checks and skips catalog/risk/boundary smokes."
-            ),
-            execute=execute,
-            timeout_seconds=timeout_seconds,
-            repo_root=target_repo_root,
-        )
-
     risk_profiles = list(classification["risk_profiles"])
     risk_profile_run: dict[str, Any] | None = None
     profile_limit = int(limits["profile_limit"])
     run_risk_profiles = bool(risk_profiles) and not (
         tier == "quick" and profile_limit == 0
     )
-    if run_risk_profiles:
-        risk_progress = _section_progress_callback(
-            progress_callback,
-            section="risk_profile_smokes",
+    cache_cleanup_failures: list[dict[str, object]] = []
+    with _run_scoped_node_compile_cache(
+        cache_cleanup_failures,
+        enabled=execute and bool(files),
+    ):
+        if files:
+            catalog_progress = _section_progress_callback(
+                progress_callback,
+                section="catalog_canaries",
+            )
+            _emit_section_progress(
+                catalog_progress,
+                event="section_started",
+                selected_hint=int(limits["catalog_limit"]),
+            )
+            catalog_run = build_canary_smoke_suite_run(
+                suite="catalog-plan",
+                repo_root=target_repo_root,
+                catalog_path=catalog_path,
+                changed_files=files,
+                include_deep_checks=include_deep,
+                max_checks_per_family=3,
+                max_checks_per_profile=4,
+                limit=int(limits["catalog_limit"]),
+                execute=execute,
+                timeout_seconds=timeout_seconds,
+                fail_fast=fail_fast,
+                parallel_jobs=effective_parallel_jobs,
+                progress_callback=catalog_progress if execute else None,
+                cli_output_base_ref=base_ref,
+            )
+            _emit_section_progress(
+                catalog_progress,
+                event="section_finished",
+                status="passed" if catalog_run.get("ok") else "failed",
+                ok=bool(catalog_run.get("ok")),
+                selected_check_count=catalog_run.get("selected_check_count"),
+                executed_check_count=catalog_run.get("executed_check_count"),
+                reused_check_count=catalog_run.get("reused_check_count"),
+                failure_count=catalog_run.get("failure_count"),
+            )
+            adjusted_catalog_run = downgrade_inherited_baseline_failures(
+                catalog_run,
+                changed_files=files,
+            )
+            assert adjusted_catalog_run is not None  # A dictionary input retains a result.
+            catalog_run = adjusted_catalog_run
+        else:
+            catalog_run = _empty_smoke_suite_run(
+                suite="catalog-plan",
+                reason=(
+                    "No changed files were provided, so premerge only runs direct "
+                    "diff hygiene checks and skips catalog/risk/boundary smokes."
+                ),
+                execute=execute,
+                timeout_seconds=timeout_seconds,
+                repo_root=target_repo_root,
+            )
+
+        reusable_results = (
+            _reusable_results_from_run(
+                catalog_run,
+                section="catalog_canaries",
+                cli_output_base_ref=base_ref,
+            )
+            if execute and files
+            else {}
         )
-        _emit_section_progress(
-            risk_progress,
-            event="section_started",
-            profiles=risk_profiles,
-            selected_hint=profile_limit,
-        )
-        risk_profile_run = build_canary_smoke_suite_run(
-            suite="default-public",
-            repo_root=target_repo_root,
-            catalog_path=catalog_path,
-            profiles=risk_profiles,
-            include_deep_checks=include_deep,
-            limit=profile_limit,
-            execute=execute,
-            timeout_seconds=timeout_seconds,
-            fail_fast=fail_fast,
-            progress_callback=risk_progress if execute else None,
-            cli_output_base_ref=base_ref,
-        )
-        _emit_section_progress(
-            risk_progress,
-            event="section_finished",
-            status="passed" if risk_profile_run.get("ok") else "failed",
-            ok=bool(risk_profile_run.get("ok")),
-            selected_check_count=risk_profile_run.get("selected_check_count"),
-            executed_check_count=risk_profile_run.get("executed_check_count"),
-            failure_count=risk_profile_run.get("failure_count"),
-        )
-        risk_profile_run = downgrade_inherited_baseline_failures(
-            risk_profile_run,
-            changed_files=files,
+        if run_risk_profiles:
+            risk_progress = _section_progress_callback(
+                progress_callback,
+                section="risk_profile_smokes",
+            )
+            _emit_section_progress(
+                risk_progress,
+                event="section_started",
+                profiles=risk_profiles,
+                selected_hint=profile_limit,
+            )
+            risk_profile_run = build_canary_smoke_suite_run(
+                suite="default-public",
+                repo_root=target_repo_root,
+                catalog_path=catalog_path,
+                profiles=risk_profiles,
+                include_deep_checks=include_deep,
+                limit=profile_limit,
+                execute=execute,
+                timeout_seconds=timeout_seconds,
+                fail_fast=fail_fast,
+                parallel_jobs=effective_parallel_jobs,
+                progress_callback=risk_progress if execute else None,
+                cli_output_base_ref=base_ref,
+                reusable_results_by_command=reusable_results or None,
+            )
+            _emit_section_progress(
+                risk_progress,
+                event="section_finished",
+                status="passed" if risk_profile_run.get("ok") else "failed",
+                ok=bool(risk_profile_run.get("ok")),
+                selected_check_count=risk_profile_run.get("selected_check_count"),
+                executed_check_count=risk_profile_run.get("executed_check_count"),
+                reused_check_count=risk_profile_run.get("reused_check_count"),
+                failure_count=risk_profile_run.get("failure_count"),
+            )
+            risk_profile_run = downgrade_inherited_baseline_failures(
+                risk_profile_run,
+                changed_files=files,
+            )
+    if cache_cleanup_failures:
+        _attach_compile_cache_cleanup_failures(
+            cache_cleanup_failures,
+            target_run=risk_profile_run if isinstance(risk_profile_run, dict) else catalog_run,
         )
 
     boundary_run: dict[str, Any] | None = None
@@ -1103,6 +1238,7 @@ def build_premerge_validation_gate(
         catalog_run=catalog_run,
         risk_profile_run=risk_profile_run,
         boundary_run=boundary_run,
+        parallel_jobs=effective_parallel_jobs,
     )
     ok = gate["status"] in {"passed", "no_changes"} or (
         not execute and gate["status"] in {"preview_only", "manual_review_required", "no_changes"}
@@ -1117,12 +1253,15 @@ def build_premerge_validation_gate(
         "executes_checks": execute,
         "writes_evidence": False,
         "creates_runtime_contract": False,
+        "parallel_jobs": effective_parallel_jobs,
+        "reused_check_count": validation_summary["reused_check_count"],
         "changed_files": files,
         "classification": classification,
         "direct_checks": direct_checks,
         "catalog_run": catalog_run,
         "risk_profile_run": risk_profile_run,
         "boundary_run": boundary_run,
+        **({"cleanup_failures": cache_cleanup_failures} if cache_cleanup_failures else {}),
         "validation_summary": validation_summary,
         "gate": gate,
         "recommended_pr_comment_fields": [
@@ -1211,6 +1350,8 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
         f"`{str((gate.get('self_merge_authority') or {}).get('reason') or '')}`",
         f"- tier: `{payload.get('tier')}`",
         f"- dry_run: `{str(payload.get('dry_run')).lower()}`",
+        f"- parallel_jobs: `{payload.get('parallel_jobs')}`",
+        f"- reused_checks: `{payload.get('reused_check_count') or 0}`",
         f"- changed_files: `{classification.get('changed_file_count')}`",
         f"- surfaces: `{', '.join(classification.get('surfaces') or [])}`",
         f"- risk_profiles: `{', '.join(classification.get('risk_profiles') or [])}`",
@@ -1242,6 +1383,7 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
                 f"- ok: `{str(run.get('ok')).lower()}`",
                 f"- selected_checks: `{run.get('selected_check_count')}`",
                 f"- executed_checks: `{run.get('executed_check_count')}`",
+                f"- reused_checks: `{run.get('reused_check_count') or 0}`",
                 f"- failures: `{run.get('failure_count')}`",
                 f"- advisory_failures: `{run.get('advisory_failure_count') or 0}`",
                 f"- warnings: `{run.get('warning_count')}`",
@@ -1253,13 +1395,21 @@ def render_premerge_validation_gate_markdown(payload: dict[str, Any]) -> str:
             normalized_value = check.get('normalized')
             normalized = normalized_value if isinstance(normalized_value, dict) else {}
             command = " ".join(str(part) for part in normalized.get("display_argv") or [])
-            lines.append(f"- `{check.get('status') or 'ready'}` {command or check.get('command')}")
+            reused_suffix = " (reused)" if check.get("reused") else ""
+            lines.append(f"- `{check.get('status') or 'ready'}` {command or check.get('command')}{reused_suffix}")
             if check.get("advisory_reason"):
                 lines.append(f"  advisory_reason: {check.get('advisory_reason')}")
 
     append_run("Catalog Canaries", payload.get("catalog_run"))
     append_run("Risk Profile Smokes", payload.get("risk_profile_run"))
     append_run("Public Boundary", payload.get("boundary_run"))
+
+    cleanup_failures = payload.get("cleanup_failures") or []
+    if cleanup_failures:
+        lines.extend(["", "## Cleanup Failures"])
+        for failure in cleanup_failures:
+            if isinstance(failure, dict):
+                lines.append(f"- {failure.get('reason')}")
 
     quality = (
         payload.get("change_quality_qualification")

@@ -8,10 +8,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
@@ -449,7 +450,11 @@ def _should_propagate_node_compile_cache() -> bool:
 def _run_scoped_node_compile_cache(
     cleanup_failures: list[dict[str, object]], *, enabled: bool,
 ) -> Iterator[None]:
-    if not enabled or not _should_propagate_node_compile_cache():
+    if (
+        not enabled
+        or not _should_propagate_node_compile_cache()
+        or _ACTIVE_NODE_COMPILE_CACHE.get() is not None
+    ):
         yield
         return
     cache_dir = Path(tempfile.mkdtemp(prefix="loopx-smoke-compile-cache-"))
@@ -775,6 +780,59 @@ def _progress_check_started(
     )
 
 
+_TERMINAL_REUSABLE_STATUSES = frozenset({
+    "passed",
+    "failed",
+    "advisory_inherited_failure",
+    "timed_out",
+})
+
+
+def premerge_check_reuse_key(
+    normalized: Mapping[str, Any] | None,
+    *,
+    cli_output_base_ref: str | None = None,
+) -> tuple[tuple[str, ...], str]:
+    """Build the command/environment identity key used for premerge cross-section reuse."""
+    argv = normalized.get("argv") if isinstance(normalized, Mapping) else None
+    return (tuple(str(part) for part in (argv or ())), cli_output_base_ref or "")
+
+
+def _reused_check_result(
+    check: Mapping[str, Any],
+    prior: Mapping[str, Any],
+    *,
+    check_index: int,
+    check_count: int,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {**check}
+    for field in ("profile_id", "family", "module"):
+        if field in check:
+            result[field] = check[field]
+    result["check_index"] = check_index
+    result["check_count"] = check_count
+    for field in (
+        "ok",
+        "status",
+        "returncode",
+        "stdout_tail",
+        "stderr_tail",
+        "normalized",
+        "maintainability_failure_paths",
+        "tracked_side_effects",
+        "inherited_baseline_failure",
+        "advisory_reason",
+    ):
+        if field in prior:
+            result[field] = deepcopy(prior[field])
+    if not prior.get("ok") and "reason" in prior:
+        result["reason"] = deepcopy(prior["reason"])
+    result["duration_seconds"] = 0.0
+    result["reused"] = True
+    result["reused_from_section"] = prior.get("section") or "catalog_canaries"
+    return result
+
+
 def _progress_check_finished(
     progress_callback: ProgressCallback | None,
     *,
@@ -793,6 +851,7 @@ def _progress_check_finished(
             "status": result.get("status"),
             "ok": bool(result.get("ok")),
             "duration_seconds": result.get("duration_seconds"),
+            **({"reused": True} if result.get("reused") else {}),
         }
     )
 
@@ -821,6 +880,7 @@ def build_canary_smoke_suite_run(
     progress_callback: ProgressCallback | None = None,
     repo_root: Path | None = None,
     cli_output_base_ref: str | None = None,
+    reusable_results_by_command: Mapping[tuple[tuple[str, ...], str], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build and optionally execute a continue-on-failure smoke suite.
 
@@ -921,94 +981,90 @@ def build_canary_smoke_suite_run(
         "tracked_side_effects": [],
         "auto_restored": False,
     }
+    reused_check_count = 0
     if execute:
-        run_check = partial(
-            _run_check,
-            timeout_seconds=max(1.0, timeout_seconds),
-            check_count=len(selected),
-            repo_root=repo_root,
-        )
-        if cli_output_base_ref is not None:
-            run_check = partial(run_check, cli_output_base_ref=cli_output_base_ref)
-        git_ok, tracked_before, git_stderr = _tracked_change_paths(repo_root=repo_root)
-        clean_start = git_ok and not tracked_before
-        if allow_tracked_side_effects:
-            enforcement_reason = "tracked_side_effects_explicitly_allowed"
-        elif not git_ok:
-            enforcement_reason = "git_worktree_unavailable"
+        reusable_matches: dict[int, dict[str, Any]] = {}
+        if reusable_results_by_command:
+            for index, (check, item) in enumerate(zip(selected, normalized, strict=True), start=1):
+                norm = item.get("normalized")
+                if not isinstance(norm, dict) or not norm.get("ok") or not norm.get("argv"):
+                    continue
+                key = premerge_check_reuse_key(norm, cli_output_base_ref=cli_output_base_ref)
+                prior = reusable_results_by_command.get(key)
+                if (
+                    isinstance(prior, Mapping)
+                    and not prior.get("tracked_side_effects")
+                    and prior.get("status") in _TERMINAL_REUSABLE_STATUSES
+                ):
+                    reusable_matches[index] = _reused_check_result(
+                        check,
+                        prior,
+                        check_index=index,
+                        check_count=len(selected),
+                    )
+        uncached_indexes = [
+            index for index in range(1, len(selected) + 1) if index not in reusable_matches
+        ]
+        if selected and not uncached_indexes:
+            side_effect_guard["enforcement_reason"] = "all_checks_reused"
+            for index, check in enumerate(selected, start=1):
+                _progress_check_started(
+                    progress_callback,
+                    index=index,
+                    total=len(selected),
+                    check=check,
+                    repo_root=repo_root,
+                )
+                result = reusable_matches[index]
+                _progress_check_finished(
+                    progress_callback,
+                    index=index,
+                    total=len(selected),
+                    result=result,
+                )
+                results.append(result)
+                if fail_fast and not result.get("ok"):
+                    break
         else:
-            enforcement_reason = "tracked_side_effect_guard_active"
-        side_effect_guard.update(
-            {
-                "git_status_ok": git_ok,
-                "clean_start": clean_start,
-                "tracked_before": _display_git_paths(tracked_before),
-                "enforced": bool(git_ok and not allow_tracked_side_effects),
-                "enforcement_reason": enforcement_reason,
-            }
-        )
-        if git_stderr:
-            side_effect_guard["git_status_unavailable_reason"] = git_stderr[-800:]
-        serial_indexes = {
-            index
-            for index, check in enumerate(selected, start=1)
-            if _serial_smoke_reason(check, repo_root=repo_root)
-        }
-        serial_check_count = len(serial_indexes)
-        parallel_check_count = len(selected) - serial_check_count
-        if selected and not fail_fast and parallel_check_count:
-            effective_parallel_jobs = min(requested_parallel_jobs, parallel_check_count)
-        with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(selected)):
-            if effective_parallel_jobs <= 1:
-                for index, check in enumerate(selected, start=1):
-                    _progress_check_started(
-                        progress_callback,
-                        index=index,
-                        total=len(selected),
-                        check=check,
-                        repo_root=repo_root,
-                    )
-                    result = run_check(check, check_index=index)
-                    if side_effect_guard["enforced"]:
-                        after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
-                        side_effects = sorted(set(tracked_after) - set(tracked_before))
-                        if side_effects:
-                            result.update(
-                                {
-                                    "ok": False,
-                                    "status": "failed_tracked_side_effect",
-                                    "tracked_side_effects": _display_git_paths(side_effects),
-                                }
-                            )
-                            if clean_start:
-                                restore = _restore_tracked_paths(
-                                    side_effects,
-                                    repo_root=repo_root,
-                                    expected_paths=tracked_before,
-                                )
-                                result["tracked_side_effect_restore"] = restore
-                                side_effect_guard["auto_restored"] = (
-                                    bool(side_effect_guard.get("auto_restored"))
-                                    or bool(restore.get("ok"))
-                                )
-                        if not after_ok and after_stderr:
-                            result["tracked_side_effect_stderr_tail"] = after_stderr[-800:]
-                    _progress_check_finished(
-                        progress_callback,
-                        index=index,
-                        total=len(selected),
-                        result=result,
-                    )
-                    results.append(result)
-                    if fail_fast and not result.get("ok"):
-                        break
+            run_check = partial(
+                _run_check,
+                timeout_seconds=max(1.0, timeout_seconds),
+                check_count=len(selected),
+                repo_root=repo_root,
+            )
+            if cli_output_base_ref is not None:
+                run_check = partial(run_check, cli_output_base_ref=cli_output_base_ref)
+            git_ok, tracked_before, git_stderr = _tracked_change_paths(repo_root=repo_root)
+            clean_start = git_ok and not tracked_before
+            if allow_tracked_side_effects:
+                enforcement_reason = "tracked_side_effects_explicitly_allowed"
+            elif not git_ok:
+                enforcement_reason = "git_worktree_unavailable"
             else:
-                indexed_results: dict[int, dict[str, Any]] = {}
-                with ThreadPoolExecutor(max_workers=effective_parallel_jobs) as executor:
-                    futures = {}
+                enforcement_reason = "tracked_side_effect_guard_active"
+            side_effect_guard.update(
+                {
+                    "git_status_ok": git_ok,
+                    "clean_start": clean_start,
+                    "tracked_before": _display_git_paths(tracked_before),
+                    "enforced": bool(git_ok and not allow_tracked_side_effects),
+                    "enforcement_reason": enforcement_reason,
+                }
+            )
+            if git_stderr:
+                side_effect_guard["git_status_unavailable_reason"] = git_stderr[-800:]
+            serial_indexes = {
+                index
+                for index in uncached_indexes
+                if _serial_smoke_reason(selected[index - 1], repo_root=repo_root)
+            }
+            serial_check_count = len(serial_indexes)
+            parallel_check_count = len(uncached_indexes) - serial_check_count
+            if uncached_indexes and not fail_fast and parallel_check_count:
+                effective_parallel_jobs = min(requested_parallel_jobs, parallel_check_count)
+            with _run_scoped_node_compile_cache(cleanup_failures, enabled=bool(uncached_indexes)):
+                if effective_parallel_jobs <= 1:
                     for index, check in enumerate(selected, start=1):
-                        if index in serial_indexes:
-                            continue
                         _progress_check_started(
                             progress_callback,
                             index=index,
@@ -1016,23 +1072,113 @@ def build_canary_smoke_suite_run(
                             check=check,
                             repo_root=repo_root,
                         )
-                        future = executor.submit(copy_context().run, run_check, check, check_index=index)
-                        futures[future] = (index, check)
-                    for future in as_completed(futures):
-                        index, check = futures[future]
-                        try:
-                            result = future.result()
-                        except Exception as exc:
-                            result = {
-                                **check,
-                                "status": "failed",
-                                "ok": False,
-                                "reason": f"smoke runner exception: {exc}",
-                                "returncode": None,
-                                "duration_seconds": None,
-                                "check_index": index,
-                                "check_count": len(selected),
-                            }
+                        if index in reusable_matches:
+                            result = reusable_matches[index]
+                        else:
+                            result = run_check(check, check_index=index)
+                            if side_effect_guard["enforced"]:
+                                after_ok, tracked_after, after_stderr = _tracked_change_paths(repo_root=repo_root)
+                                side_effects = sorted(set(tracked_after) - set(tracked_before))
+                                if side_effects:
+                                    result.update(
+                                        {
+                                            "ok": False,
+                                            "status": "failed_tracked_side_effect",
+                                            "tracked_side_effects": _display_git_paths(side_effects),
+                                        }
+                                    )
+                                    if clean_start:
+                                        restore = _restore_tracked_paths(
+                                            side_effects,
+                                            repo_root=repo_root,
+                                            expected_paths=tracked_before,
+                                        )
+                                        result["tracked_side_effect_restore"] = restore
+                                        side_effect_guard["auto_restored"] = (
+                                            bool(side_effect_guard.get("auto_restored"))
+                                            or bool(restore.get("ok"))
+                                        )
+                                if not after_ok and after_stderr:
+                                    result["tracked_side_effect_stderr_tail"] = after_stderr[-800:]
+                        _progress_check_finished(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            result=result,
+                        )
+                        results.append(result)
+                        if fail_fast and not result.get("ok"):
+                            break
+                else:
+                    indexed_results: dict[int, dict[str, Any]] = {}
+                    for index in sorted(reusable_matches):
+                        check = selected[index - 1]
+                        reused = reusable_matches[index]
+                        _progress_check_started(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            check=check,
+                            repo_root=repo_root,
+                        )
+                        indexed_results[index] = reused
+                        _progress_check_finished(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            result=reused,
+                        )
+                    with ThreadPoolExecutor(max_workers=effective_parallel_jobs) as executor:
+                        futures = {}
+                        for index in uncached_indexes:
+                            if index in serial_indexes:
+                                continue
+                            check = selected[index - 1]
+                            _progress_check_started(
+                                progress_callback,
+                                index=index,
+                                total=len(selected),
+                                check=check,
+                                repo_root=repo_root,
+                            )
+                            future = executor.submit(copy_context().run, run_check, check, check_index=index)
+                            futures[future] = (index, check)
+                        for future in as_completed(futures):
+                            index, check = futures[future]
+                            try:
+                                result = future.result()
+                            except Exception as exc:
+                                result = {
+                                    **check,
+                                    "status": "failed",
+                                    "ok": False,
+                                    "reason": f"smoke runner exception: {exc}",
+                                    "returncode": None,
+                                    "duration_seconds": None,
+                                    "check_index": index,
+                                    "check_count": len(selected),
+                                }
+                            indexed_results[index] = result
+                            _progress_check_finished(
+                                progress_callback,
+                                index=index,
+                                total=len(selected),
+                                result=result,
+                            )
+                    for index in uncached_indexes:
+                        if index not in serial_indexes:
+                            continue
+                        check = selected[index - 1]
+                        _progress_check_started(
+                            progress_callback,
+                            index=index,
+                            total=len(selected),
+                            check=check,
+                            repo_root=repo_root,
+                        )
+                        result = run_check(check, check_index=index)
+                        result["serial_execution_required"] = True
+                        result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
                         indexed_results[index] = result
                         _progress_check_finished(
                             progress_callback,
@@ -1040,61 +1186,42 @@ def build_canary_smoke_suite_run(
                             total=len(selected),
                             result=result,
                         )
-                for index, check in enumerate(selected, start=1):
-                    if index not in serial_indexes:
-                        continue
-                    _progress_check_started(
-                        progress_callback,
-                        index=index,
-                        total=len(selected),
-                        check=check,
-                        repo_root=repo_root,
-                    )
-                    result = run_check(check, check_index=index)
-                    result["serial_execution_required"] = True
-                    result["serial_execution_reason"] = _serial_smoke_reason(check, repo_root=repo_root)
-                    indexed_results[index] = result
-                    _progress_check_finished(
-                        progress_callback,
-                        index=index,
-                        total=len(selected),
-                        result=result,
-                    )
-                results = [indexed_results[index] for index in sorted(indexed_results)]
-        if side_effect_guard["enforced"]:
-            final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
-            side_effects = sorted(set(tracked_after) - set(tracked_before))
-            side_effect_guard.update(
-                {
-                    "git_status_final_ok": final_ok,
-                    "tracked_after": _display_git_paths(tracked_after),
-                    "tracked_side_effects": _display_git_paths(side_effects),
-                }
-            )
-            if final_stderr:
-                side_effect_guard["git_status_final_stderr_tail"] = final_stderr[-800:]
-            if effective_parallel_jobs > 1 and side_effects:
-                guard_failure = {
-                    "schema_version": "canary_smoke_suite_guard_failure_v0",
-                    "status": "failed_tracked_side_effect",
-                    "ok": False,
-                    "reason": (
-                        "parallel smoke-suite run produced tracked side effects; "
-                        "rerun with --jobs 1 to attribute the script precisely"
-                    ),
-                    "tracked_side_effects": _display_git_paths(side_effects),
-                }
-                if clean_start:
-                    restore = _restore_tracked_paths(
-                        side_effects,
-                        repo_root=repo_root,
-                        expected_paths=tracked_before,
-                    )
-                    guard_failure["tracked_side_effect_restore"] = restore
-                    side_effect_guard["auto_restored"] = (
-                        bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
-                    )
-                suite_guard_failures.append(guard_failure)
+                    results = [indexed_results[index] for index in sorted(indexed_results)]
+            if side_effect_guard["enforced"]:
+                final_ok, tracked_after, final_stderr = _tracked_change_paths(repo_root=repo_root)
+                side_effects = sorted(set(tracked_after) - set(tracked_before))
+                side_effect_guard.update(
+                    {
+                        "git_status_final_ok": final_ok,
+                        "tracked_after": _display_git_paths(tracked_after),
+                        "tracked_side_effects": _display_git_paths(side_effects),
+                    }
+                )
+                if final_stderr:
+                    side_effect_guard["git_status_final_stderr_tail"] = final_stderr[-800:]
+                if effective_parallel_jobs > 1 and side_effects:
+                    guard_failure = {
+                        "schema_version": "canary_smoke_suite_guard_failure_v0",
+                        "status": "failed_tracked_side_effect",
+                        "ok": False,
+                        "reason": (
+                            "parallel smoke-suite run produced tracked side effects; "
+                            "rerun with --jobs 1 to attribute the script precisely"
+                        ),
+                        "tracked_side_effects": _display_git_paths(side_effects),
+                    }
+                    if clean_start:
+                        restore = _restore_tracked_paths(
+                            side_effects,
+                            repo_root=repo_root,
+                            expected_paths=tracked_before,
+                        )
+                        guard_failure["tracked_side_effect_restore"] = restore
+                        side_effect_guard["auto_restored"] = (
+                            bool(side_effect_guard.get("auto_restored")) or bool(restore.get("ok"))
+                        )
+                    suite_guard_failures.append(guard_failure)
+        reused_check_count = sum(1 for item in results if item.get("reused"))
 
     display_items = results if execute else normalized
     failures = [item for item in results if not item.get("ok")] + suite_guard_failures + cleanup_failures
@@ -1108,7 +1235,7 @@ def build_canary_smoke_suite_run(
     unsafe = [
         item
         for item in normalized
-        if not isinstance(item.get("normalized"), dict) or not item["normalized"].get("ok")
+        if not isinstance((norm := item.get("normalized")), dict) or not norm.get("ok")
     ]
     ok = not failures and (execute or not unsafe) and not warnings
     return {
@@ -1130,7 +1257,8 @@ def build_canary_smoke_suite_run(
         "limit": max(0, limit),
         "matched_check_count": matched_check_count,
         "selected_check_count": len(selected),
-        "executed_check_count": len(results),
+        "executed_check_count": len(results) - reused_check_count,
+        "reused_check_count": reused_check_count,
         "failure_count": len(failures),
         **({"cleanup_failures": cleanup_failures} if cleanup_failures else {}),
         "git_required_skip_count": len(git_required_skips),
@@ -1232,7 +1360,7 @@ def build_catalog_canary_run(
     unsafe = [
         item
         for item in normalized
-        if not isinstance(item.get("normalized"), dict) or not item["normalized"].get("ok")
+        if not isinstance((norm := item.get("normalized")), dict) or not norm.get("ok")
     ]
     ok = not failures and (execute or not unsafe)
     return {
@@ -1334,6 +1462,7 @@ def render_canary_smoke_suite_run_markdown(payload: dict[str, Any]) -> str:
         f"- limit: `{payload.get('limit')}`",
         f"- selected_checks: `{payload.get('selected_check_count')}`",
         f"- executed_checks: `{payload.get('executed_check_count')}`",
+        f"- reused_checks: `{payload.get('reused_check_count') or 0}`",
         f"- parallel_jobs: `{payload.get('parallel_jobs')}`",
         f"- effective_parallel_jobs: `{payload.get('effective_parallel_jobs')}`",
         f"- serial_check_count: `{payload.get('serial_check_count')}`",
