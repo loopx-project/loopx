@@ -361,6 +361,7 @@ def _prompt(request: Mapping[str, Any]) -> str:
 
 def _checked_prompt_context(
     request: Mapping[str, Any], *, include_session_lineage: bool = False,
+    required_write_scope: str | None = None,
 ) -> dict[str, Any] | None:
     from ..quota.turn_envelope import assert_turn_envelope_consumer_version
 
@@ -372,7 +373,7 @@ def _checked_prompt_context(
     try:
         checked = complete_turn_host_source(request, operation="host_dispatch_context",
                                         include_session_lineage=include_session_lineage,
-                                        include_model_context=True)
+                                        include_model_context=True, required_write_scope=required_write_scope)
     except RuntimeError:
         # Preserve the historical diagnostic precedence for doubly malformed
         # input without imposing a second bridge call on valid requests.
@@ -382,7 +383,9 @@ def _checked_prompt_context(
     return checked
 
 
-def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+def prepare_codex_cli_input(
+    request: Mapping[str, Any], *, required_write_scope: str | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Prepare one launch's prompt and schema from one complete-source check.
 
     This value never crosses an attempt/result boundary or enters a cache.
@@ -390,7 +393,7 @@ def prepare_codex_cli_input(request: Mapping[str, Any]) -> tuple[str, dict[str, 
     their existing prompt/schema readers. Launch and result authority stay with
     the original Host and outer executor.
     """
-    checked = _checked_prompt_context(request)
+    checked = _checked_prompt_context(request, required_write_scope=required_write_scope)
     if checked is None:
         return _prompt(request), codex_cli_result_schema(request)
     return _render_prompt(request, checked=checked), _result_schema(request, checked=checked)
@@ -834,6 +837,34 @@ class CodexFailureObservation:
         return _FAILURE_KINDS.get(self.category(complete=complete), "unknown")
 
 
+def codex_project_write_scope(project: Path, directory: Path, runtime_root: Path) -> tuple[Path, str]:
+    """Resolve one writable directory without including the controller stores."""
+    from ..todos.contract import normalize_required_write_scopes
+
+    project = project.resolve()
+    directory = (project / directory).resolve()
+    if directory == project or not directory.is_relative_to(project) or (directory.exists() and not directory.is_dir()):
+        raise ValueError("--write-dir must name a directory inside the project.")
+    for protected in ((project / ".loopx").resolve(), runtime_root.resolve()):
+        if directory.is_relative_to(protected) or protected.is_relative_to(directory):
+            raise ValueError("--write-dir must stay separate from the goal and runtime state.")
+    if any(marker in str(directory) for marker in "*?[]"):
+        raise ValueError("--write-dir must use a literal path supported by the Codex permission profile.")
+    scope = f"{directory.relative_to(project).as_posix()}/**"
+    if normalize_required_write_scopes([scope]) != [scope]:
+        raise ValueError("--write-dir must use a directory name supported by the task write scope.")
+    return directory, scope
+
+
+def _codex_write_launch_options(
+    project: Path, runtime_root: Path, directory: Path | None, sandbox: str,
+) -> tuple[Path | None, str, dict[str, str]]:
+    if directory is None:
+        return None, sandbox, {}
+    directory, scope = codex_project_write_scope(project, directory, runtime_root)
+    return directory, f"directory:{directory}", {"required_write_scope": scope}
+
+
 def _codex_command(
     *,
     codex_bin: str,
@@ -846,7 +877,23 @@ def _codex_command(
     session_id: str | None,
     mcp_server: Mapping[str, Any] | None,
     mcp_turn_environment: Mapping[str, str],
+    write_directory: Path | None = None,
 ) -> list[str]:
+    if write_directory is not None:
+        # Entry names can merge with ambient config. Use this invocation's own
+        # profile and bind sessions to the stable directory separately.
+        profile = f"loopx_{os.urandom(16).hex()}"
+        rule = f'{{{json.dumps(str(write_directory), ensure_ascii=False)}="write"}}'
+        sandbox_arguments = [
+            "--strict-config", "--ignore-rules",
+            "-c", f'permissions.{profile}={{extends=":read-only",filesystem={rule},network={{enabled=false}}}}',
+            "-c", f'default_permissions="{profile}"',
+            "-c", 'approval_policy="never"',
+        ]
+    elif session_id:
+        sandbox_arguments = ["-c", f'sandbox_mode="{sandbox}"']
+    else:
+        sandbox_arguments = ["--sandbox", sandbox]
     if session_id:
         command = [
             codex_bin,
@@ -855,8 +902,7 @@ def _codex_command(
             "-C",
             str(project),
             "resume",
-            "-c",
-            f'sandbox_mode="{sandbox}"',
+            *sandbox_arguments,
             "--json",
         ]
     else:
@@ -864,8 +910,7 @@ def _codex_command(
             codex_bin,
             "exec",
             "--skip-git-repo-check",
-            "--sandbox",
-            sandbox,
+            *sandbox_arguments,
             "-C",
             str(project),
             "--json",
@@ -930,6 +975,7 @@ def run_codex_cli_host(
     timeout_seconds: float | None = None,
     goal_admission: FirstPartyHostGoalAdmission | None = None,
     registry_path: Path | None = None,
+    write_directory: Path | None = None,
 ) -> dict[str, Any]:
     assert_turn_host_request_version(request)
     if sandbox not in CODEX_CLI_SANDBOXES:
@@ -940,6 +986,9 @@ def run_codex_cli_host(
     resolved = shutil.which(codex_bin) if os.path.sep not in codex_bin else codex_bin
     if not resolved or not Path(resolved).exists():
         raise ValueError("Codex CLI executable is unavailable")
+    write_directory, session_sandbox, write_context = _codex_write_launch_options(
+        project, runtime_root, write_directory, sandbox,
+    )
     lineage = _lineage(request)
     admission = goal_admission
     if admission is None and registry_path is not None:
@@ -967,11 +1016,11 @@ def run_codex_cli_host(
     profile_digest = (codex_session_profile_digest(
         project=project, codex_bin=str(resolved),
         home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
-        model=model, reasoning_effort=reasoning_effort, sandbox=sandbox, mcp_server=mcp_server,
+        model=model, reasoning_effort=reasoning_effort, sandbox=session_sandbox, mcp_server=mcp_server,
     ) if session_scope == "agent" else None)
     if binding and profile_digest:
         approved_write_resume = (
-            sandbox == "workspace-write"
+            session_sandbox == "workspace-write"
             and binding.get("session_profile_digest") == codex_session_profile_digest(
                 project=project, codex_bin=str(resolved),
                 home=Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser(),
@@ -1040,7 +1089,7 @@ def run_codex_cli_host(
         temporary = Path(directory)
         schema_path = temporary / "result-schema.json"
         output_path = temporary / "last-message.json"
-        input_text, result_schema = prepare_codex_cli_input(request)
+        input_text, result_schema = prepare_codex_cli_input(request, **write_context)
         schema_path.write_text(
             json.dumps(
                 result_schema,
@@ -1059,6 +1108,7 @@ def run_codex_cli_host(
             reasoning_effort=reasoning_effort,
             session_id=session_id,
             mcp_server=mcp_server,
+            write_directory=write_directory,
             mcp_turn_environment=collaboration_mcp_turn_environment(
                 mcp_server, turn_key=request["turn_key"], lineage=lineage, project=project,
             ),

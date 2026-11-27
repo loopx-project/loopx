@@ -27,7 +27,7 @@ from .control_plane.projects.registry_codec import (
 from typing import Any
 
 from .control_plane.runtime.time import now_local_iso
-from .control_plane.runtime.document_io import atomic_write_state_text
+from .control_plane.runtime.document_io import atomic_write_state_text, fsync_state_directory
 from .control_plane.todos.active_state_editing import (
     TODO_SECTION_HEADINGS,
     insertion_anchor,
@@ -42,6 +42,7 @@ from .execution_profile import (
     compact_execution_profile,
     execution_profile_summary,
 )
+from .file_lock import exclusive_cross_runtime_file_lock
 from .global_registry import sync_project_registry_to_global
 from .install_contract import (
     archive_fallback_install_command,
@@ -196,6 +197,54 @@ def relative_state_file(project: Path, state_file: Path) -> str:
     return rel_or_abs(state_file, project)
 
 
+def initialize_first_goal_storage(
+    runtime_root: Path, goal: dict[str, Any], *, registry_path: Path, objective: str,
+    goal_doc: Path | None = None,
+) -> dict[str, Any]:
+    """Prepare the registered initial source only when the authority owner needs it."""
+    project = Path(goal["repo"])
+    goal_id = str(goal["id"])
+    state_file = resolve_state_file(project, goal.get("state_file"))
+    if state_file is None or not state_file.resolve().is_relative_to(project):
+        raise ValueError("The first goal requires a state file inside its project")
+
+    def prepare_source() -> None:
+        from .control_plane.goals.activation import goal_is_stopped
+
+        with (
+            project_registry_transaction(registry_path, operation="bootstrap_registry") as transaction,
+            exclusive_cross_runtime_file_lock(state_file, operation="bootstrap_state"),
+        ):
+            registry = transaction.payload_copy()
+            if find_registry_goal(registry, goal_id) != goal or resolve_runtime_root(
+                registry, None, registry_path=registry_path,
+            ).resolve() != runtime_root:
+                raise GoalCreationConflictError("The first goal registration changed; retry the original start request")
+            if state_file.exists():
+                return
+            if goal_is_stopped(goal):
+                raise ValueError("The goal is stopped. Resume it before retrying the original start request.")
+            require_single_goal_state_route(project, goal_id, state_file)
+            require_legacy_state_replacement_allowed(runtime_root=runtime_root, goal_id=goal_id, goal=goal)
+            require_registry_source_write_allowed(
+                registry_path=registry_path, runtime_root=runtime_root, goal_id=goal_id, state_file=state_file,
+            )
+            fsync_state_directory(registry_path)
+            atomic_write_state_text(state_file, render_state_markdown(
+                project=project, goal_id=goal_id, adapter_kind=goal["adapter"]["kind"],
+                objective=objective, updated_at=now_iso(), goal_doc=goal_doc,
+                execution_profile=goal.get("execution_profile"),
+                handoff_mode=goal["coordination"]["storage_target"]["handoff_mode"],
+            ), create_only=True)
+
+    result = initialize_goal_storage_target(
+        runtime_root, goal, registry_path=registry_path, prepare_source=prepare_source,
+    )
+    if result is None or result.get("authority_initialized") is not True:
+        raise RuntimeError("The first goal authority could not be initialized")
+    return result
+
+
 def build_goal_entry(
     *,
     project: Path,
@@ -326,6 +375,7 @@ def bootstrap_project(
     sync_global: bool,
     allow_global_route_replacement: bool = False,
     creation_operation_id: str | None = None,
+    initial_agent_id: str | None = None,
 ) -> dict[str, Any]:
     project = project.expanduser().resolve()
     goal_id = validate_goal_id_path_segment(goal_id or default_goal_id(project))
@@ -391,6 +441,15 @@ def bootstrap_project(
     if storage_target is not None:
         goal_entry.setdefault("coordination", {})["storage_target"] = storage_target
     canonical_creation = (storage_target or {}).get("schema_version") == "loopx_new_goal_storage_target_v1"
+    if initial_agent_id is not None:
+        from .control_plane.todos.contract import normalize_todo_claimed_by
+
+        agent_id = normalize_todo_claimed_by(initial_agent_id)
+        if not canonical_creation or creation_operation_id is None or agent_id != initial_agent_id:
+            raise ValueError("First task creation requires a new canonical Goal and an exact Agent identity")
+        if not state_file.resolve().is_relative_to(project):
+            raise ValueError("The first goal requires a state file inside its project")
+        goal_entry["coordination"].update(agent_model="peer_v1", registered_agents=[agent_id])
     # Imported/promoted Goals have no canonical *creation* receipt. Resolve
     # their current authority through the existing typed reader, never by
     # manufacturing a creation target or reviving their old Markdown source.
@@ -553,6 +612,8 @@ def bootstrap_project(
         ) as registry_transaction, nullcontext():
             current_registry = registry_transaction.payload_copy()
             current_goal = find_registry_goal(current_registry, goal_id)
+            if initial_agent_id is not None and current_registry.get("goals"):
+                raise GoalCreationConflictError("First task creation requires a fresh local project registry")
             if canonical_existing and current_goal != previous_goal:
                 raise ValueError("Canonical Goal registration changed; retry bootstrap")
             if creation_operation_id is not None and current_goal is not None:
@@ -567,6 +628,8 @@ def bootstrap_project(
                     goal_entry["coordination"]["storage_target"] = frozen
             frozen_target = goal_entry.get("coordination", {}).get("storage_target") or {}
             canonical_creation = frozen_target.get("schema_version") == "loopx_new_goal_storage_target_v1"
+            if initial_agent_id is not None and not canonical_creation:
+                raise ValueError("First task creation could not establish its original canonical storage target")
             if canonical_creation and force and (current_goal is not None or state_file.exists()):
                 raise ValueError("Canonical creation cannot rebuild existing state; restore or migrate through its owning operation")
 
@@ -591,7 +654,7 @@ def bootstrap_project(
                 if action.get("path") == str(state_file):
                     action["action"] = state_action
             planned = original
-            if state_action in {"created", "replaced"}:
+            if state_action in {"created", "replaced"} and initial_agent_id is None:
                 declared_handoff_mode = goal_handoff_mode(original) if original and force else frozen_target.get("handoff_mode", HANDOFF_MODE_LEGACY)
                 planned = render_state_markdown(
                     project=project,
@@ -620,7 +683,13 @@ def bootstrap_project(
         # Registry intent survives an interrupted initialization. Reconnect retries
         # it outside the legacy/registry locks; changing machine defaults cannot
         # retarget that Goal. The TS owner refuses replacing an existing provider.
-        if not canonical_existing:
+        if initial_agent_id is not None:
+            # Publish the existing creation intent first. The same operation
+            # can supply its missing initial source after a process exit.
+            storage_selection = initialize_first_goal_storage(
+                runtime_root, goal_entry, registry_path=registry_path, objective=objective, goal_doc=goal_doc,
+            )
+        elif not canonical_existing:
             storage_selection = initialize_goal_storage_target(runtime_root, find_registry_goal(registry, goal_id) or {}, registry_path=registry_path)
         if sync_global:
             global_sync = sync_project_registry_to_global(
