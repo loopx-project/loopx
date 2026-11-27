@@ -16,6 +16,7 @@ from .steward_turn_common import (
     as_mapping,
     as_optional_dict,
     native_steward_client_id,
+    steward_monitor_for,
 )
 from .steward_turn_context import (
     ExecutionReportServiceProtocol,
@@ -188,7 +189,7 @@ def execute_steward_turn(
     is_replan_deferral: Callable[[Mapping[str, object]], bool],
 ) -> dict[str, object]:
     """Run in the original Chat worker, through all native settlement owners."""
-    from ...cli import build_parser
+    from ...cli_runtime import _build_selected_parser
     from ...cli_commands.turn import handle_turn_command
     from ...control_plane.turn_driver.host_candidate import build_result, extract_turn_authority
     from .antigravity_adapter import ANTIGRAVITY_IDLE_TIMEOUT_SEC, AntigravityAdapter
@@ -211,9 +212,7 @@ def execute_steward_turn(
     steward_advancement = not local_session and not report_work
     managed_turn = ManagedSessionTurn(host.controller) if local_session and not report_work else None
     if admitted["observation_only"]:
-        from .steward_monitor import StewardMonitor
-
-        monitor = StewardMonitor(host.controller)
+        monitor = steward_monitor_for(host.controller)
         todo = next(
             (row for row in as_dict_list(monitor.todos(dict(actor))) if row.get("todo_id") == request.get("todo_id")),
             None,
@@ -489,7 +488,7 @@ def execute_steward_turn(
         argv += ["--todo-id", str(request["todo_id"])]
     if request.get("validation_command") is not None:
         argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-    args = build_parser().parse_args(argv)
+    args = _build_selected_parser("turn").parse_args(argv)
     args.host, args.session_scope = "codex-app-server", "agent"
     result: dict[str, object] = {}
 

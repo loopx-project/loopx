@@ -40,6 +40,8 @@ from .steward_turn_common import (
     as_dict_list,
     as_mapping,
     as_optional_dict,
+    monitor_controller_for,
+    steward_monitor_for,
 )
 
 PRESET = "portfolio-progress"
@@ -327,7 +329,6 @@ class _StewardReportsBase:
         return subscription, as_dict(journal["window"]) if journal else None
 
     def _frontier(self, owner_key: str, actor: dict[str, object]) -> tuple[dict[str, object] | None, bool]:
-        from .steward_monitor import StewardMonitor
         from .steward_turn import StewardTurnHost
 
         subscription = self.subscription(owner_key)
@@ -349,7 +350,7 @@ class _StewardReportsBase:
             return None, False
         window = as_dict(admitted["window"])
         window_id = str(window["window_id"])
-        rows = [row for row in as_dict_list(StewardMonitor(self.controller).todos(actor)) if row.get("target_key") == window_id]
+        rows = [row for row in as_dict_list(steward_monitor_for(self.controller).todos(actor)) if row.get("target_key") == window_id]
         if len(rows) > 1:
             raise ValueError("report window has conflicting native tasks")
         if not rows:
@@ -366,7 +367,7 @@ class _StewardReportsBase:
                     "--target-key", window_id, "--continuation-policy", "same_agent_non_delivery", "--execute",
                 ],
             )
-            rows = [row for row in as_dict_list(StewardMonitor(self.controller).todos(actor)) if row.get("target_key") == window_id]
+            rows = [row for row in as_dict_list(steward_monitor_for(self.controller).todos(actor)) if row.get("target_key") == window_id]
         folder = attempt_directory(self.root, window)
         if len(rows) == 1 and (
             rows[0]["status"] == "done"
@@ -487,9 +488,9 @@ class StewardReports(_StewardReportsBase):
                 raise ValueError("native report configuration readback changed")
             if plan["retires_failed_window"] and journal and failure is not None:
                 self._cancel_failed_window(actor, as_dict(journal["window"]), failure)
-            next_check = getattr(self.controller, "_steward_monitor_next_check", None)
-            if isinstance(next_check, dict):
-                next_check.pop(binding_id, None)
+            from .steward_monitor_pump import clear_steward_monitor_check_hints
+
+            clear_steward_monitor_check_hints(monitor_controller_for(self.controller), binding_id)
             receipt: dict[str, object] = {
                 "ok": True, "applied": True, "plan": plan, "report": self.health(binding_id),
                 "model_invoked": False, "external_writes_performed": False,
@@ -793,7 +794,6 @@ class ManagedSessionReports(_StewardReportsBase):
         )
 
     def frontier(self, session_id: str) -> tuple[dict[str, object] | None, bool]:
-        from .steward_monitor import StewardMonitor
         from .steward_turn import StewardTurnHost
 
         actor = as_dict(self.selected(session_id)["actor"])
@@ -802,7 +802,7 @@ class ManagedSessionReports(_StewardReportsBase):
             return None, False
         if window:
             window_id = str(window["window_id"])
-            todo = next((row for row in as_dict_list(StewardMonitor(self.controller).todos(actor)) if row.get("target_key") == window_id), None)
+            todo = next((row for row in as_dict_list(steward_monitor_for(self.controller).todos(actor)) if row.get("target_key") == window_id), None)
             if todo and (
                 (attempt_directory(self.root, window) / "private-generation.json").exists()
                 or StewardTurnHost(self.controller).has_recoverable_stopped_report(actor, window, todo)

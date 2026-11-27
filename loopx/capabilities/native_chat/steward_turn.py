@@ -54,10 +54,12 @@ from .steward_turn_common import (
     as_optional_str,
     iso_timestamp_seconds,
     is_zero_effect_replan_selection_deferral as _is_zero_effect_replan_selection_deferral,
+    monitor_store_for,
     native_steward_client_id as native_steward_client_id,
     normalize_report_kernel_candidate as _normalize_report_kernel_candidate,
     normalize_steward_advancement_kernel_candidate as _normalize_steward_advancement_kernel_candidate,
     report_turn as report_turn,
+    steward_monitor_for,
     same_report_validator_command as _same_report_validator_command,
     split_bounded_evidence_items,
     split_evidence_text_chunks,
@@ -113,12 +115,14 @@ class StewardTurnHost:
     def _lookup_monitor_turn(
         self, binding_id: str, actor: Mapping[str, object], client_id: str
     ) -> dict[str, object] | None:
-        return as_optional_dict(lookup_steward_monitor_turn(self.store, binding_id, str(actor["session_id"]), client_id))
+        return as_optional_dict(
+            lookup_steward_monitor_turn(monitor_store_for(self.store), binding_id, str(actor["session_id"]), client_id)
+        )
 
     def _ensure_background_session(
         self, binding_id: str, parent_session: Mapping[str, object]
     ) -> dict[str, object]:
-        return as_dict(ensure_steward_background_session(self.store, binding_id, parent_session))
+        return as_dict(ensure_steward_background_session(monitor_store_for(self.store), binding_id, parent_session))
 
     def _monitor_selection_failed_before_poll(self, turn: Mapping[str, object]) -> bool:
         return monitor_selection_failed_before_poll(self.store, turn)
@@ -204,7 +208,6 @@ class StewardTurnHost:
             "observation": observed.get("observation"),
         }
         from ...agent_registry import load_goal_from_registry
-        from .steward_monitor import StewardMonitor
 
         goal_id = str(actor["goal_id"])
         goal = as_optional_dict(load_goal_from_registry(cast(Path, self.controller.registry_path), goal_id))
@@ -213,7 +216,7 @@ class StewardTurnHost:
             next(
                 (
                     row
-                    for row in as_dict_list(StewardMonitor(self.controller).todos(dict(canonical_actor)))
+                    for row in as_dict_list(steward_monitor_for(self.controller).todos(dict(canonical_actor)))
                     if row.get("todo_id") == request.get("todo_id") and row.get("task_class") == "continuous_monitor"
                 ),
                 None,
@@ -236,7 +239,11 @@ class StewardTurnHost:
             from .steward_reports import StewardReports
 
             subscription, window = StewardReports(self.controller).current_window(str(saved["binding_id"]))
-            todos = as_dict_list(StewardMonitor(self.controller).todos(dict(canonical_actor))) if canonical_actor else []
+            todos = (
+                as_dict_list(steward_monitor_for(self.controller).todos(dict(canonical_actor)))
+                if canonical_actor
+                else []
+            )
             report = {
                 "report_window": window,
                 "report_subscription": subscription,

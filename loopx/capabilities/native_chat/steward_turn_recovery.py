@@ -27,7 +27,9 @@ from .steward_turn_common import (
     as_optional_dict,
     as_optional_str,
     iso_timestamp_seconds,
+    monitor_store_for,
     native_steward_client_id,
+    steward_monitor_for,
 )
 
 _MONITOR_PRE_POLL_ERROR = (
@@ -81,10 +83,10 @@ def monitor_restart_basis(
     from ...chat_store import _read_jsonl
     from ...control_plane.quota.monitor_poll import _monitor_poll_effect_id, _monitor_poll_receipt_path
     from .steward_commands import native_command
-    from .steward_monitor import TARGET, StewardMonitor
+    from .steward_monitor import TARGET
 
     actor = as_mapping(request["actor"])
-    original_raw = load_steward_monitor_turn_by_id(host.store, actor, str(recovery["original_turn_id"]))
+    original_raw = load_steward_monitor_turn_by_id(monitor_store_for(host.store), actor, str(recovery["original_turn_id"]))
     if original_raw is None:
         raise ValueError("the original stopped watch is unavailable")
     original = as_dict(original_raw)
@@ -130,7 +132,7 @@ def monitor_restart_basis(
             matched = next(
                 (
                     row
-                    for row in as_dict_list(StewardMonitor(host.controller).todos(dict(actor)))
+                    for row in as_dict_list(steward_monitor_for(host.controller).todos(dict(actor)))
                     if row.get("todo_id") == todo_id
                 ),
                 None,
@@ -222,7 +224,7 @@ def monitor_restart_carrier(
     next_client_id = base
     session_id = str(original["session_id"])
     while True:
-        raw_carrier = lookup_steward_monitor_turn(host.store, binding_id, session_id, next_client_id)
+        raw_carrier = lookup_steward_monitor_turn(monitor_store_for(host.store), binding_id, session_id, next_client_id)
         if raw_carrier is None:
             break
         carrier = as_dict(raw_carrier)
@@ -353,16 +355,21 @@ def report_selection_recovery(
             return None
         goal_id = str(actor["goal_id"])
         agent_id = str(actor["agent_id"])
-        journal = as_dict(load_turn_journal(turn_journal_path(reports.root, goal_id=goal_id, turn_key=key_obj)))
+        journal = as_optional_dict(load_turn_journal(turn_journal_path(reports.root, goal_id=goal_id, turn_key=key_obj)))
+        if journal is None:
+            return None
         current_guard: dict[str, object] | None = None
+        journal_status = journal.get("status")
         if (
-            journal.get("status") == "failed"
+            journal_status == "failed"
             and journal.get("result_kind") == "validation_failed"
             and journal.get("validation_stage") == "host_result_contract"
         ):
             current_guard = host._cleared_replan_guard(actor)
             if current_guard is None:
                 return None
+        elif journal_status != "stopped":
+            return None
         # Transport canonical observations to the shared typed admission owner.
         proof["probe"] = {
             "turn": probe_turn,
@@ -664,7 +671,7 @@ def settle_stopped_report_candidate(
     normalize_report_candidate: Callable[[Mapping[str, object]], dict[str, object]],
 ) -> dict[str, object]:
     """Freeze and settle an already-generated stopped report candidate without invoking a model."""
-    from ...cli import build_parser
+    from ...cli_runtime import _build_selected_parser
     from ...cli_commands.turn import handle_turn_command
     from ...control_plane.turn_driver import inspect_loopx_turn_journal
     from ..periodic_report.private_generation import validate_private_generation
@@ -714,7 +721,7 @@ def settle_stopped_report_candidate(
     ]
     if request.get("validation_command") is not None:
         argv += ["--validation-command-json", json.dumps(request["validation_command"])]
-    args = build_parser().parse_args(argv)
+    args = _build_selected_parser("turn").parse_args(argv)
     args.host, args.session_scope = "codex-app-server", "agent"
     result: dict[str, object] = {}
     host_runner = host._build_replay_runner(normalize_report_candidate(raw_candidate))
@@ -746,7 +753,7 @@ def recover_report_settlement(
     report_turn_fn: Callable[[StewardStoreProtocol, Mapping[str, object], Mapping[str, object]], dict[str, object] | None],
 ) -> None:
     """Resume only cached, validated native effects of the original report."""
-    from ...cli import build_parser
+    from ...cli_runtime import _build_selected_parser
     from ...cli_commands.turn import handle_turn_command
     from ...control_plane.turn_driver import inspect_loopx_turn_journal
     from ...control_plane.turn_driver.journal_store import find_loopx_turn_key_by_settlement_identity
@@ -850,7 +857,7 @@ def recover_report_settlement(
         host_runner: Callable[[Mapping[str, object], object], dict[str, object]] = (
             host._build_replay_runner(contract_recovery[1]) if contract_recovery is not None else no_model
         )
-        args = build_parser().parse_args(
+        args = _build_selected_parser("turn").parse_args(
             [
                 "turn",
                 "run-once",

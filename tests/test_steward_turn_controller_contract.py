@@ -15,6 +15,7 @@ import pytest
 
 from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.external_conversations import ChatExternalConversations
+from loopx.capabilities.native_chat.session_calendar_tasks import SessionCalendarTasks
 from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports, StewardReports
 from loopx.capabilities.native_chat.steward_turn import StewardTurnHost, report_turn
 from loopx.capabilities.native_chat.steward_turn_common import (
@@ -125,6 +126,7 @@ def test_real_controller_constructs_host_and_matches_protocol_signatures(tmp_pat
     host = StewardTurnHost(controller)
     reports = StewardReports(controller)
     managed_reports = ManagedSessionReports(controller)
+    calendar_tasks = SessionCalendarTasks(controller)
     transport = LarkPrivateConversations(
         controller=controller,
         runtime_root=tmp_path,
@@ -137,6 +139,7 @@ def test_real_controller_constructs_host_and_matches_protocol_signatures(tmp_pat
     assert host.store is store
     assert reports.controller is controller
     assert managed_reports.controller is controller
+    assert calendar_tasks.controller is controller
     assert lark_reports.controller is controller
     assert lark_reports.transport is transport
     assert callable(report_turn)
@@ -146,6 +149,7 @@ def test_real_controller_constructs_host_and_matches_protocol_signatures(tmp_pat
         (StewardControllerProtocol, ChatRuntimeController, "_start_accepted_turn_worker"),
         (StewardControllerProtocol, ChatRuntimeController, "_fail_queue_preparation"),
         (StewardStoreProtocol, ChatSessionStore, "events_after"),
+        (StewardStoreProtocol, ChatSessionStore, "messages"),
         (StewardStoreProtocol, ChatSessionStore, "append_event"),
         (StewardStoreProtocol, ChatSessionStore, "update_session"),
         (StewardStoreProtocol, ChatSessionStore, "accept_managed_turn"),
@@ -173,6 +177,7 @@ def test_real_controller_protocol_and_four_callers_mypy_contract(tmp_path: Path)
         "loopx/chat_runtime.py",
         "loopx/capabilities/native_chat/steward_managed_mode.py",
         "loopx/capabilities/native_chat/steward_reports.py",
+        "loopx/capabilities/native_chat/session_calendar_tasks.py",
         "loopx/extensions/lark/steward_reports.py",
     ]
     probe_errors, caller_errors = _run_mypy_contract_probe(
@@ -180,6 +185,7 @@ def test_real_controller_protocol_and_four_callers_mypy_contract(tmp_path: Path)
         probe_name="controller_contract_probe.py",
         probe_lines=[
             "from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings",
+            "from loopx.capabilities.native_chat.session_calendar_tasks import SessionCalendarTasks",
             "from loopx.capabilities.native_chat.steward_reports import ManagedSessionReports, StewardReports",
             "from loopx.capabilities.native_chat.steward_turn import StewardTurnHost",
             "from loopx.capabilities.native_chat.steward_turn_common import (",
@@ -202,8 +208,8 @@ def test_real_controller_protocol_and_four_callers_mypy_contract(tmp_path: Path)
             "def bind_bindings(bindings: ChatConversationBindings) -> StewardBindingsProtocol:",
             "    return bindings",
             "",
-            "def bind_reports(ctrl: ChatRuntimeController) -> tuple[StewardReports, ManagedSessionReports]:",
-            "    return StewardReports(ctrl), ManagedSessionReports(ctrl)",
+            "def bind_reports(ctrl: ChatRuntimeController) -> tuple[StewardReports, ManagedSessionReports, SessionCalendarTasks]:",
+            "    return StewardReports(ctrl), ManagedSessionReports(ctrl), SessionCalendarTasks(ctrl)",
         ],
         callers=callers,
     )
@@ -218,6 +224,7 @@ def test_real_controller_protocol_and_four_callers_mypy_contract(tmp_path: Path)
         caller_errors["loopx/capabilities/native_chat/steward_managed_mode.py"]
     )
     assert caller_errors["loopx/capabilities/native_chat/steward_reports.py"] == []
+    assert caller_errors["loopx/capabilities/native_chat/session_calendar_tasks.py"] == []
     assert caller_errors["loopx/extensions/lark/steward_reports.py"] == []
     assert sum(len(lines) for lines in caller_errors.values()) <= 40
 

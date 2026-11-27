@@ -140,7 +140,7 @@ def governance_replan_context(
     authority: Mapping[str, object],
 ) -> dict[str, object]:
     """Project public-safe review/writeback/vision context for text-only Steward replanning."""
-    from ...cli import build_parser
+    from ...cli_runtime import _build_selected_parser
     from ...cli_commands.quota_native_context import read_replan_view
     from ...control_plane.goals.goal_frontier.semantic_history import latest_agent_vision_from_status_payload
     from ...control_plane.todos.list_readback import list_goal_todos
@@ -162,7 +162,7 @@ def governance_replan_context(
         try:
             tokens = shlex.split(cmd_str)
             q_idx = tokens.index("quota")
-            parsed = build_parser().parse_args(tokens[q_idx:])
+            parsed = _build_selected_parser("quota").parse_args(tokens[q_idx:])
             view = read_replan_view(parsed)
             if isinstance(view, Mapping) and view.get("ok") is True:
                 return as_dict(view)

@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
     from ...chat_runtime import ChatRuntimeAdapter
+    from .steward_monitor import StewardMonitor
+    from .steward_monitor_turns import (
+        StewardControllerProtocol as _MonitorControllerProtocol,
+        StewardSessionStoreProtocol as _MonitorStoreProtocol,
+    )
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
 _WORKER_EXITED_ERROR = (
@@ -81,7 +86,7 @@ class StewardStoreProtocol(Protocol):
 
     def events_after(self, session_id: str, turn_id: str, event_id: str | None) -> list[dict[str, object]]: ...
 
-    def messages(self, session_id: str) -> list[dict[str, object]]: ...
+    def messages(self, session_id: str, *, strict: bool = False) -> list[dict[str, object]]: ...
 
     def queued_turns(self, session_id: str) -> list[dict[str, object]]: ...
 
@@ -182,6 +187,12 @@ class StewardControllerProtocol(Protocol):
 
     @property
     def project_contexts(self) -> StewardProjectContextsProtocol: ...
+
+    @property
+    def codex_bin(self) -> str: ...
+
+    @property
+    def codex_home(self) -> Path: ...
 
     def _ensure_adapter_locked(
         self,
@@ -595,3 +606,20 @@ def is_zero_effect_replan_selection_deferral(result: Mapping[str, object]) -> bo
         effects.get(key) is False
         for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")
     )
+
+
+def monitor_controller_for(controller: StewardControllerProtocol) -> _MonitorControllerProtocol:
+    """Adapt the outer Chat controller protocol to the monitor controller boundary."""
+    return cast("_MonitorControllerProtocol", controller)
+
+
+def steward_monitor_for(controller: StewardControllerProtocol) -> StewardMonitor:
+    """Adapt the outer Chat controller protocol to the StewardMonitor helper boundary."""
+    from .steward_monitor import StewardMonitor
+
+    return StewardMonitor(monitor_controller_for(controller))
+
+
+def monitor_store_for(store: StewardStoreProtocol) -> _MonitorStoreProtocol:
+    """Adapt the narrowed Steward store protocol to the monitor turn store protocol."""
+    return cast("_MonitorStoreProtocol", store)

@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from ...chat_store import _read_json
+from ...control_plane.collaboration.source_chat_observation import _read_json
 from ...file_lock import exclusive_file_lock, try_exclusive_file_lock
 from ...registry import atomic_write_json
 from ...capabilities.native_chat.steward_monitor import steward_monitor_delivery_dir
