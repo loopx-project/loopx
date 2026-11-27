@@ -140,6 +140,8 @@ def build_codex_cli_host_runner(
                 operation_request_sha256=getattr(args, "operation_request_sha256", None),
                 **options,
             )
+        if (directory := getattr(args, "codex_write_dir", None)) is not None:
+            options["write_directory"] = directory
         return run_codex_cli_host(request, registry_path=registry_path, **options)
 
     return run_built_in_host

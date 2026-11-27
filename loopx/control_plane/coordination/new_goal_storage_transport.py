@@ -5,7 +5,7 @@ empty-source admission, writer fences, provider selection and recovery are TS-ow
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,10 @@ def resolve_canonical_creation_target(provider: str) -> dict[str, Any]:
     return result
 
 
-def initialize_goal_storage_target(runtime_root: Path, goal: Mapping[str, Any], *, registry_path: Path | None = None) -> dict[str, Any] | None:
+def initialize_goal_storage_target(
+    runtime_root: Path, goal: Mapping[str, Any], *, registry_path: Path | None = None,
+    prepare_source: Callable[[], None] | None = None,
+) -> dict[str, Any] | None:
     target = (goal.get("coordination") or {}).get("storage_target")
     if target is None:
         return None
@@ -56,6 +59,8 @@ def initialize_goal_storage_target(runtime_root: Path, goal: Mapping[str, Any], 
         # owner can request a complete source capture for unfinished creation.
         if result.get("source_capture_required") is not True:
             return result
+        if prepare_source is not None:
+            prepare_source()
         from .authority_source_capture import build_runtime_shadow_source_snapshot
         projection, snapshot = build_runtime_shadow_source_snapshot(goal=goal, runtime_root=runtime_root,
             state_path=state_path, registry_path=registry_path)
