@@ -297,6 +297,48 @@ def test_queue_read_is_ordered_bounded_read_only_and_full_input_remains_readable
     assert request(f"/api/chat/sessions/{sid}/queue")[0] == 503
 
 
+def test_mixed_queue_timestamps_keep_readback_and_claim_in_utc_order(ordinary):  # noqa: F811
+    store, _runtime, contexts, request, capture, *_ = ordinary
+    project = contexts.resolve(contexts.available()[0]["project_ref"])
+    sid = store.create_session(
+        goal_id=None, agent_id="codex", adapter_kind="codex_app_server",
+        upstream_thread_id="fixture", upstream_mode="chat",
+        channel_id=project["channel_id"], project_context=project["context"],
+    )["session_id"]
+    timestamps = {
+        "expired": "2000-01-01T00:00:00Z",
+        "earlier": "2026-02-03T10:00:00Z",
+        "later": "2026-02-03T10:00:00.000001Z",
+        "equal-offset": "2026-02-03T18:00:00+08:00",
+    }
+    turns = {}
+    for client_id, stamp in timestamps.items():
+        turn, created = store.create_queued_turn(
+            sid, client_turn_id=client_id, message=client_id, origin="web",
+        )
+        assert created
+        turns[client_id] = turn["turn_id"]
+        path = store._turn_path(sid, turn["turn_id"])
+        path.write_text(json.dumps({**turn, "created_at": stamp}), encoding="utf-8")
+    store.update_turn(sid, turns["expired"], expires_at="2000-01-01T00:00:01Z")
+
+    code, snapshot = request(f"/api/chat/sessions/{sid}/queue")
+    assert code == 200 and snapshot["active_turn_id"] is None
+    claimed = store.claim_next_queued_turn(sid, host_claim_id="fixture-claim")
+    assert claimed is not None
+
+    assert (
+        [(row["turn_id"], row["created_at"]) for row in snapshot["turns"]],
+        claimed["turn_id"],
+    ) == (
+        [(turns[key], timestamps[key]) for key in ("expired", "earlier", "equal-offset", "later")],
+        turns["earlier"],
+    )
+    assert store.load_session(sid)["active_turn_id"] == turns["earlier"]
+    assert store.load_turn(sid, turns["expired"])["status"] == "timed_out"
+    assert not capture.exists()
+
+
 def test_queued_steering_uses_original_input_once_and_replays_after_target_finished(ordinary):  # noqa: F811
     store, runtime, contexts, request, capture, *_ = ordinary
     sid, active, queued, original = held_queue(ordinary)

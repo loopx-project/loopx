@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from ..chat import require_matching_message_replay, require_matching_replay
 from ..file_lock import exclusive_file_lock
 from ..capabilities.native_chat.file_discovery import FileChatDiscovery
+from ..control_plane.runtime.time import chronology_key
 
 if TYPE_CHECKING:
     from ..capabilities.native_chat.conversation_bindings import ChatConversationBindings
@@ -275,9 +276,9 @@ class ChatIngressStore:
         selected = set(queued_chat_turn_ids(rows, active_turn_id, include_reserved=include_reserved, capacity_at=capacity_at))
         return sorted(
             [row for row in rows if row["turn_id"] in selected],
-            key=lambda item: (
-                str(item.get("created_at") or ""),
-                str(item.get("turn_id") or ""),
+            key=lambda row: (
+                chronology_key(row.get("created_at")),
+                str(row.get("turn_id") or ""),
             ),
         )
 
