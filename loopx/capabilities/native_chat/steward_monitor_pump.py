@@ -15,7 +15,7 @@ from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
 from ...control_plane.projects.registry_codec import load_registry
-from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
+from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due, monitor_todo_next_due_at
 from ...registry import registry_goals
 from .steward_monitor_turns import (
     FOLLOWUP_TARGET_PREFIX,
@@ -347,9 +347,11 @@ def _report_config_for_goal(controller: StewardControllerProtocol, goal_id: str)
     return report_config if isinstance(report_config, Mapping) else {}
 
 
-def _remaining_due_seconds(next_due_at: str) -> float:
-    due_dt = datetime.fromisoformat(next_due_at.replace("Z", "+00:00"))
-    return (due_dt - datetime.now(timezone.utc)).total_seconds()
+def _monitor_deadline(todo: StewardTodoRecord) -> datetime:
+    deadline = monitor_todo_next_due_at(todo)
+    if deadline is None:
+        raise ValueError("invalid monitor deadline")
+    return deadline
 
 
 def _schedule_soonest_monitor_backoff(
@@ -364,8 +366,8 @@ def _schedule_soonest_monitor_backoff(
     ]
     if not all_monitors:
         return
-    soonest = min(all_monitors, key=lambda row: datetime.fromisoformat(row["next_due_at"].replace("Z", "+00:00")))
-    remaining = _remaining_due_seconds(soonest["next_due_at"])
+    soonest = min(_monitor_deadline(row) for row in all_monitors)
+    remaining = (soonest - datetime.now(timezone.utc)).total_seconds()
     if remaining > 0:
         cache[binding_id] = time.monotonic() + min(60, remaining)
 
@@ -607,7 +609,7 @@ def _process_managed_session(
         if not monitor_todo_is_due(todo):
             _clear_failure(cache, failures, watch_fail_key)
             if todo.get("status") == "open" and todo.get("next_due_at") and not _any_session_failure_active(cache, session_id, now_mono):
-                remaining = _remaining_due_seconds(todo["next_due_at"])
+                remaining = (_monitor_deadline(todo) - datetime.now(timezone.utc)).total_seconds()
                 cache[key] = time.monotonic() + min(60, max(0, remaining))
             return
         accepted, created = service.submit(
