@@ -446,8 +446,14 @@ class PrivateDeliveryDiscovery:
         repairs = bool(row.get("session_id") and row.get("turn_id") and legacy_recovery_repairs(row))
         view = {key: row.get(key) for key in
                 ("status", "request_ref", "binding_id", "session_id", "turn_id")}
+        if row.get("created_at") is not None:
+            view["created_at"] = row.get("created_at")
+        event = row.get("event", {})
+        event_view: dict[str, Any] = {"chat_type": event.get("chat_type")}
+        if event.get("create_time") is not None:
+            event_view["create_time"] = event.get("create_time")
         view.update(agent_target=bool(row.get("agent_target")),
-                    event={"chat_type": row.get("event", {}).get("chat_type")})
+                    event=event_view)
         historic_images = row.get("historical_answer_images") or {}
         if historic_images:
             view["historical_images_admitted"] = True

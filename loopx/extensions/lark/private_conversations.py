@@ -91,6 +91,28 @@ class _ControlReadFallback(Exception):
     """A valid source needs ordinary rendering, before any Core write."""
 
 
+def _recovery_timestamp_ms(row: PayloadView) -> int | None:
+    """Resolve provider event time or ISO created_at onto a comparable UTC epoch-ms timeline."""
+    raw_create_time = _mapping(row.get("event")).get("create_time")
+    parsed_num: int | None = None
+    if isinstance(raw_create_time, int) and not isinstance(raw_create_time, bool):
+        parsed_num = raw_create_time
+    elif isinstance(raw_create_time, str) and raw_create_time.strip().isdigit():
+        parsed_num = int(raw_create_time.strip())
+    if parsed_num is not None:
+        return parsed_num * 1000 if parsed_num < 10**11 else parsed_num
+    raw_created_at = row.get("created_at")
+    if isinstance(raw_created_at, str) and raw_created_at.strip():
+        try:
+            dt = datetime.fromisoformat(raw_created_at.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    return None
+
+
 class LarkPrivateConversations(
     PrivateProgressMixin, PrivateWebProjectionMixin, PrivateAnswerImageMixin, PrivateSourceVerificationMixin,
 ):
@@ -945,6 +967,8 @@ class LarkPrivateConversations(
     def pending_delivery_paths(self) -> list[Path]:
         """The durable transport store is the queue; no in-memory admission."""
         paths: list[Path] = []
+        timed_recovery_indices: list[int] = []
+        timed_recovery_paths: list[tuple[tuple[int, str], Path]] = []
         recovery_candidate = self.core.context_recovery_observer()
         now = datetime.now(timezone.utc).timestamp()
         planned_repairs = self._planned_historical_repairs()
@@ -991,6 +1015,10 @@ class LarkPrivateConversations(
                     )
                     if repairs or candidate:
                         self._context_recovery_probe_at[path] = now_mono + 60
+                        ts_ms = _recovery_timestamp_ms(row)
+                        if ts_ms is not None:
+                            timed_recovery_indices.append(len(paths))
+                            timed_recovery_paths.append(((ts_ms, path.name), path))
                         paths.append(path)
                     else:
                         if current_fp is _UNSET:
@@ -1001,6 +1029,13 @@ class LarkPrivateConversations(
                         self._record_context_recovery_noop_backoff(
                             path, row, stagger_first=True, fingerprints=current_fp,
                         )
+        if len(timed_recovery_paths) > 1:
+            for slot, (_, path) in zip(
+                timed_recovery_indices,
+                sorted(timed_recovery_paths, key=lambda item: item[0]),
+                strict=True,
+            ):
+                paths[slot] = path
         self._web_projection_scan_rows = scanned_rows
         try:
             web_paths = self._web_projection_paths()
@@ -1232,7 +1267,10 @@ class LarkPrivateConversations(
         if not turn or turn["status"] not in TERMINAL_TURN_STATES:
             return None
         if turn["status"] == "failed":
-            events = store.events_after(sid, tid, None) if turn.get("error_code") in {"host_gate", "response_timeout"} else []
+            events = (
+                store.events_after(sid, tid, None)
+                if turn.get("error_code") in {"host_gate", "response_timeout", "resume_failed"} else []
+            )
             preparation_recovery = (
                 _mapping(record["source"]).get("private_human_message") is True
                 and _mapping(selected["binding"]).get("context_kind") in {"project", "steward"}
