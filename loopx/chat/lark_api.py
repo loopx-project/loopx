@@ -358,8 +358,8 @@ def reconcile_lark_manager_route(
         "executor_endpoint_source": executor_endpoint_source,
         "manager_channel_id": expected_channel,
         **(
-            {"connector": dict(binding["connector"])}
-            if isinstance(binding.get("connector"), Mapping)
+            {"connector": dict(connector)}
+            if isinstance((connector := binding.get("connector")), Mapping)
             else {}
         ),
     }
@@ -690,7 +690,8 @@ class LarkChatRequestMixin:
                 if connection_id
                 else None
             )
-            stored_routing = (stored or {}).get("routing") or {}
+            raw_stored_routing = (stored or {}).get("routing")
+            stored_routing = raw_stored_routing if isinstance(raw_stored_routing, Mapping) else {}
             conversation_kind = (
                 _compact_text(body.get("conversation_kind"), limit=40)
                 or stored_routing.get("conversation_kind")

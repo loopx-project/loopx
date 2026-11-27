@@ -528,6 +528,52 @@ def test_delivery_projects_one_proposal_to_manager_and_goal_audiences(
     ] == "goal-profile"
 
 
+def test_resolved_binding_rejects_non_mapping_routing_before_delivery(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    import loopx.extensions.lark.team_plan_confirmation as confirmation
+
+    binding_path = tmp_path / "goal-channel.json"
+    binding_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "loopx_goal_channel_lark_binding_v0",
+                "bindings": {
+                    "goal-alpha": {
+                        "goal_id": "goal-alpha",
+                        "provider": "lark",
+                        "enabled": True,
+                        "connection_id": "goal-connection",
+                        "target_ref": "goal-target",
+                        "routing": "invalid-routing",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(confirmation, "load_registry", lambda _path: {})
+    monkeypatch.setattr(
+        confirmation,
+        "resolve_goal_source_runtime_route",
+        lambda **_kwargs: {"source_registry": tmp_path / ".loopx" / "registry.json"},
+    )
+    monkeypatch.setattr(
+        confirmation, "default_goal_channel_binding_path", lambda _path: binding_path
+    )
+
+    with pytest.raises(
+        ValueError, match="team plan review audience routing is invalid"
+    ):
+        confirmation._resolved_binding(
+            registry_path=tmp_path / ".loopx" / "registry.json",
+            runtime_root=tmp_path,
+            goal_id="goal-alpha",
+            connection_id=None,
+            manager_audience=False,
+        )
+
+
 def test_delivery_retry_resumes_after_the_first_audience_checkpoint(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
