@@ -429,6 +429,36 @@ def test_due_monitors_and_pump_single_todo_read_efficiency(
     assert read_calls == 1
 
 
+def test_followups_keep_priority_and_order_equal_priority_by_utc(tmp_path: Path) -> None:
+    monitor = StewardMonitor(_as_controller(_StubController(tmp_path)))
+    todos: list[StewardTodoRecord] = [
+        {
+            "todo_id": todo_id,
+            "status": "open",
+            "task_class": "advancement_task",
+            "claimed_by": "steward",
+            "target_key": FOLLOWUP_TARGET_PREFIX + todo_id,
+            "priority": priority,
+            "created_at": timestamp,
+            "resume_ready": resume_ready,
+        }
+        for todo_id, priority, timestamp, resume_ready in [
+            ("earlier-z", "P1", "2026-02-03T10:00:00Z", True),
+            ("later", "P1", "2026-02-03T10:00:00.000001Z", True),
+            ("urgent", "P0", "2026-02-03T10:00:01Z", True),
+            ("equal-offset", "P1", "2026-02-03T18:00:00+08:00", True),
+            ("earlier-a", "P1", "2026-02-03T10:00:00Z", True),
+            ("waiting", "P0", "2026-02-03T09:00:00Z", False),
+        ]
+    ]
+
+    selected = monitor.runnable_advancement_todos({"agent_id": "steward"}, todos=todos)
+
+    assert [row["todo_id"] for row in selected] == [
+        "urgent", "earlier-a", "earlier-z", "equal-offset", "later",
+    ]
+
+
 def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
