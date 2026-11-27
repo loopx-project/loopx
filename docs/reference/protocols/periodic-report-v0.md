@@ -219,6 +219,12 @@ freeze a generation and queue the existing delivery Todo. A fully unattended
 managed Turn runner still needs an adapter for that editorial handoff; the
 calendar setting alone does not supply one.
 
+Derived work-window labels use Beijing time when both endpoints can be
+displayed in that zone. If the display zone is unavailable or either endpoint
+falls outside its calendar range, the label uses UTC for both endpoints.
+Display conversion preserves the recorded instants. Calendar reports label
+the frozen window using the configured schedule timezone.
+
 `periodic_report_activation_v0` is the effect-free inspection receipt. It
 records whether generation is allowed, the normalized profile digest, and the
 portable/enhanced/durable extension mode. It performs no source read, schedule
