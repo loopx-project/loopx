@@ -48,6 +48,7 @@ from loopx.control_plane.scheduler.execution_context import (
     scheduler_execution_context_for_runtime_profile,
 )
 from loopx.control_plane.turn_driver import decision_capture as decision_capture_module
+from loopx.control_plane.turn_driver import native_context_profile
 from loopx.control_plane.work_items.interaction_contract import (
     build_interaction_contract,
     interaction_next_cli_actions,
@@ -890,9 +891,10 @@ def test_codex_app_windows_settlement_command_substitutes_powershell_turn(
     (SimpleNamespace(name="posix", getuid=None), False),
     (SimpleNamespace(name="posix", getuid=lambda: 0), True),
 ])
-def test_private_capture_support_matches_uid_boundary(
+def test_private_capture_support_matches_uid_and_settlement_command(
     platform: SimpleNamespace, supported: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(native_context_profile, "os", platform)
     monkeypatch.setattr(decision_capture_module, "os", platform)
     assert decision_capture_module.private_capture_supported() is supported
     if supported:
@@ -901,29 +903,13 @@ def test_private_capture_support_matches_uid_boundary(
         with pytest.raises(ValueError, match="unsupported on this platform"):
             decision_capture_module.private_capture_uid()
 
-
-def test_settlement_command_uses_private_capture_support() -> None:
-    # The generated command and the CLI's private-capture check must share one
-    # platform qualification; a POSIX-looking host without getuid is unsupported.
-    # The settlement kernel resolves the predicate at its owner, because keeping
-    # capture IO out of the plan module's cold import is itself a guard.
-    with patch.object(decision_capture_module, "private_capture_supported", return_value=False):
-        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
-            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
-            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
-        ).as_dict()
-        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
-        assert command is not None
-        assert "--max-page-output-bytes" not in command
-
-    with patch.object(decision_capture_module, "private_capture_supported", return_value=True):
-        plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
-            goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
-            turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
-        ).as_dict()
-        command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
-        assert command is not None
-        assert "--max-page-output-bytes" in command
+    plan = quota_effect_program.build_turn_scoped_cli_settlement_plan(
+        goal_id=GOAL_ID, agent_id=AGENT_ID, todo_id=TODO_ID,
+        turn_instance_id=TURN_ID, scoped_cli_args="", lifecycle_actor_args="",
+    ).as_dict()
+    command = settlement_step_command(plan, SettlementStepKind.QUOTA_SPEND)
+    assert command is not None
+    assert ("--max-page-output-bytes" in shlex.split(command)) is supported
 
 
 def test_cli_validation_projects_ordinary_completion_not_terminal_intent() -> None:
