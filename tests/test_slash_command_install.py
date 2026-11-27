@@ -2356,3 +2356,65 @@ def test_claude_legacy_migration_heredocs_compound_clauses_and_manual_diagnostic
         py_exe=sys.executable,
         powershell=False,
     ) is None
+
+    # 6. Cross-version live shims under this installation stay intact unless their python fails
+    # or another segment in the same command references a stale/missing legacy path.
+    live_shim_root = claude_install.REPO_ROOT / "loopx" / "claude_goal_mode"
+    live_cmd_shim = str(live_shim_root / "scripts" / "goalmode_cmd.py")
+    live_status_shim = str(live_shim_root / "statusline" / "goal_status.py")
+    live_hook_shim = str(live_shim_root / "hooks" / "goal_policy.py")
+    live_mcp_shim = str(live_shim_root / "mcp" / "loopx_mcp.py")
+
+    live_md = (
+        "---\n"
+        "description: loopx goal-mode setup. `/loopx <task>`.\n"
+        f"allowed-tools: Bash({shlex.quote(sys.executable)}:*)\n"
+        "---\n"
+        f"!`{shlex.quote(sys.executable)} {shlex.quote(live_cmd_shim)} $ARGUMENTS`\n"
+        "<!-- preserve comment -->\n"
+    )
+    assert claude_install._migrated_command_md_text(live_md, py_exe=sys.executable) is None
+
+    broken_py_live_md = live_md.replace(shlex.quote(sys.executable), "'/old/python3'")
+    migrated_broken_md = claude_install._migrated_command_md_text(broken_py_live_md, py_exe=sys.executable)
+    assert migrated_broken_md is not None
+    assert "/loopx/hosts/claude/scripts/goalmode_cmd.py" in migrated_broken_md
+    assert "<!-- preserve comment -->" in migrated_broken_md
+
+    assert claude_install._inspect_legacy_claude_command(
+        f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)}",
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+
+    mixed_live_and_stale = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)} && "
+        f"/old/python3 {shlex.quote(legacy_status)}"
+    )
+    migrated_mixed, mixed_reason = claude_install._inspect_legacy_claude_command(
+        mixed_live_and_stale,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert mixed_reason is None
+    assert migrated_mixed is not None
+    assert migrated_mixed.startswith(f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)} && ")
+    assert new_status in migrated_mixed and "/old/python3" not in migrated_mixed
+
+    assert claude_install._migrated_mcp_json_payload(
+        {"mcpServers": {"loopx": {"command": sys.executable, "args": [live_mcp_shim]}}}
+    ) is None
+    assert claude_install._migrated_mcp_json_payload(
+        {"mcpServers": {"loopx": {"command": "/old/python3", "args": [live_mcp_shim]}}}
+    )["mcpServers"]["loopx"]["args"][0].endswith("/loopx/hosts/claude/mcp/loopx_mcp.py")
+    assert claude_install._inspect_legacy_claude_command(
+        f"/old/python3 {shlex.quote(live_hook_shim)}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )[0] is not None

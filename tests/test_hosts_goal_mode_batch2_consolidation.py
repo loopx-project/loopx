@@ -104,7 +104,7 @@ def _build_pure_loopx_wheel(out_dir: Path) -> Path:
         rel = file_path.relative_to(REPO_ROOT).as_posix()
         if "/__pycache__/" in rel or rel.startswith("loopx/web/") or rel.endswith(".pyc"):
             continue
-        if file_path.suffix not in {".py", ".json", ".ts", ".toml", ".md", ".png"}:
+        if file_path.suffix not in {".py", ".json", ".ts", ".toml", ".md", ".png", ".js", ".mjs"}:
             continue
         contents[rel] = file_path.read_bytes()
 
@@ -538,3 +538,347 @@ def test_isolated_wheel_upgrade_preserves_batch2_shims_and_scripts(
             assert mod_outputs[0] == mod_outputs[1]
         else:
             assert all("usage:" in out for out in mod_outputs)
+
+
+def _build_pre_consolidation_claude_wheel(out_dir: Path) -> Path:
+    """Build a baseline-layout wheel without ``loopx/hosts/claude/``."""
+    version = "0.0.0"
+    metadata = f"loopx-{version}.dist-info"
+    contents: dict[str, bytes] = {}
+    excluded_prefixes = (
+        "loopx/hosts/claude/",
+        "loopx/claude_goal_mode/",
+        "loopx/web/",
+    )
+    for file_path in sorted(PACKAGE_ROOT.rglob("*")):
+        if not file_path.is_file():
+            continue
+        rel = file_path.relative_to(REPO_ROOT).as_posix()
+        if "/__pycache__/" in rel or rel.endswith(".pyc") or rel.startswith(excluded_prefixes):
+            continue
+        if file_path.suffix not in {".py", ".json", ".ts", ".toml", ".md", ".png", ".js", ".mjs"}:
+            continue
+        if rel == "loopx/__init__.py":
+            text = file_path.read_text(encoding="utf-8")
+            contents[rel] = text.replace(loopx_version, version, 1).encode("utf-8")
+        elif rel == "loopx/hosts/capabilities.py":
+            text = file_path.read_text(encoding="utf-8")
+            contents[rel] = text.replace(
+                '"claude": "loopx.hosts.claude"',
+                '"claude": "loopx.claude_goal_mode"',
+            ).encode("utf-8")
+        elif rel == "loopx/goal_mode_mcp.py":
+            text = file_path.read_text(encoding="utf-8")
+            contents[rel] = text.replace(
+                "from .hosts.claude.scripts.goalmode_cmd import",
+                "from .claude_goal_mode.scripts.goalmode_cmd import",
+            ).encode("utf-8")
+        elif rel == "loopx/slash_command_install.py":
+            text = file_path.read_text(encoding="utf-8")
+            text = text.replace(
+                "from loopx.hosts.claude.scripts import install as claude_install",
+                "from loopx.claude_goal_mode.scripts import install as claude_install",
+            )
+            marker = "    try:\n        from loopx.claude_goal_mode.scripts import install as claude_install"
+            assert marker in text
+            text = text.replace(marker, "    return\n" + marker, 1)
+            contents[rel] = text.encode("utf-8")
+        else:
+            contents[rel] = file_path.read_bytes()
+
+    claude_root = PACKAGE_ROOT / "hosts" / "claude"
+    for file_path in sorted(claude_root.rglob("*")):
+        if not file_path.is_file():
+            continue
+        sub_rel = file_path.relative_to(claude_root).as_posix()
+        if "/__pycache__/" in sub_rel or sub_rel.endswith(".pyc"):
+            continue
+        rel = f"loopx/claude_goal_mode/{sub_rel}"
+        if file_path.suffix in {".py", ".json", ".md"}:
+            text = file_path.read_text(encoding="utf-8")
+            if sub_rel == "__init__.py":
+                text = text.replace("from ..capabilities", "from ..hosts.capabilities")
+                text = text.replace('adapter_module="loopx.hosts.claude"', 'adapter_module="loopx.claude_goal_mode"')
+            elif sub_rel in {
+                "hooks/goal_state.py",
+                "mcp/loopx_mcp.py",
+                "scripts/connect.py",
+                "scripts/install.py",
+            }:
+                text = text.replace("parents[4]", "parents[3]")
+            contents[rel] = text.encode("utf-8")
+        else:
+            contents[rel] = file_path.read_bytes()
+
+    contents[f"{metadata}/METADATA"] = (
+        f"Metadata-Version: 2.1\nName: loopx\nVersion: {version}\n".encode("utf-8")
+    )
+    contents[f"{metadata}/WHEEL"] = (
+        b"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+    )
+    contents[f"{metadata}/RECORD"] = "".join(
+        f"{name},,\n" for name in [*contents, f"{metadata}/RECORD"]
+    ).encode("utf-8")
+
+    wheel_path = out_dir / f"loopx-{version}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+    return wheel_path
+
+
+def test_two_wheel_claude_upgrade_migration_and_rollback_cycle(
+    tmp_path: Path,
+) -> None:
+    """5-stage wheel cycle: baseline -> upgrade -> default migrate -> downgrade -> baseline reinstall."""
+    baseline_wheel = _build_pre_consolidation_claude_wheel(tmp_path)
+    candidate_wheel = _build_pure_loopx_wheel(tmp_path)
+    venv_dir = tmp_path / "rollback-venv"
+    venv.EnvBuilder(with_pip=True, symlinks=os.name != "nt").create(venv_dir)
+    py_bin = venv_dir / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    bin_dir = py_bin.parent
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj"
+    proj_claude = proj / ".claude"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-rb",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-rb",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    proj_claude.mkdir(parents=True)
+    (proj_claude / "loop.md").write_text(
+        '<!-- loopx:armed {"goal_id": "cc-rb", "agent_id": "cc"} -->\n',
+        encoding="utf-8",
+    )
+
+    isolated_env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(home),
+        "CLAUDE_HOME": str(user_claude),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "LOOPX_GOAL_FORCE": "1",
+    }
+
+    def pip_install(wheel: Path, *extra: str) -> None:
+        subprocess.run(
+            [
+                str(py_bin),
+                "-I",
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--no-deps",
+                "--disable-pip-version-check",
+                *extra,
+                str(wheel),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def site_loopx_dir() -> Path:
+        raw = subprocess.check_output(
+            [str(py_bin), "-I", "-c", "import loopx, pathlib; print(pathlib.Path(loopx.__file__).parent)"],
+            cwd=tmp_path,
+            text=True,
+        ).strip()
+        return Path(raw)
+
+    def replay_all(stage: str) -> None:
+        settings_data = json.loads((proj_claude / "settings.json").read_text(encoding="utf-8"))
+        assert settings_data["permissions"] == {"deny": ["Read(~/.ssh/**)"]}, stage
+        pre_hooks = [
+            h["command"]
+            for g in settings_data["hooks"]["PreToolUse"]
+            for h in g["hooks"]
+        ]
+        assert "echo user-hook-keep" in pre_hooks, stage
+
+        sl_cmd = settings_data["statusLine"]["command"]
+        sl_proc = subprocess.run(
+            ["/bin/sh", "-c", sl_cmd],
+            cwd=proj,
+            input=json.dumps({"cwd": str(proj)}),
+            capture_output=True,
+            text=True,
+            env=isolated_env,
+            check=False,
+        )
+        assert sl_proc.returncode == 0, f"{stage} statusLine rc={sl_proc.returncode}: {sl_proc.stderr}"
+        assert "cc-rb" in sl_proc.stdout, f"{stage} statusLine stdout={sl_proc.stdout!r}"
+
+        cmd_text = (proj_claude / "commands" / "loopx.md").read_text(encoding="utf-8")
+        assert "<!-- user-loopx-comment-keep -->" in cmd_text, stage
+        bang_lines = [
+            line.strip()
+            for line in cmd_text.splitlines()
+            if line.strip().startswith("!`") and line.strip().endswith("`")
+        ]
+        assert len(bang_lines) == 1, f"{stage}: {cmd_text!r}"
+        slash_cmd = bang_lines[0][2:-1].replace("$ARGUMENTS", "status")
+        slash_proc = subprocess.run(
+            ["/bin/sh", "-c", slash_cmd],
+            cwd=proj,
+            capture_output=True,
+            text=True,
+            env=isolated_env,
+            check=False,
+        )
+        assert slash_proc.returncode == 0, f"{stage} /loopx status rc={slash_proc.returncode}: {slash_proc.stderr}"
+        assert "goal      : cc-rb" in slash_proc.stdout, f"{stage} /loopx stdout={slash_proc.stdout!r}"
+
+        hook_cmds = [c for c in pre_hooks if "goal_policy.py" in c]
+        assert len(hook_cmds) == 1, stage
+        hook_proc = subprocess.run(
+            ["/bin/sh", "-c", hook_cmds[0]],
+            cwd=proj,
+            input=json.dumps({"cwd": str(proj), "tool_name": "Read", "tool_input": {"file_path": "README.md"}}),
+            capture_output=True,
+            text=True,
+            env=isolated_env,
+            check=False,
+        )
+        assert hook_proc.returncode == 0, f"{stage} PreToolUse rc={hook_proc.returncode}: {hook_proc.stderr}"
+
+        mcp_data = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))
+        assert Path(mcp_data["mcpServers"]["loopx"]["args"][0]).is_file(), stage
+
+    # Stage 1: baseline install
+    pip_install(baseline_wheel)
+    site_base = site_loopx_dir()
+    assert not (site_base / "hosts" / "claude").exists()
+    inst = subprocess.run(
+        [
+            str(py_bin),
+            "-I",
+            str(site_base / "claude_goal_mode" / "scripts" / "install.py"),
+            "--scope",
+            "project",
+            "--project",
+            str(proj),
+            "--skip-mcp",
+            "--harden",
+        ],
+        cwd=proj,
+        env=isolated_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert inst.returncode == 0, inst.stderr + inst.stdout
+    settings = json.loads((proj_claude / "settings.json").read_text(encoding="utf-8"))
+    settings["permissions"] = {"deny": ["Read(~/.ssh/**)"]}
+    settings["hooks"]["PreToolUse"].insert(
+        0,
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo user-hook-keep"}]},
+    )
+    (proj_claude / "settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    loopx_md = proj_claude / "commands" / "loopx.md"
+    loopx_md.write_text(loopx_md.read_text(encoding="utf-8") + "\n<!-- user-loopx-comment-keep -->\n", encoding="utf-8")
+    (proj / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "loopx": {
+                        "command": str(py_bin),
+                        "args": [str(site_base / "claude_goal_mode" / "mcp" / "loopx_mcp.py")],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    replay_all("stage1_baseline")
+
+    # Stage 2: upgrade to candidate wheel before running slash-commands --install
+    pip_install(candidate_wheel, "--upgrade")
+    assert (site_loopx_dir() / "hosts" / "claude").is_dir()
+    replay_all("stage2_upgraded_before_migrate")
+
+    # Stage 3: candidate default slash-commands --install preserves cross-version shim launchers
+    cand_install = subprocess.run(
+        [
+            str(py_bin),
+            "-I",
+            "-m",
+            "loopx.cli",
+            "--format",
+            "json",
+            "slash-commands",
+            "--install",
+            "--codex-home",
+            str(home / ".codex"),
+            "--opencode-home",
+            str(home / ".config" / "opencode"),
+        ],
+        cwd=proj,
+        env=isolated_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert cand_install.returncode == 0, cand_install.stderr + cand_install.stdout
+    assert json.loads(cand_install.stdout)["ok"] is True
+    replay_all("stage3_after_candidate_default_install")
+
+    # Stage 4: downgrade back to baseline wheel -> entries stay runnable with zero missing-script errors
+    pip_install(baseline_wheel, "--force-reinstall")
+    assert not (site_loopx_dir() / "hosts" / "claude").exists()
+    replay_all("stage4_downgraded_to_baseline")
+
+    # Stage 5: baseline rollback reinstall command continues working cleanly
+    base_reinstall = subprocess.run(
+        [
+            str(py_bin),
+            "-I",
+            "-m",
+            "loopx.cli",
+            "slash-commands",
+            "--install",
+            "--codex-home",
+            str(home / ".codex"),
+            "--opencode-home",
+            str(home / ".config" / "opencode"),
+        ],
+        cwd=proj,
+        env=isolated_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert base_reinstall.returncode == 0, base_reinstall.stderr + base_reinstall.stdout
+    replay_all("stage5_after_baseline_reinstall")

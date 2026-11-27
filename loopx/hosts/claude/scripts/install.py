@@ -539,7 +539,56 @@ def _migration_python_cmd() -> str:
     return _python_cmd()
 
 
-def _migrated_command_md_text(raw: str, *, py_exe: str) -> str | None:
+def _resolve_live_python_command(
+    raw_cmd: str,
+    *,
+    live_py_cache: dict[str, bool] | None = None,
+) -> bool:
+    """True when ``raw_cmd`` resolves to an executable Python 3.11+ interpreter."""
+    if not raw_cmd:
+        return False
+    if live_py_cache is not None and raw_cmd in live_py_cache:
+        return live_py_cache[raw_cmd]
+    candidate_path = Path(raw_cmd)
+    if "/" in raw_cmd or "\\" in raw_cmd:
+        resolved = (
+            str(candidate_path)
+            if candidate_path.is_absolute() and candidate_path.is_file()
+            else None
+        )
+    else:
+        resolved = shutil.which(raw_cmd)
+    ok = bool(resolved) and _launches_python(resolved)  # type: ignore[arg-type]
+    if live_py_cache is not None:
+        live_py_cache[raw_cmd] = ok
+    return ok
+
+
+def _is_live_legacy_shim_path(raw_path: str, *, legacy_suffix: str) -> bool:
+    """True when ``raw_path`` resolves to this install's active ``claude_goal_mode`` shim."""
+    normalized = raw_path.replace("\\", "/")
+    if not normalized.endswith(legacy_suffix):
+        return False
+    expected_shim = REPO_ROOT / legacy_suffix.lstrip("/")
+    if not expected_shim.is_file():
+        return False
+    candidate = Path(raw_path)
+    if not candidate.is_file():
+        return False
+    try:
+        return os.path.normcase(str(candidate.resolve())) == os.path.normcase(
+            str(expected_shim.resolve())
+        )
+    except OSError:
+        return False
+
+
+def _migrated_command_md_text(
+    raw: str,
+    *,
+    py_exe: str,
+    live_py_cache: dict[str, bool] | None = None,
+) -> str | None:
     if _LEGACY_COMMAND_SCRIPT_SUFFIX not in raw.replace("\\", "/"):
         return None
     if "description: loopx goal-mode setup" not in raw:
@@ -555,10 +604,22 @@ def _migrated_command_md_text(raw: str, *, py_exe: str) -> str | None:
             allowed_index = index
     if command_index is None:
         return None
+    bare_cmd_line = lines[command_index].rstrip("\r\n")
+    leading_ws_len = len(bare_cmd_line) - len(bare_cmd_line.lstrip())
+    inner_cmd = bare_cmd_line.strip()[2:-1]
+    migrated_inner, _ = _inspect_legacy_claude_command(
+        inner_cmd,
+        legacy_suffix=_LEGACY_COMMAND_SCRIPT_SUFFIX,
+        new_script=_p("scripts", "goalmode_cmd.py"),
+        py_exe=py_exe,
+        powershell=False,
+        live_py_cache=live_py_cache,
+    )
+    if migrated_inner is None:
+        return None
     py = _shell_literal(py_exe, powershell=False)
-    entry = _shell_literal(_p("scripts", "goalmode_cmd.py"), powershell=False)
     cmd_nl = "\r\n" if lines[command_index].endswith("\r\n") else "\n"
-    lines[command_index] = f"!`{py} {entry} $ARGUMENTS`{cmd_nl}"
+    lines[command_index] = f"{bare_cmd_line[:leading_ws_len]}!`{migrated_inner}`{cmd_nl}"
     if allowed_index is not None:
         allowed_nl = "\r\n" if lines[allowed_index].endswith("\r\n") else "\n"
         lines[allowed_index] = f"allowed-tools: Bash({py}:*){allowed_nl}"
@@ -1000,6 +1061,7 @@ def _segment_edits(
     new_script: str,
     py_exe: str,
     powershell: bool,
+    live_py_cache: dict[str, bool] | None = None,
 ) -> tuple[list[tuple[int, int, str]], str | None]:
     cmd_idx, wrapper_reason = _advance_command_wrappers(
         words,
@@ -1046,6 +1108,7 @@ def _segment_edits(
             new_script=new_script,
             py_exe=py_exe,
             powershell=False,
+            live_py_cache=live_py_cache,
         )
         if inner is None:
             return ([], inner_reason)
@@ -1097,6 +1160,12 @@ def _segment_edits(
         script_tok = words[probe]
         normalized = script_tok.unquoted.replace("\\", "/")
         if not normalized.startswith("-") and normalized.endswith(legacy_suffix):
+            if _is_live_legacy_shim_path(
+                script_tok.unquoted, legacy_suffix=legacy_suffix
+            ) and _resolve_live_python_command(
+                cmd_tok.unquoted, live_py_cache=live_py_cache
+            ):
+                return ([], None)
             return (
                 [
                     (script_tok.start, script_tok.end, script_literal),
@@ -1112,6 +1181,15 @@ def _segment_edits(
         and not _ENV_ASSIGN_RE.fullmatch(normalized_cmd)
         and normalized_cmd.endswith(legacy_suffix)
     ):
+        if (
+            os.name != "nt"
+            and _is_live_legacy_shim_path(
+                cmd_tok.unquoted, legacy_suffix=legacy_suffix
+            )
+            and os.access(Path(cmd_tok.unquoted), os.X_OK)
+            and _resolve_live_python_command("python3", live_py_cache=live_py_cache)
+        ):
+            return ([], None)
         return ([(cmd_tok.start, cmd_tok.end, f"{py_replacement} {script_literal}")], None)
     return ([], None)
 
@@ -1123,6 +1201,7 @@ def _inspect_legacy_claude_command(
     new_script: str,
     py_exe: str,
     powershell: bool,
+    live_py_cache: dict[str, bool] | None = None,
 ) -> tuple[str | None, str | None]:
     """Upgrade certified executed legacy commands and report uncertifiable dynamic legacy references."""
     prefilter_command = raw_command.replace("\\\n", "") if not powershell else raw_command
@@ -1147,6 +1226,7 @@ def _inspect_legacy_claude_command(
             new_script=new_script,
             py_exe=py_exe,
             powershell=powershell,
+            live_py_cache=live_py_cache,
         )
         edits.extend(seg_edits)
         if seg_reason and seg_reason not in manual_reasons:
@@ -1186,7 +1266,10 @@ def _rewrite_legacy_claude_command(
 
 
 def _inspect_settings_migration(
-    raw_data: dict[str, Any], *, py_exe: str
+    raw_data: dict[str, Any],
+    *,
+    py_exe: str,
+    live_py_cache: dict[str, bool] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     powershell = _uses_powershell()
     gate_script = _p("hooks", "goal_policy.py")
@@ -1219,6 +1302,7 @@ def _inspect_settings_migration(
                             new_script=gate_script,
                             py_exe=py_exe,
                             powershell=powershell,
+                            live_py_cache=live_py_cache,
                         )
                         if manual_reason and manual_reason not in manual_reasons:
                             manual_reasons.append(manual_reason)
@@ -1250,6 +1334,7 @@ def _inspect_settings_migration(
             new_script=status_script,
             py_exe=py_exe,
             powershell=powershell,
+            live_py_cache=live_py_cache,
         )
         if sl_reason and sl_reason not in manual_reasons:
             manual_reasons.append(sl_reason)
@@ -1267,7 +1352,11 @@ def _migrated_settings_payload(raw_data: dict[str, Any], *, py_exe: str) -> dict
     return updated
 
 
-def _migrated_mcp_json_payload(raw_data: dict[str, Any]) -> dict[str, Any] | None:
+def _migrated_mcp_json_payload(
+    raw_data: dict[str, Any],
+    *,
+    live_py_cache: dict[str, bool] | None = None,
+) -> dict[str, Any] | None:
     servers = raw_data.get("mcpServers")
     if not isinstance(servers, dict):
         return None
@@ -1277,13 +1366,22 @@ def _migrated_mcp_json_payload(raw_data: dict[str, Any]) -> dict[str, Any] | Non
     args = loopx_entry.get("args")
     if not isinstance(args, list):
         return None
+    cmd = loopx_entry.get("command")
+    live_cmd = isinstance(cmd, str) and _resolve_live_python_command(
+        cmd, live_py_cache=live_py_cache
+    )
     new_mcp_script = _p("mcp", "loopx_mcp.py")
     updated_args: list[Any] = []
     changed = False
     for arg in args:
         if isinstance(arg, str) and _LEGACY_MCP_SCRIPT_SUFFIX in arg.replace("\\", "/"):
-            updated_args.append(new_mcp_script)
-            changed = True
+            if live_cmd and _is_live_legacy_shim_path(
+                arg, legacy_suffix=_LEGACY_MCP_SCRIPT_SUFFIX
+            ):
+                updated_args.append(arg)
+            else:
+                updated_args.append(new_mcp_script)
+                changed = True
         else:
             updated_args.append(arg)
     if not changed:
@@ -1317,6 +1415,7 @@ def migrate_legacy_claude_dir(
     """
     results: list[dict[str, str]] = []
     py_exe: str | None = None
+    live_py_cache: dict[str, bool] = {}
 
     def resolve_py() -> str:
         nonlocal py_exe
@@ -1330,7 +1429,13 @@ def migrate_legacy_claude_dir(
             raw_cmd = cmd_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             raw_cmd = ""
-        updated_cmd = _migrated_command_md_text(raw_cmd, py_exe=resolve_py()) if raw_cmd else None
+        updated_cmd = (
+            _migrated_command_md_text(
+                raw_cmd, py_exe=resolve_py(), live_py_cache=live_py_cache
+            )
+            if raw_cmd
+            else None
+        )
         if updated_cmd is not None:
             if execute:
                 write_bytes_atomic(
@@ -1344,7 +1449,9 @@ def migrate_legacy_claude_dir(
     if settings_path.is_file():
         raw_settings = _read_json_dict_fail_closed(settings_path)
         updated_settings, manual_reasons = (
-            _inspect_settings_migration(raw_settings, py_exe=resolve_py())
+            _inspect_settings_migration(
+                raw_settings, py_exe=resolve_py(), live_py_cache=live_py_cache
+            )
             if raw_settings is not None
             else (None, [])
         )
@@ -1380,7 +1487,11 @@ def migrate_legacy_claude_dir(
         mcp_path = project_dir / ".mcp.json"
         if mcp_path.is_file():
             raw_mcp = _read_json_dict_fail_closed(mcp_path)
-            updated_mcp = _migrated_mcp_json_payload(raw_mcp) if raw_mcp is not None else None
+            updated_mcp = (
+                _migrated_mcp_json_payload(raw_mcp, live_py_cache=live_py_cache)
+                if raw_mcp is not None
+                else None
+            )
             if updated_mcp is not None:
                 if execute:
                     write_json_atomic(
