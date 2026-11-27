@@ -84,7 +84,7 @@
   <text x="358" y="402" font-size="18.5" font-weight="600">Pure dry-run &amp; exact replay</text>
   <text x="358" y="432" font-size="14.5" class="sub">Single write; keep rejections (#4286)</text>
   <text x="358" y="458" font-size="14.5" class="sub">--dry-run triggers zero writes (#8685)</text>
-  <text x="358" y="484" font-size="14" class="mono sub">--expected-revision + --operation-id</text>
+  <text x="358" y="484" font-size="14.5" class="sub">Explicit CAS revision + replay key</text>
   <text x="358" y="511" font-size="13" class="mono sub">#4094 · #4286 · #7088 · #8685</text>
 
   <!-- Loop connectors -->

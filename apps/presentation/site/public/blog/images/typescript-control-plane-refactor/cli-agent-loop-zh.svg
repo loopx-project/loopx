@@ -84,7 +84,7 @@
   <text x="358" y="402" font-size="18.5" font-weight="600">纯只读预检与乐观并发重放</text>
   <text x="358" y="432" font-size="14.5" class="sub">单次写入尝试，断连不丢冲突拒绝 (#4286)</text>
   <text x="358" y="458" font-size="14.5" class="sub">--dry-run 零写钩子、零日志污染 (#8685)</text>
-  <text x="358" y="484" font-size="14" class="mono sub">--expected-revision + --operation-id</text>
+  <text x="358" y="484" font-size="14.5" class="sub">显式期望版本 CAS + 幂等键重放回执</text>
   <text x="358" y="511" font-size="13" class="mono sub">#4094 · #4286 · #7088 · #8685</text>
 
   <!-- Loop connectors -->
