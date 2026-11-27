@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -33,10 +34,30 @@ SEMANTICS_SOURCE = (
 )
 
 
+def _bounded_stage_timeout(
+    deadline_monotonic: float | None,
+    *,
+    stage: str,
+    default_timeout: float = 240.0,
+) -> float:
+    if deadline_monotonic is None:
+        return default_timeout
+    remaining = float(deadline_monotonic) - time.monotonic()
+    if remaining <= 0.0:
+        raise TimeoutError(f"deadline exhausted before {stage}")
+    return min(default_timeout, remaining)
+
+
 def _run(
     command: list[str], *, cwd: Path, env: dict[str, str] | None = None,
     input_bytes: bytes | None = None,
+    deadline_monotonic: float | None = None,
 ) -> bytes:
+    timeout = _bounded_stage_timeout(
+        deadline_monotonic,
+        stage=" ".join(command[:3]) if command else "subprocess",
+        default_timeout=240.0,
+    )
     completed = subprocess.run(
         command,
         cwd=cwd,
@@ -45,7 +66,7 @@ def _run(
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=240,
+        timeout=timeout,
     )
     if completed.returncode != 0:
         stdout = completed.stdout.decode("utf-8", errors="replace")
@@ -58,15 +79,27 @@ def _run(
     return completed.stdout
 
 
-def _materialize_base_source(base_ref: str, base_root: Path) -> None:
+def _materialize_base_source(
+    base_ref: str,
+    base_root: Path,
+    *,
+    deadline_monotonic: float | None = None,
+) -> None:
     """Export the pinned CLI source and its resources using a private Git index."""
     env = {**os.environ, "GIT_INDEX_FILE": str(base_root.with_suffix(".index"))}
-    _run(["git", "read-tree", base_ref], cwd=REPO_ROOT, env=env)
+    _run(
+        ["git", "read-tree", base_ref],
+        cwd=REPO_ROOT,
+        env=env,
+        deadline_monotonic=deadline_monotonic,
+    )
     # Root files include build manifests. The probe itself comes from the
     # candidate, so docs, test fixtures and other product trees are unnecessary.
     paths = _run(
         ["git", "ls-files", "-z", "--", ":(top,glob)*", "loopx/", "packages/", "scripts/", "skills/"],
-        cwd=REPO_ROOT, env=env,
+        cwd=REPO_ROOT,
+        env=env,
+        deadline_monotonic=deadline_monotonic,
     )
     if b"loopx/__init__.py" not in paths.split(b"\0"):
         raise ValueError(f"CLI comparison base {base_ref} has no LoopX Python source")
@@ -75,7 +108,10 @@ def _materialize_base_source(base_ref: str, base_root: Path) -> None:
     _run(
         ["git", f"--work-tree={base_root}", "checkout-index",
          f"--prefix={base_root.as_posix()}/", "--stdin", "-z"],
-        cwd=REPO_ROOT, env=env, input_bytes=paths,
+        cwd=REPO_ROOT,
+        env=env,
+        input_bytes=paths,
+        deadline_monotonic=deadline_monotonic,
     )
 
 
@@ -165,7 +201,21 @@ def _base_ceiling_observation(receipt: dict) -> dict:
     }
 
 
-def _is_ancestor(ancestor: str, descendant: str) -> bool:
+def _is_ancestor(
+    ancestor: str,
+    descendant: str,
+    *,
+    deadline_monotonic: float | None = None,
+) -> bool:
+    timeout = (
+        _bounded_stage_timeout(
+            deadline_monotonic,
+            stage="git merge-base --is-ancestor",
+            default_timeout=240.0,
+        )
+        if deadline_monotonic is not None
+        else None
+    )
     completed = subprocess.run(
         ["git", "merge-base", "--is-ancestor", ancestor, descendant],
         cwd=REPO_ROOT,
@@ -175,6 +225,7 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
         text=True,
         encoding="utf-8",
         errors="replace",
+        timeout=timeout,
     )
     if completed.returncode == 0:
         return True
@@ -186,9 +237,23 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
     )
 
 
-def _pin_probe_base_ref(base_ref: str, *, main_ref: str) -> str:
+def _pin_probe_base_ref(
+    base_ref: str,
+    *,
+    main_ref: str,
+    deadline_monotonic: float | None = None,
+) -> str:
     # CI may fetch a newer main after its candidate merge commit was created.
     # Compare that candidate's ancestry, not unrelated later output changes.
+    timeout = (
+        _bounded_stage_timeout(
+            deadline_monotonic,
+            stage="git pin base ref",
+            default_timeout=240.0,
+        )
+        if deadline_monotonic is not None
+        else None
+    )
     command = (
         ["git", "merge-base", "--all", "--", base_ref, "HEAD"]
         if base_ref == main_ref else
@@ -197,6 +262,7 @@ def _pin_probe_base_ref(base_ref: str, *, main_ref: str) -> str:
     completed = subprocess.run(
         command, cwd=REPO_ROOT, check=False, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout,
     )
     revisions = completed.stdout.splitlines()
     if completed.returncode != 0 or len(revisions) != 1:
