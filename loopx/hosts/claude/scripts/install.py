@@ -647,10 +647,17 @@ def _tokenize_shell_spans(
     awaiting_heredoc: bool | None = None
     pending_heredocs: list[tuple[str, bool]] = []
     while i < n:
-        while i < n and raw_command[i] in " \t\r\v\f":
-            i += 1
+        while i < n and (
+            raw_command[i] in " \t\r\v\f"
+            or (not powershell and raw_command.startswith("\\\n", i))
+        ):
+            i += 2 if (not powershell and raw_command.startswith("\\\n", i)) else 1
         if i >= n:
             break
+        if not powershell and awaiting_heredoc is None and raw_command[i] == "#":
+            while i < n and raw_command[i] != "\n":
+                i += 1
+            continue
         matched_op: str | None = None
         if raw_command[i] in _SHELL_OPERATOR_CHARS:
             for candidate in _SHELL_OPERATORS_ORDERED:
@@ -673,6 +680,7 @@ def _tokenize_shell_spans(
             continue
 
         start = i
+        word_end = i
         buf: list[str] = []
         while i < n and raw_command[i] not in " \t\r\v\f" and raw_command[i] not in _SHELL_OPERATOR_CHARS:
             ch = raw_command[i]
@@ -692,9 +700,18 @@ def _tokenize_shell_spans(
                     i += 1
                 if not closed:
                     return None
+                word_end = i
             elif ch == '"':
                 i += 1
                 while i < n and raw_command[i] != '"':
+                    if (
+                        not powershell
+                        and raw_command[i] == "\\"
+                        and i + 1 < n
+                        and raw_command[i + 1] == "\n"
+                    ):
+                        i += 2
+                        continue
                     if (
                         raw_command[i] == "\\"
                         and i + 1 < n
@@ -708,6 +725,7 @@ def _tokenize_shell_spans(
                 if i >= n:
                     return None
                 i += 1
+                word_end = i
             elif (
                 ch == "\\"
                 and not powershell
@@ -718,16 +736,21 @@ def _tokenize_shell_spans(
                     or raw_command[i + 1] in {"'", '"', "\\", "|", "&", ";", "(", ")", "<", ">"}
                 )
             ):
-                if awaiting_heredoc is not None and raw_command[i + 1] == "\n":
-                    return None
+                if raw_command[i + 1] == "\n":
+                    if awaiting_heredoc is not None:
+                        return None
+                    i += 2
+                    continue
                 i += 1
                 buf.append(raw_command[i])
                 i += 1
+                word_end = i
             else:
                 buf.append(ch)
                 i += 1
+                word_end = i
         unquoted_word = "".join(buf)
-        tokens.append(_ShellToken(start, i, unquoted_word))
+        tokens.append(_ShellToken(start, word_end, unquoted_word))
         if awaiting_heredoc is not None:
             pending_heredocs.append((unquoted_word, awaiting_heredoc))
             awaiting_heredoc = None
@@ -1102,7 +1125,8 @@ def _inspect_legacy_claude_command(
     powershell: bool,
 ) -> tuple[str | None, str | None]:
     """Upgrade certified executed legacy commands and report uncertifiable dynamic legacy references."""
-    if legacy_suffix not in raw_command.replace("\\", "/"):
+    prefilter_command = raw_command.replace("\\\n", "") if not powershell else raw_command
+    if legacy_suffix not in prefilter_command.replace("\\", "/"):
         return (None, None)
     tokens = _tokenize_shell_spans(raw_command, powershell=powershell)
     if tokens is None:

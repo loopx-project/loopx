@@ -2274,3 +2274,85 @@ def test_claude_legacy_migration_heredocs_compound_clauses_and_manual_diagnostic
         assert any("--harden" in str(n) for n in payload["notes"])  # type: ignore[attr-defined]
         md = slash_command_install.render_slash_command_install_markdown(payload)
         assert "manual_migration_required" in md and "--harden" in md
+
+    # 5. POSIX backslash-newline line continuations and unquoted `# comments` containing
+    # apostrophes stay cleanly separated from executable tokens, while `#` inside quotes or
+    # mid-word remains literal.
+    continued_if_cmd = (
+        f"if true; then \\\n"
+        f"  /old/python3 {shlex.quote(legacy_hook)} --flag # don't strip launcher's comment\n"
+        f"fi"
+    )
+    migrated_cont_if = claude_install._rewrite_legacy_claude_command(
+        continued_if_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_cont_if is not None
+    assert migrated_cont_if.startswith("if true; then \\\n  ")
+    assert new_hook in migrated_cont_if and "/old/python3" not in migrated_cont_if
+    assert migrated_cont_if.endswith(" --flag # don't strip launcher's comment\nfi")
+
+    continued_hook = legacy_hook.replace("claude_goal_mode", "claude_goal_mode\\\n")
+    attached_cont_if = (
+        f"if true; then\\\n"
+        f"  /old/py\\\nthon3 {continued_hook}\n"
+        f"fi"
+    )
+    migrated_attached = claude_install._rewrite_legacy_claude_command(
+        attached_cont_if,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_attached is not None
+    assert migrated_attached.startswith("if true; then\\\n  ")
+    assert new_hook in migrated_attached
+    assert "/old/py" not in migrated_attached and "/claude_goal_mode/" not in migrated_attached
+
+    quoted_cont_cmd = f'/old/python3 "{legacy_status[:20]}\\\n{legacy_status[20:]}" # it\'s fine'
+    migrated_q_cont = claude_install._rewrite_legacy_claude_command(
+        quoted_cont_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_q_cont is not None
+    assert new_status in migrated_q_cont and "/old/python3" not in migrated_q_cont
+    assert migrated_q_cont.endswith(" # it's fine")
+
+    # Literal `#` inside quotes or mid-word is NOT treated as a comment boundary.
+    literal_hash_cmd = (
+        f"# leading comment's ok\n"
+        f"/old/python3 {shlex.quote(legacy_hook)} arg#keep 'x#y' \"z#'w\""
+    )
+    migrated_lit_hash = claude_install._rewrite_legacy_claude_command(
+        literal_hash_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_lit_hash is not None
+    assert migrated_lit_hash.startswith("# leading comment's ok\n")
+    assert migrated_lit_hash.endswith(" arg#keep 'x#y' \"z#'w\"")
+    assert new_hook in migrated_lit_hash and "/old/python3" not in migrated_lit_hash
+
+    assert claude_install._inspect_legacy_claude_command(
+        f"# don't run /old/python3 {legacy_hook}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+    assert claude_install._rewrite_legacy_claude_command(
+        f"echo foo#bar /old/python3 {legacy_hook}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
