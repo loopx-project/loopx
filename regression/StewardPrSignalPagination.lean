@@ -679,6 +679,77 @@ theorem duplicate_repository_numbers_preserve_the_verified_result (prior : Optio
     observeRepositoryRows prior [some 42, some 42] = (prior, false) := by
   exact invalid_repository_rows_preserve_the_verified_result prior _ (by simp [RepositoryRowsValid])
 
+/- Producer: timing evidence only includes exact-head Request Changes reviews.
+   The outer option distinguishes unreadable timing from a confirmed absence
+   of a current anchor. The existing dated-review logic provides the anchor
+   when every relevant timestamp is readable. -/
+def observedStalledAnchor (reviewTimes : List (Option Nat)) (verifiedAnchor : Option Nat) :
+    Option (Option Nat) :=
+  if none ∈ reviewTimes then none else some verifiedAnchor
+
+theorem unordered_request_changes_time_remains_unknown
+    (reviewTimes : List (Option Nat)) (verifiedAnchor : Option Nat) (missing : none ∈ reviewTimes) :
+    observedStalledAnchor reviewTimes verifiedAnchor = none := by
+  simp [observedStalledAnchor, missing]
+
+theorem known_absence_and_unknown_request_changes_time_are_distinct :
+    observedStalledAnchor [] none = some none ∧ observedStalledAnchor [none] none = none := by
+  decide
+
+/- Core: an absent clock means the threshold cannot be evaluated. A present
+   Boolean reports the comparison with the configured minimum. An absent
+   reply reports incomplete comment evidence. Independent exclusions include
+   drafts, verified scope mismatch and a confirmed absent required anchor. -/
+def decideStalledScope (excluded : Bool) (clock : Option Bool) (canBypass : Bool)
+    (authorReply : Option Bool) : Option Bool :=
+  if excluded || (clock == some false && !canBypass) then some false
+  else if authorReply.isNone && (clock.isSome || canBypass) then none
+  else if clock == some true || (canBypass && authorReply == some true) then some true
+  else clock.map (fun _ => false)
+
+theorem independently_excluded_rows_remain_excluded (clock : Option Bool) (canBypass : Bool)
+    (authorReply : Option Bool) : decideStalledScope true clock canBypass authorReply = some false := by
+  rfl
+
+theorem unknown_age_is_included_iff_verified_author_reply_can_bypass
+    (canBypass : Bool) (authorReply : Option Bool) :
+    decideStalledScope false none canBypass authorReply = some true ↔
+      canBypass = true ∧ authorReply = some true := by
+  cases authorReply with
+  | none => cases canBypass <;> decide
+  | some reply => cases reply <;> cases canBypass <;> decide
+
+theorem unknown_age_cannot_establish_a_verified_exclusion (canBypass : Bool)
+    (authorReply : Option Bool) : decideStalledScope false none canBypass authorReply ≠ some false := by
+  cases authorReply with
+  | none => cases canBypass <;> decide
+  | some reply => cases reply <;> cases canBypass <;> decide
+
+def observeStalledScope (prior : List Nat) (number : Nat) (decision : Option Bool) :
+    List Nat × Bool :=
+  observe prior (decision.map (fun included => if included then [number] else []))
+
+theorem unknown_age_preserves_prior_without_reply_bypass (prior : List Nat) (number : Nat)
+    (authorReply : Option Bool) :
+    observeStalledScope prior number (decideStalledScope false none false authorReply) = (prior, false) := by
+  cases authorReply <;> rfl
+
+theorem treating_unknown_age_as_recent_can_publish_a_false_removal :
+    observeStalledScope [42] 42 (decideStalledScope false none false (some false)) ≠
+      observeStalledScope [42] 42 (decideStalledScope false (some false) false (some false)) := by
+  decide
+
+def planStalledCommentRead (excluded : Bool) (clock : Option Bool) (canBypass authorKnown : Bool) :
+    Bool :=
+  !excluded && (clock != some false || canBypass) && (clock.isSome || canBypass) &&
+    (authorKnown || (canBypass && clock == some false))
+
+theorem unknown_age_comment_backfill_requires_available_reply_bypass_and_known_author
+    (canBypass authorKnown : Bool) :
+    planStalledCommentRead false none canBypass authorKnown = true ↔
+      canBypass = true ∧ authorKnown = true := by
+  cases canBypass <;> cases authorKnown <;> decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -747,5 +818,13 @@ theorem duplicate_repository_numbers_preserve_the_verified_result (prior : Optio
 #print axioms verified_empty_rows_can_publish_a_removal
 #print axioms dropping_an_unreadable_row_can_publish_a_false_removal
 #print axioms duplicate_repository_numbers_preserve_the_verified_result
+#print axioms unordered_request_changes_time_remains_unknown
+#print axioms known_absence_and_unknown_request_changes_time_are_distinct
+#print axioms independently_excluded_rows_remain_excluded
+#print axioms unknown_age_is_included_iff_verified_author_reply_can_bypass
+#print axioms unknown_age_cannot_establish_a_verified_exclusion
+#print axioms unknown_age_preserves_prior_without_reply_bypass
+#print axioms treating_unknown_age_as_recent_can_publish_a_false_removal
+#print axioms unknown_age_comment_backfill_requires_available_reply_bypass_and_known_author
 
 end StewardPrSignalPagination

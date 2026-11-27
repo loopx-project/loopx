@@ -2029,6 +2029,37 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
 
     # And backfill failure on age-filtered monitor fails closed (RuntimeError -> no hash overwrite).
     age_todo_with_hash = {**age_todo, "result_hash": obs_age["result_hash"]}
+    age_snapshot_path = steward_monitor_snapshot_path(
+        runtime.coordination_runtime_root, actor["goal_id"], age_todo["todo_id"],
+    )
+    verified_age_snapshot = age_snapshot_path.read_bytes()
+
+    def _read_review_times(reviews):
+        def runner(cmd, **_kw):
+            assert all(not arg.startswith("before=") for arg in cmd)
+            node = {**complete_node, "reviews": {"nodes": reviews}}
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps(_graphql_page([node])), stderr="",
+            )
+        return runner
+
+    for unresolved_reviews in (
+        [{**rc_review, "submittedAt": None}],
+        [{**rc_review, "submittedAt": "unreadable"}],
+        [{**rc_review, "submittedAt": "0001-01-01T00:00:00+01:00"}],
+        [rc_review, {**rc_review, "id": "PRR_undated", "submittedAt": None}],
+    ):
+        with pytest.raises(RuntimeError, match="temporarily unavailable"):
+            _collect_with_gh(age_todo_with_hash, _read_review_times(unresolved_reviews))
+        assert age_snapshot_path.read_bytes() == verified_age_snapshot
+
+    stale, _, _ = _collect_with_gh(
+        age_todo_with_hash, _read_review_times([{**rc_review, "commit": {"oid": "b" * 40}}]),
+    )
+    assert stale["observation_incomplete"] is False
+    assert stale["material_change"] is True
+    assert stale["scoped_repository_items"] == []
+
     with pytest.raises(RuntimeError, match="temporarily unavailable"):
         _collect_with_gh(
             age_todo_with_hash,

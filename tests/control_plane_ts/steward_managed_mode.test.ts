@@ -1183,7 +1183,7 @@ test("Steward comment coverage respects the exact age boundary and reply bypass"
     previous_hash: "sha256:prior",
   });
 
-  assert.deepEqual(plan(scope, [younger, exact, invalid]), {pr_numbers: [12, 13]});
+  assert.deepEqual(plan(scope, [younger, exact, invalid]), {pr_numbers: [12]});
   const observation = observe(scope, [younger, {...exact, comments_coverage_incomplete: false}]);
   assert.equal(observation.observation_incomplete, false);
   assert.deepEqual((observation.scoped_repository_items as {number: number}[]).map(row => row.number), [12]);
@@ -1240,6 +1240,63 @@ test("author scopes preserve the prior observation when an eligible PR loses its
   const unfiltered = observe({}, [unknown]);
   assert.equal(unfiltered.observation_incomplete, false);
   assert.deepEqual(unfiltered.scoped_repository_items, [unknown]);
+});
+
+test("age filters distinguish unreadable clocks from verified exclusions and reply bypass", () => {
+  const observed_at = "2030-01-03T12:00:00Z";
+  const oldClock = "2030-01-01T12:00:00Z";
+  const row = {number: 42, author: {login: "contributor"}, updatedAt: oldClock,
+    review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const scope = (mode: string) => ({
+    schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false, include_inbox: false,
+    pr_filter: {exclude_drafts: true, effective_verdicts: ["REQUEST_CHANGES"], min_stalled_hours: 24,
+      author_mode: mode, authors: [mode === "include" ? "contributor" : "maintainer"]},
+  });
+  const observe = (mode: string, repositoryItems: unknown[], prior?: unknown) =>
+    observeStewardSignalMonitor({signal_scope: scope(mode), observed_at, previous_hash: prior,
+      repository_snapshot: {status: "ok", items: repositoryItems}});
+  const plan = (mode: string, item: unknown) =>
+    planStewardSignalCommentBackfill({signal_scope: scope(mode), observed_at, repository_items: [item]});
+
+  for (const mode of ["include", "exclude"]) {
+    const baseline = observe(mode, [row]);
+    assert.equal(baseline.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
+    for (const unreadable of [
+      {...row, updatedAt: undefined},
+      {...row, updatedAt: "invalid"},
+      {...row, stalled_since: "invalid"},
+      {...row, stalled_since: 42},
+      {...row, review_summary: {...row.review_summary, stalled_since: 42}},
+      {...row, stalled_since: null, stalled_since_unknown: true},
+    ]) {
+      const actual = observe(mode, [unreadable], baseline.result_hash);
+      assert.equal(actual.observation_incomplete, true, JSON.stringify(unreadable));
+      assert.equal(actual.material_change, false);
+      assert.equal(actual.result_hash, baseline.result_hash);
+    }
+    for (const excluded of [
+      {...row, stalled_since: null},
+      {...row, updatedAt: "2030-01-03T11:00:00Z"},
+      {...row, isDraft: true, stalled_since: "invalid"},
+    ]) {
+      const actual = observe(mode, [excluded], baseline.result_hash);
+      assert.equal(actual.observation_incomplete, false);
+      assert.deepEqual(actual.scoped_repository_items, []);
+    }
+  }
+  const unreadable = {...row, updatedAt: "invalid", comments_coverage_incomplete: true};
+  assert.deepEqual(plan("include", unreadable), {pr_numbers: []});
+  assert.deepEqual(plan("exclude", unreadable), {pr_numbers: [42]});
+  assert.deepEqual(plan("exclude", {...unreadable, author: null}), {pr_numbers: []});
+  const reply = observe("exclude", [{...unreadable, comments_coverage_incomplete: false,
+    author_replied_after_request_changes: true}]);
+  assert.equal(reply.observation_incomplete, false);
+  assert.equal(reply.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  const unscoped = (item: unknown) => observeStewardSignalMonitor({
+    repository_snapshot: {status: "ok", items: [item]},
+  });
+  assert.equal(unscoped(row).result_hash, unscoped({...row, stalled_since_unknown: true}).result_hash);
 });
 
 test("author membership can be ruled out by age without spending useless comment reads", () => {

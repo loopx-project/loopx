@@ -59,12 +59,9 @@ def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
     normalized = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
     try:
         dt = datetime.fromisoformat(normalized)
-    except ValueError:
+        dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
     return dt, raw
 
 
@@ -440,10 +437,14 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     latest_by_actor: dict[tuple[str, str], str | None] = {}
     latest_record_by_actor: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
     inconsistent_verdict = False
+    stalled_since_unknown = False
     for record in exact_reviews:
         actionable = _actor_actionable_verdict(record)
         if actionable is None:
             continue
+        # An undated Request Changes review cannot be ordered relative to dated reviews.
+        if actionable in {"REQUEST_CHANGES", "CONFLICT"} and _parse_iso_timestamp(record["submitted_at"]) is None:
+            stalled_since_unknown = True
         actor_key = (
             (record["author_login"] or "").casefold(),
             (record["reviewer_declaration"] or "").casefold(),
@@ -459,8 +460,10 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             latest_by_actor[actor_key] = actionable
             latest_record_by_actor[actor_key] = (actionable, record)
 
-    latest_rc_review_id, stalled_since, author_replied_after_rc, comments_coverage_incomplete = (
-        _summarize_request_changes_stall(
+    stall = (
+        (None, None, False, False)
+        if stalled_since_unknown
+        else _summarize_request_changes_stall(
             row,
             raw_reviews=raw_reviews,
             latest_record_by_actor=latest_record_by_actor,
@@ -468,6 +471,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             pr_author=pr_author,
         )
     )
+    latest_rc_review_id, stalled_since, author_replied_after_rc, comments_coverage_incomplete = stall
 
     verdicts = {val for val in latest_by_actor.values() if val}
     review_decision = str(row.get("reviewDecision") or "").strip().upper()
@@ -519,6 +523,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
         "stalled_since": stalled_since,
+        **({"stalled_since_unknown": True} if stalled_since_unknown else {}),
         "author_replied_after_request_changes": author_replied_after_rc,
         "comments_coverage_incomplete": comments_coverage_incomplete,
         "checks_summary": checks_summary,

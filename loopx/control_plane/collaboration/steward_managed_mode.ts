@@ -1200,18 +1200,20 @@ function filterScopedRepositoryItems(
         || (reviewSummary !== null && Object.prototype.hasOwnProperty.call(reviewSummary, "stalled_since"));
       const rawStalledSince = typeof item.stalled_since === "string"
         ? item.stalled_since
-        : (typeof reviewSummary?.stalled_since === "string" ? reviewSummary.stalled_since : null);
+        : (reviewSummary?.stalled_since ?? item.stalled_since);
+      const stalledSinceUnknown = item.stalled_since_unknown === true;
       if (
-        hasExplicitStalledSince
-        && rawStalledSince === null
+        !stalledSinceUnknown
+        && hasExplicitStalledSince
+        && rawStalledSince == null
         && effectiveVerdicts !== null
         && effectiveVerdicts.size === 1
         && effectiveVerdicts.has("REQUEST_CHANGES")
       ) {
         continue;
       }
-      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
-      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
+      const basisIso = stalledSinceUnknown ? null : (rawStalledSince ?? item.updatedAt);
+      const basisMs = typeof basisIso === "string" ? Date.parse(basisIso) : NaN;
       const basisKnown = Number.isFinite(basisMs);
       const thresholdMet = basisKnown && observedAtMs - basisMs >= minStalledHours * 3_600_000;
       if (!canBypassAge && basisKnown && !thresholdMet) continue;
@@ -1220,16 +1222,17 @@ function filterScopedRepositoryItems(
       // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
       const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
         || reviewSummary?.comments_coverage_incomplete === true;
-      if (commentsCoverageIncomplete) {
+      if (commentsCoverageIncomplete && (basisKnown || canBypassAge)) {
         if (onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
-        // Backfill can rule out an under-age PR, but it cannot identify its creator.
-        if (!authorMembershipUncertain || (canBypassAge && !thresholdMet)) {
+        // Backfill cannot resolve missing creator or clock evidence.
+        if (!authorMembershipUncertain || (canBypassAge && basisKnown && !thresholdMet)) {
           onIncompleteComments(item);
         }
         continue;
       }
       const authorReplyBypass = authorReplied && canBypassAge;
       if (!authorReplyBypass && !thresholdMet) {
+        if (!basisKnown && onIncompleteComments === undefined) return { items: [], observationIncomplete: true };
         continue;
       }
       const stalledAgeMs = basisKnown ? Math.max(0, observedAtMs - basisMs) : 0;
@@ -1269,6 +1272,7 @@ export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject
 
 const AGE_FILTER_ITEM_FIELDS = [
   "stalled_since",
+  "stalled_since_unknown",
   "author_replied_after_request_changes",
   "comments_coverage_incomplete",
   "stalled_threshold_met",
@@ -1293,8 +1297,8 @@ function projectRepositoryItemForMaterialHash(item: RepositoryItem, usesStalledA
     const hasStalledSinceClock = typeof item.stalled_since === "string"
       || typeof reviewSummary?.stalled_since === "string";
     const omittedItemFields = hasStalledSinceClock
-      ? ["comments_coverage_incomplete", "updatedAt"]
-      : ["comments_coverage_incomplete"];
+      ? ["comments_coverage_incomplete", "stalled_since_unknown", "updatedAt"]
+      : ["comments_coverage_incomplete", "stalled_since_unknown"];
     const projectedItem = omitKeys(item, omittedItemFields);
     if (reviewSummary !== null) {
       projectedItem.review_summary = omitKeys(reviewSummary, ["comments_coverage_incomplete"]);
