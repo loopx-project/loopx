@@ -275,6 +275,12 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
         ("duplicate_check_id", None),
         ("full_page", 1),
         ("distinct_ids_same_name", 1),
+        ("stale_conclusion", None),
+        ("completed_without_conclusion", None),
+        ("unknown_run_status", None),
+        ("requested_run", 0),
+        ("expected_context", 0),
+        ("failure_and_unclassified_check", None),
         ("matching_failure", 1),
         ("trusted_top_level", 0),
         ("confirmed_empty", 0),
@@ -292,6 +298,12 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
         "full_page": [failure] + [success] * 29,
         "distinct_ids_same_name": [failure, success],
         "duplicate_check_id": [{**failure, "id": "duplicate"}, {**success, "id": "duplicate"}],
+        "stale_conclusion": [{**failure, "conclusion": "STALE"}],
+        "completed_without_conclusion": [{**failure, "conclusion": None}],
+        "unknown_run_status": [{**failure, "status": "FUTURE_STATUS", "conclusion": None}],
+        "requested_run": [{**failure, "status": "REQUESTED", "conclusion": None}],
+        "expected_context": [{"__typename": "StatusContext", "context": "ci", "state": "EXPECTED"}],
+        "failure_and_unclassified_check": [failure, {**failure, "conclusion": "STALE"}],
     }.get(case, [failure])
     node = _graphql_node(_sample_pr(number=42, head_oid=head), contexts=checks)
     commit = node["commits"]["nodes"][0]["commit"]
@@ -328,7 +340,7 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
         commit["statusCheckRollup"] = None
 
     if case == "trusted_top_level":
-        node["statusCheckRollup"] = [{**failure, "conclusion": "SUCCESS"}]
+        node["statusCheckRollup"] = [{"conclusion": "SUCCESS"}]
     if case == "draft_excluded":
         node["isDraft"] = True
 
@@ -365,8 +377,13 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
         assert "FAILING_CHECKS" not in item["bypassed_gates"]
     else:
         assert item.get("checks_coverage_incomplete") is None
-        assert item["checks_summary"]["fail_count"] == failure_count
+        summary = item["checks_summary"]
+        assert summary["fail_count"] == failure_count
+        assert summary["total"] == summary["pass_count"] + summary["fail_count"] + summary["pending_count"]
         assert ("FAILING_CHECKS" in item["bypassed_gates"]) is (failure_count > 0)
+        if case in {"requested_run", "expected_context"}:
+            assert summary["pending_count"] == 1
+            assert "PENDING_CHECKS" in item["bypassed_gates"]
         if case == "distinct_ids_same_name":
             assert item["checks_summary"]["total"] == 2
             assert item["checks_summary"]["pass_count"] == 1

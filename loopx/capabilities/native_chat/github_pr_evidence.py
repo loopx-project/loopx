@@ -44,6 +44,7 @@ _CHECK_FAIL_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 )
 _CHECK_PASS_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+_CHECK_ACTIVE_STATUSES = frozenset({"IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"})
 _KNOWN_BOT_LOGINS = frozenset(
     {"mergify", "codecov", "codecov-commenter", "github-actions", "dependabot"}
 )
@@ -222,19 +223,27 @@ def is_steward_repository_authorized(
     return repository.casefold() in {slug.casefold() for slug in allowed}
 
 
-def _summarize_checks(rollup: Any) -> dict[str, int]:
-    items = [row for row in (rollup or []) if isinstance(row, Mapping)]
+def _summarize_checks(rollup: Any) -> dict[str, int] | None:
+    items = [] if rollup is None else rollup
+    if not isinstance(items, (list, tuple)):
+        return None
     pass_count = fail_count = pending_count = 0
     for item in items:
+        if not isinstance(item, Mapping):
+            return None
         conclusion = str(item.get("conclusion") or "").strip().upper()
         status = str(item.get("status") or "").strip().upper()
         state = str(item.get("state") or "").strip().upper()
+        if conclusion == "STALE" or (status and status != "COMPLETED" and status not in _CHECK_ACTIVE_STATUSES):
+            return None
         if conclusion in _CHECK_FAIL_CONCLUSIONS or state in {"FAILURE", "ERROR"}:
             fail_count += 1
-        elif (status and status != "COMPLETED") or (not conclusion and state in {"PENDING", "EXPECTED"}):
+        elif status in _CHECK_ACTIVE_STATUSES or (not conclusion and state in {"PENDING", "EXPECTED"}):
             pending_count += 1
         elif conclusion in _CHECK_PASS_CONCLUSIONS or state == "SUCCESS":
             pass_count += 1
+        else:
+            return None
     return {
         "total": len(items),
         "pass_count": pass_count,

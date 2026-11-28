@@ -1245,6 +1245,75 @@ theorem over_cap_checks_cannot_be_verified_as_a_requested_window :
     useCheckContextWindow (some false) (some 31) ((List.range 31).map some) = none := by
   decide
 
+/- The provider decodes each readable check as passed, failed or pending.
+   STALE, completed checks without a terminal verdict and unsupported
+   statuses decode to none. A tally requires a classification for every row. -/
+inductive CheckOutcome where
+  | passed
+  | failed
+  | pending
+
+structure CheckTally where
+  passed : Nat
+  failed : Nat
+  pending : Nat
+
+def addCheckOutcome (tally : CheckTally) : CheckOutcome → CheckTally
+  | .passed => { tally with passed := tally.passed + 1 }
+  | .failed => { tally with failed := tally.failed + 1 }
+  | .pending => { tally with pending := tally.pending + 1 }
+
+def summarizeCheckOutcomes : List (Option CheckOutcome) → Option CheckTally
+  | [] => some ⟨0, 0, 0⟩
+  | none :: _ => none
+  | some outcome :: rest => (summarizeCheckOutcomes rest).map (fun tally => addCheckOutcome tally outcome)
+
+theorem published_check_tally_counts_every_observed_check
+    (outcomes : List (Option CheckOutcome)) (tally : CheckTally)
+    (accepted : summarizeCheckOutcomes outcomes = some tally) :
+    tally.passed + tally.failed + tally.pending = outcomes.length := by
+  induction outcomes generalizing tally with
+  | nil =>
+    have same : (⟨0, 0, 0⟩ : CheckTally) = tally := Option.some.inj accepted
+    subst tally
+    rfl
+  | cons current rest ih =>
+    cases current with
+    | none => simp [summarizeCheckOutcomes] at accepted
+    | some outcome =>
+      cases summarized : summarizeCheckOutcomes rest with
+      | none => simp [summarizeCheckOutcomes, summarized] at accepted
+      | some previous =>
+        have priorTotal := ih previous summarized
+        have same : addCheckOutcome previous outcome = tally := by
+          simpa [summarizeCheckOutcomes, summarized] using accepted
+        subst tally
+        cases outcome <;> simp [addCheckOutcome] <;> omega
+
+theorem an_unclassified_check_blocks_a_complete_tally
+    (outcomes : List (Option CheckOutcome)) (unknown : none ∈ outcomes) :
+    summarizeCheckOutcomes outcomes = none := by
+  induction outcomes with
+  | nil => simp at unknown
+  | cons current rest ih =>
+    cases current with
+    | none => rfl
+    | some outcome =>
+      have inRest : none ∈ rest := by simpa using unknown
+      simp [summarizeCheckOutcomes, ih inRest]
+
+def observeCheckTally (prior : List Nat) (outcomes : List (Option CheckOutcome)) : List Nat × Bool :=
+  observe prior ((summarizeCheckOutcomes outcomes).map (fun tally => [tally.passed, tally.failed, tally.pending]))
+
+theorem unresolved_check_conclusion_preserves_prior_failure :
+    observeCheckTally [0, 1, 0] [none] = ([0, 1, 0], false) := rfl
+
+theorem known_failure_with_an_unclassified_check_preserves_prior :
+    observeCheckTally [0, 1, 0] [some .failed, none] = ([0, 1, 0], false) := rfl
+
+theorem known_check_outcomes_keep_their_counts :
+    summarizeCheckOutcomes [some .passed, some .failed, some .pending] = some ⟨1, 1, 1⟩ := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1381,5 +1450,10 @@ theorem over_cap_checks_cannot_be_verified_as_a_requested_window :
 #print axioms absent_terminal_marker_and_verified_empty_checks_are_distinct
 #print axioms matching_reported_count_cannot_override_a_check_continuation
 #print axioms over_cap_checks_cannot_be_verified_as_a_requested_window
+#print axioms published_check_tally_counts_every_observed_check
+#print axioms an_unclassified_check_blocks_a_complete_tally
+#print axioms unresolved_check_conclusion_preserves_prior_failure
+#print axioms known_failure_with_an_unclassified_check_preserves_prior
+#print axioms known_check_outcomes_keep_their_counts
 
 end StewardPrSignalPagination
