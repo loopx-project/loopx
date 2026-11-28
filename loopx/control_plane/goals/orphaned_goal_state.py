@@ -1,4 +1,4 @@
-"""Guard the goal-start flow when Goal state outlives its registry entry.
+"""Guard goal start when Goal state or its shared route outlives its registry entry.
 
 A project ``ACTIVE_GOAL_STATE.md`` for a goal id the project registry no longer
 declares is not the ordinary "nothing to connect yet" case: continuing would hand
@@ -18,7 +18,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ...global_registry import same_source_registry
 from ...project_prompt import shell_arg
+from ...registry import registry_goals
+from ..projects.registry_codec import load_registry
 
 ACTIVE_GOAL_STATE_FILENAME = "ACTIVE_GOAL_STATE.md"
 
@@ -101,9 +104,35 @@ def orphaned_goal_state_projection(project: Path, goal_id: str) -> dict[str, Any
     }
 
 
+def _global_registration_projection(
+    shared_registry: Path, source_registry: str, goal_id: str,
+) -> dict[str, Any] | None:
+    """Project a matching route when the shared registry is readable."""
+    try:
+        global_payload = load_registry(shared_registry)
+    except (OSError, ValueError):
+        return None
+    source = {"source_registry": source_registry}
+    if not any(
+        item.get("id") == goal_id and same_source_registry(item, source)
+        for item in registry_goals(global_payload)
+    ):
+        return None
+    return {
+        "schema_version": ORPHANED_GOAL_STATE_GATE_SCHEMA_VERSION,
+        "goal_id": goal_id,
+        "state_file_routes": [],
+        "reason": (
+            "the shared registry still records this Goal for this project. "
+            "Restore the original project registry entry before retrying."
+        ),
+    }
+
+
 def absent_goal_connection(
     *,
     base_connection: dict[str, Any],
+    shared_registry: Path,
     goal_id: str,
     state_file: Path,
     registry_exists: bool,
@@ -111,7 +140,7 @@ def absent_goal_connection(
     absence_reason: str,
     known_goal_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Project "no registry entry carries this goal", fenced if its state survives.
+    """Project a missing registration, fenced if its state or shared route survives.
 
     This is the only way the goal-start flow states an absence, so an unparseable
     registry file, a missing or empty one, and a readable registry with no
@@ -138,6 +167,8 @@ def absent_goal_connection(
     project = str(base_connection.get("project") or "")
     projection = orphaned_goal_state_projection(Path(project), goal_id) if project else None
     if projection is None:
+        projection = _global_registration_projection(shared_registry, str(connection["registry"]), goal_id)
+    if projection is None:
         return connection
     return {
         **connection,
@@ -148,7 +179,7 @@ def absent_goal_connection(
         "absent_connection_state": absence_connection,
         "absent_reason": absence_reason,
         "bootstrap_continuation_allowed": False,
-        "reason": ORPHANED_GOAL_STATE_REASON,
+        "reason": projection["reason"],
     }
 
 
@@ -221,7 +252,7 @@ def fence_command_pack(command_pack: dict[str, Any], *, command_prefix: str) -> 
     command_pack["recommended_next_step"] = {
         "kind": "resolve_orphaned_goal_state",
         "requires_user_confirmation": True,
-        "summary": ORPHANED_GOAL_STATE_REASON,
+        "summary": gate["reason"],
         "orphaned_goal_state_gate": gate,
     }
 
@@ -291,11 +322,12 @@ def render_guided_lines(transaction: dict[str, Any]) -> str:
     if not isinstance(gate, dict):
         return ""
     routes = _preview_route_lines(gate)
+    state_files = ', '.join(f'`{route}`' for route in gate.get('state_file_routes') or [])
     return (
         "\n## Orphaned Goal State Gate\n\n"
         f"{gate.get('reason')}\n\n"
-        f"- orphaned state: {', '.join(f'`{route}`' for route in gate.get('state_file_routes') or [])}\n"
-        f"- blocked until resolved: {', '.join(f'`{name}`' for name in gate.get('forbidden_until_resolved') or [])}\n"
+        + (f"- orphaned state: {state_files}\n" if state_files else "")
+        + f"- blocked until resolved: {', '.join(f'`{name}`' for name in gate.get('forbidden_until_resolved') or [])}\n"
         f"- {gate.get('execution_boundary')}\n\n"
         + routes
         + "\n"

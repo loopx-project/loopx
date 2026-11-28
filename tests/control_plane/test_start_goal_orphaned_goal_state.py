@@ -217,6 +217,43 @@ def test_guided_packet_offers_only_previews_over_orphaned_state(
     assert contract["mutation_commands_are_previewed"] is True
 
 
+@pytest.mark.parametrize("registry", ["missing", "registered"])
+@pytest.mark.parametrize("same_source", [True, False])
+def test_guided_connect_checks_retained_global_registration(
+    tmp_path: Path, registry: str, same_source: bool,
+) -> None:
+    project = _project(tmp_path, registry=registry)
+    runtime_root = tmp_path / "shared"
+    runtime_root.mkdir()
+    global_registry = runtime_root / "registry.global.json"
+    source_project = project if same_source else tmp_path / "other"
+    recorded = json.dumps({"goals": [{
+        "id": ORPHANED_GOAL_ID,
+        "repo": str(source_project),
+        "source_registry": str(source_project / ".loopx/registry.json"),
+    }]})
+    global_registry.write_text(recorded, encoding="utf-8")
+
+    payload = build_start_goal_guided_packet(
+        project=project,
+        goal_id=ORPHANED_GOAL_ID,
+        agent_id=None,
+        cli_bin="loopx",
+        host_surface="codex-app",
+        goal_text=GOAL_TEXT,
+        runtime_root_arg=str(runtime_root),
+    )
+
+    steps = payload["guided_transaction"]["ordered_steps"]
+    if same_source:
+        assert [step["id"] for step in steps] == ["inspect_connection", "resolve_orphaned_goal_state"]
+        assert "Restore the original project registry entry" in payload["message"]
+        assert payload["command_pack"]["commands"]["goal_start_connect_if_needed"] is None
+    else:
+        assert any(step["id"] == "connect_if_needed" for step in steps)
+    assert global_registry.read_text(encoding="utf-8") == recorded
+
+
 def test_guided_packet_carries_no_bootstrap_or_todo_authoring_continuation(
     tmp_path: Path,
 ) -> None:
