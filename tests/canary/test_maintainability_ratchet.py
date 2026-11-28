@@ -496,3 +496,181 @@ def test_module_ceiling_colocation_ignores_non_python_and_deleted_files(
         )
         == []
     )
+
+
+def test_iter_import_nodes_covers_every_statement_container_and_nested_imports() -> None:
+    import ast
+    import tempfile
+    from loopx.canary.maintainability_ratchet import _iter_import_nodes, resolved_imports
+
+    suite_fields = {"body", "orelse", "finalbody", "handlers", "cases"}
+    stmt_types = {ast.stmt}
+    queue = [ast.stmt]
+    while queue:
+        cls = queue.pop()
+        for sub in cls.__subclasses__():
+            if sub not in stmt_types:
+                stmt_types.add(sub)
+                queue.append(sub)
+    expected_containers = {
+        ast.Module,
+        ast.If,
+        ast.For,
+        ast.AsyncFor,
+        ast.While,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.With,
+        ast.AsyncWith,
+        ast.Try,
+        ast.TryStar,
+        ast.Match,
+        ast.Import,
+        ast.ImportFrom,
+    }
+    for cls in stmt_types:
+        if suite_fields & set(getattr(cls, "_fields", ())):
+            assert cls in expected_containers, f"unhandled stmt container: {cls.__name__}"
+
+    sample = """
+import mod_top
+if cond:
+    import mod_if
+else:
+    from mod_else import sub_else
+for x in items:
+    import mod_for
+else:
+    import mod_for_else
+async def f():
+    async for y in aitems:
+        import mod_afor
+    else:
+        import mod_afor_else
+    async with ctx():
+        import mod_awith
+while cond:
+    import mod_while
+else:
+    import mod_while_else
+with ctx():
+    import mod_with
+class C:
+    import mod_class
+    def m(self):
+        import mod_method
+try:
+    import mod_try
+except Exception:
+    import mod_except
+else:
+    import mod_try_else
+finally:
+    import mod_finally
+try:
+    import mod_trystar
+except* ValueError:
+    import mod_exceptstar
+match val:
+    case 1:
+        import mod_match
+"""
+    tree = ast.parse(sample)
+    expected = {id(node) for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))}
+    actual = {id(node) for node in _iter_import_nodes(tree)}
+    assert actual == expected
+    with tempfile.TemporaryDirectory() as tmp:
+        pkg = Path(tmp) / "loopx"
+        pkg.mkdir()
+        target = pkg / "sample.py"
+        target.write_text(sample, encoding="utf-8")
+        assert "mod_exceptstar" in resolved_imports(target, package_root=pkg)
+        assert "mod_match" in resolved_imports(target, package_root=pkg)
+
+
+def test_module_metrics_fast_paths_match_ast_walk_and_syntax_errors(tmp_path: Path) -> None:
+    cases = {
+        "no_any_ascii.py": "def add(x: int, y: int) -> int:\n    return x + y\n",
+        "comment_only.py": "# Any dict[str, Any]\nx = 'dict[\"str\", Any]'\n",
+        "str_any_and_quoted_key.py": (
+            "from typing import Any\n"
+            "a: Any = None\n"
+            "b: dict[str, Any] = {}\n"
+            "c: dict['str', Any] = {}\n"
+        ),
+        "unicode_nfkc_any.py": (
+            "from typing import Any as RealAny\n"
+            "x: \U0001d400ny = 1\n"
+        ),
+        "syntax_err.py": "def broken(:\n    pass\n",
+    }
+    for name, content in cases.items():
+        path = tmp_path / name
+        path.write_text(content, encoding="utf-8")
+
+    assert module_metrics(tmp_path / "no_any_ascii.py") == {
+        "lines": 2, "any_count": 0, "dict_any_count": 0,
+    }
+    assert module_metrics(tmp_path / "comment_only.py") == {
+        "lines": 2, "any_count": 0, "dict_any_count": 0,
+    }
+    assert module_metrics(tmp_path / "str_any_and_quoted_key.py") == {
+        "lines": 4, "any_count": 3, "dict_any_count": 1,
+    }
+    assert module_metrics(tmp_path / "unicode_nfkc_any.py") == {
+        "lines": 2, "any_count": 1, "dict_any_count": 0,
+    }
+    assert module_metrics(tmp_path / "syntax_err.py") == {
+        "lines": 2, "any_count": 0, "dict_any_count": 0,
+    }
+
+
+def test_build_report_reflects_mutations_across_calls_without_stale_cache(tmp_path: Path) -> None:
+    package_root = tmp_path / "loopx"
+    control_plane = package_root / "control_plane"
+    control_plane.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (control_plane / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "quota.py").write_text("", encoding="utf-8")
+    (package_root / "status.py").write_text("", encoding="utf-8")
+    (package_root / "presentation.py").write_text("", encoding="utf-8")
+    sample = control_plane / "sample.py"
+    sample.write_text("x = 1\n", encoding="utf-8")
+    _git(tmp_path, ["init", "-q"])
+    _git(tmp_path, ["add", "."])
+    _git(tmp_path, ["commit", "-q", "-m", "base"])
+
+    clean_report = build_control_plane_maintainability_report(tmp_path, reviewed_exceptions={})
+    assert clean_report["ok"] is True
+
+    sample.write_text("from loopx import presentation\n", encoding="utf-8")
+    dirty_report = build_control_plane_maintainability_report(tmp_path, reviewed_exceptions={})
+    assert dirty_report["ok"] is False
+    assert any(
+        f["id"] == "dependency_debt:loopx.control_plane.sample->loopx.presentation"
+        for f in dirty_report["unreviewed_findings"]
+    )
+
+
+def test_syntax_error_still_raises_in_scan_cached_debt_while_metrics_stay_tolerant(tmp_path: Path) -> None:
+    import pytest
+    from loopx.canary.maintainability_ratchet import _resolved_from_imports, resolved_imports
+
+    pkg = tmp_path / "loopx"
+    (pkg / "control_plane").mkdir(parents=True)
+    (pkg / "quota.py").write_text("", encoding="utf-8")
+    (pkg / "status.py").write_text("", encoding="utf-8")
+    bad = pkg / "control_plane" / "broken.py"
+    bad.write_text("def broken(:\n    pass\n", encoding="utf-8")
+    _git(tmp_path, ["init", "-q"])
+    _git(tmp_path, ["add", "."])
+    _git(tmp_path, ["commit", "-q", "-m", "base"])
+
+    assert module_metrics(bad) == {"lines": 2, "any_count": 0, "dict_any_count": 0}
+    with pytest.raises(SyntaxError):
+        resolved_imports(bad, package_root=pkg)
+    with pytest.raises(SyntaxError):
+        _resolved_from_imports(bad, package_root=pkg)
+    with pytest.raises(SyntaxError):
+        build_control_plane_maintainability_report(tmp_path)

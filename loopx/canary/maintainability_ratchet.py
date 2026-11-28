@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import ast
 from collections import Counter
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from importlib.util import resolve_name
 import json
 import os
 from pathlib import Path
 import subprocess
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from ..paths import display_path_text
+
+_SubmoduleCache = dict[tuple[Path, str, str], str | None]
+
+
+@dataclass(frozen=True, slots=True)
+class _ModuleScan:
+    metrics: dict[str, int]
+    from_imports: dict[str, set[str]] | None
+    top_level_package_imports: dict[str, str] | None
+    oversized_findings: list[dict[str, Any]] | None
+    syntax_error: SyntaxError | None
 
 
 MAINTAINABILITY_REPORT_SCHEMA_VERSION = "control_plane_maintainability_report_v0"
@@ -90,65 +103,93 @@ def _resolved_module(node: ast.ImportFrom, *, package_name: str) -> str:
     return resolve_name("." * node.level + module, package_name)
 
 
+def _iter_import_nodes(tree: ast.Module) -> Iterator[ast.Import | ast.ImportFrom]:
+    stack: list[Sequence[ast.stmt]] = [tree.body]
+    while stack:
+        for stmt in stack.pop():
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                yield stmt
+            elif isinstance(stmt, (ast.If, ast.For, ast.AsyncFor, ast.While)):
+                if stmt.orelse:
+                    stack.append(stmt.orelse)
+                if stmt.body:
+                    stack.append(stmt.body)
+            elif isinstance(
+                stmt,
+                (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.With, ast.AsyncWith),
+            ):
+                if stmt.body:
+                    stack.append(stmt.body)
+            elif isinstance(stmt, (ast.Try, ast.TryStar)):
+                if stmt.finalbody:
+                    stack.append(stmt.finalbody)
+                if stmt.orelse:
+                    stack.append(stmt.orelse)
+                for handler in stmt.handlers:
+                    if handler.body:
+                        stack.append(handler.body)
+                if stmt.body:
+                    stack.append(stmt.body)
+            elif isinstance(stmt, ast.Match):
+                for case in stmt.cases:
+                    if case.body:
+                        stack.append(case.body)
+
+
+def _python_paths_under(
+    root: Path,
+    *,
+    tracked_paths: set[Path] | None,
+) -> list[Path]:
+    if tracked_paths is not None:
+        return sorted(
+            path
+            for path in tracked_paths
+            if path.name.endswith(".py")
+            and path.is_relative_to(root)
+            and path.is_file()
+        )
+    return sorted(root.rglob("*.py")) if root.is_dir() else []
+
+
 def _existing_submodule(
     module: str,
     imported_name: str,
     *,
     package_root: Path,
+    _submodule_cache: _SubmoduleCache | None = None,
 ) -> str | None:
     if not module or imported_name == "*":
         return None
+    cache_key = (package_root, module, imported_name)
+    if _submodule_cache is not None and cache_key in _submodule_cache:
+        return _submodule_cache[cache_key]
     candidate = f"{module}.{imported_name}"
     package_prefix = package_root.name + "."
-    if not candidate.startswith(package_prefix):
-        return None
-    relative_parts = candidate[len(package_prefix) :].split(".")
-    candidate_path = package_root.joinpath(*relative_parts)
-    if candidate_path.with_suffix(".py").is_file() or candidate_path.is_dir():
-        return candidate
-    return None
+    resolved: str | None = None
+    if candidate.startswith(package_prefix):
+        relative_parts = candidate[len(package_prefix) :].split(".")
+        candidate_path = package_root.joinpath(*relative_parts)
+        if candidate_path.with_suffix(".py").is_file() or candidate_path.is_dir():
+            resolved = candidate
+    if _submodule_cache is not None:
+        _submodule_cache[cache_key] = resolved
+    return resolved
 
 
-def resolved_imports(path: Path, *, package_root: Path) -> set[str]:
-    package_name = _package_name(path, package_root)
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = _resolved_module(node, package_name=package_name)
-            if module:
-                imports.add(module)
-                imports.update(
-                    candidate
-                    for alias in node.names
-                    if (
-                        candidate := _existing_submodule(
-                            module,
-                            alias.name,
-                            package_root=package_root,
-                        )
-                    )
-                )
-    return imports
-
-
-def _resolved_from_imports(
-    path: Path,
+def _extract_from_imports(
+    tree: ast.Module,
     *,
+    package_name: str,
     package_root: Path,
+    submodule_cache: _SubmoduleCache | None = None,
 ) -> dict[str, set[str]]:
-    package_name = (
-        _package_name(path, package_root) if path.is_relative_to(package_root) else ""
-    )
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
+    for node in _iter_import_nodes(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 imports.setdefault(alias.name, set()).add("*")
-        elif isinstance(node, ast.ImportFrom):
+        else:
             module = _resolved_module(node, package_name=package_name)
             if not module:
                 continue
@@ -158,10 +199,68 @@ def _resolved_from_imports(
                     module,
                     alias.name,
                     package_root=package_root,
+                    _submodule_cache=submodule_cache,
                 )
                 if candidate:
                     imports.setdefault(candidate, set()).add("*")
     return imports
+
+
+def _extract_top_level_package_imports(
+    tree: ast.Module,
+    *,
+    package_name: str,
+    package_root: Path,
+) -> dict[str, str]:
+    imports: dict[str, str] = {}
+    package_prefix = package_root.name + "."
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            module = _resolved_module(node, package_name=package_name)
+            if not module.startswith(package_prefix):
+                continue
+            for alias in node.names:
+                imports[alias.asname or alias.name] = module
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith(package_prefix):
+                    imports[alias.asname or alias.name.split(".")[0]] = alias.name
+    return imports
+
+
+def resolved_imports(
+    path: Path,
+    *,
+    package_root: Path,
+    _submodule_cache: _SubmoduleCache | None = None,
+) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return set(
+        _extract_from_imports(
+            tree,
+            package_name=_package_name(path, package_root),
+            package_root=package_root,
+            submodule_cache=_submodule_cache,
+        )
+    )
+
+
+def _resolved_from_imports(
+    path: Path,
+    *,
+    package_root: Path,
+    _submodule_cache: _SubmoduleCache | None = None,
+) -> dict[str, set[str]]:
+    package_name = (
+        _package_name(path, package_root) if path.is_relative_to(package_root) else ""
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    return _extract_from_imports(
+        tree,
+        package_name=package_name,
+        package_root=package_root,
+        submodule_cache=_submodule_cache,
+    )
 
 
 def _top_level_package_imports(
@@ -169,21 +268,12 @@ def _top_level_package_imports(
     *,
     package_root: Path,
 ) -> dict[str, str]:
-    package_name = _package_name(path, package_root)
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    imports: dict[str, str] = {}
-    for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            module = _resolved_module(node, package_name=package_name)
-            if not module.startswith(package_root.name + "."):
-                continue
-            for alias in node.names:
-                imports[alias.asname or alias.name] = module
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.startswith(package_root.name + "."):
-                    imports[alias.asname or alias.name.split(".")[0]] = alias.name
-    return imports
+    return _extract_top_level_package_imports(
+        tree,
+        package_name=_package_name(path, package_root),
+        package_root=package_root,
+    )
 
 
 def _matches_prefix(value: str, prefixes: Sequence[str]) -> bool:
@@ -261,19 +351,34 @@ def collect_dependency_debt(
     repository_root: Path,
     *,
     tracked_paths: set[Path] | None = None,
+    _scan_cache: Mapping[Path, _ModuleScan] | None = None,
 ) -> list[dict[str, Any]]:
     package_root = repository_root / "loopx"
     control_plane_root = package_root / "control_plane"
+    submodule_cache: _SubmoduleCache = {}
+
+    def path_from_imports(path: Path) -> dict[str, set[str]]:
+        if _scan_cache is not None and path in _scan_cache:
+            scan = _scan_cache[path]
+            if scan.syntax_error is not None:
+                raise scan.syntax_error
+            if scan.from_imports is not None:
+                return scan.from_imports
+        return _resolved_from_imports(
+            path,
+            package_root=package_root,
+            _submodule_cache=submodule_cache,
+        )
+
     findings: list[dict[str, Any]] = []
-    control_plane_paths = sorted(control_plane_root.rglob("*.py"))
-    if tracked_paths is not None:
-        control_plane_paths = [
-            path for path in control_plane_paths if path in tracked_paths
-        ]
+    control_plane_paths = _python_paths_under(
+        control_plane_root,
+        tracked_paths=tracked_paths,
+    )
     for path in control_plane_paths:
         source = _module_name(path, package_root)
         for target in _outermost_matching_imports(
-            resolved_imports(path, package_root=package_root),
+            set(path_from_imports(path)),
             CONTROL_PLANE_FORBIDDEN_DEPENDENCY_PREFIXES,
         ):
             findings.append(
@@ -288,7 +393,7 @@ def collect_dependency_debt(
 
     status_path = package_root / "status.py"
     for target in _outermost_matching_imports(
-        resolved_imports(status_path, package_root=package_root),
+        set(path_from_imports(status_path)),
         STATUS_FORBIDDEN_DEPENDENCY_PREFIXES,
     ):
         findings.append(
@@ -301,23 +406,28 @@ def collect_dependency_debt(
             )
         )
 
-    facade_exports = {
-        module: set(
-            _top_level_package_imports(
-                repository_root / relative_path,
-                package_root=package_root,
-            )
+    facade_exports: dict[str, set[str]] = {}
+    for module, relative_path in COMPATIBILITY_FACADE_PATHS.items():
+        facade_path = repository_root / relative_path
+        scan = _scan_cache.get(facade_path) if _scan_cache is not None else None
+        if scan is not None:
+            if scan.syntax_error is not None:
+                raise scan.syntax_error
+            if scan.top_level_package_imports is not None:
+                facade_exports[module] = set(scan.top_level_package_imports)
+                continue
+        facade_exports[module] = set(
+            _top_level_package_imports(facade_path, package_root=package_root)
         )
-        for module, relative_path in COMPATIBILITY_FACADE_PATHS.items()
-    }
+
     facade_paths = {
         repository_root / path for path in COMPATIBILITY_FACADE_PATHS.values()
     }
     internal_paths = [
         path
         for root in (package_root, repository_root / "scripts")
-        for path in root.rglob("*.py")
-        if path not in facade_paths and (tracked_paths is None or path in tracked_paths)
+        for path in _python_paths_under(root, tracked_paths=tracked_paths)
+        if path not in facade_paths
     ]
     for path in sorted(internal_paths):
         source = (
@@ -325,9 +435,7 @@ def collect_dependency_debt(
             if path.is_relative_to(package_root)
             else path.relative_to(repository_root).as_posix()
         )
-        for target, imported_names in sorted(
-            _resolved_from_imports(path, package_root=package_root).items()
-        ):
+        for target, imported_names in sorted(path_from_imports(path).items()):
             if target not in facade_exports:
                 continue
             facade_consumers = (
@@ -437,68 +545,129 @@ def _iter_functions(
     return functions
 
 
+def _decision_scan_paths(
+    repository_root: Path,
+    *,
+    tracked_paths: set[Path] | None,
+) -> list[Path]:
+    package_root = repository_root / "loopx"
+    return [
+        *_python_paths_under(package_root / "control_plane", tracked_paths=tracked_paths),
+        *(
+            path
+            for path in (
+                package_root / "quota.py",
+                package_root / "status.py",
+                package_root / "cli_commands" / "quota.py",
+            )
+            if path.is_file() and (tracked_paths is None or path in tracked_paths)
+        ),
+    ]
+
+
+def _extract_oversized_decision_functions(
+    tree: ast.Module,
+    *,
+    path: Path,
+    module: str,
+    repository_root: Path,
+    statement_limit: int,
+    decision_point_limit: int,
+) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    relative_path = display_path_text(path.relative_to(repository_root).as_posix())
+    display_module = display_path_text(module)
+    for qualified_name, function in _iter_functions(tree.body):
+        metrics = _FunctionMetrics(function)
+        metrics.visit(function)
+        if (
+            metrics.statement_count <= statement_limit
+            and metrics.decision_points <= decision_point_limit
+        ):
+            continue
+        identity = f"{module}:{qualified_name}"
+        findings.append(
+            {
+                "id": _finding_id(
+                    "oversized_decision_function", display_path_text(identity)
+                ),
+                "category": "oversized_decision_function",
+                "path": relative_path,
+                "module": display_module,
+                "symbol": qualified_name,
+                "line": function.lineno,
+                "metrics": {
+                    "statements": metrics.statement_count,
+                    "decision_points": metrics.decision_points,
+                },
+                "thresholds": {
+                    "max_statements": statement_limit,
+                    "max_decision_points": decision_point_limit,
+                },
+            }
+        )
+    return findings
+
+
 def collect_oversized_decision_functions(
     repository_root: Path,
     *,
     statement_limit: int = DECISION_STATEMENT_LIMIT,
     decision_point_limit: int = DECISION_POINT_LIMIT,
     tracked_paths: set[Path] | None = None,
+    _scan_cache: Mapping[Path, _ModuleScan] | None = None,
 ) -> list[dict[str, Any]]:
     package_root = repository_root / "loopx"
-    paths = [
-        *sorted((package_root / "control_plane").rglob("*.py")),
-        package_root / "quota.py",
-        package_root / "status.py",
-    ]
-    quota_cli_path = package_root / "cli_commands" / "quota.py"
-    if quota_cli_path.is_file():
-        paths.append(quota_cli_path)
-    if tracked_paths is not None:
-        paths = [path for path in paths if path in tracked_paths]
+    paths = _decision_scan_paths(repository_root, tracked_paths=tracked_paths)
+    use_cached_findings = (
+        _scan_cache is not None
+        and statement_limit == DECISION_STATEMENT_LIMIT
+        and decision_point_limit == DECISION_POINT_LIMIT
+    )
     findings: list[dict[str, Any]] = []
     for path in paths:
+        if use_cached_findings and _scan_cache is not None and path in _scan_cache:
+            scan = _scan_cache[path]
+            if scan.syntax_error is not None:
+                raise scan.syntax_error
+            if scan.oversized_findings is not None:
+                findings.extend(scan.oversized_findings)
+                continue
         module = _module_name(path, package_root)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for qualified_name, function in _iter_functions(tree.body):
-            metrics = _FunctionMetrics(function)
-            metrics.visit(function)
-            if (
-                metrics.statement_count <= statement_limit
-                and metrics.decision_points <= decision_point_limit
-            ):
-                continue
-            identity = f"{module}:{qualified_name}"
-            findings.append(
-                {
-                    "id": _finding_id(
-                        "oversized_decision_function", display_path_text(identity)
-                    ),
-                    "category": "oversized_decision_function",
-                    "path": display_path_text(
-                        path.relative_to(repository_root).as_posix()
-                    ),
-                    "module": display_path_text(module),
-                    "symbol": qualified_name,
-                    "line": function.lineno,
-                    "metrics": {
-                        "statements": metrics.statement_count,
-                        "decision_points": metrics.decision_points,
-                    },
-                    "thresholds": {
-                        "max_statements": statement_limit,
-                        "max_decision_points": decision_point_limit,
-                    },
-                }
+        findings.extend(
+            _extract_oversized_decision_functions(
+                tree,
+                path=path,
+                module=module,
+                repository_root=repository_root,
+                statement_limit=statement_limit,
+                decision_point_limit=decision_point_limit,
             )
+        )
     return sorted(findings, key=lambda item: str(item["id"]))
 
 
-def collect_compatibility_facades(repository_root: Path) -> list[dict[str, Any]]:
+def collect_compatibility_facades(
+    repository_root: Path,
+    *,
+    _scan_cache: Mapping[Path, _ModuleScan] | None = None,
+) -> list[dict[str, Any]]:
     package_root = repository_root / "loopx"
     findings: list[dict[str, Any]] = []
     for module, relative_path in sorted(COMPATIBILITY_FACADE_PATHS.items()):
         path = repository_root / relative_path
-        imports = _top_level_package_imports(path, package_root=package_root)
+        scan = _scan_cache.get(path) if _scan_cache is not None else None
+        if scan is not None:
+            if scan.syntax_error is not None:
+                raise scan.syntax_error
+            imports = (
+                scan.top_level_package_imports
+                if scan.top_level_package_imports is not None
+                else _top_level_package_imports(path, package_root=package_root)
+            )
+        else:
+            imports = _top_level_package_imports(path, package_root=package_root)
         public_exports = sorted(name for name in imports if not name.startswith("_"))
         if not public_exports:
             continue
@@ -562,33 +731,53 @@ def module_metric_baseline(baseline_path: Path) -> dict[str, dict[str, int]]:
     return normalized
 
 
-def module_metrics(path: Path) -> dict[str, int]:
-    source = path.read_text(encoding="utf-8")
-    lines = len(source.splitlines())
-    try:
-        tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return {"lines": lines, "any_count": 0, "dict_any_count": 0}
+def _fast_ast_any_counts(tree: ast.Module) -> tuple[int, int]:
     any_count = 0
     dict_any_count = 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "Any":
-            any_count += 1
-        if (
-            isinstance(node, ast.Subscript)
-            and isinstance(node.value, ast.Name)
-            and node.value.id == "dict"
-            and isinstance(node.slice, ast.Tuple)
-            and len(node.slice.elts) == 2
-        ):
-            key, value = node.slice.elts
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Name):
+            if node.id == "Any":
+                any_count += 1
+            continue
+        if isinstance(node, ast.Constant):
+            continue
+        if isinstance(node, ast.Subscript):
+            value = node.value
+            slice_node = node.slice
             if (
-                isinstance(key, ast.Constant)
-                and key.value == "str"
-                and isinstance(value, ast.Name)
-                and value.id == "Any"
+                isinstance(value, ast.Name)
+                and value.id == "dict"
+                and isinstance(slice_node, ast.Tuple)
+                and len(slice_node.elts) == 2
             ):
-                dict_any_count += 1
+                key, val = slice_node.elts
+                if (
+                    isinstance(key, ast.Constant)
+                    and key.value == "str"
+                    and isinstance(val, ast.Name)
+                    and val.id == "Any"
+                ):
+                    dict_any_count += 1
+        for child in node.__dict__.values():
+            if type(child) is list:
+                for item in child:
+                    if isinstance(item, ast.AST):
+                        stack.append(item)
+            elif isinstance(child, ast.AST):
+                stack.append(child)
+    return any_count, dict_any_count
+
+
+def _metrics_from_source_and_tree(
+    source: str,
+    tree: ast.Module | None,
+) -> dict[str, int]:
+    lines = len(source.splitlines())
+    if tree is None or ("Any" not in source and source.isascii()):
+        return {"lines": lines, "any_count": 0, "dict_any_count": 0}
+    any_count, dict_any_count = _fast_ast_any_counts(tree)
     return {
         "lines": lines,
         "any_count": any_count,
@@ -596,25 +785,126 @@ def module_metrics(path: Path) -> dict[str, int]:
     }
 
 
+def module_metrics(path: Path) -> dict[str, int]:
+    source = path.read_text(encoding="utf-8")
+    lines = len(source.splitlines())
+    if "Any" not in source and source.isascii():
+        return {"lines": lines, "any_count": 0, "dict_any_count": 0}
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError:
+        return {"lines": lines, "any_count": 0, "dict_any_count": 0}
+    return _metrics_from_source_and_tree(source, tree)
+
+
+def _scan_repository_modules(
+    repository_root: Path,
+    *,
+    tracked_paths: set[Path],
+    statement_limit: int = DECISION_STATEMENT_LIMIT,
+    decision_point_limit: int = DECISION_POINT_LIMIT,
+) -> dict[Path, _ModuleScan]:
+    package_root = repository_root / "loopx"
+    facade_paths = {
+        repository_root / relative_path
+        for relative_path in COMPATIBILITY_FACADE_PATHS.values()
+    }
+    decision_paths = set(_decision_scan_paths(repository_root, tracked_paths=tracked_paths))
+    dependency_paths = {
+        *(_python_paths_under(package_root, tracked_paths=tracked_paths)),
+        *(_python_paths_under(repository_root / "scripts", tracked_paths=tracked_paths)),
+        package_root / "status.py",
+    } - facade_paths
+    metric_paths = {
+        path
+        for path in _python_paths_under(package_root, tracked_paths=tracked_paths)
+        if not _is_benchmark_module_path(path)
+    }
+    all_paths = sorted(
+        path
+        for path in (dependency_paths | decision_paths | metric_paths | facade_paths)
+        if path.is_file()
+    )
+    submodule_cache: _SubmoduleCache = {}
+    scans: dict[Path, _ModuleScan] = {}
+    for path in all_paths:
+        source = path.read_text(encoding="utf-8")
+        tree: ast.Module | None = None
+        syntax_error: SyntaxError | None = None
+        need_ast = (
+            path in dependency_paths
+            or path in decision_paths
+            or path in facade_paths
+            or "Any" in source
+            or not source.isascii()
+        )
+        if need_ast:
+            try:
+                tree = ast.parse(source, filename=str(path))
+            except SyntaxError as exc:
+                syntax_error = exc
+        metrics = _metrics_from_source_and_tree(source, tree)
+        from_imports: dict[str, set[str]] | None = None
+        top_level_imports: dict[str, str] | None = None
+        oversized_findings: list[dict[str, Any]] | None = None
+        if tree is not None:
+            in_package = path.is_relative_to(package_root)
+            package_name = _package_name(path, package_root) if in_package else ""
+            if path in dependency_paths or path in facade_paths:
+                if path in facade_paths:
+                    top_level_imports = _extract_top_level_package_imports(
+                        tree,
+                        package_name=package_name,
+                        package_root=package_root,
+                    )
+                if path in dependency_paths:
+                    from_imports = _extract_from_imports(
+                        tree,
+                        package_name=package_name,
+                        package_root=package_root,
+                        submodule_cache=submodule_cache,
+                    )
+            if path in decision_paths:
+                oversized_findings = _extract_oversized_decision_functions(
+                    tree,
+                    path=path,
+                    module=_module_name(path, package_root),
+                    repository_root=repository_root,
+                    statement_limit=statement_limit,
+                    decision_point_limit=decision_point_limit,
+                )
+        scans[path] = _ModuleScan(
+            metrics=metrics,
+            from_imports=from_imports,
+            top_level_package_imports=top_level_imports,
+            oversized_findings=oversized_findings,
+            syntax_error=syntax_error,
+        )
+    return scans
+
+
 def collect_module_metric_findings(
     repository_root: Path,
     *,
     tracked_paths: set[Path] | None = None,
     baseline_path: Path | None = None,
+    _scan_cache: Mapping[Path, _ModuleScan] | None = None,
 ) -> list[dict[str, Any]]:
     package_root = repository_root / "loopx"
     baseline = module_metric_baseline(
         baseline_path or MODULE_METRIC_BASELINE_PATH
     )
-    paths = sorted(package_root.rglob("*.py"))
-    if tracked_paths is not None:
-        paths = [path for path in paths if path in tracked_paths]
+    paths = _python_paths_under(package_root, tracked_paths=tracked_paths)
     findings: list[dict[str, Any]] = []
     for path in paths:
         if _is_benchmark_module_path(path):
             continue
         relative = path.relative_to(repository_root).as_posix()
-        metrics = module_metrics(path)
+        metrics = (
+            dict(_scan_cache[path].metrics)
+            if _scan_cache is not None and path in _scan_cache
+            else module_metrics(path)
+        )
         ceilings = {
             "lines": MODULE_LINE_LIMIT,
             "any_count": MODULE_ANY_LIMIT,
@@ -694,7 +984,7 @@ def diff_scoped_module_ceiling_violations(
         checkout_path = repository_root / relative
         if not checkout_path.is_file():
             continue
-        head_lines = module_metrics(checkout_path)["lines"]
+        head_lines = len(checkout_path.read_text(encoding="utf-8").splitlines())
         base_lines = _git_show_text(repository_root, (base_ref or "origin/main").strip() or "origin/main", relative)
         if base_lines is None:
             base_ceiling = MODULE_LINE_LIMIT
@@ -824,16 +1114,29 @@ def build_control_plane_maintainability_report(
     ] = REVIEWED_MAINTAINABILITY_EXCEPTIONS,
 ) -> dict[str, Any]:
     tracked_paths = tracked_python_paths(repository_root)
+    scan_cache = _scan_repository_modules(
+        repository_root,
+        tracked_paths=tracked_paths,
+    )
     findings = [
-        *collect_dependency_debt(repository_root, tracked_paths=tracked_paths),
+        *collect_dependency_debt(
+            repository_root,
+            tracked_paths=tracked_paths,
+            _scan_cache=scan_cache,
+        ),
         *collect_oversized_decision_functions(
             repository_root,
             tracked_paths=tracked_paths,
+            _scan_cache=scan_cache,
         ),
-        *collect_compatibility_facades(repository_root),
+        *collect_compatibility_facades(
+            repository_root,
+            _scan_cache=scan_cache,
+        ),
         *collect_module_metric_findings(
             repository_root,
             tracked_paths=tracked_paths,
+            _scan_cache=scan_cache,
         ),
     ]
     evaluation = evaluate_maintainability_findings(
