@@ -317,6 +317,95 @@ def test_background_session_and_immutable_scope_parity(tmp_path: Path) -> None:
     assert _github_repo_slug("https://github.com/owner/repo") is None
 
 
+@pytest.mark.parametrize(("completed_at", "valid"), [
+    ("2000-01-01T00:00:00.250000Z", True),
+    ("2000-01-01T00:00:00.250000z", True),
+    ("2000-01-01T08:00:00.250000+08:00", True),
+    ("2000-01-01T00:00:00.250000", True),
+    ("invalid", False),
+])
+def test_steward_retry_cooldowns_use_the_retained_completion_instant(
+    tmp_path: Path, completed_at: str, valid: bool,
+) -> None:
+    from loopx.capabilities.native_chat.steward_turn import MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS, StewardTurnHost
+
+    completed = datetime(2000, 1, 1, microsecond=250000, tzinfo=timezone.utc).timestamp()
+    store = ChatSessionStore(tmp_path / "chat")
+    proto_store = cast(StewardSessionStoreProtocol, _CountingTurnLookupStore(store))
+    session = store.create_session(
+        goal_id="loopx-manager", agent_id="steward", adapter_kind="codex", upstream_thread_id="fixture",
+    )
+    sid = str(session["session_id"])
+    actor = {"goal_id": "steward-goal", "agent_id": "steward", "session_id": sid}
+    todo = {"todo_id": "adv-1", "updated_at": "2000-01-01T00:01:00Z"}
+    token = advancement_turn_id(todo)
+    turn, _ = store.create_turn(sid, client_turn_id=native_steward_client_id(actor, token), message="follow up")
+    native_failure = {
+        "ok": False, "status": "failed", "result_kind": "host_failure",
+        "effects": {"state_written": False, "quota_spent": False, "scheduler_acknowledged": False},
+    }
+    store.update_turn(sid, str(turn["turn_id"]), status="completed", completed_at=completed_at,
+                      response={"native_loopx": native_failure})
+    monitor = {
+        "status": "failed", "error_code": "runtime_unavailable", "completed_at": completed_at,
+        "turn_id": "retained-monitor", "loopx_request": {
+            "work_kind": "monitor", "monitor_restart_recovery": {"original_turn_id": "prior-monitor"},
+        },
+    }
+    advancement_due = completed + ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+    monitor_due = completed + MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS
+    retry = token + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX
+    recovery = {**monitor["loopx_request"], "monitor_restart_recovery": {"original_turn_id": "retained-monitor"}}
+
+    for offset in (-0.000001, 0.0, 0.000001):
+        elapsed = valid and offset >= 0
+        assert (
+            resolve_advancement_turn_id(proto_store, actor, todo, now=advancement_due + offset),
+            StewardTurnHost.monitor_restart_request(monitor, now=monitor_due + offset),
+        ) == (
+            (retry, recovery) if elapsed else (None, None)
+        )
+
+    native_failure["effects"]["state_written"] = True
+    store.update_turn(sid, str(turn["turn_id"]), response={"native_loopx": native_failure})
+    assert resolve_advancement_turn_id(proto_store, actor, todo, now=advancement_due) is None
+    assert StewardTurnHost.monitor_restart_request({**monitor, "error_code": "unrelated"}, now=monitor_due) is None
+
+
+def test_both_retry_cooldowns_preserve_far_future_microseconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    from math import inf, nextafter
+    import time
+
+    from loopx.capabilities.native_chat import steward_turn
+
+    completed_second = int(datetime(9999, 12, 31, 23, 50, tzinfo=timezone.utc).timestamp())
+    completed = {"completed_at": "9999-12-31T23:50:00.000001Z"}
+    original = {
+        **completed, "status": "failed", "error_code": "runtime_unavailable", "turn_id": "retained-monitor",
+        "loopx_request": {"work_kind": "monitor", "monitor_restart_recovery": {"original_turn_id": "prior"}},
+    }
+    advancement_second = completed_second + ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+    monitor_second = completed_second + steward_turn.MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS
+    clock_ns = 0
+    monkeypatch.setattr(time, "time_ns", lambda: clock_ns)
+    monkeypatch.setattr(time, "time", lambda: clock_ns / 1_000_000_000)
+
+    for offset in (-1_000, -1, 0, 1_000):
+        clock_ns = advancement_second * 1_000_000_000 + 1_000 + offset
+        followup_due = steward_monitor_turns._past_precommit_cooldown(completed, None)
+        clock_ns = monitor_second * 1_000_000_000 + 1_000 + offset
+        recovery_due = steward_turn.StewardTurnHost.monitor_restart_request(original) is not None
+        assert (followup_due, recovery_due) == (offset >= 0, offset >= 0)
+
+    assert not steward_monitor_turns._past_precommit_cooldown(completed, float(advancement_second))
+    assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=float(monitor_second)) is None
+    assert steward_monitor_turns._past_precommit_cooldown(completed, nextafter(advancement_second, inf))
+    assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=nextafter(monitor_second, inf)) is not None
+    for invalid_now in (inf, -inf, float("nan")):
+        assert not steward_monitor_turns._past_precommit_cooldown(completed, invalid_now)
+        assert steward_turn.StewardTurnHost.monitor_restart_request(original, now=invalid_now) is None
+
+
 def test_advancement_retry_exhaustion_and_lookup_cache_efficiency(tmp_path: Path) -> None:
     store = ChatSessionStore(tmp_path / "chat")
     counting_store = _CountingTurnLookupStore(store)

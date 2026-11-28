@@ -8,11 +8,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import time
 from typing import Literal, NoReturn, Protocol, overload
 
 from ...chat_store import ChatSessionStore, _atomic_write_json
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...control_plane.runtime.time import timestamp_age_at_least
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
@@ -432,12 +432,9 @@ _PRE_DISPATCH_ADVANCEMENT_ERROR_CODES = frozenset({
 
 def _past_precommit_cooldown(turn: Mapping[str, object], now: float | None) -> bool:
     """Return True when a finished turn has passed the precommit retry cooldown."""
-    from .steward_turn import _iso_timestamp_seconds
-
-    completed_ts = _iso_timestamp_seconds(turn.get("completed_at"))
-    if completed_ts is None:
-        return False
-    return (time.time() if now is None else now) - completed_ts >= ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS
+    return timestamp_age_at_least(
+        turn.get("completed_at"), ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS, now=now,
+    )
 
 
 def _zero_write_advancement_response(

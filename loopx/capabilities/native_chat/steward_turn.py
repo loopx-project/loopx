@@ -52,7 +52,6 @@ from .steward_turn_common import (
     as_mapping,
     as_optional_dict,
     as_optional_str,
-    iso_timestamp_seconds,
     is_zero_effect_replan_selection_deferral as _is_zero_effect_replan_selection_deferral,
     monitor_store_for,
     native_steward_client_id as native_steward_client_id,
@@ -89,7 +88,6 @@ from .steward_turn_recovery import (
     stopped_report_candidate_recovery,
 )
 
-_iso_timestamp_seconds = iso_timestamp_seconds
 _append_bounded_ellipsis = append_bounded_ellipsis
 _split_bounded_evidence_items = split_bounded_evidence_items
 _split_evidence_text_chunks = split_evidence_text_chunks

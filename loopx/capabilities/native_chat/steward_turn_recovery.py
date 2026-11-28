@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 from typing import Protocol, cast
 
+from ...control_plane.runtime.time import timestamp_age_at_least
 from ...file_lock import LOCK_ACQUIRE_TIMEOUT_ERROR_CODE, exclusive_file_lock
 from .steward_monitor import (
     actor_steward_binding_id,
@@ -26,7 +27,6 @@ from .steward_turn_common import (
     as_mapping,
     as_optional_dict,
     as_optional_str,
-    iso_timestamp_seconds,
     monitor_store_for,
     native_steward_client_id,
     steward_monitor_for,
@@ -198,12 +198,8 @@ def monitor_restart_request(
                 or (isinstance(msg, str) and _FILE_LOCK_TIMEOUT_ERROR_RE.fullmatch(msg) is not None)
             )
         )
-        completed_ts = iso_timestamp_seconds(original.get("completed_at"))
-        current_ts = time.time() if now is None else now
-        if (
-            not post_context_error
-            or completed_ts is None
-            or current_ts - completed_ts < MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS
+        if not post_context_error or not timestamp_age_at_least(
+            original.get("completed_at"), MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS, now=now,
         ):
             return None
     return {**prior, "monitor_restart_recovery": {"original_turn_id": original["turn_id"]}}

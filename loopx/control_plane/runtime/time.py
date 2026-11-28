@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from math import isfinite
 import re
+import time
 from typing import Any
 
 
@@ -83,6 +85,22 @@ def parse_timestamp(value: Any) -> datetime | None:
         return parsed.astimezone(timezone.utc)
     except (ValueError, OverflowError):
         return None
+
+
+def timestamp_age_at_least(value: object, duration_seconds: int, *, now: float | None) -> bool:
+    """Compare a retained timestamp with the wall clock without rounding it up."""
+    started = parse_timestamp(value) if isinstance(value, str) else None
+    if started is None:
+        return False
+    if now is None:
+        observed_us = time.time_ns() // 1_000
+    elif isfinite(now):
+        numerator, denominator = now.as_integer_ratio()
+        observed_us = numerator * 1_000_000 // denominator
+    else:
+        return False
+    started_us = (started - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(microseconds=1)
+    return observed_us - started_us >= duration_seconds * 1_000_000
 
 
 def chronology_key(value: Any) -> tuple[int, datetime, str]:
