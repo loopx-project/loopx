@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence, cast
+from typing import Mapping, Sequence, cast
 
 from datetime import datetime, timezone
 import hashlib
@@ -89,13 +89,56 @@ def _managed_command_facade(path: Path) -> bool:
     return LOOPX_MANAGED_SLASH_COMMAND_MARKER in existing
 
 
+def _replacement_paths_are_safe(candidate: Path, replacement: Path, target: Path) -> bool:
+    replacement_skill = replacement / "SKILL.md"
+    if (
+        candidate.is_symlink()
+        or replacement.is_symlink()
+        or replacement_skill.is_symlink()
+    ):
+        return False
+    try:
+        candidate_resolved = candidate.resolve()
+        protected_paths = (target, replacement.resolve(), replacement_skill.resolve())
+    except OSError:
+        return False
+    return all(
+        path != candidate_resolved and not path.is_relative_to(candidate_resolved)
+        for path in protected_paths
+    )
+
+
+def _manifest_stat_signature(path: Path) -> tuple[int, int, int, int, int] | None:
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        stat_result.st_ctime_ns,
+    )
+
+
+def _read_target_skill_manifest(manifest_path: Path) -> tuple[object, object]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, None
+    skills = manifest.get("skills") if isinstance(manifest, dict) else None
+    items = skills.get("items") if isinstance(skills, dict) else None
+    return manifest, items
+
+
 def retire_duplicate_managed_skills(
     skills_dir: Path,
     *,
     alternate_root: Path | None = None,
     execute: bool,
     retire_legacy_aliases: bool = False,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """Retire LoopX-managed skill copies from the alternate well-known root.
 
     The fixed installer overwrites within the target root, but it historically
@@ -149,16 +192,26 @@ def retire_duplicate_managed_skills(
                     recorded_hashes[str(skill_id)] = item["sha256"]
 
     candidate_dirs: list[Path] = []
+    seen_candidates: set[Path] = set()
     if managed_ids:
-        candidate_dirs.extend(alternate / skill_id for skill_id in managed_ids)
+        for skill_id in managed_ids:
+            candidate = alternate / skill_id
+            if candidate not in seen_candidates:
+                seen_candidates.add(candidate)
+                candidate_dirs.append(candidate)
     if alternate.is_dir():
-        candidate_dirs.extend(
-            path
-            for path in sorted(
-                [alternate / "loopx", *alternate.glob("loopx-*"), *alternate.glob("loop-global-*")]
-            )
-            if path.is_dir() and path not in candidate_dirs
-        )
+        for path in sorted(
+            [alternate / "loopx", *alternate.glob("loopx-*"), *alternate.glob("loop-global-*")]
+        ):
+            if path.is_dir() and path not in seen_candidates:
+                seen_candidates.add(path)
+                candidate_dirs.append(path)
+
+    target_manifest_path = target / SKILL_INSTALL_READBACK_FILENAME
+    target_manifest_loaded = False
+    target_manifest_sig: tuple[int, int, int, int, int] | None = None
+    target_manifest: object = {}
+    target_items: object = None
 
     for candidate in sorted(candidate_dirs):
         if not candidate.is_dir() or not (candidate / "SKILL.md").is_file():
@@ -170,30 +223,42 @@ def retire_duplicate_managed_skills(
             else skill_id
         )
         replacement = target / replacement_id
-        # Never remove a sole copy, follow a skill symlink, or replace a rich
-        # workflow with a command facade that merely refers back to that skill.
-        if (candidate.is_symlink() or not (replacement / "SKILL.md").is_file()
-                or (not _managed_command_facade(candidate)
-                    and _managed_command_facade(replacement))):
+        if not _replacement_paths_are_safe(candidate, replacement, target):
             skipped.append(skill_id)
             continue
-        if not _managed_command_facade(replacement):
-            try:
-                target_manifest = json.loads(
-                    (target / SKILL_INSTALL_READBACK_FILENAME).read_text(encoding="utf-8")
-                )
-            except (OSError, json.JSONDecodeError):
-                target_manifest = {}
-            target_skills = target_manifest.get("skills") if isinstance(target_manifest, dict) else None
-            target_items = target_skills.get("items") if isinstance(target_skills, dict) else None
-            if (not isinstance(target_manifest, dict)
-                    or target_manifest.get("owner") not in SKILL_INSTALL_OWNERS
-                    or not isinstance(target_items, dict)
-                    or target_items.get(replacement_id) != hash_skill_tree(replacement)):
+        replacement_skill = replacement / "SKILL.md"
+        if not replacement_skill.is_file():
+            skipped.append(skill_id)
+            continue
+
+        candidate_is_facade = _managed_command_facade(candidate)
+        replacement_is_facade = _managed_command_facade(replacement)
+        # Never replace a rich workflow with a command facade that merely refers
+        # back to that skill.
+        if not candidate_is_facade and replacement_is_facade:
+            skipped.append(skill_id)
+            continue
+        if not replacement_is_facade:
+            current_sig = _manifest_stat_signature(target_manifest_path)
+            if not target_manifest_loaded or current_sig != target_manifest_sig:
+                target_manifest_loaded = True
+                target_manifest_sig = None
+                target_manifest, target_items = {}, None
+                if current_sig is not None:
+                    manifest_read, items_read = _read_target_skill_manifest(target_manifest_path)
+                    if _manifest_stat_signature(target_manifest_path) == current_sig:
+                        target_manifest, target_items = manifest_read, items_read
+                        target_manifest_sig = current_sig
+            if (
+                not isinstance(target_manifest, dict)
+                or target_manifest.get("owner") not in SKILL_INSTALL_OWNERS
+                or not isinstance(target_items, dict)
+                or target_items.get(replacement_id) != hash_skill_tree(replacement)
+            ):
                 skipped.append(skill_id)
                 continue
         managed = skill_id in managed_ids
-        marker_managed = _managed_command_facade(candidate)
+        marker_managed = candidate_is_facade
         if not managed and not marker_managed:
             skipped.append(skill_id)
             continue
@@ -217,6 +282,12 @@ def retire_duplicate_managed_skills(
             if metadata.exists() and LOOPX_MANAGED_SLASH_COMMAND_MARKER not in metadata.read_text(encoding="utf-8"):
                 skipped.append(skill_id)
                 continue
+        if (
+            not replacement_is_facade
+            and _manifest_stat_signature(target_manifest_path) != target_manifest_sig
+        ):
+            skipped.append(skill_id)
+            continue
         if execute:
             shutil.rmtree(candidate)
             retired.append(skill_id)
@@ -261,7 +332,7 @@ def hash_skill_tree(
     root: Path,
     *,
     ignored_relative_paths: Sequence[str] = (),
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if not root.is_dir():
         return {
             "available": False,
@@ -292,7 +363,7 @@ def _source_readback(
     source_root: Path,
     *,
     env: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     source_env = os.environ if env is None else env
     resolved_commit = source_env.get("LOOPX_RESOLVED_SOURCE_GIT_COMMIT")
     if resolved_commit:
@@ -309,7 +380,7 @@ def _source_readback(
     except (OSError, json.JSONDecodeError):
         release_manifest = {}
     release_source = (
-        cast(dict[str, Any], release_manifest.get("source"))
+        cast(dict[str, object], release_manifest.get("source"))
         if isinstance(release_manifest.get("source"), dict)
         else {}
     )
@@ -364,13 +435,13 @@ def _source_revision_for_root(source_root: Path) -> str | None:
     return str(revision) if revision else None
 
 
-def _skills_digest(items: Mapping[str, Any]) -> str:
+def _skills_digest(items: Mapping[str, object]) -> str:
     return hashlib.sha256(
         json.dumps(items, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
 
 
-def _write_json_atomic(target: Path, payload: Mapping[str, Any]) -> None:
+def _write_json_atomic(target: Path, payload: Mapping[str, object]) -> None:
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -425,7 +496,7 @@ def build_skill_install_readback(
     owner: str = SKILL_INSTALL_OWNER,
     integration_mode: str = SKILL_INSTALL_INTEGRATION_MODE,
     loopx_version: str = __version__,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     identity = _normalized_install_identity(
         owner=owner, integration_mode=integration_mode, loopx_version=loopx_version,
     )
@@ -519,7 +590,7 @@ def inspect_skill_install_readback(
     source_root: Path | None = None,
     expected_source_revision_override: str | None = None,
     expected_loopx_version_override: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     expected_source_revision = (
         expected_source_revision_override
         or (_source_revision_for_root(source_root) if source_root else None)
@@ -574,12 +645,12 @@ def inspect_skill_install_readback(
     )
     missing_ids = sorted(set(required_ids) - set(materialized_ids))
     manifest_skills = (
-        cast(dict[str, Any], manifest.get("skills"))
+        cast(dict[str, object], manifest.get("skills"))
         if isinstance(manifest, dict) and isinstance(manifest.get("skills"), dict)
         else {}
     )
     manifest_items = (
-        cast(dict[str, Any], manifest_skills.get("items"))
+        cast(dict[str, object], manifest_skills.get("items"))
         if isinstance(manifest_skills.get("items"), dict)
         else {}
     )
@@ -589,13 +660,13 @@ def inspect_skill_install_readback(
         if manifest_items.get(skill_id) != hash_skill_tree(root / skill_id)
     ]
     manifest_ids = (
-        {str(skill_id) for skill_id in cast(list[Any], manifest.get("materialized_skill_ids"))}
+        {str(skill_id) for skill_id in cast(list[object], manifest.get("materialized_skill_ids"))}
         if isinstance(manifest, dict)
         and isinstance(manifest.get("materialized_skill_ids"), list)
         else set()
     )
     source = (
-        cast(dict[str, Any], manifest.get("source"))
+        cast(dict[str, object], manifest.get("source"))
         if isinstance(manifest, dict) and isinstance(manifest.get("source"), dict)
         else {}
     )
@@ -728,7 +799,9 @@ def inspect_skill_install_readback(
     }
 
 
-def skill_install_doctor_checks(readback: dict[str, Any] | None) -> list[dict[str, Any]]:
+def skill_install_doctor_checks(
+    readback: dict[str, object] | None,
+) -> list[dict[str, object]]:
     """Expose an optional host installation check only when readback applies."""
     if not readback:
         return []
