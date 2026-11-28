@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.cli import main as cli_main
+from loopx.entrypoint import main as cli_main
 from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from loopx.control_plane.testing.canary_harness import import_fixture_authority
@@ -322,10 +322,16 @@ def _write_todo_list_limit_stress_fixture(state_file: Path) -> None:
 def _invoke_cli(args: list[str], *, read_context: bool = False) -> tuple[int, str]:
     output = io.StringIO()
     ambient_thread_id = os.environ.pop("CODEX_THREAD_ID", None)
+    ambient_usage_ping = os.environ.get("LOOPX_USAGE_PING")
+    os.environ["LOOPX_USAGE_PING"] = "0"
     try:
         with contextlib.redirect_stdout(output):
             exit_code = cli_main(args)
     finally:
+        if ambient_usage_ping is None:
+            os.environ.pop("LOOPX_USAGE_PING", None)
+        else:
+            os.environ["LOOPX_USAGE_PING"] = ambient_usage_ping
         if ambient_thread_id is not None:
             os.environ["CODEX_THREAD_ID"] = ambient_thread_id
     text = output.getvalue()
@@ -2576,3 +2582,28 @@ def test_first_class_runtime_profiles_fit_thin_prompt_budget_and_cli_round_trip(
             assert payload["scheduler_hint"].get("action") != (
                 "repair_scheduler_execution_context"
             )
+
+
+@pytest.mark.parametrize("initial_ping", ["1", None])
+def test_invoke_cli_isolates_usage_ping_and_restores_ambient_env(
+    monkeypatch: pytest.MonkeyPatch, initial_ping: str | None,
+) -> None:
+    if initial_ping is None:
+        monkeypatch.delenv("LOOPX_USAGE_PING", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_USAGE_PING", initial_ping)
+    monkeypatch.setenv("CODEX_THREAD_ID", "parent-thread")
+
+    observed: list[tuple[str | None, str | None]] = []
+
+    def fake_cli_main(args: list[str]) -> int:
+        observed.append((os.environ.get("LOOPX_USAGE_PING"), os.environ.get("CODEX_THREAD_ID")))
+        print("{}")
+        return 0
+
+    monkeypatch.setitem(globals(), "cli_main", fake_cli_main)
+    code, text = _invoke_cli(["--format", "json", "quota", "should-run"])
+    assert code == 0 and text == "{}\n"
+    assert observed == [("0", None)]
+    assert os.environ.get("LOOPX_USAGE_PING") == initial_ping
+    assert os.environ.get("CODEX_THREAD_ID") == "parent-thread"

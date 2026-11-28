@@ -133,3 +133,68 @@ def test_machine_smoke_calls_keep_core_gates_and_parent_context_mode(
         observed = smoke["run_cli"](*arguments, registry_path=registry, runtime=runtime)
     assert observed["normal_delivery_allowed"] is (gate == "ready"), observed
     assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_mode
+
+
+@pytest.mark.parametrize("parent_mode", ["on", "off"])
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_import_fixture_authority_fast_path_preserves_env_and_subprocess_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parent_mode: str, provider: str,
+) -> None:
+    from tests.control_plane import test_quota_settlement_cli as fixture
+
+    project, runtime, registry = fixture._write_fixture(tmp_path / "real")
+    monkeypatch.setenv("LOOPX_CONTEXT_DELIVERY", parent_mode)
+    canary_harness.import_fixture_authority(registry, fixture.GOAL_ID, provider=provider)
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_mode
+    readback = canary_harness.run_json_cli(
+        "todo", "list", "--goal-id", fixture.GOAL_ID,
+        registry_path=registry, runtime_root=runtime,
+    )["authority_read"]
+    assert readback["source_authority"] == f"{provider}_v0"
+    assert readback["decision_read_from_provider"] is True
+
+    calls: list[list[str]] = []
+    project_hook, runtime_hook, registry_hook = fixture._write_fixture(tmp_path / "hook")
+
+    def fake_run(cmd, *args, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(
+            stdout=json.dumps({
+                "cold_import": {"status": "prepared" if "prepare-import" in cmd else "applied", "plan_path": str(tmp_path / "plan.json"), "plan_sha256": "abc"},
+                "authority_read": {"source_authority": "file_v0", "decision_read_from_provider": True, "legacy_fallback_used": False},
+            }),
+            stderr="",
+            returncode=0,
+        )
+
+    (tmp_path / "plan.json").write_text(json.dumps({"plan_sha256": "abc"}), encoding="utf-8")
+    monkeypatch.setattr(canary_harness.subprocess, "run", fake_run)
+    canary_harness.import_fixture_authority(registry_hook, fixture.GOAL_ID)
+    assert len(calls) == 3
+    assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_mode
+
+
+@pytest.mark.parametrize("initial_ping", ["1", None])
+def test_import_fixture_authority_isolates_usage_ping_and_restores_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial_ping: str | None,
+) -> None:
+    import loopx.entrypoint as entrypoint_module
+    from tests.control_plane import test_quota_settlement_cli as fixture
+
+    _project, _runtime, registry = fixture._write_fixture(tmp_path)
+    if initial_ping is None:
+        monkeypatch.delenv("LOOPX_USAGE_PING", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_USAGE_PING", initial_ping)
+
+    observed: list[tuple[str | None, str | None]] = []
+    original_main = entrypoint_module.main
+
+    def recording_main(argv=None):
+        observed.append((os.environ.get("LOOPX_USAGE_PING"), os.environ.get("LOOPX_CONTEXT_DELIVERY")))
+        return original_main(argv)
+
+    monkeypatch.setattr(entrypoint_module, "main", recording_main)
+    canary_harness.import_fixture_authority(registry, fixture.GOAL_ID)
+    assert observed == [("0", "off"), ("0", "off"), ("0", "off")]
+    assert os.environ.get("LOOPX_USAGE_PING") == initial_ping

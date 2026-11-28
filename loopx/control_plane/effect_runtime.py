@@ -250,33 +250,61 @@ def _control_plane_root() -> Path:
     return Path(__file__).resolve().parent
 
 
+_DEFAULT_PATH_STAT = Path.stat
+
+
 def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
     snapshot: list[tuple[str, int, int, int]] = []
-    for directory, child_directories, filenames in os.walk(root):
-        child_directories.sort()
-        relative_directory = os.path.relpath(directory, root)
-        relative_prefix = (
-            "" if relative_directory == "." else relative_directory.replace(os.sep, "/") + "/"
-        )
-        for filename in sorted(filenames):
-            relative = relative_prefix + filename
-            dot = filename.rfind(".")
-            if ((dot <= 0 or filename[dot:] not in _RUNTIME_SOURCE_SUFFIXES)
-                    and relative not in _RUNTIME_SOURCE_PATHS):
-                continue
-            source = Path(directory, filename)
+    suffixes = _RUNTIME_SOURCE_SUFFIXES
+    exact_paths = _RUNTIME_SOURCE_PATHS
+    use_path_stat = Path.stat is not _DEFAULT_PATH_STAT
+    stack: list[tuple[str, str]] = [(os.fspath(root), "")]
+    while stack:
+        directory, relative_prefix = stack.pop()
+        try:
+            with os.scandir(directory) as entries:
+                directory_entries = list(entries)
+        except OSError:
+            continue
+        for entry in directory_entries:
+            name = entry.name
             try:
-                metadata = source.stat()
+                is_dir = entry.is_dir(follow_symlinks=False)
             except OSError:
-                # Preserve pathlib's missing-file and platform-specific error policy.
-                if not source.is_file():
-                    continue
-                raise
-            except ValueError:
                 continue
+            if is_dir:
+                if name != "__pycache__":
+                    stack.append((entry.path, f"{relative_prefix}{name}/"))
+                continue
+            relative = f"{relative_prefix}{name}"
+            dot = name.rfind(".")
+            if (dot <= 0 or name[dot:] not in suffixes) and relative not in exact_paths:
+                continue
+            if use_path_stat:
+                source = Path(directory, name)
+                try:
+                    metadata = source.stat()
+                except OSError:
+                    # Preserve pathlib's missing-file and platform-specific error policy.
+                    if not source.is_file():
+                        continue
+                    raise
+                except ValueError:
+                    continue
+            else:
+                try:
+                    metadata = entry.stat(follow_symlinks=True)
+                except OSError:
+                    # Preserve pathlib's missing-file and platform-specific error policy.
+                    if not Path(entry.path).is_file():
+                        continue
+                    raise
+                except ValueError:
+                    continue
             if stat.S_ISREG(metadata.st_mode):
                 snapshot.append((relative, metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
-    return tuple(sorted(snapshot))
+    snapshot.sort()
+    return tuple(snapshot)
 
 
 def _runtime_source_snapshot(root: Path | None = None) -> _RuntimeSourceSnapshot:
