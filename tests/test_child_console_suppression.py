@@ -16,6 +16,7 @@ import io
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -585,3 +586,77 @@ def test_consoleless_host_receipt_arrives_through_a_redirected_pipe(
     assert captured.kwargs is not None
     assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
     assert captured.kwargs["capture_output"] is True
+
+
+def test_run_host_process_bridge_windows_branch_assigns_job_and_passes_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Windows spawn path supervises the child through its Host Job.
+
+    The production branch imports ``WindowsHostJob`` lazily and assigns the
+    spawned process before any request is written, so the spawn-options test
+    must cover that branch too: the Job boundary is replaced here (the real
+    module cannot even load off Windows) and the fixture's process carries the
+    handle ``assign`` reads. Asserts the assignment happened for THIS process
+    and that the console-less flag reached the spawn options.
+    """
+    captured = Captured()
+
+    class BridgeProcess:
+        pid = 8484
+        _handle = 0x2468  # what Popen retains on Windows; assign() reads it.
+
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            captured.record(*_args, **kwargs)
+            self.stdin = io.StringIO()
+            self.stdout = (line for line in ('{"kind": "result", "outcome": "exited"}\n',))
+            self.returncode = 0
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    assigned: list[object] = []
+
+    class RecordingJob:
+        name = "Local\\LoopXHost-test"
+
+        def __enter__(self):
+            return self
+
+        def assign(self, process) -> None:
+            # The real assign reads process._handle before any Win32 call; a
+            # process without one cannot be supervised.
+            assert process._handle is not None
+            assigned.append(process)
+
+        def finish(self) -> None:
+            return None
+
+        def __exit__(self, *_exc):
+            self.finish()
+
+    fake_job_module = types.ModuleType("loopx.control_plane.turn_driver.windows_host_job")
+    fake_job_module.WindowsHostJob = RecordingJob
+    monkeypatch.setitem(
+        sys.modules, "loopx.control_plane.turn_driver.windows_host_job", fake_job_module)
+    monkeypatch.setattr(sys, "platform", "win32")
+    emulate_windows_spawn(monkeypatch, host_transport_module)
+    monkeypatch.setattr(host_transport_module, "_node_executable", lambda: sys.executable)
+    monkeypatch.setattr(host_transport_module.subprocess, "Popen", BridgeProcess)
+    observation = host_transport_module.run_host_process(
+        [sys.executable, "-c", "pass"], project=tmp_path, input_text="", timeout_seconds=1.0,
+    )
+    assert observation.get("outcome") == "exited"
+    assert captured.kwargs is not None
+    assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
+    assert len(assigned) == 1
+    assert isinstance(assigned[0], BridgeProcess)
