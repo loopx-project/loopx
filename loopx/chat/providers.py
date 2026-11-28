@@ -392,6 +392,11 @@ class DirectModelAdapter:
                 raw_response = "".join(str(block.get("text") or "") for block in blocks if isinstance(block, dict) and block.get("type") == "text")
                 calls = [block for block in blocks if isinstance(block, dict) and block.get("type") == "tool_use"]
                 if not calls:
+                    if payload.get("stop_reason") == "max_tokens":
+                        raise _provider_error(
+                            "Anthropic",
+                            "The response hit the output limit; retry, shorten the request, or select another model.",
+                        )
                     break
                 event_sink("agent.phase", {"label": f"{self.provider.title()} 正在检查项目上下文"})
                 messages.append({"role": "assistant", "content": blocks})
