@@ -366,6 +366,127 @@ test("fenced takeover preserves admission and rejects competing or stale source 
   } finally {await rm(root, {recursive: true, force: true});}
 });
 
+test("completed lease takeover binds verified retired generation and rejects tampered or foreign sources", async () => {
+  const {root, identity, event, log, request} = await fixture();
+  try {
+    const originalKey = "original-claim";
+    const original = {...event, recorded_at: "2026-01-01T00:00:00Z", details: {...event.details,
+      closeout_required: true, prepared_lease_required: true,
+      prepared_lease_key_sha256: createHash("sha256").update(originalKey).digest("hex"),
+      prepared_lease_version: 1, prepared_lease_epoch: 1}};
+    const completionEvent = {schema_version: "loopx_rollout_event_v0", event_id: "event-complete",
+      event_kind: "todo_complete", goal_id: goalId, agent_id: agentId, todo_id: todoId, run_id: turnId,
+      status: "done", details: {settlement_effect_id: identity.effect_id}};
+    const source = {goal_id: goalId, todo_id: todoId, handoff_mode: "hard_lease",
+      source_authority: "sqlite_v0", provider_revision: "sqlite:fixture:4",
+      decision_read_from_provider: true, legacy_fallback_used: false,
+      // Even hours after the retired lease's TTL window elapsed, updated_at <= expires_at holds.
+      observed_at: "2026-01-01T08:00:00Z", takeover_basis: {
+        acceptance_sha256: "b".repeat(64), todo: {todo_id: todoId, role: "agent", task_class: "advancement_task",
+          status: "done", archive_state: "active", done: true, claimed_by: agentId,
+          completion_turn_key: identity.effect_id}},
+      leases: [{todo_id: todoId, owner: agentId, status: "released", idempotency_key: "replacement-claim",
+        version: 2, lease_epoch: 2, acquired_at: "2026-01-01T01:00:00Z",
+        updated_at: "2026-01-01T01:30:00Z", expires_at: "2026-01-01T04:00:00Z"} as JsonObject]};
+    const guardDetails = {todo_id: todoId, settlement_effect_id: identity.effect_id,
+      lease_takeover_source: source};
+
+    // Cold readback through settlement_readback passes completionEvent only while accounting has not started.
+    // Terminal completion retires the lease via updated_at without a separate released_at field.
+    await writeFile(log, [original, completionEvent].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const readback = await readQuotaSettlement({...request, heartbeat_reentry_guard: guardDetails});
+    assert.equal(readback.replay_phase, "settlement_pending");
+    const qualification = readback.heartbeat_reentry_qualification;
+    assert.equal(qualification.append, true);
+    const details = qualification.details as JsonObject;
+    assert.equal(details.settlement_receipt_revision, "completed_lease_takeover");
+    assert.equal(details.takeover_original_event_id, original.event_id);
+    assert.equal(details.takeover_original_epoch, 1);
+    assert.equal(details.prepared_lease_epoch, 2);
+    assert.equal(details.prepared_lease_version, 2);
+    assert.equal(details.prepared_lease_key_sha256, createHash("sha256").update("replacement-claim").digest("hex"));
+    assert.equal(details.takeover_completion_event_id, completionEvent.event_id);
+    assert.equal(details.takeover_released_at, "2026-01-01T01:30:00Z");
+    assert.equal(details.lease_takeover_source, undefined);
+
+    // Appending the completed takeover receipt validates cleanly on cold readback and replays idempotently.
+    const takeoverEvent = {...original, event_id: "completed-takeover-event",
+      recorded_at: source.observed_at, causality: {source_event_id: original.event_id, caused_by: original.event_id},
+      details};
+    validateHeartbeatTakeoverParent(takeoverEvent, original, identity);
+    await appendFile(log, JSON.stringify(takeoverEvent) + "\n");
+    const replayed = await readQuotaSettlement({...request, heartbeat_reentry_guard: guardDetails});
+    assert.equal(replayed.heartbeat_receipt.event_id, "completed-takeover-event");
+    assert.deepEqual(replayed.heartbeat_reentry_qualification, {append: false, details: null});
+
+    // Cold readback rejects a completed_lease_takeover whose completion event id does not match rollout history.
+    const wrongCompletionEvent = structuredClone(takeoverEvent);
+    wrongCompletionEvent.details.takeover_completion_event_id = "event-other";
+    await writeFile(log, [original, completionEvent, wrongCompletionEvent].map(row => JSON.stringify(row)).join("\n") + "\n");
+    await assert.rejects(readQuotaSettlement(request), /completed lease takeover completion receipt mismatch/);
+
+    // Once accounting (refresh_state) exists, completed takeover is disabled.
+    const writebackEvent = {...event, event_id: "event-writeback", event_kind: "refresh_state",
+      details: {settlement_effect_id: identity.effect_id}};
+    await writeFile(log, [original, completionEvent, writebackEvent].map(row => JSON.stringify(row)).join("\n") + "\n");
+    const afterWriteback = await readQuotaSettlement({...request, heartbeat_reentry_guard: guardDetails});
+    assert.equal(afterWriteback.heartbeat_reentry_qualification.append, false);
+
+    // Same-generation retired lease requires no takeover (idempotent no-op).
+    const sameGenSource = structuredClone(source);
+    sameGenSource.leases[0] = {...sameGenSource.leases[0]!, idempotency_key: originalKey, version: 1, lease_epoch: 1};
+    assert.deepEqual(
+      heartbeatWorkRequalification(original, {...guardDetails, lease_takeover_source: sameGenSource},
+        identity, "settlement_pending", true, completionEvent),
+      {append: false, details: null},
+    );
+
+    // Unprepared Turn (missing prepared_lease) cannot gain admission through completed takeover.
+    const unprepared = {...event, recorded_at: "2026-01-01T00:00:00Z", details: {...event.details,
+      closeout_required: true, prepared_lease_required: true}};
+    assert.throws(() => heartbeatWorkRequalification(unprepared, guardDetails,
+      identity, "settlement_pending", true, completionEvent), /original task lease generation/);
+
+    // Any invalid, foreign, open, or tampered source fails closed.
+    for (const mutate of [
+      (s: typeof source) => {s.leases[0]!.owner = "competing-holder";},
+      (s: typeof source) => {s.leases[0]!.status = "active";},
+      (s: typeof source) => {s.leases[0]!.released_at = "2026-01-01T04:00:01Z";},
+      (s: typeof source) => {s.leases[0]!.released_at = null;},
+      (s: typeof source) => {s.leases[0]!.updated_at = "2026-01-01T04:00:01Z";},
+      (s: typeof source) => {s.leases[0]!.acquired_at = "2025-12-31T23:59:59Z";},
+      (s: typeof source) => {s.takeover_basis.todo.status = "open"; s.takeover_basis.todo.done = false;},
+      (s: typeof source) => {s.takeover_basis.todo.status = "blocked"; s.takeover_basis.todo.done = false;},
+      (s: typeof source) => {s.takeover_basis.todo.completion_turn_key = "foreign-turn-effect";},
+      (s: typeof source) => {s.takeover_basis.todo.claimed_by = "other-agent";},
+      (s: typeof source) => {s.decision_read_from_provider = false;},
+      (s: typeof source) => {s.legacy_fallback_used = true;},
+      (s: typeof source) => {s.provider_revision = "";},
+      (s: typeof source) => {s.leases.push({...s.leases[0]!});},
+    ]) {
+      const invalid = structuredClone(source); mutate(invalid);
+      assert.throws(() => heartbeatWorkRequalification(original,
+        {...guardDetails, lease_takeover_source: invalid}, identity, "settlement_pending", true, completionEvent),
+        /original task lease generation/);
+    }
+    for (const [field, value] of [
+      ["takeover_owner", "invalid"],
+      ["takeover_original_event_id", "invalid"],
+      ["takeover_todo_sha256", "invalid"],
+      ["takeover_acceptance_sha256", "invalid"],
+      ["takeover_released_at", "invalid"],
+      ["takeover_expires_at", "invalid"],
+      ["takeover_completion_event_id", ""],
+    ] as const) {
+      const corrupted = structuredClone(takeoverEvent);
+      corrupted.details[field] = value;
+      assert.throws(() => validateHeartbeatTakeoverParent(corrupted, original, identity), /lease takeover/);
+    }
+    assert.throws(() => validateHeartbeatTakeoverParent({...takeoverEvent,
+      details: {...details, quota_spend_source: "changed-source"}}, original, identity), /lease takeover/);
+  } finally {await rm(root, {recursive: true, force: true});}
+});
+
 test("work requalification fails closed on binding and semantic guard conflicts", async () => {
   const {root, identity, event} = await fixture();
   try {

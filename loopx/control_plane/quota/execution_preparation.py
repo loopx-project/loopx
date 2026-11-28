@@ -345,42 +345,6 @@ def _recovery_lease_bound(
     return prepared_lease == admitted_fields
 
 
-def _completion_retired_lease_bound(
-    *,
-    requested_proof: Mapping[str, Any] | None,
-    current_proof: Mapping[str, Any] | None,
-    settlement: QuotaSettlementReadback,
-    todo_id: str,
-    agent_id: str,
-) -> bool:
-    """Bind writeback for a Todo completed under a reclaimed lease generation.
-
-    The guard already requires this Turn's own completion receipt for a done
-    Todo, so the lease-fenced terminal transition is durable before writeback.
-    A completed Todo can never produce another lease generation (claims and
-    lifecycle operations reject non-open Todos), which makes the owner's
-    retired head lease the unambiguous completing generation: binding to it
-    admits no execution the completion fence did not already permit, while
-    refusing to bind would strand the exact Turn the settlement plan instructs
-    to complete before writing back.
-    """
-    completion = settlement.completion_event
-    settlement_turn_id = (
-        settlement.identity.value.turn_instance_id if settlement.identity.value is not None else None
-    )
-    if (
-        current_proof is None
-        or settlement_turn_id is None
-        or not isinstance(completion, Mapping)
-        or completion.get("event_kind") != "todo_complete"
-        or completion.get("todo_id") != todo_id
-        or completion.get("agent_id") != agent_id
-        or completion.get("run_id") != settlement_turn_id
-    ):
-        return False
-    return requested_proof is None or requested_proof == current_proof
-
-
 def _autonomous_replan_guard_bound(
     *,
     settlement: QuotaSettlementReadback,
@@ -471,14 +435,6 @@ def _hard_lease_execution_bound(
         todo_id=todo_id,
         agent_id=agent_id,
         validation_recovery_turn_instance_id=validation_recovery_turn_instance_id,
-    ):
-        return True
-    if not todo_open and _completion_retired_lease_bound(
-        requested_proof=requested_proof,
-        current_proof=current_proof,
-        settlement=settlement,
-        todo_id=todo_id,
-        agent_id=agent_id,
     ):
         return True
     return not prepared_required and prepared_lease is None and _autonomous_replan_guard_bound(

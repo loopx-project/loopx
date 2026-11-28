@@ -357,20 +357,110 @@ function heartbeatLeaseTakeover(original: JsonObject, current: JsonObject,
     takeover_todo_sha256: canonicalAuthoritySha256(todo), takeover_acceptance_sha256: basis.acceptance_sha256}};
 }
 
+/** Bind a completed Todo's retired completing generation under the maintenance fence
+ * when completion preceded takeover and no writeback or spend has started yet. */
+function heartbeatCompletedLeaseTakeover(original: JsonObject, current: JsonObject,
+  identity: SettlementIdentity, completionEvent: JsonObject): JsonObject {
+  const replay = {append: false, details: null};
+  const reject = (): never => {throw receiptIdentityConflict(
+    "work requalification must preserve this Turn's original task lease generation unless a fenced completing holder qualifies takeover");};
+  const source = jsonObject(current.lease_takeover_source);
+  if (!source || source.handoff_mode === "soft_claim") return replay;
+  const previous = heartbeatPreparedWorkAdmission(original, identity);
+  const old = heartbeatReceiptDetails(original);
+  const basis = jsonObject(source.takeover_basis), todo = jsonObject(basis?.todo);
+  const leases = source.leases;
+  const lease = Array.isArray(leases) && leases.length === 1 ? jsonObject(leases[0]) : null;
+  if (previous !== null && previous.prepared_lease_epoch !== undefined && lease !== null &&
+      lease.todo_id === identity.todo_id && lease.owner === identity.agent_id &&
+      lease.status === "released" && typeof lease.idempotency_key === "string" && lease.idempotency_key &&
+      lease.lease_epoch === previous.prepared_lease_epoch &&
+      typeof lease.version === "number" && Number.isSafeInteger(lease.version) &&
+      lease.version >= previous.prepared_lease_version &&
+      createHash("sha256").update(lease.idempotency_key).digest("hex") === previous.prepared_lease_key_sha256) {
+    return replay;
+  }
+  if (!basis || !todo || !lease || previous === null || previous.prepared_lease_epoch === undefined ||
+      typeof original.event_id !== "string" || !original.event_id ||
+      typeof completionEvent.event_id !== "string" || !completionEvent.event_id ||
+      completionEvent.event_kind !== "todo_complete" ||
+      completionEvent.goal_id !== identity.goal_id || completionEvent.agent_id !== identity.agent_id ||
+      completionEvent.todo_id !== identity.todo_id || completionEvent.run_id !== identity.turn_instance_id ||
+      !effectIdsMatch(optionalHeartbeatString(heartbeatReceiptDetails(completionEvent).settlement_effect_id), identity.effect_id) ||
+      source.goal_id !== identity.goal_id || source.todo_id !== identity.todo_id ||
+      source.handoff_mode !== "hard_lease" || !["file_v0", "sqlite_v0"].includes(String(source.source_authority)) ||
+      source.decision_read_from_provider !== true || source.legacy_fallback_used !== false ||
+      typeof source.provider_revision !== "string" || !source.provider_revision ||
+      typeof basis.acceptance_sha256 !== "string" || !BARE_SHA256_PATTERN.test(basis.acceptance_sha256) ||
+      todo.todo_id !== identity.todo_id || todo.role !== "agent" || todo.task_class !== "advancement_task" ||
+      todo.status !== "done" || todo.done !== true ||
+      (todo.archive_state !== "active" && todo.archive_state !== "archive") ||
+      (todo.claimed_by != null && todo.claimed_by !== identity.agent_id) ||
+      (Array.isArray(todo.excluded_agents) && todo.excluded_agents.includes(identity.agent_id)) ||
+      todo.completion_turn_key !== identity.effect_id ||
+      lease.todo_id !== identity.todo_id || lease.owner !== identity.agent_id || lease.status !== "released" ||
+      leaseRepositoryRejection(todo, lease) !== null ||
+      typeof lease.idempotency_key !== "string" || !lease.idempotency_key ||
+      typeof lease.version !== "number" || !Number.isSafeInteger(lease.version) ||
+      lease.version <= previous.prepared_lease_version ||
+      typeof lease.lease_epoch !== "number" || !Number.isSafeInteger(lease.lease_epoch) ||
+      lease.lease_epoch <= previous.prepared_lease_epoch ||
+      normalizeHeartbeatReplanObligationId(old.semantic_replan_obligation_id) !== null ||
+      normalizeHeartbeatReplanObligationId(current.semantic_replan_obligation_id) !== null) return reject();
+  const keySha = createHash("sha256").update(lease.idempotency_key).digest("hex");
+  if (keySha === previous.prepared_lease_key_sha256) return reject();
+  // Terminal completion releases the lease by updating `updated_at` without
+  // writing a separate `released_at` field; explicit lease releases write both.
+  const retiredAtRaw = lease.released_at === undefined ? lease.updated_at : lease.released_at;
+  const clock = (value: unknown): bigint | null => typeof value === "string" ? parseTodoTimestampMicros(value, true) : null;
+  const at = clock(source.observed_at), admitted = clock(original.recorded_at),
+    acquired = clock(lease.acquired_at), updated = clock(lease.updated_at),
+    released = clock(retiredAtRaw), expires = clock(lease.expires_at);
+  if (at === null || admitted === null || acquired === null || updated === null ||
+      released === null || expires === null ||
+      admitted > acquired || acquired > updated || released > updated || updated > at || released > expires) {
+    return reject();
+  }
+  const prepared: HeartbeatPreparedLease = {
+    prepared_lease_key_sha256: keySha,
+    prepared_lease_version: lease.version,
+    prepared_lease_epoch: lease.lease_epoch,
+  };
+  return {append: true, details: {...old, ...prepared, settlement_receipt_revision: "completed_lease_takeover",
+    takeover_original_event_id: original.event_id,
+    takeover_original_key_sha256: previous.prepared_lease_key_sha256,
+    takeover_original_version: previous.prepared_lease_version,
+    takeover_original_epoch: previous.prepared_lease_epoch,
+    takeover_owner: identity.agent_id, takeover_observed_at: source.observed_at,
+    takeover_released_at: retiredAtRaw as string, takeover_expires_at: lease.expires_at,
+    takeover_provider_revision: source.provider_revision,
+    takeover_todo_sha256: canonicalAuthoritySha256(todo), takeover_acceptance_sha256: basis.acceptance_sha256,
+    takeover_completion_event_id: completionEvent.event_id}};
+}
+
 /** Reject broken or rewritten takeover lineage during cold settlement reads. */
 export function validateHeartbeatTakeoverParent(event: JsonObject, parent: JsonObject,
   identity: SettlementIdentity): void {
   const details = heartbeatReceiptDetails(event);
-  if (details.settlement_receipt_revision !== "lease_takeover") return;
+  const revision = details.settlement_receipt_revision;
+  if (revision !== "lease_takeover" && revision !== "completed_lease_takeover") return;
   const old = heartbeatPreparedWorkAdmission(parent, identity), current = heartbeatPreparedLease(details);
+  const completed = revision === "completed_lease_takeover";
   const fields = {takeover_original_event_id: details.takeover_original_event_id,
     takeover_original_key_sha256: details.takeover_original_key_sha256,
     takeover_original_version: details.takeover_original_version, takeover_original_epoch: details.takeover_original_epoch,
     takeover_owner: details.takeover_owner, takeover_observed_at: details.takeover_observed_at,
+    ...(completed ? {takeover_released_at: details.takeover_released_at} : {}),
     takeover_expires_at: details.takeover_expires_at, takeover_provider_revision: details.takeover_provider_revision,
-    takeover_todo_sha256: details.takeover_todo_sha256, takeover_acceptance_sha256: details.takeover_acceptance_sha256};
+    takeover_todo_sha256: details.takeover_todo_sha256, takeover_acceptance_sha256: details.takeover_acceptance_sha256,
+    ...(completed ? {takeover_completion_event_id: details.takeover_completion_event_id} : {})};
   const time = (value: unknown): bigint | null => typeof value === "string" ? parseTodoTimestampMicros(value, true) : null;
-  const at = time(details.takeover_observed_at), expires = time(details.takeover_expires_at), recorded = time(event.recorded_at);
+  const at = time(details.takeover_observed_at), expires = time(details.takeover_expires_at),
+    released = completed ? time(details.takeover_released_at) : null, recorded = time(event.recorded_at);
+  const validClock = completed
+    ? at !== null && released !== null && expires !== null && recorded !== null &&
+      released <= expires && released <= at && recorded >= at
+    : at !== null && expires !== null && recorded !== null && expires > at && recorded >= at;
   if (!old || !current || old.prepared_lease_epoch === undefined ||
       current.prepared_lease_epoch === undefined || current.prepared_lease_epoch <= old.prepared_lease_epoch ||
       current.prepared_lease_version <= old.prepared_lease_version ||
@@ -379,11 +469,12 @@ export function validateHeartbeatTakeoverParent(event: JsonObject, parent: JsonO
       details.takeover_original_key_sha256 !== old.prepared_lease_key_sha256 ||
       details.takeover_original_version !== old.prepared_lease_version ||
       details.takeover_original_epoch !== old.prepared_lease_epoch ||
+      (completed && (typeof details.takeover_completion_event_id !== "string" || !details.takeover_completion_event_id.trim())) ||
       !isDeepStrictEqual(details, {...heartbeatReceiptDetails(parent), ...current,
-        settlement_receipt_revision: "lease_takeover", ...fields}) ||
+        settlement_receipt_revision: revision, ...fields}) ||
       ![details.takeover_todo_sha256, details.takeover_acceptance_sha256].every(value => typeof value === "string" && BARE_SHA256_PATTERN.test(value)) ||
       typeof details.takeover_provider_revision !== "string" || !details.takeover_provider_revision ||
-      at === null || expires === null || recorded === null || expires <= at || recorded < at) {
+      !validClock) {
     throw receiptIdentityConflict("lease takeover does not preserve original admission and verified current ownership");
   }
 }
@@ -396,6 +487,7 @@ export function heartbeatWorkRequalification(
   identity: SettlementIdentity,
   phase: ReceiptBoundReplayPhase,
   closeoutStarted: boolean,
+  completedTurnEvent: JsonObject | null = null,
 ): JsonObject {
   const replay = {append: false, details: null};
   const candidate = heartbeatReceiptBinding(identity.goal_id, identity.agent_id,
@@ -404,6 +496,10 @@ export function heartbeatWorkRequalification(
       candidate.binding_id !== identity.binding_id ||
       candidate.settlement_effect_id !== identity.effect_id) {
     throw receiptIdentityConflict("work requalification must preserve the original settlement binding");
+  }
+  if (phase === "settlement_pending" && completedTurnEvent !== null &&
+      identity.binding_kind === "todo" && identity.todo_id !== null) {
+    return heartbeatCompletedLeaseTakeover(original, currentDetails, identity, completedTurnEvent);
   }
   if (phase !== "open" || closeoutStarted) return replay;
   // The retained settlement binding is not today's executable selection.

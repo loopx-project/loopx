@@ -403,10 +403,11 @@ export async function readExecutionPreparationSource(input: JsonObject, dependen
   const todo = originalRecords(canonical.todos).find(row => row.todo_id === todoId);
   if (!todo) return unavailable;
   const leases = originalRecords(canonical.leases).filter(row => row.todo_id === todoId)
-    .map(({todo_id, schema_version, status, owner, acquired_at, updated_at, expires_at,
+    .map(({todo_id, schema_version, status, owner, acquired_at, updated_at, released_at, expires_at,
       idempotency_key, version, lease_epoch, write_repository}) =>
       ({todo_id, schema_version, status, owner, expires_at, idempotency_key, version, lease_epoch,
-        ...(takeover ? {acquired_at, updated_at, write_repository} : {})}));
+        ...(takeover ? {acquired_at, updated_at,
+          ...(released_at === undefined ? {} : {released_at}), write_repository} : {})}));
   return {schema_version: TODO_READ_RESULT, execution_preparation_source: {
     goal_id: goalId, todo_id: todoId, handoff_mode: canonical.handoff_mode,
     source_authority: canonical.source_authority, provider_revision: canonical.provider_revision,

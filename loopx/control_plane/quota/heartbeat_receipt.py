@@ -770,8 +770,9 @@ def requalify_bound_heartbeat_receipt(
     log_path = rollout_event_log_path(runtime_root, goal_id)
     with ExitStack() as locks:
         locks.enter_context(exclusive_cross_runtime_file_lock(log_path, operation="requalify_heartbeat_work"))
+        events = load_rollout_events(log_path)
         original, _ = _effective_heartbeat_receipt(_heartbeat_receipt_events(
-            load_rollout_events(log_path), goal_id=goal_id, agent_id=agent_id,
+            events, goal_id=goal_id, agent_id=agent_id,
             turn_instance_id=turn_instance_id, goal_ref=goal_ref,
         ))
         original_details_value = original.get("details") if original else None
@@ -782,10 +783,42 @@ def requalify_bound_heartbeat_receipt(
         # unchanged through the append below.
         guard_details = dict(details)
         guard_details.pop("lease_takeover_source", None)
-        if (todo_id and original_details.get("prepared_lease_key_sha256")
-                and details.get("prepared_lease_key_sha256")
-                and (original_details.get("prepared_lease_key_sha256") != details.get("prepared_lease_key_sha256")
-                     or original_details.get("prepared_lease_epoch") != details.get("prepared_lease_epoch"))):
+        changed_open_generation = bool(
+            todo_id and original_details.get("prepared_lease_key_sha256")
+            and details.get("prepared_lease_key_sha256")
+            and (original_details.get("prepared_lease_key_sha256") != details.get("prepared_lease_key_sha256")
+                 or original_details.get("prepared_lease_epoch") != details.get("prepared_lease_epoch"))
+        )
+        completed_takeover_candidate = False
+        if (
+            not changed_open_generation
+            and todo_id
+            and original_details.get("prepared_lease_key_sha256")
+            and not details.get("prepared_lease_key_sha256")
+        ):
+            turn_events = [
+                event for event in events
+                if str(event.get("goal_id") or "") == goal_id
+                and str(event.get("agent_id") or "") == agent_id
+                and str(event.get("run_id") or "") == turn_instance_id
+            ]
+            has_completion = any(
+                event.get("event_kind") == "todo_complete"
+                and str(event.get("todo_id") or "") == todo_id
+                for event in turn_events
+            )
+            has_accounting = any(
+                event.get("event_kind") in {"refresh_state", "quota_spend", "todo_supersede"}
+                for event in turn_events
+            )
+            if has_completion and not has_accounting:
+                from ..coordination.local_authority import local_authority_is_promoted
+
+                completed_takeover_candidate = local_authority_is_promoted(
+                    runtime_root=runtime_root, goal_id=goal_id,
+                )
+        if changed_open_generation or completed_takeover_candidate:
+            assert todo_id is not None
             from ..coordination.shadow_management import (
                 require_shadow_primary_write_allowed, shadow_maintenance_lock_target,
             )
@@ -825,11 +858,16 @@ def requalify_bound_heartbeat_receipt(
             "review_guard_upgrade": "same-Turn review guard upgraded without rebinding",
             "lease_readiness": "same-Turn lease readiness recorded without readmission",
             "lease_takeover": "current holder resumed the original Turn; validate saved results against current requirements",
+            "completed_lease_takeover": "completing holder bound the retired lease generation for original Turn settlement",
         }.get(receipt_revision, "same-Turn work admission requalified without rebinding")
         corrected = build_rollout_event(
             goal_id=goal_id, goal_ref=goal_ref, event_kind="quota_should_run",
             agent_id=agent_id, todo_id=todo_id, run_id=turn_instance_id,
-            status=str(original.get("status") or status) if receipt_revision in {"lease_readiness", "lease_takeover"} else status,
+            status=(
+                str(original.get("status") or status)
+                if receipt_revision in {"lease_readiness", "lease_takeover", "completed_lease_takeover"}
+                else status
+            ),
             summary=summary,
             source_event_id=event_id, caused_by=event_id, details=dict(qualified_details),
         )
@@ -858,14 +896,27 @@ def heartbeat_receipt_view(
     if details.get("closeout_required") is True:
         receipt["closeout_required"] = True
     if details.get("takeover_original_event_id"):
+        completed_takeover = (
+            details.get("settlement_receipt_revision") == "completed_lease_takeover"
+        )
         receipt["lease_takeover"] = {
             "original_receipt_event_id": details["takeover_original_event_id"],
             "original_lease_epoch": details.get("takeover_original_epoch"),
             "current_lease_epoch": details.get("prepared_lease_epoch"),
+            **(
+                {"completion_event_id": details["takeover_completion_event_id"]}
+                if completed_takeover and details.get("takeover_completion_event_id")
+                else {}
+            ),
             "evidence_policy": (
-                "Current ownership resumed the original Turn, not acceptance of old results. "
-                "Read current requirements, dependencies and artifact revisions; reuse only evidence "
-                "that remains valid, run affected validation, then settle this original identity once."
+                "The completing owner's retired lease generation was verified against canonical "
+                "completion authority. Settle this original Turn identity once without repeating work."
+                if completed_takeover
+                else (
+                    "Current ownership resumed the original Turn, not acceptance of old results. "
+                    "Read current requirements, dependencies and artifact revisions; reuse only evidence "
+                    "that remains valid, run affected validation, then settle this original identity once."
+                )
             ),
         }
     todo_id = str(details.get("todo_id") or "").strip()
