@@ -614,6 +614,8 @@ _GITHUB_PR_REVIEW_PAGE_SIZE = 20
 _GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE = 30
 _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE = 20
 _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE = 50
+# At most twenty full three-page supplements fit in the joint readback.
+_GITHUB_PR_JOINT_COMMENT_ROW_CAP = 3400
 _GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
 fragment StewardReviewPage on PullRequestReviewConnection {
   totalCount
@@ -1123,6 +1125,13 @@ def _read_older_pr_page(
     ]
     for variable, value in additional_variables.items():
         argv.extend(("-f", f"{variable}={value}"))
+    repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
+    return _bound_pr_row(repo.get("pullRequest") if repo is not None else None, number, head_oid)
+
+
+def _read_supplemental_repository(
+    argv: list[str], remaining_seconds: float, *, runner: Callable[..., Any], deadline: float,
+) -> Mapping[str, Any] | None:
     try:
         completed = runner(
             argv,
@@ -1138,7 +1147,10 @@ def _read_older_pr_page(
         return None
     data = payload.get("data")
     repo = data.get("repository") if isinstance(data, Mapping) else None
-    pr_data = repo.get("pullRequest") if isinstance(repo, Mapping) else None
+    return repo if isinstance(repo, Mapping) else None
+
+
+def _bound_pr_row(pr_data: object, number: int, head_oid: str) -> Mapping[str, Any] | None:
     if not isinstance(pr_data, Mapping):
         return None
     returned_number = pr_data.get("number")
@@ -1210,6 +1222,71 @@ def _backfill_pr_reviews(
     return None, remaining_pages
 
 
+class _CommentSupplementEvidence(NamedTuple):
+    head_oid: str
+    revision: tuple[str, str | None]
+    latest: _CommentPage
+    pages: dict[str, _CommentPage]
+
+
+def _joint_comment_query(evidence: Mapping[int, _CommentSupplementEvidence]) -> tuple[str, dict[str, str]]:
+    cursors = {}
+    fields = []
+    for number, supplement in evidence.items():
+        pages = []
+        for index, cursor in enumerate(supplement.pages):
+            name = f"before{number}_{index}"
+            cursors[name] = cursor
+            pages.append(f"page{index}: comments(last: 50, before: ${name}) {{ ...StewardCommentPage }}")
+        fields.append(f"""
+    commentPr{number}: pullRequest(number: {number}) {{
+      number headRefOid updatedAt reviewDecision
+      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      {' '.join(pages)}
+    }}""")
+    variables = "".join(f", ${name}: String!" for name in cursors)
+    query = f"""query($owner: String!, $name: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{ {''.join(fields)} }}
+}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+    return query, cursors
+
+
+def _joint_comment_pr_matches(pr_data: object, number: int, evidence: _CommentSupplementEvidence) -> bool:
+    row = _bound_pr_row(pr_data, number, evidence.head_oid)
+    if row is None or _read_pr_signal_revision(row) != evidence.revision:
+        return False
+    if _read_graphql_comment_page(row.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE) != evidence.latest:
+        return False
+    return all(
+        _read_graphql_comment_page(row.get(f"page{index}"), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE) == page
+        for index, page in enumerate(evidence.pages.values())
+    )
+
+
+def _corroborate_comment_supplements(
+    evidence: Mapping[int, _CommentSupplementEvidence],
+    *, owner: str, name: str, runner: Callable[..., Any], deadline: float,
+) -> set[int]:
+    requested_rows = sum(
+        _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE + len(supplement.pages) * _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE
+        for supplement in evidence.values()
+    )
+    if requested_rows > _GITHUB_PR_JOINT_COMMENT_ROW_CAP:
+        return set()
+    query, cursors = _joint_comment_query(evidence)
+    argv = ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"]
+    for variable, cursor in cursors.items():
+        argv.extend(("-f", f"{variable}={cursor}"))
+    remaining_seconds = deadline - monotonic()
+    if remaining_seconds <= 0:
+        return set()
+    repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
+    if repo is None:
+        return set()
+    return {number for number, supplement in evidence.items()
+            if _joint_comment_pr_matches(repo.get(f"commentPr{number}"), number, supplement)}
+
+
 def _backfill_pr_comments_if_needed(
     norm_node: dict[str, Any],
     summary: dict[str, Any],
@@ -1219,11 +1296,11 @@ def _backfill_pr_comments_if_needed(
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
-) -> tuple[dict[str, Any], int]:
-    """Backfill an incomplete PR and return the remaining allowance."""
+) -> tuple[dict[str, Any], int, _CommentSupplementEvidence | None]:
+    """Backfill one PR and retain the pages that establish a complete result."""
     head_oid = norm_node.get("headRefOid")
     if not isinstance(head_oid, str) or not head_oid.strip() or revision is None:
-        return summary, remaining_pages
+        return summary, remaining_pages, None
     first_page = _CommentPage(norm_node["comments"], norm_node["commentsHasPreviousPage"], norm_node["commentsStartCursor"])
     consumed_pages: dict[str, _CommentPage] = {}
     for _ in range(remaining_pages):
@@ -1262,7 +1339,10 @@ def _backfill_pr_comments_if_needed(
         summary = summarize_github_pr_signal(norm_node)
         if next_cursor is None:
             break
-    return summary, remaining_pages
+    evidence = None
+    if consumed_pages and summary.get("comments_coverage_incomplete") is not True:
+        evidence = _CommentSupplementEvidence(head_oid, revision, first_page, consumed_pages)
+    return summary, remaining_pages, evidence
 
 
 def observe_github_repository_prs(
@@ -1440,13 +1520,14 @@ def observe_github_repository_prs(
             if select_comment_backfill is not None and candidates and remaining_seconds > 0:
                 selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)
                 candidates = [number for number in candidates if number in selected]
+            supplements: dict[int, tuple[dict[str, Any], _CommentSupplementEvidence]] = {}
             for number in candidates:
                 if remaining_backfill_pages <= 0 or monotonic() >= deadline:
                     break
                 limit = min(
                     remaining_backfill_pages, _GITHUB_PR_MAX_BACKFILL_PAGES - review_pages_read.get(number, 0),
                 )
-                items[number], remaining = _backfill_pr_comments_if_needed(
+                summary, remaining, evidence = _backfill_pr_comments_if_needed(
                     normalized_nodes[number],
                     items[number],
                     number=number,
@@ -1456,6 +1537,19 @@ def observe_github_repository_prs(
                     read_older_page=read_older_page,
                 )
                 remaining_backfill_pages -= limit - remaining
+                if evidence is None:
+                    items[number] = summary
+                else:
+                    supplements[number] = (summary, evidence)
+            # Independently complete backfills may represent different revisions across PRs.
+            verified = set(supplements) if len(supplements) <= 1 else set()
+            if len(supplements) > 1 and remaining_backfill_pages > 0:
+                # The joint readback has one request slot in the same scan budget and deadline.
+                verified = _corroborate_comment_supplements(
+                    {number: evidence for number, (_summary, evidence) in supplements.items()},
+                    owner=owner, name=name, runner=runner, deadline=deadline,
+                )
+            items.update((number, supplements[number][0]) for number in verified)
         return {"status": "ok", "repository": repo_slug, "items": list(items.values())}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}

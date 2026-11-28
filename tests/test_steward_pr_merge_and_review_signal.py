@@ -1337,6 +1337,97 @@ def test_steward_unreadable_fresh_native_metadata_holds_without_reinterpreting_l
     assert legacy_result["observation_incomplete"] is False
 
 
+@pytest.mark.parametrize("case", [
+    "stable", "mixed", "missing", "wrong-head", "budget", "payload-budget", "late", "excluded",
+])
+def test_steward_publishes_multi_pr_comment_supplements_only_after_joint_corroboration(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "a" * 40
+    review = {"id": "request-changes", "state": "CHANGES_REQUESTED", "author": {"login": "maintainer"},
+              "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z"}
+    recent = [{"createdAt": f"2030-01-01T09:{minute:02d}:00Z", "author": {"login": "ci[bot]"}}
+              for minute in range(20)]
+    reply = {"createdAt": "2030-01-01T08:30:00Z", "author": {"login": "contributor"}}
+
+    def pr(number: int) -> dict[str, Any]:
+        watched = number in {1, 21}
+        row = _graphql_node(_sample_pr(number=number, head_oid=head, author="contributor",
+                                       reviews=[review] if watched else []))
+        if watched:
+            row["comments"] = {"nodes": recent, "pageInfo": {"hasPreviousPage": True, "startCursor": f"comment-{number}"}}
+        row["isDraft"] = case == "excluded" and number == 1
+        return row
+
+    earlier = [pr(number) for number in range(1, 21)]
+    last = pr(21)
+    watched_rows = {1: earlier[0], 21: last}
+    reads = []
+    elapsed = 0
+    monkeypatch.setattr(github_pr_evidence, "monotonic", lambda: elapsed)
+    if case == "budget":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_BACKFILL_BUDGET", 2)
+    if case == "payload-budget":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_COMMENT_ROW_CAP", 139)
+
+    def pr_comments(number: int, replied: bool, field: str) -> dict[str, Any]:
+        row = watched_rows[number]
+        payload = {key: row[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+        payload["latestComments"] = row["comments"]
+        payload[field] = {"nodes": [reply] if replied else [], "pageInfo": {"hasPreviousPage": False}}
+        return payload
+
+    def runner(cmd, **kwargs):
+        nonlocal elapsed
+        assert kwargs["timeout"] == 20
+        query = next(part for part in cmd if part.startswith("query="))
+        older = next((part.removeprefix("before=") for part in cmd if part.startswith("before=")), None)
+        if older is not None:
+            number = int(older.removeprefix("comment-"))
+            reads.append(number)
+            payload = {"data": {"repository": {"pullRequest": pr_comments(number, case != "stable" or number == 1, "comments")}}}
+        elif "commentPr1: pullRequest" in query:
+            reads.append("joint")
+            assert "commentPr21: pullRequest" in query
+            assert {"before1_0=comment-1", "before21_0=comment-21"}.issubset(cmd)
+            repositories = {
+                f"commentPr{number}": pr_comments(number, number == (1 if case == "stable" else 21), "page0")
+                for number in watched_rows
+            }
+            if case == "missing":
+                del repositories["commentPr1"]
+            elif case == "wrong-head":
+                repositories["commentPr1"]["headRefOid"] = "b" * 40
+            elif case == "late":
+                elapsed = 101
+            payload = {"data": {"repository": repositories}}
+        elif "cursor=tail" in cmd:
+            reads.append("terminal")
+            payload = _graphql_page([last], total_count=21)
+            window = _graphql_page(earlier, has_next_page=True, end_cursor="tail", total_count=21)
+            payload["data"]["repository"]["previousPrs0"] = window["data"]["repository"]["pullRequests"]
+        else:
+            reads.append("first")
+            payload = _graphql_page(earlier, has_next_page=True, end_cursor="tail", total_count=21)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
+    assert snapshot["status"] == "ok"
+    assert reads == ["first", "terminal", 1, 21] + ([] if case in {"budget", "payload-budget"} else ["joint"])
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior", "observed_at": "2030-01-01T12:00:00Z",
+              "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                               "include_inbox": False, "pr_filter": {"exclude_drafts": True, "min_stalled_hours": 24,
+                                                                   "author_mode": "exclude", "authors": ["maintainer"]}}}
+    result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if case in {"stable", "excluded"}:
+        assert result["observation_incomplete"] is False
+        assert [item["number"] for item in result["scoped_repository_items"]] == ([1] if case == "stable" else [21])
+    else:
+        assert snapshot["items"][0]["comments_coverage_incomplete"] is True
+        assert result["observation_incomplete"] is True
+        assert result["result_hash"] == "sha256:verified-prior" and result["material_change"] is False
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):

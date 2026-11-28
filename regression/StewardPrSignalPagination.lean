@@ -1806,6 +1806,51 @@ theorem terminal_metadata_readbacks_bound_added_and_total_fields (previousPrs : 
     4 * previousPrs ≤ 380 ∧ (4 + 4) * previousPrs ≤ 760 := by
   omega
 
+/- Each pair stands for one PR number and its complete supplement certificate,
+   including head, revision, latest window and cursor-bound older pages. The
+   readbacks are the aliases read together in one response. -/
+def corroborateCommentSupplements (provisional readbacks : List (Nat × List Nat)) (jointAllowed : Bool) :
+    List (Nat × List Nat) :=
+  if provisional.length ≤ 1 then provisional
+  else if jointAllowed then provisional.filter (fun row => decide (row ∈ readbacks)) else []
+
+def observeCommentSupplementScope (prior rows required : List Nat) (certified : List (Nat × List Nat)) : List Nat × Bool :=
+  observe prior (if required.all (fun number => certified.any (fun item => item.1 == number)) then some rows else none)
+
+theorem multi_pr_supplement_needs_a_matching_joint_readback
+    (provisional readbacks : List (Nat × List Nat)) (row : Nat × List Nat)
+    (multiple : 1 < provisional.length) (used : row ∈ corroborateCommentSupplements provisional readbacks true) :
+    row ∈ provisional ∧ row ∈ readbacks := by
+  have notSingle : ¬ provisional.length ≤ 1 := by omega
+  simpa [corroborateCommentSupplements, notSingle] using used
+
+theorem single_pr_supplement_keeps_its_existing_readback (row : Nat × List Nat) :
+    corroborateCommentSupplements [row] [] false = [row] := rfl
+
+theorem missing_joint_budget_leaves_multi_pr_supplements_unpublished (first second : Nat × List Nat) :
+    corroborateCommentSupplements [first, second] [] false = [] := rfl
+
+theorem independently_excluded_supplement_does_not_block_verified_prs :
+    let certified := corroborateCommentSupplements [(1, [1]), (21, [1])] [(1, []), (21, [1])] true
+    observeCommentSupplementScope [1] [21] [21] certified = ([21], true) := by
+  decide
+
+theorem sequential_comment_supplements_can_publish_a_mixed_scope :
+    let provisional := [(1, [1]), (21, [1])]
+    let current := [(1, []), (21, [1])]
+    observeCommentSupplementScope [1] [1, 21] [1, 21] provisional = ([1, 21], true) ∧
+    observeCommentSupplementScope [1] [1, 21] [1, 21]
+      (corroborateCommentSupplements provisional current true) = ([1], false) := by
+  decide
+
+theorem joint_comment_readback_uses_one_remaining_request (used budget : Nat) (available : used < budget) :
+    used + 1 ≤ budget := by
+  omega
+
+theorem joint_comment_readback_row_budget (prs olderPages : Nat) (nonemptyEvidence : prs ≤ olderPages)
+    (bounded : 20 * prs + 50 * olderPages ≤ 3400) : prs ≤ 48 ∧ olderPages ≤ 68 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2004,5 +2049,12 @@ theorem terminal_metadata_readbacks_bound_added_and_total_fields (previousPrs : 
 #print axioms independent_exclusion_can_publish_without_terminal_pr_metadata
 #print axioms defaulting_unreadable_terminal_metadata_can_publish_a_false_change
 #print axioms terminal_metadata_readbacks_bound_added_and_total_fields
+#print axioms multi_pr_supplement_needs_a_matching_joint_readback
+#print axioms single_pr_supplement_keeps_its_existing_readback
+#print axioms missing_joint_budget_leaves_multi_pr_supplements_unpublished
+#print axioms independently_excluded_supplement_does_not_block_verified_prs
+#print axioms sequential_comment_supplements_can_publish_a_mixed_scope
+#print axioms joint_comment_readback_uses_one_remaining_request
+#print axioms joint_comment_readback_row_budget
 
 end StewardPrSignalPagination
