@@ -1011,6 +1011,56 @@ theorem distinct_comments_can_reach_verified_end_at_budget :
       collectOlderComments 2 [] 1 pages = none := by
   decide
 
+/- These tokens stand for a readable updatedAt and a present reviewDecision.
+   The optional decision models the explicit null GraphQL value. A missing
+   or unreadable field makes the entire observed revision none. The list
+   describes the older pages consumed by the bounded collector. -/
+structure ReviewRevision where
+  updatedAt : Nat
+  reviewDecision : Option Nat
+  deriving DecidableEq
+
+def useReviewsAtRevision (initial : ReviewRevision) (observed : List (Option ReviewRevision))
+    (coveredRows : Option (List Nat)) : Option (List Nat) :=
+  if observed.all (fun revision => revision == some initial) then coveredRows else none
+
+theorem accepted_reviews_require_observable_revision_agreement
+    (initial : ReviewRevision) (observed : List (Option ReviewRevision))
+    (coveredRows : Option (List Nat)) (acceptedRows : List Nat)
+    (accepted : useReviewsAtRevision initial observed coveredRows = some acceptedRows) :
+    ∀ revision ∈ observed, revision = some initial := by
+  by_cases stable : observed.all (fun revision => revision == some initial) = true
+  · simpa [List.all_eq_true] using stable
+  · simp [useReviewsAtRevision, stable] at accepted
+
+theorem any_older_review_revision_mismatch_preserves_prior
+    (initial : ReviewRevision) (observed : List (Option ReviewRevision)) (revision : Option ReviewRevision)
+    (coveredRows : Option (List Nat)) (prior : List Nat)
+    (seen : revision ∈ observed) (drift : revision ≠ some initial) :
+    observe prior (useReviewsAtRevision initial observed coveredRows) = (prior, false) := by
+  cases result : useReviewsAtRevision initial observed coveredRows with
+  | none => rfl
+  | some rows =>
+    exact False.elim (drift
+      (accepted_reviews_require_observable_revision_agreement initial observed coveredRows rows result revision seen))
+
+theorem changed_review_decision_with_equal_timestamp_cannot_publish :
+    observe [] (useReviewsAtRevision ⟨10, some 1⟩ [some ⟨10, some 2⟩] (some [42])) = ([], false) := by
+  decide
+
+theorem changed_review_timestamp_with_equal_decision_cannot_remove :
+    observe [42] (useReviewsAtRevision ⟨10, some 1⟩ [some ⟨11, some 1⟩] (some [])) = ([42], false) := by
+  decide
+
+theorem consistent_nullable_decisions_preserve_recovered_coverage (rows : List Nat) :
+    useReviewsAtRevision ⟨10, none⟩ [some ⟨10, none⟩, some ⟨10, none⟩] (some rows) = some rows := by
+  rfl
+
+theorem missing_last_review_revision_cannot_be_treated_as_a_null_decision (prior : List Nat) :
+    observe prior (useReviewsAtRevision ⟨10, none⟩ [some ⟨10, none⟩, none] (some [42])) =
+      (prior, false) := by
+  rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1117,5 +1167,11 @@ theorem distinct_comments_can_reach_verified_end_at_budget :
 #print axioms looping_comment_backfill_preserves_prior
 #print axioms independent_reply_on_fresh_page_survives_a_cyclic_continuation
 #print axioms distinct_comments_can_reach_verified_end_at_budget
+#print axioms accepted_reviews_require_observable_revision_agreement
+#print axioms any_older_review_revision_mismatch_preserves_prior
+#print axioms changed_review_decision_with_equal_timestamp_cannot_publish
+#print axioms changed_review_timestamp_with_equal_decision_cannot_remove
+#print axioms consistent_nullable_decisions_preserve_recovered_coverage
+#print axioms missing_last_review_revision_cannot_be_treated_as_a_null_decision
 
 end StewardPrSignalPagination

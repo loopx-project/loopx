@@ -595,6 +595,8 @@ _GITHUB_PR_REVIEWS_PAGE_QUERY = """query($owner: String!, $name: String!, $numbe
     pullRequest(number: $number) {
       number
       headRefOid
+      updatedAt
+      reviewDecision
       reviews(last: 20, before: $before) { ...StewardReviewPage }
     }
   }
@@ -876,11 +878,24 @@ def _read_older_pr_page(
 _ReadOlderPage = Callable[[int, str, str, str, float], Mapping[str, Any] | None]
 
 
+def _read_review_revision(row: Mapping[str, Any]) -> tuple[str, str | None] | None:
+    """Read the observable revision fields used to check older review pages."""
+    updated_at = row.get("updatedAt")
+    timestamp = _parse_iso_timestamp(updated_at) if isinstance(updated_at, str) else None
+    decision = row.get("reviewDecision")
+    if timestamp is None or "reviewDecision" not in row:
+        return None
+    if decision is not None and (not isinstance(decision, str) or not decision.strip()):
+        return None
+    return timestamp[1], decision
+
+
 def _backfill_pr_reviews(
     number: int,
     head_oid: str,
     first_page: _ReviewPage,
     *,
+    revision: tuple[str, str | None],
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
@@ -898,7 +913,7 @@ def _backfill_pr_reviews(
         seen_cursors.add(cursor)
         remaining_pages -= 1
         pr_data = read_older_page(number, head_oid, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
-        if pr_data is None:
+        if pr_data is None or _read_review_revision(pr_data) != revision:
             break
         page = _read_graphql_review_page(pr_data.get("reviews"))
         if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:
@@ -1064,20 +1079,22 @@ def observe_github_repository_prs(
             for number, node in normalized_nodes.items():
                 if not node["review_coverage_incomplete"] or not isinstance(node["headRefOid"], str) or not node["headRefOid"]:
                     continue
-                first_page = _read_graphql_review_page(raw_nodes_by_number[number].get("reviews"))
-                if first_page is not None and first_page.previous_cursor is not None:
-                    review_candidates[number] = first_page
+                raw_node = raw_nodes_by_number[number]
+                first_page = _read_graphql_review_page(raw_node.get("reviews"))
+                revision = _read_review_revision(raw_node)
+                if first_page is not None and first_page.previous_cursor is not None and revision is not None:
+                    review_candidates[number] = (first_page, revision)
             remaining_seconds = deadline - monotonic()
             if review_candidates and remaining_seconds > 0:
                 selected = select_review_backfill([items[number] for number in review_candidates], remaining_seconds)
-                for number, first_page in review_candidates.items():
+                for number, (first_page, revision) in review_candidates.items():
                     if number not in selected or remaining_backfill_pages <= 0 or monotonic() >= deadline:
                         continue
                     limit = min(_GITHUB_PR_MAX_BACKFILL_PAGES, remaining_backfill_pages)
                     node = normalized_nodes[number]
                     reviews, remaining = _backfill_pr_reviews(
                         number, node["headRefOid"], first_page, remaining_pages=limit,
-                        deadline=deadline, read_older_page=read_older_page,
+                        revision=revision, deadline=deadline, read_older_page=read_older_page,
                     )
                     review_pages_read[number] = limit - remaining
                     remaining_backfill_pages -= review_pages_read[number]

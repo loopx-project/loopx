@@ -666,6 +666,13 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     [
         ("one_page", 1, True),
         ("multiple_pages", 2, True),
+        ("nullable_decision", 1, True),
+        ("decision_drift", 1, False),
+        ("age_drift", 1, False),
+        ("last_page_drift", 2, False),
+        ("missing_initial_timestamp", 0, False),
+        ("missing_older_decision", 1, False),
+        ("invalid_timestamp", 0, False),
         ("head_changed", 1, False),
         ("count_drift", 1, False),
         ("duplicate_row", 1, False),
@@ -700,16 +707,27 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
         }
 
     newest = [review(f"new-{i}") for i in range(20)]
-    older_count = {"multiple_pages": 21, "repeated_cursor": 21, "over_budget": 61, "per_pr_budget": 60}.get(case, 1)
+    if case == "age_drift":
+        newest[-1] = {**review("new-19", "CHANGES_REQUESTED"),
+                      "author": {"login": "recent-reviewer"}, "submittedAt": "2030-01-03T07:00:00Z"}
+    older_count = {"multiple_pages": 21, "last_page_drift": 21, "repeated_cursor": 21,
+                   "over_budget": 61, "per_pr_budget": 60}.get(case, 1)
     count = len(newest) + older_count
     older = [review(f"old-{i}") for i in range(older_count - 1)]
-    older.append(review("active-rc", "CHANGES_REQUESTED"))
+    older.append(review("active-rc", "DISMISSED" if case == "decision_drift" else "CHANGES_REQUESTED"))
     node = _graphql_node(_sample_pr(
         number=42, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=newest,
     ))
     node["reviews"] = _graphql_reviews(
         newest, totalCount=count, pageInfo={"hasPreviousPage": True, "startCursor": "recent"},
     )
+    node["updatedAt"] = "2030-01-03T07:30:00Z"
+    if case in {"nullable_decision", "missing_older_decision"}:
+        node["reviewDecision"] = None
+    if case == "missing_initial_timestamp":
+        del node["updatedAt"]
+    elif case == "invalid_timestamp":
+        node["updatedAt"] = "unreadable"
     comments_blocked = case in {"shared_budget", "per_pr_budget"}
     if comments_blocked:
         node["comments"]["pageInfo"] = {"hasPreviousPage": True, "startCursor": "comments"}
@@ -720,6 +738,8 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
             "author_mode": "include", "authors": ["other" if case == "author_excluded" else "contributor"],
         },
     }
+    if case == "decision_drift":
+        del scope["pr_filter"]["min_stalled_hours"]
     cursors = []
 
     def runner(cmd, **kwargs):
@@ -730,6 +750,9 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
         else:
             review_cursors = ["recent", "earlier", "oldest"]
             assert cursor in review_cursors, "the fixture must not read comments"
+            query = next(arg for arg in cmd if arg.startswith("query="))
+            revision_fields = query.split("pullRequest(number: $number) {", 1)[1].split("reviews(", 1)[0]
+            assert {"updatedAt", "reviewDecision"}.issubset(revision_fields.split())
             assert kwargs["timeout"] == 20
             cursors.append(cursor)
             page_index = review_cursors.index(cursor)
@@ -749,10 +772,18 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
                 page_info["startCursor"] = cursor
             elif case == "late_page":
                 elapsed = 101
-            payload = {"data": {"repository": {"pullRequest": {
+            pr_data = {
                 "number": 42, "headRefOid": "b" * 40 if case == "head_changed" else head,
+                "updatedAt": node.get("updatedAt"), "reviewDecision": node["reviewDecision"],
                 "reviews": _graphql_reviews(page_nodes, totalCount=count + (case == "count_drift"), pageInfo=page_info),
-            }}}}
+            }
+            if case == "decision_drift" or (case == "last_page_drift" and cursor == "earlier"):
+                pr_data["reviewDecision"] = "REVIEW_REQUIRED"
+            elif case == "age_drift":
+                pr_data["updatedAt"] = observed_time.isoformat().replace("+00:00", "Z")
+            elif case == "missing_older_decision":
+                del pr_data["reviewDecision"]
+            payload = {"data": {"repository": {"pullRequest": pr_data}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
     snapshot = _read_repository_snapshot(
