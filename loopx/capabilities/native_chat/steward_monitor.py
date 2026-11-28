@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import subprocess as subprocess
 
+from ...control_plane.runtime.time import chronology_key
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...control_plane.todos.list_readback import list_goal_todos
 from ...file_lock import exclusive_file_lock
@@ -157,7 +158,7 @@ class StewardMonitor:
             rows,
             key=lambda row: (
                 prio.get(str(row.get("priority") or "P1"), 9),
-                str(row.get("created_at") or ""),
+                chronology_key(row.get("created_at")),
                 str(row["todo_id"]),
             ),
         )

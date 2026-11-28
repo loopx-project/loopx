@@ -190,6 +190,7 @@ export const COORDINATION_STATE_CONTRACT = deepFreeze({
       "note",
       "evidence",
       "reason",
+      "created_at",
       "completed_at",
       "completion_turn_key",
       "completion_result",

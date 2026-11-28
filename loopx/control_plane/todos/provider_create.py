@@ -10,7 +10,6 @@ import re
 
 from ...agent_registry import registered_agent_ids_from_registry
 from ..coordination.authority_source_capture import authority_registry_source
-from ...state_refresh import now_local
 from ..coordination.local_authority import (
     LOCAL_AUTHORITY_SOURCES,
     LocalCoordinationAuthorityUnavailable,
@@ -22,6 +21,7 @@ from ..effect_runtime import (
     EffectRuntimeResponseAmbiguous,
     effect_runtime_result,
 )
+from ..runtime.time import now_local_iso
 from .contract import (
     normalize_todo_metadata_for_write,
     normalize_todo_task_class,
@@ -38,6 +38,10 @@ from .completion_validation_store import (
     read_completion_validation_declaration,
 )
 from .provider_projection import settle_canonical_todo_projection
+
+
+def now_local() -> str:
+    return now_local_iso(timespec="microseconds")
 
 
 def create_canonical_todo_if_promoted(

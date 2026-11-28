@@ -265,6 +265,15 @@ test("canonical monitor discoveries default independently and accept per-role pr
   }
 });
 
+test("monitor successors keep the original observation timestamp", () => {
+  const input = request();
+  const generatedAt = "2026-09-01T08:00:00.123456+08:00";
+  const batch = planMonitorBatch({...input, observation: {...input.observation, generated_at: generatedAt}});
+  const [successor] = (batch.writeback.next_todos as JsonObject[]);
+  assert.equal(successor!.created_at, generatedAt);
+  assert.equal(successor!.updated_at, "2026-09-01T00:00:00Z");
+});
+
 test("historical unranked monitor receipts replay without applying the new default", () => {
   const input = request();
   const receipt = historicalReceipt(input);

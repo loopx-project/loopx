@@ -22,6 +22,7 @@ from loopx.capabilities.native_chat import (
     steward_monitor_pump,
     steward_monitor_signals,
     steward_monitor_turns,
+    steward_turn,
 )
 from loopx.capabilities.native_chat.steward_monitor import (
     ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
@@ -65,6 +66,13 @@ from loopx.capabilities.native_chat.steward_monitor_turns import (
 from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
 from loopx.chat_store import ChatSessionStore
 from loopx.control_plane.runtime.effect_client_errors import EffectRuntimeRejected
+from loopx.control_plane.todos import provider_create
+from loopx.control_plane.todos.list_readback import list_goal_todos
+from loopx.control_plane.todos.mutation_api import add_goal_todo, update_goal_todo
+from tests.control_plane.canonical_authority_fixture import (
+    isolate_sqlite_runtime,
+    promoted_create_fixture,
+)
 
 
 class _ClosedFlag:
@@ -427,6 +435,117 @@ def test_due_monitors_and_pump_single_todo_read_efficiency(
         row["next_due_at"] = future_due
     pump_steward_monitors(ctrl_proto)
     assert read_calls == 1
+
+
+def test_followups_keep_priority_and_order_equal_priority_by_utc(tmp_path: Path) -> None:
+    monitor = StewardMonitor(_as_controller(_StubController(tmp_path)))
+    todos: list[StewardTodoRecord] = [
+        {
+            "todo_id": todo_id,
+            "status": "open",
+            "task_class": "advancement_task",
+            "claimed_by": "steward",
+            "target_key": FOLLOWUP_TARGET_PREFIX + todo_id,
+            "priority": priority,
+            "created_at": timestamp,
+            "resume_ready": resume_ready,
+        }
+        for todo_id, priority, timestamp, resume_ready in [
+            ("earlier-z", "P1", "2026-02-03T10:00:00Z", True),
+            ("later", "P1", "2026-02-03T10:00:00.000001Z", True),
+            ("urgent", "P0", "2026-02-03T10:00:01Z", True),
+            ("equal-offset", "P1", "2026-02-03T18:00:00+08:00", True),
+            ("earlier-a", "P1", "2026-02-03T10:00:00Z", True),
+            ("waiting", "P0", "2026-02-03T09:00:00Z", False),
+        ]
+    ]
+
+    selected = monitor.runnable_advancement_todos({"agent_id": "steward"}, todos=todos)
+
+    assert [row["todo_id"] for row in selected] == [
+        "urgent", "earlier-a", "earlier-z", "equal-offset", "later",
+    ]
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_pump_orders_followups_from_canonical_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    goal_id, agent_id = "steward-agent-b-order", "steward"
+    registry, runtime, _ = promoted_create_fixture(
+        tmp_path, provider=provider, goal_id=goal_id, registered_agents=[agent_id],
+    )
+    controller = _StubController(tmp_path)
+    session = controller.store.create_session(
+        session_id="sess-order", goal_id=goal_id, agent_id=agent_id,
+        adapter_kind="codex", upstream_thread_id="thread-order",
+    )
+    bindings = controller.project_contexts.conversation_bindings
+    bindings.bindings_rows = [{
+        "binding_id": "b-order", "enabled": True,
+        "managed_actor": {"goal_id": goal_id, "agent_id": agent_id, "session_id": session["session_id"]},
+    }]
+    timestamps = {
+        "early": "2026-02-03T18:00:00.000001+08:00",
+        "late": "2026-02-03T10:00:00.000002Z",
+        "urgent": "2026-02-03T10:00:00.000003Z",
+    }
+    observed_times = iter(timestamps.values())
+    monkeypatch.setattr(provider_create, "now_local", lambda: next(observed_times))
+    todo_ids = {
+        name: add_goal_todo(
+            registry_path=registry, runtime_root_arg=str(runtime), goal_id=goal_id,
+            role="agent", agent_id=agent_id, claimed_by=agent_id, task_class="advancement_task",
+            text=f"Advance {name} follow-up", priority=priority,
+            monitor_metadata={"target_key": FOLLOWUP_TARGET_PREFIX + name},
+            operation_id=f"followup-{name}",
+        )["todo_id"]
+        for name, priority in (("early", "P1"), ("late", "P1"), ("urgent", "P0"))
+    }
+    assert todo_ids["late"] < todo_ids["early"]
+
+    def read_todos() -> dict:
+        return list_goal_todos(
+            registry_path=registry, runtime_root_arg=str(runtime),
+            goal_id=goal_id, agent_id=agent_id, role="agent",
+        )
+
+    listed = read_todos()
+    assert listed["authority_read"]["source_authority"] == f"{provider}_v0"
+    assert {row["todo_id"]: row.get("created_at") for row in listed["todos"]} == {
+        todo_ids[name]: timestamp for name, timestamp in timestamps.items()
+    }
+    assert {row["updated_at"] for row in listed["todos"]} == {"2026-02-03T10:00:00Z"}
+
+    submitted: list[str] = []
+
+    def submit(
+        _host: object, _binding_id: str, *, todo_id: str, **_kwargs: object
+    ) -> tuple[dict[str, object], bool]:
+        submitted.append(todo_id)
+        return {"todo_id": todo_id, "status": "queued"}, True
+
+    # Record the pump's dispatch without launching a Steward Turn.
+    monkeypatch.setattr(steward_turn.StewardTurnHost, "submit", submit)
+    controller_protocol = _as_controller(controller)
+    assert pump_steward_monitors(controller_protocol) == [
+        {"todo_id": todo_ids["urgent"], "status": "queued"},
+    ]
+    assert submitted == [todo_ids["urgent"]]
+
+    update_goal_todo(
+        registry_path=registry, runtime_root_arg=str(runtime), goal_id=goal_id,
+        todo_id=todo_ids["urgent"], agent_id=agent_id, status="blocked",
+    )
+    urgent, = (row for row in read_todos()["todos"] if row["todo_id"] == todo_ids["urgent"])
+    assert urgent["created_at"] == timestamps["urgent"]
+    steward_monitor_pump.clear_steward_monitor_check_hints(controller_protocol, "b-order")
+    assert pump_steward_monitors(controller_protocol) == [
+        {"todo_id": todo_ids["early"], "status": "queued"},
+    ]
+    assert submitted == [todo_ids["urgent"], todo_ids["early"]]
 
 
 def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(

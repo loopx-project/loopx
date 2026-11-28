@@ -1635,6 +1635,39 @@ test("terminal and archive wire adapters reject coercible numeric values", async
   assert.equal(opened, 2, "legal integers must cross the wire boundary unchanged");
 });
 
+test("terminal successors retain the original microsecond creation time on readback", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "loopx-terminal-successor-time-"));
+  t.after(() => rm(root, {recursive: true, force: true}));
+  await engageCanonicalRoute(root);
+  const store = new FileAuthorityStore(join(root, "authority", "file-v0"), "goal-a");
+  assert.equal((await store.commitAuthority({expected_provider_revision: null, operation_id: "seed-successor-time",
+    events: [], receipts: [], next_projection: withTodoReadModel({goal_id: "goal-a", handoff_mode: "soft_claim",
+      todos: [todoRecord({claimed_by: "agent-a"})], leases: []}),
+  })).status, "applied");
+  const registryPath = join(root, "registry.json");
+  await writeFile(registryPath, "{}");
+  const observedAt = "2026-09-08T04:00:00.123456+08:00";
+  const terminal = await terminalLifecycleLocalCoordinationTodo({
+    schema_version: LOCAL_COORDINATION_TODO_TERMINAL_LIFECYCLE_REQUEST_SCHEMA,
+    registry_source: {path: registryPath, sha256: createHash("sha256").update("{}").digest("hex")},
+    runtime_root: root, goal_id: "goal-a", todo_id: "todo_a", role: "agent", command: "supersede",
+    actor_agent_id: "agent-a", registered_agents: ["agent-a"], lifecycle_grants: [],
+    operation_identity: {kind: "explicit", operation_id: "supersede-with-successor-time"},
+    allow_user_gate_auto_acquire: false, requested_no_followup: false, linked_successor_todo_ids: [],
+    successor_intents: [{role: "agent", text: "Replace the scoped work"}],
+    reason: "Replace the superseded Todo", clear_claim: false, dry_run: false, observed_at: observedAt,
+  });
+  assert.equal(terminal.status, "applied", JSON.stringify(terminal));
+  assert.ok(Array.isArray(terminal.generated_successor_todo_ids));
+  const [successorId] = terminal.generated_successor_todo_ids;
+  const readback = await readLocalCoordinationTodo({schema_version: LOCAL_COORDINATION_TODO_READ_REQUEST_SCHEMA,
+    runtime_root: root, goal_id: "goal-a", todo_id: successorId});
+  assert.equal(readback.status, "found", JSON.stringify(readback));
+  const successor = canonicalAuthorityObject(readback.todo, "successor Todo");
+  assert.equal(successor.created_at, observedAt);
+  assert.equal(successor.updated_at, "2026-09-07T20:00:00Z");
+});
+
 test("terminal wire preserves legacy optional prose semantics", async (t) => {
   const cases = [
     {field: "note", value: null, expected: "existing-note"},

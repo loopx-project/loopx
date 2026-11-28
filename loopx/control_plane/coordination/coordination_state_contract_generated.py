@@ -77,6 +77,7 @@ COORDINATION_STATE_CONTRACT: Final = _freeze({'schema_version': 'loopx_coordinat
                                  'note',
                                  'evidence',
                                  'reason',
+                                 'created_at',
                                  'completed_at',
                                  'completion_turn_key',
                                  'completion_result',

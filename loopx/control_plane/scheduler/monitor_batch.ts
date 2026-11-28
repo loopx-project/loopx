@@ -129,9 +129,10 @@ function planWriteback(input: MonitorBatchInput) {
       }
       if (todo.task_class === "user_gate") Object.assign(todo, {action_kind: "gate", unblocks_todo_id: monitor.todo_id});
     }
+    const observedAt = String(observation.generated_at);
     const created = planCoordinationTodoCreate({goal_id: input.goal_id, operation_id: input.operation_id,
       actor_agent_id: actor, registered_agents: input.registered_agents, dry_run: input.dry_run,
-      now: new Date(String(observation.generated_at)), todo}, plannedTodos,
+      now: new Date(observedAt), observed_at: observedAt, todo}, plannedTodos,
       input.read_model_schema ?? TODO_DOMAIN_READ_RECORD_SCHEMA,
       role === "agent" && intent.next_target_key ? "role_target" : "role_text", "actor_owned");
     if (created.status !== "planned" && created.status !== "no_change") throw new EffectRuntimeRequestError(String(created.reason));

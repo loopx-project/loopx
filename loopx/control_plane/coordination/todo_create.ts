@@ -35,6 +35,7 @@ export interface CoordinationTodoCreateInput {
   readonly operation_id: string;
   readonly dry_run: boolean;
   readonly expected_provider_revision?: string;
+  readonly observed_at?: string;
   readonly now: Date;
 }
 
@@ -120,7 +121,7 @@ function semanticDuplicateResult(
   cursor: unknown,
   identityDescription = "role/text",
 ): CoordinationTodoCreateResult {
-  const ignored = new Set(["schema_version", "todo_id", "created_by", "last_actor_agent_id", "updated_at"]);
+  const ignored = new Set(["schema_version", "todo_id", "created_by", "last_actor_agent_id", "created_at", "updated_at"]);
   const mismatch = Object.entries(todo).find(([field, value]) =>
     !ignored.has(field) && !(
       // The legacy Markdown read model omits an empty capabilities list;
@@ -161,6 +162,7 @@ function createCandidate(
     schema_version: TODO_DOMAIN_ITEM_SCHEMA,
     created_by: input.actor_agent_id,
     last_actor_agent_id: input.actor_agent_id,
+    created_at: input.observed_at ?? input.now.toISOString(),
     updated_at: input.now.toISOString().replace(/\.\d{3}Z$/u, "Z"),
   };
   if (priority.priority === null) { delete candidate.priority; delete candidate.title; }
