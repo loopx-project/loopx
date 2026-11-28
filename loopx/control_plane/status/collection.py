@@ -91,6 +91,7 @@ def collect_status(
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
     tolerate_malformed_settlement_history: bool = False,
+    include_global_member_ids: bool = False,
 ) -> dict[str, Any]:
     """Collect the status read model.
 
@@ -125,6 +126,7 @@ def collect_status(
         registry_path=registry_path,
         runtime_root=runtime_root,
         current_registry=registry,
+        include_member_ids=include_global_member_ids,
     )
     global_registry_read_at = now_utc_iso()
     include_runtime_goals = bool(global_registry.get("current_registry_is_global"))

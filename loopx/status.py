@@ -810,6 +810,7 @@ def collect_global_registry_health(
     registry_path: Path,
     runtime_root: Path,
     current_registry: dict[str, object],
+    include_member_ids: bool = False,
 ) -> dict[str, object]:
     from .control_plane.status.registry_health_projection import (
         collect_global_registry_health as _collect_global_registry_health,
@@ -819,6 +820,7 @@ def collect_global_registry_health(
         registry_path=registry_path,
         runtime_root=runtime_root,
         current_registry=current_registry,
+        include_member_ids=include_member_ids,
     )
 
 
@@ -1313,6 +1315,7 @@ def collect_status(
     allow_missing_registry: bool = False,
     include_presentation_projections: bool = True,
     tolerate_malformed_settlement_history: bool = False,
+    include_global_member_ids: bool = False,
 ) -> dict[str, object]:
     with effect_runtime_request_scope():
         return _collect_status_read_model(
@@ -1331,6 +1334,7 @@ def collect_status(
             activation_state_filter=activation_state_filter,
             agent_lane_id=agent_lane_id,
             include_presentation_projections=include_presentation_projections,
+            include_global_member_ids=include_global_member_ids,
             context=build_status_collection_context(
                 tolerate_malformed_settlement_history=(
                     tolerate_malformed_settlement_history

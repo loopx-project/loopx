@@ -621,6 +621,65 @@ def test_global_membership_binds_rows_and_rollups_to_registered_goals(
     assert payload["complete"] is True
 
 
+def test_missing_membership_evidence_never_certifies_coverage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    status = status_payload(
+        {"id": "goal-a", "artifact_lifecycle": projection("goal-a")},
+        {"id": "goal-b", "artifact_lifecycle": projection("goal-b")},
+        {"id": "goal-retired", "artifact_lifecycle": projection("goal-retired")},
+    )
+    status["global_registry"] = {
+        **status["global_registry"],
+        "global_goal_count": 2,
+    }
+    status["global_registry"].pop("global_goal_ids", None)
+    patch_status(monkeypatch, status)
+
+    payload = build(tmp_path)
+
+    coverage = payload["projection_envelope"]["coverage"]
+    # Without the member list the board cannot prove any row belongs to the
+    # current estate, so it must not report a whole one.
+    assert coverage["expected_count"] == 2
+    assert coverage["included_count"] == 0
+    assert any(
+        row["reason"] == "global_membership_unavailable" and row["count"] == 1
+        for row in coverage["omitted"]
+    )
+    assert coverage["complete"] is False
+    assert payload["projection_envelope"]["complete"] is False
+    assert payload["complete"] is False
+
+
+def test_membership_list_conflicting_with_the_denominator_never_certifies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    status = status_payload(
+        {"id": "goal-a", "artifact_lifecycle": projection("goal-a")},
+        {"id": "goal-b", "artifact_lifecycle": projection("goal-b")},
+        {"id": "goal-retired", "artifact_lifecycle": projection("goal-retired")},
+    )
+    status["global_registry"] = {
+        **status["global_registry"],
+        "global_goal_count": 2,
+        "global_goal_ids": ["goal-a", "goal-b", "goal-retired"],
+    }
+    patch_status(monkeypatch, status)
+
+    payload = build(tmp_path)
+
+    coverage = payload["projection_envelope"]["coverage"]
+    assert coverage["expected_count"] == 2
+    assert coverage["included_count"] == 0
+    assert any(
+        row["reason"] == "global_membership_inconsistent" and row["count"] == 1
+        for row in coverage["omitted"]
+    )
+    assert coverage["complete"] is False
+    assert payload["complete"] is False
+
+
 def test_a_project_registry_with_stale_membership_does_not_reenlist_it(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

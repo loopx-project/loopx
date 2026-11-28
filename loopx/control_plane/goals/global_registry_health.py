@@ -88,6 +88,7 @@ def collect_global_registry_health(
     registry_path: Path,
     runtime_root: Path,
     current_registry: dict[str, Any],
+    include_member_ids: bool = False,
     global_registry_path: Callable[[Path], Path],
     load_registry: Callable[[Path], dict[str, Any]],
     registry_goals: Callable[[dict[str, Any]], list[dict[str, Any]]],
@@ -301,10 +302,9 @@ def collect_global_registry_health(
         "current_registry": str(registry_path),
         "current_registry_is_global": current_is_global,
         "global_goal_count": len(global_goals),
-        # The complete registered membership, so a consumer can bind its rows to
-        # the current global estate instead of trusting whatever history its
-        # status read retained for Goals that already left the registry.
-        "global_goal_ids": sorted(global_id_set),
+        # Opt-in only: the cross-Goal lifecycle board binds its rows to this
+        # complete membership, while ordinary status keeps its bounded output.
+        **({"global_goal_ids": sorted(global_id_set)} if include_member_ids else {}),
         "current_goal_count": len(current_goals),
         "current_registry_excluded_goal_count": 0 if current_is_global else len(missing_from_current),
         "current_registry_excluded_goal_ids": [] if current_is_global else missing_from_current[:8],

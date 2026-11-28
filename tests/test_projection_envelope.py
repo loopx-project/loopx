@@ -1148,6 +1148,12 @@ def test_real_cli_lifecycle_board_drops_a_goal_outside_global_membership(tmp_pat
         assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
+    # Ordinary status keeps its bounded registry facts; only the board asks
+    # for the complete membership it must bind rows to.
+    default_status = cli("status")
+    assert "global_goal_ids" not in default_status["global_registry"]
+    assert default_status["global_registry"]["current_registry_excluded_goal_ids"] == []
+
     payload = cli("global-lifecycle")
     goal_ids = sorted(row["goal_id"] for row in payload["goals"])
     assert goal_ids == ["goal-a", "goal-b"]

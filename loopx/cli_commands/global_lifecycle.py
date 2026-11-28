@@ -65,20 +65,36 @@ def _request(
     }
 
 
-def _global_member_ids(status_payload: dict[str, Any]) -> set[str] | None:
-    """The complete current global membership, when the status owner published it.
+GAP_MEMBERSHIP_UNAVAILABLE = "global_membership_unavailable"
+GAP_MEMBERSHIP_INCONSISTENT = "global_membership_inconsistent"
 
-    A `None` answer means the payload cannot bind rows to membership, and the
-    board must stay uncertified rather than describe an unknown estate as whole.
+
+def _global_membership(
+    status_payload: dict[str, Any],
+) -> tuple[frozenset[str] | None, str | None]:
+    """Parse the opt-in membership list the lifecycle collector requested.
+
+    Returns the complete current membership, or a typed evidence gap when the
+    payload cannot bind rows to it. A list that is absent, malformed or
+    contradicts the published denominator must never certify a whole estate.
     """
 
     global_registry = as_dict(status_payload.get("global_registry"))
     if global_registry.get("available") is not True:
-        return None
+        # The envelope already reports the membership source itself as missing.
+        return None, None
     ids = global_registry.get("global_goal_ids")
-    if not isinstance(ids, list):
-        return None
-    return {item for item in ids if isinstance(item, str) and item}
+    if not isinstance(ids, list) or any(
+        not isinstance(item, str) or not item for item in ids
+    ):
+        return None, GAP_MEMBERSHIP_UNAVAILABLE
+    members = frozenset(ids)
+    if len(members) != len(ids):
+        return None, GAP_MEMBERSHIP_INCONSISTENT
+    count = global_registry.get("global_goal_count")
+    if isinstance(count, int) and not isinstance(count, bool) and len(members) != count:
+        return None, GAP_MEMBERSHIP_INCONSISTENT
+    return members, None
 
 
 def _scope_counts(
@@ -140,6 +156,7 @@ def _envelope(
     )
     summary = as_dict(as_dict(board).get("summary"))
     scope = _scope_counts(status_payload, summary)
+    members, membership_error = _global_membership(status_payload)
     shown = summary.get("returned_goal_count")
     if not isinstance(shown, int) or isinstance(shown, bool):
         shown = None
@@ -181,12 +198,20 @@ def _envelope(
         omitted.append({"reason": "goal_identity_unavailable", "count": without_identity})
     if unscanned:
         omitted.append({"reason": "goal_scan_omitted", "count": unscanned})
+    if membership_error:
+        # A membership list the board could not bind must be a stated coverage
+        # gap, never an implicitly complete answer.
+        omitted.append({"reason": membership_error, "count": 1})
     projected = summary.get("goals_with_projection")
-    # Included means "carried a derived projection in this answer". It can never
-    # exceed what was inspected or what remains inside the current registry.
+    # Included means "proved to carry a derived projection in this answer".
+    # It can never exceed what was inspected, what remains inside the current
+    # registry, or what verified global membership admits.
     included = (
         min(projected, max(0, expected - excluded))
-        if isinstance(projected, int) and expected is not None
+        if membership_error is None
+        and members is not None
+        and isinstance(projected, int)
+        and expected is not None
         else 0
     )
     sealed: dict[str, Any] = seal_projection_envelope(
@@ -313,6 +338,9 @@ def build_global_lifecycle(
             runtime_root_override=runtime_root_override,
             limit=scan_limit,
             agent_lane_id=requested_agent,
+            # The complete membership is internal to this board read; the shared
+            # default status output keeps its bounded registry facts.
+            include_global_member_ids=True,
         )
     except Exception as exc:
         return build_global_lifecycle_error(
@@ -333,13 +361,16 @@ def build_global_lifecycle(
             status_read_at=status_read_at,
             error_code="status_collection_unavailable",
         )
+    members, membership_error = _global_membership(status_payload)
     try:
         board = build_global_goal_lifecycle_board(
             status_payload,
             limit=max(1, limit),
             phases=wanted,
             agent_id=requested_agent,
-            member_goal_ids=_global_member_ids(status_payload),
+            member_goal_ids=(
+                set(members) if members is not None and membership_error is None else None
+            ),
         )
     except ValueError as exc:
         return build_global_lifecycle_error(

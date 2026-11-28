@@ -61,11 +61,13 @@ def collect_global_registry_health(
     registry_path: Path,
     runtime_root: Path,
     current_registry: dict[str, Any],
+    include_member_ids: bool = False,
 ) -> dict[str, Any]:
     return _collect_global_registry_health(
         registry_path=registry_path,
         runtime_root=runtime_root,
         current_registry=current_registry,
+        include_member_ids=include_member_ids,
         global_registry_path=global_registry_path,
         load_registry=load_registry,
         registry_goals=registry_goals,
