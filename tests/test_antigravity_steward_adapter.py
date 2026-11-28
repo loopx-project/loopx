@@ -962,6 +962,30 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     assert len(language_server["calls"]) == 1
 
 
+def test_loopback_rpc_works_without_tls_initialization(language_server):
+    probe = """
+import ssl
+import sys
+
+def unavailable_context(*args, **kwargs):
+    raise ssl.SSLError("TLS initialization unavailable")
+
+ssl.create_default_context = unavailable_context
+ssl._create_default_https_context = unavailable_context
+
+from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
+
+reply = _rpc_post(sys.argv[1], "synthetic-csrf-token", "GetUserStatus", {})
+assert reply["userStatus"]["email"] == "synthetic@invalid.example"
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe, language_server["url"]],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert language_server["calls"] == [("GetUserStatus", {})]
+
+
 def test_stop_acknowledges_worker_and_next_turn_progresses(tmp_path, language_server):
     from loopx.chat_runtime import ChatRuntimeController
     from loopx.chat_store import ChatSessionStore

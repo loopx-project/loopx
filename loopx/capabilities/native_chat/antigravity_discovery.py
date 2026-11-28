@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from email.message import Message
+from functools import lru_cache
 import hashlib
 import ipaddress
 import json
@@ -131,10 +132,15 @@ class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_NO_PROXY_OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}),
-    _LocalRedirectHandler(),
-)
+@lru_cache(maxsize=1)
+def _loopback_rpc_opener() -> urllib.request.OpenerDirector:
+    # Only direct HTTP is needed for the validated loopback endpoint.
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPHandler())
+    opener.add_handler(urllib.request.HTTPDefaultErrorHandler())
+    opener.add_handler(_LocalRedirectHandler())
+    opener.add_handler(urllib.request.HTTPErrorProcessor())
+    return opener
 
 
 def _local_url(value: str) -> str:
@@ -178,7 +184,7 @@ def _rpc_post(
         method="POST",
     )
     try:
-        with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
+        with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data: object = json.loads(raw) if raw.strip() else {}
             return as_rpc_response(data if _is_dict(data) else {})

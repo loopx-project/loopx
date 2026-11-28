@@ -2849,6 +2849,34 @@ theorem chat_a_second_compaction_retains_the_first_append_identity :
 theorem chat_fully_compacted_journal_allocates_above_the_sequence_floor (through : Nat) :
     nextChatAppendSequence 0 through = through + 1 := by simp [nextChatAppendSequence]
 
+inductive ChatStartupAdapter where
+  | codex | antigravity | other
+
+/- The selected adapter owns its per-turn reader reset. Antigravity RPC
+   validation permits direct loopback HTTP, with redirects disabled. -/
+def loadsAntigravityTurnSetup : ChatStartupAdapter → Bool
+  | .antigravity => true
+  | _ => false
+
+def permitsAntigravityLoopbackRpc (http loopback redirected _tlsAvailable : Bool) : Bool :=
+  http && loopback && !redirected
+
+theorem ordinary_queue_does_not_load_antigravity_turn_setup :
+    loadsAntigravityTurnSetup .codex = false ∧ loadsAntigravityTurnSetup .other = false := by decide
+
+theorem antigravity_turn_still_loads_its_reader_setup :
+    loadsAntigravityTurnSetup .antigravity = true := rfl
+
+theorem antigravity_loopback_http_does_not_require_tls_initialization :
+    permitsAntigravityLoopbackRpc true true false false = true := rfl
+
+theorem antigravity_rpc_rejects_nonloopback_or_https (tlsAvailable : Bool) :
+    permitsAntigravityLoopbackRpc true false false tlsAvailable = false ∧
+      permitsAntigravityLoopbackRpc false true false tlsAvailable = false := ⟨rfl, rfl⟩
+
+theorem antigravity_rpc_does_not_follow_redirects (tlsAvailable : Bool) :
+    permitsAntigravityLoopbackRpc true true true tlsAvailable = false := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3177,5 +3205,10 @@ theorem chat_fully_compacted_journal_allocates_above_the_sequence_floor (through
 #print axioms chat_live_append_evidence_takes_precedence_over_a_compacted_receipt
 #print axioms chat_a_second_compaction_retains_the_first_append_identity
 #print axioms chat_fully_compacted_journal_allocates_above_the_sequence_floor
+#print axioms ordinary_queue_does_not_load_antigravity_turn_setup
+#print axioms antigravity_turn_still_loads_its_reader_setup
+#print axioms antigravity_loopback_http_does_not_require_tls_initialization
+#print axioms antigravity_rpc_rejects_nonloopback_or_https
+#print axioms antigravity_rpc_does_not_follow_redirects
 
 end StewardPrSignalPagination
