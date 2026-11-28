@@ -132,7 +132,8 @@ function lifecycleJournal(
 
 function reduceLifecycle(
   journal: ReturnType<typeof lifecycleJournal>,
-  phase: "inspect" | "observe_result" = "inspect",
+  phase: "inspect" | "observe_result" | "authorize_dispatch" = "inspect",
+  dispatch?: object,
 ) {
   return validateGovernedCapabilityResult({
     ...authority,
@@ -144,9 +145,100 @@ function reduceLifecycle(
       canonical_request_digest: providerRequestDigest,
       admission: null,
       journal,
+      ...(dispatch === undefined ? {} : { dispatch }),
     },
   });
 }
+
+test("only an explicitly unarmed start can retry without provider readback", () => {
+  const starting = lifecycleJournal("starting", null);
+  const unarmed = { ...starting, dispatch_armed: false };
+  const armed = { ...starting, dispatch_armed: true };
+  const nativeDispatch = { restored_runtime: false };
+  assert.equal(reduceLifecycle(unarmed).start_disposition, "allow_retry");
+  assert.deepEqual(
+    reduceLifecycle(unarmed, "authorize_dispatch", nativeDispatch).dispatch_checkpoint,
+    { dispatch_armed: true },
+  );
+  for (const journal of [armed, starting]) {
+    assert.equal(reduceLifecycle(journal).start_disposition, "unsettled_reconcile_required");
+    assert.throws(
+      () => reduceLifecycle(journal, "authorize_dispatch", nativeDispatch),
+      /reconcile original invocation/,
+    );
+  }
+  const malformed = { ...starting, dispatch_armed: "false" };
+  assert.throws(() => reduceLifecycle(malformed), /dispatch_armed must be boolean/);
+});
+
+const restoredStartProof = {
+  operation_key: `sha256:${"1".repeat(64)}`,
+  intent_digest: `sha256:${"2".repeat(64)}`,
+  request_digest: providerRequestDigest,
+  invocation_id: authority.invocation_id,
+  challenge: "ab".repeat(16),
+};
+const restoredStartReservation = {
+  ...restoredStartProof,
+  status: "reserved_after_terminal_no_effect",
+  reservation_ref: "service-grant-1",
+};
+
+test("a fresh service reservation authorizes and normalizes a restored dispatch", () => {
+  const journal = { ...lifecycleJournal("starting", null), dispatch_armed: false };
+  const dispatch = {
+    restored_runtime: true,
+    proof: restoredStartProof,
+    reservation: { ...restoredStartReservation, service_metadata: "not part of the grant" },
+  };
+  const reduction = reduceLifecycle(journal, "authorize_dispatch", dispatch);
+  assert.deepEqual(reduction.dispatch_checkpoint, {
+    dispatch_armed: true,
+    restored_start_reservation: restoredStartReservation,
+  });
+  const checkpoint = { ...journal, dispatch_armed: true, restored_start_reservation: restoredStartReservation };
+  assert.equal(reduceLifecycle(checkpoint).start_disposition, "unsettled_reconcile_required");
+  assert.throws(
+    () => reduceLifecycle(checkpoint, "authorize_dispatch", dispatch),
+    /reconcile original invocation/,
+  );
+});
+
+test("restored dispatch rejects stale or malformed service reservations", () => {
+  const journal = { ...lifecycleJournal("starting", null), dispatch_armed: false };
+  for (const [scenario, reservation, proof, error] of [
+    ["no grant", null, restoredStartProof, /lacks a current provider reservation/],
+    ["wrong status", { ...restoredStartReservation, status: "reserved" }, restoredStartProof, /status or journal identity/],
+    ["stale challenge", { ...restoredStartReservation, challenge: "cd".repeat(16) }, restoredStartProof, /lacks a current provider reservation/],
+    ["other operation", { ...restoredStartReservation, operation_key: providerRequestDigest }, restoredStartProof, /lacks a current provider reservation/],
+    ["other intent", { ...restoredStartReservation, intent_digest: providerRequestDigest }, restoredStartProof, /lacks a current provider reservation/],
+    ["other request", { ...restoredStartReservation, request_digest: effectReceiptDigest }, { ...restoredStartProof, request_digest: effectReceiptDigest }, /journal identity/],
+    ["other invocation", { ...restoredStartReservation, invocation_id: "different" }, { ...restoredStartProof, invocation_id: "different" }, /journal identity/],
+    ["overlong reference", { ...restoredStartReservation, reservation_ref: "x".repeat(257) }, restoredStartProof, /reservation reference/],
+    ["nonprintable reference", { ...restoredStartReservation, reservation_ref: "grant\t1" }, restoredStartProof, /reservation reference/],
+    ["blank reference", { ...restoredStartReservation, reservation_ref: " " }, restoredStartProof, /reservation reference/],
+  ] as const) {
+    assert.throws(
+      () => reduceLifecycle(journal, "authorize_dispatch", { restored_runtime: true, proof, reservation }),
+      error,
+      scenario,
+    );
+  }
+});
+
+test("journal inspection rejects incomplete or misbound stored dispatch reservations", () => {
+  const starting = lifecycleJournal("starting", null);
+  for (const [reservation, error] of [
+    [{ ...restoredStartProof, status: restoredStartReservation.status }, /fields are invalid/],
+    [{ ...restoredStartReservation, request_digest: effectReceiptDigest }, /journal identity/],
+    [{ ...restoredStartReservation, invocation_id: "different" }, /journal identity/],
+  ] as const) {
+    const journal = { ...starting, dispatch_armed: true, restored_start_reservation: reservation };
+    assert.throws(() => reduceLifecycle(journal), error);
+  }
+  const unarmed = { ...starting, dispatch_armed: false, restored_start_reservation: restoredStartReservation };
+  assert.throws(() => reduceLifecycle(unarmed), /requires an armed dispatch/);
+});
 
 test("material admission binds the exact Todo action to the operation", () => {
   const admission = {
@@ -478,6 +570,7 @@ test("committed lifecycle replay validates the whole journal in one reduction", 
   const reduction = reduceLifecycle(journal);
 
   assert.equal(reduction.journal_status, "committed");
+  assert.equal(reduction.start_disposition, "settled_committed");
   assert.equal(reduction.public_receipt.status, "committed");
   assert.equal(reduction.public_receipt.effects.loopx_state_written, true);
   assert.equal(reduction.public_receipt.effects.quota_spent, true);

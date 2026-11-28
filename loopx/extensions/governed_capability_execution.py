@@ -10,8 +10,10 @@ from __future__ import annotations
 import json
 import os
 import secrets
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +54,15 @@ GOVERNED_CAPABILITY_LIFECYCLE_REDUCTION_SCHEMA_VERSION = (
     "loopx_governed_capability_lifecycle_reduction_v0"
 )
 MaterialEffect = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class _LifecycleReduction:
+    provider_result: dict[str, Any] | None
+    journal_status: str
+    receipt: dict[str, Any]
+    start_disposition: object
+    dispatch_checkpoint: object
 
 
 def default_governed_capability_run_dir(
@@ -175,7 +186,7 @@ def _start_scope(journal: Mapping[str, Any]) -> str:
     ]).removeprefix("sha256:")
 
 
-def _restored_start_reservation(
+def _query_restored_start_reservation(
     journal: Mapping[str, Any], reserve: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
 ) -> dict[str, Any]:
     request = journal["request"]
@@ -189,25 +200,12 @@ def _restored_start_reservation(
     }
     # The service must atomically fence the old work and grant this challenge once.
     receipt = reserve({**proof, "target_key": target, "request": deepcopy(request)})
-    if (
-        not isinstance(receipt, Mapping)
-        or receipt.get("status") != "reserved_after_terminal_no_effect"
-        or any(receipt.get(key) != value for key, value in proof.items())
-    ):
-        raise ValueError("restored external start lacks a current provider reservation after terminal no-effect")
-    ref = receipt.get("reservation_ref")
-    if not isinstance(ref, str) or not ref.strip() or len(ref) > 256 or not ref.isprintable():
-        raise ValueError("restored external start requires a bounded provider reservation reference")
-    checked = {**proof, "status": receipt["status"], "reservation_ref": ref}
-    validate_public_safe_value(checked, path="provider_reservation")
-    return checked
+    return {"proof": proof, "reservation": dict(receipt) if isinstance(receipt, Mapping) else None}
 
 
-def _record_start_intent(
-    path: Path, journal: dict[str, Any],
-    reserve_restored_start: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
-) -> None:
-    """Reserve a Todo operation across Turns before letting its provider start."""
+@contextmanager
+def _locked_start_scope(path: Path, journal: Mapping[str, Any]) -> Iterator[Path]:
+    """Serialize starts of one Todo operation across Turns."""
     index = path.parent / ".start-reservations-v1"
     index.mkdir(mode=0o700, exist_ok=True)
     with exclusive_file_lock(index / "catalog", operation="reserve_external_start"):
@@ -236,25 +234,50 @@ def _record_start_intent(
             previous = _read_journal(previous_path)
             if (_start_scope(previous) != group.name or previous["invocation_id"] != reservation.name):
                 raise ValueError("external start reservation does not match the original request")
-            undispatched = previous.get("dispatch_armed") is False and previous.get("provider_result") is None
-            if not undispatched and previous.get("status") != "committed":
-                raise ValueError(f"external write is unsettled; reconcile original invocation {reservation.name}")
-            _reduce_governed_capability_journal(
+            reduction = _reduce_governed_capability_journal(
                 previous, invocation_id=reservation.name, phase="inspect", dry_run=False,
             )
+            if reduction.start_disposition not in ("allow_retry", "settled_committed"):
+                raise ValueError(f"external write is unsettled; reconcile original invocation {reservation.name}")
             reservation.unlink()
-        # Only the armed checkpoint permits delivery. A grant request alone cannot deliver.
-        observed = journal.get("provider_result") is not None
-        journal["dispatch_armed"] = observed
+        yield group
+
+
+def _checkpoint_start(path: Path, journal: Mapping[str, Any], group: Path) -> None:
+    _write_journal(path, journal)
+    (group / path.stem).touch(mode=0o600, exist_ok=False)
+    fsync_state_directory(group / path.stem)
+    fsync_state_directory(group)
+
+
+def _record_start_intent(
+    path: Path, journal: dict[str, Any], *,
+    dispatch_checkpoint: object,
+    reserve_restored_start: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None,
+) -> dict[str, Any] | None:
+    with _locked_start_scope(path, journal) as group:
+        # A process can exit during the service lookup, before it is allowed to deliver.
+        _checkpoint_start(path, journal, group)
+        if reserve_restored_start is not None:
+            reduction = _reduce_governed_capability_journal(
+                journal, invocation_id=path.stem, phase="authorize_dispatch", dry_run=False,
+                dispatch={
+                    "restored_runtime": True,
+                    **_query_restored_start_reservation(journal, reserve_restored_start),
+                },
+            )
+            dispatch_checkpoint = reduction.dispatch_checkpoint
+        checkpoint = _mapping(dispatch_checkpoint, "governed capability dispatch checkpoint")
+        if checkpoint.get("dispatch_armed") is not True:
+            raise RuntimeError("TypeScript governed capability dispatch checkpoint shape mismatch")
+        reservation = None
+        if reserve_restored_start is not None:
+            reservation = _mapping(checkpoint.get("restored_start_reservation"), "provider reservation")
+            validate_public_safe_value(reservation, path="provider_reservation")
+            journal["restored_start_reservation"] = reservation
+        journal["dispatch_armed"] = checkpoint["dispatch_armed"]
         _write_journal(path, journal)
-        (group / path.stem).touch(mode=0o600, exist_ok=False)
-        fsync_state_directory(group / path.stem)
-        fsync_state_directory(group)
-        if not observed:
-            if reserve_restored_start is not None:
-                journal["restored_start_reservation"] = _restored_start_reservation(journal, reserve_restored_start)
-            journal["dispatch_armed"] = True
-            _write_journal(path, journal)
+        return reservation
 
 
 def _settlement_identity(transaction_plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -321,7 +344,8 @@ def _reduce_governed_capability_journal(
     phase: str,
     dry_run: bool,
     admission: Mapping[str, Any] | None = None,
-) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    dispatch: Mapping[str, Any] | None = None,
+) -> _LifecycleReduction:
     """Validate one lifecycle state and project its canonical public receipt."""
 
     transaction_plan = _mapping(journal.get("transaction_plan"), "transaction plan")
@@ -348,6 +372,7 @@ def _reduce_governed_capability_journal(
                     "canonical_request_digest": _canonical_digest(request),
                     "admission": dict(admission) if admission is not None else None,
                     "journal": dict(journal),
+                    **({"dispatch": dict(dispatch)} if dispatch is not None else {}),
                 },
                 "invocation_id": invocation_id,
                 "effect_id": identity.get("effect_id"),
@@ -357,7 +382,7 @@ def _reduce_governed_capability_journal(
             },
         )
     except EffectRuntimeRejected as exc:
-        if phase != "inspect" or admission is not None:
+        if phase == "observe_result" or admission is not None:
             raise
         raise ValueError(str(exc)) from exc
     if (
@@ -398,7 +423,13 @@ def _reduce_governed_capability_journal(
     )
     if receipt.get("schema_version") != GOVERNED_CAPABILITY_RECEIPT_SCHEMA_VERSION:
         raise RuntimeError("TypeScript governed capability receipt shape mismatch")
-    return result, journal_status, receipt
+    return _LifecycleReduction(
+        provider_result=result,
+        journal_status=journal_status,
+        receipt=receipt,
+        start_disposition=payload.get("start_disposition"),
+        dispatch_checkpoint=payload.get("dispatch_checkpoint"),
+    )
 
 
 def _receipt_with_local_effects(
@@ -571,6 +602,7 @@ def start_governed_external_capability(
         "kernel_context_digest": _canonical_digest(kernel_context),
         "completed_phases": [],
         "provider_result": None,
+        "dispatch_armed": False,
         "transition_receipts": [],
         "writeback": None,
         "quota_spend": None,
@@ -579,29 +611,25 @@ def start_governed_external_capability(
     if not execute:
         if restored and read_start_result is None and reserve_restored_start is None:
             raise ValueError("restored runtime requires provider reconciliation before external start")
-        _provider_result, _journal_status, receipt = (
-            _reduce_governed_capability_journal(
-                journal,
-                invocation_id=invocation_id,
-                phase="inspect",
-                dry_run=True,
-                admission=admission,
-            )
+        reduction = _reduce_governed_capability_journal(
+            journal,
+            invocation_id=invocation_id,
+            phase="inspect",
+            dry_run=True,
+            admission=admission,
         )
-        return _receipt_with_local_effects(receipt, journal)
+        return _receipt_with_local_effects(reduction.receipt, journal)
 
     path = _journal_path(run_dir, invocation_id)
     with exclusive_file_lock(path, operation="start_governed_external_capability"):
         original_present = path.exists()
         if original_present:
             current = _read_journal(path)
-            current_result, _current_status, receipt = (
-                _reduce_governed_capability_journal(
-                    current,
-                    invocation_id=invocation_id,
-                    phase="inspect",
-                    dry_run=False, admission=admission if read_start_result is not None else None,
-                )
+            current_reduction = _reduce_governed_capability_journal(
+                current,
+                invocation_id=invocation_id,
+                phase="inspect",
+                dry_run=False, admission=admission if read_start_result is not None else None,
             )
             if (
                 current.get("request_digest") != request_digest
@@ -614,7 +642,7 @@ def start_governed_external_capability(
                 and current["admitted_target_key"] != admission["selected_todo"].get("target_key")
             ):
                 raise ValueError("current Todo target does not match original external write")
-            if current_result is not None:
+            if current_reduction.provider_result is not None:
                 if _has_unsettled_start_transition(current):
                     _require_admission(
                         admission,
@@ -633,8 +661,8 @@ def start_governed_external_capability(
                     path=path,
                     phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
                 )
-                return _receipt_with_local_effects(receipt, current)
-            if read_start_result is None and current.get("dispatch_armed") is not False:
+                return _receipt_with_local_effects(current_reduction.receipt, current)
+            if read_start_result is None and current_reduction.start_disposition != "allow_retry":
                 raise ValueError(
                     "external write outcome unknown; preserve the original invocation "
                     "and supply provider readback before any new start"
@@ -651,12 +679,14 @@ def start_governed_external_capability(
             expected_identity=identity,
             require_should_run=True, original_readback=read_start_result is not None,
         )
-        _reduce_governed_capability_journal(
+        native_dispatch = not restored and read_start_result is None
+        start_reduction = _reduce_governed_capability_journal(
             journal,
             invocation_id=invocation_id,
-            phase="inspect",
+            phase="authorize_dispatch" if native_dispatch else "inspect",
             dry_run=False,
             admission=admission,
+            dispatch={"restored_runtime": False} if native_dispatch else None,
         )
         if read_start_result is not None:
             target_key = admission["selected_todo"]["target_key"]
@@ -694,30 +724,35 @@ def start_governed_external_capability(
             if restored and reserve_restored_start is None:
                 raise ValueError("restored runtime requires provider reconciliation before external start")
             journal["admitted_target_key"] = admission["selected_todo"]["target_key"]
-            _record_start_intent(path, journal, reserve_restored_start)
+            reservation = _record_start_intent(
+                path, journal,
+                dispatch_checkpoint=start_reduction.dispatch_checkpoint,
+                reserve_restored_start=reserve_restored_start,
+            )
             dispatch_request = request
-            if reserve_restored_start is not None:
+            if reservation is not None:
                 dispatch_request = {**request, "lifecycle": {
-                    **request["lifecycle"], "restored_start_reservation": journal["restored_start_reservation"],
+                    **request["lifecycle"], "restored_start_reservation": reservation,
                 }}
             provider_result = _execute_extension_runtime_binding(binding, request=dispatch_request, environment=environment)
         journal["provider_result"] = _mapping(
             provider_result,
             "external capability result",
         )
-        validated, journal_status, receipt = _reduce_governed_capability_journal(
+        reduction = _reduce_governed_capability_journal(
             journal,
             invocation_id=invocation_id,
             phase="observe_result",
             dry_run=False,
         )
-        if validated is None:
+        if reduction.provider_result is None:
             raise RuntimeError("TypeScript governed capability result shape mismatch")
-        journal["provider_result"] = validated
-        journal["status"] = journal_status
+        journal["provider_result"] = reduction.provider_result
+        journal["status"] = reduction.journal_status
         if read_start_result is not None and not original_present:
             journal["admitted_target_key"] = admission["selected_todo"]["target_key"]
-            _record_start_intent(path, journal)
+            with _locked_start_scope(path, journal) as group:
+                _checkpoint_start(path, journal, group)
         else:
             _write_journal(path, journal)
         _settle_journal_transition_proposals(
@@ -725,7 +760,7 @@ def start_governed_external_capability(
             path=path,
             phase=GovernedTransitionSettlementPhase.PRE_SETTLEMENT,
         )
-        return _receipt_with_local_effects(receipt, journal)
+        return _receipt_with_local_effects(reduction.receipt, journal)
 
 
 def _settlement_callback(
@@ -762,12 +797,13 @@ def reconcile_governed_external_capability(
     path = _journal_path(run_dir, invocation_id)
     with exclusive_file_lock(path, operation="reconcile_governed_external_capability"):
         journal = _read_journal(path)
-        provider_result, _journal_status, receipt = _reduce_governed_capability_journal(
+        reduction = _reduce_governed_capability_journal(
             journal,
             invocation_id=invocation_id,
             phase="inspect",
             dry_run=False,
         )
+        provider_result, receipt = reduction.provider_result, reduction.receipt
         if journal.get("status") == "committed":
             return _receipt_with_local_effects(receipt, journal)
         identity = _settlement_identity(
@@ -797,20 +833,19 @@ def reconcile_governed_external_capability(
                 observed,
                 "external capability result",
             )
-            provider_result, journal_status, receipt = (
-                _reduce_governed_capability_journal(
-                    journal,
-                    invocation_id=invocation_id,
-                    phase="observe_result",
-                    dry_run=False,
-                )
+            reduction = _reduce_governed_capability_journal(
+                journal,
+                invocation_id=invocation_id,
+                phase="observe_result",
+                dry_run=False,
             )
+            provider_result, receipt = reduction.provider_result, reduction.receipt
             if provider_result is None:
                 raise RuntimeError(
                     "TypeScript governed capability result shape mismatch"
                 )
             journal["provider_result"] = provider_result
-            journal["status"] = journal_status
+            journal["status"] = reduction.journal_status
             _write_journal(path, journal)
             _settle_journal_transition_proposals(
                 journal=journal,

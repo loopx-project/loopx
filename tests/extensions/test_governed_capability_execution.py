@@ -577,6 +577,14 @@ governed.start_governed_external_capability(**json.load(sys.stdin), execute=True
     calls = tmp_path / "provider-calls.txt"
     assert calls.exists() == (crash_at == "after_delivery")
     assert pending.exists() == (crash_at == "grant_reply_lost")
+    journal_path, = Path(args["run_dir"]).glob("capability-*.json")
+    checkpoint = json.loads(journal_path.read_text())
+    assert checkpoint["dispatch_armed"] is (crash_at == "after_delivery")
+    if crash_at == "after_delivery":
+        consumed = json.loads((tmp_path / "consumed-reservation.json").read_text())
+        assert checkpoint["restored_start_reservation"] == consumed
+    else:
+        assert "restored_start_reservation" not in checkpoint
     retry = args
     if receiver == "successor":
         identity = SettlementIdentity(goal_id=args["goal_id"], todo_id=args["todo_id"],

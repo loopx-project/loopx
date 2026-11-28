@@ -105,7 +105,7 @@ const LIFECYCLE_PACKET_FIELDS = new Set([
   "admission",
   "journal",
 ]);
-const LIFECYCLE_PHASES = ["inspect", "observe_result"] as const;
+const LIFECYCLE_PHASES = ["inspect", "observe_result", "authorize_dispatch"] as const;
 const JOURNAL_STATUSES = [
   "ready",
   "starting",
@@ -115,6 +115,33 @@ const JOURNAL_STATUSES = [
   "committed",
 ] as const;
 type GovernedCapabilityJournalStatus = typeof JOURNAL_STATUSES[number];
+type StartDisposition = "allow_retry" | "unsettled_reconcile_required" | "settled_committed";
+
+const RESTORED_RESERVATION_PROOF_FIELDS = [
+  "operation_key",
+  "intent_digest",
+  "request_digest",
+  "invocation_id",
+  "challenge",
+];
+const RESTORED_RESERVATION_FIELDS = new Set([
+  ...RESTORED_RESERVATION_PROOF_FIELDS,
+  "status",
+  "reservation_ref",
+]);
+type RestoredStartReservation = {
+  operation_key: string;
+  intent_digest: string;
+  request_digest: string;
+  invocation_id: string;
+  challenge: string;
+  status: "reserved_after_terminal_no_effect";
+  reservation_ref: string;
+};
+type DispatchCheckpoint = {
+  dispatch_armed: true;
+  restored_start_reservation?: RestoredStartReservation;
+};
 
 function requiredObject(value: unknown, label: string): JsonObject {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -610,6 +637,94 @@ function validateStoredSettlementCallback(input: {
   return payload;
 }
 
+function restoredReservationReference(value: unknown): string {
+  const message = "restored external start requires a bounded provider reservation reference";
+  requireCondition(typeof value === "string" && value.length <= 512, message);
+  const ref = value;
+  const points = [...ref];
+  requireCondition(
+    ref.trim().length > 0 && points.length <= 256 &&
+      points.every((point) => point === " " || !/[\p{C}\p{Z}]/u.test(point)),
+    message,
+  );
+  return ref;
+}
+
+function validateRestoredStartReservation(
+  reservation: JsonObject,
+  journal: JsonObject,
+): RestoredStartReservation {
+  const label = "restored external start provider reservation";
+  requireCondition(
+    reservation.status === "reserved_after_terminal_no_effect" &&
+      reservation.invocation_id === journal.invocation_id &&
+      reservation.request_digest === journal.request_digest,
+    `${label} status or journal identity is invalid`,
+  );
+  return {
+    operation_key: requiredCanonicalDigest(reservation.operation_key, `${label} operation_key`),
+    intent_digest: requiredCanonicalDigest(reservation.intent_digest, `${label} intent_digest`),
+    request_digest: requiredCanonicalDigest(reservation.request_digest, `${label} request_digest`),
+    invocation_id: requiredString(reservation.invocation_id, `${label} invocation_id`),
+    challenge: requiredString(reservation.challenge, `${label} challenge`),
+    status: reservation.status,
+    reservation_ref: restoredReservationReference(reservation.reservation_ref),
+  };
+}
+
+function validateStoredDispatchState(journal: JsonObject): void {
+  requireCondition(
+    journal.dispatch_armed === undefined || typeof journal.dispatch_armed === "boolean",
+    "governed capability journal dispatch_armed must be boolean",
+  );
+  if (journal.restored_start_reservation === undefined) return;
+  requireCondition(
+    journal.dispatch_armed === true,
+    "governed capability journal restored_start_reservation requires an armed dispatch",
+  );
+  const label = "governed capability journal restored_start_reservation";
+  const reservation = requiredObject(journal.restored_start_reservation, label);
+  requireExactFields(reservation, RESTORED_RESERVATION_FIELDS, label);
+  validateRestoredStartReservation(reservation, journal);
+}
+
+function authorizeDispatch(
+  journal: JsonObject, facts: unknown, disposition: StartDisposition,
+): DispatchCheckpoint {
+  requireCondition(
+    disposition === "allow_retry",
+    "external write dispatch may already be armed; reconcile original invocation",
+  );
+  const dispatch = requiredObject(facts, "governed capability dispatch facts");
+  if (dispatch.restored_runtime === false) {
+    requireExactFields(dispatch, new Set(["restored_runtime"]), "governed capability dispatch facts");
+    return { dispatch_armed: true };
+  }
+  const message = "restored external start lacks a current provider reservation after terminal no-effect";
+  requireCondition(
+    dispatch.restored_runtime === true && dispatch.reservation != null,
+    message,
+  );
+  const proof = requiredObject(dispatch.proof, "restored external start reservation proof");
+  const reservation = requiredObject(dispatch.reservation, "restored external start provider reservation");
+  requireCondition(RESTORED_RESERVATION_PROOF_FIELDS.every((field) => reservation[field] === proof[field]), message);
+  return {
+    dispatch_armed: true,
+    restored_start_reservation: validateRestoredStartReservation(reservation, journal),
+  };
+}
+
+function startDisposition(
+  journal: JsonObject,
+  status: GovernedCapabilityJournalStatus,
+): StartDisposition {
+  if (status === "committed") return "settled_committed";
+  if (status === "starting" && journal.provider_result == null && journal.dispatch_armed === false) {
+    return "allow_retry";
+  }
+  return "unsettled_reconcile_required";
+}
+
 function reduceGovernedCapabilityLifecycle(input: {
   packet: JsonObject;
   invocation_id: string;
@@ -620,7 +735,9 @@ function reduceGovernedCapabilityLifecycle(input: {
 }): JsonObject {
   requireExactFields(
     input.packet,
-    LIFECYCLE_PACKET_FIELDS,
+    input.packet.phase === "authorize_dispatch"
+      ? new Set([...LIFECYCLE_PACKET_FIELDS, "dispatch"])
+      : LIFECYCLE_PACKET_FIELDS,
     "governed capability lifecycle packet",
   );
   const phase = requireStringLiteral(
@@ -704,6 +821,7 @@ function reduceGovernedCapabilityLifecycle(input: {
     journal.request_digest === requestDigest,
     "governed capability journal request digest is invalid",
   );
+  validateStoredDispatchState(journal);
 
   const operationProfile = requiredObject(
     journal.operation_profile,
@@ -728,7 +846,7 @@ function reduceGovernedCapabilityLifecycle(input: {
   const rawResult = journal.provider_result;
   if (rawResult === null || rawResult === undefined) {
     requireCondition(
-      phase === "inspect" &&
+      (phase === "inspect" || (phase === "authorize_dispatch" && !input.packet.dry_run)) &&
         currentStatus === (input.packet.dry_run ? "ready" : "starting"),
       "governed capability journal provider state is invalid",
     );
@@ -747,10 +865,15 @@ function reduceGovernedCapabilityLifecycle(input: {
         todo_contract: operationProfile.todo_contract,
       });
     }
+    const disposition = startDisposition(journal, currentStatus);
+    const start = phase === "authorize_dispatch"
+      ? { dispatch_checkpoint: authorizeDispatch(journal, input.packet.dispatch, disposition) }
+      : { start_disposition: disposition };
     return {
       schema_version: GOVERNED_CAPABILITY_LIFECYCLE_REDUCTION_SCHEMA_VERSION,
       journal_status: currentStatus,
       provider_result: null,
+      ...(input.packet.dry_run ? {} : start),
       public_receipt: lifecyclePublicReceipt({
         journal,
         status: currentStatus,
@@ -760,6 +883,10 @@ function reduceGovernedCapabilityLifecycle(input: {
     };
   }
 
+  requireCondition(
+    phase !== "authorize_dispatch",
+    "governed capability dispatch requires a journal without a provider result",
+  );
   if (input.packet.admission !== null) {
     requireCondition(
       phase === "inspect",
@@ -877,6 +1004,7 @@ function reduceGovernedCapabilityLifecycle(input: {
     schema_version: GOVERNED_CAPABILITY_LIFECYCLE_REDUCTION_SCHEMA_VERSION,
     journal_status: journalStatus,
     provider_result: validated.result,
+    ...(phase === "inspect" ? { start_disposition: startDisposition(journal, journalStatus) } : {}),
     public_receipt: lifecyclePublicReceipt({
       journal: reducedJournal,
       status: journalStatus,
