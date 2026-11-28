@@ -29,6 +29,7 @@ GITHUB_PR_LIST_FIELDS = (
 )
 
 _KNOWN_MERGE_STATES = {"BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE"}
+_PR_DISPLAY_FIELDS = ("title", "url", "headRefName", "baseRefName")
 GITHUB_PR_VIEW_FIELDS = GITHUB_PR_LIST_FIELDS + ",state,mergedAt,mergeCommit"
 
 _GITHUB_URL_TARGET_RE = re.compile(
@@ -562,6 +563,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "headRefOid": row.get("headRefOid"),
         "headRefName": row.get("headRefName"),
         "baseRefName": row.get("baseRefName"),
+        **({"pr_metadata_coverage_incomplete": True} if row.get("pr_metadata_coverage_incomplete") is True else {}),
         "isDraft": row.get("isDraft"),
         "author": row.get("author"),
         "reviewDecision": row.get("reviewDecision"),
@@ -695,11 +697,7 @@ _GITHUB_OPEN_PR_FIELDS = """
       }
       nodes {
         ...StewardPrWindowRow
-        ...StewardPrScopeFields
-        title
-        url
-        headRefName
-        baseRefName
+        ...StewardPrTerminalFields
         comments(last: 20) {
           ...StewardCommentPage
         }
@@ -731,12 +729,16 @@ fragment StewardPrWindowRow on PullRequest {
   reviewDecision
 }"""
 
-_GITHUB_OPEN_PR_SCOPE_FRAGMENT = """
-fragment StewardPrScopeFields on PullRequest {
+_GITHUB_OPEN_PR_TERMINAL_FRAGMENT = """
+fragment StewardPrTerminalFields on PullRequest {
   isDraft
   mergeable
   mergeStateStatus
   author { login }
+  title
+  url
+  headRefName
+  baseRefName
 }"""
 
 _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT = """
@@ -775,9 +777,9 @@ def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
     return fields
 
 
-def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, terminal_scope: bool) -> str:
+def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, include_terminal_fields: bool) -> str:
     variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
-    scope_fields = "\n        ...StewardPrScopeFields" if terminal_scope else ""
+    terminal_fields = "\n        ...StewardPrTerminalFields" if include_terminal_fields else ""
     readbacks = "".join(
         f"""
     previousPrs{index}: pullRequests(
@@ -786,7 +788,7 @@ def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *,
     ) {{
       totalCount
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ ...StewardPrWindowRow{scope_fields}{_open_pr_readback_fields(limits)} }}
+      nodes {{ ...StewardPrWindowRow{terminal_fields}{_open_pr_readback_fields(limits)} }}
     }}"""
         for index, limits in enumerate(previous_limits)
     )
@@ -796,7 +798,7 @@ def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *,
 {_GITHUB_OPEN_PR_FIELDS}{readbacks}
   }}
 }}"""
-        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_SCOPE_FRAGMENT
+        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_TERMINAL_FRAGMENT
         + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
         + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
     )
@@ -1080,14 +1082,15 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     if rollup is None:
         rollup = _read_graphql_head_check_rollup(verified_head_commit)
     merge_state = node.get("mergeStateStatus")
+    display_fields = {field: node.get(field) for field in _PR_DISPLAY_FIELDS}
 
     return {
         "number": node.get("number"),
-        "title": node.get("title"),
-        "url": node.get("url"),
+        **display_fields,
+        "pr_metadata_coverage_incomplete": any(
+            not isinstance(value, str) or not value.strip() for value in display_fields.values()
+        ),
         "headRefOid": node.get("headRefOid"),
-        "headRefName": node.get("headRefName"),
-        "baseRefName": node.get("baseRefName"),
         "isDraft": node.get("isDraft"),
         "author": node.get("author"),
         "reviewDecision": node.get("reviewDecision"),
@@ -1305,7 +1308,7 @@ def observe_github_repository_prs(
                 "api",
                 "graphql",
                 "-f",
-                f"query={_open_prs_graphql_query(previous_limits, terminal_scope=can_finish)}",
+                f"query={_open_prs_graphql_query(previous_limits, include_terminal_fields=can_finish)}",
                 "-f",
                 f"owner={owner}",
                 "-f",
@@ -1367,6 +1370,7 @@ def observe_github_repository_prs(
                         "mergeable": readback_row.get("mergeable"),
                         "mergeStateStatus": readback_row.get("mergeStateStatus"),
                         "author": author if isinstance(author, Mapping) else None,
+                        **{field: readback_row.get(field) for field in _PR_DISPLAY_FIELDS},
                     }
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)
             if page.next_cursor is None:

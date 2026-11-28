@@ -1099,7 +1099,7 @@ def test_steward_uses_terminal_scope_fields_and_holds_only_on_decisive_unknowns(
         if tail:
             query = next(part for part in cmd if part.startswith("query="))
             alias = query.split("previousPrs0:", 1)[1].split("fragment StewardPrWindowRow", 1)[0]
-            assert "...StewardPrScopeFields" in alias
+            assert "...StewardPrTerminalFields" in alias
             payload = _graphql_page([pr(21)], total_count=21)
             prior_window = _graphql_page(readback, has_next_page=True, end_cursor="tail", total_count=21)
             payload["data"]["repository"]["previousPrs0"] = prior_window["data"]["repository"]["pullRequests"]
@@ -1164,8 +1164,8 @@ def test_steward_publishes_merge_gates_from_the_terminal_readback(
         reads.append(tail)
         if tail:
             query = next(part for part in cmd if part.startswith("query="))
-            assert "...StewardPrScopeFields" in query.split("previousPrs0:", 1)[1].split("fragment ", 1)[0]
-            assert "mergeStateStatus" in query.split("fragment StewardPrScopeFields", 1)[1].split("}", 1)[0]
+            assert "...StewardPrTerminalFields" in query.split("previousPrs0:", 1)[1].split("fragment ", 1)[0]
+            assert "mergeStateStatus" in query.split("fragment StewardPrTerminalFields", 1)[1].split("}", 1)[0]
             payload = _graphql_page([last], total_count=21)
             window = _graphql_page(readback, has_next_page=True, end_cursor="tail", total_count=21)
             payload["data"]["repository"]["previousPrs0"] = window["data"]["repository"]["pullRequests"]
@@ -1216,6 +1216,94 @@ def test_steward_unknown_native_merge_state_preserves_prior_without_reinterpreti
 
     legacy = summarize_github_pr_signal(row)
     assert "merge_state_coverage_incomplete" not in legacy
+    legacy_result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": {"status": "ok", "items": [legacy]}, "previous_hash": previous_hash,
+    })
+    assert legacy_result["observation_incomplete"] is False
+
+
+@pytest.mark.parametrize(
+    ("field", "terminal", "excluded"),
+    [
+        pytest.param("title", "Retitled pull request", False, id="title"),
+        pytest.param("url", "https://github.com/org/renamed/pull/1", False, id="url"),
+        pytest.param("headRefName", "topic-renamed", False, id="head-ref"),
+        pytest.param("baseRefName", "release", False, id="base-ref"),
+        pytest.param("title", None, False, id="missing-title"),
+        pytest.param("headRefName", " \t", False, id="blank-head-ref"),
+        pytest.param("url", {"value": "link"}, False, id="malformed-url"),
+        pytest.param("baseRefName", None, True, id="missing-base-ref-excluded-draft"),
+    ],
+)
+def test_steward_uses_terminal_display_metadata_before_publishing(field: str, terminal: object, excluded: bool) -> None:
+    from copy import deepcopy
+
+    first = [_graphql_node(_sample_pr(number=number)) for number in range(1, 21)]
+    last = _graphql_node(_sample_pr(number=21))
+    readback = deepcopy(first)
+    if terminal is None:
+        del readback[0][field]
+    else:
+        readback[0][field] = terminal
+    readback[0]["isDraft"] = excluded
+    reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        tail = "cursor=tail" in cmd
+        reads.append(tail)
+        if tail:
+            query = next(part for part in cmd if part.startswith("query="))
+            assert "...StewardPrTerminalFields" in query.split("previousPrs0:", 1)[1].split("fragment ", 1)[0]
+            fragment = query.split("fragment StewardPrTerminalFields", 1)[1].split("\n}", 1)[0]
+            assert all(name in fragment.split() for name in ("title", "url", "headRefName", "baseRefName"))
+            payload = _graphql_page([last], total_count=21)
+            window = _graphql_page(readback, has_next_page=True, end_cursor="tail", total_count=21)
+            payload["data"]["repository"]["previousPrs0"] = window["data"]["repository"]["pullRequests"]
+        else:
+            payload = _graphql_page(first, has_next_page=True, end_cursor="tail", total_count=21)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    assert snapshot["status"] == "ok" and reads == [False, True]
+    first_item = snapshot["items"][0]
+    assert first_item[field] == terminal
+    incomplete = not isinstance(terminal, str) or not terminal.strip()
+    assert first_item.get("pr_metadata_coverage_incomplete", False) is incomplete
+    assert first_item["mergeStateStatus"] == "BLOCKED"
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+              "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                               "include_inbox": False, "pr_filter": {"exclude_drafts": True}}}
+    result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if incomplete and not excluded:
+        assert result["observation_incomplete"] is True
+        assert result["result_hash"] == "sha256:verified-prior" and result["material_change"] is False
+    else:
+        assert result["observation_incomplete"] is False
+        items = result["scoped_repository_items"]
+        assert [item["number"] for item in items] == list(range(2 if excluded else 1, 22))
+        if not excluded:
+            assert items[0][field] == terminal
+
+
+def test_steward_unreadable_fresh_native_metadata_holds_without_reinterpreting_legacy_signals() -> None:
+    row = _sample_pr()
+    del row["title"]
+
+    def runner(cmd, **_kwargs):
+        payload = _graphql_page([_graphql_node(row)])
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    native = observe_github_repository_prs("org/repo", runner=runner)
+    previous_hash = "sha256:verified-prior"
+    native_result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": native, "previous_hash": previous_hash,
+    })
+    assert native_result["observation_incomplete"] is True
+    assert native_result["result_hash"] == previous_hash and native_result["material_change"] is False
+
+    legacy = summarize_github_pr_signal(row)
+    assert "pr_metadata_coverage_incomplete" not in legacy
     legacy_result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
         "repository_snapshot": {"status": "ok", "items": [legacy]}, "previous_hash": previous_hash,
     })

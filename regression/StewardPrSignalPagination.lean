@@ -1772,6 +1772,40 @@ theorem terminal_merge_state_readback_adds_at_most_95_scalar_fields (previousPrs
     1 * previousPrs ≤ 95 := by
   omega
 
+/- Tokens stand for the four readable display strings from a verified PR row.
+   A missing or unreadable field makes the terminal record unavailable. -/
+structure TerminalPrMetadata where
+  title : Nat
+  url : Nat
+  headRefName : Nat
+  baseRefName : Nat
+
+def encodeTerminalPrMetadata (metadata : TerminalPrMetadata) : List Nat :=
+  [metadata.title, metadata.url, metadata.headRefName, metadata.baseRefName]
+
+def observeTerminalPrMetadata (prior : List Nat) (excluded : Bool)
+    (terminal : Option TerminalPrMetadata) : List Nat × Bool :=
+  observe prior (if excluded then some [] else terminal.map encodeTerminalPrMetadata)
+
+theorem published_pr_metadata_uses_all_four_terminal_fields (prior : List Nat) (terminal : TerminalPrMetadata) :
+    (observeTerminalPrMetadata prior false (some terminal)).1 =
+      [terminal.title, terminal.url, terminal.headRefName, terminal.baseRefName] := rfl
+
+theorem unreadable_terminal_pr_metadata_keeps_prior (prior : List Nat) :
+    observeTerminalPrMetadata prior false none = (prior, false) := rfl
+
+theorem independent_exclusion_can_publish_without_terminal_pr_metadata (prior : List Nat) :
+    observeTerminalPrMetadata prior true none = observe prior (some []) := rfl
+
+theorem defaulting_unreadable_terminal_metadata_can_publish_a_false_change :
+    observeTerminalPrMetadata [1, 2, 3, 4] false none = ([1, 2, 3, 4], false) ∧
+    observeTerminalPrMetadata [1, 2, 3, 4] false (some ⟨0, 0, 0, 0⟩) = ([0, 0, 0, 0], true) := by
+  decide
+
+theorem terminal_metadata_readbacks_bound_added_and_total_fields (previousPrs : Nat) (previousCap : previousPrs ≤ 95) :
+    4 * previousPrs ≤ 380 ∧ (4 + 4) * previousPrs ≤ 760 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1965,5 +1999,10 @@ theorem terminal_merge_state_readback_adds_at_most_95_scalar_fields (previousPrs
 #print axioms terminal_merge_state_replaces_earlier_marker_preserving_other_gates
 #print axioms treating_unknown_merge_state_as_clean_can_clear_a_published_block
 #print axioms terminal_merge_state_readback_adds_at_most_95_scalar_fields
+#print axioms published_pr_metadata_uses_all_four_terminal_fields
+#print axioms unreadable_terminal_pr_metadata_keeps_prior
+#print axioms independent_exclusion_can_publish_without_terminal_pr_metadata
+#print axioms defaulting_unreadable_terminal_metadata_can_publish_a_false_change
+#print axioms terminal_metadata_readbacks_bound_added_and_total_fields
 
 end StewardPrSignalPagination
