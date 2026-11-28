@@ -1151,6 +1151,53 @@ theorem older_review_request_bounds_rows_including_readbacks
     firstRows + olderRows + readbackRows ≤ 80 := by
   omega
 
+/- Readable check contexts are represented by an optional list of evidence
+   tokens. A matching commit's explicit null rollup or empty contexts decode
+   to some []. Missing evidence decodes to none. Direct adapter checks are
+   independent of the nested GraphQL commit. -/
+def selectHeadChecks (head : Option Nat) (direct : Option (List Nat))
+    (commit : Option Nat) (nested : Option (List Nat)) : Option (List Nat) :=
+  match direct with
+  | some checks => some checks
+  | none => if head.isSome && head == commit then nested else none
+
+def observeHeadChecks (prior : List Nat) (independentExclusion : Bool) (checks : Option (List Nat)) :
+    List Nat × Bool :=
+  observe prior (if independentExclusion then some [] else checks)
+
+theorem accepted_nested_checks_require_matching_head
+    (head : Nat) (commit : Option Nat) (nested : Option (List Nat)) (checks : List Nat)
+    (accepted : selectHeadChecks (some head) none commit nested = some checks) :
+    commit = some head := by
+  by_cases matchesHead : commit = some head
+  · exact matchesHead
+  · have wrongHead : some head ≠ commit := fun same => matchesHead same.symm
+    simp [selectHeadChecks, wrongHead] at accepted
+
+theorem foreign_or_unbound_checks_preserve_prior
+    (prior nested : List Nat) (head : Nat) (commit : Option Nat) (wrongHead : commit ≠ some head) :
+    observeHeadChecks prior false (selectHeadChecks (some head) none commit (some nested)) =
+      (prior, false) := by
+  have mismatch : some head ≠ commit := fun same => wrongHead same.symm
+  simp [observeHeadChecks, selectHeadChecks, mismatch, observe]
+
+theorem verified_empty_head_checks_and_missing_checks_have_distinct_results :
+    observeHeadChecks [1] false (selectHeadChecks (some 7) none (some 7) (some [])) = ([], true) ∧
+      observeHeadChecks [1] false (selectHeadChecks (some 7) none (some 7) none) = ([1], false) := by
+  decide
+
+theorem direct_pr_checks_remain_authoritative (head commit : Option Nat) (direct : List Nat)
+    (nested : Option (List Nat)) :
+    selectHeadChecks head (some direct) commit nested = some direct := rfl
+
+theorem independent_exclusion_survives_unavailable_checks (prior : List Nat) :
+    observeHeadChecks prior true none = observe prior (some []) := rfl
+
+theorem genuine_current_head_check_failure_can_publish :
+    observeHeadChecks [1] false (selectHeadChecks (some 7) none (some 7) (some [2])) =
+      ([2], true) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1274,5 +1321,11 @@ theorem older_review_request_bounds_rows_including_readbacks
 #print axioms changed_first_consumed_review_is_detected_after_a_matching_second_readback
 #print axioms missing_consumed_review_readback_cannot_complete
 #print axioms older_review_request_bounds_rows_including_readbacks
+#print axioms accepted_nested_checks_require_matching_head
+#print axioms foreign_or_unbound_checks_preserve_prior
+#print axioms verified_empty_head_checks_and_missing_checks_have_distinct_results
+#print axioms direct_pr_checks_remain_authoritative
+#print axioms independent_exclusion_survives_unavailable_checks
+#print axioms genuine_current_head_check_failure_can_publish
 
 end StewardPrSignalPagination

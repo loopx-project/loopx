@@ -1376,6 +1376,9 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
   const baseRepoItems = scopedRepoItems ?? repoItems;
+  if (baseRepoItems?.some((item) => item.checks_coverage_incomplete === true)) {
+    return incompleteObservation;
+  }
   const hashedRepoItems = baseRepoItems === null
     ? null
     : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));

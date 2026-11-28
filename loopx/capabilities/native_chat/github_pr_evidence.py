@@ -503,17 +503,20 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     else:
         effective_verdict = "NONE"
 
-    checks_summary = _summarize_checks(row.get("statusCheckRollup"))
+    checks_summary = (
+        None if row.get("checks_coverage_incomplete") is True else _summarize_checks(row.get("statusCheckRollup"))
+    )
     merge_state = str(row.get("mergeStateStatus") or "").strip().upper()
     bypassed_gates: list[str] = []
     if review_decision == "REVIEW_REQUIRED":
         bypassed_gates.append("REVIEW_REQUIRED")
     if merge_state == "BLOCKED":
         bypassed_gates.append("BLOCKED_MERGE_STATE")
-    if checks_summary["fail_count"] > 0:
-        bypassed_gates.append("FAILING_CHECKS")
-    if checks_summary["pending_count"] > 0:
-        bypassed_gates.append("PENDING_CHECKS")
+    if checks_summary is not None:
+        if checks_summary["fail_count"] > 0:
+            bypassed_gates.append("FAILING_CHECKS")
+        if checks_summary["pending_count"] > 0:
+            bypassed_gates.append("PENDING_CHECKS")
     if merge_state == "UNSTABLE":
         bypassed_gates.append("UNSTABLE_MERGE_STATE")
 
@@ -542,6 +545,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "author_replied_after_request_changes": author_replied_after_rc,
         "comments_coverage_incomplete": comments_coverage_incomplete,
         "checks_summary": checks_summary,
+        **({"checks_coverage_incomplete": True} if checks_summary is None else {}),
         "review_summary": {
             "effective_verdict": effective_verdict,
             "has_review_conflict": has_conflict,
@@ -774,6 +778,27 @@ def _read_graphql_review_page(connection: object) -> _ReviewPage | None:
     return _ReviewPage(rows, seen_ids, total_count, cursor)
 
 
+def _read_graphql_head_check_rollup(node: Mapping[str, Any], commit: object) -> list[Mapping[str, Any]] | None:
+    # Some adapters provide check evidence directly on the PR row.
+    direct = node.get("statusCheckRollup")
+    if isinstance(direct, list) and all(isinstance(check, Mapping) for check in direct):
+        return direct
+    head = node.get("headRefOid")
+    if not isinstance(head, str) or not head.strip() or not isinstance(commit, Mapping):
+        return None
+    oid = commit.get("oid")
+    if not isinstance(oid, str) or oid.strip().casefold() != head.strip().casefold():
+        return None
+    if "statusCheckRollup" not in commit:
+        return None
+    rollup = commit["statusCheckRollup"]
+    if rollup is None:
+        return []
+    contexts = rollup.get("contexts") if isinstance(rollup, Mapping) else None
+    nodes = contexts.get("nodes") if isinstance(contexts, Mapping) else None
+    return nodes if isinstance(nodes, list) and all(isinstance(check, Mapping) for check in nodes) else None
+
+
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     raw_reviews = node.get("reviews")
     review_page = _read_graphql_review_page(raw_reviews)
@@ -815,12 +840,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
             if head_pushed_at is None:
                 head_pushed_at = first_commit.get("pushedDate")
 
-    rollup = node.get("statusCheckRollup")
-    if rollup is None:
-        raw_rollup = first_commit.get("statusCheckRollup") if isinstance(first_commit, Mapping) else None
-        raw_contexts = raw_rollup.get("contexts") if isinstance(raw_rollup, Mapping) else None
-        context_nodes = raw_contexts.get("nodes") if isinstance(raw_contexts, Mapping) else None
-        rollup = [item for item in context_nodes if isinstance(item, Mapping)] if isinstance(context_nodes, list) else []
+    rollup = _read_graphql_head_check_rollup(node, first_commit)
 
     return {
         "number": node.get("number"),
@@ -843,6 +863,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         "reviews": reviews,
         "review_coverage_incomplete": not review_coverage_complete or not head_oid,
         "statusCheckRollup": rollup,
+        "checks_coverage_incomplete": rollup is None,
     }
 
 

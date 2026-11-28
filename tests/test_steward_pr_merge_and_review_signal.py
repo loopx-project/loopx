@@ -241,6 +241,7 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
         "nodes": [
             {
                 "commit": {
+                    "oid": copied["headRefOid"],
                     "statusCheckRollup": {
                         "contexts": {
                             "nodes": rollup_contexts,
@@ -251,6 +252,82 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
         ]
     }
     return copied
+
+
+@pytest.mark.parametrize(
+    ("case", "failure_count"),
+    [
+        ("foreign_failure", None),
+        ("missing_commit_oid", None),
+        ("missing_rollup", None),
+        ("missing_contexts", None),
+        ("unreadable_context", None),
+        ("matching_failure", 1),
+        ("trusted_top_level", 0),
+        ("confirmed_empty", 0),
+        ("nullable_rollup", 0),
+        ("draft_excluded", None),
+    ],
+)
+def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failure_count: int | None) -> None:
+    head = "a" * 40
+    failure = {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}
+    node = _graphql_node(_sample_pr(number=42, head_oid=head), contexts=[failure])
+    commit = node["commits"]["nodes"][0]["commit"]
+    if case in {"foreign_failure", "trusted_top_level", "draft_excluded"}:
+        commit["oid"] = "b" * 40
+    elif case == "matching_failure":
+        commit["oid"] = head.upper()
+    elif case == "missing_commit_oid":
+        del commit["oid"]
+    elif case == "missing_rollup":
+        del commit["statusCheckRollup"]
+    elif case == "missing_contexts":
+        commit["statusCheckRollup"] = {}
+    elif case == "unreadable_context":
+        commit["statusCheckRollup"]["contexts"]["nodes"] = [None, failure]
+    elif case == "confirmed_empty":
+        commit["statusCheckRollup"]["contexts"]["nodes"] = []
+    elif case == "nullable_rollup":
+        commit["statusCheckRollup"] = None
+
+    if case == "trusted_top_level":
+        node["statusCheckRollup"] = [{**failure, "conclusion": "SUCCESS"}]
+    if case == "draft_excluded":
+        node["isDraft"] = True
+
+    def runner(cmd, **_kwargs):
+        assert not any(arg.startswith("before=") for arg in cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([node])), stderr="")
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    assert snapshot["status"] == "ok"
+    scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+             "include_inbox": False, "pr_filter": {"exclude_drafts": True}}
+    for active_scope in (None, scope):
+        observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            "repository_snapshot": snapshot, "signal_scope": active_scope, "previous_hash": "sha256:prior",
+        })
+        if case == "draft_excluded" and active_scope is not None:
+            assert observation["observation_incomplete"] is False
+            assert observation["scoped_repository_items"] == []
+        elif failure_count is None:
+            assert observation["observation_incomplete"] is True
+            assert observation["result_hash"] == "sha256:prior"
+            assert observation["material_change"] is False
+        else:
+            assert observation["observation_incomplete"] is False
+            assert observation["material_change"] is True
+
+    item = snapshot["items"][0]
+    if failure_count is None:
+        assert item["checks_coverage_incomplete"] is True
+        assert item["checks_summary"] is None
+        assert "FAILING_CHECKS" not in item["bypassed_gates"]
+    else:
+        assert item.get("checks_coverage_incomplete") is None
+        assert item["checks_summary"]["fail_count"] == failure_count
+        assert ("FAILING_CHECKS" in item["bypassed_gates"]) is (failure_count > 0)
 
 
 def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> None:
