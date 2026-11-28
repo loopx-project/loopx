@@ -187,7 +187,9 @@ def _rpc_post(
         with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             data: object = json.loads(raw) if raw.strip() else {}
-            return as_rpc_response(data if _is_dict(data) else {})
+            if not _is_dict(data):
+                raise ValueError("Antigravity RPC response must be a JSON object")
+            return as_rpc_response(data)
     except urllib.error.HTTPError as exc:
         raise CodexChatAgentError(
             f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",

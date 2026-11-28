@@ -109,6 +109,13 @@ def language_server(monkeypatch):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             method = self.path.rsplit("/", 1)[-1]
             state["calls"].append((method, body))
+            if "raw_rpc_response" in state:
+                status, raw_body = state["raw_rpc_response"]
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(raw_body)))
+                self.end_headers()
+                self.wfile.write(raw_body)
+                return
             failures = state.get("read_failures", {})
             if state["active"] and failures.get(method, 0):
                 failures[method] -= 1
@@ -960,6 +967,38 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     language_server["redirect"] = language_server["url"] + "/redirect-target"
     assert discover_antigravity_language_server() is None
     assert len(language_server["calls"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (200, b'{"fixture":true}', {"fixture": True}),
+        (200, b"{}", {}),
+        (200, b"", {}),
+        (200, b" \n\t", {}),
+        (200, b"[]", "antigravity_transport_error"),
+        (200, b"null", "antigravity_transport_error"),
+        (200, b"false", "antigravity_transport_error"),
+        (200, b"42", "antigravity_transport_error"),
+        (200, b'"fixture"', "antigravity_transport_error"),
+        (200, b"{", "antigravity_transport_error"),
+        (503, b"[]", "antigravity_rpc_error"),
+    ],
+    ids=["object", "empty-object", "empty-body", "whitespace", "array", "null", "boolean",
+         "number", "string", "malformed-json", "http-error"],
+)
+def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
+    from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
+    from loopx.chat_agent import CodexChatAgentError
+
+    language_server["raw_rpc_response"] = (status, body)
+    if isinstance(expected, str):
+        with pytest.raises(CodexChatAgentError) as raised:
+            _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {})
+        assert raised.value.error_code == expected
+    else:
+        assert _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {}) == expected
+    assert language_server["calls"] == [("Fixture", {})]
 
 
 def test_loopback_rpc_works_without_tls_initialization(language_server):

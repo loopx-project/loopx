@@ -2877,6 +2877,35 @@ theorem antigravity_rpc_rejects_nonloopback_or_https (tlsAvailable : Bool) :
 theorem antigravity_rpc_does_not_follow_redirects (tlsAvailable : Bool) :
     permitsAntigravityLoopbackRpc true true true tlsAvailable = false := rfl
 
+inductive AntigravityRpcBody where
+  | blank | object | nonobject | malformed
+
+inductive AntigravityRpcOutcome where
+  | accepted | invalidResponse | httpFailure
+
+/- HTTP errors keep their typed failure. A successful transport reply can
+   carry its JSON object or the existing blank-body acknowledgement. -/
+def classifyAntigravityRpcReply (httpOk : Bool) (body : AntigravityRpcBody) : AntigravityRpcOutcome :=
+  if !httpOk then .httpFailure else
+    match body with
+    | .blank | .object => .accepted
+    | .nonobject | .malformed => .invalidResponse
+
+theorem antigravity_nonobject_json_cannot_acknowledge_a_request :
+    classifyAntigravityRpcReply true .nonobject = .invalidResponse := rfl
+
+theorem antigravity_blank_rpc_acknowledgement_remains_valid :
+    classifyAntigravityRpcReply true .blank = .accepted := rfl
+
+theorem antigravity_json_object_rpc_reply_remains_valid :
+    classifyAntigravityRpcReply true .object = .accepted := rfl
+
+theorem antigravity_malformed_json_remains_a_transport_failure :
+    classifyAntigravityRpcReply true .malformed = .invalidResponse := rfl
+
+theorem antigravity_http_error_precedes_response_shape (body : AntigravityRpcBody) :
+    classifyAntigravityRpcReply false body = .httpFailure := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3210,5 +3239,10 @@ theorem antigravity_rpc_does_not_follow_redirects (tlsAvailable : Bool) :
 #print axioms antigravity_loopback_http_does_not_require_tls_initialization
 #print axioms antigravity_rpc_rejects_nonloopback_or_https
 #print axioms antigravity_rpc_does_not_follow_redirects
+#print axioms antigravity_nonobject_json_cannot_acknowledge_a_request
+#print axioms antigravity_blank_rpc_acknowledgement_remains_valid
+#print axioms antigravity_json_object_rpc_reply_remains_valid
+#print axioms antigravity_malformed_json_remains_a_transport_failure
+#print axioms antigravity_http_error_precedes_response_shape
 
 end StewardPrSignalPagination
