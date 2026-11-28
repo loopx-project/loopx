@@ -14,7 +14,10 @@ from collections.abc import Callable, Iterator, Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations_contracts import ExternalRequestDict
 
 from ...capabilities.native_chat.file_discovery import FileChatDiscovery
 from ...file_lock import try_exclusive_file_lock
@@ -50,7 +53,7 @@ def _private_source_input(message: Mapping[str, Any]) -> tuple[Any, ...]:
 
 
 def recovery_source_matches(record: Mapping[str, Any], source: Mapping[str, Any],
-                            native: Mapping[str, Any]) -> bool:
+                            native: Mapping[str, Any] | ExternalRequestDict) -> bool:
     """Match a fresh provider observation against the originally admitted input."""
     if source.get("deleted") is True:
         return False

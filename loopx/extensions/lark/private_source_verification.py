@@ -22,6 +22,7 @@ from .private_web_projection import _same_fields
 if TYPE_CHECKING:
     from ...capabilities.native_chat.conversation_bindings import ChatConversationBindings
     from ...capabilities.native_chat.external_conversations import ChatExternalConversations
+    from ...capabilities.native_chat.external_conversations_contracts import ExternalRequestDict
 
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
         def record_event_timing(self, profile: str, message_id: str, stage: str) -> None: ...
         def _lark_payload(self, runner: CommandRunner, cli_bin: str, profile: str, tail: list[str]) -> PayloadView | None: ...
         def resumable_answer_image_session(
-            self, core: ChatExternalConversations, request: Payload, turn: Payload | None,
+            self, core: ChatExternalConversations, request: PayloadView | ExternalRequestDict, turn: Payload | None,
         ) -> Payload | None: ...
 
 
@@ -53,8 +54,8 @@ def _mapping(value: object) -> PayloadView:
     return value if isinstance(value, Mapping) else {}
 
 
-def _req_dict(mapping: PayloadView, key: str) -> Payload:
-    value = mapping[key]
+def _req_dict(mapping: PayloadView | ExternalRequestDict, key: str) -> Payload:
+    value = mapping[key] if isinstance(mapping, Mapping) else mapping.get(key)
     if not isinstance(value, dict):
         raise ValueError(f"{key} must be an object")
     return value
@@ -69,7 +70,7 @@ def _ensure_dict(mapping: Payload, key: str) -> Payload:
     return created
 
 
-def _str_field(mapping: PayloadView, key: str) -> str:
+def _str_field(mapping: PayloadView | ExternalRequestDict, key: str) -> str:
     value = mapping.get(key)
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string")

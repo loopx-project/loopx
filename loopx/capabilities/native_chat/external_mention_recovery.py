@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING, cast
 
 from ...chat.ingress import resolve_external_admission_source
 from ...chat_store import TERMINAL_TURN_STATES, _atomic_write_json
 from ...file_lock import exclusive_file_lock
+from .external_conversations_contracts import ExternalRequestDict, Payload, _dict_or_empty, _opt_dict, as_payload
 from .file_discovery import external_source_route_path
 
 if TYPE_CHECKING:
     from .external_conversations import ChatExternalConversations
 
 
-def requeue_rejected_mention(core: ChatExternalConversations, request_ref: str, *, original_turn_id: str,
-                             source_preflight: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
+def requeue_rejected_mention(
+    core: ChatExternalConversations,
+    request_ref: str,
+    *,
+    original_turn_id: str,
+    source_preflight: Callable[[Payload], None],
+) -> ExternalRequestDict:
     """Admit an explicitly selected, independently verified private source once."""
     from ...chat import require_matching_replay
     from ...chat_manager_context import manager_authorization_scope_is_current
@@ -28,15 +34,15 @@ def requeue_rejected_mention(core: ChatExternalConversations, request_ref: str, 
     error = "live_steering_session_not_attached"
     with exclusive_file_lock(path, operation="admit_external_chat_request"):
         row = core.read_request(request_ref)
-        replay = row.get("rejected_mention_replay")
+        replay = _opt_dict(row.get("rejected_mention_replay"))
         if replay is not None:
             if replay["target_turn_id"] != original_turn_id:
                 raise ValueError("the original mention replay target changed")
             if row["status"] == "accepted":
                 return row  # Repair transport correlation after a committed admission.
         sid = row["session_id"]
-        capture = row.get("mention_capture") or {}
-        if (row["status"] != "command_completed" or row.get("delivery_verified") is not True
+        capture = _dict_or_empty(row.get("mention_capture"))
+        if (not isinstance(sid, str) or not sid or row["status"] != "command_completed" or row.get("delivery_verified") is not True
                 or row.get("origin") != "lark" or row.get("command") or row.get("agent_target")
                 or row.get("attachments") or row.get("native_mention") is not True
                 or row["source"].get("private_human_message") is not True
@@ -68,10 +74,10 @@ def requeue_rejected_mention(core: ChatExternalConversations, request_ref: str, 
             else:
                 if (not session or session.get("status") == "closed" or not session.get("steward_context")
                         or not prior or prior["status"] not in TERMINAL_TURN_STATES
-                        or core._source_stop_observed(row, prior, store.events_after(sid, original_turn_id, None))):
+                        or core._source_stop_observed(row, prior, [dict(item) for item in store.events_after(sid, original_turn_id, None)])):
                     raise ValueError("the original mention replay is not eligible")
                 selected = resolve_external_admission_source(
-                    core.bindings, row["binding_id"], row["source"], source_preflight, session=session,
+                    core.bindings, row["binding_id"], as_payload(row["source"]), source_preflight, session=session,
                 )
                 if (selected["owner_manager_audience"] is not True
                         or selected["channel_id"] != capture.get("channel_id")
@@ -80,11 +86,15 @@ def requeue_rejected_mention(core: ChatExternalConversations, request_ref: str, 
                             runtime_root=core.controller.coordination_runtime_root)):
                     raise ValueError("the original steward source or authority changed")
                 if replay is None:
-                    row["rejected_mention_replay"] = {"target_turn_id": original_turn_id, "original_response": row["response"]}
-                    _atomic_write_json(path, row)
-                core._record_steward_ingress(row, selected, session, client)
+                    original_response = row.get("response")
+                    row["rejected_mention_replay"] = {
+                        "target_turn_id": original_turn_id,
+                        "original_response": original_response if isinstance(original_response, str) else None,
+                    }
+                    _atomic_write_json(path, as_payload(row))
+                core._record_steward_ingress(as_payload(row), cast(Payload, selected), cast(Payload, session), client)
                 turn, _ = core.controller.enqueue_turn(session_id=sid, client_turn_id=client,
                     message=row["message"], attachments=None, work_dir=Path("."), objective="", origin="lark")
             row.update(status="accepted", turn_id=turn["turn_id"], response=None, delivery_verified=False)
-            _atomic_write_json(path, row)
+            _atomic_write_json(path, as_payload(row))
             return row

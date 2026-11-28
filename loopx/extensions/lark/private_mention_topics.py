@@ -15,6 +15,7 @@ from ...file_lock import exclusive_file_lock
 from .private_web_projection import _same_fields
 
 if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations_contracts import ExternalRequestDict
     from .private_conversations import LarkPrivateConversations
 
 _REPLAY_FOLDER = "rejected-mention-replays"
@@ -59,7 +60,7 @@ def steer_in_topic(transport: LarkPrivateConversations, path: Path, record: dict
     return False
 
 
-def replay_presentation(admitted: Mapping[str, Any]) -> dict[str, str] | None:
+def replay_presentation(admitted: Mapping[str, Any] | ExternalRequestDict) -> dict[str, str] | None:
     if admitted["status"] == "accepted" and admitted.get("rejected_mention_replay"):
         return {"presentation_key": "rejected-mention.1"}
     return None

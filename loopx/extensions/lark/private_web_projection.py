@@ -24,6 +24,11 @@ from .manager_context import manager_failure_reply
 from .outbound import present_lark_conversation_text as _presentation_text
 
 if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations_contracts import (
+        ExternalBacklogRequestDict,
+        ExternalRequestDict,
+        ExternalSourceDict,
+    )
     from .private_conversations import LarkPrivateConversations
 
 _UNSUPPORTED_MEDIA_LABELS = {"audio": "音频", "file": "文件", "media": "视频"}
@@ -35,7 +40,11 @@ def _pc() -> Any:
     return private_conversations
 
 
-def _same_fields(left: Mapping[str, Any], right: Mapping[str, Any], *keys: str) -> bool:
+def _same_fields(
+    left: Mapping[str, Any] | ExternalRequestDict | ExternalBacklogRequestDict | ExternalSourceDict,
+    right: Mapping[str, Any] | ExternalRequestDict | ExternalBacklogRequestDict | ExternalSourceDict,
+    *keys: str,
+) -> bool:
     return all(left.get(key) == right.get(key) for key in keys)
 
 

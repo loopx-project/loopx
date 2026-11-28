@@ -70,6 +70,10 @@ from .private_web_projection import (
 from .return_files import uploaded_chat_images, verify_chat_images
 
 if TYPE_CHECKING:
+    from ...capabilities.native_chat.external_conversations_contracts import (
+        ExternalBacklogRequestDict,
+        ExternalRequestDict,
+    )
     from .team_plan_confirmation import TeamPlanReviewCallbackStream
 
     class _ControllerProtocol(Protocol):
@@ -194,7 +198,7 @@ class LarkPrivateConversations(
         health: dict[str, dict[str, int]] = {}
         observed_fps: dict[Path, tuple[int, ...]] = {}
         quota_pending = self.core.quota_backlog_observer(use_cache=True, observed_fps=observed_fps)
-        completed: list[tuple[Payload, Payload]] = []
+        completed: list[tuple[Payload, PayloadView | ExternalBacklogRequestDict]] = []
 
         def count(row: PayloadView) -> None:
             entry = health[_str_field(row, "binding_id")]
@@ -206,7 +210,9 @@ class LarkPrivateConversations(
             )
 
         def observe_completed() -> None:
-            flags = cast("Callable[[list[Payload]], list[bool]]", quota_pending)([native for _, native in completed])
+            flags = cast(
+                "Callable[[list[PayloadView | ExternalBacklogRequestDict]], list[bool]]", quota_pending
+            )([native for _, native in completed])
             for (row, _), pending in zip(completed, flags, strict=True):
                 if pending:
                     count(row)
@@ -343,7 +349,7 @@ class LarkPrivateConversations(
         return {"status": "command_rejected"}
 
     @staticmethod
-    def _record_admission(path: Path, record: Payload, admitted: PayloadView) -> dict[str, str]:
+    def _record_admission(path: Path, record: Payload, admitted: PayloadView | ExternalRequestDict) -> dict[str, str]:
         record.update(
             status="captured" if admitted["status"] == "prepared" else admitted["status"],
             session_id=admitted["session_id"], turn_id=admitted["turn_id"],
@@ -351,8 +357,8 @@ class LarkPrivateConversations(
         )
         if recovery := admitted.get("context_recovery") or private_mention_topics.replay_presentation(admitted):
             record["context_recovery"] = recovery
-        if admitted.get("mention_delivery"):
-            record["mention_delivery"] = admitted["mention_delivery"]
+        if mention_delivery := admitted.get("mention_delivery"):
+            record["mention_delivery"] = mention_delivery
         _atomic_write_json(path, record)
         if admitted["status"] == "prepared" and (
                 admitted.get("response_code") == STEWARD_BINDING_ADOPTION_PENDING
@@ -1109,7 +1115,7 @@ class LarkPrivateConversations(
             observation = _mapping(selected["observation"])
             self._feedback(path, record, inbox=lambda: self._inbox(record, observation=observation))
 
-    def _reconcile_native_result(self, path: Path, native: PayloadView) -> int:
+    def _reconcile_native_result(self, path: Path, native: PayloadView | ExternalRequestDict) -> int:
         with exclusive_file_lock(path, operation="deliver_private_chat_request"):
             record = _read_json(path)
             if not _same_fields(record, native, "request_ref", "binding_id", "source", "session_id", "turn_id"):
@@ -1118,7 +1124,7 @@ class LarkPrivateConversations(
             text = self.core.native_result_reply(request_ref)
             if text is None:
                 return 0
-            recovered = _mapping(native["native_result_recovery"])
+            recovered = _mapping(native.get("native_result_recovery"))
             recovered_message_id = _str_field(recovered, "message_id")
 
             def authorized() -> bool:
@@ -1168,13 +1174,13 @@ class LarkPrivateConversations(
             else:
                 self._record_context_recovery_noop_backoff(path, row)
             return row, delivered_native
-        if recovered.get("context_recovery") and not recovered.get("delivery_verified") and recovered.get("turn_id") != row["turn_id"]:
+        if (recovered_context := recovered.get("context_recovery")) and not recovered.get("delivery_verified") and recovered.get("turn_id") != row["turn_id"]:
             self._noop_backoff_cache().pop(path, None)
             with exclusive_file_lock(path, operation="deliver_private_chat_request"):
                 row = _read_json(path)
                 if not _same_fields(row, recovered, "request_ref", "binding_id", "source", "session_id"):
                     raise ValueError("original recovery source changed")
-                row.update(status="accepted", turn_id=recovered["turn_id"], context_recovery=recovered["context_recovery"])
+                row.update(status="accepted", turn_id=recovered["turn_id"], context_recovery=recovered_context)
                 _atomic_write_json(path, row)
             return row, None
         if receipt_unknown:
@@ -1235,7 +1241,8 @@ class LarkPrivateConversations(
             self._recover_core(row)
 
     def _resolve_accepted_response(
-        self, path: Path, record: Payload, selected: PayloadView, native: PayloadView, inbox: Callable[[], Path],
+        self, path: Path, record: Payload, selected: PayloadView, native: PayloadView | ExternalRequestDict,
+        inbox: Callable[[], Path],
     ) -> tuple[str, bool, Sequence[str | PayloadView | None] | None] | None:
         store = self.core.controller.store
         sid, tid = _str_field(record, "session_id"), _str_field(record, "turn_id")
@@ -1291,7 +1298,7 @@ class LarkPrivateConversations(
         return response, False, None
 
     def _deliver_commission_followup(
-        self, path: Path, record: Payload, native: PayloadView, inbox: Callable[[], Path],
+        self, path: Path, record: Payload, native: PayloadView | ExternalRequestDict, inbox: Callable[[], Path],
     ) -> bool:
         resources = _mapping(record.get("commission_resources"))
         if not (resources.get("session_id") and resources.get("turn_id")):
@@ -1356,7 +1363,7 @@ class LarkPrivateConversations(
             config: Path | None = None
             selected: Payload | None = None
             control_receipt_first = False
-            native: PayloadView = {}
+            native: PayloadView | ExternalRequestDict = {}
 
             def inbox() -> Path:
                 nonlocal config
