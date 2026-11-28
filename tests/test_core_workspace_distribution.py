@@ -61,6 +61,10 @@ def test_workspace_wheel_owns_the_complete_bundle_without_core_files(wheels):
         assert "loopx/dashboard_launcher.py" in workspace_zip.namelist()
         assert {
             "loopx/capabilities/native_chat/steward_turn.py",
+            "loopx/capabilities/native_chat/steward_turn_common.py",
+            "loopx/capabilities/native_chat/steward_turn_context.py",
+            "loopx/capabilities/native_chat/steward_turn_execution.py",
+            "loopx/capabilities/native_chat/steward_turn_recovery.py",
             "loopx/capabilities/native_chat/steward_managed_mode.py",
             "loopx/capabilities/native_chat/steward_monitor.py",
             "loopx/capabilities/native_chat/steward_reports.py",
