@@ -1678,6 +1678,110 @@ def test_supersede_event_admits_done_todo_only_for_exact_turn(
             )
 
 
+def test_completed_turn_writeback_binds_owner_retired_lease_across_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Todo completed under a reclaimed later lease generation still settles its original Turn.
+
+    The completion receipt already proves a lease-fenced terminal transition
+    for the exact Turn, and no further generation can ever be created for a
+    done Todo, so the owner's retired head lease is unambiguous writeback
+    authority even when the admission generation is fenced.
+    """
+    retired = {
+        **_lease(status="released"),
+        "idempotency_key": "claim-replacement",
+        "version": 2,
+        "lease_epoch": 2,
+    }
+    make_settlement, run_guard = _writeback_guard_fixture(
+        tmp_path, monkeypatch, todo_status="done", leases=[retired],
+    )
+    prepared = prepared_lease_receipt_fields(
+        {"idempotency_key": "claim-original", "expected_version": 1},
+        lease_epoch=1,
+    )
+    completion = {
+        "event_kind": "todo_complete",
+        "todo_id": TODO,
+        "agent_id": AGENT,
+        "run_id": "turn-1",
+    }
+    retired_proof = {"idempotency_key": "claim-replacement", "expected_version": 2}
+    settlement = make_settlement(
+        prepared_lease=prepared,
+        prepared_lease_required=True,
+        completion_event=completion,
+    )
+    # The settlement-plan default path passes no proof; the completing
+    # generation's retired lease binds the original writeback.
+    assert run_guard(requested_proof=None, settlement=settlement)
+    # The exact completing proof also binds.
+    assert run_guard(requested_proof=retired_proof, settlement=settlement)
+
+
+def test_completed_turn_writeback_rejects_foreign_or_fabricated_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross-generation retired-lease admission never covers foreign or fabricated receipts."""
+    retired = {
+        **_lease(status="released"),
+        "idempotency_key": "claim-replacement",
+        "version": 2,
+        "lease_epoch": 2,
+    }
+    make_settlement, run_guard = _writeback_guard_fixture(
+        tmp_path, monkeypatch, todo_status="done", leases=[retired],
+    )
+    prepared = prepared_lease_receipt_fields(
+        {"idempotency_key": "claim-original", "expected_version": 1},
+        lease_epoch=1,
+    )
+    completion = {
+        "event_kind": "todo_complete",
+        "todo_id": TODO,
+        "agent_id": AGENT,
+        "run_id": "turn-1",
+    }
+    retired_proof = {"idempotency_key": "claim-replacement", "expected_version": 2}
+    for bad_completion, bad_proof in (
+        # No completion receipt at all: the generation gap is unproven.
+        (None, None),
+        # A completion committed by a different Turn never closes this one.
+        ({**completion, "run_id": "turn-foreign"}, None),
+        # A completion committed by a different agent never closes this one.
+        ({**completion, "agent_id": "agent-b"}, None),
+        # A completion for a different Todo never closes this one.
+        ({**completion, "todo_id": "todo_other"}, None),
+        # The completing proof is exact, but the completion is foreign.
+        ({**completion, "run_id": "turn-foreign"}, retired_proof),
+    ):
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(
+                requested_proof=bad_proof,
+                settlement=make_settlement(
+                    prepared_lease=prepared,
+                    prepared_lease_required=True,
+                    completion_event=bad_completion,
+                ),
+            )
+    # A proof that is not the completing generation's exact proof is rejected.
+    for fabricated_proof in (
+        {"idempotency_key": "claim-replacement", "expected_version": 1},
+        {"idempotency_key": "claim-replacement", "expected_version": 99},
+        {"idempotency_key": "claim-original", "expected_version": 1},
+    ):
+        with pytest.raises(RefreshTaskLeaseUnavailable):
+            run_guard(
+                requested_proof=fabricated_proof,
+                settlement=make_settlement(
+                    prepared_lease=prepared,
+                    prepared_lease_required=True,
+                    completion_event=completion,
+                ),
+            )
+
+
 def test_todo_bound_autonomous_replan_admits_without_prepared_lease_only_on_replan_guard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
