@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -107,7 +108,13 @@ def open_turn(monkeypatch):
 
 @pytest.mark.parametrize("scenario", ["codex_app_heartbeat", "codex_app_ssh_goal"])
 def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch, open_turn, scenario: str) -> None:
-    request = _bound_request(tmp_path)
+    packet = _packet(tmp_path)
+    packet["agent_identity"] = {"runtime_available_capabilities": [
+        "filesystem_write", "external_evidence_poll", "production_access", "credentials",
+    ]}
+    request = compact_execution_preparation_request(packet, claim_source_sha256=ORIGINAL_DIGEST)
+    assert request is not None
+    request["source_sha256"] = OBSERVED_DIGEST
     capture, native = tmp_path / "ready", tmp_path / "native"
     calls: list[list[str]] = []
     timeouts = []
@@ -161,6 +168,17 @@ def test_executor_claims_then_proves_same_turn_ready(tmp_path: Path, monkeypatch
         assert call[call.index("--runtime-root") + 1] == str((tmp_path / "loopx-runtime-a").resolve())
     assert calls[0][-len(request["claim_args"]):] == request["claim_args"]
     assert calls[0][-2:] == ["--claim-operation-id", CLAIM]
+
+    guidance = codex_execution_preparation.codex_execution_preparation_readback_context(
+        request | {"readback_only": True}, scenario=scenario, context_directory=str(native),
+        progressive_enabled=True,
+    )
+    assert guidance is not None
+    resume = json.loads(guidance.rsplit("Receipt: ", 1)[1])
+    for guard in (calls[1], shlex.split(resume["readiness_command"])):
+        assert [
+            guard[index + 1] for index, item in enumerate(guard) if item == "--available-capability"
+        ] == ["filesystem_write", "external_evidence_poll"]
     assert calls[1][-12:] == [
         "--context-delivery", "on", "--codex-context-dir", str(native), "--defer-context-presentation",
         "--todo-id", TODO, "--turn-instance-id", "turn-example",

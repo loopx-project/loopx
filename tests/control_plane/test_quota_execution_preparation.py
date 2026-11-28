@@ -385,10 +385,12 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     event = {"session_id": "preparation-session", "cwd": str(tmp_path),
         "hook_event_name": "SessionStart", "source": "startup"}
     assert codex_context.codex_context_hook(str(native), event) == {}
-    original = {**_todo(), "text": "Deliver the complete synthetic request: 保留原文" + "。不可截断的验收条件" * 100,
+    original = {**_todo(), "required_capabilities": ["filesystem_write"],
+        "text": "Deliver the complete synthetic request: 保留原文" + "。不可截断的验收条件" * 100,
         "note": "Preserve the original stop and once-only settlement."}
     capture = tmp_path / "before-claim"
     before = _run(tmp_path, monkeypatch, provider, [], "--runtime-profile", scenario,
+        "--available-capability", "filesystem_write", "--available-capability", "shell",
         "--turn-instance-id", "preparation-turn", "--todo-id", TODO,
         "--defer-context-presentation", "--codex-context-dir", str(native), "--decision-output-dir", str(capture),
         todos=[original], context_delivery="on",
@@ -427,7 +429,9 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     if location == "root":
         assert list(root.iterdir()) == [native]
     read = shlex.split(ready["recovery"]["command"])
+    runtime_capabilities = "/agent_identity/runtime_available_capabilities"
     pointers = ["/execution_preparation", "/selected_todo", "/heartbeat_receipt", "/interaction_contract/cli_channel",
+        runtime_capabilities,
         "/interaction_contract/agent_channel/work_context", "/interaction_contract/agent_channel/required_reads"]
     for pointer in pointers:
         read.extend(("--select", pointer))
@@ -437,6 +441,7 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     assert page["eof"] is True and page["offset"] == 0
     selected = {item["pointer"]: item["value"] for item in json.loads(page["content"])["selections"]}
     assert selected["/execution_preparation"]["state"] == "ready"
+    assert selected[runtime_capabilities] == before["agent_identity"]["runtime_available_capabilities"]
     assert selected["/heartbeat_receipt"]["turn_instance_id"] == "preparation-turn"
     plan = selected["/interaction_contract/cli_channel"]["settlement_plan"]
     assert plan["identity"]["todo_id"] == TODO and plan["identity"]["turn_instance_id"] == "preparation-turn"
@@ -447,6 +452,8 @@ def test_native_hook_returns_readable_ready_source_and_original_claim(
     writeback, spend = [step for step in plan["ordered_steps"]
                         if step["kind"] in {"durable_writeback", "quota_spend"}]
     assert "--settle-turn --settlement-receipt" in writeback["command_template"]
+    for capability in ("filesystem_write", "shell"):
+        assert f"--available-capability {capability}" in writeback["semantic_closeout_command_template"]
     assert spend["owner"] == "runtime" and "command_template" not in spend
     sources = selected["/interaction_contract/agent_channel/work_context"]["sources"]
     task = next(item["content"]["todo"] for item in sources if item["source"] == "selected_todo")
