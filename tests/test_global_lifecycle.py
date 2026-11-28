@@ -63,6 +63,7 @@ def status_payload(*goals: dict[str, Any], ok: bool = True) -> dict[str, Any]:
         "global_registry": {
             "available": True,
             "global_goal_count": len(goals),
+            "global_goal_ids": [str(goal["id"]) for goal in goals if goal.get("id")],
             "current_registry_excluded_goal_count": 0,
             "current_registry_excluded_goal_ids": [],
         },
@@ -552,6 +553,13 @@ def test_global_membership_sets_the_denominator_and_names_exclusions(
     status["global_registry"] = {
         **status["global_registry"],
         "global_goal_count": 5,
+        "global_goal_ids": [
+            "goal-a",
+            "goal-b",
+            "goal-c",
+            "goal-x",
+            "goal-y",
+        ],
         "current_registry_excluded_goal_count": 2,
         "current_registry_excluded_goal_ids": ["goal-x", "goal-y"],
     }
@@ -571,6 +579,76 @@ def test_global_membership_sets_the_denominator_and_names_exclusions(
         "refs": ["goal-x", "goal-y"],
     } in coverage["omitted"]
     assert payload["projection_envelope"]["complete"] is False
+
+
+def test_global_membership_binds_rows_and_rollups_to_registered_goals(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    status = status_payload(
+        {"id": "goal-a", "artifact_lifecycle": projection("goal-a")},
+        {"id": "goal-b", "artifact_lifecycle": projection("goal-b")},
+        {
+            "id": "goal-retired",
+            "artifact_lifecycle": projection("goal-retired", phase="closed"),
+        },
+    )
+    # Three records still carry history, but the global registry now holds two:
+    # the retired Goal already left the estate the operator asked about.
+    status["global_registry"] = {
+        **status["global_registry"],
+        "global_goal_count": 2,
+        "global_goal_ids": ["goal-a", "goal-b"],
+    }
+    patch_status(monkeypatch, status)
+
+    payload = build(tmp_path)
+
+    goal_ids = [row["goal_id"] for row in payload["goals"]]
+    assert goal_ids == ["goal-a", "goal-b"]
+    rolled_up = {
+        row["lifecycle_phase"]: row["goal_ids"] for row in payload["phases"]
+    }
+    assert set(rolled_up) == {"qualifying"}
+    assert rolled_up["qualifying"] == ["goal-a", "goal-b"]
+    assert payload["summary"]["goals_inspected"] == 2
+    assert payload["summary"]["phase_counts"] == {"qualifying": 2}
+    coverage = payload["projection_envelope"]["coverage"]
+    assert coverage["expected_count"] == 2
+    assert coverage["included_count"] == 2
+    assert coverage["shown_count"] == 2
+    assert coverage["omitted"] == []
+    assert coverage["complete"] is True
+    assert payload["complete"] is True
+
+
+def test_a_project_registry_with_stale_membership_does_not_reenlist_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    status = status_payload(
+        {"id": "goal-a", "artifact_lifecycle": projection("goal-a")},
+        {"id": "goal-b", "artifact_lifecycle": projection("goal-b")},
+        {
+            "id": "goal-retired",
+            "artifact_lifecycle": projection("goal-retired", phase="qualifying"),
+        },
+    )
+    # A project registry can still list the retired record while global
+    # membership no longer does; membership, not the local file, decides scope.
+    status["global_registry"] = {
+        **status["global_registry"],
+        "global_goal_count": 2,
+        "global_goal_ids": ["goal-a", "goal-b"],
+        "current_registry_is_global": False,
+    }
+    patch_status(monkeypatch, status)
+
+    board = build_global_goal_lifecycle_board(
+        status, member_goal_ids={"goal-a", "goal-b"}
+    )
+
+    assert [row["goal_id"] for row in board["goals"]] == ["goal-a", "goal-b"]
+    assert board["summary"]["goals_inspected"] == 2
+    assert board["complete"] is True
 
 
 def test_unknown_global_membership_never_certifies_the_board(
@@ -607,7 +685,11 @@ def test_a_bounded_status_read_reports_the_goals_it_never_scanned(
     status = status_payload(
         {"id": "goal-a", "artifact_lifecycle": projection("goal-a")}
     )
-    status["global_registry"] = {**status["global_registry"], "global_goal_count": 4}
+    status["global_registry"] = {
+        **status["global_registry"],
+        "global_goal_count": 4,
+        "global_goal_ids": ["goal-a", "goal-b", "goal-c", "goal-d"],
+    }
     patch_status(monkeypatch, status)
 
     payload = build(tmp_path)

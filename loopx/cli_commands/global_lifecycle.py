@@ -65,6 +65,22 @@ def _request(
     }
 
 
+def _global_member_ids(status_payload: dict[str, Any]) -> set[str] | None:
+    """The complete current global membership, when the status owner published it.
+
+    A `None` answer means the payload cannot bind rows to membership, and the
+    board must stay uncertified rather than describe an unknown estate as whole.
+    """
+
+    global_registry = as_dict(status_payload.get("global_registry"))
+    if global_registry.get("available") is not True:
+        return None
+    ids = global_registry.get("global_goal_ids")
+    if not isinstance(ids, list):
+        return None
+    return {item for item in ids if isinstance(item, str) and item}
+
+
 def _scope_counts(
     status_payload: dict[str, Any], summary: dict[str, Any]
 ) -> dict[str, int | None]:
@@ -323,6 +339,7 @@ def build_global_lifecycle(
             limit=max(1, limit),
             phases=wanted,
             agent_id=requested_agent,
+            member_goal_ids=_global_member_ids(status_payload),
         )
     except ValueError as exc:
         return build_global_lifecycle_error(

@@ -209,6 +209,7 @@ def build_global_goal_lifecycle_board(
     limit: int = 50,
     phases: list[str] | None = None,
     agent_id: str | None = None,
+    member_goal_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Aggregate every derived projection the status payload already carries.
 
@@ -223,12 +224,31 @@ def build_global_goal_lifecycle_board(
     narrow the page: coverage and the cross-Goal rollups keep describing the
     whole inspected estate. An unknown agent matches nothing instead of
     silently widening back to every Goal.
+
+    `member_goal_ids`, when given, is the current global membership this read
+    was asked to describe. A status payload can retain history for a Goal that
+    has already left the global registry; such a row is not current work, so it
+    is dropped before any rollup or coverage count instead of inflating them.
     """
 
     bounded_limit = max(1, int(limit))
     status = _mapping(status_payload)
     run_history = _mapping(status.get("run_history"))
     goals = [goal for goal in _list(run_history.get("goals")) if _mapping(goal)]
+    if member_goal_ids is not None:
+        # Membership decides the estate; a history row for a Goal no longer
+        # registered must not appear as an operator's current Goal. Matching
+        # uses the complete recorded id so a display truncation can never merge
+        # two members or admit a non-member.
+        goals = [
+            goal
+            for goal in goals
+            # A Goal without a publishable identity cannot be matched to a
+            # member list; it stays visible as an identity gap rather than
+            # disappearing from the inspected count.
+            if _identity(goal.get("id")) is None
+            or str(goal.get("id")) in member_goal_ids
+        ]
 
     rows: list[dict[str, Any]] = []
     gaps: list[dict[str, Any]] = []
