@@ -974,6 +974,16 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     [
         (200, b'{"fixture":true}', {"fixture": True}),
         (200, b'{"fixture":[42,-7.25,5e2,"NaN","Infinity"]}', {"fixture": [42, -7.25, 500.0, "NaN", "Infinity"]}),
+        (
+            200,
+            b'{"fixture":[1.7976931348623157e308,-1.7976931348623157e308,5e-324,-1e-400,'
+            b'123456789012345678901234567890,"1e400"]}',
+            {"fixture": [
+                sys.float_info.max, -sys.float_info.max, 5e-324, -0.0, 123456789012345678901234567890, "1e400",
+            ]},
+        ),
+        (200, b'{"fixture":1e400}', "antigravity_transport_error"),
+        (200, b'{"fixture":{"nested":[-1e400]}}', "antigravity_transport_error"),
         (200, b'{"fixture":{"nested":[NaN]}}', "antigravity_transport_error"),
         (200, b'{"fixture":Infinity}', "antigravity_transport_error"),
         (200, b'{"fixture":-Infinity}', "antigravity_transport_error"),
@@ -991,11 +1001,13 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (200, b"{", "antigravity_transport_error"),
         (503, b"[]", "antigravity_rpc_error"),
         (503, b"\xff", "antigravity_rpc_error"),
+        (503, b'{"fixture":1e400}', "antigravity_rpc_error"),
     ],
-    ids=["object", "finite-numbers-and-text", "nested-nan", "infinity", "negative-infinity",
+    ids=["object", "finite-numbers-and-text", "finite-float-boundaries", "float-overflow", "nested-negative-overflow",
+         "nested-nan", "infinity", "negative-infinity",
          "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
          "whitespace", "array", "null", "boolean", "number", "string", "malformed-json",
-         "http-error", "http-error-invalid-utf8"],
+         "http-error", "http-error-invalid-utf8", "http-error-with-overflow"],
 )
 def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
     from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
@@ -1007,7 +1019,9 @@ def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, st
             _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {})
         assert raised.value.error_code == expected
     else:
-        assert _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {}) == expected
+        response = _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {})
+        # JSON serialization also compares the sign of an underflow to zero.
+        assert json.dumps(response, sort_keys=True) == json.dumps(expected, sort_keys=True)
     assert language_server["calls"] == [("Fixture", {})]
 
 

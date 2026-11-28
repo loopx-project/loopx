@@ -2953,6 +2953,31 @@ theorem antigravity_http_error_precedes_numeric_validation (utf8Valid standardNu
     (body : AntigravityRpcBody) :
     classifyAntigravityNumericReply false utf8Valid standardNumbers body = .httpFailure := rfl
 
+/- Standard numeric syntax may still yield a nonfinite host float.
+   The transport acknowledges the object only if float conversion succeeds. -/
+def classifyAntigravityRepresentableReply (httpOk utf8Valid standardNumbers finiteFloats : Bool)
+    (body : AntigravityRpcBody) : AntigravityRpcOutcome :=
+  match body, classifyAntigravityNumericReply httpOk utf8Valid standardNumbers body with
+  | .object, .accepted => if finiteFloats then .accepted else .invalidResponse
+  | _, outcome => outcome
+
+theorem antigravity_float_overflow_cannot_acknowledge_an_object :
+    classifyAntigravityRepresentableReply true true true false .object = .invalidResponse := rfl
+
+theorem antigravity_representable_float_still_acknowledges_an_object :
+    classifyAntigravityRepresentableReply true true true true .object = .accepted := rfl
+
+theorem antigravity_blank_reply_needs_no_float_conversion (finiteFloats : Bool) :
+    classifyAntigravityRepresentableReply true true true finiteFloats .blank = .accepted := rfl
+
+theorem antigravity_finite_check_preserves_nonstandard_token_failure :
+    classifyAntigravityRepresentableReply true true false true .object = .invalidResponse := rfl
+
+theorem antigravity_http_error_precedes_float_overflow (utf8Valid standardNumbers finiteFloats : Bool)
+    (body : AntigravityRpcBody) :
+    classifyAntigravityRepresentableReply false utf8Valid standardNumbers finiteFloats body = .httpFailure := by
+  cases body <;> rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3301,5 +3326,10 @@ theorem antigravity_http_error_precedes_numeric_validation (utf8Valid standardNu
 #print axioms antigravity_blank_reply_needs_no_numeric_tokens
 #print axioms antigravity_standard_numbers_do_not_bypass_encoding_validation
 #print axioms antigravity_http_error_precedes_numeric_validation
+#print axioms antigravity_float_overflow_cannot_acknowledge_an_object
+#print axioms antigravity_representable_float_still_acknowledges_an_object
+#print axioms antigravity_blank_reply_needs_no_float_conversion
+#print axioms antigravity_finite_check_preserves_nonstandard_token_failure
+#print axioms antigravity_http_error_precedes_float_overflow
 
 end StewardPrSignalPagination

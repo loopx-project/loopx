@@ -168,6 +168,13 @@ def _reject_nonstandard_rpc_number(_token: str) -> NoReturn:
     raise ValueError("Antigravity RPC response contains a nonstandard JSON number")
 
 
+def _parse_rpc_finite_float(token: str) -> float:
+    number = float(token)
+    if not math.isfinite(number):
+        raise ValueError("Antigravity RPC response number exceeds the finite float range")
+    return number
+
+
 def _rpc_post(
     base_url: str,
     csrf_token: str,
@@ -190,7 +197,9 @@ def _rpc_post(
     try:
         with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
-            data: object = json.loads(raw, parse_constant=_reject_nonstandard_rpc_number) if raw.strip() else {}
+            data: object = json.loads(
+                raw, parse_constant=_reject_nonstandard_rpc_number, parse_float=_parse_rpc_finite_float,
+            ) if raw.strip() else {}
             if not _is_dict(data):
                 raise ValueError("Antigravity RPC response must be a JSON object")
             return as_rpc_response(data)
