@@ -1391,6 +1391,72 @@ theorem accepting_or_dropping_an_unbound_clock_can_publish_unsupported_scope :
     observeHeadClockScope [] 42 10 5 false false (some 1) (some false) = ([42], true) := by
   decide
 
+/- The shared reader has verified PR number and HEAD. Each token represents the
+   raw fields relevant to a comment's time and actor. The ordered pages include
+   their continuation boundaries. An absent readback represents unreadable data. -/
+structure CommentWindow where
+  rows : List Nat
+  boundary : PageMetadata
+  deriving DecidableEq
+
+structure CommentReadback where
+  revision : Option ReviewRevision
+  latest : Option CommentWindow
+  previous : List (Nat × Option CommentWindow)
+  deriving DecidableEq
+
+def expectedCommentReadback (revision : ReviewRevision) (latest : CommentWindow)
+    (consumed : List (Nat × CommentWindow)) : CommentReadback :=
+  ⟨some revision, some latest, consumed.map (fun entry => (entry.1, some entry.2))⟩
+
+def useRevalidatedCommentPage (expected observed : CommentReadback) (decision : Option Bool) :
+    Option Bool :=
+  if observed = expected then decision else none
+
+theorem older_comment_decision_checks_revision_and_all_windows
+    (revision : ReviewRevision) (latest : CommentWindow) (consumed : List (Nat × CommentWindow))
+    (observed : CommentReadback) (decision : Bool) :
+    useRevalidatedCommentPage (expectedCommentReadback revision latest consumed) observed (some decision) =
+      some decision ↔ observed.revision = some revision ∧ observed.latest = some latest ∧
+        observed.previous = consumed.map (fun entry => (entry.1, some entry.2)) := by
+  cases observed
+  simp [useRevalidatedCommentPage, expectedCommentReadback]
+
+theorem changed_comment_readback_keeps_the_previous_scope
+    (prior : List Nat) (number : Nat) (expected observed : CommentReadback) (decision : Option Bool)
+    (changed : observed ≠ expected) :
+    observeStalledScope prior number (useRevalidatedCommentPage expected observed decision) =
+      (prior, false) := by
+  simp [useRevalidatedCommentPage, changed, observeStalledScope, observe]
+
+theorem matching_comment_readbacks_allow_independent_or_terminal_coverage
+    (expected : CommentReadback) (budget cursor : Nat) (pages : List OlderCommentEvidence) :
+    useRevalidatedCommentPage expected expected (collectOlderComments budget [] cursor pages) =
+      collectOlderComments budget [] cursor pages := by
+  simp [useRevalidatedCommentPage]
+
+theorem equal_comment_revision_can_hide_a_changed_latest_window :
+    let expected := expectedCommentReadback ⟨10, some 1⟩ ⟨[1], .next 5⟩ []
+    let current := expectedCommentReadback ⟨10, some 1⟩ ⟨[2], .next 5⟩ []
+    observeStalledScope [42] 42 (useRevalidatedCommentPage expected current (some false)) =
+      ([42], false) ∧ observeStalledScope [42] 42 (some false) = ([], true) := by
+  decide
+
+theorem missing_first_consumed_comment_page_is_detected_with_a_matching_second :
+    let first : CommentWindow := ⟨[2], .next 6⟩
+    let second : CommentWindow := ⟨[3], .next 7⟩
+    let expected := expectedCommentReadback ⟨10, some 1⟩ ⟨[1], .next 5⟩ [(5, first), (6, second)]
+    let current := {expected with previous := [(5, none), (6, some second)]}
+    useRevalidatedCommentPage expected current (some true) = none := by
+  decide
+
+theorem older_comment_request_bounds_rows_including_readbacks
+    (consumed firstRows olderRows readbackRows : Nat)
+    (earlier : consumed ≤ 2) (firstCap : firstRows ≤ 20) (olderCap : olderRows ≤ 50)
+    (readbackCap : readbackRows ≤ 50 * consumed) :
+    firstRows + olderRows + readbackRows ≤ 170 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1541,5 +1607,11 @@ theorem accepting_or_dropping_an_unbound_clock_can_publish_unsupported_scope :
 #print axioms unresolved_head_clock_preserves_any_prior_scope
 #print axioms independent_exclusion_can_publish_despite_unresolved_head_clock
 #print axioms accepting_or_dropping_an_unbound_clock_can_publish_unsupported_scope
+#print axioms older_comment_decision_checks_revision_and_all_windows
+#print axioms changed_comment_readback_keeps_the_previous_scope
+#print axioms matching_comment_readbacks_allow_independent_or_terminal_coverage
+#print axioms equal_comment_revision_can_hide_a_changed_latest_window
+#print axioms missing_first_consumed_comment_page_is_detected_with_a_matching_second
+#print axioms older_comment_request_bounds_rows_including_readbacks
 
 end StewardPrSignalPagination

@@ -605,6 +605,8 @@ _GITHUB_PR_BACKFILL_BUDGET = (
 )
 _GITHUB_PR_REVIEW_PAGE_SIZE = 20
 _GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE = 30
+_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE = 20
+_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE = 50
 _GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
 fragment StewardReviewPage on PullRequestReviewConnection {
   totalCount
@@ -641,28 +643,37 @@ def _older_reviews_page_query(readbacks: Mapping[str, str]) -> str:
 }}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
 
 
-_GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      number
-      headRefOid
-      comments(last: 50, before: $before) {
-        pageInfo {
-          hasPreviousPage
-          startCursor
-        }
-        nodes {
-          createdAt
-          authorAssociation
-          author {
-            __typename
-            login
-          }
-        }
-      }
-    }
+_GITHUB_PR_COMMENT_PAGE_FRAGMENT = """
+fragment StewardCommentPage on IssueCommentConnection {
+  pageInfo { hasPreviousPage startCursor }
+  nodes {
+    createdAt
+    authorAssociation
+    author { __typename login }
   }
 }"""
+
+
+def _older_comments_page_query(readbacks: Mapping[str, str]) -> str:
+    variables = "".join(f", ${alias}: String!" for alias in readbacks)
+    fields = "".join(
+        f"      {alias}: comments(last: 50, before: ${alias}) {{ ...StewardCommentPage }}\n"
+        for alias in readbacks
+    )
+    return f"""query($owner: String!, $name: String!, $number: Int!, $before: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
+      number
+      headRefOid
+      updatedAt
+      reviewDecision
+      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      comments(last: 50, before: $before) {{ ...StewardCommentPage }}
+{fields}    }}
+  }}
+}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+
+
 _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequests(
@@ -692,18 +703,7 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
           login
         }
         comments(last: 20) {
-          pageInfo {
-            hasPreviousPage
-            startCursor
-          }
-          nodes {
-            createdAt
-            authorAssociation
-            author {
-              __typename
-              login
-            }
-          }
+          ...StewardCommentPage
         }
         reviews(last: 20) {
           ...StewardReviewPage
@@ -740,7 +740,7 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
       }
     }
   }
-}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
+}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
 
 
 def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
@@ -761,6 +761,22 @@ def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | 
     if not isinstance(raw_nodes, list) or any(not isinstance(comment, Mapping) for comment in raw_nodes):
         return None
     return raw_nodes
+
+
+class _CommentPage(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    has_previous: bool
+    previous_cursor: str | None
+
+
+def _read_graphql_comment_page(connection: object, *, max_rows: int) -> _CommentPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    rows = _read_graphql_comment_nodes(connection.get("nodes"))
+    if rows is None or len(rows) > max_rows:
+        return None
+    has_previous, cursor = _graphql_comment_page_info(connection.get("pageInfo"))
+    return _CommentPage(rows, has_previous, cursor)
 
 
 class _ReviewPage(NamedTuple):
@@ -966,8 +982,8 @@ def _read_older_pr_page(
 _ReadOlderPage = Callable[[int, str, str, str, float, Mapping[str, str]], Mapping[str, Any] | None]
 
 
-def _read_review_revision(row: Mapping[str, Any]) -> tuple[str, str | None] | None:
-    """Read the observable revision fields used to check older review pages."""
+def _read_pr_signal_revision(row: Mapping[str, Any]) -> tuple[str, str | None] | None:
+    """Read the observable PR revision fields used during supplemental reads."""
     updated_at = row.get("updatedAt")
     timestamp = _parse_iso_timestamp(updated_at) if isinstance(updated_at, str) else None
     decision = row.get("reviewDecision")
@@ -1003,7 +1019,7 @@ def _backfill_pr_reviews(
         pr_data = read_older_page(
             number, head_oid, _older_reviews_page_query(readbacks), cursor, remaining_seconds, readbacks,
         )
-        if pr_data is None or _read_review_revision(pr_data) != revision:
+        if pr_data is None or _read_pr_signal_revision(pr_data) != revision:
             break
         if _read_graphql_review_page(pr_data.get("latestReviews")) != first_page:
             break
@@ -1031,15 +1047,17 @@ def _backfill_pr_comments_if_needed(
     summary: dict[str, Any],
     *,
     number: int,
+    revision: tuple[str, str | None] | None,
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
 ) -> tuple[dict[str, Any], int]:
     """Backfill an incomplete PR and return the remaining allowance."""
     head_oid = norm_node.get("headRefOid")
-    if not isinstance(head_oid, str) or not head_oid.strip():
+    if not isinstance(head_oid, str) or not head_oid.strip() or revision is None:
         return summary, remaining_pages
-    seen_cursors: set[str] = set()
+    first_page = _CommentPage(norm_node["comments"], norm_node["commentsHasPreviousPage"], norm_node["commentsStartCursor"])
+    consumed_pages: dict[str, _CommentPage] = {}
     for _ in range(remaining_pages):
         if summary.get("comments_coverage_incomplete") is not True:
             break
@@ -1047,25 +1065,31 @@ def _backfill_pr_comments_if_needed(
         remaining_seconds = deadline - monotonic()
         if not comment_cursor or remaining_seconds <= 0:
             break
-        seen_cursors.add(comment_cursor)
+        readbacks = {f"previousComments{index}": cursor for index, cursor in enumerate(consumed_pages)}
         remaining_pages -= 1
         pr_data = read_older_page(
-            number, head_oid, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds, {},
+            number, head_oid, _older_comments_page_query(readbacks), comment_cursor, remaining_seconds, readbacks,
         )
-        if pr_data is None:
+        if pr_data is None or _read_pr_signal_revision(pr_data) != revision:
             break
-        comments_conn = pr_data.get("comments")
-        older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
-        page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
-        older_comments = _read_graphql_comment_nodes(older_nodes)
-        if older_comments is None:
+        if _read_graphql_comment_page(pr_data.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE) != first_page:
             break
-        next_has_prev, next_cursor = _graphql_comment_page_info(page_info)
-        if next_cursor in seen_cursors:
+        if any(
+            _read_graphql_comment_page(pr_data.get(alias), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+            != consumed_pages[cursor]
+            for alias, cursor in readbacks.items()
+        ):
+            break
+        older_page = _read_graphql_comment_page(pr_data.get("comments"), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+        if older_page is None:
+            break
+        consumed_pages[comment_cursor] = older_page
+        next_cursor = older_page.previous_cursor
+        if next_cursor in consumed_pages:
             # A cycle leaves older coverage unverified.
             next_cursor = None
-        norm_node["comments"] = [*older_comments, *norm_node["comments"]]
-        norm_node["commentsHasPreviousPage"] = next_has_prev
+        norm_node["comments"] = [*older_page.rows, *norm_node["comments"]]
+        norm_node["commentsHasPreviousPage"] = older_page.has_previous
         norm_node["commentsStartCursor"] = next_cursor
         summary = summarize_github_pr_signal(norm_node)
         if next_cursor is None:
@@ -1181,7 +1205,7 @@ def observe_github_repository_prs(
                     continue
                 raw_node = raw_nodes_by_number[number]
                 first_page = _read_graphql_review_page(raw_node.get("reviews"))
-                revision = _read_review_revision(raw_node)
+                revision = _read_pr_signal_revision(raw_node)
                 if first_page is not None and first_page.previous_cursor is not None and revision is not None:
                     review_candidates[number] = (first_page, revision)
             remaining_seconds = deadline - monotonic()
@@ -1221,6 +1245,7 @@ def observe_github_repository_prs(
                     normalized_nodes[number],
                     items[number],
                     number=number,
+                    revision=_read_pr_signal_revision(raw_nodes_by_number[number]),
                     remaining_pages=limit,
                     deadline=deadline,
                     read_older_page=read_older_page,

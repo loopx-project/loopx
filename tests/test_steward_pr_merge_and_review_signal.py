@@ -231,6 +231,22 @@ def _graphql_reviews(nodes: list[Any], **metadata: Any) -> dict[str, Any]:
     return {"nodes": nodes, "totalCount": len(nodes), "pageInfo": {"hasPreviousPage": False}, **metadata}
 
 
+def _older_comment_row(initial: dict[str, Any], comments: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "number": initial["number"], "headRefOid": initial["headRefOid"],
+        "updatedAt": initial["updatedAt"], "reviewDecision": initial["reviewDecision"],
+        "latestComments": initial["comments"], "comments": comments,
+    }
+
+
+def _comment_readback_rows(cmd: list[str], pages: dict[str, Any]) -> dict[str, Any]:
+    return {
+        alias: pages[cursor]
+        for arg in cmd if arg.startswith("previousComments")
+        for alias, cursor in [arg.split("=", 1)]
+    }
+
+
 def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     copied = dict(row)
     default_contexts = copied.pop("statusCheckRollup", [])
@@ -750,6 +766,8 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
     }
     backfilled: list[str] = []
     read_count = 0
+    initial_nodes = {}
+    comment_pages = {}
 
     def fake_run(cmd, **_kwargs):
         nonlocal read_count
@@ -757,9 +775,11 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
         if cursor is not None:
             backfilled.append(next(arg for arg in cmd if arg.startswith("number=")))
             comments = {"pageInfo": {"hasPreviousPage": True, "startCursor": cursor + "-older"}, "nodes": []}
-            payload = {"data": {"repository": {"pullRequest": {
-                "number": int(backfilled[-1].removeprefix("number=")), "headRefOid": head, "comments": comments,
-            }}}}
+            number = int(backfilled[-1].removeprefix("number="))
+            pr_data = _older_comment_row(initial_nodes[number], comments)
+            pr_data.update(_comment_readback_rows(cmd, comment_pages.setdefault(number, {})))
+            comment_pages[number][cursor] = comments
+            payload = {"data": {"repository": {"pullRequest": pr_data}}}
         else:
             size = int(next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("pageSize=")), "20"))
             limit = min(read_count + size, 101)
@@ -769,6 +789,7 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
                     number=number, head_oid=head, review_decision="CHANGES_REQUESTED", reviews=[review],
                 ))
                 node["comments"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}, "nodes": []}
+                initial_nodes[number] = node
                 nodes.append(node)
             read_count = limit
             payload = _graphql_page(
@@ -821,6 +842,7 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     elapsed = 0
     list_pages = 0
     comment_timeouts = []
+    initial_nodes = {}
     head = "9" * 40
     review = {
         "id": "PRR_review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
@@ -834,9 +856,7 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
             comment_timeouts.append(kwargs["timeout"])
             elapsed += comment_seconds
             comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "older"}, "nodes": []}
-            response = {"data": {"repository": {"pullRequest": {
-                "number": 1, "headRefOid": head, "comments": comments,
-            }}}}
+            response = {"data": {"repository": {"pullRequest": _older_comment_row(initial_nodes[1], comments)}}}
         else:
             list_pages += 1
             elapsed += 19
@@ -845,6 +865,7 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
                 reviews=[review] if list_pages <= 2 else [],
             ))
             node["comments"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}, "nodes": []}
+            initial_nodes[list_pages] = node
             response = _graphql_page(
                 [node], has_next_page=list_pages < 5, end_cursor=f"cursor-{list_pages}", total_count=5,
             )
@@ -1118,13 +1139,10 @@ def test_steward_requires_matching_pr_and_head_for_older_comments(monkeypatch, c
             assert {"number", "headRefOid"}.issubset(identity_fields.split())
             reads.append(kwargs["timeout"])
             reply_login = "maintainer" if case == "same_head_maintainer" else "contributor"
-            pr_data = {
-                "number": 42, "headRefOid": head,
-                "comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": [
+            pr_data = _older_comment_row(node, {"pageInfo": {"hasPreviousPage": False}, "nodes": [
                     {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": reply_login},
                      "authorAssociation": "MEMBER"},
-                ]},
-            }
+                ]})
             if case == "changed_head":
                 pr_data["headRefOid"] = "b" * 40
             elif case == "missing_head":
@@ -1159,6 +1177,75 @@ def test_steward_requires_matching_pr_and_head_for_older_comments(monkeypatch, c
         assert observation["material_change"] is False
 
 
+@pytest.mark.parametrize("case", [
+    "updated-at", "review-decision", "missing-latest", "changed-latest", "changed-latest-cursor",
+    "missing-consumed", "changed-consumed", "oversized-older-page", "consistent",
+])
+def test_steward_requires_comment_revision_and_consumed_windows_to_remain_consistent(case: str) -> None:
+    head = "a" * 40
+    node = _graphql_node(_sample_pr(head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=[{
+        "id": "request-changes", "state": "CHANGES_REQUESTED", "commit": {"oid": head},
+        "author": {"login": "maintainer"}, "submittedAt": "2030-01-01T08:00:00Z",
+    }]))
+    visitor = {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": "observer"}}
+    author = {**visitor, "author": {"login": "contributor"}}
+    node["comments"] = {"nodes": [visitor], "pageInfo": {"hasPreviousPage": True, "startCursor": "first"}}
+    consumed = {"nodes": [visitor], "pageInfo": {"hasPreviousPage": True, "startCursor": "second"}}
+    terminal = {"nodes": [author], "pageInfo": {"hasPreviousPage": False}}
+    reads = []
+
+    def runner(cmd, **_kwargs):
+        cursor = next((arg.removeprefix("before=") for arg in cmd if arg.startswith("before=")), None)
+        reads.append(cursor)
+        if cursor is None:
+            payload = _graphql_page([node])
+        else:
+            query = next(arg for arg in cmd if arg.startswith("query="))
+            assert "latestComments: comments(last: 20)" in query
+            pr_data = _older_comment_row(node, consumed if cursor == "first" else terminal)
+            if cursor == "second":
+                assert "previousComments0=first" in cmd
+                assert "previousComments0: comments(last: 50, before: $previousComments0)" in query
+                pr_data["previousComments0"] = consumed
+                if case == "updated-at":
+                    pr_data["updatedAt"] = "2030-01-01T09:01:00Z"
+                elif case == "review-decision":
+                    pr_data["reviewDecision"] = "APPROVED"
+                elif case == "missing-latest":
+                    del pr_data["latestComments"]
+                elif case == "changed-latest":
+                    pr_data["latestComments"] = {**node["comments"], "nodes": [author]}
+                elif case == "changed-latest-cursor":
+                    pr_data["latestComments"] = {
+                        **node["comments"], "pageInfo": {"hasPreviousPage": True, "startCursor": "other"},
+                    }
+                elif case == "missing-consumed":
+                    del pr_data["previousComments0"]
+                elif case == "changed-consumed":
+                    pr_data["previousComments0"] = {**consumed, "nodes": [author]}
+                elif case == "oversized-older-page":
+                    pr_data["comments"] = {**terminal, "nodes": [author] * 51}
+            payload = {"data": {"repository": {"pullRequest": pr_data}}}
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
+    assert reads == [None, "first", "second"]
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "previous_hash": "sha256:prior",
+        "observed_at": "2030-01-01T10:00:00Z",
+        "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                         "include_inbox": False, "pr_filter": {"min_stalled_hours": 24,
+                             "author_mode": "exclude", "authors": ["maintainer"]}},
+    })
+    if case == "consistent":
+        assert observation["observation_incomplete"] is False
+        assert observation["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"
+    else:
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:prior"
+        assert observation["material_change"] is False
+
+
 @pytest.mark.parametrize(
     ("pages", "expected_reads", "expected_prs"),
     [
@@ -1188,6 +1275,7 @@ def test_steward_comment_backfill_never_reuses_a_cursor(monkeypatch, pages, expe
                       "author_mode": "exclude", "authors": ["maintainer"]},
     }
     reads = []
+    comment_pages = {}
 
     def runner(cmd, **_kwargs):
         before = next((arg.removeprefix("before=") for arg in cmd if arg.startswith("before=")), None)
@@ -1197,12 +1285,13 @@ def test_steward_comment_backfill_never_reuses_a_cursor(monkeypatch, pages, expe
             next_cursor, login = pages[len(reads)]
             reads.append(before)
             replies = [{"createdAt": "2030-01-01T09:00:00Z", "author": {"login": login}}] if login else []
-            payload = {"data": {"repository": {"pullRequest": {
-                "number": 42, "headRefOid": head,
-                "comments": {"nodes": replies, "pageInfo": {
-                    "hasPreviousPage": next_cursor is not None, "startCursor": next_cursor,
-                }},
-            }}}}
+            comments = {"nodes": replies, "pageInfo": {
+                "hasPreviousPage": next_cursor is not None, "startCursor": next_cursor,
+            }}
+            pr_data = _older_comment_row(node, comments)
+            pr_data.update(_comment_readback_rows(cmd, comment_pages))
+            comment_pages[before] = comments
+            payload = {"data": {"repository": {"pullRequest": pr_data}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
     snapshot = _read_repository_snapshot(
@@ -1295,10 +1384,7 @@ def test_steward_requires_readable_comment_page_for_coverage(
             response = _graphql_page([node])
         else:
             requested_cursors.append(cursor)
-            response = {"data": {"repository": {"pullRequest": {
-                "number": node["number"], "headRefOid": head,
-                "comments": response_page,
-            }}}}
+            response = {"data": {"repository": {"pullRequest": _older_comment_row(node, response_page)}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
     snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
@@ -1393,9 +1479,7 @@ def test_steward_requires_actor_evidence_when_a_reply_can_change_the_result(
             response = _graphql_page([node])
         else:
             requested_cursors.append(cursor)
-            response = {"data": {"repository": {"pullRequest": {
-                "number": node["number"], "headRefOid": head, "comments": finished,
-            }}}}
+            response = {"data": {"repository": {"pullRequest": _older_comment_row(node, finished)}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
     snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=source == "older")
@@ -2090,20 +2174,8 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
         calls_snap2.append(list(cmd))
         if any(arg == "before=c20" for arg in cmd):
             assert "-F" in cmd and "number=401" in cmd
-            body = {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "number": snap2_node["number"],
-                            "headRefOid": head,
-                            "comments": {
-                                "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
-                                "nodes": [author_comment],
-                            }
-                        }
-                    }
-                }
-            }
+            comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "c1"}, "nodes": [author_comment]}
+            body = {"data": {"repository": {"pullRequest": _older_comment_row(snap2_node, comments)}}}
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
 
@@ -2162,20 +2234,11 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
     def run_maintainer_p2(cmd, **_kwargs):
         calls_maintainer_p2.append(list(cmd))
         if any(arg == "before=c20" for arg in cmd):
-            body = {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "number": snap2_node["number"],
-                            "headRefOid": head,
-                            "comments": {
-                                "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"},
-                                "nodes": [author_comment, maintainer_comment],
-                            }
-                        }
-                    }
-                }
+            comments = {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": "c0"},
+                "nodes": [author_comment, maintainer_comment],
             }
+            body = {"data": {"repository": {"pullRequest": _older_comment_row(snap2_node, comments)}}}
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
 
@@ -2199,6 +2262,7 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
     # 3. Backfill budget exhausted (3 pages of visitor comments, still hasPreviousPage=True) ->
     #    comments_coverage_incomplete=True and TS retains previous_hash with observation_incomplete=True.
     backfill_cursors: list[str] = []
+    comment_pages = {}
 
     def run_exhausted(cmd, **_kwargs):
         before_args = [arg.split("=", 1)[1] for arg in cmd if arg.startswith("before=")]
@@ -2207,20 +2271,14 @@ def test_observe_github_prs_backfills_evicted_author_reply_and_preserves_incompl
             backfill_cursors.append(cursor)
             next_map = {"c20": ("c70", "11"), "c70": ("c120", "12"), "c120": ("c170", "13")}
             next_cursor, hour = next_map[cursor]
-            body = {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "number": snap2_node["number"],
-                            "headRefOid": head,
-                            "comments": {
-                                "pageInfo": {"hasPreviousPage": True, "startCursor": next_cursor},
-                                "nodes": _visitor_comments(5, prefix_hour=hour),
-                            }
-                        }
-                    }
-                }
+            comments = {
+                "pageInfo": {"hasPreviousPage": True, "startCursor": next_cursor},
+                "nodes": _visitor_comments(5, prefix_hour=hour),
             }
+            pr_data = _older_comment_row(snap2_node, comments)
+            pr_data.update(_comment_readback_rows(cmd, comment_pages))
+            comment_pages[cursor] = comments
+            body = {"data": {"repository": {"pullRequest": pr_data}}}
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([snap2_node])), stderr="")
 
@@ -2597,25 +2655,12 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
         nonlocal elapsed
         if any(arg == "before=c20" for arg in cmd):
             elapsed += 5
+            comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "c1"}, "nodes": [author_comment]}
+            payload = {"data": {"repository": {"pullRequest": _older_comment_row(truncated_node, comments)}}}
             return subprocess.CompletedProcess(
                 cmd,
                 0,
-                stdout=json.dumps(
-                    {
-                        "data": {
-                            "repository": {
-                                "pullRequest": {
-                                    "number": truncated_node["number"],
-                                    "headRefOid": head,
-                                    "comments": {
-                                        "pageInfo": {"hasPreviousPage": False, "startCursor": "c1"},
-                                        "nodes": [author_comment],
-                                    }
-                                }
-                            }
-                        }
-                    }
-                ),
+                stdout=json.dumps(payload),
                 stderr="",
             )
         elapsed += 19
