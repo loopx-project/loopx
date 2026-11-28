@@ -1403,6 +1403,67 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     assert todos_calls == [1000.0, 1004.0, 1006.0]
 
 
+def test_registry_read_recovery_releases_backoff_without_a_file_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
+    bindings = _StubBindings(tmp_path / "bindings.json", bindings_rows=[])
+    controller = _StubController(tmp_path, bindings=bindings)
+    store = controller.store
+    goal_id = "steward-goal-target"
+    session = store.create_session(
+        goal_id=goal_id, agent_id="steward", adapter_kind="codex-app-server",
+        upstream_thread_id="fixture-thread",
+    )
+    bindings.bindings_rows.append({
+        "binding_id": "b-target", "enabled": True,
+        "managed_actor": {"goal_id": goal_id, "agent_id": "steward", "session_id": session["session_id"]},
+    })
+    monkeypatch.setattr(store, "list_sessions", lambda: [])
+    registry = controller.registry_path
+    _write_test_registry_envelope(registry, [{"id": goal_id, "description": "confirmed target"}])
+    before = registry.stat()
+
+    registry_unavailable = False
+    failed_reads: list[float] = []
+    original_read = Path.read_bytes
+
+    def read_registry_with_transient_error(path: Path) -> bytes:
+        if path == registry and registry_unavailable:
+            failed_reads.append(clock["now"])
+            raise OSError("registry read temporarily unavailable")
+        return original_read(path)
+
+    todo_reads: list[float] = []
+
+    def read_todos(_self: StewardMonitor, _actor: Mapping[str, object]) -> list[StewardTodoRecord]:
+        nonlocal registry_unavailable
+        todo_reads.append(clock["now"])
+        if len(todo_reads) == 1:
+            registry_unavailable = True
+            raise RuntimeError("first poll failed")
+        return []
+
+    monkeypatch.setattr(Path, "read_bytes", read_registry_with_transient_error)
+    monkeypatch.setattr(StewardMonitor, "todos", read_todos)
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0] and failed_reads == [1000.0]
+
+    clock["now"] = 1003.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0]
+
+    registry_unavailable = False
+    clock["now"] = 1004.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0, 1004.0]
+    after = registry.stat()
+    assert (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size, after.st_ctime_ns) == (
+        before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size, before.st_ctime_ns,
+    )
+
+
 def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

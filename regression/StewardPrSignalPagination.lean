@@ -2599,6 +2599,48 @@ theorem steward_mtime_change_still_reloads_the_goal_witness
       (stewardRegistryWitnessFields device inode after size ctime) cachedGoal currentGoal = currentGoal := by
   simp [stewardRegistryGoalWitness, stewardRegistryWitnessFields, changed]
 
+inductive StewardRegistryRead where
+  | unavailable (errorClass : Nat)
+  | absent
+  | loaded (selectedGoal : Option Nat)
+  deriving DecidableEq
+
+/- The lookup has already matched the file stamp, if any. Only a parsed
+   snapshot supplies reusable per-Goal evidence, including a missing Goal. -/
+def observeStewardRegistryRead (cached : Option StewardRegistryRead)
+    (current : StewardRegistryRead) : StewardRegistryRead × Option StewardRegistryRead :=
+  let witness := cached.getD current
+  let retained := match witness with
+    | .loaded _ => some witness
+    | _ => none
+  (witness, retained)
+
+def releaseStewardBackoffAfterRegistryRead (failure current : StewardRegistryRead) : Bool :=
+  decide (failure ≠ current)
+
+theorem steward_registry_read_error_is_not_cached (errorClass : Nat) :
+    observeStewardRegistryRead none (.unavailable errorClass) =
+      (.unavailable errorClass, none) := rfl
+
+theorem steward_recovered_registry_read_releases_backoff_without_a_stamp_change
+    (errorClass : Nat) (goal : Option Nat) :
+    let failed := observeStewardRegistryRead none (.unavailable errorClass)
+    let recovered := observeStewardRegistryRead failed.2 (.loaded goal)
+    releaseStewardBackoffAfterRegistryRead failed.1 recovered.1 = true := rfl
+
+theorem steward_same_registry_error_keeps_failure_backoff (errorClass : Nat) :
+    let failed := observeStewardRegistryRead none (.unavailable errorClass)
+    let stillUnavailable := observeStewardRegistryRead failed.2 (.unavailable errorClass)
+    releaseStewardBackoffAfterRegistryRead failed.1 stillUnavailable.1 = false := by
+  simp [observeStewardRegistryRead, releaseStewardBackoffAfterRegistryRead]
+
+theorem steward_valid_registry_snapshot_reuses_its_goal_digest (goal : Option Nat) (ignored : StewardRegistryRead) :
+    observeStewardRegistryRead (some (.loaded goal)) ignored =
+      (.loaded goal, some (.loaded goal)) := rfl
+
+theorem steward_absent_registry_is_not_a_cached_snapshot :
+    observeStewardRegistryRead none .absent = (.absent, none) := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2893,5 +2935,10 @@ theorem steward_mtime_change_still_reloads_the_goal_witness
 #print axioms steward_unrelated_registry_edit_keeps_backoff
 #print axioms steward_unchanged_registry_stamp_reuses_the_goal_witness
 #print axioms steward_mtime_change_still_reloads_the_goal_witness
+#print axioms steward_registry_read_error_is_not_cached
+#print axioms steward_recovered_registry_read_releases_backoff_without_a_stamp_change
+#print axioms steward_same_registry_error_keeps_failure_backoff
+#print axioms steward_valid_registry_snapshot_reuses_its_goal_digest
+#print axioms steward_absent_registry_is_not_a_cached_snapshot
 
 end StewardPrSignalPagination

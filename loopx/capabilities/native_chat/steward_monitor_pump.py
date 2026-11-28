@@ -48,7 +48,7 @@ class _HashDigest(Protocol):
 
 _WitnessRecord = tuple[str, tuple[Path, ...]]
 _StatVersion = tuple[int, int, int, int, int]
-_RegistryCacheEntry = tuple[_StatVersion | None, dict[str, str], str | None]
+_RegistryCacheEntry = tuple[_StatVersion, dict[str, str]]
 _V = TypeVar("_V")
 
 
@@ -113,26 +113,21 @@ def _canonical_json_digest(digest: _HashDigest, label: str, value: object) -> No
 def _registry_goal_witness_token(
     controller: StewardControllerProtocol, registry_path: Path, goal_id: str
 ) -> str:
-    try:
-        st = registry_path.stat()
-        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_ctime_ns)
-    except FileNotFoundError:
-        stat_version = None
-    except OSError as exc:
-        return f"stat_err:{type(exc).__name__}"
     reg_cache: dict[str, _RegistryCacheEntry] = _ensure_dict_cache(
         controller, "_steward_monitor_registry_cache"
     )
     key = str(registry_path)
+    try:
+        st = registry_path.stat()
+        stat_version: _StatVersion = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_ctime_ns)
+    except FileNotFoundError:
+        reg_cache.pop(key, None)
+        return "missing"
+    except OSError as exc:
+        return f"stat_err:{type(exc).__name__}"
     cached = reg_cache.get(key)
     if cached is not None and cached[0] == stat_version:
-        _, goal_digests, error_tag = cached
-        return error_tag if error_tag is not None else goal_digests.get(goal_id, "missing")
-    if len(reg_cache) >= 8 and key not in reg_cache:
-        reg_cache.clear()
-    if stat_version is None:
-        reg_cache[key] = (None, {}, None)
-        return "missing"
+        return cached[1].get(goal_id, "missing")
     try:
         registry = load_registry(registry_path)
         goal_digests = {
@@ -140,12 +135,14 @@ def _registry_goal_witness_token(
             for goal in registry_goals(registry)
             if isinstance(goal, Mapping) and goal.get("id") is not None
         }
-        reg_cache[key] = (stat_version, goal_digests, None)
-        return goal_digests.get(goal_id, "missing")
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        error_tag = f"err:{type(exc).__name__}"
-        reg_cache[key] = (stat_version, {}, error_tag)
-        return error_tag
+        # A transient error can clear without a change in the file stamp.
+        reg_cache.pop(key, None)
+        return f"err:{type(exc).__name__}"
+    if len(reg_cache) >= 8 and key not in reg_cache:
+        reg_cache.clear()
+    reg_cache[key] = (stat_version, goal_digests)
+    return goal_digests.get(goal_id, "missing")
 
 
 def _collect_session_turn_targets(
