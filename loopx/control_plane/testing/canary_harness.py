@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
 import sys
+import threading
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,6 +16,8 @@ from ..runtime.node_probe import node_typescript_flags
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_SUBPROCESS_RUN = subprocess.run
+_IN_PROCESS_CLI_LOCK = threading.RLock()
 
 
 def default_state_file(goal_id: str) -> str:
@@ -198,6 +204,74 @@ def read_run_index(runtime_root: Path, goal_id: str) -> list[dict[str, Any]]:
     ]
 
 
+@contextlib.contextmanager
+def _fixture_cli_request_scope() -> Iterator[None]:
+    from ..effect_runtime import effect_runtime_request_scope
+
+    with effect_runtime_request_scope():
+        yield
+
+
+def _run_json_cli_in_process(
+    *args: str,
+    registry_path: Path,
+    runtime_root: Path | None = None,
+    include_returncode: bool = True,
+) -> dict[str, Any]:
+    """Run machine CLI JSON via the real entrypoint without spawning a child Python."""
+    if subprocess.run is not _DEFAULT_SUBPROCESS_RUN:
+        return run_json_cli(
+            *args,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            include_returncode=include_returncode,
+        )
+    from ...entrypoint import main as entrypoint_main
+
+    argv = [
+        "--registry",
+        str(registry_path),
+        *(("--runtime-root", str(runtime_root)) if runtime_root is not None else ()),
+        "--format",
+        "json",
+        *args,
+    ]
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with _IN_PROCESS_CLI_LOCK:
+        previous_context_delivery = os.environ.get("LOOPX_CONTEXT_DELIVERY")
+        os.environ["LOOPX_CONTEXT_DELIVERY"] = "off"
+        try:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                try:
+                    raw_code = entrypoint_main(argv)
+                except SystemExit as exc:
+                    if exc.code is None:
+                        raw_code = 0
+                    elif isinstance(exc.code, int):
+                        raw_code = exc.code
+                    else:
+                        stderr.write(str(exc.code))
+                        raw_code = 1
+        finally:
+            if previous_context_delivery is None:
+                os.environ.pop("LOOPX_CONTEXT_DELIVERY", None)
+            else:
+                os.environ["LOOPX_CONTEXT_DELIVERY"] = previous_context_delivery
+    stdout_text = stdout.getvalue()
+    stderr_text = stderr.getvalue()
+    if raw_code != 0:
+        raise AssertionError(stdout_text + stderr_text)
+    if not stdout_text.strip():
+        raise AssertionError(f"empty CLI output for {argv!r}: {stderr_text}")
+    payload = json.loads(stdout_text)
+    if not isinstance(payload, dict):
+        raise AssertionError(f"expected JSON object for {argv!r}: {payload!r}")
+    if include_returncode:
+        payload["_returncode"] = raw_code
+    return payload
+
+
 def import_fixture_authority(registry_path: Path, goal_id: str, *, provider: str = "file") -> None:
     """Import a disposable smoke's complete source through the real saved plan.
 
@@ -229,26 +303,27 @@ def import_fixture_authority(registry_path: Path, goal_id: str, *, provider: str
     assert backup["ok"], backup
     prefix = ("coordination-shadow",)
     identity = ("--goal-id", goal_id, "--operation-id", f"fixture-import:{goal_id}")
-    prepared = run_json_cli(
-        *prefix, "prepare-import", *identity,
-        "--backup-manifest", backup["manifest_path"],
-        "--provider", provider, "--target-handoff-mode", "soft_claim",
-        registry_path=registry_path, runtime_root=runtime,
-    )["cold_import"]
-    assert prepared["status"] == "prepared", prepared
-    # Read the saved carrier rather than manufacturing a digest/target.
-    plan = json.loads(Path(prepared["plan_path"]).read_text(encoding="utf-8"))
-    assert plan["plan_sha256"] == prepared["plan_sha256"], plan
-    applied = run_json_cli(
-        *prefix, "apply-import", *identity,
-        "--plan-sha256", prepared["plan_sha256"], "--writers-stopped", "--execute",
-        registry_path=registry_path, runtime_root=runtime,
-    )["cold_import"]
-    assert applied["status"] in {"applied", "recovered"}, applied
-    readback = run_json_cli(
-        "todo", "list", "--goal-id", goal_id,
-        registry_path=registry_path, runtime_root=runtime,
-    )["authority_read"]
+    with _fixture_cli_request_scope():
+        prepared = _run_json_cli_in_process(
+            *prefix, "prepare-import", *identity,
+            "--backup-manifest", backup["manifest_path"],
+            "--provider", provider, "--target-handoff-mode", "soft_claim",
+            registry_path=registry_path, runtime_root=runtime,
+        )["cold_import"]
+        assert prepared["status"] == "prepared", prepared
+        # Read the saved carrier rather than manufacturing a digest/target.
+        plan = json.loads(Path(prepared["plan_path"]).read_text(encoding="utf-8"))
+        assert plan["plan_sha256"] == prepared["plan_sha256"], plan
+        applied = _run_json_cli_in_process(
+            *prefix, "apply-import", *identity,
+            "--plan-sha256", prepared["plan_sha256"], "--writers-stopped", "--execute",
+            registry_path=registry_path, runtime_root=runtime,
+        )["cold_import"]
+        assert applied["status"] in {"applied", "recovered"}, applied
+        readback = _run_json_cli_in_process(
+            "todo", "list", "--goal-id", goal_id,
+            registry_path=registry_path, runtime_root=runtime,
+        )["authority_read"]
     assert readback["source_authority"] == f"{provider}_v0", readback
     assert readback["decision_read_from_provider"] is True, readback
     assert readback["legacy_fallback_used"] is False, readback

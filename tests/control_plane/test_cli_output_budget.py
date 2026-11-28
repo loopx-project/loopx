@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.cli import main as cli_main
+from loopx.entrypoint import main as cli_main
 from loopx.control_plane.quota.turn_envelope import assert_complete_turn_decision
 from loopx.control_plane.scheduler.execution_context import SchedulerRuntimeProfile
 from loopx.control_plane.testing.canary_harness import import_fixture_authority

@@ -388,3 +388,47 @@ def test_todo_reuse_is_bounded_and_unscoped_calls_keep_original_behavior(monkeyp
     for _ in range(2):
         effect_runtime.effect_runtime_result("todo.context.page", {})
     assert len(calls) == 4
+
+
+def test_scan_runtime_source_snapshot_matches_walk_and_skips_pycache(tmp_path: Path) -> None:
+    import os
+    import stat
+
+    real_root = effect_runtime._control_plane_root().resolve()
+    reference: list[tuple[str, int, int, int]] = []
+    for directory, child_directories, filenames in os.walk(real_root):
+        child_directories[:] = [name for name in sorted(child_directories) if name != "__pycache__"]
+        relative_directory = os.path.relpath(directory, real_root)
+        relative_prefix = "" if relative_directory == "." else relative_directory.replace(os.sep, "/") + "/"
+        for filename in sorted(filenames):
+            relative = relative_prefix + filename
+            dot = filename.rfind(".")
+            if (dot <= 0 or filename[dot:] not in effect_runtime._RUNTIME_SOURCE_SUFFIXES) and relative not in effect_runtime._RUNTIME_SOURCE_PATHS:
+                continue
+            metadata = (Path(directory) / filename).stat()
+            if stat.S_ISREG(metadata.st_mode):
+                reference.append((relative, metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_size))
+    assert effect_runtime._scan_runtime_source_snapshot(real_root) == tuple(sorted(reference))
+
+    (tmp_path / "__pycache__").mkdir()
+    (tmp_path / "__pycache__" / "ignored.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "private_permissions.py").write_text("pass\n", encoding="utf-8")
+    (tmp_path / "ignored.py").write_text("pass\n", encoding="utf-8")
+    linked_target = tmp_path / "outside.ts"
+    linked_target.write_text("export const x = 1;\n", encoding="utf-8")
+    outside_dir = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside_dir.mkdir()
+    (outside_dir / "skipped.ts").write_text("export const y = 2;\n", encoding="utf-8")
+    root = tmp_path / "pkg"
+    root.mkdir()
+    (root / "runtime").mkdir()
+    (root / "__pycache__").mkdir()
+    (root / "__pycache__" / "cached.json").write_text("{}", encoding="utf-8")
+    (root / "runtime" / "private_permissions.py").write_text("pass\n", encoding="utf-8")
+    (root / "runtime" / "other.py").write_text("pass\n", encoding="utf-8")
+    (root / "linked.ts").symlink_to(linked_target)
+    (root / "linked_dir").symlink_to(outside_dir, target_is_directory=True)
+
+    names = [relative for relative, *_meta in effect_runtime._scan_runtime_source_snapshot(root)]
+    assert names == ["linked.ts", "runtime/private_permissions.py"]
