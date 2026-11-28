@@ -676,6 +676,9 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
         ("first_window_reordered", 1, False),
         ("missing_first_window", 1, False),
         ("last_page_window_changed", 2, False),
+        ("consumed_page_drift", 2, False),
+        ("missing_consumed_page", 2, False),
+        ("first_consumed_page_drift_on_last_read", 3, False),
         ("missing_initial_timestamp", 0, False),
         ("missing_older_decision", 1, False),
         ("invalid_timestamp", 0, False),
@@ -717,10 +720,14 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
         newest[-1] = {**review("new-19", "CHANGES_REQUESTED"),
                       "author": {"login": "recent-reviewer"}, "submittedAt": "2030-01-03T07:00:00Z"}
     older_count = {"multiple_pages": 21, "last_page_drift": 21, "last_page_window_changed": 21, "repeated_cursor": 21,
+                   "consumed_page_drift": 21, "missing_consumed_page": 21, "first_consumed_page_drift_on_last_read": 41,
                    "over_budget": 61, "per_pr_budget": 60}.get(case, 1)
     count = len(newest) + older_count
     older = [review(f"old-{i}") for i in range(older_count - 1)]
     older.append(review("active-rc", "DISMISSED" if case == "decision_drift" else "CHANGES_REQUESTED"))
+    if case in {"consumed_page_drift", "first_consumed_page_drift_on_last_read"}:
+        older[-2] = {**review("middle-rc", "CHANGES_REQUESTED"),
+                     "author": {"login": "recent-reviewer"}, "submittedAt": "2030-01-03T07:00:00Z"}
     node = _graphql_node(_sample_pr(
         number=42, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=newest,
     ))
@@ -747,6 +754,7 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
     if case == "decision_drift":
         del scope["pr_filter"]["min_stalled_hours"]
     cursors = []
+    prior_pages = []
 
     def runner(cmd, **kwargs):
         nonlocal elapsed
@@ -761,6 +769,14 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
             assert {"updatedAt", "reviewDecision"}.issubset(revision_fields.split())
             assert "latestReviews: reviews(last: 20) { ...StewardReviewPage }" in query
             assert "reviews(last: 20, before: $before) { ...StewardReviewPage }" in query
+            assert query.count("reviews(last: 20") == len(cursors) + 2
+            assert [arg for arg in cmd if arg.startswith("previousReviews")] == [
+                f"previousReviews{index}={previous}" for index, previous in enumerate(cursors)
+            ]
+            for index in range(len(cursors)):
+                alias = f"previousReviews{index}"
+                assert f"${alias}: String!" in query
+                assert f"{alias}: reviews(last: 20, before: ${alias}) {{ ...StewardReviewPage }}" in query
             assert kwargs["timeout"] == 20
             cursors.append(cursor)
             page_index = review_cursors.index(cursor)
@@ -808,6 +824,18 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
                 }
             elif case == "first_window_reordered":
                 pr_data["latestReviews"] = {**node["reviews"], "nodes": newest[::-1]}
+            for index, prior_page in enumerate(prior_pages):
+                pr_data[f"previousReviews{index}"] = prior_page
+            if case == "missing_consumed_page" and cursor == "earlier":
+                del pr_data["previousReviews0"]
+            if (case == "consumed_page_drift" and cursor == "earlier") or (
+                case == "first_consumed_page_drift_on_last_read" and cursor == "oldest"
+            ):
+                pr_data["previousReviews0"] = {**prior_pages[0], "nodes": [
+                    {**row, "state": "DISMISSED"} if row["id"] == "middle-rc" else row
+                    for row in prior_pages[0]["nodes"]
+                ]}
+            prior_pages.append(pr_data["reviews"])
             payload = {"data": {"repository": {"pullRequest": pr_data}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 

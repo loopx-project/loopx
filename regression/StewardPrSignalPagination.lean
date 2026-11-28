@@ -1102,6 +1102,55 @@ theorem changed_first_window_order_or_boundary_cannot_complete :
       useReviewsAtFirstWindow initial [some ⟨[(7, 1), (8, 1)], 21, 11⟩] (some [42]) = none := by
   decide
 
+/- Older readbacks are keyed by the cursor supplied to each GraphQL alias.
+   The window representation includes the ordered review values and boundary.
+   None represents a missing or malformed aliased page. -/
+def useRevalidatedOlderReviews (consumed : List (Nat × FirstReviewWindow))
+    (readbacks : List (Nat × Option FirstReviewWindow)) (coveredRows : Option (List Nat)) :
+    Option (List Nat) :=
+  if readbacks = consumed.map (fun entry => (entry.1, some entry.2)) then coveredRows else none
+
+theorem accepted_recovery_requires_every_consumed_review_page_to_agree
+    (consumed : List (Nat × FirstReviewWindow)) (readbacks : List (Nat × Option FirstReviewWindow))
+    (coveredRows : Option (List Nat)) (acceptedRows : List Nat)
+    (accepted : useRevalidatedOlderReviews consumed readbacks coveredRows = some acceptedRows) :
+    readbacks = consumed.map (fun entry => (entry.1, some entry.2)) := by
+  by_cases agree : readbacks = consumed.map (fun entry => (entry.1, some entry.2))
+  · exact agree
+  · simp [useRevalidatedOlderReviews, agree] at accepted
+
+theorem changed_consumed_review_pages_preserve_prior
+    (consumed : List (Nat × FirstReviewWindow)) (readbacks : List (Nat × Option FirstReviewWindow))
+    (coveredRows : Option (List Nat)) (prior : List Nat)
+    (changed : readbacks ≠ consumed.map (fun entry => (entry.1, some entry.2))) :
+    observe prior (useRevalidatedOlderReviews consumed readbacks coveredRows) = (prior, false) := by
+  simp [useRevalidatedOlderReviews, changed, observe]
+
+theorem matching_consumed_review_pages_preserve_verified_coverage
+    (consumed : List (Nat × FirstReviewWindow)) (coveredRows : Option (List Nat)) :
+    useRevalidatedOlderReviews consumed
+      (consumed.map (fun entry => (entry.1, some entry.2))) coveredRows = coveredRows := by
+  simp [useRevalidatedOlderReviews]
+
+theorem changed_first_consumed_review_is_detected_after_a_matching_second_readback :
+    let consumed : List (Nat × FirstReviewWindow) :=
+      [(10, ⟨[(7, 1)], 61, 11⟩), (11, ⟨[(8, 1)], 61, 12⟩)]
+    let readbacks : List (Nat × Option FirstReviewWindow) :=
+      [(10, some ⟨[(7, 2)], 61, 11⟩), (11, some ⟨[(8, 1)], 61, 12⟩)]
+    observe [42] (useRevalidatedOlderReviews consumed readbacks (some [])) = ([42], false) := by
+  decide
+
+theorem missing_consumed_review_readback_cannot_complete :
+    useRevalidatedOlderReviews [(10, ⟨[(7, 1)], 41, 11⟩)] [(10, none)] (some [42]) = none := by
+  decide
+
+theorem older_review_request_bounds_rows_including_readbacks
+    (consumed firstRows olderRows readbackRows : Nat)
+    (earlier : consumed ≤ 2) (firstCap : firstRows ≤ 20) (olderCap : olderRows ≤ 20)
+    (readbackCap : readbackRows ≤ 20 * consumed) :
+    firstRows + olderRows + readbackRows ≤ 80 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1219,5 +1268,11 @@ theorem changed_first_window_order_or_boundary_cannot_complete :
 #print axioms missing_last_first_window_readback_preserves_prior
 #print axioms verified_first_windows_allow_terminal_recovery
 #print axioms changed_first_window_order_or_boundary_cannot_complete
+#print axioms accepted_recovery_requires_every_consumed_review_page_to_agree
+#print axioms changed_consumed_review_pages_preserve_prior
+#print axioms matching_consumed_review_pages_preserve_verified_coverage
+#print axioms changed_first_consumed_review_is_detected_after_a_matching_second_readback
+#print axioms missing_consumed_review_readback_cannot_complete
+#print axioms older_review_request_bounds_rows_including_readbacks
 
 end StewardPrSignalPagination

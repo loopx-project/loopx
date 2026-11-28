@@ -590,18 +590,28 @@ fragment StewardReviewPage on PullRequestReviewConnection {
     commit { oid }
   }
 }"""
-_GITHUB_PR_REVIEWS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
+
+
+def _older_reviews_page_query(readbacks: Mapping[str, str]) -> str:
+    variables = "".join(f", ${alias}: String!" for alias in readbacks)
+    fields = "".join(
+        f"      {alias}: reviews(last: 20, before: ${alias}) {{ ...StewardReviewPage }}\n"
+        for alias in readbacks
+    )
+    return f"""query($owner: String!, $name: String!, $number: Int!, $before: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
       number
       headRefOid
       updatedAt
       reviewDecision
-      latestReviews: reviews(last: 20) { ...StewardReviewPage }
-      reviews(last: 20, before: $before) { ...StewardReviewPage }
-    }
-  }
-}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
+      latestReviews: reviews(last: 20) {{ ...StewardReviewPage }}
+      reviews(last: 20, before: $before) {{ ...StewardReviewPage }}
+{fields}    }}
+  }}
+}}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
+
+
 _GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -842,19 +852,23 @@ def _read_older_pr_page(
     query: str,
     cursor: str,
     remaining_seconds: float,
+    additional_variables: Mapping[str, str],
     *,
     owner: str,
     name: str,
     runner: Callable[..., Any],
     deadline: float,
 ) -> Mapping[str, Any] | None:
+    argv = [
+        "gh", "api", "graphql",
+        "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}",
+        "-F", f"number={number}", "-f", f"before={cursor}",
+    ]
+    for variable, value in additional_variables.items():
+        argv.extend(("-f", f"{variable}={value}"))
     try:
         completed = runner(
-            [
-                "gh", "api", "graphql",
-                "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}",
-                "-F", f"number={number}", "-f", f"before={cursor}",
-            ],
+            argv,
             capture_output=True, text=True, check=False,
             timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
         )
@@ -876,7 +890,7 @@ def _read_older_pr_page(
     return pr_data
 
 
-_ReadOlderPage = Callable[[int, str, str, str, float], Mapping[str, Any] | None]
+_ReadOlderPage = Callable[[int, str, str, str, float, Mapping[str, str]], Mapping[str, Any] | None]
 
 
 def _read_review_revision(row: Mapping[str, Any]) -> tuple[str, str | None] | None:
@@ -906,21 +920,29 @@ def _backfill_pr_reviews(
     rows = first_page.rows
     ids = set(first_page.ids)
     cursor = first_page.previous_cursor
-    seen_cursors: set[str] = set()
+    consumed_pages: dict[str, _ReviewPage] = {}
     for _ in range(remaining_pages):
         remaining_seconds = deadline - monotonic()
-        if cursor is None or cursor in seen_cursors or remaining_seconds <= 0:
+        if cursor is None or cursor in consumed_pages or remaining_seconds <= 0:
             break
-        seen_cursors.add(cursor)
+        readbacks = {f"previousReviews{index}": previous for index, previous in enumerate(consumed_pages)}
         remaining_pages -= 1
-        pr_data = read_older_page(number, head_oid, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
+        pr_data = read_older_page(
+            number, head_oid, _older_reviews_page_query(readbacks), cursor, remaining_seconds, readbacks,
+        )
         if pr_data is None or _read_review_revision(pr_data) != revision:
             break
         if _read_graphql_review_page(pr_data.get("latestReviews")) != first_page:
             break
+        if any(
+            _read_graphql_review_page(pr_data.get(alias)) != consumed_pages[previous]
+            for alias, previous in readbacks.items()
+        ):
+            break
         page = _read_graphql_review_page(pr_data.get("reviews"))
         if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:
             break
+        consumed_pages[cursor] = page
         ids.update(page.ids)
         rows = [*page.rows, *rows]
         cursor = page.previous_cursor
@@ -954,7 +976,9 @@ def _backfill_pr_comments_if_needed(
             break
         seen_cursors.add(comment_cursor)
         remaining_pages -= 1
-        pr_data = read_older_page(number, head_oid, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds)
+        pr_data = read_older_page(
+            number, head_oid, _GITHUB_PR_COMMENTS_PAGE_QUERY, comment_cursor, remaining_seconds, {},
+        )
         if pr_data is None:
             break
         comments_conn = pr_data.get("comments")
