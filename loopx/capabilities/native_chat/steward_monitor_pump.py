@@ -14,7 +14,11 @@ import time
 from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
-from ...control_plane.projects.registry_codec import load_registry
+from ...control_plane.projects.registry_codec import (
+    RegistryFileRevision,
+    read_registry_with_revision,
+    registry_file_revision,
+)
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...registry import registry_goals
 from .steward_monitor_turns import (
@@ -47,8 +51,7 @@ class _HashDigest(Protocol):
 
 
 _WitnessRecord = tuple[str, tuple[Path, ...]]
-_StatVersion = tuple[int, int, int, int]
-_RegistryCacheEntry = tuple[_StatVersion | None, dict[str, str], str | None]
+_RegistryCacheEntry = tuple[RegistryFileRevision, dict[str, str]]
 _V = TypeVar("_V")
 
 
@@ -113,39 +116,37 @@ def _canonical_json_digest(digest: _HashDigest, label: str, value: object) -> No
 def _registry_goal_witness_token(
     controller: StewardControllerProtocol, registry_path: Path, goal_id: str
 ) -> str:
-    try:
-        st = registry_path.stat()
-        stat_version: _StatVersion | None = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size)
-    except FileNotFoundError:
-        stat_version = None
-    except OSError as exc:
-        return f"stat_err:{type(exc).__name__}"
     reg_cache: dict[str, _RegistryCacheEntry] = _ensure_dict_cache(
         controller, "_steward_monitor_registry_cache"
     )
     key = str(registry_path)
+    try:
+        stat_version = registry_file_revision(registry_path.stat())
+    except FileNotFoundError:
+        reg_cache.pop(key, None)
+        return "missing"
+    except OSError as exc:
+        return f"stat_err:{type(exc).__name__}"
     cached = reg_cache.get(key)
     if cached is not None and cached[0] == stat_version:
-        _, goal_digests, error_tag = cached
-        return error_tag if error_tag is not None else goal_digests.get(goal_id, "missing")
-    if len(reg_cache) >= 8 and key not in reg_cache:
-        reg_cache.clear()
-    if stat_version is None:
-        reg_cache[key] = (None, {}, None)
-        return "missing"
+        return cached[1].get(goal_id, "missing")
     try:
-        registry = load_registry(registry_path)
+        registry, read_version = read_registry_with_revision(registry_path)
         goal_digests = {
             str(goal["id"]): hashlib.sha256(_canonical_json_bytes(goal)).hexdigest()
             for goal in registry_goals(registry)
             if isinstance(goal, Mapping) and goal.get("id") is not None
         }
-        reg_cache[key] = (stat_version, goal_digests, None)
-        return goal_digests.get(goal_id, "missing")
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        error_tag = f"err:{type(exc).__name__}"
-        reg_cache[key] = (stat_version, {}, error_tag)
-        return error_tag
+        # A transient error can clear without a change in the file stamp.
+        reg_cache.pop(key, None)
+        if isinstance(exc, FileNotFoundError):
+            return "missing"
+        return f"err:{type(exc).__name__}"
+    if len(reg_cache) >= 8 and key not in reg_cache:
+        reg_cache.clear()
+    reg_cache[key] = (read_version, goal_digests)
+    return goal_digests.get(goal_id, "missing")
 
 
 def _collect_session_turn_targets(

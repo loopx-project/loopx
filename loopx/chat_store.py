@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Iterator
+from typing import Any, BinaryIO, Iterator, Literal
 import uuid
 from weakref import WeakValueDictionary
 
@@ -24,7 +24,10 @@ from .capabilities.native_chat.model_settings import (
     MODEL_SELECTION_UNSET as _MODEL_SELECTION_UNSET, normalize_agent_model_id as normalize_agent_model_id,
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
-from .chat.event_cache import ChatEventCache, ChatEventStreamMixin, recover_completing_turns
+from .chat.event_cache import (
+    ChatEventCache, ChatEventStreamMixin, EventRevision, _event_revision_from_stat, _read_event_bytes,
+    recover_completing_turns,
+)
 from .chat.journal import CachedJournalRows, decode_chat_journal
 from .chat.ingress import (
     ChatIngressStore,
@@ -120,69 +123,109 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     _append_jsonl_rows(path, [payload])
 
 
-def _repair_incomplete_jsonl_tail(path: Path) -> None:
+def _repair_incomplete_jsonl_tail(handle: BinaryIO) -> None:
+    end = handle.seek(0, os.SEEK_END)
+    if end == 0:
+        return
+    handle.seek(end - 1)
+    if handle.read(1) == b"\n":
+        return
+    cursor = end
+    truncate_at = 0
+    while cursor > 0:
+        start = max(0, cursor - 8192)
+        handle.seek(start)
+        chunk = handle.read(cursor - start)
+        if (newline := chunk.rfind(b"\n")) >= 0:
+            truncate_at = start + newline + 1
+            break
+        cursor = start
+    handle.seek(truncate_at)
+    tail = handle.read(end - truncate_at)
     try:
-        handle = path.open("r+b")
-    except FileNotFoundError:
-        return
-    with handle:
-        end = handle.seek(0, os.SEEK_END)
-        if end == 0:
-            return
-        handle.seek(end - 1)
-        if handle.read(1) == b"\n":
-            return
-        cursor = end
-        truncate_at = 0
-        while cursor > 0:
-            start = max(0, cursor - 8192)
-            handle.seek(start)
-            chunk = handle.read(cursor - start)
-            if (newline := chunk.rfind(b"\n")) >= 0:
-                truncate_at = start + newline + 1
-                break
-            cursor = start
-        handle.seek(truncate_at)
-        tail = handle.read(end - truncate_at)
-        try:
-            item = json.loads(tail)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            handle.truncate(truncate_at)
+        item = json.loads(tail)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        handle.truncate(truncate_at)
+    else:
+        if isinstance(item, dict):
+            handle.seek(end)
+            handle.write(b"\n")
         else:
-            if isinstance(item, dict):
-                handle.seek(end)
-                handle.write(b"\n")
-            else:
-                handle.truncate(truncate_at)
-        handle.flush()
-        os.fsync(handle.fileno())
+            handle.truncate(truncate_at)
+    handle.flush()
+    os.fsync(handle.fileno())
 
 
-def _append_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+class ChatJournalRevisionChanged(OSError):
+    """The journal changed before the writer could use its observed contents."""
+
+
+def _append_jsonl_rows(
+    path: Path, rows: list[dict[str, Any]], *,
+    expected_revision: EventRevision | Literal["unconditional"] = "unconditional",
+) -> tuple[os.stat_result, os.stat_result] | None:
     if not rows:
-        return
+        return None
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _repair_incomplete_jsonl_tail(path)
-    with path.open("a", encoding="utf-8") as handle:
+    if expected_revision == "unconditional":
+        mode = "a+b"
+    else:
+        mode = "x+b" if expected_revision is None else "r+b"
+    try:
+        handle = path.open(mode)
+    except (FileNotFoundError, FileExistsError) as exc:
+        if expected_revision != "unconditional":
+            raise ChatJournalRevisionChanged("Chat event journal changed before append") from exc
+        raise
+    with handle:
+        before = os.fstat(handle.fileno())
+        if expected_revision not in (None, "unconditional") and expected_revision != _event_revision_from_stat(before):
+            raise ChatJournalRevisionChanged("Chat event journal changed before append")
+        _repair_incomplete_jsonl_tail(handle)
+        handle.seek(0, os.SEEK_END)
         for payload in rows:
-            handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
-            handle.write("\n")
+            line = json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + os.linesep
+            handle.write(line.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
-    os.chmod(path, 0o600)
+        if hasattr(os, "fchmod"):
+            os.fchmod(handle.fileno(), 0o600)
+        elif expected_revision == "unconditional":
+            os.chmod(path, 0o600)
+        return before, os.fstat(handle.fileno())
 
 
-def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+def _replace_jsonl(
+    path: Path, rows: list[dict[str, Any]], *, expected_revision: EventRevision,
+) -> EventRevision:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with temporary.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
-            handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    digest = hashlib.sha256()
+    handle = temporary.open("xb")
+    try:
+        with handle:
+            for row in rows:
+                line = (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + os.linesep).encode("utf-8")
+                handle.write(line)
+                digest.update(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        try:
+            current = _event_revision_from_stat(path.stat())
+        except FileNotFoundError:
+            current = None
+        if current != expected_revision:
+            raise ChatJournalRevisionChanged("Chat event journal changed before compaction")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    # A replacement can arrive after publication. Mark only verified output.
+    try:
+        raw_bytes, revision = _read_event_bytes(path)
+    except OSError:
+        return None
+    return revision if hashlib.sha256(raw_bytes).digest() == digest.digest() else None
 
 
 class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):

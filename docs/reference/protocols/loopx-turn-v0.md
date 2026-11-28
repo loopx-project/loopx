@@ -663,6 +663,9 @@ fresh task or repeated model call inferred from a failed CLI reply. This readbac
 does not bypass controller completion validation, lease conflicts or quota gates.
 Pre-execution failures retain known Turn-start hook writes without claiming Host
 execution. Normal successful/replayed `effects` remain invocation-scoped.
+Terminal journal replays also carry `recorded_effects` from the typed inspection.
+Steward advancement retry requires explicit zero-effect facts and rejects
+contradictory durable evidence.
 
 中文：`recorded_effects` 是原 Turn 的持久观察，不是本次检查或恢复又发生了副作用。
 `null` 表示未知：已登记 Host attempt 不等于模型已启动，`prepared` 不等于写回或扣额
@@ -673,6 +676,8 @@ execution. Normal successful/replayed `effects` remain invocation-scoped.
 阶段绑定。未知或畸形 intent 阻断原恢复判定，不能建议重调 Host；保留合法身份与
 阶段已经证明的执行事实，其余返回未知而非 `false`。不放松原 writer 的空 map
 拒绝语义：无待决 intent 应省略该字段，已提交历史由完成 checkpoint 表达。
+重放终态日志时，响应同时带回从类型化检查取得的 `recorded_effects`。Steward
+推进任务的自动重试要求明确的零副作用证据，存在冲突的持久记录时保留原轮次。
 
 Exit zero means that inspection completed, including when `decision` is
 `replay_blocked`. A non-zero exit means the command could not inspect the

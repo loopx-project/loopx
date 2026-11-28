@@ -15,6 +15,7 @@ from .steward_turn_common import (
     as_dict_list,
     as_mapping,
     as_optional_dict,
+    merge_steward_advancement_effects,
     native_steward_client_id,
     steward_monitor_for,
 )
@@ -657,13 +658,10 @@ def execute_steward_turn(
             )
             if replan_cleared:
                 run_primary_turn()
-            elif isinstance(adv_governance.get("effects"), Mapping):
-                gov_effects = as_mapping(adv_governance["effects"])
-                merged_effects = dict(as_mapping(result.get("effects")))
-                for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"):
-                    if gov_effects.get(key) is True:
-                        merged_effects[key] = True
-                result["effects"] = merged_effects
+            else:
+                result["effects"] = merge_steward_advancement_effects(
+                    as_mapping(result.get("effects")), adv_governance,
+                )
     if preparation_status is not None:
         result["status"] = preparation_status
         if preparation_status == "stopped":

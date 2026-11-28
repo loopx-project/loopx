@@ -16,6 +16,7 @@ from loopx.capabilities.periodic_report import cadence_runtime
 from loopx.capabilities.periodic_report.cadence_journal import read_cadence_journal
 from loopx.capabilities.periodic_report.incremental import read_periodic_report_publication_cursor
 from loopx.capabilities.periodic_report.private_generation import attempt_directory
+from loopx.chat_store import ChatSessionStore
 import loopx.capabilities.native_chat.steward_reports as report_host
 from test_native_steward_private import finish, steward as steward_fixture
 from test_native_steward_reports import configured, install_model
@@ -1645,6 +1646,65 @@ def test_selection_recovery_admission_resume_recovers_after_task_postcondition_r
     next_done = finish(runtime, next_day[0])
     assert next_done["response"]["native_loopx"]["status"] == "committed", next_done
     assert transport.steward_reports.reconcile() == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param(None, None, id="complete"),
+        pytest.param("response", None, id="missing-response"),
+        pytest.param("upstream_turn_id", None, id="missing-upstream-turn-id"),
+        pytest.param("started_at", None, id="missing-started-at"),
+        pytest.param("first_event_at", None, id="missing-first-event-at"),
+        pytest.param("started_at", "2026-11-26T02:03:00Z", id="started"),
+        pytest.param("host_claim_id", "claim-1", id="host-claimed"),
+        pytest.param("execution_dispatch", "pending", id="dispatch-pending"),
+        pytest.param("delta_count", False, id="boolean-delta-count"),
+        pytest.param("delta_count", 0.0, id="floating-point-delta-count"),
+    ],
+)
+def test_advancement_pre_dispatch_retry_requires_persisted_launch_evidence(tmp_path, field, value):
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS,
+        ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX,
+        advancement_turn_id,
+        resolve_advancement_turn_id,
+    )
+
+    store = ChatSessionStore(tmp_path)
+    session = store.create_session(
+        goal_id="goal", agent_id="steward", adapter_kind="codex", upstream_thread_id="thread-1",
+    )
+    session_id = session["session_id"]
+    actor = {"goal_id": "goal", "agent_id": "steward", "session_id": session_id}
+    todo = {"todo_id": "todo-1", "updated_at": "2026-11-26T02:00:00Z"}
+    base = advancement_turn_id(todo)
+    turn_id = store.accept_managed_turn(
+        session_id,
+        client_turn_id=native_steward_client_id(actor, base),
+        message="Advance the selected Todo.",
+        origin="native_loopx",
+        loopx_execution=True,
+        loopx_request={
+            "operation": "native_turn", "actor": actor, "turn_instance_id": base, "work_kind": "native_turn",
+        },
+    ).turn["turn_id"]
+    completed = datetime(2026, 11, 26, 2, 3, 34, tzinfo=timezone.utc)
+    failed = store.update_turn(
+        session_id, turn_id, status="failed", error_code="resume_failed", completed_at=completed.isoformat(),
+    )
+    assert failed is not None
+    if field is not None:
+        # Simulate an incomplete or contradictory persisted Turn readback.
+        if value is None:
+            del failed[field]
+        else:
+            failed[field] = value
+        store._turn_path(session_id, turn_id).write_text(json.dumps(failed), encoding="utf-8")
+
+    now = completed.timestamp() + ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS + 1
+    expected = base + ADVANCEMENT_PRECOMMIT_RETRY_SUFFIX if field is None else None
+    assert resolve_advancement_turn_id(store, actor, todo, now=now) == expected
 
 
 def test_advancement_followup_recovers_after_failed_inline_replan_and_pre_dispatch_resume_failed():

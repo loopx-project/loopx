@@ -13,6 +13,8 @@ from typing import Literal, NoReturn, Protocol, overload
 
 from ...chat_store import ChatSessionStore, _atomic_write_json
 from ...control_plane.effect_runtime import effect_runtime_result
+from ...file_lock import exclusive_file_lock
+from .steward_turn_common import has_no_steward_advancement_effects
 
 TARGET = "steward-portfolio-watch"
 FOLLOWUP_TARGET_PREFIX = "steward-monitor-followup:"
@@ -452,7 +454,7 @@ def _zero_write_advancement_response(
     if resp.get("steward_owner_report_queued") or resp.get("context_handoff") or resp.get("steward_user_action_receipts"):
         return None
     nl = resp.get("native_loopx")
-    if not isinstance(nl, Mapping) or nl.get("ok") is not False:
+    if not isinstance(nl, Mapping) or nl.get("ok") is not False or not has_no_steward_advancement_effects(nl):
         return None
     return nl if _past_precommit_cooldown(turn, now) else None
 
@@ -466,8 +468,12 @@ def _is_zero_effect_pre_dispatch_failed_advancement_turn(
         and turn.get("origin") == "native_loopx"
         and turn.get("loopx_execution") is True
         and turn.get("error_code") in _PRE_DISPATCH_ADVANCEMENT_ERROR_CODES
-        and all(turn.get(k) is None for k in ("response", "upstream_turn_id", "started_at", "first_event_at"))
-        and turn.get("delta_count") == 0
+        # Chat persists explicit nulls for these fields before worker launch.
+        and all(k in turn and turn[k] is None for k in ("response", "upstream_turn_id", "started_at", "first_event_at"))
+        and turn.get("host_claim_id") is None
+        and turn.get("execution_dispatch") is None
+        and type(turn.get("delta_count")) is int
+        and turn["delta_count"] == 0
         and _past_precommit_cooldown(turn, now)
     )
 
@@ -488,18 +494,8 @@ def _is_precommit_retryable_advancement_turn(
             isinstance(refusal, Mapping) and refusal.get("state") == "deferred"
             and refusal.get("reason_code") == "autonomous_replan"
             and isinstance(effects, Mapping) and effects.get("host_invoked") is True
-            and all(effects.get(k) is False for k in ("state_written", "quota_spent", "scheduler_acknowledged"))
         )
-    if nl.get("status") != "failed" or nl.get("result_kind") not in {"validation_failed", "host_failure"}:
-        return False
-    receipt = nl.get("receipt")
-    elig = (receipt.get("commit_eligibility") if isinstance(receipt, Mapping) else None) or {}
-    eff = effects or {}
-    if not isinstance(elig, Mapping) or not isinstance(eff, Mapping):
-        return False
-    return (elig.get("writeback") is False or eff.get("state_written") is False) and not any(
-        eff.get(k) is True for k in ("state_written", "quota_spent", "scheduler_acknowledged")
-    )
+    return nl.get("status") == "failed" and nl.get("result_kind") in {"validation_failed", "host_failure"}
 
 
 def _is_zero_effect_selection_deferred_advancement_turn(
@@ -513,7 +509,7 @@ def _is_zero_effect_selection_deferred_advancement_turn(
         nl is not None and nl.get("error_code") == "turn_todo_selection_deferred"
         and isinstance(refusal, Mapping) and refusal.get("state") == "deferred"
         and isinstance(effects, Mapping)
-        and not any(effects.get(k) is not False for k in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged"))
+        and effects.get("host_invoked") is False
     )
 
 
@@ -701,8 +697,8 @@ def write_steward_monitor_scope(
     if normalized is None:
         raise ValueError("signal_scope cannot be empty")
     path = steward_monitor_scope_path(runtime_root, goal_id, target_key)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(path, normalized)
+    with exclusive_file_lock(path, operation="write_steward_monitor_scope"):
+        _atomic_write_json(path, normalized)
     return normalized
 
 

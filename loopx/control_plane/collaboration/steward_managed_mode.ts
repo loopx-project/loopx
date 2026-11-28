@@ -128,6 +128,8 @@ function admitMonitorRestartRecovery(
     || original.error_code === "runtime_error" && (
       original.error === "steward monitor external signal source temporarily unavailable"
       || original.error === "the portfolio scope changed after observation"
+      || original.error === "the monitor signal scope changed after observation"
+      || original.error === "the monitor repository changed after observation"
       || original.error === "disk I/O error"
       || original.error === WORKER_EXITED_ERROR
       || (typeof original.error === "string" && FILE_LOCK_TIMEOUT_ERROR_PATTERN.test(original.error))
@@ -155,6 +157,7 @@ function admitMonitorRestartRecovery(
         || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
         || predecessor.original_turn_id === original.turn_id))
       || basis.old_worker_excluded !== true || basis.poll_absent !== true || basis.lease_available !== true
+      || basis.event_journal_complete !== true
       || !Array.isArray(events) || !events.includes("turn.failed")
       || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
       || priorKeys.length !== keys.length
@@ -1130,14 +1133,34 @@ function classifyStalledBucket(stalledAgeMs: number, authorReplyBypass: boolean)
   return "under_24h";
 }
 
+type RepositoryItem = JsonObject & { number: number };
+
+function hasReadableRepositoryItems(items: unknown[]): items is RepositoryItem[] {
+  const seenNumbers = new Set<number>();
+  for (const item of items) {
+    const number = jsonObject(item)?.number;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0 || seenNumbers.has(number)) {
+      return false;
+    }
+    seenNumbers.add(number);
+  }
+  return true;
+}
+
+type RepositoryBackfillPlan = {
+  source: "comment" | "review";
+  add: (item: RepositoryItem) => void;
+};
+
 function filterScopedRepositoryItems(
-  rawItems: unknown[],
+  items: RepositoryItem[],
   filter: JsonObject | null,
   observedAtValue: unknown,
-): { items: JsonObject[]; observationIncomplete: boolean } {
+  plan?: RepositoryBackfillPlan,
+): { items: RepositoryItem[]; observationIncomplete: boolean } {
   const minStalledHours = typeof filter?.min_stalled_hours === "number" ? filter.min_stalled_hours : null;
   let observedAtMs = NaN;
-  if (minStalledHours !== null) {
+  if (minStalledHours !== null && plan?.source !== "review") {
     observedAtMs = typeof observedAtValue === "string" ? Date.parse(observedAtValue) : NaN;
     if (!Number.isFinite(observedAtMs)) {
       throw new EffectRuntimeRequestError("scoped monitor min_stalled_hours requires a valid observed_at timestamp");
@@ -1151,19 +1174,41 @@ function filterScopedRepositoryItems(
     : null;
   const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
   const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
+  const canBypassAge = authorMode === "exclude";
+  const excludeDrafts = filter?.exclude_drafts === true;
+  const excludeConflicting = filter?.exclude_conflicting === true;
+  const usesReviewVerdicts = effectiveVerdicts !== null || requiredApprovers !== null || excludeConflicting;
+  const requiresCompleteReviews = minStalledHours !== null || usesReviewVerdicts;
 
-  const matched: JsonObject[] = [];
-  for (const rawItem of rawItems) {
-    const item = jsonObject(rawItem);
-    if (!item) continue;
-    if (filter?.exclude_drafts === true && item.isDraft === true) continue;
+  const matched: RepositoryItem[] = [];
+  for (const item of items) {
+    if (excludeDrafts && item.isDraft === true) continue;
+    const mergeable = typeof item.mergeable === "string" ? item.mergeable.trim().toUpperCase() : null;
+    if (excludeConflicting && mergeable === "CONFLICTING") continue;
+    // Native readbacks carry null when unavailable. Older observations can omit these fields.
+    let membershipUncertain = (excludeDrafts && item.isDraft !== undefined && typeof item.isDraft !== "boolean")
+      || (excludeConflicting && item.mergeable !== undefined && mergeable !== "MERGEABLE");
+    const login = prAuthorLogin(item);
+    if (authorMode !== null && authors !== null) {
+      membershipUncertain ||= !login;
+      if (login && authorMode === "include" && !authors.has(login)) continue;
+      if (login && authorMode === "exclude" && authors.has(login)) continue;
+    }
     const reviewSummary = jsonObject(item.review_summary);
-    if (
-      filter?.exclude_conflicting === true
-      && (String(item.mergeable ?? "").toUpperCase() === "CONFLICTING" || reviewSummary?.has_review_conflict === true)
-    ) {
+    const exactReviews = reviewSummary?.exact_head_reviews;
+    const reviewAuthorUnknown = usesReviewVerdicts && item.author !== undefined && !login && Array.isArray(exactReviews)
+      && exactReviews.some((entry) => {
+        const state = jsonObject(entry)?.state;
+        return state === "APPROVED" || state === "CHANGES_REQUESTED" || state === "COMMENTED";
+      });
+    const reviewReadbackIncomplete = item.review_readback_incomplete === true;
+    if (reviewReadbackIncomplete || reviewAuthorUnknown || (requiresCompleteReviews && item.review_coverage_incomplete === true)) {
+      if (plan === undefined) return { items: [], observationIncomplete: true };
+      if (plan.source === "review" && !reviewReadbackIncomplete && !reviewAuthorUnknown) plan.add(item);
       continue;
     }
+    if (plan?.source === "review") continue;
+    if (excludeConflicting && reviewSummary?.has_review_conflict === true) continue;
     if (effectiveVerdicts !== null) {
       const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
       if (!effectiveVerdicts.has(verdict)) continue;
@@ -1171,11 +1216,7 @@ function filterScopedRepositoryItems(
     if (requiredApprovers !== null && !hasMatchingApprovedReviewerDeclaration(item, requiredApprovers)) {
       continue;
     }
-    if (authorMode !== null && authors !== null) {
-      const login = prAuthorLogin(item);
-      if (authorMode === "include" && (!login || !authors.has(login))) continue;
-      if (authorMode === "exclude" && login && authors.has(login)) continue;
-    }
+    let scopedItem = item;
     if (minStalledHours !== null) {
       const authorReplied = item.author_replied_after_request_changes === true
         || reviewSummary?.author_replied_after_request_changes === true;
@@ -1183,45 +1224,88 @@ function filterScopedRepositoryItems(
         || (reviewSummary !== null && Object.prototype.hasOwnProperty.call(reviewSummary, "stalled_since"));
       const rawStalledSince = typeof item.stalled_since === "string"
         ? item.stalled_since
-        : (typeof reviewSummary?.stalled_since === "string" ? reviewSummary.stalled_since : null);
+        : (reviewSummary?.stalled_since ?? item.stalled_since);
+      const stalledSinceUnknown = item.stalled_since_unknown === true;
       if (
-        hasExplicitStalledSince
-        && rawStalledSince === null
+        !stalledSinceUnknown
+        && hasExplicitStalledSince
+        && rawStalledSince == null
         && effectiveVerdicts !== null
         && effectiveVerdicts.size === 1
         && effectiveVerdicts.has("REQUEST_CHANGES")
       ) {
         continue;
       }
+      const basisIso = stalledSinceUnknown ? null : (rawStalledSince ?? item.updatedAt);
+      const basisMs = typeof basisIso === "string" ? Date.parse(basisIso) : NaN;
+      const basisKnown = Number.isFinite(basisMs);
+      const thresholdMet = basisKnown && observedAtMs - basisMs >= minStalledHours * 3_600_000;
+      if (!canBypassAge && basisKnown && !thresholdMet) continue;
+
       // Fail closed when comment pagination did not reach the stalled anchor or a newer
       // author/maintainer reply, so evicted replies cannot drop awaiting_maintainer_reply.
       const commentsCoverageIncomplete = item.comments_coverage_incomplete === true
         || reviewSummary?.comments_coverage_incomplete === true;
-      if (commentsCoverageIncomplete) {
-        return { items: [], observationIncomplete: true };
-      }
-      const basisIso = rawStalledSince ?? (typeof item.updatedAt === "string" ? item.updatedAt : null);
-      const basisMs = basisIso !== null ? Date.parse(basisIso) : NaN;
-      const authorReplyBypass = authorReplied && authorMode === "exclude";
-      const thresholdMet = Number.isFinite(basisMs) && observedAtMs - basisMs >= minStalledHours * 3_600_000;
-      if (!authorReplyBypass && !thresholdMet) {
+      if (commentsCoverageIncomplete && (basisKnown || canBypassAge)) {
+        if (plan === undefined) return { items: [], observationIncomplete: true };
+        // Backfill can exclude under-age items even when another scope field is uncertain.
+        if (!membershipUncertain || (canBypassAge && basisKnown && !thresholdMet)) {
+          plan.add(item);
+        }
         continue;
       }
-      const stalledAgeMs = Number.isFinite(basisMs) ? Math.max(0, observedAtMs - basisMs) : 0;
-      matched.push({
+      const authorReplyBypass = authorReplied && canBypassAge;
+      if (!authorReplyBypass && !thresholdMet) {
+        if (!basisKnown && plan === undefined) return { items: [], observationIncomplete: true };
+        continue;
+      }
+      const stalledAgeMs = basisKnown ? Math.max(0, observedAtMs - basisMs) : 0;
+      scopedItem = {
         ...item,
         stalled_threshold_met: thresholdMet,
         stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
-      });
-    } else {
-      matched.push(item);
+      };
     }
+    if (membershipUncertain) {
+      if (plan === undefined) return { items: [], observationIncomplete: true };
+      continue;
+    }
+    matched.push(scopedItem);
   }
   return { items: matched, observationIncomplete: false };
 }
 
+function planStewardSignalBackfill(params: JsonObject, source: RepositoryBackfillPlan["source"]): JsonObject {
+  const scope = normalizeStewardSignalMonitorScope(params.signal_scope);
+  const filter = jsonObject(scope?.pr_filter);
+  const items = params.repository_items;
+  if (!Array.isArray(items)) {
+    throw new EffectRuntimeRequestError(`${source} backfill requires repository items`);
+  }
+  if (!hasReadableRepositoryItems(items)) {
+    throw new EffectRuntimeRequestError(`${source} backfill requires distinct valid PR numbers`);
+  }
+  const prNumbers: number[] = [];
+  // The planner's cutoff includes the time still available for provider reads.
+  filterScopedRepositoryItems(items, filter, params.observed_at, {
+    source,
+    add: (item) => prNumbers.push(item.number),
+  });
+  return { pr_numbers: prNumbers };
+}
+
+/** Read-only selection at the same coverage gate used by scoped observation. */
+export function planStewardSignalCommentBackfill(params: JsonObject): JsonObject {
+  return planStewardSignalBackfill(params, "comment");
+}
+
+export function planStewardSignalReviewBackfill(params: JsonObject): JsonObject {
+  return planStewardSignalBackfill(params, "review");
+}
+
 const AGE_FILTER_ITEM_FIELDS = [
   "stalled_since",
+  "stalled_since_unknown",
   "author_replied_after_request_changes",
   "comments_coverage_incomplete",
   "stalled_threshold_met",
@@ -1240,23 +1324,21 @@ function omitKeys(obj: JsonObject, keysToOmit: readonly string[]): JsonObject {
   return Object.fromEntries(Object.entries(obj).filter(([key]) => !omit.has(key)));
 }
 
-function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFilter: boolean): unknown {
-  const item = jsonObject(rawItem);
-  if (!item) return rawItem;
+function projectRepositoryItemForMaterialHash(item: RepositoryItem, usesStalledAgeFilter: boolean): JsonObject {
   const reviewSummary = jsonObject(item.review_summary);
   if (usesStalledAgeFilter) {
     const hasStalledSinceClock = typeof item.stalled_since === "string"
       || typeof reviewSummary?.stalled_since === "string";
     const omittedItemFields = hasStalledSinceClock
-      ? ["comments_coverage_incomplete", "updatedAt"]
-      : ["comments_coverage_incomplete"];
+      ? ["comments_coverage_incomplete", "stalled_since_unknown", "updatedAt"]
+      : ["comments_coverage_incomplete", "stalled_since_unknown"];
     const projectedItem = omitKeys(item, omittedItemFields);
     if (reviewSummary !== null) {
       projectedItem.review_summary = omitKeys(reviewSummary, ["comments_coverage_incomplete"]);
     }
     return projectedItem;
   }
-  const projectedItem = omitKeys(item, AGE_FILTER_ITEM_FIELDS);
+  const projectedItem = omitKeys(item, [...AGE_FILTER_ITEM_FIELDS, "review_coverage_incomplete"]);
   if (reviewSummary !== null) {
     projectedItem.review_summary = omitKeys(reviewSummary, AGE_FILTER_REVIEW_SUMMARY_FIELDS);
   }
@@ -1265,8 +1347,7 @@ function projectRepositoryItemForMaterialHash(rawItem: unknown, usesStalledAgeFi
 
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
- * Unavailable external signal reads fail closed so transient provider errors
- * never overwrite the last verified hash or trigger spurious model wakeups. */
+ * Incomplete repository reads can only wake the monitor on independent changes. */
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
@@ -1278,45 +1359,56 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   };
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
-  if (repo !== null && repo.status === "unavailable") {
-    return incompleteObservation;
-  }
-  const portfolio = params.portfolio_observation == null ? null
-    : requireJsonObject(params.portfolio_observation, "portfolio observation");
-  const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
-  const rawRepoItems = repo === null ? null : (Array.isArray(repo.items) ? repo.items : []);
+  const rawItems = repo?.items;
+  const repoItems = repo?.status !== "unavailable" && Array.isArray(rawItems)
+    && hasReadableRepositoryItems(rawItems) ? rawItems : null;
   const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
   const rawMinStalledHours = prFilter?.min_stalled_hours;
   const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
     && Number.isFinite(rawMinStalledHours)
     && rawMinStalledHours > 0;
-  const scopedResult = signalScope !== null && rawRepoItems !== null
+  const scopedResult = signalScope !== null && repoItems !== null
     ? filterScopedRepositoryItems(
-      rawRepoItems,
+      repoItems,
       prFilter,
       params.observed_at ?? repo?.observed_at,
     )
     : null;
-  if (scopedResult?.observationIncomplete) {
-    return incompleteObservation;
-  }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
-  const baseRepoItems = scopedRepoItems ?? rawRepoItems;
-  const hashedRepoItems = baseRepoItems === null
-    ? null
-    : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));
+  const currentRepoItems = scopedRepoItems ?? repoItems;
+  const repoIncomplete = repo !== null && (repoItems === null || scopedResult?.observationIncomplete === true
+    || currentRepoItems?.some((item) => item.checks_coverage_incomplete === true
+      || item.review_readback_incomplete === true
+      || item.merge_state_coverage_incomplete === true
+      || item.pr_metadata_coverage_incomplete === true) === true);
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
+  if (repoIncomplete && !includePortfolio && !includeInbox) return incompleteObservation;
+  const portfolio = params.portfolio_observation == null ? null
+    : requireJsonObject(params.portfolio_observation, "portfolio observation");
+  const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : null;
+  const repositoryCoverage = repoIncomplete ? {repository_observation_incomplete: true} : {};
+  const independentSignalsReadable = (!includePortfolio || portfolio !== null) && (!includeInbox || inboxItems !== null);
+  if (repoIncomplete && !independentSignalsReadable) {
+    return {...incompleteObservation, ...repositoryCoverage};
+  }
+  // Saved items already passed the scope filter at their last verified observation time.
+  const previousRepo = jsonObject(params.previous_repository_snapshot);
+  const previousItems = previousRepo?.status !== "unavailable" ? previousRepo?.items : null;
+  const baseRepoItems = repoIncomplete
+    ? (Array.isArray(previousItems) && hasReadableRepositoryItems(previousItems) ? previousItems : null)
+    : currentRepoItems;
+  const hashedRepoItems = baseRepoItems?.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter)) ?? null;
   const facts = signalScope === null
     ? {
       portfolio_hash: portfolio?.result_hash ?? null,
-      inbox_items: inboxItems,
+      inbox_items: inboxItems ?? [],
       repository_items: hashedRepoItems,
     }
     : {
       signal_scope: signalScope,
       portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
-      inbox_items: includeInbox ? inboxItems : [],
+      inbox_items: includeInbox ? (inboxItems ?? []) : [],
       repository_items: hashedRepoItems,
     };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
@@ -1329,12 +1421,16 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     return value;
   }
   const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
+  if (repoIncomplete && previousHash === resultHash) {
+    return {...incompleteObservation, ...repositoryCoverage};
+  }
   return {
     result_hash: resultHash,
     material_change: previousHash !== resultHash,
     observation_incomplete: false,
     own_monitor_bookkeeping_excluded: true,
-    ...(scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
+    ...repositoryCoverage,
+    ...(!repoIncomplete && scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
   };
 }
 

@@ -1792,6 +1792,7 @@ def run_loopx_turn_once(
                 payload["recovery"] = build_turn_recovery_audit(
                     recovery_decision, journal, status="finished", host_invoked=False,
                 )
+                payload["recorded_effects"] = assessment.inspection["recorded_effects"]
                 return payload
             request = require_turn_recovery_continuation(assessment)
         else:

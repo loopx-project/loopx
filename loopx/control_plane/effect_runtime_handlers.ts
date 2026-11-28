@@ -654,6 +654,8 @@ export function createEffectRuntimeHandlers(
     ["collaboration.steward.report.plan", lazyHandler(() => import("./collaboration/steward_reports.ts"), ({planStewardReport}) => planStewardReport)],
     ["collaboration.steward.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardPortfolio}) => observeStewardPortfolio)],
     ["collaboration.steward.monitor.signal_observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeStewardSignalMonitor}) => observeStewardSignalMonitor)],
+    ["collaboration.steward.monitor.comment_backfill.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardSignalCommentBackfill}) => planStewardSignalCommentBackfill)],
+    ["collaboration.steward.monitor.review_backfill.plan", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({planStewardSignalReviewBackfill}) => planStewardSignalReviewBackfill)],
     ["collaboration.steward.monitor.signal_scope.normalize", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({normalizeStewardSignalMonitorScope}) => (params) => ({signal_scope: normalizeStewardSignalMonitorScope(params?.signal_scope)}))],
     ["collaboration.session.monitor.observation", lazyHandler(() => import("./collaboration/steward_managed_mode.ts"), ({observeManagedWork}) => observeManagedWork)],
     ["collaboration.conversation.binding", lazyHandler(() => import("./collaboration/conversation_binding.ts"), ({planConversationBinding}) => planConversationBinding)],

@@ -104,6 +104,7 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     code, repeated = f._run_cli([*base, "--resume-turn-key", resume_key, "--execute"])
     assert code == 1 and not repeated["ok"], repeated
     assert repeated["status"] == "failed" and not any(repeated["effects"].values())
+    assert repeated["recorded_effects"] == failed["effects"]
     assert f._quota_spend_count(runtime) == 0
     assert (workspace / "invocations.txt").read_text() == "host\n"
     assert not (workspace / "validator-ran").exists()
@@ -119,5 +120,7 @@ def test_native_turn_rejects_invalid_candidate_before_writeback(
     code, replay = f._run_cli([*base, "--resume-turn-key", recovered["resume_turn_key"], "--execute"])
     assert code == 0 and replay["ok"], replay
     assert not any(replay["effects"].values())
+    assert replay["recorded_effects"]["quota_spent"] is True
+    assert replay["quota_slot_spend_count"] == 1
     assert f._quota_spend_count(runtime) == 1
     assert (workspace / "invocations.txt").read_text() == "host\nhost\n"

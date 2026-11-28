@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from types import MappingProxyType
 from typing import cast
 
@@ -23,6 +24,7 @@ from loopx.capabilities.native_chat import (
     steward_monitor_signals,
     steward_monitor_turns,
 )
+from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.steward_monitor import (
     ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
     ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS,
@@ -64,6 +66,7 @@ from loopx.capabilities.native_chat.steward_monitor_turns import (
 )
 from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
 from loopx.chat_store import ChatSessionStore
+from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, _root, _write, plan_request_publication
 from loopx.control_plane.runtime.effect_client_errors import EffectRuntimeRejected
 
 
@@ -340,7 +343,7 @@ def test_advancement_retry_exhaustion_and_lookup_cache_efficiency(tmp_path: Path
 
     precommit_resp: dict[str, object] = {"native_loopx": {"ok": False, "status": "failed",
         "result_kind": "host_failure", "receipt": {"commit_eligibility": {"writeback": False}},
-        "effects": {"state_written": False}}}
+        "effects": {"state_written": False, "quota_spent": False, "scheduler_acknowledged": False}}}
     deferred_resp: dict[str, object] = {"native_loopx": {"ok": False,
         "error_code": "turn_todo_selection_deferred", "selection_rejection": {"state": "deferred"},
         "effects": {"host_invoked": False, "state_written": False,
@@ -471,12 +474,12 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
         return list(open_todos)
 
     monkeypatch.setattr(monitor, "todos", counting_todos)
-    obs, args = monitor._collect_signal_monitor(actor, {}, todo)
+    obs, args, snap = monitor._collect_signal_monitor(actor, {}, todo)
     assert obs["material_change"] is False and args == [] and todo_read_count == 0
     snap_path = steward_monitor_snapshot_path(
         controller.coordination_runtime_root, "steward-agent-b2", "todo-sig-1"
     )
-    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    assert not snap_path.exists()
     assert "signal_scope" not in snap
     assert snap["repository_snapshot"]["items"] == [{"number": 11}, {"number": 12}]
 
@@ -488,11 +491,11 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
     bindings.core_responses["collaboration.steward.monitor.signal_observation"] = {
         "result_hash": "sig-changed", "material_change": True, "scoped_repository_items": [{"number": 11}],
     }
-    obs2, args2 = monitor._collect_signal_monitor(actor, {}, todo)
+    obs2, args2, snap2 = monitor._collect_signal_monitor(actor, {}, todo)
     assert obs2["material_change"] is True and todo_read_count == 1
     assert "--next-target-key" in args2 and f"{FOLLOWUP_TARGET_PREFIX}todo-sig-1" in args2
-    snap2 = json.loads(snap_path.read_text(encoding="utf-8"))
     assert snap2["signal_scope"] == saved_scope and snap2["repository_snapshot"]["items"] == [{"number": 11}]
+    assert not snap_path.exists()
 
     bindings.core_responses["collaboration.steward.monitor.signal_observation"] = {
         "result_hash": "sig-bad", "material_change": True, "scoped_repository_items": None,
@@ -506,7 +509,7 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
 
     # Pre-existing open follow-up suppresses duplicate --next-target-key emission.
     open_todos.append({"target_key": f"{FOLLOWUP_TARGET_PREFIX}todo-sig-1", "status": "open"})
-    _, args3 = monitor._collect_signal_monitor(actor, {}, todo)
+    _, args3, _ = monitor._collect_signal_monitor(actor, {}, todo)
     assert args3 == [] and todo_read_count == 2
 
     # Monkeypatching steward_monitor.native_command intercepts _rearm_exhausted_followup_if_needed.
@@ -529,6 +532,76 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
     }
     assert monitor._rearm_exhausted_followup_if_needed(actor, todo, "poll-seam-1") is True
     assert any("--note" in cmd and "rearm-followup:poll-seam-1" in cmd for cmd in seen_rearm_cmds)
+
+
+@pytest.mark.parametrize("incomplete_repository", [
+    pytest.param({"status": "unavailable"}, id="unavailable"),
+    pytest.param({"status": "ok", "items": [{"number": 43, "checks_coverage_incomplete": True}]}, id="checks"),
+    pytest.param({"status": "ok", "items": [{"number": 43, "review_readback_incomplete": True}]}, id="review-readback"),
+])
+@pytest.mark.parametrize("include_inbox", [True, False], ids=["combined", "repository-only"])
+def test_incomplete_repository_retains_snapshot_and_allows_new_inbox_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    incomplete_repository: dict[str, object], include_inbox: bool,
+) -> None:
+    bindings = _StubBindings(tmp_path / "bindings.json")
+    monkeypatch.setattr(bindings, "_core", ChatConversationBindings._core)
+    controller = _StubController(tmp_path, bindings=bindings)
+    runtime_root = controller.coordination_runtime_root
+    actor = {"goal_id": "sample-goal", "agent_id": "steward"}
+    todo: dict[str, object] = {"todo_id": "watch-1", "target_key": "watch-repo", "text": "Watch repo PRs",
+            "task_repository": "git:github.com/org/repo"}
+    write_steward_monitor_scope(runtime_root, actor["goal_id"], "watch-repo", {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_inbox": include_inbox,
+        "include_portfolio": False, "pr_filter": {"exclude_drafts": True},
+    })
+    verified_repository: dict[str, object] = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
+    repository = verified_repository
+    snapshot_path = steward_monitor_snapshot_path(runtime_root, actor["goal_id"], "watch-1")
+
+    def collect() -> tuple[dict[str, object], list[str]]:
+        observation, args, snapshot = steward_monitor_signals.collect_signal_monitor(
+            _as_controller(controller), actor=actor, context={}, todo=todo,
+            session_scope_for_actor=lambda _: [], read_todos=lambda _: [], observe_github_prs=lambda _: repository,
+        )
+        _write(snapshot_path, snapshot)
+        return observation, args
+
+    baseline, _ = collect()
+    todo["result_hash"] = baseline["result_hash"]
+    baseline_snapshot = snapshot_path.read_bytes()
+
+    source_id = "synthetic-source"
+    request_id = _hash([source_id, actor])
+    request = {"schema_version": ENTRY_SCHEMA, "request_id": request_id, "source_id": source_id,
+               **actor, "message": "Inspect the review findings"}
+    entry = plan_request_publication(request, entry=None)["entry"]
+    _write(_root(runtime_root) / "entries" / _hash(actor) / f"{request_id}.json", entry)
+    repository = {"repository": "org/repo", **incomplete_repository}
+
+    before_retry = baseline_snapshot
+    if include_inbox:
+        observation, successor_args = collect()
+        assert observation["observation_incomplete"] is False
+        assert observation["repository_observation_incomplete"] is True
+        assert observation["material_change"] is True
+        assert f"{FOLLOWUP_TARGET_PREFIX}watch-1" in successor_args
+        before_retry = snapshot_path.read_bytes()
+        snapshot = json.loads(before_retry)
+        assert snapshot["repository_snapshot"] == json.loads(baseline_snapshot)["repository_snapshot"]
+        assert snapshot["repository_observation_incomplete"] is True
+        assert snapshot["inbox_items"] == [{"request_id": request_id, "source_id": source_id}]
+        assert snapshot["result_hash"] == observation["result_hash"] != baseline["result_hash"]
+        todo["result_hash"] = observation["result_hash"]
+
+    with pytest.raises(RuntimeError, match="external signal source temporarily unavailable"):
+        collect()
+    assert snapshot_path.read_bytes() == before_retry
+
+    repository = verified_repository
+    recovered, successor_args = collect()
+    assert recovered["observation_incomplete"] is False
+    assert recovered["material_change"] is False and successor_args == []
 
 
 def test_steward_monitor_failure_modes_and_negative_paths(
@@ -1239,8 +1312,9 @@ def _write_test_registry_envelope(path: Path, goals: list[dict[str, object]]) ->
     path.write_text(json.dumps(envelope, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("preserve_mtime", [False, True], ids=["mtime-changes", "ctime-only"])
 def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve_mtime: bool,
 ) -> None:
     clock = {"now": 1000.0}
     monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
@@ -1268,6 +1342,27 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     ctrl.store = store
     _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
 
+    def rewrite_registry() -> None:
+        path = ctrl.registry_path
+        before = path.stat()
+        _write_test_registry_envelope(path, [target_goal, unrelated_goal])
+        if not preserve_mtime:
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+            return
+
+        timestamps = (before.st_atime_ns, before.st_mtime_ns)
+        os.utime(path, ns=timestamps)
+        after = path.stat()
+        if after.st_ctime_ns == before.st_ctime_ns:
+            time.sleep(0.01)
+            os.utime(path, ns=timestamps)
+            after = path.stat()
+        if after.st_ctime_ns == before.st_ctime_ns:
+            pytest.skip("filesystem does not report a different change time for the rewrite")
+        assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (
+            before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
+        )
+
     todos_calls: list[float] = []
 
     def failing_todos(_self: StewardMonitor, _actor: Mapping[str, object]) -> list[StewardTodoRecord]:
@@ -1282,7 +1377,7 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
 
     # t=1003: edit an unrelated Goal in registry.json AND an unrelated binding -> backoff MUST remain active.
     unrelated_goal["description"] = "other-v2"
-    _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
+    rewrite_registry()
     b_other["notes"] = "unrelated-binding-edited"
     clock["now"] = 1003.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
@@ -1290,7 +1385,7 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
 
     # t=1004: edit ONLY the target Goal in registry.json -> witness invalidates backoff immediately.
     target_goal["description"] = "target-v2"
-    _write_test_registry_envelope(ctrl.registry_path, [target_goal, unrelated_goal])
+    rewrite_registry()
     clock["now"] = 1004.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert todos_calls == [1000.0, 1004.0]
@@ -1306,6 +1401,173 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     clock["now"] = 1006.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert todos_calls == [1000.0, 1004.0, 1006.0]
+
+
+@pytest.mark.parametrize("read_failure", [OSError, FileNotFoundError], ids=["read-error", "transient-absence"])
+def test_registry_read_recovery_releases_backoff_without_a_file_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_failure: type[OSError],
+) -> None:
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
+    bindings = _StubBindings(tmp_path / "bindings.json", bindings_rows=[])
+    controller = _StubController(tmp_path, bindings=bindings)
+    store = controller.store
+    goal_id = "steward-goal-target"
+    session = store.create_session(
+        goal_id=goal_id, agent_id="steward", adapter_kind="codex-app-server",
+        upstream_thread_id="fixture-thread",
+    )
+    bindings.bindings_rows.append({
+        "binding_id": "b-target", "enabled": True,
+        "managed_actor": {"goal_id": goal_id, "agent_id": "steward", "session_id": session["session_id"]},
+    })
+    monkeypatch.setattr(store, "list_sessions", lambda: [])
+    registry = controller.registry_path
+    _write_test_registry_envelope(registry, [{"id": goal_id, "description": "confirmed target"}])
+    before = registry.stat()
+
+    registry_unavailable = False
+    failed_reads: list[float] = []
+    original_open = Path.open
+    original_exists = Path.exists
+
+    def registry_exists(path: Path) -> bool:
+        if path == registry and registry_unavailable and read_failure is FileNotFoundError:
+            return False
+        return original_exists(path)
+
+    def open_registry_with_transient_error(path: Path, mode: str = "r", *args, **kwargs):
+        if path == registry and mode == "rb" and registry_unavailable:
+            failed_reads.append(clock["now"])
+            raise read_failure("registry read temporarily unavailable")
+        return original_open(path, mode, *args, **kwargs)
+
+    todo_reads: list[float] = []
+
+    def read_todos(_self: StewardMonitor, _actor: Mapping[str, object]) -> list[StewardTodoRecord]:
+        nonlocal registry_unavailable
+        todo_reads.append(clock["now"])
+        if len(todo_reads) == 1:
+            registry_unavailable = True
+            raise RuntimeError("first poll failed")
+        return []
+
+    monkeypatch.setattr(Path, "exists", registry_exists)
+    monkeypatch.setattr(Path, "open", open_registry_with_transient_error)
+    monkeypatch.setattr(StewardMonitor, "todos", read_todos)
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0]
+
+    clock["now"] = 1003.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0]
+
+    registry_unavailable = False
+    clock["now"] = 1004.0
+    steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
+    assert todo_reads == [1000.0, 1004.0]
+    assert 1000.0 in failed_reads
+    after = registry.stat()
+    assert (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size, after.st_ctime_ns) == (
+        before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size, before.st_ctime_ns,
+    )
+
+
+def test_registry_witness_reuses_a_successfully_decoded_empty_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.projects.registry_codec import load_registry
+
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    assert load_registry(registry) == {}
+    _write_test_registry_envelope(registry, [])
+    reads: list[Path] = []
+    original_open = Path.open
+
+    def count_registry_reads(path: Path, mode: str = "r", *args, **kwargs):
+        if path == registry and mode == "rb":
+            reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", count_registry_reads)
+    assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-a") == "missing"
+    assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-b") == "missing"
+    assert reads == [registry]
+
+
+def test_registry_cache_uses_the_revision_of_the_file_opened_during_a_path_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    goal_id = "steward-goal-target"
+    _write_test_registry_envelope(first, [{"id": goal_id, "description": "first"}])
+    _write_test_registry_envelope(second, [{"id": goal_id, "description": "other"}])
+    try:
+        registry.symlink_to(first.name)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"cannot create a local registry symlink: {exc}")
+    witness = steward_monitor_pump._registry_goal_witness_token
+    first_digest = witness(_as_controller(ctrl), first, goal_id)
+    second_digest = witness(_as_controller(ctrl), second, goal_id)
+    assert first_digest != second_digest
+    original_open = Path.open
+
+    def switch_registry_target(target: Path) -> None:
+        replacement = tmp_path / "replacement"
+        replacement.symlink_to(target.name)
+        replacement.replace(registry)
+
+    def open_between_registry_path_changes(path: Path, mode: str = "r", *args, **kwargs):
+        if path != registry or mode != "rb":
+            return original_open(path, mode, *args, **kwargs)
+        switch_registry_target(second)
+        try:
+            return original_open(path, mode, *args, **kwargs)
+        finally:
+            switch_registry_target(first)
+
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path, "open", open_between_registry_path_changes)
+        assert witness(_as_controller(ctrl), registry, goal_id) == second_digest
+
+    assert registry.resolve() == first
+    assert witness(_as_controller(ctrl), registry, goal_id) == first_digest
+
+
+def test_registry_cache_rejects_a_snapshot_changed_during_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    goal_id = "steward-goal-target"
+    _write_test_registry_envelope(registry, [{"id": goal_id, "description": "first"}])
+    original_open = Path.open
+
+    def open_with_concurrent_registry_write(path: Path, mode: str = "r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == registry and mode == "rb":
+            original_read = stream.read
+
+            def read_then_rewrite() -> bytes:
+                observed = original_read()
+                before = registry.stat()
+                _write_test_registry_envelope(registry, [{"id": goal_id, "description": "other"}])
+                os.utime(registry, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+                return observed
+
+            monkeypatch.setattr(stream, "read", read_then_rewrite)
+        return stream
+
+    witness = steward_monitor_pump._registry_goal_witness_token
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path, "open", open_with_concurrent_registry_write)
+        assert witness(_as_controller(ctrl), registry, goal_id) == "err:ProjectRegistryError"
+    fresh = witness(_as_controller(_StubController(tmp_path)), registry, goal_id)
+    assert len(fresh) == 64
+    assert witness(_as_controller(ctrl), registry, goal_id) == fresh
 
 
 def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
@@ -1354,29 +1616,28 @@ def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
 
     monkeypatch.setattr(store, "load_session", tracked_load)
 
-    reg_read_bytes: list[int] = []
-    orig_read_bytes = Path.read_bytes
+    registry_reads: list[Path] = []
+    original_open = Path.open
 
-    def tracked_read_bytes(self: Path) -> bytes:
-        data = orig_read_bytes(self)
-        if self == ctrl.registry_path:
-            reg_read_bytes.append(len(data))
-        return data
+    def track_registry_reads(path: Path, mode: str = "r", *args, **kwargs):
+        if path == ctrl.registry_path and mode == "rb":
+            registry_reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    monkeypatch.setattr(Path, "open", track_registry_reads)
 
     # Initial failing tick across 4 corrupt sessions reads registry.json at most once.
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert load_calls == corrupt_sids
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
 
     # Over 4 unchanged idle ticks, registry.json is read 0 times (0 bytes) with 0 premature retries.
-    reg_read_bytes.clear()
+    registry_reads.clear()
     before_idle = len(load_calls)
     for _ in range(4):
         clock["now"] += 3.0
         steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert reg_read_bytes == []
+    assert registry_reads == []
     assert len(load_calls) == before_idle
 
     # Mutating an unrelated Goal reloads registry.json at most once and preserves all 4 active backoffs.
@@ -1384,18 +1645,18 @@ def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
     _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert len(load_calls) == before_idle
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert len(load_calls) == before_idle
 
     # Mutating target Goal #2 reloads once and immediately invalidates ONLY binding #2's witness.
-    reg_read_bytes.clear()
+    registry_reads.clear()
     target_goals[2]["description"] = "target-2-edited"
     _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert load_calls[before_idle:] == [corrupt_sids[2]]

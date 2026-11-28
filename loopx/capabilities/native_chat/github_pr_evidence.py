@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import configparser
 from datetime import datetime, timezone
+from functools import partial
 import json
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Callable, Mapping, Sequence
+from time import monotonic
+from typing import Any, Callable, Generic, Mapping, NamedTuple, Sequence, TypeVar
 
 from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
 from ..pr_review_queue.review_body import (
@@ -25,6 +27,9 @@ GITHUB_PR_LIST_FIELDS = (
     "isDraft,author,reviewDecision,mergeStateStatus,mergeable,updatedAt,"
     "reviews,statusCheckRollup"
 )
+
+_KNOWN_MERGE_STATES = {"BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE"}
+_PR_DISPLAY_FIELDS = ("title", "url", "headRefName", "baseRefName")
 GITHUB_PR_VIEW_FIELDS = GITHUB_PR_LIST_FIELDS + ",state,mergedAt,mergeCommit"
 
 _GITHUB_URL_TARGET_RE = re.compile(
@@ -42,6 +47,7 @@ _CHECK_FAIL_CONCLUSIONS = frozenset(
     {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 )
 _CHECK_PASS_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+_CHECK_ACTIVE_STATUSES = frozenset({"IN_PROGRESS", "PENDING", "QUEUED", "REQUESTED", "WAITING"})
 _KNOWN_BOT_LOGINS = frozenset(
     {"mergify", "codecov", "codecov-commenter", "github-actions", "dependabot"}
 )
@@ -58,18 +64,15 @@ def _parse_iso_timestamp(value: Any) -> tuple[datetime, str] | None:
     normalized = f"{raw[:-1]}+00:00" if raw.endswith("Z") else raw
     try:
         dt = datetime.fromisoformat(normalized)
-    except ValueError:
+        dt = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
     return dt, raw
 
 
 def _is_bot_login(login: str) -> bool:
     cleaned = str(login or "").strip().casefold()
-    return not cleaned or cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
+    return cleaned.endswith("[bot]") or cleaned in _KNOWN_BOT_LOGINS
 
 
 def _is_bot_actor(raw_user: Any, login: str) -> bool:
@@ -223,25 +226,33 @@ def is_steward_repository_authorized(
     return repository.casefold() in {slug.casefold() for slug in allowed}
 
 
-def _summarize_checks(rollup: Any) -> dict[str, int]:
-    items = [row for row in (rollup or []) if isinstance(row, Mapping)]
+def _tally_checks(rollup: object) -> tuple[dict[str, int], bool]:
+    items = [] if rollup is None else rollup
+    if not isinstance(items, (list, tuple)):
+        items = ()
     pass_count = fail_count = pending_count = 0
     for item in items:
+        if not isinstance(item, Mapping):
+            continue
         conclusion = str(item.get("conclusion") or "").strip().upper()
         status = str(item.get("status") or "").strip().upper()
         state = str(item.get("state") or "").strip().upper()
+        if conclusion == "STALE" or (status and status != "COMPLETED" and status not in _CHECK_ACTIVE_STATUSES):
+            continue
         if conclusion in _CHECK_FAIL_CONCLUSIONS or state in {"FAILURE", "ERROR"}:
             fail_count += 1
-        elif (status and status != "COMPLETED") or (not conclusion and state in {"PENDING", "EXPECTED"}):
+        elif status in _CHECK_ACTIVE_STATUSES or (not conclusion and state in {"PENDING", "EXPECTED"}):
             pending_count += 1
         elif conclusion in _CHECK_PASS_CONCLUSIONS or state == "SUCCESS":
             pass_count += 1
-    return {
+    counts = {
         "total": len(items),
         "pass_count": pass_count,
         "fail_count": fail_count,
         "pending_count": pending_count,
     }
+    complete = (rollup is None or isinstance(rollup, (list, tuple))) and len(items) == pass_count + fail_count + pending_count
+    return counts, complete
 
 
 def _extract_review_record(
@@ -319,19 +330,30 @@ def _post_reply_role(
     *,
     pr_author: str,
     rc_reviewer_logins: set[str],
-) -> tuple[int, str] | None:
+) -> tuple[int, str | None] | None:
     raw_user = entry.get("author") or entry.get("user") or {}
-    login = str(raw_user.get("login") if isinstance(raw_user, Mapping) else "").strip()
+    raw_login = raw_user.get("login") if isinstance(raw_user, Mapping) else None
+    login = raw_login.strip() if isinstance(raw_login, str) else ""
     if _is_bot_actor(raw_user, login):
         return None
-    if pr_author and login.casefold() == pr_author.casefold():
+    if not login or not pr_author:
+        return 1, None
+    if login.casefold() == pr_author.casefold():
         return 1, "author"
     assoc = str(entry.get("authorAssociation") or entry.get("author_association") or "").strip().upper()
     if assoc in _MAINTAINER_ASSOCIATIONS or (
-        bool(login) and login.casefold() in rc_reviewer_logins and assoc not in _NON_MAINTAINER_ASSOCIATIONS
+        login.casefold() in rc_reviewer_logins and assoc not in _NON_MAINTAINER_ASSOCIATIONS
     ):
         return 0, "maintainer"
     return None
+
+
+class _StallEvidence(NamedTuple):
+    latest_review_id: str | None = None
+    stalled_since: str | None = None
+    author_replied: bool = False
+    comments_incomplete: bool = False
+    stalled_since_unknown: bool = False
 
 
 def _summarize_request_changes_stall(
@@ -341,7 +363,7 @@ def _summarize_request_changes_stall(
     latest_record_by_actor: Mapping[tuple[str, str], tuple[str, dict[str, Any]]],
     head_oid: str,
     pr_author: str,
-) -> tuple[str | None, str | None, bool, bool]:
+) -> _StallEvidence:
     rc_candidates: list[tuple[datetime, str, dict[str, Any], str]] = []
     for verdict_val, rec in latest_record_by_actor.values():
         if verdict_val != "REQUEST_CHANGES":
@@ -350,7 +372,7 @@ def _summarize_request_changes_stall(
         if parsed is not None:
             rc_candidates.append((parsed[0], str(rec.get("id") or ""), rec, parsed[1]))
     if not rc_candidates:
-        return None, None, False, False
+        return _StallEvidence()
     latest_rc_dt, _latest_id, latest_rec, rc_iso = max(
         rc_candidates, key=lambda item: (item[0], item[1])
     )
@@ -366,57 +388,84 @@ def _summarize_request_changes_stall(
         if parsed_commit is not None:
             anchors.append(parsed_commit)
     stalled_anchor_dt, stalled_since = max(anchors, key=lambda pair: pair[0])
+    unbound_commit_at = _parse_iso_timestamp(row.get("_unbound_head_commit_at"))
+    if unbound_commit_at is not None and unbound_commit_at[0] > stalled_anchor_dt:
+        # Both the age and the set of post-anchor replies depend on this clock's identity.
+        return _StallEvidence(latest_review_id=latest_rc_review_id, stalled_since_unknown=True)
+
+    if row.get("_comment_readback_incomplete") is True:
+        return _StallEvidence(latest_review_id=latest_rc_review_id, stalled_since=stalled_since, comments_incomplete=True)
 
     earliest_comment_dt: datetime | None = None
     has_post_anchor_comment_reply = False
-    post_replies: list[tuple[datetime, int, str]] = []
+    post_replies: list[tuple[datetime, int, str | None]] = []
+    undated_reply_roles: set[str | None] = set()
     for comment in row.get("comments") or []:
         if not isinstance(comment, Mapping):
             continue
         parsed_ts = _parse_iso_timestamp(comment.get("createdAt") or comment.get("created_at"))
-        if parsed_ts is None:
-            continue
-        if earliest_comment_dt is None or parsed_ts[0] < earliest_comment_dt:
-            earliest_comment_dt = parsed_ts[0]
-        if parsed_ts[0] <= stalled_anchor_dt:
-            continue
+        if parsed_ts is not None:
+            if earliest_comment_dt is None or parsed_ts[0] < earliest_comment_dt:
+                earliest_comment_dt = parsed_ts[0]
+            if parsed_ts[0] <= stalled_anchor_dt:
+                continue
         role_info = _post_reply_role(comment, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
-        if role_info is not None:
-            has_post_anchor_comment_reply = True
+        if role_info is None:
+            continue
+        if parsed_ts is None:
+            undated_reply_roles.add(role_info[1])
+        else:
+            has_post_anchor_comment_reply |= role_info[1] is not None
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
     for review in raw_reviews:
         if str(review.get("state") or "").strip().upper() != "COMMENTED":
             continue
         parsed_ts = _parse_iso_timestamp(review.get("submittedAt") or review.get("submitted_at"))
-        if parsed_ts is None or parsed_ts[0] <= stalled_anchor_dt:
+        if parsed_ts is not None and parsed_ts[0] <= stalled_anchor_dt:
             continue
         if _extract_review_record(review, head_oid=head_oid, pr_author=pr_author)["valid_verdict_review"]:
             continue
         role_info = _post_reply_role(review, pr_author=pr_author, rc_reviewer_logins=rc_reviewer_logins)
-        if role_info is not None:
+        if role_info is None:
+            continue
+        if parsed_ts is None:
+            undated_reply_roles.add(role_info[1])
+        else:
             post_replies.append((parsed_ts[0], role_info[0], role_info[1]))
 
-    post_replies.sort(key=lambda item: (item[0], item[1]))
-    author_replied = bool(pr_author and post_replies and post_replies[-1][2] == "author")
+    # An unknown actor could be the PR author. A known author at the same time settles that tie.
+    post_replies.sort(key=lambda item: (item[0], item[1], item[2] is not None))
+    latest_reply = post_replies[-1] if post_replies else None
+    author_replied = latest_reply is not None and latest_reply[2] == "author"
+    # An undated reply could precede the anchor or supersede all dated replies.
+    compatible_role = "author" if author_replied else "maintainer"
+    reply_role_uncertain = (
+        (latest_reply is not None and latest_reply[2] is None)
+        or bool(undated_reply_roles - {compatible_role})
+    )
     # GraphQL comments(last: N) returns a newest-last suffix, so coverage is complete when
     # there is no earlier page, the fetched suffix reaches the anchor, or a newer reply
     # from the PR author or a maintainer in the visible suffix supersedes older comments.
-    comments_coverage_complete = (
+    comments_coverage_complete = not reply_role_uncertain and (
         row.get("commentsHasPreviousPage") is not True
         or (earliest_comment_dt is not None and earliest_comment_dt <= stalled_anchor_dt)
         or has_post_anchor_comment_reply
     )
-    return latest_rc_review_id, stalled_since, author_replied, not comments_coverage_complete
+    return _StallEvidence(
+        latest_review_id=latest_rc_review_id,
+        stalled_since=stalled_since,
+        author_replied=author_replied and not reply_role_uncertain,
+        comments_incomplete=not comments_coverage_complete,
+    )
 
 
 def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     """Project compact, deterministic exact-head review, check, and gate facts."""
     head_oid = str(row.get("headRefOid") or "").strip()
     raw_author = row.get("author")
-    pr_author = str(
-        raw_author.get("login") if isinstance(raw_author, Mapping) else (raw_author or "")
-    ).strip()
+    author_login = raw_author.get("login") if isinstance(raw_author, Mapping) else raw_author
+    pr_author = author_login.strip() if isinstance(author_login, str) else ""
     raw_reviews = [item for item in (row.get("reviews") or []) if isinstance(item, Mapping)]
     stale_count = 0
     exact_reviews: list[dict[str, Any]] = []
@@ -434,10 +483,14 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     latest_by_actor: dict[tuple[str, str], str | None] = {}
     latest_record_by_actor: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
     inconsistent_verdict = False
+    stalled_since_unknown = False
     for record in exact_reviews:
         actionable = _actor_actionable_verdict(record)
         if actionable is None:
             continue
+        # An undated Request Changes review cannot be ordered relative to dated reviews.
+        if actionable in {"REQUEST_CHANGES", "CONFLICT"} and _parse_iso_timestamp(record["submitted_at"]) is None:
+            stalled_since_unknown = True
         actor_key = (
             (record["author_login"] or "").casefold(),
             (record["reviewer_declaration"] or "").casefold(),
@@ -453,8 +506,10 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             latest_by_actor[actor_key] = actionable
             latest_record_by_actor[actor_key] = (actionable, record)
 
-    latest_rc_review_id, stalled_since, author_replied_after_rc, comments_coverage_incomplete = (
-        _summarize_request_changes_stall(
+    stall = (
+        _StallEvidence(stalled_since_unknown=True)
+        if stalled_since_unknown
+        else _summarize_request_changes_stall(
             row,
             raw_reviews=raw_reviews,
             latest_record_by_actor=latest_record_by_actor,
@@ -462,7 +517,6 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             pr_author=pr_author,
         )
     )
-
     verdicts = {val for val in latest_by_actor.values() if val}
     review_decision = str(row.get("reviewDecision") or "").strip().upper()
     has_conflict = (
@@ -479,16 +533,17 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     else:
         effective_verdict = "NONE"
 
-    checks_summary = _summarize_checks(row.get("statusCheckRollup"))
+    check_counts, checks_complete = _tally_checks(row.get("statusCheckRollup"))
+    checks_summary = check_counts if checks_complete and row.get("checks_coverage_incomplete") is not True else None
     merge_state = str(row.get("mergeStateStatus") or "").strip().upper()
     bypassed_gates: list[str] = []
     if review_decision == "REVIEW_REQUIRED":
         bypassed_gates.append("REVIEW_REQUIRED")
     if merge_state == "BLOCKED":
         bypassed_gates.append("BLOCKED_MERGE_STATE")
-    if checks_summary["fail_count"] > 0:
+    if check_counts["fail_count"] > 0:
         bypassed_gates.append("FAILING_CHECKS")
-    if checks_summary["pending_count"] > 0:
+    if check_counts["pending_count"] > 0:
         bypassed_gates.append("PENDING_CHECKS")
     if merge_state == "UNSTABLE":
         bypassed_gates.append("UNSTABLE_MERGE_STATE")
@@ -506,24 +561,30 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "headRefOid": row.get("headRefOid"),
         "headRefName": row.get("headRefName"),
         "baseRefName": row.get("baseRefName"),
+        **({"pr_metadata_coverage_incomplete": True} if row.get("pr_metadata_coverage_incomplete") is True else {}),
         "isDraft": row.get("isDraft"),
         "author": row.get("author"),
         "reviewDecision": row.get("reviewDecision"),
         "mergeStateStatus": row.get("mergeStateStatus"),
+        **({"merge_state_coverage_incomplete": True} if row.get("merge_state_coverage_incomplete") is True else {}),
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
-        "stalled_since": stalled_since,
-        "author_replied_after_request_changes": author_replied_after_rc,
-        "comments_coverage_incomplete": comments_coverage_incomplete,
+        "stalled_since": stall.stalled_since,
+        **({"review_coverage_incomplete": True} if row.get("review_coverage_incomplete") is True else {}),
+        **({"review_readback_incomplete": True} if row.get("review_readback_incomplete") is True else {}),
+        **({"stalled_since_unknown": True} if stall.stalled_since_unknown else {}),
+        "author_replied_after_request_changes": stall.author_replied,
+        "comments_coverage_incomplete": stall.comments_incomplete,
         "checks_summary": checks_summary,
+        **({"checks_coverage_incomplete": True} if checks_summary is None else {}),
         "review_summary": {
             "effective_verdict": effective_verdict,
             "has_review_conflict": has_conflict,
             "stale_review_count": stale_count,
-            "latest_request_changes_review_id": latest_rc_review_id,
-            "stalled_since": stalled_since,
-            "author_replied_after_request_changes": author_replied_after_rc,
-            "comments_coverage_incomplete": comments_coverage_incomplete,
+            "latest_request_changes_review_id": stall.latest_review_id,
+            "stalled_since": stall.stalled_since,
+            "author_replied_after_request_changes": stall.author_replied,
+            "comments_coverage_incomplete": stall.comments_incomplete,
             "exact_head_reviews": exact_reviews,
         },
         "bypassed_gates": bypassed_gates,
@@ -537,84 +598,114 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 _GITHUB_PR_LIST_PAGE_SIZE = 20
+_GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE = 25
 _GITHUB_PR_LIST_MAX_PAGES = 5
-_GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES = 3
-_GITHUB_PR_COMMENTS_PAGE_QUERY = """query($owner: String!, $name: String!, $number: Int!, $before: String!) {
-  repository(owner: $owner, name: $name) {
-    pullRequest(number: $number) {
-      comments(last: 50, before: $before) {
-        pageInfo {
-          hasPreviousPage
-          startCursor
-        }
-        nodes {
-          createdAt
-          authorAssociation
-          author {
-            __typename
-            login
-          }
-        }
-      }
-    }
+_GITHUB_PR_QUERY_TIMEOUT_SECONDS = 20
+_GITHUB_PR_SCAN_TIMEOUT_SECONDS = _GITHUB_PR_LIST_MAX_PAGES * _GITHUB_PR_QUERY_TIMEOUT_SECONDS
+_GITHUB_PR_LIST_STANDARD_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE * _GITHUB_PR_LIST_MAX_PAGES
+_GITHUB_PR_LIST_MAX_CAPACITY = _GITHUB_PR_LIST_PAGE_SIZE + (
+    _GITHUB_PR_LIST_MAX_PAGES - 1
+) * _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
+_GITHUB_PR_MAX_BACKFILL_PAGES = 3
+_GITHUB_PR_BACKFILL_BUDGET = (
+    _GITHUB_PR_LIST_STANDARD_CAPACITY * _GITHUB_PR_MAX_BACKFILL_PAGES
+)
+_GITHUB_PR_REVIEW_PAGE_SIZE = 20
+_GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE = 30
+_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE = 20
+_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE = 50
+# Review rows carry full bodies, so the joint readback has a lower review-specific cap.
+_GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP = 3400
+_GITHUB_PR_JOINT_REVIEW_ROW_CAP = 400
+_GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
+fragment StewardReviewPage on PullRequestReviewConnection {
+  totalCount
+  pageInfo { hasPreviousPage startCursor }
+  nodes {
+    id
+    state
+    submittedAt
+    body
+    authorAssociation
+    author { __typename login }
+    commit { oid }
   }
 }"""
-_GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String) {
-  repository(owner: $owner, name: $name) {
+
+
+def _older_reviews_page_query(readbacks: Mapping[str, str]) -> str:
+    variables = "".join(f", ${alias}: String!" for alias in readbacks)
+    fields = "".join(
+        f"      {alias}: reviews(last: 20, before: ${alias}) {{ ...StewardReviewPage }}\n"
+        for alias in readbacks
+    )
+    return f"""query($owner: String!, $name: String!, $number: Int!, $before: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
+      number
+      headRefOid
+      updatedAt
+      reviewDecision
+      latestReviews: reviews(last: 20) {{ ...StewardReviewPage }}
+      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      reviews(last: 20, before: $before) {{ ...StewardReviewPage }}
+{fields}    }}
+  }}
+}}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+
+
+_GITHUB_PR_COMMENT_PAGE_FRAGMENT = """
+fragment StewardCommentPage on IssueCommentConnection {
+  pageInfo { hasPreviousPage startCursor }
+  nodes {
+    createdAt
+    authorAssociation
+    author { __typename login }
+  }
+}"""
+
+
+def _older_comments_page_query(readbacks: Mapping[str, str]) -> str:
+    variables = "".join(f", ${alias}: String!" for alias in readbacks)
+    fields = "".join(
+        f"      {alias}: comments(last: 50, before: ${alias}) {{ ...StewardCommentPage }}\n"
+        for alias in readbacks
+    )
+    return f"""query($owner: String!, $name: String!, $number: Int!, $before: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+    pullRequest(number: $number) {{
+      number
+      headRefOid
+      updatedAt
+      reviewDecision
+      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      latestReviews: reviews(last: 20) {{ ...StewardReviewPage }}
+      comments(last: 50, before: $before) {{ ...StewardCommentPage }}
+{fields}    }}
+  }}
+}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
+
+
+_GITHUB_OPEN_PR_FIELDS = """
     pullRequests(
       states: OPEN,
-      first: 20,
+      first: $pageSize,
       after: $cursor,
       orderBy: {field: UPDATED_AT, direction: DESC}
     ) {
+      totalCount
       pageInfo {
         hasNextPage
         endCursor
       }
       nodes {
-        number
-        title
-        url
-        headRefOid
-        headRefName
-        baseRefName
-        isDraft
-        reviewDecision
-        mergeStateStatus
-        mergeable
-        updatedAt
-        author {
-          login
-        }
+        ...StewardPrWindowRow
+        ...StewardPrTerminalFields
         comments(last: 20) {
-          pageInfo {
-            hasPreviousPage
-            startCursor
-          }
-          nodes {
-            createdAt
-            authorAssociation
-            author {
-              __typename
-              login
-            }
-          }
+          ...StewardCommentPage
         }
         reviews(last: 20) {
-          nodes {
-            id
-            state
-            submittedAt
-            body
-            authorAssociation
-            author {
-              __typename
-              login
-            }
-            commit {
-              oid
-            }
-          }
+          ...StewardReviewPage
         }
         commits(last: 1) {
           nodes {
@@ -624,171 +715,748 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
               pushedDate
               statusCheckRollup {
                 contexts(first: 30) {
-                  nodes {
-                    __typename
-                    ... on CheckRun {
-                      name
-                      status
-                      conclusion
-                    }
-                    ... on StatusContext {
-                      context
-                      state
-                    }
-                  }
+                  ...StewardCheckContextWindow
                 }
               }
             }
           }
         }
       }
-    }
+    }"""
+
+_GITHUB_OPEN_PR_WINDOW_FRAGMENT = """
+fragment StewardPrWindowRow on PullRequest {
+  number
+  headRefOid
+  updatedAt
+  reviewDecision
+}"""
+
+_GITHUB_OPEN_PR_TERMINAL_FRAGMENT = """
+fragment StewardPrTerminalFields on PullRequest {
+  isDraft
+  mergeable
+  mergeStateStatus
+  author { login }
+  title
+  url
+  headRefName
+  baseRefName
+}"""
+
+_GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT = """
+fragment StewardCheckContextWindow on StatusCheckRollupContextConnection {
+  totalCount
+  pageInfo { hasNextPage }
+  nodes {
+    ... on CheckRun { id status conclusion }
+    ... on StatusContext { id state }
   }
 }"""
 
 
-def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
-    raw_reviews = node.get("reviews")
-    if isinstance(raw_reviews, Mapping) and isinstance(raw_reviews.get("nodes"), list):
-        reviews = [item for item in raw_reviews["nodes"] if isinstance(item, Mapping)]
-    elif isinstance(raw_reviews, list):
-        reviews = [item for item in raw_reviews if isinstance(item, Mapping)]
-    else:
-        reviews = []
+def _open_pr_check_readback(limit: int, *, include_clocks: bool) -> str:
+    clocks = " committedDate pushedDate" if include_clocks else ""
+    return f"""
+        commits(last: 1) {{
+          nodes {{ commit {{ oid{clocks} statusCheckRollup {{
+            contexts(first: {limit}) {{ ...StewardCheckContextWindow }}
+          }} }} }}
+        }}"""
 
-    raw_comments = node.get("comments")
-    comments_page_info: Mapping[str, Any] = {}
-    if isinstance(raw_comments, Mapping):
-        raw_nodes = raw_comments.get("nodes")
-        comments = [item for item in raw_nodes if isinstance(item, Mapping)] if isinstance(raw_nodes, list) else []
-        raw_page_info = raw_comments.get("pageInfo")
-        if isinstance(raw_page_info, Mapping):
-            comments_page_info = raw_page_info
-    elif isinstance(raw_comments, list):
-        comments = [item for item in raw_comments if isinstance(item, Mapping)]
-    else:
-        comments = []
-    comments_has_previous_page = bool(comments_page_info.get("hasPreviousPage") is True)
-    comments_start_cursor = str(comments_page_info.get("startCursor") or "").strip() or None
 
+class _OpenPrReadbackLimits(NamedTuple):
+    page_size: int
+    checks: int | None
+    reviews: int | None
+    comments: int | None
+
+
+def _open_pr_readback_fields(limits: _OpenPrReadbackLimits, *, include_clocks: bool = False) -> str:
+    fields = _open_pr_check_readback(limits.checks, include_clocks=include_clocks) if limits.checks is not None else ""
+    if limits.reviews is not None:
+        fields += f"\n        reviews(last: {limits.reviews}) {{ ...StewardReviewPage }}"
+    if limits.comments is not None:
+        fields += f"\n        comments(last: {limits.comments}) {{ ...StewardCommentPage }}"
+    return fields
+
+
+def _open_pr_window_selection(alias: str, cursor_name: str, size: int, fields: str = "") -> str:
+    return f"""
+    {alias}: pullRequests(
+      states: OPEN, first: {size}, after: ${cursor_name},
+      orderBy: {{field: UPDATED_AT, direction: DESC}}
+    ) {{
+      totalCount
+      pageInfo {{ hasNextPage endCursor }}
+      nodes {{ ...StewardPrWindowRow{fields} }}
+    }}"""
+
+
+def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, include_terminal_fields: bool) -> str:
+    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
+    terminal_fields = "\n        ...StewardPrTerminalFields" if include_terminal_fields else ""
+    readbacks = "".join(
+        _open_pr_window_selection(
+            f"previousPrs{index}", f"previousCursor{index}", limits.page_size,
+            terminal_fields + _open_pr_readback_fields(limits),
+        )
+        for index, limits in enumerate(previous_limits)
+    )
+    return (
+        f"""query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+{_GITHUB_OPEN_PR_FIELDS}{readbacks}
+  }}
+}}"""
+        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_TERMINAL_FRAGMENT
+        + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+        + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
+    )
+
+
+class _OpenPrPage(NamedTuple):
+    total_count: int
+    rows: list[Mapping[str, Any]]
+    next_cursor: str | None
+
+
+def _read_open_pr_page(connection: object, page_size: int) -> _OpenPrPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    total = connection.get("totalCount")
+    rows = connection.get("nodes")
+    if type(total) is not int or not 0 <= total <= _GITHUB_PR_LIST_MAX_CAPACITY:
+        return None
+    if not isinstance(rows, list) or len(rows) > page_size or any(
+        not isinstance(row, Mapping) or type(row.get("number")) is not int or row["number"] <= 0
+        for row in rows
+    ):
+        return None
+    page_info = connection.get("pageInfo")
+    has_next = page_info.get("hasNextPage") if isinstance(page_info, Mapping) else None
+    if has_next is False:
+        return _OpenPrPage(total, rows, None)
+    if has_next is not True:
+        return None
+    cursor = page_info.get("endCursor")
+    return _OpenPrPage(total, rows, cursor) if isinstance(cursor, str) and cursor.strip() else None
+
+
+class _OpenPrWindow(NamedTuple):
+    total_count: int
+    next_cursor: str | None
+    revisions: list[tuple[int, str, str, str | None]]
+
+
+class _JointPrWindow(NamedTuple):
+    cursor: str | None
+    expected: _OpenPrWindow
+    page_size: int
+
+
+def _read_open_pr_window(page: _OpenPrPage | None) -> _OpenPrWindow | None:
+    if page is None:
+        return None
+    revisions = []
+    for row in page.rows:
+        head = row.get("headRefOid")
+        revision = _read_pr_signal_revision(row)
+        if not isinstance(head, str) or not head.strip() or revision is None:
+            return None
+        revisions.append((row["number"], head, *revision))
+    return _OpenPrWindow(page.total_count, page.next_cursor, revisions)
+
+
+def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
+    """Return whether older comments may exist and a verified continuation cursor."""
+    if not isinstance(page_info, Mapping):
+        return True, None
+    has_previous = page_info.get("hasPreviousPage")
+    if has_previous is False:
+        return False, None
+    cursor = page_info.get("startCursor")
+    if has_previous is True and isinstance(cursor, str) and cursor.strip():
+        return True, cursor
+    return True, None
+
+
+def _read_graphql_comment_nodes(raw_nodes: object) -> list[Mapping[str, Any]] | None:
+    # Structured rows can still establish the role of a reply with unreadable timing.
+    if not isinstance(raw_nodes, list) or any(not isinstance(comment, Mapping) for comment in raw_nodes):
+        return None
+    return raw_nodes
+
+
+class _CommentPage(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    has_previous: bool
+    previous_cursor: str | None
+
+
+def _read_graphql_comment_page(connection: object, *, max_rows: int) -> _CommentPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    rows = _read_graphql_comment_nodes(connection.get("nodes"))
+    if rows is None or len(rows) > max_rows:
+        return None
+    has_previous, cursor = _graphql_comment_page_info(connection.get("pageInfo"))
+    return _CommentPage(rows, has_previous, cursor)
+
+
+def _comment_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int:
+    limit = 1
+    for row in rows:
+        page = _read_graphql_comment_page(row.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+        if page is not None:
+            limit = max(limit, len(page.rows))
+    return limit
+
+
+def _earlier_pr_comments_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    initial = _read_graphql_comment_page(original.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    terminal = _read_graphql_comment_page(readback.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    return initial is not None and initial == terminal
+
+
+class _ReviewPage(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    ids: set[str]
+    total_count: int
+    previous_cursor: str | None
+
+
+def _read_graphql_review_page(connection: object) -> _ReviewPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    rows = connection.get("nodes")
+    page_info = connection.get("pageInfo")
+    total_count = connection.get("totalCount")
+    if (
+        not isinstance(rows, list) or len(rows) > _GITHUB_PR_REVIEW_PAGE_SIZE
+        or not isinstance(page_info, Mapping)
+        or type(total_count) is not int
+        or total_count < len(rows)
+    ):
+        return None
+    has_previous = page_info.get("hasPreviousPage")
+    cursor = page_info.get("startCursor") if has_previous is True else None
+    if has_previous is not False and (
+        has_previous is not True or not isinstance(cursor, str) or not cursor.strip()
+        or not rows or total_count == len(rows)
+    ):
+        return None
+    seen_ids: set[str] = set()
+    for review in rows:
+        if not isinstance(review, Mapping):
+            return None
+        raw_id = review.get("id")
+        review_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        commit = review.get("commit")
+        commit_oid = commit.get("oid") if isinstance(commit, Mapping) else None
+        if (
+            not review_id or review_id in seen_ids
+            or not isinstance(commit_oid, str) or not commit_oid.strip()
+        ):
+            return None
+        seen_ids.add(review_id)
+    return _ReviewPage(rows, seen_ids, total_count, cursor)
+
+
+def _review_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int:
+    return max(
+        (max(1, len(page.rows)) for row in rows if (page := _read_graphql_review_page(row.get("reviews"))) is not None),
+        default=1,
+    )
+
+
+def _earlier_pr_reviews_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    original_page = _read_graphql_review_page(original.get("reviews"))
+    return original_page is not None and original_page == _read_graphql_review_page(readback.get("reviews"))
+
+
+def _read_graphql_check_contexts(contexts: object) -> list[Mapping[str, Any]] | None:
+    if not isinstance(contexts, Mapping):
+        return None
+    nodes = contexts.get("nodes")
+    page_info = contexts.get("pageInfo")
+    total_count = contexts.get("totalCount")
+    if (
+        not isinstance(nodes, list) or len(nodes) > _GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE
+        or not isinstance(page_info, Mapping) or page_info.get("hasNextPage") is not False
+        or type(total_count) is not int or total_count != len(nodes)
+    ):
+        return None
+    seen_ids: set[str] = set()
+    for check in nodes:
+        raw_id = check.get("id") if isinstance(check, Mapping) else None
+        check_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        if not check_id or check_id in seen_ids:
+            return None
+        seen_ids.add(check_id)
+    return nodes
+
+
+def _read_direct_pr_checks(node: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    # Some adapters provide check evidence directly on the PR row.
+    direct = node.get("statusCheckRollup")
+    return direct if isinstance(direct, list) and all(isinstance(check, Mapping) for check in direct) else None
+
+
+def _read_graphql_head_check_rollup(
+    verified_head_commit: Mapping[str, Any] | None,
+) -> list[Mapping[str, Any]] | None:
+    if verified_head_commit is None or "statusCheckRollup" not in verified_head_commit:
+        return None
+    rollup = verified_head_commit["statusCheckRollup"]
+    if rollup is None:
+        return []
+    return _read_graphql_check_contexts(rollup.get("contexts")) if isinstance(rollup, Mapping) else None
+
+
+class _PrCommitBinding(NamedTuple):
+    head_oid: str
+    first_commit: Mapping[str, Any] | None
+    commit_oid: str
+    verified: Mapping[str, Any] | None
+
+
+def _graphql_commit_binding(node: Mapping[str, Any]) -> _PrCommitBinding:
     raw_commits = node.get("commits")
     commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
-    first_commit = (
+    raw_commit = (
         commit_nodes[0].get("commit")
         if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
         else None
     )
-    head_oid = str(node.get("headRefOid") or "").strip()
-    head_committed_at = node.get("headCommitCommittedAt")
-    head_pushed_at = node.get("headCommitPushedAt")
-    if isinstance(first_commit, Mapping):
-        commit_oid = str(first_commit.get("oid") or "").strip()
-        if not commit_oid or not head_oid or commit_oid.casefold() == head_oid.casefold():
-            if head_committed_at is None:
-                head_committed_at = first_commit.get("committedDate")
-            if head_pushed_at is None:
-                head_pushed_at = first_commit.get("pushedDate")
+    first_commit = raw_commit if isinstance(raw_commit, Mapping) else None
+    raw_head_oid = node.get("headRefOid")
+    head_oid = raw_head_oid.strip() if isinstance(raw_head_oid, str) else ""
+    raw_commit_oid = first_commit.get("oid") if first_commit is not None else None
+    commit_oid = raw_commit_oid.strip() if isinstance(raw_commit_oid, str) else ""
+    verified = first_commit if head_oid and commit_oid.casefold() == head_oid.casefold() else None
+    return _PrCommitBinding(head_oid, first_commit, commit_oid, verified)
 
-    rollup = node.get("statusCheckRollup")
+
+def _nested_check_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int | None:
+    # A longer window cannot corroborate its earlier tally, so reread only the observed size.
+    known_sizes = []
+    for row in rows:
+        if _read_direct_pr_checks(row) is None:
+            checks = _read_graphql_head_check_rollup(_graphql_commit_binding(row).verified)
+            if checks is not None:
+                known_sizes.append(max(1, len(checks)))
+    return max(known_sizes, default=None)
+
+
+def _earlier_pr_checks_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    if _read_direct_pr_checks(original) is not None:
+        return True
+    original_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(original).verified)
+    current_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(readback).verified)
+    if original_checks is None or current_checks is None:
+        return False
+    original_counts, original_complete = _tally_checks(original_checks)
+    current_counts, current_complete = _tally_checks(current_checks)
+    return original_complete and current_complete and original_counts == current_counts
+
+
+def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
+    raw_reviews = node.get("reviews")
+    review_page = _read_graphql_review_page(raw_reviews)
+    raw_review_nodes = raw_reviews.get("nodes") if isinstance(raw_reviews, Mapping) else raw_reviews
+    reviews = [row for row in raw_review_nodes if isinstance(row, Mapping)] if isinstance(raw_review_nodes, list) else []
+    review_coverage_complete = (
+        review_page is not None and review_page.previous_cursor is None
+        and len(review_page.rows) == review_page.total_count
+    )
+
+    comment_page = _read_graphql_comment_page(node.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    comments, comments_has_previous_page, comments_start_cursor = comment_page or _CommentPage([], True, None)
+
+    head_oid, first_commit, commit_oid, verified_head_commit = _graphql_commit_binding(node)
+    head_clocks: dict[str, Any] = {}
+    unbound_clocks: list[tuple[datetime, str]] = []
+    for row_key, commit_key in (("headCommitPushedAt", "pushedDate"), ("headCommitCommittedAt", "committedDate")):
+        head_clocks[row_key] = node.get(row_key)
+        if head_clocks[row_key] is not None or not isinstance(first_commit, Mapping):
+            continue
+        if verified_head_commit is not None:
+            head_clocks[row_key] = verified_head_commit.get(commit_key)
+        elif not commit_oid:
+            unbound_clock = _parse_iso_timestamp(first_commit.get(commit_key))
+            if unbound_clock is not None:
+                unbound_clocks.append(unbound_clock)
+    latest_unbound = max(unbound_clocks, key=lambda clock: clock[0], default=None)
+    rollup = _read_direct_pr_checks(node)
     if rollup is None:
-        raw_rollup = first_commit.get("statusCheckRollup") if isinstance(first_commit, Mapping) else None
-        raw_contexts = raw_rollup.get("contexts") if isinstance(raw_rollup, Mapping) else None
-        context_nodes = raw_contexts.get("nodes") if isinstance(raw_contexts, Mapping) else None
-        rollup = [item for item in context_nodes if isinstance(item, Mapping)] if isinstance(context_nodes, list) else []
+        rollup = _read_graphql_head_check_rollup(verified_head_commit)
+    merge_state = node.get("mergeStateStatus")
+    display_fields = {field: node.get(field) for field in _PR_DISPLAY_FIELDS}
 
     return {
         "number": node.get("number"),
-        "title": node.get("title"),
-        "url": node.get("url"),
+        **display_fields,
+        "pr_metadata_coverage_incomplete": any(
+            not isinstance(value, str) or not value.strip() for value in display_fields.values()
+        ),
         "headRefOid": node.get("headRefOid"),
-        "headRefName": node.get("headRefName"),
-        "baseRefName": node.get("baseRefName"),
         "isDraft": node.get("isDraft"),
         "author": node.get("author"),
         "reviewDecision": node.get("reviewDecision"),
-        "mergeStateStatus": node.get("mergeStateStatus"),
+        "mergeStateStatus": merge_state,
+        "merge_state_coverage_incomplete": (
+            not isinstance(merge_state, str) or merge_state.strip().upper() not in _KNOWN_MERGE_STATES
+        ),
         "mergeable": node.get("mergeable"),
         "updatedAt": node.get("updatedAt"),
-        "headCommitCommittedAt": head_committed_at,
-        "headCommitPushedAt": head_pushed_at,
+        **head_clocks,
+        "_unbound_head_commit_at": latest_unbound[1] if latest_unbound is not None else None,
         "comments": comments,
         "commentsHasPreviousPage": comments_has_previous_page,
         "commentsStartCursor": comments_start_cursor,
         "reviews": reviews,
+        "review_coverage_incomplete": not review_coverage_complete or not head_oid,
         "statusCheckRollup": rollup,
+        "checks_coverage_incomplete": rollup is None,
     }
+
+
+def _read_older_pr_page(
+    number: int,
+    head_oid: str,
+    query: str,
+    cursor: str,
+    remaining_seconds: float,
+    additional_variables: Mapping[str, str],
+    *,
+    owner: str,
+    name: str,
+    runner: Callable[..., Any],
+    deadline: float,
+) -> Mapping[str, Any] | None:
+    argv = [
+        "gh", "api", "graphql",
+        "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}",
+        "-F", f"number={number}", "-f", f"before={cursor}",
+    ]
+    for variable, value in additional_variables.items():
+        argv.extend(("-f", f"{variable}={value}"))
+    repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
+    return _bound_pr_row(repo.get("pullRequest") if repo is not None else None, number, head_oid)
+
+
+def _read_supplemental_repository(
+    argv: list[str], remaining_seconds: float, *, runner: Callable[..., Any], deadline: float,
+) -> Mapping[str, Any] | None:
+    try:
+        completed = runner(
+            argv,
+            capture_output=True, text=True, check=False,
+            timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
+        )
+        if monotonic() > deadline or completed.returncode != 0:
+            return None
+        payload = json.loads(completed.stdout or "{}")
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(payload, Mapping) or payload.get("errors"):
+        return None
+    data = payload.get("data")
+    repo = data.get("repository") if isinstance(data, Mapping) else None
+    return repo if isinstance(repo, Mapping) else None
+
+
+def _bound_pr_row(pr_data: object, number: int, head_oid: str) -> Mapping[str, Any] | None:
+    if not isinstance(pr_data, Mapping):
+        return None
+    returned_number = pr_data.get("number")
+    if type(returned_number) is not int or returned_number != number or pr_data.get("headRefOid") != head_oid:
+        return None
+    return pr_data
+
+
+_ReadOlderPage = Callable[[int, str, str, str, float, Mapping[str, str]], Mapping[str, Any] | None]
+
+
+def _read_pr_signal_revision(row: Mapping[str, Any]) -> tuple[str, str | None] | None:
+    """Read the observable PR revision fields used during supplemental reads."""
+    updated_at = row.get("updatedAt")
+    timestamp = _parse_iso_timestamp(updated_at) if isinstance(updated_at, str) else None
+    decision = row.get("reviewDecision")
+    if timestamp is None or "reviewDecision" not in row:
+        return None
+    if decision is not None and (not isinstance(decision, str) or not decision.strip()):
+        return None
+    return timestamp[1], decision
+
+
+_SupplementPage = TypeVar("_SupplementPage", _ReviewPage, _CommentPage)
+
+
+class _SupplementEvidence(NamedTuple, Generic[_SupplementPage]):
+    head_oid: str
+    revision: tuple[str, str | None]
+    latest: _SupplementPage
+    pages: dict[str, _SupplementPage]
+
+
+class _BackfilledReviews(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    evidence: _SupplementEvidence[_ReviewPage]
+    recent_comments_match: bool
+
+
+def _backfill_pr_reviews(
+    number: int,
+    head_oid: str,
+    first_page: _ReviewPage,
+    *,
+    revision: tuple[str, str | None],
+    recent_comments: _CommentPage | None,
+    remaining_pages: int,
+    deadline: float,
+    read_older_page: _ReadOlderPage,
+) -> tuple[_BackfilledReviews | None, int]:
+    if first_page.total_count > len(first_page.rows) + remaining_pages * _GITHUB_PR_REVIEW_PAGE_SIZE:
+        return None, remaining_pages
+    rows = first_page.rows
+    ids = set(first_page.ids)
+    cursor = first_page.previous_cursor
+    consumed_pages: dict[str, _ReviewPage] = {}
+    for _ in range(remaining_pages):
+        remaining_seconds = deadline - monotonic()
+        if cursor is None or cursor in consumed_pages or remaining_seconds <= 0:
+            break
+        readbacks = {f"previousReviews{index}": previous for index, previous in enumerate(consumed_pages)}
+        remaining_pages -= 1
+        pr_data = read_older_page(
+            number, head_oid, _older_reviews_page_query(readbacks), cursor, remaining_seconds, readbacks,
+        )
+        if pr_data is None or _read_pr_signal_revision(pr_data) != revision:
+            break
+        if _read_graphql_review_page(pr_data.get("latestReviews")) != first_page:
+            break
+        if any(
+            _read_graphql_review_page(pr_data.get(alias)) != consumed_pages[previous]
+            for alias, previous in readbacks.items()
+        ):
+            break
+        page = _read_graphql_review_page(pr_data.get("reviews"))
+        if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:
+            break
+        consumed_pages[cursor] = page
+        ids.update(page.ids)
+        rows = [*page.rows, *rows]
+        cursor = page.previous_cursor
+        if cursor is None:
+            if len(ids) == first_page.total_count:
+                comments_readback = _read_graphql_comment_page(
+                    pr_data.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE,
+                )
+                evidence = _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
+                comments_match = recent_comments is not None and comments_readback == recent_comments
+                return _BackfilledReviews(rows, evidence, comments_match), remaining_pages
+            break
+        if len(ids) >= first_page.total_count:
+            break
+    return None, remaining_pages
+
+
+def _joint_supplement_query(
+    reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
+    comments: Mapping[int, _SupplementEvidence[_CommentPage]],
+    windows: Sequence[_JointPrWindow],
+    terminal_limits: Mapping[int, _OpenPrReadbackLimits],
+) -> tuple[str, dict[str, str]]:
+    cursors = {}
+    fields = [
+        _open_pr_window_selection(f"terminalWindow{index}", f"terminalCursor{index}", window.page_size)
+        for index, window in enumerate(windows)
+    ]
+    fields.extend(
+        f"""
+    terminalPr{number}: pullRequest(number: {number}) {{
+      ...StewardPrWindowRow ...StewardPrTerminalFields{_open_pr_readback_fields(limits, include_clocks=True)}
+    }}"""
+        for number, limits in terminal_limits.items()
+    )
+    for kind, evidence, latest_size, older_size in (
+        ("review", reviews, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_SIZE),
+        ("comment", comments, _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE, _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE),
+    ):
+        connection = f"{kind}s"
+        upper_kind = kind.title()
+        spread = f"{{ ...Steward{upper_kind}Page }}"
+        cursor_prefix = "reviewBefore" if kind == "review" else "before"
+        for number, supplement in evidence.items():
+            pages = []
+            for index, cursor in enumerate(supplement.pages):
+                name = f"{cursor_prefix}{number}_{index}"
+                cursors[name] = cursor
+                pages.append(f"page{index}: {connection}(last: {older_size}, before: ${name}) {spread}")
+            fields.append(f"""
+    {kind}Pr{number}: pullRequest(number: {number}) {{
+      number headRefOid updatedAt reviewDecision
+      latest{upper_kind}s: {connection}(last: {latest_size}) {spread}
+      {' '.join(pages)}
+    }}""")
+    variables = "".join(f", ${name}: String!" for name in cursors)
+    variables += "".join(f", $terminalCursor{index}: String" for index in range(len(windows)))
+    cursors.update({
+        f"terminalCursor{index}": window.cursor for index, window in enumerate(windows) if window.cursor is not None
+    })
+    query = f"""query($owner: String!, $name: String!{variables}) {{
+  repository(owner: $owner, name: $name) {{ {''.join(fields)} }}
+}}""" + (
+        _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_TERMINAL_FRAGMENT
+        + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
+    )
+    return query, cursors
+
+
+def _joint_supplement_matches(
+    pr_data: object, number: int, evidence: _SupplementEvidence[_SupplementPage], latest_alias: str,
+    read_latest: Callable[[object], _SupplementPage | None],
+    read_older: Callable[[object], _SupplementPage | None],
+) -> bool:
+    row = _bound_pr_row(pr_data, number, evidence.head_oid)
+    if row is None or _read_pr_signal_revision(row) != evidence.revision:
+        return False
+    if read_latest(row.get(latest_alias)) != evidence.latest:
+        return False
+    return all(
+        read_older(row.get(f"page{index}")) == page
+        for index, page in enumerate(evidence.pages.values())
+    )
+
+
+def _corroborate_supplements(
+    reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
+    comments: Mapping[int, _SupplementEvidence[_CommentPage]],
+    windows: Sequence[_JointPrWindow],
+    terminal_rows: Mapping[int, Mapping[str, Any]],
+    *, owner: str, name: str, runner: Callable[..., Any], deadline: float,
+) -> tuple[set[int], set[int]]:
+    terminal_limits = {
+        number: _OpenPrReadbackLimits(
+            1, _nested_check_readback_limit([row]) or 1, _review_readback_limit([row]), _comment_readback_limit([row]),
+        )
+        for number, row in terminal_rows.items()
+    }
+    review_rows = sum((1 + len(supplement.pages)) * _GITHUB_PR_REVIEW_PAGE_SIZE for supplement in reviews.values())
+    review_rows += sum(limits.reviews or 0 for limits in terminal_limits.values())
+    comment_rows = sum(
+        _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE + len(supplement.pages) * _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE
+        for supplement in comments.values()
+    )
+    comment_rows += sum(limits.comments or 0 for limits in terminal_limits.values())
+    other_rows = sum(window.page_size for window in windows) + len(reviews) + len(comments)
+    other_rows += sum(2 + (limits.checks or 0) for limits in terminal_limits.values())
+    if (review_rows > _GITHUB_PR_JOINT_REVIEW_ROW_CAP
+        or review_rows + comment_rows + other_rows > _GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP):
+        return set(), set()
+    query, cursors = _joint_supplement_query(reviews, comments, windows, terminal_limits)
+    argv = ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"]
+    for variable, cursor in cursors.items():
+        argv.extend(("-f", f"{variable}={cursor}"))
+    remaining_seconds = deadline - monotonic()
+    if remaining_seconds <= 0:
+        return set(), set()
+    repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
+    if repo is None or not _joint_terminal_matches(repo, windows, terminal_rows):
+        return set(), set()
+    verified_reviews = {
+        number for number, supplement in reviews.items()
+        if _joint_supplement_matches(
+            repo.get(f"reviewPr{number}"), number, supplement, "latestReviews",
+            _read_graphql_review_page, _read_graphql_review_page,
+        )
+    }
+    read_latest_comment = partial(_read_graphql_comment_page, max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    read_older_comment = partial(_read_graphql_comment_page, max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+    verified_comments = {
+        number for number, supplement in comments.items()
+        if _joint_supplement_matches(
+            repo.get(f"commentPr{number}"), number, supplement, "latestComments", read_latest_comment, read_older_comment,
+        )
+    }
+    return verified_reviews, verified_comments
+
+
+def _joint_terminal_matches(
+    repository: Mapping[str, Any], windows: Sequence[_JointPrWindow], terminal_rows: Mapping[int, Mapping[str, Any]],
+) -> bool:
+    for index, window in enumerate(windows):
+        page = _read_open_pr_page(repository.get(f"terminalWindow{index}"), window.page_size)
+        if _read_open_pr_window(page) != window.expected:
+            return False
+    for number, original in terminal_rows.items():
+        readback = repository.get(f"terminalPr{number}")
+        if not isinstance(readback, Mapping) or _normalize_graphql_pr_node(readback) != _normalize_graphql_pr_node(original):
+            return False
+    return True
 
 
 def _backfill_pr_comments_if_needed(
     norm_node: dict[str, Any],
     summary: dict[str, Any],
     *,
-    owner: str,
-    name: str,
     number: int,
-    runner: Callable[..., Any],
-) -> dict[str, Any]:
-    """Boundedly backfill older PR comment pages when active RC reply coverage is truncated."""
-    attempts = 0
-    while (
-        summary.get("comments_coverage_incomplete") is True
-        and attempts < _GITHUB_PR_COMMENT_MAX_BACKFILL_PAGES
-    ):
-        comment_cursor = str(norm_node.get("commentsStartCursor") or "").strip()
-        if not comment_cursor:
+    revision: tuple[str, str | None] | None,
+    recent_reviews: _ReviewPage,
+    remaining_pages: int,
+    deadline: float,
+    read_older_page: _ReadOlderPage,
+) -> tuple[dict[str, Any], int, _SupplementEvidence[_CommentPage] | None]:
+    """Backfill one PR and retain the pages that establish a complete result."""
+    head_oid = norm_node.get("headRefOid")
+    if not isinstance(head_oid, str) or not head_oid.strip() or revision is None:
+        return summary, remaining_pages, None
+    first_page = _CommentPage(norm_node["comments"], norm_node["commentsHasPreviousPage"], norm_node["commentsStartCursor"])
+    consumed_pages: dict[str, _CommentPage] = {}
+    for _ in range(remaining_pages):
+        if summary.get("comments_coverage_incomplete") is not True:
             break
-        attempts += 1
-        try:
-            completed = runner(
-                [
-                    "gh",
-                    "api",
-                    "graphql",
-                    "-f",
-                    f"query={_GITHUB_PR_COMMENTS_PAGE_QUERY}",
-                    "-f",
-                    f"owner={owner}",
-                    "-f",
-                    f"name={name}",
-                    "-F",
-                    f"number={number}",
-                    "-f",
-                    f"before={comment_cursor}",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=20,
-            )
-        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        comment_cursor = norm_node.get("commentsStartCursor")
+        remaining_seconds = deadline - monotonic()
+        if not comment_cursor or remaining_seconds <= 0:
             break
-        if completed.returncode != 0:
+        readbacks = {f"previousComments{index}": cursor for index, cursor in enumerate(consumed_pages)}
+        remaining_pages -= 1
+        pr_data = read_older_page(
+            number, head_oid, _older_comments_page_query(readbacks), comment_cursor, remaining_seconds, readbacks,
+        )
+        if pr_data is None or _read_pr_signal_revision(pr_data) != revision:
             break
-        try:
-            payload = json.loads(completed.stdout or "{}")
-        except (ValueError, TypeError):
+        if _read_graphql_comment_page(pr_data.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE) != first_page:
             break
-        if not isinstance(payload, Mapping) or payload.get("errors"):
+        if _read_graphql_review_page(pr_data.get("latestReviews")) != recent_reviews:
             break
-        data = payload.get("data")
-        repo = data.get("repository") if isinstance(data, Mapping) else None
-        pr_data = repo.get("pullRequest") if isinstance(repo, Mapping) else None
-        comments_conn = pr_data.get("comments") if isinstance(pr_data, Mapping) else None
-        older_nodes = comments_conn.get("nodes") if isinstance(comments_conn, Mapping) else None
-        page_info = comments_conn.get("pageInfo") if isinstance(comments_conn, Mapping) else None
-        if not isinstance(older_nodes, list) or not isinstance(page_info, Mapping):
+        if any(
+            _read_graphql_comment_page(pr_data.get(alias), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+            != consumed_pages[cursor]
+            for alias, cursor in readbacks.items()
+        ):
             break
-        older_comments = [item for item in older_nodes if isinstance(item, Mapping)]
-        next_has_prev = page_info.get("hasPreviousPage") is True
-        next_cursor = str(page_info.get("startCursor") or "").strip() or None
-        stalled_cursor = next_has_prev and (not next_cursor or next_cursor == comment_cursor)
-        norm_node["comments"] = [*older_comments, *norm_node["comments"]]
-        norm_node["commentsHasPreviousPage"] = next_has_prev
-        norm_node["commentsStartCursor"] = None if stalled_cursor else next_cursor
+        older_page = _read_graphql_comment_page(pr_data.get("comments"), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+        if older_page is None:
+            break
+        consumed_pages[comment_cursor] = older_page
+        next_cursor = older_page.previous_cursor
+        if next_cursor in consumed_pages:
+            # A cycle leaves older coverage unverified.
+            next_cursor = None
+        norm_node["comments"] = [*older_page.rows, *norm_node["comments"]]
+        norm_node["commentsHasPreviousPage"] = older_page.has_previous
+        norm_node["commentsStartCursor"] = next_cursor
         summary = summarize_github_pr_signal(norm_node)
-        if stalled_cursor:
+        if next_cursor is None:
             break
-    return summary
+    evidence = None
+    if consumed_pages and summary.get("comments_coverage_incomplete") is not True:
+        evidence = _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
+    return summary, remaining_pages, evidence
 
 
 def observe_github_repository_prs(
@@ -796,6 +1464,8 @@ def observe_github_repository_prs(
     *,
     runner: Callable[..., Any] = subprocess.run,
     backfill_comments: bool = False,
+    select_comment_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
+    select_review_backfill: Callable[[Sequence[Mapping[str, object]], float], set[int]] | None = None,
 ) -> dict[str, Any]:
     """Read bounded public/authorized open PR signal metadata without side effects."""
     normalized = normalize_github_repo_slug(repo_slug)
@@ -803,70 +1473,225 @@ def observe_github_repository_prs(
         return {"status": "unavailable", "repository": repo_slug}
     owner, name = normalized.split("/", 1)
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
+    expected_total: int | None = None
     cursor: str | None = None
+    previous_pages: dict[str | None, tuple[_OpenPrWindow, _OpenPrReadbackLimits]] = {}
+    unverified_checks: set[int] = set()
+    unverified_reviews: set[int] = set()
+    unverified_comments: set[int] = set()
+    page_size = _GITHUB_PR_LIST_PAGE_SIZE
+    deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
-        for page_index in range(_GITHUB_PR_LIST_MAX_PAGES):
+        for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
+            can_finish = expected_total is not None and len(raw_nodes_by_number) + page_size >= expected_total
+            previous_limits = [
+                limits if can_finish else _OpenPrReadbackLimits(limits.page_size, None, None, None)
+                for _window, limits in previous_pages.values()
+            ]
             cmd = [
                 "gh",
                 "api",
                 "graphql",
                 "-f",
-                f"query={_GITHUB_OPEN_PRS_GRAPHQL_QUERY}",
+                f"query={_open_prs_graphql_query(previous_limits, include_terminal_fields=can_finish)}",
                 "-f",
                 f"owner={owner}",
                 "-f",
                 f"name={name}",
+                "-F",
+                f"pageSize={page_size}",
             ]
             if cursor is not None:
                 cmd.extend(["-f", f"cursor={cursor}"])
+            for index, previous_cursor in enumerate(previous_pages):
+                if previous_cursor is not None:
+                    cmd.extend(["-f", f"previousCursor{index}={previous_cursor}"])
+            remaining_seconds = deadline - monotonic()
+            if remaining_seconds <= 0:
+                return {"status": "unavailable", "repository": repo_slug}
             completed = runner(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=20,
+                timeout=min(_GITHUB_PR_QUERY_TIMEOUT_SECONDS, remaining_seconds),
             )
-            if completed.returncode != 0:
+            if monotonic() > deadline or completed.returncode != 0:
                 return {"status": "unavailable", "repository": repo_slug}
             payload = json.loads(completed.stdout or "{}")
             if not isinstance(payload, Mapping) or payload.get("errors"):
                 return {"status": "unavailable", "repository": repo_slug}
             data = payload.get("data")
             repo = data.get("repository") if isinstance(data, Mapping) else None
-            pull_requests = repo.get("pullRequests") if isinstance(repo, Mapping) else None
-            nodes = pull_requests.get("nodes") if isinstance(pull_requests, Mapping) else None
-            if not isinstance(nodes, list):
+            if not isinstance(repo, Mapping):
                 return {"status": "unavailable", "repository": repo_slug}
-            for node in nodes:
-                if not isinstance(node, Mapping):
-                    continue
-                number = int(node.get("number") or 0)
-                if number > 0:
-                    raw_nodes_by_number[number] = node
-            page_info = pull_requests.get("pageInfo")
-            if not isinstance(page_info, Mapping) or page_info.get("hasNextPage") is not True:
-                break
-            next_cursor = str(page_info.get("endCursor") or "").strip()
-            if not next_cursor or next_cursor == cursor:
-                if page_index < _GITHUB_PR_LIST_MAX_PAGES - 1:
+            page = _read_open_pr_page(repo.get("pullRequests"), page_size)
+            if page is None or (expected_total is not None and page.total_count != expected_total):
+                return {"status": "unavailable", "repository": repo_slug}
+            earlier_rows = {}
+            for index, (expected_window, limits) in enumerate(previous_pages.values()):
+                readback = _read_open_pr_page(repo.get(f"previousPrs{index}"), limits.page_size)
+                if readback is None or _read_open_pr_window(readback) != expected_window:
                     return {"status": "unavailable", "repository": repo_slug}
+                if page.next_cursor is None:
+                    earlier_rows.update((row["number"], row) for row in readback.rows)
+            expected_total = page.total_count
+            if page.next_cursor is None:
+                fresh_numbers = {row["number"] for row in page.rows}
+                for number, original in raw_nodes_by_number.items():
+                    if number in fresh_numbers:
+                        continue
+                    readback_row = earlier_rows.get(number, {})
+                    if not _earlier_pr_checks_agree(original, readback_row):
+                        unverified_checks.add(number)
+                    if not _earlier_pr_reviews_agree(original, readback_row):
+                        unverified_reviews.add(number)
+                    if not _earlier_pr_comments_agree(original, readback_row):
+                        unverified_comments.add(number)
+                    author = readback_row.get("author")
+                    raw_nodes_by_number[number] = {
+                        **original,
+                        "isDraft": readback_row.get("isDraft"),
+                        "mergeable": readback_row.get("mergeable"),
+                        "mergeStateStatus": readback_row.get("mergeStateStatus"),
+                        "author": author if isinstance(author, Mapping) else None,
+                        **{field: readback_row.get(field) for field in _PR_DISPLAY_FIELDS},
+                    }
+            raw_nodes_by_number.update((row["number"], row) for row in page.rows)
+            if page.next_cursor is None:
                 break
-            cursor = next_cursor
-        items: list[dict[str, Any]] = []
-        for number in sorted(raw_nodes_by_number):
-            norm_node = _normalize_graphql_pr_node(raw_nodes_by_number[number])
-            summary = summarize_github_pr_signal(norm_node)
-            if backfill_comments:
-                summary = _backfill_pr_comments_if_needed(
-                    norm_node,
-                    summary,
-                    owner=owner,
-                    name=name,
-                    number=number,
-                    runner=runner,
+            window = _read_open_pr_window(page)
+            if window is None or page.next_cursor == cursor or page.next_cursor in previous_pages:
+                return {"status": "unavailable", "repository": repo_slug}
+            limits = _OpenPrReadbackLimits(
+                page_size, _nested_check_readback_limit(page.rows), _review_readback_limit(page.rows),
+                _comment_readback_limit(page.rows),
+            )
+            previous_pages[cursor] = (window, limits)
+            cursor = page.next_cursor
+            if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
+                page_size = _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
+        else:
+            # A partial list can make the monitor report PRs as removed.
+            return {"status": "unavailable", "repository": repo_slug}
+        if len(raw_nodes_by_number) != expected_total:
+            return {"status": "unavailable", "repository": repo_slug}
+        normalized_nodes = {
+            number: _normalize_graphql_pr_node(raw_nodes_by_number[number])
+            for number in sorted(raw_nodes_by_number)
+        }
+        for number in unverified_checks:
+            normalized_nodes[number]["checks_coverage_incomplete"] = True
+            normalized_nodes[number]["statusCheckRollup"] = None
+        for number in unverified_reviews:
+            normalized_nodes[number]["review_readback_incomplete"] = True
+            normalized_nodes[number]["review_coverage_incomplete"] = True
+        for number in unverified_comments:
+            normalized_nodes[number]["_comment_readback_incomplete"] = True
+        items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
+        remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
+        review_pages_read: dict[int, int] = {}
+        review_supplements: dict[int, _SupplementEvidence[_ReviewPage]] = {}
+        initial_review_items: dict[int, dict[str, Any]] = {}
+        comment_supplements: dict[int, _SupplementEvidence[_CommentPage]] = {}
+        supplemented_comment_items: dict[int, dict[str, Any]] = {}
+        read_older_page = partial(
+            _read_older_pr_page, owner=owner, name=name, runner=runner, deadline=deadline,
+        )
+        if select_review_backfill is not None:
+            review_candidates = {}
+            for number, node in normalized_nodes.items():
+                if number in unverified_reviews:
+                    continue
+                if not node["review_coverage_incomplete"] or not isinstance(node["headRefOid"], str) or not node["headRefOid"]:
+                    continue
+                raw_node = raw_nodes_by_number[number]
+                first_page = _read_graphql_review_page(raw_node.get("reviews"))
+                revision = _read_pr_signal_revision(raw_node)
+                if first_page is not None and first_page.previous_cursor is not None and revision is not None:
+                    review_candidates[number] = (first_page, revision)
+            remaining_seconds = deadline - monotonic()
+            if review_candidates and remaining_seconds > 0:
+                selected = select_review_backfill([items[number] for number in review_candidates], remaining_seconds)
+                for number, (first_page, revision) in review_candidates.items():
+                    if number not in selected or remaining_backfill_pages <= 0 or monotonic() >= deadline:
+                        continue
+                    limit = min(_GITHUB_PR_MAX_BACKFILL_PAGES, remaining_backfill_pages)
+                    node = normalized_nodes[number]
+                    recent_comments = _read_graphql_comment_page(
+                        raw_nodes_by_number[number].get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE,
+                    )
+                    backfilled, remaining = _backfill_pr_reviews(
+                        number, node["headRefOid"], first_page, remaining_pages=limit,
+                        revision=revision, recent_comments=recent_comments, deadline=deadline,
+                        read_older_page=read_older_page,
+                    )
+                    review_pages_read[number] = limit - remaining
+                    remaining_backfill_pages -= review_pages_read[number]
+                    if backfilled is not None:
+                        initial_review_items[number] = items[number]
+                        review_supplements[number] = backfilled.evidence
+                        node["reviews"] = backfilled.rows
+                        node["review_coverage_incomplete"] = False
+                        if not backfilled.recent_comments_match:
+                            node["_comment_readback_incomplete"] = True
+                        items[number] = summarize_github_pr_signal(node)
+        if backfill_comments:
+            candidates = [
+                number for number, item in items.items()
+                if not normalized_nodes[number].get("_comment_readback_incomplete")
+                and item["comments_coverage_incomplete"] and not item.get("review_coverage_incomplete")
+            ]
+            remaining_seconds = deadline - monotonic()
+            if select_comment_backfill is not None and candidates and remaining_seconds > 0:
+                selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)
+                candidates = [number for number in candidates if number in selected]
+            for number in candidates:
+                if remaining_backfill_pages <= 0 or monotonic() >= deadline:
+                    break
+                recent_reviews = _read_graphql_review_page(raw_nodes_by_number[number].get("reviews"))
+                if recent_reviews is None:
+                    continue
+                limit = min(
+                    remaining_backfill_pages, _GITHUB_PR_MAX_BACKFILL_PAGES - review_pages_read.get(number, 0),
                 )
-            items.append(summary)
-        return {"status": "ok", "repository": repo_slug, "items": items}
+                summary, remaining, evidence = _backfill_pr_comments_if_needed(
+                    normalized_nodes[number],
+                    items[number],
+                    number=number,
+                    revision=_read_pr_signal_revision(raw_nodes_by_number[number]),
+                    recent_reviews=recent_reviews,
+                    remaining_pages=limit,
+                    deadline=deadline,
+                    read_older_page=read_older_page,
+                )
+                remaining_backfill_pages -= limit - remaining
+                if evidence is None:
+                    items[number] = summary
+                else:
+                    comment_supplements[number] = evidence
+                    supplemented_comment_items[number] = summary
+        # A PR with an unverified review cannot publish a comment result computed from that review.
+        verified_comments = set(comment_supplements)
+        supplement_count = len(review_supplements) + len(comment_supplements)
+        if supplement_count and (len(raw_nodes_by_number) > 1 or supplement_count > 1):
+            verified_reviews, verified_comments = set(), set()
+            terminal_window = _read_open_pr_window(page)
+            if remaining_backfill_pages > 0 and terminal_window is not None:
+                windows = [
+                    _JointPrWindow(previous_cursor, expected, limits.page_size)
+                    for previous_cursor, (expected, limits) in previous_pages.items()
+                ]
+                windows.append(_JointPrWindow(cursor, terminal_window, page_size))
+                verified_reviews, verified_comments = _corroborate_supplements(
+                    review_supplements, comment_supplements, windows, raw_nodes_by_number,
+                    owner=owner, name=name, runner=runner, deadline=deadline,
+                )
+            for number in review_supplements.keys() - verified_reviews:
+                items[number] = initial_review_items[number]
+                verified_comments.discard(number)
+        items.update((number, supplemented_comment_items[number]) for number in verified_comments)
+        return {"status": "ok", "repository": repo_slug, "items": list(items.values())}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}
 

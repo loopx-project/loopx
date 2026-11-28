@@ -31,6 +31,7 @@ import {
 } from "../scheduler/monitor_successor.ts";
 import { normalizeMonitorChangeScope } from "../todos/monitor_scope.ts";
 import { parseProjectionDelivery } from "../todos/projection_delivery.ts";
+import { normalizeTodoRepository } from "../todos/work_requirements.ts";
 
 export const QUOTA_MONITOR_POLL_COMMIT_REQUEST_SCHEMA =
   "loopx_quota_monitor_poll_commit_request_v0";
@@ -112,6 +113,7 @@ export interface MonitorSharedObservationFields extends JsonObject {
   lease_proof?: TaskLeaseProof;
   todo_id: string | null;
   target_key: string | null;
+  observed_task_repository?: string;
   material_change: boolean;
   material_change_scope?: string | null;
   cadence: string | null;
@@ -290,7 +292,16 @@ function decodeSuccessorRouteFields(
 }
 
 export function sharedObservationValues(source: MonitorSharedObservationFields): Record<string, unknown> {
-  return Object.fromEntries(SHARED_OBSERVATION_KEYS.map((key) => [key, source[key]]));
+  return {
+    ...Object.fromEntries(SHARED_OBSERVATION_KEYS.map((key) => [key, source[key]])),
+    ...observedRepositoryField(source),
+  };
+}
+
+function observedRepositoryField(source: JsonObject): { observed_task_repository?: string } {
+  return Object.hasOwn(source, "observed_task_repository")
+    ? { observed_task_repository: normalizeTodoRepository(source.observed_task_repository, "observed_task_repository") ?? "" }
+    : {};
 }
 
 export function collapsedSummary(value: unknown, limit = 160): string {
@@ -454,6 +465,7 @@ export function observationObject(value: unknown): MonitorObservation {
   const trim = (key: string): string | null => optionalTrimmed(observation[key], `observation.${key}`);
   const result = {
     ...observation,
+    ...observedRepositoryField(observation),
     actor_agent_id: trim("actor_agent_id"),
     settlement_todo_id: normalizedTodoId(observation.settlement_todo_id, "observation.settlement_todo_id"),
     reason_summary: optionalString(observation.reason_summary, "observation.reason_summary"),
@@ -567,6 +579,7 @@ export function providerPlanObject(value: unknown): MonitorProviderPlan {
     execute: requireBoolean(plan.execute, "provider_plan.execute"),
     todo_id: normalizedTodoId(plan.todo_id, "provider_plan.todo_id"),
     target_key: trim("target_key"),
+    ...observedRepositoryField(plan),
     result_hash: requiredString(plan.result_hash, "provider_plan.result_hash").trim(),
     material_change: requireBoolean(plan.material_change, "provider_plan.material_change"),
     ...(Object.hasOwn(plan, "material_change_scope") ? {

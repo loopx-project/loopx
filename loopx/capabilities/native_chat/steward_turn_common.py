@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     )
 
 MONITOR_RECOVERY_RETRY_COOLDOWN_SECONDS = 300
+MONITOR_SIGNAL_SCOPE_CHANGED = "the monitor signal scope changed after observation"
+MONITOR_REPOSITORY_CHANGED = "the monitor repository changed after observation"
 _WORKER_EXITED_ERROR = (
     "The LoopX Chat execution worker exited before this turn finished. "
     "Your conversation is saved; execution may have occurred. This turn was not retried automatically."
@@ -26,6 +28,8 @@ _WORKER_EXITED_ERROR = (
 _POST_CONTEXT_WATCH_ERRORS = frozenset({
     "steward monitor external signal source temporarily unavailable",
     "the portfolio scope changed after observation",
+    MONITOR_SIGNAL_SCOPE_CHANGED,
+    MONITOR_REPOSITORY_CHANGED,
     "disk I/O error",
     _WORKER_EXITED_ERROR,
 })
@@ -587,6 +591,59 @@ def normalize_steward_advancement_kernel_candidate(candidate: Mapping[str, objec
     return normalized
 
 
+_ADVANCEMENT_EFFECT_KEYS = ("state_written", "quota_spent", "scheduler_acknowledged")
+_DURABLE_EFFECT_PHASES = frozenset({"durable_writeback", "quota_spend", "scheduler_ack", "terminal_closeout"})
+
+
+def _explicit_no_advancement_effects(value: object) -> bool:
+    return isinstance(value, Mapping) and all(value.get(key) is False for key in _ADVANCEMENT_EFFECT_KEYS)
+
+
+def has_no_steward_advancement_effects(result: Mapping[str, object]) -> bool:
+    """Require known zero effects and reject conflicting durable evidence."""
+    if not _explicit_no_advancement_effects(result.get("effects")):
+        return False
+    replayed = result.get("replayed", False)
+    if not isinstance(replayed, bool):
+        return False
+    if replayed or "recorded_effects" in result:
+        # Replay flags describe only the current call. Read the original Turn's
+        # journal projection before treating them as retry evidence.
+        if not _explicit_no_advancement_effects(result.get("recorded_effects")):
+            return False
+    spent = result.get("quota_slot_spend_count", 0)
+    if type(spent) is not int or spent != 0:
+        return False
+    receipt = result.get("receipt")
+    if receipt is None:
+        return True
+    if not isinstance(receipt, Mapping):
+        return False
+    phases = receipt.get("completed_phases", [])
+    return isinstance(phases, list) and all(
+        isinstance(phase, str) and phase not in _DURABLE_EFFECT_PHASES for phase in phases
+    )
+
+
+def merge_steward_advancement_effects(
+    initial: Mapping[str, object], governance: Mapping[str, object],
+) -> dict[str, object]:
+    effects = as_mapping(governance.get("effects"))
+    original = as_mapping(governance.get("recorded_effects"))
+    uses_original = governance.get("replayed", False) is not False or "recorded_effects" in governance
+    no_governance_effects = has_no_steward_advancement_effects(governance)
+    merged = dict(initial)
+    for key in ("host_invoked", *_ADVANCEMENT_EFFECT_KEYS):
+        observations = (initial.get(key), effects.get(key), original.get(key) if uses_original else False)
+        if any(value is True for value in observations):
+            merged[key] = True
+        elif all(value is False for value in observations) and (key == "host_invoked" or no_governance_effects):
+            merged[key] = False
+        else:
+            merged[key] = None
+    return merged
+
+
 def is_zero_effect_replan_selection_deferral(result: Mapping[str, object]) -> bool:
     """Identify a zero-effect pre-host autonomous_replan selection refusal."""
     if result.get("ok") is not False or result.get("error_code") != "turn_todo_selection_deferred":
@@ -602,10 +659,7 @@ def is_zero_effect_replan_selection_deferral(result: Mapping[str, object]) -> bo
     effects = result.get("effects")
     if not isinstance(effects, Mapping):
         return False
-    return all(
-        effects.get(key) is False
-        for key in ("host_invoked", "state_written", "quota_spent", "scheduler_acknowledged")
-    )
+    return effects.get("host_invoked") is False and has_no_steward_advancement_effects(result)
 
 
 def monitor_controller_for(controller: StewardControllerProtocol) -> _MonitorControllerProtocol:

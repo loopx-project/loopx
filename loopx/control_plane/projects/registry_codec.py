@@ -227,6 +227,25 @@ def decode_registry_snapshot(path: Path, raw_bytes: bytes) -> dict[str, Any]:
     return payload
 
 
+RegistryFileRevision = tuple[int, int, int, int, int]
+
+
+def registry_file_revision(info: os.stat_result) -> RegistryFileRevision:
+    return info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size, info.st_ctime_ns
+
+
+def read_registry_with_revision(path: Path) -> tuple[dict[str, Any], RegistryFileRevision]:
+    """Bind decoded bytes to their opened file, even if the path is replaced."""
+    with path.open("rb") as stream:
+        before = os.fstat(stream.fileno())
+        raw_bytes = stream.read()
+        after = os.fstat(stream.fileno())
+    revision = registry_file_revision(before)
+    if revision != registry_file_revision(after) or len(raw_bytes) != before.st_size:
+        raise ProjectRegistryError("registry changed while reading")
+    return decode_registry_snapshot(path, raw_bytes), revision
+
+
 def load_registry(
     path: Path, *, source_snapshots: dict[Path, bytes | None] | None = None,
 ) -> dict[str, Any]:

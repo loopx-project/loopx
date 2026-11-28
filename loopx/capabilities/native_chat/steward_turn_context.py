@@ -74,7 +74,8 @@ def steward_followup_context(
 ) -> dict[str, object]:
     """Assemble selected-todo, monitor snapshot, open user todos, and handoff receipt dedupe context."""
     from ...control_plane.todos.list_readback import list_goal_todos
-    from .steward_monitor import FOLLOWUP_TARGET_PREFIX, steward_monitor_snapshot_path
+    from .steward_monitor_snapshots import read_committed_signal_snapshot
+    from .steward_monitor_turns import FOLLOWUP_TARGET_PREFIX, read_steward_monitor_scope
 
     goal_id = str(actor["goal_id"])
     agent_id = str(actor["agent_id"])
@@ -95,13 +96,16 @@ def steward_followup_context(
     target_key = as_str((selected or {}).get("target_key"))
     if target_key.startswith(FOLLOWUP_TARGET_PREFIX):
         source_id = target_key.removeprefix(FOLLOWUP_TARGET_PREFIX)
-        payload["source_monitor"] = next((row for row in agent_todos if row.get("todo_id") == source_id), None)
-        snap = steward_monitor_snapshot_path(host.controller.coordination_runtime_root, goal_id, source_id)
-        if snap.is_file():
-            try:
-                payload["signal_snapshot"] = json.loads(snap.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                payload["signal_snapshot"] = None
+        source_monitor = next((row for row in agent_todos if row.get("todo_id") == source_id), None)
+        payload["source_monitor"] = source_monitor
+        if source_monitor is not None:
+            runtime_root = host.controller.coordination_runtime_root
+            signal_scope = read_steward_monitor_scope(runtime_root, goal_id, as_str(source_monitor.get("target_key")))
+            snapshot = read_committed_signal_snapshot(
+                runtime_root, cast(Path, host.controller.registry_path), goal_id, source_monitor, signal_scope,
+            )
+            if snapshot is not None:
+                payload["signal_snapshot"] = snapshot
     user_todos = as_dict_list(
         as_mapping(
             list_goal_todos(

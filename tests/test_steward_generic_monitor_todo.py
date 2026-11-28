@@ -813,6 +813,7 @@ def test_resolve_advancement_turn_id_handles_selection_deferral_and_precommit_re
         resolve_advancement_turn_id,
     )
     from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
+    from loopx.capabilities.native_chat.steward_turn_common import merge_steward_advancement_effects
 
     actor = {"goal_id": "goal-steward-test", "agent_id": "steward", "session_id": "sess-1"}
     todo = {"todo_id": "todo_adv123", "updated_at": "2026-11-21T08:00:00Z"}
@@ -886,7 +887,41 @@ def test_resolve_advancement_turn_id_handles_selection_deferral_and_precommit_re
             },
         },
     }
-    assert resolve_advancement_turn_id(_FakeStore({base_cid: host_invoked_deferred}), actor, todo, now=now_after_cooldown) is None
+    assert resolve_advancement_turn_id(
+        _FakeStore({base_cid: host_invoked_deferred}), actor, todo, now=now_after_cooldown,
+    ) == pre_tok
+    initial_deferral = deferred_turn["response"]["native_loopx"]
+    governance_effects = host_invoked_deferred["response"]["native_loopx"]["effects"]
+    incomplete_governance = {"effects": {**governance_effects, "quota_spent": None}}
+    merged = merge_steward_advancement_effects(initial_deferral["effects"], incomplete_governance)
+    assert merged["host_invoked"] is True and merged["quota_spent"] is None
+    rejected_deferral = {**deferred_turn, "response": {"native_loopx": {**initial_deferral, "effects": merged}}}
+    assert resolve_advancement_turn_id(
+        _FakeStore({base_cid: rejected_deferral}), actor, todo, now=now_after_cooldown,
+    ) is None
+    assert merge_steward_advancement_effects(initial_deferral["effects"], {"effects": governance_effects}) == governance_effects
+
+    precommit = precommit_turn["response"]["native_loopx"]
+    effects = precommit["effects"]
+    for label, changes in {
+        "missing quota": {"effects": {k: v for k, v in effects.items() if k != "quota_spent"}},
+        "unknown scheduler": {"effects": {**effects, "scheduler_acknowledged": None}},
+        "known historical spend": {"quota_slot_spend_count": 1},
+        "completed writeback": {"receipt": {"completed_phases": ["durable_writeback"]}},
+        "replay without original effects": {"replayed": True},
+        "replay with original spend": {"replayed": True, "recorded_effects": {**effects, "quota_spent": True}},
+    }.items():
+        retained = {**precommit_turn, "response": {"native_loopx": {**precommit, **changes}}}
+        assert resolve_advancement_turn_id(
+            _FakeStore({base_cid: retained}), actor, todo, now=now_after_cooldown,
+        ) is None, label
+    proven_replay = {
+        **precommit_turn,
+        "response": {"native_loopx": {**precommit, "replayed": True, "recorded_effects": effects}},
+    }
+    assert resolve_advancement_turn_id(
+        _FakeStore({base_cid: proven_replay}), actor, todo, now=now_after_cooldown,
+    ) == pre_tok
 
     # Pre-commit failure on base followed by zero-effect deferral on .precommit-retry unlocks .precommit-retry.admission-retry once.
     store_after_precommit_deferred = _FakeStore({base_cid: precommit_turn, pre_cid: deferred_turn})

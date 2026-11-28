@@ -270,6 +270,9 @@ export function buildRecord(request: MonitorRequest, allowed: Admission): JsonOb
     todo_id: request.observation.todo_id,
     target_key: request.observation.target_key,
     result_hash: request.observation.result_hash,
+    ...(request.observation.observed_task_repository === undefined ? {} : {
+      observed_task_repository: request.observation.observed_task_repository,
+    }),
     before: compactDecision(request.decision),
   };
   const record: JsonObject = {

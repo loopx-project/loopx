@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
 import os
@@ -328,6 +329,14 @@ def test_original_queue_survives_progress_and_cleanup_disk_failure(tmp_path, mon
             pass
 
     adapter = OriginalAdapter()
+    original_import = builtins.__import__
+
+    def reject_other_provider(name, *args, **kwargs):
+        if name.endswith(".antigravity_adapter"):
+            raise ImportError("the ordinary queue must not initialize Antigravity")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_other_provider)
     monkeypatch.setattr(store, "update_turn", checkpoint)
     monkeypatch.setattr(store, "flush_events", persist)
     monkeypatch.setattr(_TurnEventBuffer, "__init__", buffer_init)

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {admitStewardManagedTurn, bindStewardManagedActor, observeStewardNativeExecutor, planStewardManagedMode,
   planStewardMonitor, observeStewardPortfolio,
-  observeStewardSignalMonitor} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
+  observeStewardSignalMonitor, planStewardSignalCommentBackfill} from "../../loopx/control_plane/collaboration/steward_managed_mode.ts";
 import {planConversationBinding} from "../../loopx/control_plane/collaboration/conversation_binding.ts";
 
 function fixture() {
@@ -61,7 +61,7 @@ test("identity-refused watches need independent collector evidence and retain cu
     delta_count: 0, loopx_request: prior};
   const basis = {original, contexts: [], phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
   const monitor = {todo_id: "todo_watch", task_class: "continuous_monitor", target_key: "steward-portfolio-watch",
     watch_only: true, claimed_by: "steward", status: "open", next_due_at: prior.monitor_deadline};
   const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
@@ -72,6 +72,7 @@ test("identity-refused watches need independent collector evidence and retain cu
     {phases: []}, {phases: [{phase: "model_start"}]}, {phases: [{phase: "manager_context"}, {phase: "manager_context"}]},
     {contexts: [{}]}, {event_kinds: ["turn.queued", "turn.failed"]},
     {event_kinds: [...basis.event_kinds, "agent.phase"]},
+    {event_journal_complete: false}, {event_journal_complete: undefined},
     {poll_absent: false}, {old_worker_excluded: false}, {lease_available: false},
     {original: {...original, error: "Unknown identity failure"}},
     {original: {...original, upstream_turn_id: "unknown-model-turn"}},
@@ -96,7 +97,7 @@ test("signal-unavailable custom monitors admit exactly one zero-effect recovery 
   const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
     phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
   const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
     target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
     next_due_at: prior.monitor_deadline};
@@ -329,11 +330,22 @@ test("custom steward signal monitors admit model-free probes while excluding loc
     portfolio_observation: {result_hash: "sha256:portfolio1"},
     inbox_items: [{request_id: "req_1", source_id: "peer"}],
     repository_snapshot: {status: "unavailable", repository: "acme/widgets"},
+    previous_repository_snapshot: {status: "ok", items: [prItem]},
     previous_hash: first.result_hash,
   });
   assert.equal(unavailable.observation_incomplete, true);
   assert.equal(unavailable.material_change, false);
   assert.equal(unavailable.result_hash, first.result_hash);
+
+  const unreadableInbox = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: null,
+    repository_snapshot: {status: "unavailable"},
+    previous_repository_snapshot: {status: "ok", items: [prItem]},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unreadableInbox.observation_incomplete, true);
+  assert.equal(unreadableInbox.result_hash, first.result_hash);
 });
 
 test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallback while rejecting unallocated antigravity", () => {
@@ -442,7 +454,7 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
       origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
       delta_count: 0, loopx_request: prior};
     const basis = {original, contexts: scenario.contexts, phases: [{phase: "manager_context"}],
-      event_kinds: scenario.event_kinds, poll_absent: true, old_worker_excluded: true, lease_available: true};
+      event_kinds: scenario.event_kinds, event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
     const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
       request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
       monitor_todo: monitor, monitor_restart_basis: basis};
@@ -473,7 +485,7 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
     const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
       phases: [{phase: "manager_context"}],
       event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-      poll_absent: true, old_worker_excluded: true, lease_available: true};
+      event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
     assert.throws(() => admitStewardManagedTurn({
       ...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
       request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
@@ -502,7 +514,7 @@ test("chained post-context transient watch carriers recover only after cooldown 
   const basis = {original: carrier, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
     phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
   const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
     request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
     monitor_todo: monitor, monitor_restart_basis: basis};
@@ -1100,6 +1112,25 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
       comments_coverage_incomplete: true,
     },
   });
+  const repositoryItems = [
+    {...truncatedExternal, number: 300, isDraft: true},
+    {...truncatedExternal, number: 301, author: {login: " ALICE "}},
+    truncatedExternal,
+    {...truncatedExternal, number: 303, mergeable: "CONFLICTING"},
+    makeExternalPr({number: 304}),
+    {...truncatedExternal, number: 305, review_summary: {effective_verdict: "APPROVE"}},
+    {...truncatedExternal, number: 306, comments_coverage_incomplete: false},
+  ];
+  const planParams = {repository_items: repositoryItems, observed_at: "2026-11-21T11:00:00Z"};
+  assert.deepEqual(planStewardSignalCommentBackfill({...planParams, signal_scope: {
+    ...externalStalledScope, pr_filter: {...externalStalledScope.pr_filter, exclude_conflicting: true},
+  }}), {pr_numbers: [302, 306]});
+  assert.deepEqual(planStewardSignalCommentBackfill({
+    ...planParams, signal_scope: internalStalledScope,
+  }), {pr_numbers: []});
+  assert.deepEqual(planStewardSignalCommentBackfill({
+    ...planParams, signal_scope: noAgeScope,
+  }), {pr_numbers: []});
   const noAgeObs = observeStewardSignalMonitor({
     signal_scope: noAgeScope,
     repository_snapshot: {status: "ok", repository: "acme/widgets", items: [truncatedExternal]},
@@ -1146,6 +1177,308 @@ test("observeStewardSignalMonitor fails closed on comments_coverage_incomplete o
   });
   assert.equal(externalIgnoringDraftOrApprove.observation_incomplete, false);
   assert.deepEqual(externalIgnoringDraftOrApprove.scoped_repository_items, []);
+});
+
+test("Steward comment coverage respects the exact age boundary and reply bypass", () => {
+  const observedAt = "2026-11-22T08:00:00.000Z";
+  const scope = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: false, pr_filter: {min_stalled_hours: 24, author_mode: "include", authors: ["alice"]}};
+  const younger = {number: 11, author: {login: "alice"}, stalled_since: "2026-11-21T08:00:00.001Z",
+    comments_coverage_incomplete: true, review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const exact = {...younger, number: 12, stalled_since: "2026-11-21T08:00:00.000Z"};
+  const invalid = {...younger, number: 13, stalled_since: "invalid"};
+  const plan = (signalScope: typeof scope, items: unknown[]) => planStewardSignalCommentBackfill({
+    signal_scope: signalScope, repository_items: items, observed_at: observedAt,
+  });
+  const observe = (signalScope: typeof scope, items: unknown[]) => observeStewardSignalMonitor({
+    signal_scope: signalScope, repository_snapshot: {status: "ok", items}, observed_at: observedAt,
+    previous_hash: "sha256:prior",
+  });
+
+  assert.deepEqual(plan(scope, [younger, exact, invalid]), {pr_numbers: [12]});
+  const observation = observe(scope, [younger, {...exact, comments_coverage_incomplete: false}]);
+  assert.equal(observation.observation_incomplete, false);
+  assert.deepEqual((observation.scoped_repository_items as {number: number}[]).map(row => row.number), [12]);
+  for (const unresolved of [exact, invalid]) {
+    const held = observe(scope, [unresolved]);
+    assert.equal(held.observation_incomplete, true);
+    assert.equal(held.result_hash, "sha256:prior");
+  }
+
+  const external = {...scope, pr_filter: {...scope.pr_filter, author_mode: "exclude", authors: ["other"]}};
+  assert.deepEqual(plan(external, [younger]), {pr_numbers: [11]});
+  assert.equal(observe(external, [younger]).observation_incomplete, true);
+  const reply = observe(external, [{...younger, comments_coverage_incomplete: false,
+    author_replied_after_request_changes: true}]);
+  assert.equal(reply.observation_incomplete, false);
+  assert.equal((reply.scoped_repository_items as {stalled_bucket: string}[])[0]?.stalled_bucket,
+    "awaiting_maintainer_reply");
+});
+
+test("author scopes preserve the prior observation when an eligible PR loses its creator", () => {
+  const scope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+  };
+  const known = {number: 42, author: {login: " MEMBER "}, isDraft: false,
+    review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const unknown = {...known, author: null};
+  const observe = (filter: Record<string, unknown>, items: unknown[], prior?: unknown) =>
+    observeStewardSignalMonitor({
+      signal_scope: {...scope, pr_filter: filter}, repository_snapshot: {status: "ok", items}, previous_hash: prior,
+    });
+  for (const mode of ["include", "exclude"]) {
+    const filter = {author_mode: mode, authors: ["member"], exclude_drafts: true,
+      effective_verdicts: ["REQUEST_CHANGES"]};
+    const original = observe(filter, [known]);
+    assert.deepEqual(original.scoped_repository_items, mode === "include" ? [known] : []);
+    for (const creator of [null, {login: null}, {login: "   "}]) {
+      const blocked = observe(filter, [{...unknown, author: creator}], original.result_hash);
+      assert.equal(blocked.observation_incomplete, true);
+      assert.equal(blocked.material_change, false);
+      assert.equal(blocked.result_hash, original.result_hash);
+    }
+    const recovered = observe(filter, [known], original.result_hash);
+    assert.equal(recovered.material_change, false);
+    assert.equal(recovered.observation_incomplete, false);
+    const ruledOut = observe(filter, [
+      {...unknown, isDraft: true},
+      {...unknown, number: 43, review_summary: {effective_verdict: "APPROVE"}},
+    ]);
+    assert.equal(ruledOut.observation_incomplete, false);
+    assert.deepEqual(ruledOut.scoped_repository_items, []);
+  }
+  const unfiltered = observe({}, [unknown]);
+  assert.equal(unfiltered.observation_incomplete, false);
+  assert.deepEqual(unfiltered.scoped_repository_items, [unknown]);
+});
+
+test("review-dependent scopes preserve their prior result on incomplete review coverage", () => {
+  const signalScope = {schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false, include_inbox: false, pr_filter: {
+      exclude_drafts: true, exclude_conflicting: true, author_mode: "include", authors: ["alice"],
+      effective_verdicts: ["REQUEST_CHANGES"], min_stalled_hours: 24,
+    }};
+  const observed_at = "2030-01-03T12:00:00Z";
+  const row = {number: 42, author: {login: "alice"}, isDraft: false, mergeable: "MERGEABLE",
+    stalled_since: "2030-01-01T12:00:00Z", review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const observe = (signal_scope: unknown, items: unknown[], previous_hash?: unknown) =>
+    observeStewardSignalMonitor({signal_scope, observed_at, previous_hash,
+      repository_snapshot: {status: "ok", items}});
+  const baseline = observe(signalScope, [row]);
+  assert.equal(baseline.scoped_repository_items.length, 1);
+  for (const review_summary of [
+    row.review_summary, {effective_verdict: "NONE"}, {has_review_conflict: true},
+  ]) {
+    const partial = {...row, stalled_since: null, review_summary, review_coverage_incomplete: true};
+    const result = observe(signalScope, [partial], baseline.result_hash);
+    assert.equal(result.observation_incomplete, true);
+    assert.equal(result.result_hash, baseline.result_hash);
+    assert.equal(result.material_change, false);
+  }
+  for (const independentlyExcluded of [
+    {isDraft: true}, {mergeable: "CONFLICTING"}, {author: {login: "bob"}},
+  ]) {
+    const result = observe(signalScope, [{...row, ...independentlyExcluded, review_coverage_incomplete: true}]);
+    assert.equal(result.observation_incomplete, false);
+    assert.deepEqual(result.scoped_repository_items, []);
+  }
+  const partial = {...row, review_coverage_incomplete: true, comments_coverage_incomplete: true};
+  assert.deepEqual(planStewardSignalCommentBackfill({signal_scope: signalScope, observed_at,
+    repository_items: [partial]}), {pr_numbers: []});
+  assert.equal(observe(null, [row]).result_hash,
+    observe(null, [{...row, review_coverage_incomplete: true}]).result_hash);
+});
+
+test("age filters distinguish unreadable clocks from verified exclusions and reply bypass", () => {
+  const observed_at = "2030-01-03T12:00:00Z";
+  const oldClock = "2030-01-01T12:00:00Z";
+  const row = {number: 42, author: {login: "contributor"}, updatedAt: oldClock,
+    review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const scope = (mode: string) => ({
+    schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false, include_inbox: false,
+    pr_filter: {exclude_drafts: true, effective_verdicts: ["REQUEST_CHANGES"], min_stalled_hours: 24,
+      author_mode: mode, authors: [mode === "include" ? "contributor" : "maintainer"]},
+  });
+  const observe = (mode: string, repositoryItems: unknown[], prior?: unknown) =>
+    observeStewardSignalMonitor({signal_scope: scope(mode), observed_at, previous_hash: prior,
+      repository_snapshot: {status: "ok", items: repositoryItems}});
+  const plan = (mode: string, item: unknown) =>
+    planStewardSignalCommentBackfill({signal_scope: scope(mode), observed_at, repository_items: [item]});
+
+  for (const mode of ["include", "exclude"]) {
+    const baseline = observe(mode, [row]);
+    assert.equal(baseline.scoped_repository_items[0].stalled_bucket, "24h_to_72h");
+    for (const unreadable of [
+      {...row, updatedAt: undefined},
+      {...row, updatedAt: "invalid"},
+      {...row, stalled_since: "invalid"},
+      {...row, stalled_since: 42},
+      {...row, review_summary: {...row.review_summary, stalled_since: 42}},
+      {...row, stalled_since: null, stalled_since_unknown: true},
+    ]) {
+      const actual = observe(mode, [unreadable], baseline.result_hash);
+      assert.equal(actual.observation_incomplete, true, JSON.stringify(unreadable));
+      assert.equal(actual.material_change, false);
+      assert.equal(actual.result_hash, baseline.result_hash);
+    }
+    for (const excluded of [
+      {...row, stalled_since: null},
+      {...row, updatedAt: "2030-01-03T11:00:00Z"},
+      {...row, isDraft: true, stalled_since: "invalid"},
+    ]) {
+      const actual = observe(mode, [excluded], baseline.result_hash);
+      assert.equal(actual.observation_incomplete, false);
+      assert.deepEqual(actual.scoped_repository_items, []);
+    }
+  }
+  const unreadable = {...row, updatedAt: "invalid", comments_coverage_incomplete: true};
+  assert.deepEqual(plan("include", unreadable), {pr_numbers: []});
+  assert.deepEqual(plan("exclude", unreadable), {pr_numbers: [42]});
+  assert.deepEqual(plan("exclude", {...unreadable, author: null}), {pr_numbers: []});
+  const reply = observe("exclude", [{...unreadable, comments_coverage_incomplete: false,
+    author_replied_after_request_changes: true}]);
+  assert.equal(reply.observation_incomplete, false);
+  assert.equal(reply.scoped_repository_items[0].stalled_bucket, "awaiting_maintainer_reply");
+
+  const unscoped = (item: unknown) => observeStewardSignalMonitor({
+    repository_snapshot: {status: "ok", items: [item]},
+  });
+  assert.equal(unscoped(row).result_hash, unscoped({...row, stalled_since_unknown: true}).result_hash);
+});
+
+test("author membership can be ruled out by age without spending useless comment reads", () => {
+  const observed_at = "2026-11-22T08:00:00Z";
+  const scope = {
+    schema_version: "steward_signal_monitor_scope_v0",
+    include_portfolio: false,
+    include_inbox: false,
+  };
+  const due = {number: 11, author: null, stalled_since: "2026-11-21T08:00:00Z",
+    comments_coverage_incomplete: true, review_summary: {effective_verdict: "REQUEST_CHANGES"}};
+  const young = {...due, number: 12, stalled_since: "2026-11-22T07:00:00Z"};
+  const known = {...due, number: 13, author: {login: "member"}};
+  const signalScope = (mode: string) => ({...scope,
+    pr_filter: {author_mode: mode, authors: ["member"], min_stalled_hours: 24}});
+  const plan = (mode: string) => planStewardSignalCommentBackfill({
+    signal_scope: signalScope(mode), repository_items: [due, young, known], observed_at,
+  });
+  const observe = (mode: string, item: unknown) => observeStewardSignalMonitor({
+    signal_scope: signalScope(mode), repository_snapshot: {status: "ok", items: [item]},
+    observed_at, previous_hash: "sha256:prior",
+  });
+
+  assert.deepEqual(plan("include"), {pr_numbers: [13]});
+  assert.deepEqual(plan("exclude"), {pr_numbers: [12]});
+  for (const mode of ["include", "exclude"]) {
+    const completeDue = observe(mode, {...due, comments_coverage_incomplete: false});
+    assert.equal(completeDue.observation_incomplete, true);
+    assert.equal(completeDue.result_hash, "sha256:prior");
+    const tooYoung = observe(mode, {...young, comments_coverage_incomplete: mode === "include"});
+    assert.equal(tooYoung.observation_incomplete, false);
+    assert.deepEqual(tooYoung.scoped_repository_items, []);
+  }
+  assert.equal(observe("exclude", young).observation_incomplete, true);
+});
+
+test("repository observation distinguishes invalid items, verified emptiness and no repository", () => {
+  const scoped = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: true, pr_filter: {exclude_drafts: true}};
+  for (const signalScope of [null, scoped]) {
+    const previous_repository_snapshot = {status: "ok", items: [{number: 42, isDraft: false}]};
+    const observe = (repositorySnapshot: unknown, previousHash?: unknown, inboxItems: unknown[] = []) =>
+      observeStewardSignalMonitor({
+        signal_scope: signalScope, repository_snapshot: repositorySnapshot,
+        previous_hash: previousHash, previous_repository_snapshot, inbox_items: inboxItems,
+      });
+    const previous = observe(previous_repository_snapshot);
+    for (const malformed of [
+      {status: "ok"},
+      {status: "ok", items: null},
+      {status: "ok", items: {}},
+      {status: "ok", items: "[]"},
+      {status: "unavailable", items: []},
+    ]) {
+      const result = observe(malformed, previous.result_hash);
+      assert.equal(result.observation_incomplete, true);
+      assert.equal(result.material_change, false);
+      assert.equal(result.result_hash, previous.result_hash);
+    }
+    const empty = observe({status: "ok", items: []}, previous.result_hash);
+    assert.equal(empty.observation_incomplete, false);
+    assert.equal(empty.material_change, true);
+    if (signalScope !== null) assert.deepEqual(empty.scoped_repository_items, []);
+
+    const absent = observe(undefined);
+    assert.equal(absent.observation_incomplete, false);
+    assert.notEqual(absent.result_hash, empty.result_hash);
+    assert.equal(observe(null, absent.result_hash).material_change, false);
+    const inboxChange = observe(null, absent.result_hash, [{id: "new-evidence"}]);
+    assert.equal(inboxChange.observation_incomplete, false);
+    assert.equal(inboxChange.material_change, true);
+  }
+});
+
+test("incomplete repository observations keep the last scoped age and admit portfolio changes", () => {
+  const signal_scope = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: true,
+    include_inbox: false, pr_filter: {min_stalled_hours: 24}};
+  const repository_snapshot = {status: "ok", items: [{number: 42, stalled_since: "2030-01-01T00:00:00Z"}]};
+  const params = {signal_scope, repository_snapshot, observed_at: "2030-01-02T00:00:00Z",
+    portfolio_observation: {result_hash: "portfolio-before"}};
+  const baseline = observeStewardSignalMonitor(params);
+  const unavailable = {...params,
+    previous_hash: baseline.result_hash,
+    previous_repository_snapshot: {...repository_snapshot, items: baseline.scoped_repository_items},
+    repository_snapshot: {status: "unavailable", items: []},
+    observed_at: "2030-01-05T00:00:00Z",
+  };
+  const unchanged = observeStewardSignalMonitor(unavailable);
+  assert.equal(unchanged.result_hash, baseline.result_hash);
+  assert.equal(unchanged.observation_incomplete, true);
+
+  const portfolio_observation = {result_hash: "portfolio-after"};
+  const changed = observeStewardSignalMonitor({...unavailable, portfolio_observation});
+  const expected = observeStewardSignalMonitor({...params, portfolio_observation});
+  assert.equal(changed.result_hash, expected.result_hash);
+  assert.equal(changed.material_change, true);
+  assert.equal(changed.observation_incomplete, false);
+  assert.equal(changed.repository_observation_incomplete, true);
+
+  const withoutPriorRepository = observeStewardSignalMonitor({...params, repository_snapshot: null});
+  const firstOutage = observeStewardSignalMonitor({...unavailable, previous_repository_snapshot: null,
+    previous_hash: withoutPriorRepository.result_hash, portfolio_observation});
+  assert.equal(firstOutage.result_hash,
+    observeStewardSignalMonitor({...params, repository_snapshot: null, portfolio_observation}).result_hash);
+  assert.equal(firstOutage.material_change, true);
+});
+
+test("repository observations and backfill require distinct readable PR numbers", () => {
+  const scoped = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
+    include_inbox: false, pr_filter: {exclude_drafts: true}};
+  const valid = {number: 42, isDraft: false};
+  const malformedRows = [null, [], "42", {title: "Missing number", isDraft: true},
+    ...[null, false, "42", 0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map(number => ({number}))];
+  const invalidLists = [...malformedRows.map(row => [valid, row]), [valid, {...valid}]];
+  for (const signal_scope of [null, scoped]) {
+    const observe = (items: unknown[], previous_hash?: unknown) => observeStewardSignalMonitor({
+      signal_scope, repository_snapshot: {status: "ok", items}, previous_hash,
+    });
+    const baseline = observe([valid, {number: Number.MAX_SAFE_INTEGER, isDraft: true}]);
+    assert.equal(baseline.observation_incomplete, false);
+    if (signal_scope) assert.deepEqual(baseline.scoped_repository_items, [valid]);
+    for (const items of invalidLists) {
+      const result = observe(items, baseline.result_hash);
+      assert.equal(result.observation_incomplete, true, JSON.stringify(items));
+      assert.equal(result.result_hash, baseline.result_hash);
+      assert.equal(result.material_change, false);
+    }
+    assert.equal(observe([], baseline.result_hash).material_change, true);
+  }
+  for (const repository_items of invalidLists) {
+    assert.throws(() => planStewardSignalCommentBackfill({signal_scope: scoped, repository_items}),
+      /backfill requires distinct valid PR numbers/);
+  }
 });
 
 test("observeStewardSignalMonitor preserves pre-#9207 upgrade parity and excludes pagination metadata from hashes", () => {

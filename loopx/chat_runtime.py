@@ -936,7 +936,7 @@ class ChatRuntimeController(ChatSessionLifecycleMixin):
                     if conversation_scope(session)["kind"] == "owner_goal"
                     else None
                 )
-            else:
+            elif getattr(adapter, "adapter_kind", None) == "antigravity_ls":
                 from .capabilities.native_chat.antigravity_adapter import AntigravityAdapter
                 if isinstance(adapter, AntigravityAdapter):
                     adapter._steward_report_reader = None

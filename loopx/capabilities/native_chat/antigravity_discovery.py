@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from email.message import Message
+from functools import lru_cache
 import hashlib
 import ipaddress
+from itertools import chain
 import json
 import math
 import os
@@ -14,7 +16,7 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Callable, IO, Mapping, Protocol, TypeAlias, TypeGuard
+from typing import Callable, IO, Iterator, Mapping, NoReturn, Protocol, TypeAlias, TypeGuard
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -131,10 +133,15 @@ class _LocalRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_NO_PROXY_OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({}),
-    _LocalRedirectHandler(),
-)
+@lru_cache(maxsize=1)
+def _loopback_rpc_opener() -> urllib.request.OpenerDirector:
+    # Only direct HTTP is needed for the validated loopback endpoint.
+    opener = urllib.request.OpenerDirector()
+    opener.add_handler(urllib.request.HTTPHandler())
+    opener.add_handler(urllib.request.HTTPDefaultErrorHandler())
+    opener.add_handler(_LocalRedirectHandler())
+    opener.add_handler(urllib.request.HTTPErrorProcessor())
+    return opener
 
 
 def _local_url(value: str) -> str:
@@ -158,6 +165,47 @@ def _local_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _reject_nonstandard_rpc_number(_token: str) -> NoReturn:
+    raise ValueError("Antigravity RPC response contains a nonstandard JSON number")
+
+
+def _parse_rpc_finite_float(token: str) -> float:
+    number = float(token)
+    if not math.isfinite(number):
+        raise ValueError("Antigravity RPC response number exceeds the finite float range")
+    return number
+
+
+def _parse_rpc_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError("Antigravity RPC response contains a duplicate JSON object key")
+        fields[key] = value
+    return fields
+
+
+_SURROGATE_CODE_POINT = re.compile(r"[\ud800-\udfff]")
+
+
+def _validate_rpc_strings(response: JsonDict) -> None:
+    # JSON decoding combines valid UTF-16 pairs before exposing strings.
+    pending: list[Iterator[object]] = [chain(response, response.values())]
+    while pending:
+        try:
+            member = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(member, str):
+            if _SURROGATE_CODE_POINT.search(member):
+                raise ValueError("Antigravity RPC response contains an unpaired Unicode surrogate")
+        elif isinstance(member, dict):
+            pending.append(chain(member, member.values()))
+        elif isinstance(member, list):
+            pending.append(iter(member))
+
+
 def _rpc_post(
     base_url: str,
     csrf_token: str,
@@ -178,10 +226,18 @@ def _rpc_post(
         method="POST",
     )
     try:
-        with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            data: object = json.loads(raw) if raw.strip() else {}
-            return as_rpc_response(data if _is_dict(data) else {})
+        with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8")
+            data: object = json.loads(
+                raw,
+                object_pairs_hook=_parse_rpc_object,
+                parse_constant=_reject_nonstandard_rpc_number,
+                parse_float=_parse_rpc_finite_float,
+            ) if raw.strip(" \t\r\n") else {}
+            if not _is_dict(data):
+                raise ValueError("Antigravity RPC response must be a JSON object")
+            _validate_rpc_strings(data)
+            return as_rpc_response(data)
     except urllib.error.HTTPError as exc:
         raise CodexChatAgentError(
             f"Antigravity LanguageServerService/{method} failed with HTTP {exc.code}",

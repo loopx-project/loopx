@@ -214,6 +214,7 @@ export function validatedProviderReceipt(value: unknown, plan: MonitorProviderPl
   const targetKey = matchedOptional(receipt, plan, "target_key");
   const resultHash = requiredString(receipt.result_hash, "provider_receipt.result_hash").trim();
   requireProviderMatch(resultHash, plan.result_hash, "provider_receipt.result_hash");
+  requireProviderMatch(receipt.observed_task_repository, plan.observed_task_repository, "provider_receipt.observed_task_repository");
   const materialChange = requireBoolean(receipt.material_change, "provider_receipt.material_change");
   requireProviderMatch(materialChange, plan.material_change, "provider_receipt.material_change");
   const materialChangeScope = optionalTrimmed(receipt.material_change_scope, "provider_receipt.material_change_scope");
@@ -285,6 +286,7 @@ export function conflictFields(request: MonitorRequest, receipt: MonitorReceipt)
   const recordedTarget = optionalTrimmed(recorded.target_key, "recorded target_key");
   if (requested.target_key && requested.target_key !== recordedTarget) conflicts.push("target_key");
   if (requested.result_hash !== optionalTrimmed(recorded.result_hash, "recorded result_hash")) conflicts.push("result_hash");
+  if (requested.observed_task_repository !== recorded.observed_task_repository) conflicts.push("observed_task_repository");
   if (requested.material_change !== (recorded.material_change === true)) conflicts.push("material_change");
   if ((requested.material_change_scope ?? null) !== optionalTrimmed(recorded.material_change_scope, "recorded material_change_scope")) {
     conflicts.push("material_change_scope");
@@ -303,6 +305,7 @@ export function validateNoEffect(receipt: JsonObject | null, plan: MonitorProvid
     "todo_id", "target_key", "result_hash", "material_change", "generated_at", "cadence", "next_due_at", "reason_summary",
   ].map((key) => [key, plan[key]]));
   if (Object.hasOwn(plan, "material_change_scope")) observation.material_change_scope = plan.material_change_scope ?? null;
+  if (plan.observed_task_repository !== undefined) observation.observed_task_repository = plan.observed_task_repository;
   const intent = Object.fromEntries([
     "next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
     "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",

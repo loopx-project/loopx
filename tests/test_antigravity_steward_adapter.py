@@ -109,6 +109,13 @@ def language_server(monkeypatch):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             method = self.path.rsplit("/", 1)[-1]
             state["calls"].append((method, body))
+            if "raw_rpc_response" in state:
+                status, raw_body = state["raw_rpc_response"]
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(raw_body)))
+                self.end_headers()
+                self.wfile.write(raw_body)
+                return
             failures = state.get("read_failures", {})
             if state["active"] and failures.get(method, 0):
                 failures[method] -= 1
@@ -960,6 +967,112 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     language_server["redirect"] = language_server["url"] + "/redirect-target"
     assert discover_antigravity_language_server() is None
     assert len(language_server["calls"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (200, b'{"fixture":true}', {"fixture": True}),
+        (
+            200,
+            b'{"value":0,"items":[{"value":1},{"value":2}]}',
+            {"value": 0, "items": [{"value": 1}, {"value": 2}]},
+        ),
+        (200, b'{"value":1,"value":2}', "antigravity_transport_error"),
+        (200, b'{"items":[{"value":1,"value":2}]}', "antigravity_transport_error"),
+        (200, br'{"value":1,"\u0076alue":2}', "antigravity_transport_error"),
+        (200, b'{"fixture":[42,-7.25,5e2,"NaN","Infinity"]}', {"fixture": [42, -7.25, 500.0, "NaN", "Infinity"]}),
+        (
+            200,
+            b'{"fixture":[1.7976931348623157e308,-1.7976931348623157e308,5e-324,-1e-400,'
+            b'123456789012345678901234567890,"1e400"]}',
+            {"fixture": [
+                sys.float_info.max, -sys.float_info.max, 5e-324, -0.0, 123456789012345678901234567890, "1e400",
+            ]},
+        ),
+        (200, b'{"fixture":1e400}', "antigravity_transport_error"),
+        (200, b'{"fixture":{"nested":[-1e400]}}', "antigravity_transport_error"),
+        (200, b'{"fixture":{"nested":[NaN]}}', "antigravity_transport_error"),
+        (200, b'{"fixture":Infinity}', "antigravity_transport_error"),
+        (200, b'{"fixture":-Infinity}', "antigravity_transport_error"),
+        (200, '{"fixture":"before�after"}'.encode("utf-8"), {"fixture": "before�after"}),
+        (
+            200,
+            '{"literal":"🙂",'.encode("utf-8")
+            + br'"\ud83d\ude42":"\ud83d\ude42","boundaries":["\ud7ff","\ue000"],"escaped":"\\ud800"}',
+            {"literal": "🙂", "🙂": "🙂", "boundaries": ["\ud7ff", "\ue000"], "escaped": r"\ud800"},
+        ),
+        (200, br'{"fixture":[["\ud800"]]}', "antigravity_transport_error"),
+        (200, br'{"fixture":{"\udfff":true}}', "antigravity_transport_error"),
+        (200, b'{"fixture":"before\xffafter"}', "antigravity_transport_error"),
+        (200, b'{"fixture":"incomplete\xe2\x82"}', "antigravity_transport_error"),
+        (200, b"{}", {}),
+        (200, b"", {}),
+        (200, b" \t\r\n", {}),
+        (200, b"\x0c", "antigravity_transport_error"),
+        (200, b" \t\xc2\xa0\r\n", "antigravity_transport_error"),
+        (200, b' \t{"fixture":"\xc2\xa0\\f"}\r\n', {"fixture": "\u00a0\f"}),
+        (200, b"[]", "antigravity_transport_error"),
+        (200, b"null", "antigravity_transport_error"),
+        (200, b"false", "antigravity_transport_error"),
+        (200, b"42", "antigravity_transport_error"),
+        (200, b'"fixture"', "antigravity_transport_error"),
+        (200, b"{", "antigravity_transport_error"),
+        (503, b"[]", "antigravity_rpc_error"),
+        (503, b"\xff", "antigravity_rpc_error"),
+        (503, b'{"fixture":1e400}', "antigravity_rpc_error"),
+        (503, b'{"value":1,"value":2}', "antigravity_rpc_error"),
+        (503, b"\x0c", "antigravity_rpc_error"),
+        (503, br'{"fixture":"\ud800"}', "antigravity_rpc_error"),
+    ],
+    ids=["object", "same-key-different-objects", "duplicate-key", "nested-duplicate-key", "escaped-duplicate-key",
+         "finite-numbers-and-text", "finite-float-boundaries", "float-overflow", "nested-negative-overflow",
+         "nested-nan", "infinity", "negative-infinity",
+         "valid-unicode", "unicode-scalars-and-literal-escape", "nested-unpaired-surrogate-value",
+         "nested-unpaired-surrogate-key", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
+         "json-whitespace-only", "form-feed-only", "with-nonbreaking-space", "whitespace-inside-string",
+         "array", "null", "boolean", "number", "string", "malformed-json",
+         "http-error", "http-error-invalid-utf8", "http-error-with-overflow", "http-error-with-duplicate-key",
+         "http-error-with-non-json-whitespace", "http-error-with-unpaired-surrogate"],
+)
+def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
+    from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
+    from loopx.chat_agent import CodexChatAgentError
+
+    language_server["raw_rpc_response"] = (status, body)
+    if isinstance(expected, str):
+        with pytest.raises(CodexChatAgentError) as raised:
+            _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {})
+        assert raised.value.error_code == expected
+    else:
+        response = _rpc_post(language_server["url"], "synthetic-csrf-token", "Fixture", {})
+        # JSON serialization also compares the sign of an underflow to zero.
+        assert json.dumps(response, sort_keys=True) == json.dumps(expected, sort_keys=True)
+    assert language_server["calls"] == [("Fixture", {})]
+
+
+def test_loopback_rpc_works_without_tls_initialization(language_server):
+    probe = """
+import ssl
+import sys
+
+def unavailable_context(*args, **kwargs):
+    raise ssl.SSLError("TLS initialization unavailable")
+
+ssl.create_default_context = unavailable_context
+ssl._create_default_https_context = unavailable_context
+
+from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
+
+reply = _rpc_post(sys.argv[1], "synthetic-csrf-token", "GetUserStatus", {})
+assert reply["userStatus"]["email"] == "synthetic@invalid.example"
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe, language_server["url"]],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert language_server["calls"] == [("GetUserStatus", {})]
 
 
 def test_stop_acknowledges_worker_and_next_turn_progresses(tmp_path, language_server):

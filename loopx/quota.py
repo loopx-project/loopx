@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import shlex
 from typing import TYPE_CHECKING, TypedDict, TypeVar, cast
 
 if TYPE_CHECKING:
@@ -36,6 +35,7 @@ from .control_plane.quota.monitor_poll import (
     record_quota_monitor_poll_for_decision,
     resolve_monitor_poll_target,
 )
+from .control_plane.quota.monitor_poll_readback import attach_auxiliary_monitor_settlement_resume
 from .control_plane.quota.policy_constants import (
     AUTONOMOUS_CANDIDATE_CONTEXT_FIELDS,  # noqa: F401
     DEFAULT_COMPUTE_QUOTA,
@@ -52,7 +52,6 @@ from .control_plane.quota.scheduler_ack import (
     record_quota_scheduler_ack_for_decision,
 )
 from .control_plane.quota.settlement import (
-    read_heartbeat_settlement,
     read_quota_spend_precheck,
     settlement_result_payload,
 )
@@ -987,72 +986,6 @@ def build_quota_slot_spend_event(
     )
 
 
-def _attach_auxiliary_monitor_settlement_resume(
-    result: dict[str, object],
-    *,
-    runtime_root: Path | None,
-    registry_path: Path | None,
-    goal_id: str,
-    agent_id: str | None,
-    todo_id: str | None,
-    turn_instance_id: str | None,
-    available_capabilities: object,
-    goal_ref: Mapping[str, object] | None,
-) -> None:
-    # The open-work readback may now select another Todo. Render the
-    # original receipt's closeout separately; never borrow that selection
-    # to construct this Turn's refresh/spend commands.
-    from .control_plane.agents.capability_gate import runtime_capabilities_for_cli_projection
-    from .control_plane.quota.settlement import (
-        attach_settlement_progress,
-        build_turn_scoped_cli_settlement_plan,
-    )
-
-    readback = read_heartbeat_settlement(
-        cast(Path, runtime_root), goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
-        turn_instance_id=turn_instance_id, registry_path=registry_path, goal_ref=goal_ref,
-    )
-    if readback is None or readback.identity.value is None:
-        raise RuntimeError("auxiliary monitor receipt lost its original settlement readback")
-    attach_settlement_progress(
-        result, readback, registry_path=registry_path, runtime_root=runtime_root, goal_ref=goal_ref,
-    )
-    identity = readback.identity.value
-    prefix = "loopx" + (f" --registry {shlex.quote(str(registry_path))}" if registry_path is not None else "")
-    prefix += f" --runtime-root {shlex.quote(str(runtime_root))}"
-    scoped_args = "".join(
-        f" --available-capability {shlex.quote(capability)}"
-        for capability in runtime_capabilities_for_cli_projection(available_capabilities)
-    )
-    progress = _as_dict(readback.progress)
-    plan = build_turn_scoped_cli_settlement_plan(
-        goal_id=identity.goal_id, agent_id=identity.agent_id, todo_id=identity.todo_id,
-        turn_instance_id=identity.turn_instance_id, replan_obligation_id=identity.replan_obligation_id,
-        command_prefix=prefix, scoped_cli_args=scoped_args, lifecycle_actor_args="",
-        quota_spend_source=str(progress["quota_spend_source"]), goal_ref=goal_ref, composed_settlement=True,
-    )
-    ordered_steps = _dict_items(plan.as_dict().get("ordered_steps"))
-    result["settlement_resume"] = {
-        "schema_version": "auxiliary_monitor_settlement_resume_v0",
-        "identity": identity.as_dict(),
-        "progress_ref": "$.settlement_progress",
-        "next_step": next((step for step in ordered_steps if step.get("kind") == progress["next_step"]), None),
-        "grants_new_delivery": False,
-    }
-    # A later discovery projection is not a second settlement plan. The
-    # top-level resume/readback above owns this original Turn's closeout.
-    raw_after = result.get("after")
-    after = raw_after if isinstance(raw_after, Mapping) else {}
-    contract = after.get("interaction_contract")
-    cli = contract.get("cli_channel") if isinstance(contract, Mapping) else None
-    selected = after.get("selected_todo")
-    selected_id = selected.get("todo_id") if isinstance(selected, Mapping) else None
-    if isinstance(cli, dict) and selected_id != identity.todo_id:
-        cli.pop("settlement_plan", None)
-        cli.pop("next_cli_actions", None)
-        cli.update(spend_allowed_now=False, spend_after_validation=False, settlement_resume_ref="$.settlement_resume")
-
-
 def record_quota_monitor_poll(
     status_payload: dict[str, object],
     *,
@@ -1065,6 +998,7 @@ def record_quota_monitor_poll(
     available_capabilities: object = None,
     todo_id: str | None = None,
     target_key: str | None = None,
+    observed_task_repository: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
     material_change_scope: str | None = None,
@@ -1155,6 +1089,7 @@ def record_quota_monitor_poll(
         reason_summary=reason_summary, agent_id=agent_id, settlement_todo_id=normalized_receipt_todo_id,
         auxiliary_settlement_todo=auxiliary_settlement_todo, todo_id=effective_todo_id,
         target_key=target_key, result_hash=result_hash, material_change=material_change,
+        observed_task_repository=observed_task_repository,
         material_change_scope=material_change_scope, cadence=cadence, next_due_at=next_due_at,
         next_agent_todo=next_agent_todo, next_action_kind=next_action_kind,
         next_task_repository=next_task_repository, next_required_capabilities=next_required_capabilities,
@@ -1173,7 +1108,7 @@ def record_quota_monitor_poll(
         and isinstance(continuation, Mapping)
         and continuation.get("settlement_binding_matches_observation") is False
     ):
-        _attach_auxiliary_monitor_settlement_resume(
+        attach_auxiliary_monitor_settlement_resume(
             result, runtime_root=runtime_root, registry_path=registry_path, goal_id=safe_goal_id,
             agent_id=agent_id, todo_id=normalized_receipt_todo_id, turn_instance_id=turn_instance_id,
             available_capabilities=available_capabilities, goal_ref=goal_ref,

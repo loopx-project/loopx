@@ -1,5 +1,6 @@
 """Actual native Todo/deadline/Chat worker/poll path; no model is needed to observe."""
 from datetime import datetime, timedelta, timezone
+import json
 import time
 
 import pytest
@@ -520,6 +521,17 @@ def interrupt_unstarted_watch(store, turn):
     store.update_session(sid, active_turn_id=None, status="ready")
 
 
+def append_watch_event_before_failure(store, turn, kind, payload):
+    session_id, turn_id = turn["session_id"], turn["turn_id"]
+    journal = store._event_path(session_id, turn_id)
+    prefix, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 1)
+    failed_event = json.loads(terminal)
+    assert failed_event["kind"] == "turn.failed"
+    journal.write_bytes(prefix + b"\n")
+    store.append_event(session_id, turn_id, kind=kind, payload=payload)
+    store.append_event(session_id, turn_id, kind="turn.failed", payload=failed_event["payload"])
+
+
 def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
     import loopx.chat_manager_context as context_owner
     _, runtime, _, transport, *_ = steward
@@ -786,6 +798,42 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(
     assert spent_slots(StewardMonitor(runtime), actor) == used
 
 
+@pytest.mark.parametrize("journal_state", ["recorded_poll", "missing_poll", "retained_at_compaction"])
+def test_typed_monitor_restart_requires_original_event_evidence(steward, tmp_path, monkeypatch, journal_state):
+    store, runtime, _, _, _, capture, _ = steward
+    _, actor, todo_id, original = stopped_watch(steward, tmp_path, monkeypatch, "sqlite", "steward")
+    session_id, turn_id = original["session_id"], original["turn_id"]
+    journal = store._event_path(session_id, turn_id)
+    if journal_state == "retained_at_compaction":
+        append_watch_event_before_failure(store, original, "agent.phase", {"phase": "manager_context"})
+        store.update_turn(session_id, turn_id, completed_at="2000-01-01T00:00:00Z")
+        original_bytes = journal.read_bytes()
+        store.compact_completed_events(older_than_hours=24)
+        assert journal.read_bytes() == original_bytes
+    else:
+        append_watch_event_before_failure(store, original, "native_loopx.monitor_poll", {})
+        if journal_state == "missing_poll":
+            prefix, poll, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 2)
+            assert json.loads(poll)["kind"] == "native_loopx.monitor_poll"
+            journal.write_bytes(prefix + b"\n" + terminal + b"\n")
+            assert [json.loads(line)["sequence"] for line in journal.read_bytes().splitlines()] == [1, 3]
+
+    retained = store.load_turn(session_id, turn_id)
+    watch = local_watch_row(runtime, actor, todo_id)
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    if journal_state == "retained_at_compaction":
+        carrier, = recovered
+        assert carrier["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == turn_id
+        assert finish(runtime, carrier)["response"]["native_loopx"]["status"] == "observed"
+    else:
+        assert recovered == []
+        assert local_watch_row(runtime, actor, todo_id) == watch
+    assert store.load_turn(session_id, turn_id) == retained
+    assert capture.read_bytes() == calls
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("fault", ["unknown_error", "native_started", "delta", "unknown_event", "broken_history",
@@ -1005,7 +1053,10 @@ def test_due_monitor_observes_without_selecting_it_over_open_advancement(steward
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault", [None, "different_error", "native_started", "delta", "interrupted", "retry_fails"])
+@pytest.mark.parametrize("fault", [
+    None, "different_error", "native_started", "delta", "interrupted", "retry_fails",
+    "recorded_poll", "damaged_poll", "missing_poll", "missing_journal",
+])
 def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(steward, tmp_path, monkeypatch, provider, fault):
     import copy
     from loopx.capabilities.native_chat.steward_commands import native_command
@@ -1028,11 +1079,26 @@ def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(stewar
     first = pump_steward_monitors(runtime)[0]
     failed = finish(runtime, first)
     assert failed["status"] == "failed" and "auxiliary_monitor_not_selectable" in failed["error"]
-    if fault and fault != "retry_fails":
-        change = {"different_error": {"error": "An unknown observation failed."},
-            "native_started": {"upstream_turn_id": "unknown-native-turn"},
-            "delta": {"delta_count": 1}, "interrupted": {"status": "interrupted"}}[fault]
-        store.update_turn(first["session_id"], first["turn_id"], **change)
+    turn_changes = {
+        "different_error": {"error": "An unknown observation failed."},
+        "native_started": {"upstream_turn_id": "unknown-native-turn"},
+        "delta": {"delta_count": 1},
+        "interrupted": {"status": "interrupted"},
+    }
+    session_id, turn_id = first["session_id"], first["turn_id"]
+    if fault in turn_changes:
+        store.update_turn(session_id, turn_id, **turn_changes[fault])
+    if fault in {"recorded_poll", "damaged_poll", "missing_poll", "missing_journal"}:
+        journal = store._event_path(session_id, turn_id)
+        if fault == "missing_journal":
+            journal.unlink()
+        else:
+            append_watch_event_before_failure(store, first, "native_loopx.monitor_poll", {})
+            if fault in {"damaged_poll", "missing_poll"}:
+                prefix, poll, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 2)
+                assert json.loads(poll)["kind"] == "native_loopx.monitor_poll"
+                malformed = poll[:-1] + b"\n" if fault == "damaged_poll" else b""
+                journal.write_bytes(prefix + b"\n" + malformed + terminal + b"\n")
     retained = copy.deepcopy(store.load_turn(first["session_id"], first["turn_id"]))
     monkeypatch.setattr(StewardMonitor, "observe", legacy if fault == "retry_fails" else observe)
     runtime._steward_monitor_next_check.clear()
@@ -1287,10 +1353,16 @@ def test_fresh_scope_includes_a_new_stopped_goal_without_reusing_or_rewriting_mo
     assert monitor.current(actor)["result_hash"] == first_hash
 
 
-def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_monitors(
-    steward, tmp_path, monkeypatch,
+@pytest.mark.parametrize("scope", ["repository-only", "combined", "rejected-poll", "lost-commit-reply"])
+def test_repository_unavailability_preserves_poll_and_recovery_scope(
+    steward, tmp_path, monkeypatch, scope,
 ):
     from test_steward_generic_monitor_todo import _set_signal_source_policy
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        steward_monitor_snapshot_path,
+        write_steward_monitor_scope,
+    )
 
     store, runtime, _, transport, binding, _, _ = steward
     sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
@@ -1307,8 +1379,7 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
         (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
     )
 
-    from loopx.capabilities.native_chat.steward_commands import native_command
-
+    target = "steward-stalled-pr-monitor"
     first_due = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
     second_due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
     added_first = native_command(
@@ -1321,7 +1392,7 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
             "--action-kind", "local_runtime_observe",
             "--continuation-policy", "same_agent_non_delivery",
             "--required-capability", "filesystem",
-            "--target-key", "steward-stalled-pr-monitor",
+            "--target-key", target,
             "--task-repository", "git:github.com/org/repo",
             "--watch-only",
             "--cadence", "30m",
@@ -1348,9 +1419,75 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     )
     pr_todo_id = added_first["todo_id"]
     secondary_todo_id = added_second["todo_id"]
+    root = runtime.coordination_runtime_root
+    snapshot_path = steward_monitor_snapshot_path(root, actor["goal_id"], pr_todo_id)
+    if scope == "repository-only":
+        write_steward_monitor_scope(root, actor["goal_id"], target, {
+            "schema_version": "steward_signal_monitor_scope_v0",
+            "include_portfolio": False,
+            "include_inbox": False,
+            "pr_filter": {"exclude_drafts": True},
+        })
     transport.reconcile()
 
-    # 1. Fail due[0] inside _observe_github_repository_prs before any poll receipt.
+    def poll_events(turn):
+        return [event for event in store.events_after(turn["session_id"], turn["turn_id"], None)
+                if event["kind"] == "native_loopx.monitor_poll"]
+
+    verified_repository = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
+    if scope != "repository-only":
+        from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, _root, _write, plan_request_publication
+
+        monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+                            lambda *_args, **_kwargs: verified_repository)
+        runtime._steward_monitor_next_check.clear()
+        seed_turns = pump_steward_monitors(runtime)
+        assert len(seed_turns) == 1 and seed_turns[0]["loopx_request"]["todo_id"] == pr_todo_id
+        seed = finish(runtime, seed_turns[0])
+        assert seed["status"] == "completed" and len(poll_events(seed)) == 1
+        assert json.loads(snapshot_path.read_bytes())["repository_snapshot"] == verified_repository
+        trusted_repository = verified_repository
+        if scope in {"rejected-poll", "lost-commit-reply"}:
+            candidate_repository = {**verified_repository, "items": [{"number": 43}]}
+            verified_snapshot = snapshot_path.read_bytes()
+            committed = local_watch_row(runtime, actor, pr_todo_id)
+            candidate_due = (datetime.fromisoformat(first_due) - timedelta(seconds=1)).isoformat()
+            edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", candidate_due)
+            native_poll = StewardMonitor._native_poll
+
+            def lose_poll_response(owner, argv, **kwargs):
+                if scope == "lost-commit-reply":
+                    assert native_poll(owner, argv, **kwargs)["ok"] is True
+                raise RuntimeError("synthetic fault at the native poll response boundary")
+
+            with monkeypatch.context() as fault:
+                fault.setattr("loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+                              lambda *_args, **_kwargs: candidate_repository)
+                fault.setattr(StewardMonitor, "_native_poll", lose_poll_response)
+                runtime._steward_monitor_next_check.clear()
+                attempts = pump_steward_monitors(runtime)
+                assert len(attempts) == 1 and attempts[0]["loopx_request"]["todo_id"] == pr_todo_id
+                failed_attempt = finish(runtime, attempts[0])
+            assert failed_attempt["status"] == "failed" and not poll_events(failed_attempt)
+            assert snapshot_path.read_bytes() == verified_snapshot
+            after_attempt = local_watch_row(runtime, actor, pr_todo_id)
+            if scope == "rejected-poll":
+                assert after_attempt["result_hash"] == committed["result_hash"]
+                assert after_attempt["last_checked_at"] == committed["last_checked_at"]
+            else:
+                assert after_attempt["result_hash"] != committed["result_hash"]
+                trusted_repository = candidate_repository
+        outage_due = (datetime.fromisoformat(first_due) - timedelta(seconds=2)).isoformat()
+        edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", outage_due)
+        receiver = {key: actor[key] for key in ("goal_id", "agent_id")}
+        source = "synthetic-recovery-control"
+        request_id = _hash([source, receiver])
+        entry = plan_request_publication({
+            "schema_version": ENTRY_SCHEMA, "request_id": request_id, "source_id": source,
+            **receiver, "message": "Inspect the independent inbox signal.",
+        }, entry=None)["entry"]
+        _write(_root(root) / "entries" / _hash(receiver) / f"{request_id}.json", entry)
+
     calls = {"count": 0}
 
     def flaky_repo_observe(repo_slug, **_kwargs):
@@ -1363,13 +1500,46 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
         "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
         flaky_repo_observe,
     )
+    before = local_watch_row(runtime, actor, pr_todo_id)
+    quota_before = spent_slots(monitor, actor)
     runtime._steward_monitor_next_check.clear()
     initial = pump_steward_monitors(runtime)
     assert len(initial) == 1 and initial[0]["loopx_request"]["todo_id"] == pr_todo_id
-    failed = finish(runtime, initial[0])
+    first = finish(runtime, initial[0])
+    assert calls["count"] == 1
+    if scope != "repository-only":
+        assert first["status"] == "completed"
+        native = first["response"]["native_loopx"]
+        assert not native["model_invoked"] and not native["quota_spent"]
+        observed = native["monitor"]
+        assert observed["observation_incomplete"] is False
+        assert observed["repository_observation_incomplete"] is True
+        assert observed["material_change"] is True and observed["result_hash"] != before["result_hash"]
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert snapshot["repository_snapshot"] == trusted_repository
+        assert snapshot["repository_observation_incomplete"] is True
+        assert snapshot["inbox_items"] == [{"request_id": request_id, "source_id": source}]
+        assert snapshot["result_hash"] == observed["result_hash"]
+        assert len(poll_events(first)) == 1
+        after = local_watch_row(runtime, actor, pr_todo_id)
+        assert after["result_hash"] == observed["result_hash"] and after["next_due_at"] != before["next_due_at"]
+        runtime._steward_monitor_next_check.clear()
+        next_due = pump_steward_monitors(runtime)
+        assert len(next_due) == 1 and next_due[0]["loopx_request"]["todo_id"] == secondary_todo_id
+        assert "monitor_restart_recovery" not in next_due[0]["loopx_request"]
+        assert finish(runtime, next_due[0])["status"] == "completed"
+        assert spent_slots(monitor, actor) == quota_before
+        return
+
+    failed = first
     assert failed["status"] == "failed"
     assert failed["error_code"] == "runtime_error"
     assert failed["error"] == "steward monitor external signal source temporarily unavailable"
+    assert not poll_events(failed) and not snapshot_path.exists()
+    poll_fields = ("result_hash", "last_checked_at", "next_due_at", "material_change_generation")
+    after_first_failure = local_watch_row(runtime, actor, pr_todo_id)
+    for field in poll_fields:
+        assert after_first_failure.get(field) == before.get(field)
 
     # 2. If due[0] stays unavailable on recovery, it executes its ONE bounded retry and stops failing over itself.
     # Replace flaky mock to fail a second time so we prove 1-retry cap AND non-starvation of due[1]!
@@ -1384,6 +1554,10 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == failed["turn_id"]
     failed_again = finish(runtime, recovery[0])
     assert failed_again["status"] == "failed"
+    assert not poll_events(failed_again) and not snapshot_path.exists()
+    after_second_failure = local_watch_row(runtime, actor, pr_todo_id)
+    for field in poll_fields:
+        assert after_second_failure.get(field) == before.get(field)
 
     # 3. Next pump skips the unrecoverable due[0] and dispatches due[1] instead of starving it!
     runtime._steward_monitor_next_check.clear()
@@ -1409,7 +1583,189 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     assert len(recovered_try) == 1
     recovered_done = finish(runtime, recovered_try[0])
     assert recovered_done["status"] == "completed", recovered_done
-    assert local_watch_row(runtime, actor, pr_todo_id)["next_due_at"] != third_due
+    assert len(poll_events(recovered_done)) == 1
+    recovered_watch = local_watch_row(runtime, actor, pr_todo_id)
+    assert recovered_watch["next_due_at"] != third_due
+    assert recovered_watch["result_hash"] == json.loads(snapshot_path.read_bytes())["result_hash"]
+    assert spent_slots(monitor, actor) == quota_before
+
+
+@pytest.mark.parametrize("revision", [
+    "changed-during-read", "equivalent-rewrite", "writer-during-commit",
+    "repository-change", "repository-change-lost-reply",
+])
+def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path, monkeypatch, revision):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from test_steward_generic_monitor_todo import _set_signal_source_policy
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        read_steward_monitor_scope,
+        steward_monitor_scope_path,
+        steward_monitor_snapshot_path,
+        write_steward_monitor_scope,
+    )
+    from loopx.file_lock import LockAcquireTimeoutError, exclusive_file_lock
+
+    store, runtime, _, transport, binding, _, _ = steward
+    sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
+    _set_signal_source_policy(runtime, store.load_session(sid), binding,
+                              goal_id=actor["goal_id"], agent_id=actor["agent_id"])
+    edit_local_watch(
+        runtime, actor, monitor.current(actor)["todo_id"], "--next-due-at",
+        (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+    )
+    target = "steward-filter-ordering-prs"
+    first_due = datetime.now(timezone.utc) - timedelta(seconds=10)
+    added = native_command(runtime, [
+        "todo", "add", "--goal-id", actor["goal_id"], "--role", "agent",
+        "--text", "Monitor scoped pull requests", "--claimed-by", actor["agent_id"],
+        "--task-class", "continuous_monitor", "--action-kind", "local_runtime_observe",
+        "--continuation-policy", "same_agent_non_delivery", "--required-capability", "filesystem",
+        "--target-key", target, "--task-repository", "git:github.com/org/repo", "--watch-only",
+        "--cadence", "30m", "--next-due-at", first_due.isoformat(), "--execute",
+    ])
+    todo_id = added["todo_id"]
+    root, goal_id = runtime.coordination_runtime_root, actor["goal_id"]
+    original_scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {"exclude_drafts": False, "author_mode": "exclude", "authors": ["maintainer"]},
+    }
+    normalized = write_steward_monitor_scope(root, goal_id, target, original_scope)
+    changed_scope = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "exclude_drafts": True}}
+    repository_changed = revision in {"repository-change", "repository-change-lost-reply"}
+    transport.reconcile()
+
+    def events(turn):
+        return [event for event in store.events_after(turn["session_id"], turn["turn_id"], None)
+                if event["kind"] == "native_loopx.monitor_poll"]
+
+    def observe(items):
+        return {"status": "ok", "repository": "org/repo", "items": items}
+
+    observer = "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs"
+    committed_pr = {"number": 42, "isDraft": False, "author": {"login": "contributor"}}
+    monkeypatch.setattr(observer, lambda *_args, **_kwargs: observe([committed_pr]))
+    runtime._steward_monitor_next_check.clear()
+    seeded = finish(runtime, pump_steward_monitors(runtime)[0])
+    assert seeded["status"] == "completed" and len(events(seeded)) == 1
+    snapshot_path = steward_monitor_snapshot_path(root, goal_id, todo_id)
+    prior_snapshot = snapshot_path.read_bytes()
+    edit_local_watch(runtime, actor, todo_id, "--next-due-at", (first_due - timedelta(seconds=1)).isoformat())
+    before = local_watch_row(runtime, actor, todo_id)
+    quota_before = spent_slots(monitor, actor)
+    draft = {"number": 43, "isDraft": True, "author": {"login": "contributor"}}
+    calls = 0
+    edited_todo = None
+
+    def read_repository(repository, **_kwargs):
+        nonlocal calls, edited_todo
+        calls += 1
+        if calls == 1 and revision == "changed-during-read":
+            write_steward_monitor_scope(root, goal_id, target, changed_scope)
+        if calls == 1 and revision == "equivalent-rewrite":
+            equivalent = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "authors": ["MAINTAINER", "maintainer"]}}
+            assert write_steward_monitor_scope(root, goal_id, target, equivalent) == normalized
+        if calls == 1 and repository_changed:
+            assert repository == "org/repo"
+            actions = transport.core.actions
+            proposal = actions.preview({
+                "action_kind": "monitor.update", "summary": "Change the repository for this watch",
+                "normalized_parameters": {"goal_id": goal_id, "todo_id": todo_id, "agent_id": actor["agent_id"],
+                                          "operation": "edit", "task_repository": "git:github.com/org/replacement"},
+                "context": {}, "idempotency_key": "change-watch-repository",
+            })
+            assert proposal["status"] == "preview_ready", proposal
+            applied = actions.apply(proposal["proposal_id"])["proposal"]
+            assert applied["status"] == "applied", applied
+            edited_todo = local_watch_row(runtime, actor, todo_id)
+            assert edited_todo["task_repository"] == "git:github.com/org/replacement"
+        if repository_changed and calls > 1:
+            assert repository == "org/replacement"
+            return {"status": "ok", "repository": repository, "items": [{**committed_pr, "number": 44}]}
+        return observe([draft])
+
+    monkeypatch.setattr(observer, read_repository)
+    runtime._steward_monitor_next_check.clear()
+    with ThreadPoolExecutor(max_workers=1) as writers:
+        if revision == "writer-during-commit":
+            contended = Event()
+            attempts = []
+            native_poll = StewardMonitor._native_poll
+
+            def edit_scope():
+                path = steward_monitor_scope_path(root, goal_id, target)
+                with pytest.raises(LockAcquireTimeoutError), exclusive_file_lock(path, timeout_seconds=0):
+                    pass
+                contended.set()
+                return write_steward_monitor_scope(root, goal_id, target, changed_scope)
+
+            def poll_with_concurrent_editor(owner, argv, **kwargs):
+                attempts.append(writers.submit(edit_scope))
+                assert contended.wait(5), "scope writer did not observe the commit lock"
+                assert not attempts[0].done()
+                return native_poll(owner, argv, **kwargs)
+
+            monkeypatch.setattr(StewardMonitor, "_native_poll", poll_with_concurrent_editor)
+        elif revision == "repository-change-lost-reply":
+            from loopx.capabilities.native_chat.steward_commands import NativeStewardCommandError
+            from loopx.capabilities.native_chat.steward_turn_common import _WORKER_EXITED_ERROR
+
+            native_poll = StewardMonitor._native_poll
+
+            def poll_with_lost_abort_reply(owner, argv, **kwargs):
+                try:
+                    return native_poll(owner, argv, **kwargs)
+                except NativeStewardCommandError as error:
+                    assert error.payload["provider_aborted_no_effect"] is True
+                    raise RuntimeError(_WORKER_EXITED_ERROR) from None
+
+            monkeypatch.setattr(StewardMonitor, "_native_poll", poll_with_lost_abort_reply)
+        turns = pump_steward_monitors(runtime)
+        assert len(turns) == 1 and turns[0]["loopx_request"]["todo_id"] == todo_id
+        first = finish(runtime, turns[0])
+        if revision == "writer-during-commit":
+            assert attempts[0].result(timeout=5)["pr_filter"]["exclude_drafts"] is True
+    assert calls == 1
+
+    if revision == "changed-during-read" or repository_changed:
+        changed = "repository" if repository_changed else "signal scope"
+        lost_reply = revision == "repository-change-lost-reply"
+        assert first["status"] == "failed"
+        assert first["error"] == (_WORKER_EXITED_ERROR if lost_reply else f"the monitor {changed} changed after observation")
+        assert not events(first)
+        assert snapshot_path.read_bytes() == prior_snapshot
+        assert snapshot_path.with_suffix(".pending.json").exists() is lost_reply
+        after_failure = local_watch_row(runtime, actor, todo_id)
+        previous_poll = edited_todo if edited_todo is not None else before
+        for field in ("result_hash", "monitor_effect_id", "last_checked_at", "next_due_at", "material_change_generation"):
+            assert after_failure.get(field) == previous_poll.get(field)
+        runtime._steward_monitor_next_check.clear()
+        recovery = pump_steward_monitors(runtime)
+        assert len(recovery) == 1
+        assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == first["turn_id"]
+        accepted = finish(runtime, recovery[0])
+        assert calls == 2 and accepted["status"] == "completed" and len(events(accepted)) == 1
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert not snapshot_path.with_suffix(".pending.json").exists()
+        if repository_changed:
+            assert snapshot["task_repository"] == "git:github.com/org/replacement"
+            assert snapshot["repository_snapshot"]["items"] == [{**committed_pr, "number": 44}]
+        else:
+            assert snapshot["repository_snapshot"]["items"] == []
+        assert snapshot["signal_scope"] == read_steward_monitor_scope(root, goal_id, target)
+    else:
+        assert first["status"] == "completed" and len(events(first)) == 1
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert snapshot["repository_snapshot"]["items"] == [draft]
+        assert snapshot["signal_scope"] == normalized
+        if revision == "writer-during-commit":
+            assert read_steward_monitor_scope(root, goal_id, target)["pr_filter"]["exclude_drafts"] is True
+
+    after = local_watch_row(runtime, actor, todo_id)
+    assert after["next_due_at"] != before["next_due_at"] and after["result_hash"] == snapshot["result_hash"]
+    assert spent_slots(monitor, actor) == quota_before
 
 
 @pytest.mark.parametrize(

@@ -55,10 +55,10 @@ def test_progress_storage_failure_does_not_replay_or_discard_work(tmp_path, monk
     def initialize_immediately(self, **kwargs):
         initialize(self, **kwargs, metadata_checkpoint_interval_sec=0)
 
-    def append_with_pressure(path, rows):
+    def append_with_pressure(path, rows, **kwargs):
         if failure == "journal-space" and pressure and path == store._event_path(sid, first["turn_id"]):
             raise OSError(errno.ENOSPC, "Synthetic storage failure")
-        return append(path, rows)
+        return append(path, rows, **kwargs)
 
     class Adapter:
         upstream_thread_id = "saved-thread"
