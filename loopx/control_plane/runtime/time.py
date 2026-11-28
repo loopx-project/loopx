@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import lru_cache
 import re
 from typing import Any
 
@@ -65,12 +66,34 @@ def _stable_iso_timestamp_text(text: str) -> str | None:
     )
 
 
-def parse_timestamp(value: Any) -> datetime | None:
-    if not value:
+def _try_parse_fast_utc_timestamp(text: str) -> datetime | None:
+    # Fast path the overwhelmingly common UTC ISO form without regex overhead,
+    # keeping hour 24 and non-ASCII/extended forms on the full normalizer.
+    length = len(text)
+    if (
+        length < 20
+        or text[4] != "-"
+        or text[7] != "-"
+        or text[10] != "T"
+        or text[13] != ":"
+        or text[16] != ":"
+        or (text[-1] != "Z" and text[-1] != "z")
+        or text[11:13] == "24"
+    ):
         return None
-    text = str(value).strip()
-    if not text:
-        return None
+    if length == 20 or (text[19] == "." and text[20:-1].isdigit()):
+        try:
+            return datetime.fromisoformat(text[:-1]).replace(tzinfo=timezone.utc)
+        except (ValueError, OverflowError):
+            return None
+    return None
+
+
+@lru_cache(maxsize=32768)
+def _parse_timestamp_text(text: str) -> datetime | None:
+    fast = _try_parse_fast_utc_timestamp(text)
+    if fast is not None:
+        return fast
     stable_text = _stable_iso_timestamp_text(text)
     if stable_text is None:
         return None
@@ -83,6 +106,15 @@ def parse_timestamp(value: Any) -> datetime | None:
         return parsed.astimezone(timezone.utc)
     except (ValueError, OverflowError):
         return None
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip() if isinstance(value, str) else str(value).strip()
+    if not text:
+        return None
+    return _parse_timestamp_text(text)
 
 
 def chronology_key(value: Any) -> tuple[int, datetime, str]:

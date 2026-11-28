@@ -394,7 +394,7 @@ class CanonicalTodoSnapshot:
             tuple[Path, str], dict[str, Any] | LocalCoordinationAuthorityUnavailable
         ] = {}
 
-    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
+    def _read_cached(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
         if self._runtime_root_for_goal is not None:
             if goal_id not in self._routes:
                 try:
@@ -427,9 +427,23 @@ class CanonicalTodoSnapshot:
             raise LocalCoordinationAuthorityUnavailable(
                 str(result), code=result.code, payload=deepcopy(result.payload),
             )
+        return result
+
+    def read(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
+        result = self._read_cached(runtime_root=runtime_root, goal_id=goal_id)
         # Summary enrichment mutates nested records. Never share those mutations
         # with contract checks, another role, or the retained snapshot itself.
         return deepcopy(result)
+
+    def read_contract_rows(self, *, runtime_root: Path, goal_id: str) -> dict[str, Any]:
+        result = self._read_cached(runtime_root=runtime_root, goal_id=goal_id)
+        # Contract diagnostics only inspect diagnostic rows and never consume or
+        # mutate _todo_fields, avoiding a redundant full-field deep copy.
+        return {
+            key: deepcopy(value)
+            for key, value in result.items()
+            if key != "_todo_fields"
+        }
 
 
 def validate_canonical_todo_read(

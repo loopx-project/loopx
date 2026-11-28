@@ -490,7 +490,6 @@ def load_index_snapshot(
                 continue
 
             key = index_identity(item)
-            item = dict(item)
             # These are observations, never persisted index authority.
             item.pop("json_exists", None)
             item.pop("markdown_exists", None)
@@ -499,6 +498,7 @@ def load_index_snapshot(
             else:
                 positions[key] = len(records)
                 records.append(item)
+
     if include_artifact_status:
         observed_runs = runs_dir
         observed_goal = goal_id
@@ -636,10 +636,13 @@ def collect_history(
             runs = [run for run, stamp in dated_runs if stamp is not None
                     and (start is None or stamp >= start) and (end is None or stamp < end)]
         run_count += len(runs)
-        recent_runs = list(islice(
-            merge(recent_runs, runs, key=lambda item: _chronology_key(item.get("generated_at")), reverse=True),
-            recent_limit,
-        ))
+        if not recent_runs:
+            recent_runs = runs[:recent_limit]
+        else:
+            recent_runs = list(islice(
+                merge(recent_runs, runs, key=lambda item: _chronology_key(item.get("generated_at")), reverse=True),
+                recent_limit,
+            ))
 
         adapter = _as_mapping(meta.get("adapter"))
         raw_spawn_policy = meta.get("spawn_policy")
