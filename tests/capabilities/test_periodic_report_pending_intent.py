@@ -1956,6 +1956,98 @@ def test_consumption_derives_the_period_from_actual_report_facts(
     }
 
 
+def _simulate_missing_shanghai_timezone(monkeypatch: pytest.MonkeyPatch) -> None:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    def load_timezone(key: str) -> ZoneInfo:
+        if key == "Asia/Shanghai":
+            raise ZoneInfoNotFoundError(key)
+        return ZoneInfo(key)
+
+    monkeypatch.setattr("zoneinfo.ZoneInfo", load_timezone)
+
+
+def _read_editorial_cli_request(registry: Path, runtime: Path, capsys) -> dict:
+    from loopx.cli import main
+
+    code = main([
+        "--registry", str(registry), "--runtime-root", str(runtime), "--format", "json",
+        "periodic-report", "consume-pending", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--execute",
+    ])
+    decision = json.loads(capsys.readouterr().out)
+    assert code == 0, decision
+    assert decision["status"] == "editorial_required"
+    assert decision["external_writes_performed"] is False
+    return json.loads(Path(decision["editorial_request_path"]).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize(
+    ("start_at", "completed_at", "missing_zone", "label"),
+    [
+        pytest.param(
+            "2026-08-29T14:42:26Z", "2026-08-30T09:00:00Z", True,
+            "2026-08-29 14:42 — 2026-08-30 09:00（UTC）", id="missing-display-zone",
+        ),
+        pytest.param(
+            "9999-12-31T15:59:59.999999Z", "9999-12-31T23:59:59.999999Z", False,
+            "9999-12-31 15:59 — 9999-12-31 23:59（UTC）", id="one-endpoint-overflows",
+        ),
+    ],
+)
+def test_editorial_cli_preserves_utc_work_window_when_local_display_fails(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch,
+    start_at: str, completed_at: str, missing_zone: bool, label: str,
+) -> None:
+    registry, runtime = _fixture(tmp_path, finished_updated_at=start_at)
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    config["goals"][0]["control_plane"]["periodic_report"]["timezone"] = "UTC"
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    sidecar = next((runtime / "goals" / GOAL_ID / "post_writeback_hooks").glob("*.json"))
+    receipt = json.loads(sidecar.read_text(encoding="utf-8"))
+    receipt["intent"]["payload"]["stage_completion"]["completed_at"] = completed_at
+    receipt["recorded_at"] = completed_at
+    sidecar.write_text(json.dumps(receipt), encoding="utf-8")
+    if missing_zone:
+        _simulate_missing_shanghai_timezone(monkeypatch)
+
+    request = _read_editorial_cli_request(registry, runtime, capsys)
+    assert request["actual_work_window"] == {
+        "start_at": start_at.replace("Z", "+00:00"),
+        "end_at": completed_at.replace("Z", "+00:00"),
+        "period_label": label,
+        "source": "agent_run_history_or_report_facts",
+    }
+
+
+def test_calendar_editorial_cli_uses_schedule_zone_without_shanghai(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime
+
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text(encoding="utf-8"))
+    profile = config["goals"][0]["control_plane"]["periodic_report"]
+    profile["timezone"] = profile["schedule"]["timezone"] = "UTC"
+    registry.write_text(json.dumps(config), encoding="utf-8")
+    _simulate_missing_shanghai_timezone(monkeypatch)
+    dispatch = extend_cadence_turn_start_dispatch(
+        {}, registry_path=registry, runtime_root=runtime, goal_id=GOAL_ID,
+        agent_id=AGENT_ID, now=datetime.fromisoformat("2026-09-11T18:00:00Z"),
+    )
+    assert dispatch["failures"] == []
+
+    request = _read_editorial_cli_request(registry, runtime, capsys)
+    assert request["actual_work_window"] == {
+        "start_at": "2026-09-04T18:00:00Z",
+        "end_at": "2026-09-11T18:00:00Z",
+        "period_label": "2026-09-04 18:00 — 2026-09-11 18:00（UTC）",
+        "source": "frozen_calendar_window",
+    }
+
+
 def test_consumption_prefers_real_agent_run_start_over_completion_timestamps(
     tmp_path: Path,
 ) -> None:
