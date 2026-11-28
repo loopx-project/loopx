@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import {resolve} from "node:path";
+import {resolve, isAbsolute, sep} from "node:path";
+import {readFile} from "node:fs/promises";
 import {startCadenceAuthority} from "./automation-cadence.mjs";
 import {fetchWorkspaceBackend, openWorkspacePage} from "./scenario-context.mjs";
 import {outputDir} from "./fixture.mjs";
@@ -65,6 +66,15 @@ export const researchModeScenario = {
       await control.getByRole('button', {name: '关闭研究模式', exact: true}).waitFor();
       assert.equal(capability(await read()).current.mode, 'evidence');
       assert.equal(applies, 1);
+      const locks = (await readFile(resolve(owner.root, "projection-lock-requests.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+      assert(locks.length > 0, "Native apply must exercise the observed real projection locks");
+      assert(locks.some(lock => lock.relative_path?.split(sep).join("/") === "runtime/registry.global.json"),
+        "Apply must lock the explicitly selected fixture projection");
+      for (const lock of locks) {
+        const local = lock.relative_path;
+        assert(lock.inside_fixture && typeof local === "string" && !isAbsolute(local) && local !== ".." && !local.startsWith(`..${sep}`),
+          "Research acceptance must never lock a host runtime outside its temporary fixture");
+      }
       await page.screenshot({path: resolve(outputDir, 'research-mode-enabled.png'), animations: 'disabled'});
       await control.getByRole('button', {name: '关闭研究模式', exact: true}).click();
       await enable.waitFor();
