@@ -175,6 +175,15 @@ def _parse_rpc_finite_float(token: str) -> float:
     return number
 
 
+def _parse_rpc_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    for key, value in pairs:
+        if key in fields:
+            raise ValueError("Antigravity RPC response contains a duplicate JSON object key")
+        fields[key] = value
+    return fields
+
+
 def _rpc_post(
     base_url: str,
     csrf_token: str,
@@ -198,7 +207,10 @@ def _rpc_post(
         with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
             data: object = json.loads(
-                raw, parse_constant=_reject_nonstandard_rpc_number, parse_float=_parse_rpc_finite_float,
+                raw,
+                object_pairs_hook=_parse_rpc_object,
+                parse_constant=_reject_nonstandard_rpc_number,
+                parse_float=_parse_rpc_finite_float,
             ) if raw.strip() else {}
             if not _is_dict(data):
                 raise ValueError("Antigravity RPC response must be a JSON object")

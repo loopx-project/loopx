@@ -973,6 +973,14 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     ("status", "body", "expected"),
     [
         (200, b'{"fixture":true}', {"fixture": True}),
+        (
+            200,
+            b'{"value":0,"items":[{"value":1},{"value":2}]}',
+            {"value": 0, "items": [{"value": 1}, {"value": 2}]},
+        ),
+        (200, b'{"value":1,"value":2}', "antigravity_transport_error"),
+        (200, b'{"items":[{"value":1,"value":2}]}', "antigravity_transport_error"),
+        (200, br'{"value":1,"\u0076alue":2}', "antigravity_transport_error"),
         (200, b'{"fixture":[42,-7.25,5e2,"NaN","Infinity"]}', {"fixture": [42, -7.25, 500.0, "NaN", "Infinity"]}),
         (
             200,
@@ -1002,12 +1010,14 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (503, b"[]", "antigravity_rpc_error"),
         (503, b"\xff", "antigravity_rpc_error"),
         (503, b'{"fixture":1e400}', "antigravity_rpc_error"),
+        (503, b'{"value":1,"value":2}', "antigravity_rpc_error"),
     ],
-    ids=["object", "finite-numbers-and-text", "finite-float-boundaries", "float-overflow", "nested-negative-overflow",
+    ids=["object", "same-key-different-objects", "duplicate-key", "nested-duplicate-key", "escaped-duplicate-key",
+         "finite-numbers-and-text", "finite-float-boundaries", "float-overflow", "nested-negative-overflow",
          "nested-nan", "infinity", "negative-infinity",
          "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
          "whitespace", "array", "null", "boolean", "number", "string", "malformed-json",
-         "http-error", "http-error-invalid-utf8", "http-error-with-overflow"],
+         "http-error", "http-error-invalid-utf8", "http-error-with-overflow", "http-error-with-duplicate-key"],
 )
 def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
     from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post

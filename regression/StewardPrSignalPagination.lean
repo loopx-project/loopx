@@ -2978,6 +2978,55 @@ theorem antigravity_http_error_precedes_float_overflow (utf8Valid standardNumber
     classifyAntigravityRepresentableReply false utf8Valid standardNumbers finiteFloats body = .httpFailure := by
   cases body <;> rfl
 
+/- Each list describes one object's decoded member names, including objects
+   inside arrays. The JSON decoder supplies these lists before building maps. -/
+def antigravityObjectNamesUnique : List String → Bool
+  | [] => true
+  | name :: rest => !rest.contains name && antigravityObjectNamesUnique rest
+
+theorem antigravity_object_names_unique_iff (names : List String) :
+    antigravityObjectNamesUnique names = true ↔ names.Nodup := by
+  induction names with
+  | nil => simp [antigravityObjectNamesUnique]
+  | cons name rest ih => simp [antigravityObjectNamesUnique, ih, List.nodup_cons]
+
+def classifyAntigravityUniqueObjectReply (previous : AntigravityRpcOutcome)
+    (objects : List (List String)) : AntigravityRpcOutcome :=
+  match previous with
+  | .accepted => if objects.all antigravityObjectNamesUnique then .accepted else .invalidResponse
+  | outcome => outcome
+
+theorem antigravity_acknowledgment_preserved_iff_all_objects_have_unique_names
+    (objects : List (List String)) :
+    classifyAntigravityUniqueObjectReply .accepted objects = .accepted ↔
+      ∀ names ∈ objects, List.Nodup names := by
+  have allUnique : objects.all antigravityObjectNamesUnique = true ↔
+      ∀ names ∈ objects, List.Nodup names := by
+    simp [List.all_eq_true, antigravity_object_names_unique_iff]
+  rw [← allUnique]
+  by_cases unique : objects.all antigravityObjectNamesUnique = true <;>
+    simp [classifyAntigravityUniqueObjectReply, unique]
+
+theorem antigravity_duplicate_names_cannot_acknowledge_a_reply
+    (objects : List (List String)) (names : List String) (inReply : names ∈ objects)
+    (duplicate : ¬ names.Nodup) :
+    classifyAntigravityUniqueObjectReply .accepted objects ≠ .accepted := by
+  intro accepted
+  exact duplicate ((antigravity_acknowledgment_preserved_iff_all_objects_have_unique_names objects).mp
+    accepted names inReply)
+
+theorem antigravity_same_name_in_separate_objects_still_acknowledges :
+    classifyAntigravityUniqueObjectReply .accepted [["value"], ["value"]] = .accepted := rfl
+
+theorem antigravity_blank_reply_has_no_object_names :
+    classifyAntigravityUniqueObjectReply .accepted [] = .accepted := rfl
+
+theorem antigravity_http_error_precedes_object_name_validation (objects : List (List String)) :
+    classifyAntigravityUniqueObjectReply .httpFailure objects = .httpFailure := rfl
+
+theorem antigravity_object_name_validation_preserves_invalid_replies (objects : List (List String)) :
+    classifyAntigravityUniqueObjectReply .invalidResponse objects = .invalidResponse := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3331,5 +3380,12 @@ theorem antigravity_http_error_precedes_float_overflow (utf8Valid standardNumber
 #print axioms antigravity_blank_reply_needs_no_float_conversion
 #print axioms antigravity_finite_check_preserves_nonstandard_token_failure
 #print axioms antigravity_http_error_precedes_float_overflow
+#print axioms antigravity_object_names_unique_iff
+#print axioms antigravity_acknowledgment_preserved_iff_all_objects_have_unique_names
+#print axioms antigravity_duplicate_names_cannot_acknowledge_a_reply
+#print axioms antigravity_same_name_in_separate_objects_still_acknowledges
+#print axioms antigravity_blank_reply_has_no_object_names
+#print axioms antigravity_http_error_precedes_object_name_validation
+#print axioms antigravity_object_name_validation_preserves_invalid_replies
 
 end StewardPrSignalPagination
