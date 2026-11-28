@@ -1924,44 +1924,97 @@ structure RepositoryReadback where
   terminalRows : List (Nat × List Nat)
   deriving DecidableEq
 
-def allowsRepositorySupplement (prCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback)
+def needsRepositorySupplementReadback (prCount supplementCount : Nat) : Bool :=
+  decide (0 < supplementCount ∧ (1 < prCount ∨ 1 < supplementCount))
+
+def allowsRepositorySupplement (prCount supplementCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback)
     (joint : Option RepositoryReadback) : Bool :=
-  if prCount ≤ 1 then true else hasBudget && decide (joint = some terminal)
+  if needsRepositorySupplementReadback prCount supplementCount then hasBudget && decide (joint = some terminal) else true
 
 theorem multi_pr_supplement_requires_matching_repository_readback
-    (prCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback) (joint : Option RepositoryReadback)
-    (multi : 1 < prCount) :
-    allowsRepositorySupplement prCount hasBudget terminal joint = true ↔
+    (prCount supplementCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback) (joint : Option RepositoryReadback)
+    (multi : 1 < prCount) (supplements : 0 < supplementCount) :
+    allowsRepositorySupplement prCount supplementCount hasBudget terminal joint = true ↔
       hasBudget = true ∧ joint = some terminal := by
-  have notSingle : ¬ prCount ≤ 1 := by omega
-  simp [allowsRepositorySupplement, notSingle]
+  simp [allowsRepositorySupplement, needsRepositorySupplementReadback, supplements, multi]
 
 theorem changed_terminal_projection_precludes_older_supplement
     (prCount : Nat) (terminal current : RepositoryReadback) (multi : 1 < prCount)
     (changed : current.terminalRows ≠ terminal.terminalRows) :
-    allowsRepositorySupplement prCount true terminal (some current) = false := by
+    allowsRepositorySupplement prCount 1 true terminal (some current) = false := by
   have different : current ≠ terminal := fun same => changed (congrArg RepositoryReadback.terminalRows same)
-  have notSingle : ¬ prCount ≤ 1 := by omega
-  simp [allowsRepositorySupplement, notSingle, different]
+  simp [allowsRepositorySupplement, needsRepositorySupplementReadback, multi, different]
 
 theorem changed_open_window_precludes_older_supplement
     (prCount : Nat) (terminal current : RepositoryReadback) (multi : 1 < prCount)
     (changed : current.windows ≠ terminal.windows) :
-    allowsRepositorySupplement prCount true terminal (some current) = false := by
+    allowsRepositorySupplement prCount 1 true terminal (some current) = false := by
   have different : current ≠ terminal := fun same => changed (congrArg RepositoryReadback.windows same)
-  have notSingle : ¬ prCount ≤ 1 := by omega
-  simp [allowsRepositorySupplement, notSingle, different]
+  simp [allowsRepositorySupplement, needsRepositorySupplementReadback, multi, different]
 
-theorem single_pr_repository_does_not_require_a_joint_readback
+theorem single_pr_one_supplement_keeps_its_existing_readback
     (terminal : RepositoryReadback) :
-    allowsRepositorySupplement 1 false terminal none = true := rfl
+    allowsRepositorySupplement 1 1 false terminal none = true := rfl
+
+theorem no_supplement_needs_no_joint_readback (prCount : Nat) (terminal : RepositoryReadback) :
+    allowsRepositorySupplement prCount 0 false terminal none = true := by
+  simp [allowsRepositorySupplement, needsRepositorySupplementReadback]
+
+theorem both_older_sources_on_one_pr_need_a_budgeted_repository_readback
+    (hasBudget : Bool) (terminal : RepositoryReadback) (joint : Option RepositoryReadback) :
+    allowsRepositorySupplement 1 2 hasBudget terminal joint = true ↔
+      hasBudget = true ∧ joint = some terminal := by
+  simp [allowsRepositorySupplement, needsRepositorySupplementReadback]
 
 theorem one_supplement_mixed_with_a_terminal_pr_can_false_publish :
     let terminal : RepositoryReadback := ⟨[[1], [21]], [(1, []), (21, [1])]⟩
     let current : RepositoryReadback := ⟨[[1], [21]], [(1, []), (21, [])]⟩
     observe [21] (some [1, 21]) = ([1, 21], true) ∧
-    observe [21] (if allowsRepositorySupplement 21 true terminal (some current) then some [1, 21] else none) =
+    observe [21] (if allowsRepositorySupplement 21 1 true terminal (some current) then some [1, 21] else none) =
       ([21], false) := by
+  decide
+
+def singlePrReplyScope (readback : SupplementReadback) : Option (List Nat) :=
+  match readback.review, readback.comment with
+  | some [anchor], some [reply] => some (if anchor < reply then [1] else [])
+  | _, _ => none
+
+/- The first older page supplies the request-changes clock. The second supplies
+   the reply clock. The scope only publishes after both certificates survive. -/
+def observeSinglePrOlderReply (prior : List Nat) (budget : Bool) (terminal : RepositoryReadback)
+    (joint : Option RepositoryReadback) (provisional current : SupplementReadback) : List Nat × Bool :=
+  let allowed := allowsRepositorySupplement 1 2 budget terminal joint
+  let evidence := corroborateSupplementReadback (needsRepositorySupplementReadback 1 2) allowed provisional current
+  observe prior (singlePrReplyScope evidence)
+
+theorem single_pr_two_older_sources_keep_prior_without_budget (prior : List Nat) (terminal : RepositoryReadback)
+    (joint : Option RepositoryReadback) (provisional current : SupplementReadback) :
+    observeSinglePrOlderReply prior false terminal joint provisional current = (prior, false) := rfl
+
+theorem coherent_single_pr_older_replies_still_select_the_pr (terminal : RepositoryReadback) :
+    let earlier : SupplementReadback := ⟨some [480], some [510]⟩
+    let later : SupplementReadback := ⟨some [600], some [630]⟩
+    observeSinglePrOlderReply [] true terminal (some terminal) earlier earlier = ([1], true) ∧
+    observeSinglePrOlderReply [] true terminal (some terminal) later later = ([1], true) := by
+  simp [observeSinglePrOlderReply, allowsRepositorySupplement, needsRepositorySupplementReadback,
+    corroborateSupplementReadback, singlePrReplyScope, observe]
+
+theorem mixing_one_pr_older_review_and_comment_can_false_remove :
+    let terminal : RepositoryReadback := ⟨[[1]], [(1, [])]⟩
+    let mixed : SupplementReadback := ⟨some [600], some [510]⟩
+    let current : SupplementReadback := ⟨some [600], some [630]⟩
+    observe [1] (singlePrReplyScope mixed) = ([], true) ∧
+    observeSinglePrOlderReply [1] true terminal (some terminal) mixed current = ([1], false) := by
+  decide
+
+theorem matching_older_comment_cannot_use_a_different_review_anchor :
+    let terminal : RepositoryReadback := ⟨[[1]], [(1, [])]⟩
+    let mixed : SupplementReadback := ⟨some [480], some [630]⟩
+    let current : SupplementReadback := ⟨some [600], some [630]⟩
+    let certified := corroborateSupplementReadback (needsRepositorySupplementReadback 1 2)
+      (allowsRepositorySupplement 1 2 true terminal (some terminal)) mixed current
+    certified = ⟨none, none⟩ ∧
+    observeSinglePrOlderReply [1] true terminal (some terminal) mixed current = ([1], false) := by
   decide
 
 theorem repository_joint_readback_accounts_for_terminal_rows
@@ -2187,8 +2240,14 @@ theorem repository_joint_readback_accounts_for_terminal_rows
 #print axioms multi_pr_supplement_requires_matching_repository_readback
 #print axioms changed_terminal_projection_precludes_older_supplement
 #print axioms changed_open_window_precludes_older_supplement
-#print axioms single_pr_repository_does_not_require_a_joint_readback
+#print axioms single_pr_one_supplement_keeps_its_existing_readback
+#print axioms no_supplement_needs_no_joint_readback
+#print axioms both_older_sources_on_one_pr_need_a_budgeted_repository_readback
 #print axioms one_supplement_mixed_with_a_terminal_pr_can_false_publish
+#print axioms single_pr_two_older_sources_keep_prior_without_budget
+#print axioms coherent_single_pr_older_replies_still_select_the_pr
+#print axioms mixing_one_pr_older_review_and_comment_can_false_remove
+#print axioms matching_older_comment_cannot_use_a_different_review_anchor
 #print axioms repository_joint_readback_accounts_for_terminal_rows
 
 end StewardPrSignalPagination

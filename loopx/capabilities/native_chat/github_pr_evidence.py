@@ -1646,7 +1646,8 @@ def observe_github_repository_prs(
                     supplemented_comment_items[number] = summary
         # A PR with an unverified review cannot publish a comment result computed from that review.
         verified_comments = set(comment_supplements)
-        if len(raw_nodes_by_number) > 1 and (review_supplements or comment_supplements):
+        supplement_count = len(review_supplements) + len(comment_supplements)
+        if supplement_count and (len(raw_nodes_by_number) > 1 or supplement_count > 1):
             verified_reviews, verified_comments = set(), set()
             terminal_window = _read_open_pr_window(page)
             if remaining_backfill_pages > 0 and terminal_window is not None:

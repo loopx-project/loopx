@@ -1620,6 +1620,96 @@ def test_steward_corroborates_review_and_comment_supplements_together(monkeypatc
 
 
 @pytest.mark.parametrize("case", [
+    "stable-earlier", "stable-later", "changed-review", "changed-comment", "no-budget",
+    "missing-joint", "late", "review-only", "comment-only",
+])
+def test_steward_binds_older_reviews_and_comments_for_one_pr(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "a" * 40
+
+    def anchor(hour: str) -> dict[str, Any]:
+        return {"id": f"anchor-{hour}", "state": "CHANGES_REQUESTED", "author": {"login": "maintainer"},
+                "commit": {"oid": head}, "submittedAt": f"2030-01-01T{hour}:00:00Z", "body": ""}
+
+    def reply_page(hour: str) -> dict[str, Any]:
+        return {"nodes": [{"createdAt": f"2030-01-01T{hour}:30:00Z", "author": {"login": "contributor"}}],
+                "pageInfo": {"hasPreviousPage": False}}
+
+    review_hour = "10" if case in {"stable-later", "changed-comment", "no-budget", "missing-joint", "late"} else "08"
+    reply_hour = "10" if case in {"stable-later", "changed-review"} else "08"
+    current_hour = "08" if case == "stable-earlier" else "10"
+    row = _graphql_node(_sample_pr(number=1, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED"))
+    if case == "comment-only":
+        row["reviews"] = _graphql_reviews([anchor(review_hour)])
+    else:
+        recent = {**anchor("11"), "id": "recent", "state": "COMMENTED", "author": {"login": "observer"}}
+        row["reviews"] = _graphql_reviews(
+            [recent], totalCount=2, pageInfo={"hasPreviousPage": True, "startCursor": "older-review"},
+        )
+    row["comments"] = reply_page(reply_hour) if case == "review-only" else {
+        "nodes": [{"createdAt": "2030-01-01T11:30:00Z", "author": {"login": "ci[bot]"}}],
+        "pageInfo": {"hasPreviousPage": True, "startCursor": "older-comment"},
+    }
+    revision = {field: row[field] for field in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+    elapsed = 0
+    requests = []
+    monkeypatch.setattr(github_pr_evidence, "monotonic", lambda: elapsed)
+    if case == "no-budget":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_BACKFILL_BUDGET", 2)
+
+    def run(command, **_kwargs):
+        nonlocal elapsed
+        query = next(arg for arg in command if arg.startswith("query="))
+        if "before=older-review" in command:
+            requests.append("review")
+            repository = {"pullRequest": {**revision, "latestReviews": row["reviews"],
+                                           "reviews": _graphql_reviews([anchor(review_hour)], totalCount=2)}}
+        elif "before=older-comment" in command:
+            requests.append("comment")
+            repository = {"pullRequest": {**revision, "latestComments": row["comments"], "comments": reply_page(reply_hour)}}
+        elif "terminalWindow0:" in query:
+            requests.append("joint")
+            assert {"reviewBefore1_0=older-review", "before1_0=older-comment"}.issubset(command)
+            repository = _joint_terminal_rows([row])
+            repository.update({
+                "reviewPr1": {**revision, "latestReviews": row["reviews"],
+                              "page0": _graphql_reviews([anchor(current_hour)], totalCount=2)},
+                "commentPr1": {**revision, "latestComments": row["comments"], "page0": reply_page(current_hour)},
+            })
+            if case == "missing-joint":
+                del repository["commentPr1"]
+            if case == "late":
+                elapsed = 101
+        else:
+            requests.append("list")
+            repository = _graphql_page([row])["data"]["repository"]
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"data": {"repository": repository}}))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=run, backfill_comments=True,
+        select_review_backfill=lambda candidates, _: {item["number"] for item in candidates},
+    )
+    assert snapshot["status"] == "ok"
+    result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "previous_hash": "sha256:last-trusted", "observed_at": "2030-01-01T12:00:00Z",
+        "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                         "include_inbox": False, "pr_filter": {"min_stalled_hours": 24,
+                                                             "author_mode": "exclude", "authors": ["maintainer"]}},
+    })
+    if case in {"stable-earlier", "stable-later", "review-only", "comment-only"}:
+        assert result["observation_incomplete"] is False
+        assert [item["number"] for item in result["scoped_repository_items"]] == [1]
+    else:
+        assert result["observation_incomplete"] is True
+        assert result["result_hash"] == "sha256:last-trusted" and result["material_change"] is False
+    if case in {"review-only", "comment-only"}:
+        assert requests == ["list", case.removesuffix("-only")]
+    else:
+        assert requests == ["list", "review", "comment"] + ([] if case == "no-budget" else ["joint"])
+
+
+@pytest.mark.parametrize("case", [
     "stable", "old-generation", "terminal-review-changed", "terminal-check-changed", "terminal-window-changed",
     "terminal-row-missing", "terminal-review-cap",
 ])
