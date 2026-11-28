@@ -893,7 +893,31 @@ def test_no_console_creationflags_reports_create_no_window_on_windows(
     with monkeypatch.context() as patched:
         patched.setattr(os, "name", "nt")
         patched.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        patched.setattr(process_runtime, "_parent_has_console", lambda: False)
         assert process_runtime.no_console_creationflags() == 0x08000000
+
+
+def test_no_console_creationflags_stays_zero_while_attached_to_a_console(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A child of an attached process inherits its console; the flag would only
+    # detach the child from the console its receipt is read on.
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", "nt")
+        patched.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        patched.setattr(process_runtime, "_parent_has_console", lambda: True)
+        assert process_runtime.no_console_creationflags() == 0
+
+
+def test_no_console_creationflags_survives_an_unanswerable_console_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The query must never break a spawn: unknown means the default behavior.
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", "nt")
+        patched.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+        patched.setitem(sys.modules, "ctypes", None)
+        assert process_runtime.no_console_creationflags() == 0
 
 
 def test_no_console_creationflags_stays_zero_without_the_constant(
@@ -902,4 +926,5 @@ def test_no_console_creationflags_stays_zero_without_the_constant(
     with monkeypatch.context() as patched:
         patched.setattr(os, "name", "nt")
         patched.delattr(subprocess, "CREATE_NO_WINDOW", raising=False)
+        patched.setattr(process_runtime, "_parent_has_console", lambda: False)
         assert process_runtime.no_console_creationflags() == 0

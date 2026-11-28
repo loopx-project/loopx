@@ -3,11 +3,12 @@
 Windows allocates a visible conhost window for every console-subsystem child of
 a parent without a console. These tests never require Windows: each one inspects
 the options handed to the spawn call and asserts the computed creationflags
-(0 on POSIX, CREATE_NO_WINDOW under an emulated Windows ``os.name``). The
-emulation rebinds only the ``os`` name each site reads, so ``pathlib`` keeps
-resolving POSIX paths on this host. The visible window and pipe behavior itself
-is owned by CI's Windows lanes and interactive Windows verification, not by
-these host-agnostic assertions.
+(0 on POSIX and on a Windows host attached to a console; CREATE_NO_WINDOW under
+an emulated Windows ``os.name`` on a host without one). The emulation rebinds
+only the ``os`` name each site reads, so ``pathlib`` keeps resolving POSIX paths
+on this host, and it answers the parent-console query directly. The visible
+window and pipe behavior itself is owned by CI's Windows lanes and interactive
+Windows verification, not by these host-agnostic assertions.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -70,10 +72,18 @@ def emulate_windows_spawn(
     monkeypatch: pytest.MonkeyPatch,
     *site_modules: Any,
     constants: bool = True,
+    console_attached: bool = False,
 ) -> None:
-    """Make the helper and the named site modules observe ``os.name == 'nt'``."""
+    """Make the helper and the named site modules observe ``os.name == 'nt'``.
+
+    ``console_attached`` selects the host the spawn runs from: a console-less
+    host (the default, the case issue #9430 reports) or one attached to a
+    console, as when the user runs the command in PowerShell or cmd.
+    """
     proxy = WindowsNameOnly()
     monkeypatch.setattr(process_runtime_module, "os", proxy)
+    monkeypatch.setattr(
+        process_runtime_module, "_parent_has_console", lambda: console_attached)
     for module in site_modules:
         monkeypatch.setattr(module, "os", proxy)
     if constants:
@@ -480,3 +490,98 @@ def test_entrypoint_windows_native_followup_call_passes_no_console_creationflags
     assert entrypoint_module.main(None) == 0
     assert captured.kwargs is not None
     assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
+
+
+@pytest.mark.parametrize(
+    ("platform_name", "console_attached", "expected"),
+    [
+        ("posix", False, 0),
+        ("nt", False, WINDOWS_CREATE_NO_WINDOW),
+        ("nt", True, 0),
+    ],
+)
+def test_no_console_creationflags_follows_the_parent_console(
+    monkeypatch: pytest.MonkeyPatch, platform_name: str, console_attached: bool,
+    expected: int,
+) -> None:
+    """The flag is returned for a console-less Windows host and nothing else."""
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", WINDOWS_CREATE_NO_WINDOW, raising=False)
+    monkeypatch.setattr(process_runtime_module, "os", SimpleNamespace(name=platform_name))
+    monkeypatch.setattr(
+        process_runtime_module, "_parent_has_console", lambda: console_attached)
+    assert no_console_creationflags() == expected
+
+
+@pytest.mark.parametrize(
+    ("code_page", "window", "attached"),
+    [(0, 0, False), (65001, 0, True), (0, 0x1234, True), (437, 0x1234, True)],
+)
+def test_console_attached_accepts_either_win32_query(
+    code_page: int, window: int, attached: bool,
+) -> None:
+    """A console-less process fails both queries; either success means attached."""
+    kernel32 = SimpleNamespace(
+        GetConsoleCP=lambda: code_page, GetConsoleWindow=lambda: window)
+    assert process_runtime_module._console_attached(kernel32) is attached
+
+
+def _run_entrypoint_native_followup(
+    monkeypatch: pytest.MonkeyPatch, captured: Captured,
+) -> int:
+    monkeypatch.delenv("LOOPX_KUNLUNCODE_OUTER_CONTROLLER", raising=False)
+    monkeypatch.setattr(entrypoint_module.shutil, "which", lambda _name: sys.executable)
+    monkeypatch.setattr(
+        subprocess, "call", lambda *_args, **kwargs: (captured.record(*_args, **kwargs), 0)[1])
+    monkeypatch.setattr(
+        sys, "argv",
+        ["loopx", "quota", "scheduler-ack-current",
+         "--scheduler-host-facts-chunk", "chunk", "--turn-instance-id", "turn"],
+    )
+    return entrypoint_module.main(None)
+
+
+def test_entrypoint_windows_native_followup_keeps_the_console_receipt_when_attached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A user running the follow-up in PowerShell or cmd still reads its receipt.
+
+    The scheduler child writes its receipt to an inherited stdout. Attached to a
+    console, the child inherits that console and the receipt is printed; the
+    creation flags stay 0 and the streams are not redirected. Passing
+    CREATE_NO_WINDOW here would detach the child from the console and the
+    receipt would vanish while every write still reported success.
+    """
+    captured = Captured()
+    emulate_windows_spawn(monkeypatch, entrypoint_module, console_attached=True)
+    assert _run_entrypoint_native_followup(monkeypatch, captured) == 0
+    assert captured.kwargs is not None
+    assert captured.kwargs["creationflags"] == 0
+    assert "stdout" not in captured.kwargs
+    assert "stderr" not in captured.kwargs
+    assert captured.kwargs.get("capture_output") is None
+
+
+def test_entrypoint_windows_native_followup_is_suppressed_on_a_consoleless_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same call from a host without a console still suppresses the window."""
+    captured = Captured()
+    emulate_windows_spawn(monkeypatch, entrypoint_module, console_attached=False)
+    assert _run_entrypoint_native_followup(monkeypatch, captured) == 0
+    assert captured.kwargs is not None
+    assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
+
+
+def test_consoleless_host_receipt_arrives_through_a_redirected_pipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A redirected child keeps its receipt: the pipe, not a console, carries it."""
+    captured = Captured()
+    monkeypatch.setattr(usage_ping, "_environment_suppressed", lambda *_a, **_k: False)
+    monkeypatch.setattr(usage_ping.shutil, "which", lambda _name: sys.executable)
+    emulate_windows_spawn(monkeypatch, usage_ping, console_attached=False)
+    monkeypatch.setattr(usage_ping.subprocess, "run", captured.record)
+    assert usage_ping.control("status", tmp_path / "usage-ping.json") == {"ok": True}
+    assert captured.kwargs is not None
+    assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
+    assert captured.kwargs["capture_output"] is True
