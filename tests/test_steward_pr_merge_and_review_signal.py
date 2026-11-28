@@ -389,6 +389,90 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
             assert item["checks_summary"]["pass_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("commit_oid", "nested_clock", "direct_clocks", "draft", "decision"),
+    [
+        (None, {"committedDate": "2030-01-03T07:00:00Z"}, {}, False, "hold"),
+        (" ", {"pushedDate": "2030-01-03T07:00:00Z"}, {}, False, "hold"),
+        (42, {"pushedDate": "2030-01-03T07:00:00Z"}, {}, False, "hold"),
+        (None, {"committedDate": "2030-01-01T09:00:00+01:00"}, {}, False, "include"),
+        (None, {"committedDate": "2030-01-03T07:00:00Z"},
+         {"headCommitCommittedAt": "2030-01-01T08:00:00Z"}, False, "include"),
+        (None, {"committedDate": "2030-01-03T07:00:00Z"},
+         {"headCommitPushedAt": "2030-01-03T07:30:00Z"}, False, "exclude"),
+        ("b" * 40, {"pushedDate": "2030-01-03T07:00:00Z"}, {}, False, "include"),
+        ("A" * 40, {"pushedDate": "2030-01-03T07:00:00Z"}, {}, False, "exclude"),
+        (None, {"committedDate": "2030-01-03T07:00:00Z"}, {}, True, "exclude"),
+    ],
+    ids=["missing-oid", "blank-oid", "nontext-oid", "same-instant", "direct-wins",
+         "dominated-by-trusted-push", "foreign", "matching", "excluded-draft"],
+)
+def test_steward_publishes_stalled_scope_only_with_sufficient_head_clock_evidence(
+    commit_oid: object, nested_clock: dict[str, str], direct_clocks: dict[str, str], draft: bool, decision: str,
+) -> None:
+    head = "a" * 40
+    review_time = "2030-01-01T08:00:00Z"
+    review = {
+        "id": "request-changes", "state": "CHANGES_REQUESTED", "commit": {"oid": head},
+        "author": {"login": "maintainer"}, "submittedAt": review_time,
+    }
+    node = _graphql_node(_sample_pr(
+        head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED", reviews=[review],
+    ))
+    node["statusCheckRollup"] = []
+    node["updatedAt"] = "2030-01-03T07:55:00Z"
+    node["comments"]["nodes"] = [{"createdAt": "2030-01-03T06:00:00Z", "author": {"login": "contributor"}}]
+    commit = node["commits"]["nodes"][0]["commit"]
+    reads = []
+
+    def runner(cmd, **_kwargs):
+        reads.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([node])), stderr="")
+
+    scope = {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+        "pr_filter": {"effective_verdicts": ["REQUEST_CHANGES"], "min_stalled_hours": 24,
+                      "author_mode": "exclude", "authors": ["maintainer"], "exclude_drafts": True},
+    }
+
+    def observe(snapshot, previous_hash=None):
+        return ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            "repository_snapshot": snapshot, "signal_scope": scope,
+            "observed_at": "2030-01-03T08:00:00Z", "previous_hash": previous_hash,
+        })
+
+    included = observe(observe_github_repository_prs("org/repo", runner=runner))
+    excluded = observe({"status": "ok", "items": []})
+    assert included["scoped_repository_items"][0]["stalled_bucket"] == "awaiting_maintainer_reply"
+    assert included["result_hash"] != excluded["result_hash"]
+
+    if commit_oid is None:
+        del commit["oid"]
+    else:
+        commit["oid"] = commit_oid
+    commit.update(nested_clock)
+    node.update(direct_clocks, isDraft=draft)
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    item = snapshot["items"][0]
+    assert item["checks_summary"]["total"] == 0
+    assert len(reads) == 2
+
+    if decision == "hold":
+        assert item.get("stalled_since_unknown") is True
+        assert item["stalled_since"] is None
+        assert item["author_replied_after_request_changes"] is False
+        for prior in (included, excluded):
+            observation = observe(snapshot, prior["result_hash"])
+            assert observation["observation_incomplete"] is True
+            assert observation["result_hash"] == prior["result_hash"]
+            assert observation["material_change"] is False
+    else:
+        observation = observe(snapshot, included["result_hash"])
+        assert observation["observation_incomplete"] is False
+        expected = included if decision == "include" else excluded
+        assert observation["result_hash"] == expected["result_hash"]
+
+
 def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> None:
     head_99 = "c" * 40
     head_101 = "1" * 40

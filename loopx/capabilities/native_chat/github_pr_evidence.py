@@ -345,6 +345,14 @@ def _post_reply_role(
     return None
 
 
+class _StallEvidence(NamedTuple):
+    latest_review_id: str | None = None
+    stalled_since: str | None = None
+    author_replied: bool = False
+    comments_incomplete: bool = False
+    stalled_since_unknown: bool = False
+
+
 def _summarize_request_changes_stall(
     row: Mapping[str, Any],
     *,
@@ -352,7 +360,7 @@ def _summarize_request_changes_stall(
     latest_record_by_actor: Mapping[tuple[str, str], tuple[str, dict[str, Any]]],
     head_oid: str,
     pr_author: str,
-) -> tuple[str | None, str | None, bool, bool]:
+) -> _StallEvidence:
     rc_candidates: list[tuple[datetime, str, dict[str, Any], str]] = []
     for verdict_val, rec in latest_record_by_actor.values():
         if verdict_val != "REQUEST_CHANGES":
@@ -361,7 +369,7 @@ def _summarize_request_changes_stall(
         if parsed is not None:
             rc_candidates.append((parsed[0], str(rec.get("id") or ""), rec, parsed[1]))
     if not rc_candidates:
-        return None, None, False, False
+        return _StallEvidence()
     latest_rc_dt, _latest_id, latest_rec, rc_iso = max(
         rc_candidates, key=lambda item: (item[0], item[1])
     )
@@ -377,6 +385,10 @@ def _summarize_request_changes_stall(
         if parsed_commit is not None:
             anchors.append(parsed_commit)
     stalled_anchor_dt, stalled_since = max(anchors, key=lambda pair: pair[0])
+    unbound_commit_at = _parse_iso_timestamp(row.get("_unbound_head_commit_at"))
+    if unbound_commit_at is not None and unbound_commit_at[0] > stalled_anchor_dt:
+        # Both the age and the set of post-anchor replies depend on this clock's identity.
+        return _StallEvidence(latest_review_id=latest_rc_review_id, stalled_since_unknown=True)
 
     earliest_comment_dt: datetime | None = None
     has_post_anchor_comment_reply = False
@@ -434,7 +446,12 @@ def _summarize_request_changes_stall(
         or (earliest_comment_dt is not None and earliest_comment_dt <= stalled_anchor_dt)
         or has_post_anchor_comment_reply
     )
-    return latest_rc_review_id, stalled_since, author_replied and not reply_role_uncertain, not comments_coverage_complete
+    return _StallEvidence(
+        latest_review_id=latest_rc_review_id,
+        stalled_since=stalled_since,
+        author_replied=author_replied and not reply_role_uncertain,
+        comments_incomplete=not comments_coverage_complete,
+    )
 
 
 def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -484,7 +501,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             latest_record_by_actor[actor_key] = (actionable, record)
 
     stall = (
-        (None, None, False, False)
+        _StallEvidence(stalled_since_unknown=True)
         if stalled_since_unknown
         else _summarize_request_changes_stall(
             row,
@@ -494,8 +511,6 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
             pr_author=pr_author,
         )
     )
-    latest_rc_review_id, stalled_since, author_replied_after_rc, comments_coverage_incomplete = stall
-
     verdicts = {val for val in latest_by_actor.values() if val}
     review_decision = str(row.get("reviewDecision") or "").strip().upper()
     has_conflict = (
@@ -548,21 +563,21 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": row.get("mergeStateStatus"),
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
-        "stalled_since": stalled_since,
+        "stalled_since": stall.stalled_since,
         **({"review_coverage_incomplete": True} if row.get("review_coverage_incomplete") is True else {}),
-        **({"stalled_since_unknown": True} if stalled_since_unknown else {}),
-        "author_replied_after_request_changes": author_replied_after_rc,
-        "comments_coverage_incomplete": comments_coverage_incomplete,
+        **({"stalled_since_unknown": True} if stall.stalled_since_unknown else {}),
+        "author_replied_after_request_changes": stall.author_replied,
+        "comments_coverage_incomplete": stall.comments_incomplete,
         "checks_summary": checks_summary,
         **({"checks_coverage_incomplete": True} if checks_summary is None else {}),
         "review_summary": {
             "effective_verdict": effective_verdict,
             "has_review_conflict": has_conflict,
             "stale_review_count": stale_count,
-            "latest_request_changes_review_id": latest_rc_review_id,
-            "stalled_since": stalled_since,
-            "author_replied_after_request_changes": author_replied_after_rc,
-            "comments_coverage_incomplete": comments_coverage_incomplete,
+            "latest_request_changes_review_id": stall.latest_review_id,
+            "stalled_since": stall.stalled_since,
+            "author_replied_after_request_changes": stall.author_replied,
+            "comments_coverage_incomplete": stall.comments_incomplete,
             "exact_head_reviews": exact_reviews,
         },
         "bypassed_gates": bypassed_gates,
@@ -814,20 +829,16 @@ def _read_graphql_check_contexts(contexts: object) -> list[Mapping[str, Any]] | 
     return nodes
 
 
-def _read_graphql_head_check_rollup(node: Mapping[str, Any], commit: object) -> list[Mapping[str, Any]] | None:
+def _read_graphql_head_check_rollup(
+    node: Mapping[str, Any], verified_head_commit: Mapping[str, Any] | None,
+) -> list[Mapping[str, Any]] | None:
     # Some adapters provide check evidence directly on the PR row.
     direct = node.get("statusCheckRollup")
     if isinstance(direct, list) and all(isinstance(check, Mapping) for check in direct):
         return direct
-    head = node.get("headRefOid")
-    if not isinstance(head, str) or not head.strip() or not isinstance(commit, Mapping):
+    if verified_head_commit is None or "statusCheckRollup" not in verified_head_commit:
         return None
-    oid = commit.get("oid")
-    if not isinstance(oid, str) or oid.strip().casefold() != head.strip().casefold():
-        return None
-    if "statusCheckRollup" not in commit:
-        return None
-    rollup = commit["statusCheckRollup"]
+    rollup = verified_head_commit["statusCheckRollup"]
     if rollup is None:
         return []
     return _read_graphql_check_contexts(rollup.get("contexts")) if isinstance(rollup, Mapping) else None
@@ -863,18 +874,25 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
         else None
     )
-    head_oid = str(node.get("headRefOid") or "").strip()
-    head_committed_at = node.get("headCommitCommittedAt")
-    head_pushed_at = node.get("headCommitPushedAt")
-    if isinstance(first_commit, Mapping):
-        commit_oid = str(first_commit.get("oid") or "").strip()
-        if not commit_oid or not head_oid or commit_oid.casefold() == head_oid.casefold():
-            if head_committed_at is None:
-                head_committed_at = first_commit.get("committedDate")
-            if head_pushed_at is None:
-                head_pushed_at = first_commit.get("pushedDate")
-
-    rollup = _read_graphql_head_check_rollup(node, first_commit)
+    raw_head_oid = node.get("headRefOid")
+    head_oid = raw_head_oid.strip() if isinstance(raw_head_oid, str) else ""
+    raw_commit_oid = first_commit.get("oid") if isinstance(first_commit, Mapping) else None
+    commit_oid = raw_commit_oid.strip() if isinstance(raw_commit_oid, str) else ""
+    verified_head_commit = first_commit if head_oid and commit_oid.casefold() == head_oid.casefold() else None
+    head_clocks: dict[str, Any] = {}
+    unbound_clocks: list[tuple[datetime, str]] = []
+    for row_key, commit_key in (("headCommitPushedAt", "pushedDate"), ("headCommitCommittedAt", "committedDate")):
+        head_clocks[row_key] = node.get(row_key)
+        if head_clocks[row_key] is not None or not isinstance(first_commit, Mapping):
+            continue
+        if verified_head_commit is not None:
+            head_clocks[row_key] = verified_head_commit.get(commit_key)
+        elif not commit_oid:
+            unbound_clock = _parse_iso_timestamp(first_commit.get(commit_key))
+            if unbound_clock is not None:
+                unbound_clocks.append(unbound_clock)
+    latest_unbound = max(unbound_clocks, key=lambda clock: clock[0], default=None)
+    rollup = _read_graphql_head_check_rollup(node, verified_head_commit)
 
     return {
         "number": node.get("number"),
@@ -889,8 +907,8 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         "mergeStateStatus": node.get("mergeStateStatus"),
         "mergeable": node.get("mergeable"),
         "updatedAt": node.get("updatedAt"),
-        "headCommitCommittedAt": head_committed_at,
-        "headCommitPushedAt": head_pushed_at,
+        **head_clocks,
+        "_unbound_head_commit_at": latest_unbound[1] if latest_unbound is not None else None,
         "comments": comments,
         "commentsHasPreviousPage": comments_has_previous_page,
         "commentsStartCursor": comments_start_cursor,

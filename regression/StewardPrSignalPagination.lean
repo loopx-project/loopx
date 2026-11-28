@@ -1314,6 +1314,83 @@ theorem known_failure_with_an_unclassified_check_preserves_prior :
 theorem known_check_outcomes_keep_their_counts :
     summarizeCheckOutcomes [some .passed, some .failed, some .pending] = some ⟨1, 1, 1⟩ := rfl
 
+/- The native producer applies this selection to pushed and committed clocks
+   separately. The pair holds a trusted timestamp and an unbound candidate.
+   Naturals encode readable UTC instants in order. For direct evidence, the
+   outer option records presence even if its timestamp is unreadable. -/
+def selectHeadClock (head commit : Option Nat) (direct : Option (Option Nat))
+    (nested : Option Nat) : Option Nat × Option Nat :=
+  match direct with
+  | some clock => (clock, none)
+  | none =>
+    if head.isSome && head == commit then (nested, none)
+    else if commit.isNone then (none, nested) else (none, none)
+
+def qualifyHeadClock (review : Nat) (pushed committed : Option Nat × Option Nat) : Option Nat :=
+  let trusted := max review (max (pushed.1.getD 0) (committed.1.getD 0))
+  if trusted < max (pushed.2.getD 0) (committed.2.getD 0) then none else some trusted
+
+theorem selected_nested_clock_requires_matching_head (head commit : Option Nat) (clock : Nat) :
+    (selectHeadClock head commit none (some clock)).1 = some clock ↔
+      head.isSome = true ∧ head = commit := by
+  cases head <;> cases commit <;> simp [selectHeadClock]
+  split <;> simp_all
+
+theorem direct_head_clock_takes_precedence (head commit nested clock : Option Nat) :
+    selectHeadClock head commit (some clock) nested = (clock, none) := rfl
+
+theorem verified_head_clock_can_reset_stall (head review pushed : Nat) (newer : review ≤ pushed) :
+    qualifyHeadClock review (selectHeadClock (some head) (some head) none (some pushed)) (none, none) =
+      some pushed := by
+  simp [selectHeadClock, qualifyHeadClock, Nat.max_eq_right newer]
+
+theorem foreign_head_clock_cannot_reset_stall (head commit review pushed : Nat) (wrongHead : head ≠ commit) :
+    qualifyHeadClock review (selectHeadClock (some head) (some commit) none (some pushed)) (none, none) =
+      some review := by
+  simp [selectHeadClock, qualifyHeadClock, wrongHead]
+
+theorem unavailable_head_clock_is_material_iff_it_can_advance_the_anchor
+    (review : Nat) (pushed committed : Option Nat × Option Nat) :
+    let trusted := max review (max (pushed.1.getD 0) (committed.1.getD 0))
+    qualifyHeadClock review pushed committed = none ↔
+      trusted < pushed.2.getD 0 ∨ trusted < committed.2.getD 0 := by
+  dsimp [qualifyHeadClock]
+  split <;> simp_all <;> omega
+
+theorem a_known_stall_anchor_is_the_maximum_of_trusted_clocks
+    (review clock : Nat) (pushed committed : Option Nat × Option Nat)
+    (known : qualifyHeadClock review pushed committed = some clock) :
+    clock = max review (max (pushed.1.getD 0) (committed.1.getD 0)) := by
+  dsimp [qualifyHeadClock] at known
+  split at known
+  · contradiction
+  · exact (Option.some.inj known).symm
+
+/- The producer does not infer an author reply relative to an uncertain anchor.
+   Core retains prior scope evidence unless an independent filter excludes it. -/
+def observeHeadClockScope (prior : List Nat) (number now minimum : Nat) (excluded canBypass : Bool)
+    (anchor : Option Nat) (authorReply : Option Bool) : List Nat × Bool :=
+  observeStalledScope prior number <|
+    decideStalledScope excluded (anchor.map (fun atTime => decide (atTime + minimum ≤ now)))
+      canBypass (if anchor.isSome then authorReply else some false)
+
+theorem unresolved_head_clock_preserves_any_prior_scope
+    (prior : List Nat) (number now minimum : Nat) (canBypass : Bool) (authorReply : Option Bool) :
+    observeHeadClockScope prior number now minimum false canBypass none authorReply = (prior, false) := by
+  cases canBypass <;> rfl
+
+theorem independent_exclusion_can_publish_despite_unresolved_head_clock
+    (prior : List Nat) (number now minimum : Nat) (canBypass : Bool) (authorReply : Option Bool) :
+    observeHeadClockScope prior number now minimum true canBypass none authorReply = ([], prior != []) := rfl
+
+theorem accepting_or_dropping_an_unbound_clock_can_publish_unsupported_scope :
+    let anchor := qualifyHeadClock 1 (selectHeadClock (some 7) none none (some 9)) (none, none)
+    observeHeadClockScope [42] 42 10 5 false false anchor (some false) = ([42], false) ∧
+    observeHeadClockScope [42] 42 10 5 false false (some 9) (some false) = ([], true) ∧
+    observeHeadClockScope [] 42 10 5 false false anchor (some false) = ([], false) ∧
+    observeHeadClockScope [] 42 10 5 false false (some 1) (some false) = ([42], true) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1455,5 +1532,14 @@ theorem known_check_outcomes_keep_their_counts :
 #print axioms unresolved_check_conclusion_preserves_prior_failure
 #print axioms known_failure_with_an_unclassified_check_preserves_prior
 #print axioms known_check_outcomes_keep_their_counts
+#print axioms selected_nested_clock_requires_matching_head
+#print axioms direct_head_clock_takes_precedence
+#print axioms verified_head_clock_can_reset_stall
+#print axioms foreign_head_clock_cannot_reset_stall
+#print axioms unavailable_head_clock_is_material_iff_it_can_advance_the_anchor
+#print axioms a_known_stall_anchor_is_the_maximum_of_trusted_clocks
+#print axioms unresolved_head_clock_preserves_any_prior_scope
+#print axioms independent_exclusion_can_publish_despite_unresolved_head_clock
+#print axioms accepting_or_dropping_an_unbound_clock_can_publish_unsupported_scope
 
 end StewardPrSignalPagination
