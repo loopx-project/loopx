@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 from time import monotonic
-from typing import Any, Callable, Mapping, NamedTuple, Sequence
+from typing import Any, Callable, Generic, Mapping, NamedTuple, Sequence, TypeVar
 
 from ..issue_fix.github_public import _REPO_PATTERN as _REPO_SLUG_RE
 from ..pr_review_queue.review_body import (
@@ -614,8 +614,9 @@ _GITHUB_PR_REVIEW_PAGE_SIZE = 20
 _GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE = 30
 _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE = 20
 _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE = 50
-# At most twenty full three-page supplements fit in the joint readback.
-_GITHUB_PR_JOINT_COMMENT_ROW_CAP = 3400
+# Review rows carry full bodies, so the joint readback has a lower review-specific cap.
+_GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP = 3400
+_GITHUB_PR_JOINT_REVIEW_ROW_CAP = 400
 _GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
 fragment StewardReviewPage on PullRequestReviewConnection {
   totalCount
@@ -1174,6 +1175,16 @@ def _read_pr_signal_revision(row: Mapping[str, Any]) -> tuple[str, str | None] |
     return timestamp[1], decision
 
 
+_SupplementPage = TypeVar("_SupplementPage", _ReviewPage, _CommentPage)
+
+
+class _SupplementEvidence(NamedTuple, Generic[_SupplementPage]):
+    head_oid: str
+    revision: tuple[str, str | None]
+    latest: _SupplementPage
+    pages: dict[str, _SupplementPage]
+
+
 def _backfill_pr_reviews(
     number: int,
     head_oid: str,
@@ -1183,9 +1194,9 @@ def _backfill_pr_reviews(
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
-) -> tuple[list[Mapping[str, Any]] | None, int]:
+) -> tuple[list[Mapping[str, Any]] | None, int, _SupplementEvidence[_ReviewPage] | None]:
     if first_page.total_count > len(first_page.rows) + remaining_pages * _GITHUB_PR_REVIEW_PAGE_SIZE:
-        return None, remaining_pages
+        return None, remaining_pages, None
     rows = first_page.rows
     ids = set(first_page.ids)
     cursor = first_page.previous_cursor
@@ -1216,75 +1227,106 @@ def _backfill_pr_reviews(
         rows = [*page.rows, *rows]
         cursor = page.previous_cursor
         if cursor is None:
-            return (rows if len(ids) == first_page.total_count else None), remaining_pages
+            if len(ids) == first_page.total_count:
+                return rows, remaining_pages, _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
+            break
         if len(ids) >= first_page.total_count:
             break
-    return None, remaining_pages
+    return None, remaining_pages, None
 
 
-class _CommentSupplementEvidence(NamedTuple):
-    head_oid: str
-    revision: tuple[str, str | None]
-    latest: _CommentPage
-    pages: dict[str, _CommentPage]
-
-
-def _joint_comment_query(evidence: Mapping[int, _CommentSupplementEvidence]) -> tuple[str, dict[str, str]]:
+def _joint_supplement_query(
+    reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
+    comments: Mapping[int, _SupplementEvidence[_CommentPage]],
+) -> tuple[str, dict[str, str]]:
     cursors = {}
     fields = []
-    for number, supplement in evidence.items():
-        pages = []
-        for index, cursor in enumerate(supplement.pages):
-            name = f"before{number}_{index}"
-            cursors[name] = cursor
-            pages.append(f"page{index}: comments(last: 50, before: ${name}) {{ ...StewardCommentPage }}")
-        fields.append(f"""
-    commentPr{number}: pullRequest(number: {number}) {{
+    fragments = []
+    for kind, evidence, latest_size, older_size, fragment in (
+        ("review", reviews, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_FRAGMENT),
+        ("comment", comments, _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE, _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE,
+         _GITHUB_PR_COMMENT_PAGE_FRAGMENT),
+    ):
+        if not evidence:
+            continue
+        fragments.append(fragment)
+        connection = f"{kind}s"
+        upper_kind = kind.title()
+        spread = f"{{ ...Steward{upper_kind}Page }}"
+        cursor_prefix = "reviewBefore" if kind == "review" else "before"
+        for number, supplement in evidence.items():
+            pages = []
+            for index, cursor in enumerate(supplement.pages):
+                name = f"{cursor_prefix}{number}_{index}"
+                cursors[name] = cursor
+                pages.append(f"page{index}: {connection}(last: {older_size}, before: ${name}) {spread}")
+            fields.append(f"""
+    {kind}Pr{number}: pullRequest(number: {number}) {{
       number headRefOid updatedAt reviewDecision
-      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      latest{upper_kind}s: {connection}(last: {latest_size}) {spread}
       {' '.join(pages)}
     }}""")
     variables = "".join(f", ${name}: String!" for name in cursors)
     query = f"""query($owner: String!, $name: String!{variables}) {{
   repository(owner: $owner, name: $name) {{ {''.join(fields)} }}
-}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+}}""" + "".join(fragments)
     return query, cursors
 
 
-def _joint_comment_pr_matches(pr_data: object, number: int, evidence: _CommentSupplementEvidence) -> bool:
+def _joint_supplement_matches(
+    pr_data: object, number: int, evidence: _SupplementEvidence[_SupplementPage], latest_alias: str,
+    read_latest: Callable[[object], _SupplementPage | None],
+    read_older: Callable[[object], _SupplementPage | None],
+) -> bool:
     row = _bound_pr_row(pr_data, number, evidence.head_oid)
     if row is None or _read_pr_signal_revision(row) != evidence.revision:
         return False
-    if _read_graphql_comment_page(row.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE) != evidence.latest:
+    if read_latest(row.get(latest_alias)) != evidence.latest:
         return False
     return all(
-        _read_graphql_comment_page(row.get(f"page{index}"), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE) == page
+        read_older(row.get(f"page{index}")) == page
         for index, page in enumerate(evidence.pages.values())
     )
 
 
-def _corroborate_comment_supplements(
-    evidence: Mapping[int, _CommentSupplementEvidence],
+def _corroborate_supplements(
+    reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
+    comments: Mapping[int, _SupplementEvidence[_CommentPage]],
     *, owner: str, name: str, runner: Callable[..., Any], deadline: float,
-) -> set[int]:
-    requested_rows = sum(
+) -> tuple[set[int], set[int]]:
+    review_rows = sum((1 + len(supplement.pages)) * _GITHUB_PR_REVIEW_PAGE_SIZE for supplement in reviews.values())
+    comment_rows = sum(
         _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE + len(supplement.pages) * _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE
-        for supplement in evidence.values()
+        for supplement in comments.values()
     )
-    if requested_rows > _GITHUB_PR_JOINT_COMMENT_ROW_CAP:
-        return set()
-    query, cursors = _joint_comment_query(evidence)
+    if review_rows > _GITHUB_PR_JOINT_REVIEW_ROW_CAP or review_rows + comment_rows > _GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP:
+        return set(), set()
+    query, cursors = _joint_supplement_query(reviews, comments)
     argv = ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"]
     for variable, cursor in cursors.items():
         argv.extend(("-f", f"{variable}={cursor}"))
     remaining_seconds = deadline - monotonic()
     if remaining_seconds <= 0:
-        return set()
+        return set(), set()
     repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
     if repo is None:
-        return set()
-    return {number for number, supplement in evidence.items()
-            if _joint_comment_pr_matches(repo.get(f"commentPr{number}"), number, supplement)}
+        return set(), set()
+    verified_reviews = {
+        number for number, supplement in reviews.items()
+        if _joint_supplement_matches(
+            repo.get(f"reviewPr{number}"), number, supplement, "latestReviews",
+            _read_graphql_review_page, _read_graphql_review_page,
+        )
+    }
+    read_latest_comment = partial(_read_graphql_comment_page, max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    read_older_comment = partial(_read_graphql_comment_page, max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
+    verified_comments = {
+        number for number, supplement in comments.items()
+        if _joint_supplement_matches(
+            repo.get(f"commentPr{number}"), number, supplement, "latestComments", read_latest_comment, read_older_comment,
+        )
+    }
+    return verified_reviews, verified_comments
 
 
 def _backfill_pr_comments_if_needed(
@@ -1296,7 +1338,7 @@ def _backfill_pr_comments_if_needed(
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
-) -> tuple[dict[str, Any], int, _CommentSupplementEvidence | None]:
+) -> tuple[dict[str, Any], int, _SupplementEvidence[_CommentPage] | None]:
     """Backfill one PR and retain the pages that establish a complete result."""
     head_oid = norm_node.get("headRefOid")
     if not isinstance(head_oid, str) or not head_oid.strip() or revision is None:
@@ -1341,7 +1383,7 @@ def _backfill_pr_comments_if_needed(
             break
     evidence = None
     if consumed_pages and summary.get("comments_coverage_incomplete") is not True:
-        evidence = _CommentSupplementEvidence(head_oid, revision, first_page, consumed_pages)
+        evidence = _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
     return summary, remaining_pages, evidence
 
 
@@ -1477,6 +1519,10 @@ def observe_github_repository_prs(
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
         review_pages_read: dict[int, int] = {}
+        review_supplements: dict[int, _SupplementEvidence[_ReviewPage]] = {}
+        initial_review_items: dict[int, dict[str, Any]] = {}
+        comment_supplements: dict[int, _SupplementEvidence[_CommentPage]] = {}
+        supplemented_comment_items: dict[int, dict[str, Any]] = {}
         read_older_page = partial(
             _read_older_pr_page, owner=owner, name=name, runner=runner, deadline=deadline,
         )
@@ -1500,13 +1546,15 @@ def observe_github_repository_prs(
                         continue
                     limit = min(_GITHUB_PR_MAX_BACKFILL_PAGES, remaining_backfill_pages)
                     node = normalized_nodes[number]
-                    reviews, remaining = _backfill_pr_reviews(
+                    reviews, remaining, evidence = _backfill_pr_reviews(
                         number, node["headRefOid"], first_page, remaining_pages=limit,
                         revision=revision, deadline=deadline, read_older_page=read_older_page,
                     )
                     review_pages_read[number] = limit - remaining
                     remaining_backfill_pages -= review_pages_read[number]
-                    if reviews is not None:
+                    if reviews is not None and evidence is not None:
+                        initial_review_items[number] = items[number]
+                        review_supplements[number] = evidence
                         node["reviews"] = reviews
                         node["review_coverage_incomplete"] = False
                         items[number] = summarize_github_pr_signal(node)
@@ -1520,7 +1568,6 @@ def observe_github_repository_prs(
             if select_comment_backfill is not None and candidates and remaining_seconds > 0:
                 selected = select_comment_backfill([items[number] for number in candidates], remaining_seconds)
                 candidates = [number for number in candidates if number in selected]
-            supplements: dict[int, tuple[dict[str, Any], _CommentSupplementEvidence]] = {}
             for number in candidates:
                 if remaining_backfill_pages <= 0 or monotonic() >= deadline:
                     break
@@ -1540,16 +1587,21 @@ def observe_github_repository_prs(
                 if evidence is None:
                     items[number] = summary
                 else:
-                    supplements[number] = (summary, evidence)
-            # Independently complete backfills may represent different revisions across PRs.
-            verified = set(supplements) if len(supplements) <= 1 else set()
-            if len(supplements) > 1 and remaining_backfill_pages > 0:
-                # The joint readback has one request slot in the same scan budget and deadline.
-                verified = _corroborate_comment_supplements(
-                    {number: evidence for number, (_summary, evidence) in supplements.items()},
+                    comment_supplements[number] = evidence
+                    supplemented_comment_items[number] = summary
+        # A PR with an unverified review cannot publish a comment result computed from that review.
+        verified_comments = set(comment_supplements)
+        if len(review_supplements.keys() | comment_supplements.keys()) > 1:
+            verified_reviews, verified_comments = set(), set()
+            if remaining_backfill_pages > 0:
+                verified_reviews, verified_comments = _corroborate_supplements(
+                    review_supplements, comment_supplements,
                     owner=owner, name=name, runner=runner, deadline=deadline,
                 )
-            items.update((number, supplements[number][0]) for number in verified)
+            for number in review_supplements.keys() - verified_reviews:
+                items[number] = initial_review_items[number]
+                verified_comments.discard(number)
+        items.update((number, supplemented_comment_items[number]) for number in verified_comments)
         return {"status": "ok", "repository": repo_slug, "items": list(items.values())}
     except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
         return {"status": "unavailable", "repository": repo_slug}

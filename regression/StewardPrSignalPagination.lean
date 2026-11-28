@@ -1851,6 +1851,72 @@ theorem joint_comment_readback_row_budget (prs olderPages : Nat) (nonemptyEviden
     (bounded : 20 * prs + 50 * olderPages ≤ 3400) : prs ≤ 48 ∧ olderPages ≤ 68 := by
   omega
 
+/- A certificate stands for the PR identity, revision, and all compared windows.
+   Both projections of the readback are taken from the same response. -/
+structure SupplementReadback where
+  review : Option (List Nat)
+  comment : Option (List Nat)
+  deriving DecidableEq
+
+def corroborateSupplementReadback (jointNeeded jointAllowed : Bool)
+    (provisional current : SupplementReadback) : SupplementReadback :=
+  if !jointNeeded then provisional
+  else if !jointAllowed then ⟨none, none⟩
+  else
+    let review := if provisional.review = current.review then provisional.review else none
+    let comment :=
+      if (provisional.review.isNone || review.isSome) && provisional.comment == current.comment
+      then provisional.comment else none
+    ⟨review, comment⟩
+
+theorem multi_pr_review_supplement_requires_exact_joint_readback
+    (review : List Nat) (comment : Option (List Nat)) (current : SupplementReadback)
+    (changed : some review ≠ current.review) :
+    (corroborateSupplementReadback true true ⟨some review, comment⟩ current).review = none := by
+  simp [corroborateSupplementReadback, changed]
+
+theorem changed_review_discards_dependent_comment_even_if_comment_matches
+    (review comment : List Nat) (currentReview : Option (List Nat)) (changed : some review ≠ currentReview) :
+    corroborateSupplementReadback true true ⟨some review, some comment⟩ ⟨currentReview, some comment⟩ =
+      ⟨none, none⟩ := by
+  simp [corroborateSupplementReadback, changed]
+
+theorem matching_review_survives_changed_comment
+    (review comment : List Nat) (currentComment : Option (List Nat)) (changed : some comment ≠ currentComment) :
+    corroborateSupplementReadback true true ⟨some review, some comment⟩ ⟨some review, currentComment⟩ =
+      ⟨some review, none⟩ := by
+  simp [corroborateSupplementReadback, changed]
+
+theorem missing_common_readback_keeps_both_supplements_unpublished (provisional current : SupplementReadback) :
+    corroborateSupplementReadback true false provisional current = ⟨none, none⟩ := rfl
+
+theorem single_pr_readbacks_keep_their_existing_path (provisional current : SupplementReadback) :
+    corroborateSupplementReadback false false provisional current = provisional := rfl
+
+theorem sequential_review_supplements_can_publish_a_mixed_scope :
+    let first : SupplementReadback := ⟨some [1], none⟩
+    let second : SupplementReadback := ⟨some [21], none⟩
+    let firstJoint := corroborateSupplementReadback true true first ⟨some [], none⟩
+    let secondJoint := corroborateSupplementReadback true true second second
+    observe [1] (if first.review.isSome && second.review.isSome then some [1, 21] else none) = ([1, 21], true) ∧
+    observe [1] (if firstJoint.review.isSome && secondJoint.review.isSome then some [1, 21] else none) = ([1], false) := by
+  decide
+
+theorem mixed_readback_keeps_a_matching_independent_comment :
+    let first : SupplementReadback := ⟨some [1], some [2]⟩
+    let second : SupplementReadback := ⟨none, some [21]⟩
+    corroborateSupplementReadback true true first ⟨some [], some [2]⟩ = ⟨none, none⟩ ∧
+    corroborateSupplementReadback true true second second = second := by
+  decide
+
+theorem joint_supplement_readback_budgets
+    (reviewPrs reviewOlder commentPrs commentOlder : Nat) (nonemptyReviews : reviewPrs ≤ reviewOlder)
+    (nonemptyComments : commentPrs ≤ commentOlder)
+    (boundedReviews : 20 * (reviewPrs + reviewOlder) ≤ 400)
+    (boundedRows : 20 * (reviewPrs + reviewOlder) + 20 * commentPrs + 50 * commentOlder ≤ 3400) :
+    reviewPrs ≤ 10 ∧ reviewPrs + reviewOlder ≤ 20 ∧ commentPrs ≤ 48 ∧ commentOlder ≤ 68 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2056,5 +2122,13 @@ theorem joint_comment_readback_row_budget (prs olderPages : Nat) (nonemptyEviden
 #print axioms sequential_comment_supplements_can_publish_a_mixed_scope
 #print axioms joint_comment_readback_uses_one_remaining_request
 #print axioms joint_comment_readback_row_budget
+#print axioms multi_pr_review_supplement_requires_exact_joint_readback
+#print axioms changed_review_discards_dependent_comment_even_if_comment_matches
+#print axioms matching_review_survives_changed_comment
+#print axioms missing_common_readback_keeps_both_supplements_unpublished
+#print axioms single_pr_readbacks_keep_their_existing_path
+#print axioms sequential_review_supplements_can_publish_a_mixed_scope
+#print axioms mixed_readback_keeps_a_matching_independent_comment
+#print axioms joint_supplement_readback_budgets
 
 end StewardPrSignalPagination

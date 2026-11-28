@@ -1368,7 +1368,7 @@ def test_steward_publishes_multi_pr_comment_supplements_only_after_joint_corrobo
     if case == "budget":
         monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_BACKFILL_BUDGET", 2)
     if case == "payload-budget":
-        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_COMMENT_ROW_CAP", 139)
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP", 139)
 
     def pr_comments(number: int, replied: bool, field: str) -> dict[str, Any]:
         row = watched_rows[number]
@@ -1426,6 +1426,173 @@ def test_steward_publishes_multi_pr_comment_supplements_only_after_joint_corrobo
         assert snapshot["items"][0]["comments_coverage_incomplete"] is True
         assert result["observation_incomplete"] is True
         assert result["result_hash"] == "sha256:verified-prior" and result["material_change"] is False
+
+
+@pytest.mark.parametrize("case", [
+    "stable", "mixed", "missing", "changed-older-page", "budget", "payload-budget", "late", "excluded",
+])
+def test_steward_publishes_multi_pr_review_supplements_only_after_joint_corroboration(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "a" * 40
+    gpt = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    gemini = "model_agent · gemini-3.1-pro · Google (runtime_reported, high)"
+    recent = [{"id": f"recent-{index}", "state": "COMMENTED", "author": {"login": "reviewer"},
+               "commit": {"oid": head}, "submittedAt": f"2030-01-01T10:{index:02d}:00Z", "body": ""}
+              for index in range(20)]
+
+    def pr(number: int) -> dict[str, Any]:
+        row = _graphql_node(_sample_pr(number=number, head_oid=head, review_decision="APPROVED"))
+        if number in {1, 21}:
+            row["reviews"] = _graphql_reviews(recent, totalCount=21,
+                                              pageInfo={"hasPreviousPage": True, "startCursor": f"review-{number}"})
+        row["isDraft"] = case == "excluded" and number == 1
+        return row
+
+    earlier = [pr(number) for number in range(1, 21)]
+    last = pr(21)
+    watched = {1: earlier[0], 21: last}
+    reads = []
+    elapsed = 0
+    monkeypatch.setattr(github_pr_evidence, "monotonic", lambda: elapsed)
+    if case == "budget":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_BACKFILL_BUDGET", 2)
+    if case == "payload-budget":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_REVIEW_ROW_CAP", 79)
+
+    def review_payload(number: int, reviewer: str, field: str) -> dict[str, Any]:
+        row = watched[number]
+        payload = {key: row[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+        payload["latestReviews"] = row["reviews"]
+        payload[field] = _graphql_reviews(
+            [{"id": f"older-{number}", "state": "APPROVED", "author": {"login": "reviewer"},
+              "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
+              "body": _valid_bilingual_body(head_oid=head, verdict="APPROVE", reviewer=reviewer)}],
+            totalCount=21,
+        )
+        return payload
+
+    def runner(cmd, **kwargs):
+        nonlocal elapsed
+        assert kwargs["timeout"] == 20
+        query = next(part for part in cmd if part.startswith("query="))
+        older = next((part.removeprefix("before=") for part in cmd if part.startswith("before=")), None)
+        if older is not None:
+            number = int(older.removeprefix("review-"))
+            reads.append(number)
+            reviewer = gemini if number == 21 and case == "stable" else gpt
+            payload = {"data": {"repository": {"pullRequest": review_payload(number, reviewer, "reviews")}}}
+        elif "reviewPr1: pullRequest" in query:
+            reads.append("joint")
+            assert "reviewPr21: pullRequest" in query
+            assert {"reviewBefore1_0=review-1", "reviewBefore21_0=review-21"}.issubset(cmd)
+            repositories = {
+                f"reviewPr{number}": review_payload(number, gpt if number == (1 if case == "stable" else 21) else gemini, "page0")
+                for number in watched
+            }
+            if case == "missing":
+                del repositories["reviewPr1"]
+            elif case == "changed-older-page":
+                repositories["reviewPr1"] = review_payload(1, gpt, "page0")
+                repositories["reviewPr1"]["page0"]["nodes"][0]["submittedAt"] = "2030-01-01T08:01:00Z"
+            elif case == "late":
+                elapsed = 101
+            payload = {"data": {"repository": repositories}}
+        elif "cursor=tail" in cmd:
+            reads.append("terminal")
+            payload = _graphql_page([last], total_count=21)
+            window = _graphql_page(earlier, has_next_page=True, end_cursor="tail", total_count=21)
+            payload["data"]["repository"]["previousPrs0"] = window["data"]["repository"]["pullRequests"]
+        else:
+            reads.append("first")
+            payload = _graphql_page(earlier, has_next_page=True, end_cursor="tail", total_count=21)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=runner, select_review_backfill=lambda rows, _: {item["number"] for item in rows},
+    )
+    assert snapshot["status"] == "ok"
+    result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+        "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                         "include_inbox": False, "pr_filter": {"required_approver_declarations": ["gpt"],
+                                                             "exclude_drafts": True}},
+    })
+    if case in {"stable", "excluded"}:
+        assert result["observation_incomplete"] is False
+        assert [item["number"] for item in result["scoped_repository_items"]] == ([1] if case == "stable" else [21])
+    else:
+        assert result["observation_incomplete"] is True
+        assert result["result_hash"] == "sha256:verified-prior" and result["material_change"] is False
+    assert reads == ["first", "terminal", 1, 21] + ([] if case in {"budget", "payload-budget"} else ["joint"])
+
+
+@pytest.mark.parametrize("case", ["match", "review-changed", "comment-changed", "combined-cap"])
+def test_steward_corroborates_review_and_comment_supplements_together(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "a" * 40
+    changes = {"id": "request-changes", "state": "CHANGES_REQUESTED", "author": {"login": "maintainer"},
+               "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z"}
+    older_review = {**changes, "state": "COMMENTED", "id": "older", "submittedAt": "2030-01-01T07:00:00Z"}
+    recent_comment = {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": "ci[bot]"}}
+    reply = {"createdAt": "2030-01-01T08:30:00Z", "author": {"login": "contributor"}}
+    rows = {
+        number: _graphql_node(_sample_pr(number=number, head_oid=head, author="contributor", reviews=[changes]))
+        for number in (1, 2)
+    }
+    rows[1]["reviews"] = _graphql_reviews([changes], totalCount=2,
+                                         pageInfo={"hasPreviousPage": True, "startCursor": "older-review"})
+    for number, row in rows.items():
+        row["comments"] = {"nodes": [recent_comment],
+                           "pageInfo": {"hasPreviousPage": True, "startCursor": f"older-comment-{number}"}}
+    if case == "combined-cap":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP", 179)
+    joint_reads = 0
+
+    def pr_revision(number: int) -> dict[str, Any]:
+        return {key: rows[number][key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+
+    def comment_payload(number: int, field: str, replied: bool = True) -> dict[str, Any]:
+        return {**pr_revision(number), "latestComments": rows[number]["comments"],
+                field: {"nodes": [reply] if replied else [], "pageInfo": {"hasPreviousPage": False}}}
+
+    def review_payload(field: str, body: str = "") -> dict[str, Any]:
+        return {**pr_revision(1), "latestReviews": rows[1]["reviews"],
+                field: _graphql_reviews([{**older_review, "body": body}], totalCount=2)}
+
+    def runner(cmd, **_kwargs):
+        nonlocal joint_reads
+        query = next(part for part in cmd if part.startswith("query="))
+        if "before=older-review" in cmd:
+            repository = {"pullRequest": review_payload("reviews")}
+        elif "before=older-comment-1" in cmd:
+            repository = {"pullRequest": comment_payload(1, "comments")}
+        elif "before=older-comment-2" in cmd:
+            repository = {"pullRequest": comment_payload(2, "comments")}
+        elif "reviewPr1: pullRequest" in query:
+            joint_reads += 1
+            assert all(f"commentPr{number}: pullRequest" in query for number in rows)
+            repository = {
+                "reviewPr1": review_payload("page0", "edited" if case == "review-changed" else ""),
+                "commentPr1": comment_payload(1, "page0", replied=case != "comment-changed"),
+                "commentPr2": comment_payload(2, "page0"),
+            }
+        else:
+            payload = _graphql_page(list(rows.values()), total_count=2)
+            repository = payload["data"]["repository"]
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": repository}}))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=runner, backfill_comments=True,
+        select_review_backfill=lambda selected, _: {row["number"] for row in selected},
+    )
+    assert snapshot["status"] == "ok"
+    first, second = snapshot["items"]
+    assert first.get("review_coverage_incomplete", False) == (case in {"review-changed", "combined-cap"})
+    assert first["author_replied_after_request_changes"] == (case == "match")
+    assert second["author_replied_after_request_changes"] == (case != "combined-cap")
+    assert joint_reads == (0 if case == "combined-cap" else 1)
 
 
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
