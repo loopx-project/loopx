@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -30,12 +29,15 @@ from ..todos.external_wait_contract import (
 from ..todos.todo_semantics import todo_item_task_class
 from .accounting_admission import quota_accounting_admission
 from .decision_summary import compact_quota_decision, quota_decision_agent_id
+from .monitor_poll_readback import (
+    QUOTA_MONITOR_POLL_CLASSIFICATION as QUOTA_MONITOR_POLL_CLASSIFICATION,
+    find_quota_monitor_poll_turn as find_quota_monitor_poll_turn,
+)
 from .spend_sources import DEFAULT_SLOT_SPEND_SOURCE
 
 Payload = dict[str, object]
 PayloadView = Mapping[str, object]
 
-QUOTA_MONITOR_POLL_CLASSIFICATION = "quota_monitor_poll"
 QUOTA_MONITOR_POLL_COMMIT_REQUEST_SCHEMA = (
     "loopx_quota_monitor_poll_commit_request_v0"
 )
@@ -320,6 +322,7 @@ def _observation_packet(
     result_hash: str | None,
     material_change: bool,
     material_change_scope: str | None,
+    observed_task_repository: str | None = None,
     agent_id: str | None = None,
     settlement_todo_id: str | None = None,
     cadence: str | None = None,
@@ -349,6 +352,7 @@ def _observation_packet(
         "reason_summary": reason_summary,
         "todo_id": todo_id,
         "target_key": target_key,
+        **({"observed_task_repository": observed_task_repository} if observed_task_repository is not None else {}),
         "result_hash": result_hash,
         "material_change": material_change,
         **({"material_change_scope": material_change_scope} if material_change_scope is not None else {}),
@@ -490,79 +494,6 @@ def build_quota_monitor_poll_event(
     return _mapping(record)
 
 
-def _find_monitor_poll_turn(
-    index_path: Path,
-    *,
-    goal_id: str,
-    agent_id: str | None,
-    turn_instance_id: str,
-    todo_id: str | None = None,
-    target_key: str | None = None,
-    goal_ref: PayloadView | None = None,
-) -> Payload | None:
-    normalized_todo_id = normalize_todo_id(todo_id) if todo_id else None
-    normalized_target_key = _clean_text(target_key)
-    expected_goal_ref = _mapping(goal_ref) if goal_ref is not None else None
-    try:
-        lines = index_path.read_text(encoding="utf-8").split("\n")
-    except OSError:
-        return None
-    for line in reversed(lines):
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(row, dict):
-            continue
-        if (
-            row.get("classification") == QUOTA_MONITOR_POLL_CLASSIFICATION
-            and str(row.get("goal_id") or "") == goal_id
-            and str(row.get("agent_id") or "") == agent_id
-            and str(row.get("turn_instance_id") or "") == turn_instance_id
-            and (
-                row.get("goal_ref") == expected_goal_ref
-                if expected_goal_ref is not None
-                else "goal_ref" not in row
-            )
-            and (
-                normalized_todo_id is None
-                or normalize_todo_id(row.get("todo_id")) == normalized_todo_id
-            )
-            and (
-                normalized_target_key is None
-                or _clean_text(row.get("target_key")) == normalized_target_key
-            )
-        ):
-            return _mapping(row)
-    return None
-
-
-def find_quota_monitor_poll_turn(
-    runtime_root: Path,
-    *,
-    goal_id: str,
-    agent_id: str | None,
-    turn_instance_id: str,
-    todo_id: str | None = None,
-    target_key: str | None = None,
-    goal_ref: PayloadView | None = None,
-) -> Payload | None:
-    """Return the latest matching monitor observation for one heartbeat turn."""
-
-    normalized_turn_id = normalize_turn_instance_id(turn_instance_id)
-    if not normalized_turn_id:
-        return None
-    return _find_monitor_poll_turn(
-        runtime_root / "goals" / goal_id / "runs" / "index.jsonl",
-        goal_id=goal_id,
-        agent_id=agent_id,
-        turn_instance_id=normalized_turn_id,
-        todo_id=todo_id,
-        target_key=target_key,
-        goal_ref=goal_ref,
-    )
-
-
 def _persisted_monitor_effect_id(record: PayloadView | None) -> str | None:
     if not isinstance(record, Mapping):
         return None
@@ -608,6 +539,27 @@ def _monitor_poll_effect_id(
         target_digest = hashlib.sha256(target_key.encode("utf-8")).hexdigest()
         return f"{base}:target:sha256:{target_digest}"
     return base
+
+
+def monitor_poll_reservation_exists(
+    runtime_root: Path,
+    *,
+    goal_id: str,
+    agent_id: str,
+    todo_id: str,
+    turn_instance_id: str,
+    goal_ref: PayloadView | None = None,
+) -> bool:
+    """Check whether the original poll still owns a durable reservation."""
+    effect_id = _monitor_poll_effect_id(
+        runtime_root=runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=todo_id,
+        turn_instance_id=turn_instance_id, target_key=None, goal_ref=goal_ref,
+    )
+    try:
+        _monitor_poll_receipt_path(runtime_root, goal_id, effect_id).stat()
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _prepend_unique_run(target: Payload, key: str, record: Payload) -> None:
@@ -758,6 +710,7 @@ def _provider_writeback(
     available_capabilities: list[str] | None = None,
 ) -> Payload:
     lease_proof = _mapping(plan.get("lease_proof"))
+    observed_repository = plan.get("observed_task_repository")
     result = write_monitor_poll_todo_state(
         registry_path=registry_path,
         runtime_root=runtime_root,
@@ -767,6 +720,7 @@ def _provider_writeback(
         monitor_effect_id=str(plan.get("monitor_effect_id") or "") or None,
         todo_id=_opt_str(plan.get("todo_id")),
         target_key=_opt_str(plan.get("target_key")),
+        observed_task_repository=observed_repository if isinstance(observed_repository, str) else None,
         result_hash=_opt_str(plan.get("result_hash")),
         material_change=plan.get("material_change") is True,
         material_change_scope=_opt_str(plan.get("material_change_scope")),
@@ -812,6 +766,7 @@ def record_quota_monitor_poll_for_decision(
     settlement_todo_id: str | None = None,
     todo_id: str | None = None,
     target_key: str | None = None,
+    observed_task_repository: str | None = None,
     result_hash: str | None = None,
     material_change: bool = False,
     material_change_scope: str | None = None,
@@ -912,6 +867,7 @@ def record_quota_monitor_poll_for_decision(
         result_hash=safe_result_hash,
         material_change=material_change,
         material_change_scope=material_change_scope,
+        observed_task_repository=observed_task_repository,
         cadence=cadence,
         next_due_at=next_due_at,
         next_agent_todo=next_agent_todo,
@@ -946,7 +902,10 @@ def record_quota_monitor_poll_for_decision(
                 payload["reason"] = f"{reason}; {retry['reason']}: {', '.join(missing)}"
         return payload
 
+    provider_aborted_no_effect = False
+
     def transact(source_admission: PayloadView | None) -> tuple[Payload, Payload]:
+        nonlocal provider_aborted_no_effect
         # Recheck the transport precondition inside the same quota admission as
         # the native receipt read. A legal no-effect abort may have removed it
         # since target selection; that must never turn recovery into a new poll.
@@ -1010,7 +969,8 @@ def record_quota_monitor_poll_for_decision(
             # decides whether it releases the exact pending reservation. An
             # outage/ambiguous commit carries no no-effect proof and is retained.
             if execute and exc.payload.get("no_effect") is not None:
-                _native_result(request_for("provider_rejected", provider_receipt=exc.payload))
+                aborted = _native_result(request_for("provider_rejected", provider_receipt=exc.payload))
+                provider_aborted_no_effect = aborted.get("status") == "aborted"
             raise
         status_warning: Payload | None = None
         if execute:
@@ -1061,6 +1021,8 @@ def record_quota_monitor_poll_for_decision(
             payload["error_code"] = exc.diagnostic_code
         elif isinstance(exc, LocalCoordinationAuthorityRejection):
             payload["error_code"] = exc.code
+            if provider_aborted_no_effect:
+                payload["provider_aborted_no_effect"] = True
         return payload
 
     if native.get("status") == "conflict":

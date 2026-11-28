@@ -2246,6 +2246,61 @@ theorem excluding_drafts_cannot_commit_the_stale_draft_pr_43 :
     commitScopedObservation edited stale = edited := by
   decide
 
+/- None is an unguarded legacy request. Some none binds an observation to
+   the absence of a repository. A bound selector is checked on the writeback
+   Todo head, with the provider revision fencing the subsequent commit. -/
+def commitRepositoryObservation (live : Option Nat) (observed : Option (Option Nat))
+    (previous candidate : ScopedPollObservation) : ScopedPollObservation × Bool :=
+  match observed with
+  | none => (candidate, true)
+  | some captured => if live = captured then (candidate, true) else (previous, false)
+
+theorem repository_change_rejects_without_advancing_poll_state
+    (previous candidate : ScopedPollObservation) (live captured : Option Nat)
+    (changed : live ≠ captured) :
+    commitRepositoryObservation live (some captured) previous candidate = (previous, false) := by
+  simp [commitRepositoryObservation, changed]
+
+theorem observed_no_repository_rejects_a_new_selector
+    (previous candidate : ScopedPollObservation) (repository : Nat) :
+    commitRepositoryObservation (some repository) (some none) previous candidate = (previous, false) := by
+  simp [commitRepositoryObservation]
+
+theorem matching_repository_selector_commits
+    (previous candidate : ScopedPollObservation) (selector : Option Nat) :
+    commitRepositoryObservation selector (some selector) previous candidate = (candidate, true) := by
+  simp [commitRepositoryObservation]
+
+theorem unguarded_legacy_monitor_keeps_its_request_behavior
+    (previous candidate : ScopedPollObservation) (selector : Option Nat) :
+    commitRepositoryObservation selector none previous candidate = (candidate, true) := rfl
+
+theorem retry_under_the_new_repository_commits_the_fresh_observation
+    (previous stale fresh : ScopedPollObservation) (old new : Option Nat) (changed : new ≠ old) :
+    let rejected := commitRepositoryObservation new (some old) previous stale
+    rejected = (previous, false) ∧
+    commitRepositoryObservation new (some new) rejected.1 fresh = (fresh, true) := by
+  simp [commitRepositoryObservation, changed]
+
+theorem switched_repository_cannot_publish_old_repository_pr_43 :
+    let previous : ScopedPollObservation := ⟨[0], [42], 1, 10, 20⟩
+    let stale : ScopedPollObservation := ⟨[0], [43], 2, 20, 30⟩
+    commitRepositoryObservation (some 2) (some (some 1)) previous stale = (previous, false) := by
+  decide
+
+/- Restaging a different repository for the same Turn requires the absence
+   of its durable reservation. The original commit index still gates reuse. -/
+def canRestageChangedRepository (reservationExists : Bool) (old new : Option Nat) : Bool :=
+  !reservationExists && decide (old ≠ new)
+
+theorem aborted_repository_poll_can_restage_after_losing_its_reply
+    (old new : Option Nat) (changed : old ≠ new) :
+    canRestageChangedRepository false old new = true := by
+  simp [canRestageChangedRepository, changed]
+
+theorem a_reserved_poll_keeps_its_original_snapshot_candidate (old new : Option Nat) :
+    canRestageChangedRepository true old new = false := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2494,5 +2549,13 @@ theorem excluding_drafts_cannot_commit_the_stale_draft_pr_43 :
 #print axioms scope_edit_first_rejects_old_read_and_recovery_commits_once
 #print axioms poll_first_remains_committed_when_the_editor_runs_afterward
 #print axioms excluding_drafts_cannot_commit_the_stale_draft_pr_43
+#print axioms repository_change_rejects_without_advancing_poll_state
+#print axioms observed_no_repository_rejects_a_new_selector
+#print axioms matching_repository_selector_commits
+#print axioms unguarded_legacy_monitor_keeps_its_request_behavior
+#print axioms retry_under_the_new_repository_commits_the_fresh_observation
+#print axioms switched_repository_cannot_publish_old_repository_pr_43
+#print axioms aborted_repository_poll_can_restage_after_losing_its_reply
+#print axioms a_reserved_poll_keeps_its_original_snapshot_candidate
 
 end StewardPrSignalPagination

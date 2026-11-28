@@ -1390,9 +1390,9 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
             edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", candidate_due)
             native_poll = StewardMonitor._native_poll
 
-            def lose_poll_response(owner, argv):
+            def lose_poll_response(owner, argv, **kwargs):
                 if scope == "lost-commit-reply":
-                    assert native_poll(owner, argv)["ok"] is True
+                    assert native_poll(owner, argv, **kwargs)["ok"] is True
                 raise RuntimeError("synthetic fault at the native poll response boundary")
 
             with monkeypatch.context() as fault:
@@ -1525,7 +1525,10 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
     assert spent_slots(monitor, actor) == quota_before
 
 
-@pytest.mark.parametrize("revision", ["changed-during-read", "equivalent-rewrite", "writer-during-commit"])
+@pytest.mark.parametrize("revision", [
+    "changed-during-read", "equivalent-rewrite", "writer-during-commit",
+    "repository-change", "repository-change-lost-reply",
+])
 def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path, monkeypatch, revision):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
@@ -1566,6 +1569,7 @@ def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path,
     }
     normalized = write_steward_monitor_scope(root, goal_id, target, original_scope)
     changed_scope = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "exclude_drafts": True}}
+    repository_changed = revision in {"repository-change", "repository-change-lost-reply"}
     transport.reconcile()
 
     def events(turn):
@@ -1588,15 +1592,33 @@ def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path,
     quota_before = spent_slots(monitor, actor)
     draft = {"number": 43, "isDraft": True, "author": {"login": "contributor"}}
     calls = 0
+    edited_todo = None
 
-    def read_repository(*_args, **_kwargs):
-        nonlocal calls
+    def read_repository(repository, **_kwargs):
+        nonlocal calls, edited_todo
         calls += 1
         if calls == 1 and revision == "changed-during-read":
             write_steward_monitor_scope(root, goal_id, target, changed_scope)
         if calls == 1 and revision == "equivalent-rewrite":
             equivalent = {**original_scope, "pr_filter": {**original_scope["pr_filter"], "authors": ["MAINTAINER", "maintainer"]}}
             assert write_steward_monitor_scope(root, goal_id, target, equivalent) == normalized
+        if calls == 1 and repository_changed:
+            assert repository == "org/repo"
+            actions = transport.core.actions
+            proposal = actions.preview({
+                "action_kind": "monitor.update", "summary": "Change the repository for this watch",
+                "normalized_parameters": {"goal_id": goal_id, "todo_id": todo_id, "agent_id": actor["agent_id"],
+                                          "operation": "edit", "task_repository": "git:github.com/org/replacement"},
+                "context": {}, "idempotency_key": "change-watch-repository",
+            })
+            assert proposal["status"] == "preview_ready", proposal
+            applied = actions.apply(proposal["proposal_id"])["proposal"]
+            assert applied["status"] == "applied", applied
+            edited_todo = local_watch_row(runtime, actor, todo_id)
+            assert edited_todo["task_repository"] == "git:github.com/org/replacement"
+        if repository_changed and calls > 1:
+            assert repository == "org/replacement"
+            return {"status": "ok", "repository": repository, "items": [{**committed_pr, "number": 44}]}
         return observe([draft])
 
     monkeypatch.setattr(observer, read_repository)
@@ -1614,13 +1636,27 @@ def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path,
                 contended.set()
                 return write_steward_monitor_scope(root, goal_id, target, changed_scope)
 
-            def poll_with_concurrent_editor(owner, argv):
+            def poll_with_concurrent_editor(owner, argv, **kwargs):
                 attempts.append(writers.submit(edit_scope))
                 assert contended.wait(5), "scope writer did not observe the commit lock"
                 assert not attempts[0].done()
-                return native_poll(owner, argv)
+                return native_poll(owner, argv, **kwargs)
 
             monkeypatch.setattr(StewardMonitor, "_native_poll", poll_with_concurrent_editor)
+        elif revision == "repository-change-lost-reply":
+            from loopx.capabilities.native_chat.steward_commands import NativeStewardCommandError
+            from loopx.capabilities.native_chat.steward_turn_common import _WORKER_EXITED_ERROR
+
+            native_poll = StewardMonitor._native_poll
+
+            def poll_with_lost_abort_reply(owner, argv, **kwargs):
+                try:
+                    return native_poll(owner, argv, **kwargs)
+                except NativeStewardCommandError as error:
+                    assert error.payload["provider_aborted_no_effect"] is True
+                    raise RuntimeError(_WORKER_EXITED_ERROR) from None
+
+            monkeypatch.setattr(StewardMonitor, "_native_poll", poll_with_lost_abort_reply)
         turns = pump_steward_monitors(runtime)
         assert len(turns) == 1 and turns[0]["loopx_request"]["todo_id"] == todo_id
         first = finish(runtime, turns[0])
@@ -1628,14 +1664,18 @@ def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path,
             assert attempts[0].result(timeout=5)["pr_filter"]["exclude_drafts"] is True
     assert calls == 1
 
-    if revision == "changed-during-read":
-        assert first["status"] == "failed" and first["error"] == "the monitor signal scope changed after observation"
+    if revision == "changed-during-read" or repository_changed:
+        changed = "repository" if repository_changed else "signal scope"
+        lost_reply = revision == "repository-change-lost-reply"
+        assert first["status"] == "failed"
+        assert first["error"] == (_WORKER_EXITED_ERROR if lost_reply else f"the monitor {changed} changed after observation")
         assert not events(first)
         assert snapshot_path.read_bytes() == prior_snapshot
-        assert not snapshot_path.with_suffix(".pending.json").exists()
+        assert snapshot_path.with_suffix(".pending.json").exists() is lost_reply
         after_failure = local_watch_row(runtime, actor, todo_id)
+        previous_poll = edited_todo if edited_todo is not None else before
         for field in ("result_hash", "monitor_effect_id", "last_checked_at", "next_due_at", "material_change_generation"):
-            assert after_failure.get(field) == before.get(field)
+            assert after_failure.get(field) == previous_poll.get(field)
         runtime._steward_monitor_next_check.clear()
         recovery = pump_steward_monitors(runtime)
         assert len(recovery) == 1
@@ -1643,7 +1683,12 @@ def test_signal_monitor_commits_only_under_its_observed_scope(steward, tmp_path,
         accepted = finish(runtime, recovery[0])
         assert calls == 2 and accepted["status"] == "completed" and len(events(accepted)) == 1
         snapshot = json.loads(snapshot_path.read_bytes())
-        assert snapshot["repository_snapshot"]["items"] == []
+        assert not snapshot_path.with_suffix(".pending.json").exists()
+        if repository_changed:
+            assert snapshot["task_repository"] == "git:github.com/org/replacement"
+            assert snapshot["repository_snapshot"]["items"] == [{**committed_pr, "number": 44}]
+        else:
+            assert snapshot["repository_snapshot"]["items"] == []
         assert snapshot["signal_scope"] == read_steward_monitor_scope(root, goal_id, target)
     else:
         assert first["status"] == "completed" and len(events(first)) == 1

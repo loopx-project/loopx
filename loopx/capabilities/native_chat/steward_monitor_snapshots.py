@@ -10,8 +10,13 @@ from pathlib import Path
 
 from ...chat_store import _atomic_write_json
 from ...control_plane.goals.first_party_host_admission import capture_first_party_host_goal_ref
-from ...control_plane.quota.monitor_poll import QUOTA_MONITOR_POLL_CLASSIFICATION, find_quota_monitor_poll_turn
+from ...control_plane.quota.monitor_poll import (
+    QUOTA_MONITOR_POLL_CLASSIFICATION,
+    find_quota_monitor_poll_turn,
+    monitor_poll_reservation_exists,
+)
 from ...file_lock import exclusive_file_lock
+from .steward_commands import NativeStewardCommandError
 from .steward_monitor_turns import (
     _MONITOR_TARGET_KEY_RE,
     _coerce_dict,
@@ -19,7 +24,7 @@ from .steward_monitor_turns import (
     steward_monitor_scope_path,
     steward_monitor_snapshot_path,
 )
-from .steward_turn_common import MONITOR_SIGNAL_SCOPE_CHANGED
+from .steward_turn_common import MONITOR_REPOSITORY_CHANGED, MONITOR_SIGNAL_SCOPE_CHANGED
 
 _LOGGER = logging.getLogger(__name__)
 SIGNAL_MONITOR_SNAPSHOT_SCHEMA = "steward_signal_monitor_snapshot_v0"
@@ -164,9 +169,18 @@ def commit_signal_snapshot(
         or _coerce_dict(pending.get("poll_binding")).get("goal_ref") != binding["goal_ref"]
     ):
         pending = {}
-    if pending.get("poll_binding") == binding:
-        if any(pending.get(key) != candidate.get(key) for key in ("result_hash", "target_key", "task_repository", "signal_scope")):
+    same_poll = pending.get("poll_binding") == binding
+    if same_poll and any(pending.get(key) != candidate.get(key)
+                         for key in ("result_hash", "target_key", "task_repository", "signal_scope")):
+        if pending.get("task_repository") == candidate.get("task_repository") or monitor_poll_reservation_exists(
+            runtime_root, goal_id=goal_id, agent_id=agent_id, todo_id=str(snapshot["todo_id"]),
+            turn_instance_id=turn_instance_id, goal_ref=_coerce_dict(binding["goal_ref"]) or None,
+        ):
             raise ValueError("Steward monitor observation changed for a staged poll")
+        # A worker can lose the rejection response after the owner releases its
+        # reservation, leaving a local draft with no durable poll attempt.
+        same_poll = False
+    if same_poll:
         candidate = pending
     else:
         # A response can be lost after the quota index committed the previous draft.
@@ -177,7 +191,14 @@ def commit_signal_snapshot(
             return poll()
         pending_path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_json(pending_path, candidate)
-    result = poll()
+    try:
+        result = poll()
+    except NativeStewardCommandError as exc:
+        if (exc.payload.get("provider_aborted_no_effect") is True
+                and exc.payload.get("reason") == MONITOR_REPOSITORY_CHANGED):
+            pending_path.unlink(missing_ok=True)
+            raise ValueError(MONITOR_REPOSITORY_CHANGED) from exc
+        raise
     if result.get("ok") is True and result.get("dry_run") is False and _matches_poll(candidate, result):
         try:
             pending_path.replace(latest)

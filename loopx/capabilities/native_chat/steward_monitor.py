@@ -292,10 +292,14 @@ class StewardMonitor:
                     signal_snapshot,
                     agent_id=str(actor["agent_id"]),
                     turn_instance_id=str(request["turn_instance_id"]),
-                    poll=lambda: self._native_poll(argv),
+                    poll=lambda: self._native_poll(
+                        argv, observed_task_repository=str(signal_snapshot.get("task_repository") or ""),
+                    ),
                 )
 
-    def _native_poll(self, argv: Sequence[str]) -> dict[str, object]:
+    def _native_poll(
+        self, argv: Sequence[str], *, observed_task_repository: str | None = None,
+    ) -> dict[str, object]:
         """Use the native poll owner; a Chat observation is no heartbeat task."""
         from ...cli_runtime import _build_selected_parser
         from ...cli_commands.lark_inbox import (
@@ -343,6 +347,7 @@ class StewardMonitor:
             ).status_payload,
             todo_id=args.todo_id,
             target_key=args.target_key,
+            observed_task_repository=observed_task_repository,
             turn_instance_id=args.turn_instance_id,
             result_hash=args.result_hash,
             material_change=args.material_change,

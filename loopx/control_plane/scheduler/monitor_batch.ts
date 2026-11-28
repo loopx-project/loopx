@@ -11,6 +11,7 @@ import {planMonitorMetadata, TODO_MONITOR_METADATA_REQUEST_SCHEMA} from "../todo
 import {planMonitorSuccessor, selectMonitorTodo, MONITOR_SUCCESSOR_REQUEST_SCHEMA} from "./monitor_successor.ts";
 import {optionalNonEmptyString, requireBoolean, requireJsonObject} from "../runtime_decode.ts";
 import {planTodoAuthoringScope, TODO_AUTHORING_SCOPE_REQUEST_SCHEMA} from "../todos/authoring_scope.ts";
+import {normalizeTodoRepository} from "../todos/work_requirements.ts";
 import type {TaskLeaseProof} from "../coordination/task_lease_proof.ts";
 
 export const MONITOR_BATCH_PLAN_REQUEST_SCHEMA = "loopx_monitor_batch_plan_request_v0";
@@ -45,7 +46,8 @@ export function normalizeMonitorPollFields(observation: unknown, intent: unknown
     Pick<MonitorBatchInput, "observation" | "intent"> {
   const fields = {observation: canonicalAuthorityObject(observation, "Monitor observation"),
     intent: canonicalAuthorityObject(intent, "Monitor successor intent")};
-  const observationFields = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change", "material_change_scope", "cadence", "next_due_at", "reason_summary"]);
+  const observationFields = new Set(["todo_id", "target_key", "generated_at", "result_hash", "material_change",
+    "material_change_scope", "cadence", "next_due_at", "reason_summary", "observed_task_repository"]);
   for (const key of Object.keys(fields.observation)) if (!observationFields.has(key)) throw new EffectRuntimeRequestError(`unsupported Monitor observation field: ${key}`);
   const intentFields = new Set(["next_agent_todo", "next_action_kind", "next_task_repository", "next_required_capabilities",
     "next_continuation_policy", "next_target_key", "next_claimed_by", "next_user_todo", "next_user_task_class",
@@ -59,6 +61,11 @@ function planWriteback(input: MonitorBatchInput) {
   const observation = input.observation;
   const monitor = selectMonitorTodo(todos,
     optionalNonEmptyString(observation.todo_id, "todo_id"), optionalNonEmptyString(observation.target_key, "target_key"));
+  const observedRepository = normalizeTodoRepository(observation.observed_task_repository, "observed_task_repository");
+  if (Object.hasOwn(observation, "observed_task_repository") &&
+      observedRepository !== normalizeTodoRepository(monitor.task_repository)) {
+    throw new EffectRuntimeRequestError("the monitor repository changed after observation");
+  }
   const actor = input.actor_agent_id;
   if (input.gate_scope_guard) {
     // The caller fences this exact snapshot together with its state write.
@@ -145,6 +152,7 @@ function planWriteback(input: MonitorBatchInput) {
   const writeback: JsonObject = {schema_version: "monitor_poll_todo_writeback_v0", dry_run: input.dry_run,
     goal_id: input.goal_id, todo_id: monitor.todo_id, monitor_effect_id: input.operation_id,
     target_key: transition.target_key || null, result_hash: observation.result_hash,
+    ...(Object.hasOwn(observation, "observed_task_repository") ? { observed_task_repository: observedRepository ?? "" } : {}),
     material_change: observation.material_change, material_change_generation: transition.material_change_generation,
     ...(transition.material_change_scope == null ? {} : {
       material_change_scope: transition.material_change_scope,

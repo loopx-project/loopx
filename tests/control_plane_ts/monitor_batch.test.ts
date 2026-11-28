@@ -100,6 +100,22 @@ function replay(input: MonitorBatchInput, receipt = historicalReceipt(input)):
   });
 }
 
+test("Monitor batches distinguish an observed empty repository from an unguarded legacy request", () => {
+  const existing = request({});
+  const withoutRepository = {...existing, observation: {...existing.observation, observed_task_repository: ""}};
+  assert.equal(planMonitorBatch(withoutRepository).writeback.observed_task_repository, "");
+  const configured = {...withoutRepository, todos: [
+    {...existing.todos[0], task_repository: "git:github.com/org/replacement"},
+  ]};
+  assert.throws(() => planMonitorBatch(configured), /the monitor repository changed after observation/);
+  const matching = {...configured, observation: {
+    ...configured.observation, observed_task_repository: "git:github.com/org/replacement",
+  }};
+  assert.equal(planMonitorBatch(matching).writeback.observed_task_repository, "git:github.com/org/replacement");
+  const legacy = planMonitorBatch({...configured, observation: existing.observation});
+  assert.equal(Object.hasOwn(legacy.writeback, "observed_task_repository"), false);
+});
+
 test("historical receipt replay returns no mutations and ignores current source state", () => {
   const input = request();
   const result = replay({...input, registered_agents: [], todos: [null]});
