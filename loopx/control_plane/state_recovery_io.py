@@ -86,13 +86,16 @@ def _runtime(method: str, request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _audit_owners(request: dict[str, Any]) -> dict[str, Any]:
+    from ..extensions.process_runtime import no_console_creationflags
+
     command = [_node_executable(), "--no-warnings", "--max-old-space-size=512",
                "--experimental-sqlite", "--experimental-strip-types",
                *node_typescript_flags(),
                str(Path(__file__).with_name("state_recovery_worker.ts"))]
     try:
         completed = subprocess.run(command, input=json.dumps(request), text=True, encoding="utf-8",
-                                   capture_output=True, timeout=_OWNER_TIMEOUT_SECONDS, check=False)
+                                   capture_output=True, timeout=_OWNER_TIMEOUT_SECONDS, check=False,
+                                   creationflags=no_console_creationflags())
     except subprocess.TimeoutExpired as exc:
         # subprocess.run kills and waits for this child only, never the daemon.
         raise StateRecoveryError("recovery_owner_timeout") from exc

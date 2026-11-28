@@ -338,6 +338,8 @@ def run_host_process(
     launch_deadline = time.monotonic() + launch_budget if launch_guard is not None else None
     launch_arguments = (["--guarded-launch", str((time.time() + launch_budget) * 1000)]
                         if launch_guard is not None else [])
+    from ...extensions.process_runtime import no_console_creationflags
+
     with ExitStack() as containment:
         windows_job = None
         if sys.platform == "win32":
@@ -360,6 +362,7 @@ def run_host_process(
             errors="strict",
             start_new_session=True,
             env=bridge_environment,
+            creationflags=no_console_creationflags(),
         )
         assert proc.stdin is not None and proc.stdout is not None
         result: dict[str, Any] | None = None

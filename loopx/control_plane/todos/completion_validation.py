@@ -97,6 +97,7 @@ def _workspace_failure(label: str, *, status: str, summary: str) -> dict[str, An
 
 def _git_workspace_is_clean(path: Path) -> bool | None:
     """Return clean/dirty without exposing local paths or command output."""
+    from ...extensions.process_runtime import no_console_creationflags
 
     try:
         result = subprocess.run(
@@ -106,6 +107,7 @@ def _git_workspace_is_clean(path: Path) -> bool | None:
             stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace",
             timeout=2,
+            creationflags=no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

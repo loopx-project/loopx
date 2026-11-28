@@ -138,10 +138,13 @@ def compact_execution_preparation_request(
 def _default_runner(
     command: Sequence[str], *, cwd: Path, timeout: float,
 ) -> subprocess.CompletedProcess[str]:
+    from ...extensions.process_runtime import no_console_creationflags
+
     completed = subprocess.run(
         list(command), cwd=str(cwd), capture_output=True, text=False,
         timeout=timeout,
         check=False,
+        creationflags=no_console_creationflags(),
     )
     # The receipt is protocol data and must decode exactly.  Stderr is only
     # diagnostic output from the launcher; an unrelated invalid byte there

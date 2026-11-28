@@ -103,6 +103,7 @@ export class DrainKernelLockHost {
     if (!this.child) {
       this.child = spawn(this.python, ["-m", "loopx.control_plane.coordination.shadow_lock_host"], {
         stdio: ["pipe", "pipe", "pipe"], env: {...process.env, PYTHONPATH: fileURLToPath(new URL("../../../", import.meta.url))},
+        windowsHide: true,
       });
       this.exited = new Promise(resolve => this.child!.once("close", () => resolve()));
       this.child.on("error", () => {}); // The closed reply stream reports an unavailable host.

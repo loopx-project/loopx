@@ -39,6 +39,8 @@ def _is_same_or_child_path(path: Path, root: Path) -> bool:
 
 
 def _git_command_output(path: Path, *args: str) -> str | None:
+    from ...extensions.process_runtime import no_console_creationflags
+
     try:
         result = subprocess.run(
             ["git", "-C", str(path), *args],
@@ -47,6 +49,7 @@ def _git_command_output(path: Path, *args: str) -> str | None:
             stderr=subprocess.DEVNULL,
             text=True, encoding="utf-8", errors="replace",
             timeout=1.5,
+            creationflags=no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -134,11 +137,14 @@ def _capture_local_goal_workspace(
 
 def _git_origin_is_absent(path: Path) -> bool:
     """Only Git's missing-key result permits local fallback; errors do not."""
+    from ...extensions.process_runtime import no_console_creationflags
+
     try:
         result = subprocess.run(
             ["git", "-C", str(path), "config", "--get", "remote.origin.url"],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=1.5,
+            creationflags=no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

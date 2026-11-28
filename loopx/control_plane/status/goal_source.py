@@ -102,8 +102,11 @@ def _text(value, field, limit=4096):
 
 
 def _run(argv, *, env=None):
+    from ...extensions.process_runtime import no_console_creationflags
+
     # Diagnostics can contain private paths; callers must not return stderr.
-    result = subprocess.run(argv, env=env, capture_output=True, check=True, timeout=25)
+    result = subprocess.run(argv, env=env, capture_output=True, check=True, timeout=25,
+                             creationflags=no_console_creationflags())
     if len(result.stdout) > _MAX_BYTES:
         raise ValueError("Source read exceeds the display limit")
     return result.stdout.decode("utf-8")

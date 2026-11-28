@@ -19,6 +19,56 @@ _PROCESS_TERMINATE_GRACE_SECONDS = 1.0
 _PROCESS_GROUP_STOP_TIMEOUT_SECONDS = 1.0
 
 
+def _console_attached(kernel32: Any) -> bool:
+    """Report whether the calling process owns a Win32 console.
+
+    Either query succeeding means a console is attached. A process without one
+    fails both, and treating any success as attached keeps the answer on the
+    safe side: the only cost of a wrong "attached" is an unsuppressed window.
+    """
+    return bool(kernel32.GetConsoleCP()) or bool(kernel32.GetConsoleWindow())
+
+
+def _parent_has_console() -> bool:
+    """Report whether this process owns a console; an unanswerable query is yes."""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetConsoleCP.restype = ctypes.c_uint
+        kernel32.GetConsoleWindow.restype = ctypes.c_void_p
+    except (AttributeError, ImportError, OSError):
+        # The console query only refines the spawn options, so a host that
+        # cannot answer it keeps the child's behavior exactly as it was.
+        return True
+    return _console_attached(kernel32)
+
+
+def no_console_creationflags() -> int:
+    """Creation flags that stop a console-subsystem child from opening a console.
+
+    Windows allocates a visible console host window for every console-subsystem
+    child of a parent that has no console, so short-lived helpers such as node,
+    python or git flash a black window on console-less hosts. CREATE_NO_WINDOW
+    suppresses that allocation without touching handle inheritance or stdio.
+
+    The flag is returned only when this process has no console, because that is
+    the only case in which Windows would allocate a new one. A child of a
+    process attached to a console inherits that console and never opens a
+    window; passing the flag there would instead detach the child from the
+    console its output is being read from, and the child's writes to an
+    inherited stdout would vanish without an error.
+
+    Every other platform reports 0, which is subprocess's default and leaves
+    behavior unchanged.
+    """
+    if os.name != "nt":
+        return 0
+    if _parent_has_console():
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def write_process_stdin_before_deadline(
     process: subprocess.Popen[str], text: str, *, deadline: float,
     cancel_and_reap: Callable[[], None],

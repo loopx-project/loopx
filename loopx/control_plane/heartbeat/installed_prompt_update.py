@@ -187,11 +187,14 @@ def update_with_prompts(payload: dict, *, registry: Path, runtime_root: str | No
         command += ["--runtime-root", runtime_root]
     command += ["automation-prompts", "sync-installed", "--codex-home", str(home),
                 "--plan-file", str(plan_file), "--execute"]
+    from loopx.extensions.process_runtime import no_console_creationflags
+
     try:
         # Do not accidentally import a checkout through the parent's PYTHONPATH.
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
-                                timeout=timeout_seconds, cwd=directory)
+                                timeout=timeout_seconds, cwd=directory,
+                                creationflags=no_console_creationflags())
         report = json.loads(result.stdout)
         if not isinstance(report, dict) or "results" not in report:
             raise ValueError("new runtime returned no prompt migration result")

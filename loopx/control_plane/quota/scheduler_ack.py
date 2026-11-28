@@ -225,6 +225,8 @@ def _run_native_followup(
             / "heartbeat_followup_cli.ts"
         ),
     ]
+    from ...extensions.process_runtime import no_console_creationflags
+
     try:
         completed = subprocess.run(
             command,
@@ -234,6 +236,7 @@ def _run_native_followup(
             text=True,
             encoding="utf-8",
             timeout=30,
+            creationflags=no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError("native scheduler follow-up command failed") from exc

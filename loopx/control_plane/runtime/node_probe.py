@@ -112,6 +112,11 @@ class NodeProbe:
 
 
 def probe_node(*, timeout: float = STARTUP_READY_TIMEOUT_SECONDS) -> NodeProbe:
+    # Pure callers import this module cold; the process transport stays
+    # unselected until a probe actually launches a child (see
+    # tests/test_process_runtime_loading.py).
+    from ...extensions.process_runtime import no_console_creationflags
+
     executable = shutil.which("node")
     if executable is None:
         return NodeProbe(NodeProbeOutcome.MISSING)
@@ -121,6 +126,7 @@ def probe_node(*, timeout: float = STARTUP_READY_TIMEOUT_SECONDS) -> NodeProbe:
         completed = subprocess.run(
             [executable, "--version"], check=False, capture_output=True,
             text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            creationflags=no_console_creationflags(),
         )
     except subprocess.TimeoutExpired:
         return NodeProbe(NodeProbeOutcome.TIMED_OUT, executable)

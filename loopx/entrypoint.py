@@ -150,7 +150,9 @@ def main(argv: list[str] | None = None) -> int:
 				# Windows execv does not propagate the replaced process's status.
 				# Wait for the typed owner so rejected writes remain CLI failures.
 				import subprocess
-				return subprocess.call(native_argv)
+
+				from .extensions.process_runtime import no_console_creationflags
+				return subprocess.call(native_argv, creationflags=no_console_creationflags())
 			os.execv(native_argv[0], native_argv)
 
 	from .cli_runtime import main as runtime_main

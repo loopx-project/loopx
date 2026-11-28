@@ -72,6 +72,8 @@ class StdioNativeGoalTransport:
     ) -> StdioNativeGoalTransport:
         if not command:
             raise ValueError("command must be non-empty")
+        from ...extensions.process_runtime import no_console_creationflags
+
         process = subprocess.Popen(
             list(command),
             cwd=cwd,
@@ -82,6 +84,7 @@ class StdioNativeGoalTransport:
             text=True,
             encoding="utf-8",
             bufsize=1,
+            creationflags=no_console_creationflags(),
         )
         return cls(process, response_timeout_sec=response_timeout_sec)
 
