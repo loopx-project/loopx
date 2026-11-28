@@ -757,6 +757,87 @@ def test_steward_list_revalidates_all_consumed_windows_before_publishing(drift: 
         assert observation["material_change"] is False
 
 
+@pytest.mark.parametrize("case", [
+    "changed", "missing", "foreign", "unclassified", "truncated", "excluded", "trusted-direct",
+    "fresh-overlap", "same-tally",
+])
+def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: str) -> None:
+    from copy import deepcopy
+
+    success = {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}
+    pending = {"__typename": "StatusContext", "state": "PENDING"}
+    failure = {**success, "conclusion": "FAILURE"}
+    first_page = [_graphql_node(_sample_pr(number=number), contexts=[success]) for number in range(1, 21)]
+    second_page = [_graphql_node(_sample_pr(number=number), contexts=[success, pending]) for number in range(21, 41)]
+    terminal = [_graphql_node(_sample_pr(number=41), contexts=[failure])]
+    old_pr = first_page[0]
+    if case == "excluded":
+        old_pr["isDraft"] = True
+    elif case == "trusted-direct":
+        old_pr["statusCheckRollup"] = [success]
+    elif case == "fresh-overlap":
+        terminal.append(_graphql_node(_sample_pr(number=1), contexts=[success]))
+    history = []
+    reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        cursor = next((part.removeprefix("cursor=") for part in cmd if part.startswith("cursor=")), None)
+        reads.append(cursor)
+        query = next(part for part in cmd if part.startswith("query="))
+        if cursor is None:
+            payload = _graphql_page(first_page, has_next_page=True, end_cursor="first", total_count=41, history=history)
+        elif cursor == "first":
+            assert "commits(last: 1)" not in query.split("previousPrs0:", 1)[1]
+            payload = _graphql_page(second_page, has_next_page=True, end_cursor="second", total_count=41, history=history)
+        else:
+            assert cursor == "second"
+            assert "contexts(first: 1)" in query.split("previousPrs0:", 1)[1].split("previousPrs1:", 1)[0]
+            assert "contexts(first: 2)" in query.split("previousPrs1:", 1)[1]
+            payload = _graphql_page(terminal, total_count=41, history=history)
+            repository = payload["data"]["repository"]
+            readback = deepcopy(repository["previousPrs0"])
+            row = readback["nodes"][0]
+            commit = row["commits"]["nodes"][0]["commit"]
+            contexts = commit["statusCheckRollup"]["contexts"]
+            if case in {"missing", "trusted-direct"}:
+                del row["commits"]
+                row.pop("statusCheckRollup", None)
+            elif case == "foreign":
+                commit["oid"] = "b" * 40
+            elif case == "unclassified":
+                contexts["nodes"][0]["conclusion"] = None
+            elif case == "truncated":
+                contexts["totalCount"] = 2
+                contexts["pageInfo"]["hasNextPage"] = True
+            elif case == "same-tally":
+                contexts["nodes"][0]["id"] = "replacement-check"
+                contexts["nodes"][0]["conclusion"] = "NEUTRAL"
+            else:
+                contexts["nodes"][0]["conclusion"] = "FAILURE"
+            repository["previousPrs0"] = readback
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    assert snapshot["status"] == "ok" and reads == [None, "first", "second"]
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+        "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                         "include_inbox": False, "pr_filter": {"exclude_drafts": True}},
+    })
+    if case in {"changed", "missing", "foreign", "unclassified", "truncated"}:
+        assert snapshot["items"][0]["checks_coverage_incomplete"] is True
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior"
+        assert observation["material_change"] is False
+    else:
+        assert observation["observation_incomplete"] is False
+        numbers = [row["number"] for row in observation["scoped_repository_items"]]
+        assert (1 in numbers) is (case != "excluded")
+        failures = [row["number"] for row in observation["scoped_repository_items"] if "FAILING_CHECKS" in row["bypassed_gates"]]
+        assert failures == [41]
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):

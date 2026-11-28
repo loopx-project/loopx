@@ -1257,6 +1257,7 @@ structure CheckTally where
   passed : Nat
   failed : Nat
   pending : Nat
+  deriving DecidableEq
 
 def addCheckOutcome (tally : CheckTally) : CheckOutcome → CheckTally
   | .passed => { tally with passed := tally.passed + 1 }
@@ -1515,6 +1516,55 @@ theorem open_pr_request_bounds_rows_including_readbacks
     firstRows + previousRows ≤ 95 ∧ firstRows + previousRows + currentRows ≤ 120 := by
   omega
 
+/- A carried nested tally already passed HEAD, coverage and classification checks.
+   The terminal readback must establish the same evidence. Fresh terminal rows
+   and trusted direct adapter results take their usual path without comparison. -/
+def verifyCarriedCheckTally (original current : Option CheckTally) : Option CheckTally :=
+  if original = current then original else none
+
+theorem carried_check_tally_is_published_iff_both_reads_agree (original current : Option CheckTally)
+    (counts : CheckTally) : verifyCarriedCheckTally original current = some counts ↔
+      original = some counts ∧ current = some counts := by
+  by_cases agrees : original = current
+  · subst current
+    simp [verifyCarriedCheckTally]
+  · simp [verifyCarriedCheckTally, agrees]
+    intro prior now
+    exact agrees (prior.trans now.symm)
+
+def observeCarriedCheckTally (prior : List Nat) (excluded : Bool)
+    (original current : Option CheckTally) : List Nat × Bool :=
+  observeHeadChecks prior excluded
+    ((verifyCarriedCheckTally original current).map (fun tally => [tally.passed, tally.failed, tally.pending]))
+
+theorem changed_or_unreadable_carried_checks_keep_prior
+    (prior : List Nat) (original current : Option CheckTally) (differs : original ≠ current) :
+    observeCarriedCheckTally prior false original current = (prior, false) := by
+  simp [observeCarriedCheckTally, observeHeadChecks, verifyCarriedCheckTally, differs, observe]
+
+theorem independently_excluded_carried_checks_allow_an_observation
+    (prior : List Nat) (original current : Option CheckTally) :
+    observeCarriedCheckTally prior true original current = ([], prior != []) := rfl
+
+theorem same_check_total_can_hide_a_changed_carried_result :
+    let prior : CheckTally := ⟨0, 1, 0⟩
+    let current : CheckTally := ⟨1, 0, 0⟩
+    prior.passed + prior.failed + prior.pending = current.passed + current.failed + current.pending ∧
+    observeCarriedCheckTally [0, 1, 0] false (some prior) (some current) = ([0, 1, 0], false) := by
+  decide
+
+theorem a_page_without_check_readbacks_cannot_complete_when_below_capacity
+    (seen pageSize fetched expected : Nat) (short : seen + pageSize < expected)
+    (bounded : fetched ≤ pageSize) : seen + fetched < expected := by
+  omega
+
+theorem terminal_request_bounds_check_context_rows
+    (previousPrs currentPrs previousChecks currentChecks : Nat) (previousCap : previousPrs ≤ 95)
+    (currentCap : currentPrs ≤ 25) (previousWindow : previousChecks ≤ 30 * previousPrs)
+    (currentWindow : currentChecks ≤ 30 * currentPrs) :
+    previousChecks ≤ 2850 ∧ previousChecks + currentChecks ≤ 3600 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1677,5 +1727,11 @@ theorem open_pr_request_bounds_rows_including_readbacks
 #print axioms complete_distinct_count_can_hide_an_open_pr_generation_change
 #print axioms matching_latest_readback_cannot_hide_a_changed_first_open_pr_window
 #print axioms open_pr_request_bounds_rows_including_readbacks
+#print axioms carried_check_tally_is_published_iff_both_reads_agree
+#print axioms changed_or_unreadable_carried_checks_keep_prior
+#print axioms independently_excluded_carried_checks_allow_an_observation
+#print axioms same_check_total_can_hide_a_changed_carried_result
+#print axioms a_page_without_check_readbacks_cannot_complete_when_below_capacity
+#print axioms terminal_request_bounds_check_context_rows
 
 end StewardPrSignalPagination

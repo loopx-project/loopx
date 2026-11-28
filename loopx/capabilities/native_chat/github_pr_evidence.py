@@ -712,22 +712,7 @@ _GITHUB_OPEN_PR_FIELDS = """
               pushedDate
               statusCheckRollup {
                 contexts(first: 30) {
-                  totalCount
-                  pageInfo { hasNextPage }
-                  nodes {
-                    __typename
-                    ... on CheckRun {
-                      id
-                      name
-                      status
-                      conclusion
-                    }
-                    ... on StatusContext {
-                      id
-                      context
-                      state
-                    }
-                  }
+                  ...StewardCheckContextWindow
                 }
               }
             }
@@ -744,9 +729,28 @@ fragment StewardPrWindowRow on PullRequest {
   reviewDecision
 }"""
 
+_GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT = """
+fragment StewardCheckContextWindow on StatusCheckRollupContextConnection {
+  totalCount
+  pageInfo { hasNextPage }
+  nodes {
+    ... on CheckRun { id status conclusion }
+    ... on StatusContext { id state }
+  }
+}"""
 
-def _open_prs_graphql_query(previous_sizes: Sequence[int]) -> str:
-    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_sizes)))
+
+def _open_pr_check_readback(limit: int) -> str:
+    return f"""
+        commits(last: 1) {{
+          nodes {{ commit {{ oid statusCheckRollup {{
+            contexts(first: {limit}) {{ ...StewardCheckContextWindow }}
+          }} }} }}
+        }}"""
+
+
+def _open_prs_graphql_query(previous_limits: Sequence[tuple[int, int | None]]) -> str:
+    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
     readbacks = "".join(
         f"""
     previousPrs{index}: pullRequests(
@@ -755,9 +759,9 @@ def _open_prs_graphql_query(previous_sizes: Sequence[int]) -> str:
     ) {{
       totalCount
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ ...StewardPrWindowRow }}
+      nodes {{ ...StewardPrWindowRow{_open_pr_check_readback(limit) if limit is not None else ''} }}
     }}"""
-        for index, size in enumerate(previous_sizes)
+        for index, (size, limit) in enumerate(previous_limits)
     )
     return (
         f"""query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!{variables}) {{
@@ -766,6 +770,7 @@ def _open_prs_graphql_query(previous_sizes: Sequence[int]) -> str:
   }}
 }}"""
         + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+        + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
     )
 
 
@@ -918,19 +923,65 @@ def _read_graphql_check_contexts(contexts: object) -> list[Mapping[str, Any]] | 
     return nodes
 
 
-def _read_graphql_head_check_rollup(
-    node: Mapping[str, Any], verified_head_commit: Mapping[str, Any] | None,
-) -> list[Mapping[str, Any]] | None:
+def _read_direct_pr_checks(node: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
     # Some adapters provide check evidence directly on the PR row.
     direct = node.get("statusCheckRollup")
-    if isinstance(direct, list) and all(isinstance(check, Mapping) for check in direct):
-        return direct
+    return direct if isinstance(direct, list) and all(isinstance(check, Mapping) for check in direct) else None
+
+
+def _read_graphql_head_check_rollup(
+    verified_head_commit: Mapping[str, Any] | None,
+) -> list[Mapping[str, Any]] | None:
     if verified_head_commit is None or "statusCheckRollup" not in verified_head_commit:
         return None
     rollup = verified_head_commit["statusCheckRollup"]
     if rollup is None:
         return []
     return _read_graphql_check_contexts(rollup.get("contexts")) if isinstance(rollup, Mapping) else None
+
+
+class _PrCommitBinding(NamedTuple):
+    head_oid: str
+    first_commit: Mapping[str, Any] | None
+    commit_oid: str
+    verified: Mapping[str, Any] | None
+
+
+def _graphql_commit_binding(node: Mapping[str, Any]) -> _PrCommitBinding:
+    raw_commits = node.get("commits")
+    commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
+    raw_commit = (
+        commit_nodes[0].get("commit")
+        if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
+        else None
+    )
+    first_commit = raw_commit if isinstance(raw_commit, Mapping) else None
+    raw_head_oid = node.get("headRefOid")
+    head_oid = raw_head_oid.strip() if isinstance(raw_head_oid, str) else ""
+    raw_commit_oid = first_commit.get("oid") if first_commit is not None else None
+    commit_oid = raw_commit_oid.strip() if isinstance(raw_commit_oid, str) else ""
+    verified = first_commit if head_oid and commit_oid.casefold() == head_oid.casefold() else None
+    return _PrCommitBinding(head_oid, first_commit, commit_oid, verified)
+
+
+def _nested_check_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int | None:
+    # A longer window cannot corroborate its earlier tally, so reread only the observed size.
+    known_sizes = []
+    for row in rows:
+        if _read_direct_pr_checks(row) is None:
+            checks = _read_graphql_head_check_rollup(_graphql_commit_binding(row).verified)
+            if checks is not None:
+                known_sizes.append(max(1, len(checks)))
+    return max(known_sizes, default=None)
+
+
+def _earlier_pr_checks_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    if _read_direct_pr_checks(original) is not None:
+        return True
+    original_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(original).verified)
+    current_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(readback).verified)
+    original_summary = _summarize_checks(original_checks) if original_checks is not None else None
+    return original_summary is not None and current_checks is not None and original_summary == _summarize_checks(current_checks)
 
 
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
@@ -956,18 +1007,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     else:
         comments_has_previous_page, comments_start_cursor = False, None
 
-    raw_commits = node.get("commits")
-    commit_nodes = raw_commits.get("nodes") if isinstance(raw_commits, Mapping) else None
-    first_commit = (
-        commit_nodes[0].get("commit")
-        if isinstance(commit_nodes, list) and commit_nodes and isinstance(commit_nodes[0], Mapping)
-        else None
-    )
-    raw_head_oid = node.get("headRefOid")
-    head_oid = raw_head_oid.strip() if isinstance(raw_head_oid, str) else ""
-    raw_commit_oid = first_commit.get("oid") if isinstance(first_commit, Mapping) else None
-    commit_oid = raw_commit_oid.strip() if isinstance(raw_commit_oid, str) else ""
-    verified_head_commit = first_commit if head_oid and commit_oid.casefold() == head_oid.casefold() else None
+    head_oid, first_commit, commit_oid, verified_head_commit = _graphql_commit_binding(node)
     head_clocks: dict[str, Any] = {}
     unbound_clocks: list[tuple[datetime, str]] = []
     for row_key, commit_key in (("headCommitPushedAt", "pushedDate"), ("headCommitCommittedAt", "committedDate")):
@@ -981,7 +1021,9 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
             if unbound_clock is not None:
                 unbound_clocks.append(unbound_clock)
     latest_unbound = max(unbound_clocks, key=lambda clock: clock[0], default=None)
-    rollup = _read_graphql_head_check_rollup(node, verified_head_commit)
+    rollup = _read_direct_pr_checks(node)
+    if rollup is None:
+        rollup = _read_graphql_head_check_rollup(verified_head_commit)
 
     return {
         "number": node.get("number"),
@@ -1186,17 +1228,20 @@ def observe_github_repository_prs(
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
     expected_total: int | None = None
     cursor: str | None = None
-    previous_pages: dict[str | None, tuple[int, _OpenPrWindow]] = {}
+    previous_pages: dict[str | None, tuple[int, _OpenPrWindow, int | None]] = {}
+    unverified_checks: set[int] = set()
     page_size = _GITHUB_PR_LIST_PAGE_SIZE
     deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
         for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
+            can_finish = expected_total is not None and len(raw_nodes_by_number) + page_size >= expected_total
+            previous_limits = [(size, limit if can_finish else None) for size, _window, limit in previous_pages.values()]
             cmd = [
                 "gh",
                 "api",
                 "graphql",
                 "-f",
-                f"query={_open_prs_graphql_query([size for size, _window in previous_pages.values()])}",
+                f"query={_open_prs_graphql_query(previous_limits)}",
                 "-f",
                 f"owner={owner}",
                 "-f",
@@ -1231,19 +1276,27 @@ def observe_github_repository_prs(
             page = _read_open_pr_page(repo.get("pullRequests"), page_size)
             if page is None or (expected_total is not None and page.total_count != expected_total):
                 return {"status": "unavailable", "repository": repo_slug}
-            if any(
-                _read_open_pr_window(_read_open_pr_page(repo.get(f"previousPrs{index}"), size)) != expected_window
-                for index, (size, expected_window) in enumerate(previous_pages.values())
-            ):
-                return {"status": "unavailable", "repository": repo_slug}
+            earlier_rows = {}
+            for index, (size, expected_window, _limit) in enumerate(previous_pages.values()):
+                readback = _read_open_pr_page(repo.get(f"previousPrs{index}"), size)
+                if readback is None or _read_open_pr_window(readback) != expected_window:
+                    return {"status": "unavailable", "repository": repo_slug}
+                if page.next_cursor is None:
+                    earlier_rows.update((row["number"], row) for row in readback.rows)
             expected_total = page.total_count
+            if page.next_cursor is None:
+                fresh_numbers = {row["number"] for row in page.rows}
+                unverified_checks = {
+                    number for number, original in raw_nodes_by_number.items()
+                    if number not in fresh_numbers and not _earlier_pr_checks_agree(original, earlier_rows.get(number, {}))
+                }
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)
             if page.next_cursor is None:
                 break
             window = _read_open_pr_window(page)
             if window is None or page.next_cursor == cursor or page.next_cursor in previous_pages:
                 return {"status": "unavailable", "repository": repo_slug}
-            previous_pages[cursor] = (page_size, window)
+            previous_pages[cursor] = (page_size, window, _nested_check_readback_limit(page.rows))
             cursor = page.next_cursor
             if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
                 page_size = _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
@@ -1256,6 +1309,8 @@ def observe_github_repository_prs(
             number: _normalize_graphql_pr_node(raw_nodes_by_number[number])
             for number in sorted(raw_nodes_by_number)
         }
+        for number in unverified_checks:
+            normalized_nodes[number]["checks_coverage_incomplete"] = True
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
         review_pages_read: dict[int, int] = {}
