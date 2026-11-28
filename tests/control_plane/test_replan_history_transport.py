@@ -137,3 +137,52 @@ def test_large_history_refresh_replay_and_spend_once(tmp_path):
     assert call(*spend)["appended"] is False
     assert _spend_run_count(runtime) == 1
     assert index.read_bytes().startswith(original)
+
+
+def test_replan_history_build_run_facts_matches_single_run_fact():
+    from loopx.control_plane.work_items.replan_history_codec import (
+        _build_run_facts,
+        _run_fact,
+    )
+
+    runs = [
+        {
+            "agent_id": "Antigravity",
+            "classification": "validated_progress",
+            "generated_at": "2026-11-28T00:20:41Z",
+            "turn_instance_id": "turn-1",
+            "goal_ref": {"goal_id": "g", "goal_instance_id": "gi"},
+        },
+        {
+            "agent_id": " Antigravity ",
+            "classification": "quota_monitor_poll",
+            "generated_at": "2026-11-28T00:20:41Z",
+            "todo_id": "todo_123",
+            "target_key": "watch-1",
+            "monitor_target": {
+                "target_id": "tgt-1",
+                "schema_version": "quota_monitor_target_v0",
+                "monitor_mode": "due_monitor_observed_without_material_transition",
+                "frontier_identity": "f-1",
+            },
+            "monitor_event": {"material_change": False, "todo_id": "todo_123"},
+        },
+        {
+            "agent_id": "codex",
+            "classification": "validated_gap",
+            "generated_at": None,
+            "todo_id": "todo_retry",
+            "delivery_outcome": "outcome_gap",
+            "blocked_retry": {"retry_after": "2026-11-28T01:00:00Z"},
+        },
+        {
+            "agent_id": "codex",
+            "classification": "invalid",
+            "generated_at": {"unexpected": 1},
+        },
+    ]
+
+    def ack_fn(row):
+        return row.get("classification") == "validated_progress"
+
+    assert _build_run_facts(runs, ack_fn) == [_run_fact(row, ack_fn) for row in runs]

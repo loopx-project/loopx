@@ -811,3 +811,63 @@ def test_same_turn_replay_uses_current_registry_state_file(
     assert "[P1] advance owned scheduler slice" not in state_a.read_text(encoding="utf-8")
     assert index_path.read_text(encoding="utf-8") == index_before
     assert rollout_event_log_path(runtime_root, goal_id).read_text(encoding="utf-8") == rollout_before
+
+
+def test_load_refresh_planning_source_and_goal_context_use_rollout_event_source_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from contextlib import ExitStack
+    from loopx import rollout_event_log as rollout_mod
+    from loopx.control_plane.todos.resume_condition import TodoResumeRolloutEvents
+    from loopx.refresh_state.admission import load_and_validate_goal_context
+
+    goal_id = "goal-rollout-ptr"
+    project, state_path, registry_path, runtime_root = _setup_goal_fixture(
+        tmp_path, monkeypatch, goal_id=goal_id, provider="file"
+    )
+    log_path = rollout_event_log_path(runtime_root, goal_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        json.dumps({"schema_version": "loopx_rollout_event_v0", "event_kind": "pr_merge", "pr": 1}) + "\n",
+        encoding="utf-8",
+    )
+
+    def _forbid_full_load(*args, **kwargs):
+        raise AssertionError("full load_rollout_events must not run on refresh planning read")
+
+    monkeypatch.setattr(rollout_mod, "load_rollout_events", _forbid_full_load)
+
+    source = load_refresh_planning_source(
+        runtime_root,
+        goal_id,
+        state_path,
+        require_display=False,
+        registry_path=registry_path,
+    )
+    assert isinstance(source.events, TodoResumeRolloutEvents)
+    assert list(source.events) == []
+    assert source.events.source == {"runtime_root": str(runtime_root), "goal_id": goal_id}
+
+    registry = dict(history_load_registry(registry_path))
+    with ExitStack() as guard:
+        goal_ctx = load_and_validate_goal_context(
+            registry=registry,
+            registry_path=registry_path,
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            project=None,
+            state_file=None,
+            sync_global=False,
+            next_action=None,
+            normalized_next_action=None,
+            normalized_agent_id="worker-a",
+            settlement_readback=None,
+            goal_acceptance_preview=None,
+            research_write_guard=guard,
+            load_refresh_planning_source_fn=load_refresh_planning_source,
+            registered_agents_fn=lambda g: list((g or {}).get("registered_agents") or []),
+        )
+    assert isinstance(goal_ctx.planning_events, TodoResumeRolloutEvents)
+    assert list(goal_ctx.planning_events) == []
+    assert goal_ctx.planning_events.source == {"runtime_root": str(runtime_root), "goal_id": goal_id}

@@ -649,8 +649,39 @@ def load_rollout_events(log_path: Path, *, limit: int | None = None) -> list[dic
     return _recent_rollout_events(log_path, limit=limit)
 
 
+def _iter_reverse_rollout_candidate_lines(
+    handle: BinaryIO,
+    marker: bytes,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> Iterator[bytes]:
+    """Read backward in blocks, skipping complete interior lines that cannot match."""
+    position = handle.seek(0, 2)
+    fragments: list[bytes] = []
+    while position > 0:
+        size = min(position, chunk_size)
+        position -= size
+        handle.seek(position)
+        chunk = handle.read(size)
+        first_nl = chunk.find(b"\n")
+        if first_nl < 0:
+            fragments.append(chunk)
+            continue
+        last_nl = chunk.rfind(b"\n")
+        yield b"".join([chunk[last_nl + 1 :], *reversed(fragments)])
+        fragments.clear()
+        if last_nl > first_nl and (not marker or marker in chunk or b"\\u" in chunk):
+            yield from reversed(chunk[first_nl + 1 : last_nl].split(b"\n"))
+        fragments.append(chunk[:first_nl])
+    if fragments:
+        yield b"".join(reversed(fragments))
+
+
 def iter_reverse_rollout_events_by_kind(
-    log_path: Path, *, event_kind: str
+    log_path: Path,
+    *,
+    event_kind: str,
+    chunk_size: int = 1024 * 1024,
 ) -> Iterator[dict[str, Any]]:
     """Yield events matching ``event_kind`` newest-first, skipping non-matching JSON parses."""
     marker = event_kind.encode("utf-8")
@@ -662,7 +693,7 @@ def iter_reverse_rollout_events_by_kind(
         raw_lines: Iterator[bytes] = (
             reversed(list(handle))
             if not handle.seekable()
-            else _reverse_rollout_lines(handle)
+            else _iter_reverse_rollout_candidate_lines(handle, marker, chunk_size=chunk_size)
         )
         for encoded in raw_lines:
             if marker and b"\\u" not in encoded and marker not in encoded:

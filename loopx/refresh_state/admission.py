@@ -26,6 +26,7 @@ from ..control_plane.work_items.delivery_outcome import TURN_SCOPED_SETTLEMENT_R
 from ..control_plane.work_items.recommendation_source_io import (
     load_recommendation_source_goal,
 )
+from ..control_plane.todos.resume_condition import TodoResumeRolloutEvents
 from ..control_plane.work_items.refresh_recommendation import RefreshPlanningSource
 from ..file_lock import exclusive_file_lock
 from ..paths import resolve_runtime_root
@@ -467,7 +468,15 @@ def load_and_validate_goal_context(
         resolved_state_file=resolved_state_file,
         planning_source=planning_source,
         state_text=planning_source.state_text,
-        planning_events=[dict(item) for item in planning_source.events],
+        planning_events=(
+            TodoResumeRolloutEvents(
+                planning_source.events,
+                runtime_root=Path(planning_source.events.source["runtime_root"]),
+                goal_id=str(planning_source.events.source["goal_id"]),
+            )
+            if isinstance(planning_source.events, TodoResumeRolloutEvents)
+            else [dict(item) for item in planning_source.events]
+        ),
         todo_fields=todo_fields,
         multi_agent_goal=multi_agent_goal,
         explicit_peer_worktree_requirement=workspace_guard_policy.get(
