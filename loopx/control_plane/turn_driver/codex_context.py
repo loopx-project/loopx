@@ -282,6 +282,89 @@ def read_codex_context_reference(directory: str, *, goal_id: str | None, agent_i
     return path, digest
 
 
+def native_inbox_read_turn(
+    *,
+    registry_path: Path,
+    runtime_root: Path,
+    goal_id: str,
+    agent_id: str,
+    requested_turn_id: str | None,
+    context_directory: str | None = None,
+    context_root: str | None = None,
+) -> str | None:
+    """Resolve the live Codex App work Turn for an ordinary Inbox read."""
+    session = os.environ.get("CODEX_THREAD_ID")
+    if not session or os.environ.get("LOOPX_CONTEXT_DELIVERY") == "off":
+        return None
+
+    from ...thread_agent_binding import resolve_registry_thread_agent_binding
+    from ..quota.execution_preparation import active_task_lease_matches_prepared_receipt
+    from ..quota.settlement import read_heartbeat_settlement
+
+    if context_directory is None and context_root is None:
+        context_root = str(runtime_root / "context-delivery")
+    try:
+        directory = codex_context_directory(directory=context_directory, root=context_root, session=session)
+        if directory is None:
+            return None
+        state = _state(_private_root(directory))
+        recovery = state.get("recovery")
+        if (
+            state.get("session_id") != session
+            or not isinstance(recovery, dict)
+            or recovery.get("goal_id") != goal_id
+            or recovery.get("agent_id") != agent_id
+            or recovery.get("inbox_workspace") != native_preparation_workspace(Path.cwd())
+        ):
+            return None
+        _, _, guard = read_context_capture_file(recovery["path"], recovery["sha256"], private=True)
+        receipt = guard.get("heartbeat_receipt")
+        preparation = guard.get("execution_preparation")
+        if (
+            guard.get("registry") != str(registry_path)
+            or guard.get("runtime_root") != str(runtime_root)
+            or guard.get("goal_id") != goal_id
+            or guard.get("normal_delivery_allowed") is not True
+            or not isinstance(receipt, dict)
+            or not isinstance(preparation, dict)
+            or preparation.get("agent_id") != agent_id
+            or preparation.get("state") != "ready"
+        ):
+            return None
+        turn_id, todo_id = receipt.get("turn_instance_id"), preparation.get("todo_id")
+        if not isinstance(turn_id, str) or not turn_id or not isinstance(todo_id, str) or not todo_id:
+            return None
+        if requested_turn_id is not None and requested_turn_id != turn_id:
+            return None
+        binding = resolve_registry_thread_agent_binding(
+            registry_path=registry_path, host_surface="codex-app", thread_id=session,
+        )
+        if (binding.get("status"), binding.get("goal_id"), binding.get("agent_id")) != (
+            "bound", goal_id, agent_id,
+        ):
+            return None
+        readback = read_heartbeat_settlement(
+            runtime_root, registry_path=registry_path, goal_id=goal_id, agent_id=agent_id,
+            todo_id=todo_id, turn_instance_id=turn_id, include_record_bodies=False,
+        )
+        if (
+            readback is None
+            or (readback.progress or {}).get("state") != "writeback_required"
+            or (readback.heartbeat_receipt or {}).get("event_id") != receipt.get("event_id")
+        ):
+            return None
+        if (readback.prepared_lease_required or readback.prepared_lease is not None) and not (
+            active_task_lease_matches_prepared_receipt(
+                runtime_root=runtime_root, goal_id=goal_id, todo_id=todo_id,
+                agent_id=agent_id, prepared_lease=readback.prepared_lease,
+            )
+        ):
+            return None
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
+        return None
+    return turn_id
+
+
 def _context_continuation_instructions(command: str) -> str:
     """Separate transport continuity from the lifetime of the admitted work.
 
@@ -950,6 +1033,11 @@ def _commit_native_context_recovery(
         "goal_id": scope["goal_id"], "agent_id": scope["agent_id"],
         "total_bytes": Path(reference["path"]).stat().st_size,
         **({"execution_preparation": preparation} if preparation else {})}
+    if not saved_capture and payload.get("normal_delivery_allowed") is True:
+        try:
+            state["recovery"]["inbox_workspace"] = native_preparation_workspace(Path.cwd())
+        except (OSError, ValueError):
+            pass  # An unavailable worktree witness leaves Inbox reads in preview.
     state["pending"] = {"path": reference["path"], "sha256": reference["sha256"],
         "total_bytes": state["recovery"]["total_bytes"], "ranges": {}}
     if isinstance(prepared := state.get("host_execution_preparation"), dict):

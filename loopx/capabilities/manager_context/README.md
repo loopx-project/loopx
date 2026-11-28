@@ -1175,8 +1175,11 @@ leaves the results pending. Follow `next_cursor` as `cursor` in the same Turn to
 read later results even when earlier ones are deferred. Omit the cursor to
 restart the live scan and discover results added before the previous page
 boundary. The full `read_context` response also carries a CLI acknowledgement
-command for each exact delivery. When the result carries a `read_token`, the
-supplied command includes the corresponding `--read-token`:
+command for each exact delivery. In a managed Codex App work Turn, the standard
+`manager-inbox read` command uses the guard's native context location to verify
+the current admission in the prepared workspace and return the same
+acknowledgement command. When the result carries
+a `read_token`, that command includes the corresponding `--read-token`:
 
 ```sh
 loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
@@ -1187,7 +1190,7 @@ loopx manager-inbox acknowledge-return --goal-id allocation --agent-id builder \
 Use `--disposition deferred` to keep the same result in next-Turn attention.
 After acceptance or rejection, only the same disposition from the same Turn
 can replay the terminal acknowledgement.
-On hosts that only provide the ordinary CLI read, the result stays pending.
+A CLI read without a verified work Turn leaves the result pending.
 Consumption does not mark a Todo done or certify peer acceptance. The requester
 checks the actual artifact, incorporates or rejects the findings, and reports
 the original owner conclusion through its original request. A second review
