@@ -14,13 +14,18 @@ import uuid
 from ..file_lock import exclusive_file_lock
 
 EventKey = tuple[str, str]
-EventRevision = tuple[int, int, int] | None
+EventFileRevision = tuple[int, int, int, int]
+EventRevision = EventFileRevision | None
 EventRows = list[dict[str, Any]]
 
 # These bound terminal retention, not active history or peak decoding memory.
 TERMINAL_CACHE_MAX_TURNS = 8
 TERMINAL_CACHE_MAX_ROWS = 4096
 TERMINAL_CACHE_MAX_ENCODED_BYTES = 2 * 1024 * 1024
+
+
+def _event_revision_from_stat(stat: os.stat_result) -> EventFileRevision:
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
 def _read_compactable_event_rows(path: Path) -> EventRows:
@@ -108,10 +113,9 @@ class ChatEventStreamMixin:
     @staticmethod
     def _event_revision(path: Path) -> EventRevision:
         try:
-            stat = path.stat()
+            return _event_revision_from_stat(path.stat())
         except OSError:
             return None
-        return stat.st_ino, stat.st_size, stat.st_mtime_ns
 
     def append_event(
         self,
@@ -269,11 +273,8 @@ class ChatEventStreamMixin:
                 name = entry.name
                 if name.endswith(".events.jsonl"):
                     with suppress(OSError):
-                        st = entry.stat(follow_symlinks=False)
-                        event_revisions[name[: -len(".events.jsonl")]] = (
-                            st.st_ino,
-                            st.st_size,
-                            st.st_mtime_ns,
+                        event_revisions[name[: -len(".events.jsonl")]] = _event_revision_from_stat(
+                            entry.stat(follow_symlinks=False)
                         )
                 elif name.endswith(".json"):
                     with suppress(OSError):
@@ -476,7 +477,8 @@ def _turn_already_compacted_for_revision(
     turn_path: Path, turn_size: int, revision: EventRevision
 ) -> bool:
     """Fast tail check matching compact top-level ``event_compaction_revision``."""
-    rev_text = f"{revision[0]},{revision[1]},{revision[2]}" if revision is not None else ""
+    # A legacy marker omits change time and must be verified again.
+    rev_text = ",".join(str(field) for field in revision or ())
     expected_suffix = f',"event_compaction_revision":[{rev_text}]}}'.encode("ascii")
     if turn_size < len(expected_suffix) + 2:
         return False

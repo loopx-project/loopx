@@ -80,6 +80,7 @@ def test_startup_maintenance_skips_full_reads_on_compacted_terminal_turns(tmp_pa
             nested_event_stat.st_ino,
             nested_event_stat.st_size,
             nested_event_stat.st_mtime_ns,
+            nested_event_stat.st_ctime_ns,
         ],
     }
     _atomic_write_json(nested_path, nested_doc, preserve_mode=True)

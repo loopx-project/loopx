@@ -2522,6 +2522,44 @@ theorem valid_journal_without_replay_rows_only_marks_the_revision :
     planChatReplayCompaction false none (some [⟨3, false⟩, ⟨4, false⟩]) =
       ⟨false, none, true⟩ := by decide
 
+structure ChatEventFileVersion where
+  inode : Int
+  size : Int
+  mtime : Int
+  ctime : Int
+
+/- The filesystem supplies the identity and time values. The model covers
+   changes visible in those fields without assuming content hashes. -/
+def chatEventRevisionFields (version : Option ChatEventFileVersion) : List Int :=
+  match version with
+  | none => []
+  | some stat => [stat.inode, stat.size, stat.mtime, stat.ctime]
+
+def reuseChatEventObservation (observed : List Int) (current : Option ChatEventFileVersion) : Bool :=
+  decide (observed = chatEventRevisionFields current)
+
+theorem chat_replay_rejects_a_change_time_only_revision
+    (inode size mtime before after : Int) (changed : before ≠ after) :
+    reuseChatEventObservation (chatEventRevisionFields (some ⟨inode, size, mtime, before⟩))
+      (some ⟨inode, size, mtime, after⟩) = false := by
+  simp [reuseChatEventObservation, chatEventRevisionFields, changed]
+
+theorem legacy_compaction_marker_cannot_skip_a_present_journal (inode size mtime ctime : Int) :
+    reuseChatEventObservation [inode, size, mtime] (some ⟨inode, size, mtime, ctime⟩) = false := by
+  simp [reuseChatEventObservation, chatEventRevisionFields]
+
+theorem current_stamp_preserves_an_unchanged_replay_or_compaction_hit
+    (version : Option ChatEventFileVersion) :
+    reuseChatEventObservation (chatEventRevisionFields version) version = true := by
+  simp [reuseChatEventObservation]
+
+theorem absent_journal_marker_cannot_skip_a_present_journal (version : ChatEventFileVersion) :
+    reuseChatEventObservation [] (some version) = false := by
+  simp [reuseChatEventObservation, chatEventRevisionFields]
+
+theorem absent_journal_marker_stays_compatible :
+    reuseChatEventObservation [] none = true := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2807,5 +2845,10 @@ theorem valid_journal_without_replay_rows_only_marks_the_revision :
 #print axioms duplicate_sequence_blocks_compaction_even_when_a_replay_row_exists
 #print axioms valid_compaction_preserves_durable_rows_and_existing_sequence_gaps
 #print axioms valid_journal_without_replay_rows_only_marks_the_revision
+#print axioms chat_replay_rejects_a_change_time_only_revision
+#print axioms legacy_compaction_marker_cannot_skip_a_present_journal
+#print axioms current_stamp_preserves_an_unchanged_replay_or_compaction_hit
+#print axioms absent_journal_marker_cannot_skip_a_present_journal
+#print axioms absent_journal_marker_stays_compatible
 
 end StewardPrSignalPagination

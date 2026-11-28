@@ -4,7 +4,9 @@ from datetime import datetime, timedelta, timezone
 import gc
 import inspect
 import json
+import os
 from pathlib import Path
+import time
 
 import pytest
 
@@ -42,6 +44,24 @@ def _write_completed_turn(root: Path, *, with_events: bool = True) -> tuple[Path
     return turn_path, event_path
 
 
+def _rewrite_preserving_mtime(path: Path, updated: bytes) -> None:
+    before = path.stat()
+    assert len(updated) == before.st_size
+    path.write_bytes(updated)
+    timestamps = (before.st_atime_ns, before.st_mtime_ns)
+    os.utime(path, ns=timestamps)
+    after = path.stat()
+    if after.st_ctime_ns == before.st_ctime_ns:
+        time.sleep(0.01)
+        os.utime(path, ns=timestamps)
+        after = path.stat()
+    if after.st_ctime_ns == before.st_ctime_ns:
+        pytest.skip("filesystem does not report a different change time for the rewrite")
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (
+        before.st_ino, before.st_size, before.st_mtime_ns,
+    )
+
+
 def test_completed_replay_reuses_log_until_an_external_append(tmp_path: Path, monkeypatch) -> None:
     store = ChatSessionStore(tmp_path)
     key = ("session", "turn")
@@ -63,6 +83,18 @@ def test_completed_replay_reuses_log_until_an_external_append(tmp_path: Path, mo
     other.append_event(*key, kind="turn.completed", payload={"recovered": True})
     assert [row["sequence"] for row in store.events_after(*key, "2")] == [3]
     assert len(reads) == 3  # independent writer plus invalidated reader
+
+
+def test_completed_replay_refreshes_after_same_size_rewrite_with_preserved_mtime(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    key = ("session", "turn")
+    store.append_event(*key, kind="manager.context", payload={"note": "older"})
+    store.append_event(*key, kind="turn.completed", payload={})
+    assert store.events_after(*key, None)[0]["payload"]["note"] == "older"
+
+    path = store._event_path(*key)
+    _rewrite_preserving_mtime(path, path.read_bytes().replace(b'"older"', b'"newer"'))
+    assert store.events_after(*key, None)[0]["payload"]["note"] == "newer"
 
 
 def test_event_flush_retry_after_durable_fsync_keeps_distinct_identical_events(
@@ -404,6 +436,34 @@ def test_completed_event_compaction_marker_is_invalidated_by_a_new_event(
         restarted._event_revision(event_path) or ()
     )
     assert ("session", "turn") not in restarted._event_cache._entries
+
+
+@pytest.mark.parametrize(
+    ("legacy_marker", "rewrite"),
+    [(False, True), (True, True), (True, False)],
+    ids=["current-rewrite", "legacy-rewrite", "legacy-unchanged"],
+)
+def test_compaction_revalidates_metadata_preserving_rewrites_and_legacy_markers(
+    tmp_path: Path, legacy_marker: bool, rewrite: bool,
+) -> None:
+    turn_path, event_path = _write_completed_turn(tmp_path)
+    intact = event_path.read_bytes().replace(b"answer.delta", b"result.ready")
+    event_path.write_bytes(intact)
+    ChatSessionStore(tmp_path)
+    if legacy_marker:
+        turn = json.loads(turn_path.read_bytes())
+        turn["event_compaction_revision"] = turn["event_compaction_revision"][:3]
+        turn_path.write_text(json.dumps(turn, separators=(",", ":")), encoding="utf-8")
+    if rewrite:
+        _rewrite_preserving_mtime(event_path, intact.replace(b"result.ready", b"answer.delta"))
+
+    ChatSessionStore(tmp_path)
+    rows = chat_store._read_jsonl(event_path, strict=True)
+    expected = ["turn.completed"] if rewrite else ["result.ready", "turn.completed"]
+    assert [row["kind"] for row in rows] == expected
+    assert len(json.loads(turn_path.read_bytes())["event_compaction_revision"]) == 4
+    if not rewrite:
+        assert event_path.read_bytes() == intact
 
 
 @pytest.mark.parametrize("damage", [
