@@ -27,6 +27,8 @@ GITHUB_PR_LIST_FIELDS = (
     "isDraft,author,reviewDecision,mergeStateStatus,mergeable,updatedAt,"
     "reviews,statusCheckRollup"
 )
+
+_KNOWN_MERGE_STATES = {"BEHIND", "BLOCKED", "CLEAN", "DIRTY", "DRAFT", "HAS_HOOKS", "UNSTABLE"}
 GITHUB_PR_VIEW_FIELDS = GITHUB_PR_LIST_FIELDS + ",state,mergedAt,mergeCommit"
 
 _GITHUB_URL_TARGET_RE = re.compile(
@@ -564,6 +566,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "author": row.get("author"),
         "reviewDecision": row.get("reviewDecision"),
         "mergeStateStatus": row.get("mergeStateStatus"),
+        **({"merge_state_coverage_incomplete": True} if row.get("merge_state_coverage_incomplete") is True else {}),
         "mergeable": row.get("mergeable"),
         "updatedAt": row.get("updatedAt"),
         "stalled_since": stall.stalled_since,
@@ -697,7 +700,6 @@ _GITHUB_OPEN_PR_FIELDS = """
         url
         headRefName
         baseRefName
-        mergeStateStatus
         comments(last: 20) {
           ...StewardCommentPage
         }
@@ -733,6 +735,7 @@ _GITHUB_OPEN_PR_SCOPE_FRAGMENT = """
 fragment StewardPrScopeFields on PullRequest {
   isDraft
   mergeable
+  mergeStateStatus
   author { login }
 }"""
 
@@ -1076,6 +1079,7 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
     rollup = _read_direct_pr_checks(node)
     if rollup is None:
         rollup = _read_graphql_head_check_rollup(verified_head_commit)
+    merge_state = node.get("mergeStateStatus")
 
     return {
         "number": node.get("number"),
@@ -1087,7 +1091,10 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         "isDraft": node.get("isDraft"),
         "author": node.get("author"),
         "reviewDecision": node.get("reviewDecision"),
-        "mergeStateStatus": node.get("mergeStateStatus"),
+        "mergeStateStatus": merge_state,
+        "merge_state_coverage_incomplete": (
+            not isinstance(merge_state, str) or merge_state.strip().upper() not in _KNOWN_MERGE_STATES
+        ),
         "mergeable": node.get("mergeable"),
         "updatedAt": node.get("updatedAt"),
         **head_clocks,
@@ -1358,6 +1365,7 @@ def observe_github_repository_prs(
                         **original,
                         "isDraft": readback_row.get("isDraft"),
                         "mergeable": readback_row.get("mergeable"),
+                        "mergeStateStatus": readback_row.get("mergeStateStatus"),
                         "author": author if isinstance(author, Mapping) else None,
                     }
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)

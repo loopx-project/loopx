@@ -1733,6 +1733,45 @@ theorem approval_scope_with_unknown_author_retains_prior (prior rows : List Nat)
     observeTerminalScope prior rows [some false, nonAuthorApproval none] = observe prior (some []) := by
   constructor <;> rfl
 
+/- These tags represent the two merge-state markers emitted by Steward.
+   A readable state without either marker is distinct from unknown evidence.
+   Review and CI gates are established independently. -/
+inductive MergeStateEvidence where
+  | blocked
+  | unstable
+  | otherKnown
+  deriving DecidableEq
+
+def mergeStateMarkers : MergeStateEvidence → List Nat
+  | .blocked => [1]
+  | .unstable => [2]
+  | .otherKnown => []
+
+def observeTerminalMergeGates (prior otherGates : List Nat) (excluded : Bool)
+    (terminal : Option MergeStateEvidence) : List Nat × Bool :=
+  observe prior (if excluded then some [] else terminal.map (fun state => otherGates ++ mergeStateMarkers state))
+
+theorem unreadable_terminal_merge_state_keeps_prior (prior otherGates : List Nat) :
+    observeTerminalMergeGates prior otherGates false none = (prior, false) := rfl
+
+theorem independent_exclusion_can_publish_without_terminal_merge_state (prior otherGates : List Nat) :
+    observeTerminalMergeGates prior otherGates true none = observe prior (some []) := rfl
+
+theorem terminal_merge_state_replaces_earlier_marker_preserving_other_gates (prior otherGates : List Nat) :
+    observeTerminalMergeGates prior otherGates false (some .otherKnown) = observe prior (some otherGates) ∧
+    observeTerminalMergeGates prior otherGates false (some .blocked) = observe prior (some (otherGates ++ [1])) ∧
+    observeTerminalMergeGates prior otherGates false (some .unstable) = observe prior (some (otherGates ++ [2])) := by
+  simp [observeTerminalMergeGates, mergeStateMarkers]
+
+theorem treating_unknown_merge_state_as_clean_can_clear_a_published_block :
+    observeTerminalMergeGates [1] [] false none = ([1], false) ∧
+    observeTerminalMergeGates [1] [] false (some .otherKnown) = ([], true) := by
+  decide
+
+theorem terminal_merge_state_readback_adds_at_most_95_scalar_fields (previousPrs : Nat) (previousCap : previousPrs ≤ 95) :
+    1 * previousPrs ≤ 95 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1921,5 +1960,10 @@ theorem approval_scope_with_unknown_author_retains_prior (prior rows : List Nat)
 #print axioms treating_unknown_mergeability_as_nonconflicting_can_publish_unsupported_scope
 #print axioms terminal_request_bounds_scope_readback_fields
 #print axioms approval_scope_with_unknown_author_retains_prior
+#print axioms unreadable_terminal_merge_state_keeps_prior
+#print axioms independent_exclusion_can_publish_without_terminal_merge_state
+#print axioms terminal_merge_state_replaces_earlier_marker_preserving_other_gates
+#print axioms treating_unknown_merge_state_as_clean_can_clear_a_published_block
+#print axioms terminal_merge_state_readback_adds_at_most_95_scalar_fields
 
 end StewardPrSignalPagination

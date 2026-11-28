@@ -1127,6 +1127,101 @@ def test_steward_uses_terminal_scope_fields_and_holds_only_on_decisive_unknowns(
         assert [row["number"] for row in observation["scoped_repository_items"]] == [21]
 
 
+@pytest.mark.parametrize(
+    ("earlier", "terminal", "excluded", "expected_gate"),
+    [
+        pytest.param("BLOCKED", "CLEAN", False, None, id="cleared"),
+        pytest.param("CLEAN", "BLOCKED", False, "BLOCKED_MERGE_STATE", id="new-block"),
+        pytest.param("BLOCKED", "UNSTABLE", False, "UNSTABLE_MERGE_STATE", id="unstable"),
+        pytest.param("BLOCKED", "BEHIND", False, None, id="known-behind"),
+        pytest.param("BLOCKED", None, False, None, id="missing"),
+        pytest.param("BLOCKED", "UNKNOWN", False, None, id="unknown"),
+        pytest.param("BLOCKED", {"state": "CLEAN"}, False, None, id="malformed"),
+        pytest.param("BLOCKED", "FUTURE", False, None, id="unsupported"),
+        pytest.param("BLOCKED", "UNKNOWN", True, None, id="excluded-draft"),
+    ],
+)
+def test_steward_publishes_merge_gates_from_the_terminal_readback(
+    earlier: str, terminal: object, excluded: bool, expected_gate: str | None,
+) -> None:
+    from copy import deepcopy
+
+    checks = [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}]
+    first = [_graphql_node(_sample_pr(number=1, merge_state=earlier), contexts=checks)]
+    first += [_graphql_node(_sample_pr(number=number, merge_state="CLEAN")) for number in range(2, 21)]
+    last = _graphql_node(_sample_pr(number=21, merge_state="BLOCKED"))
+    readback = deepcopy(first)
+    if terminal is None:
+        del readback[0]["mergeStateStatus"]
+    else:
+        readback[0]["mergeStateStatus"] = terminal
+    readback[0]["isDraft"] = excluded
+    reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        tail = "cursor=tail" in cmd
+        reads.append(tail)
+        if tail:
+            query = next(part for part in cmd if part.startswith("query="))
+            assert "...StewardPrScopeFields" in query.split("previousPrs0:", 1)[1].split("fragment ", 1)[0]
+            assert "mergeStateStatus" in query.split("fragment StewardPrScopeFields", 1)[1].split("}", 1)[0]
+            payload = _graphql_page([last], total_count=21)
+            window = _graphql_page(readback, has_next_page=True, end_cursor="tail", total_count=21)
+            payload["data"]["repository"]["previousPrs0"] = window["data"]["repository"]["pullRequests"]
+        else:
+            payload = _graphql_page(first, has_next_page=True, end_cursor="tail", total_count=21)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    assert snapshot["status"] == "ok" and reads == [False, True]
+    first_item = snapshot["items"][0]
+    assert first_item["mergeStateStatus"] == terminal
+    expected_gates = {"REVIEW_REQUIRED", "FAILING_CHECKS"}
+    if expected_gate is not None:
+        expected_gates.add(expected_gate)
+    assert set(first_item["bypassed_gates"]) == expected_gates
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+              "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                               "include_inbox": False, "pr_filter": {"exclude_drafts": True}}}
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if not excluded and (not isinstance(terminal, str) or terminal in {"UNKNOWN", "FUTURE"}):
+        assert first_item["merge_state_coverage_incomplete"] is True
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior" and observation["material_change"] is False
+    else:
+        assert observation["observation_incomplete"] is False
+        items = observation["scoped_repository_items"]
+        assert (1 in {item["number"] for item in items}) is not excluded
+        assert [item["number"] for item in items if "BLOCKED_MERGE_STATE" in item["bypassed_gates"]] == (
+            [1, 21] if expected_gate == "BLOCKED_MERGE_STATE" else [21]
+        )
+
+
+def test_steward_unknown_native_merge_state_preserves_prior_without_reinterpreting_legacy_signals() -> None:
+    row = _sample_pr(merge_state="UNKNOWN")
+
+    def runner(cmd, **_kwargs):
+        payload = _graphql_page([_graphql_node(row)])
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    native = observe_github_repository_prs("org/repo", runner=runner)
+    previous_hash = "sha256:verified-prior"
+    native_result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": native, "previous_hash": previous_hash,
+    })
+    assert native["items"][0]["merge_state_coverage_incomplete"] is True
+    assert native_result["observation_incomplete"] is True
+    assert native_result["result_hash"] == previous_hash and native_result["material_change"] is False
+
+    legacy = summarize_github_pr_signal(row)
+    assert "merge_state_coverage_incomplete" not in legacy
+    legacy_result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": {"status": "ok", "items": [legacy]}, "previous_hash": previous_hash,
+    })
+    assert legacy_result["observation_incomplete"] is False
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):
