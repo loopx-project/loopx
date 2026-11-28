@@ -345,7 +345,7 @@ export function strideReviewMismatch(decision: JsonObject, context: JsonObject, 
     }
     if (hasDeclaredWork && (review.adoption === "executed" || review.adoption === "partially_executed" || review.goal_gain !== "unknown")
       && !cited.some(ref => linked.has(ref))) {
-      return "Execution and goal-gain claims require subsequent evidence for the declared work; unrelated activity is insufficient.";
+      return 'Execution and goal-gain claims require subsequent evidence for the declared work tied to reference_decision_ref; unrelated activity is insufficient (use "unknown" for adoption and goal_gain if closing a different track).';
     }
   }
   const basis = context.explore_basis as JsonObject | undefined;

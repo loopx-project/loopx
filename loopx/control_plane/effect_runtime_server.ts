@@ -82,7 +82,7 @@ let publishedInfoPath: string | undefined;
 const fingerprint = parseArg("--fingerprint");
 const token = requiredString(process.env.LOOPX_EFFECT_RUNTIME_TOKEN, "runtime token");
 const idleMs = parseIdleMs(process.env.LOOPX_EFFECT_RUNTIME_IDLE_MS);
-let idleTimer: NodeJS.Timeout;
+let idleTimer: ReturnType<typeof setTimeout> | undefined;
 let pendingRequests = 0;
 let resolveDrain: (() => void) | undefined;
 let publicationComplete = false;
@@ -98,9 +98,11 @@ const handlers = createEffectRuntimeHandlers({
 
 function resetIdleTimer(server: ReturnType<typeof createServer>): void {
   clearTimeout(idleTimer);
+  idleTimer = undefined;
   // Idleness starts after effects finish, not when their sockets connect.
   if (!publicationComplete || pendingRequests > 0 || shutdownRequested || !server.listening) return;
   idleTimer = setTimeout(() => {
+    idleTimer = undefined;
     server.close();
     // close() waits for every connection; one whose peer died without a
     // request would keep this process alive but no longer listening.
@@ -110,24 +112,97 @@ function resetIdleTimer(server: ReturnType<typeof createServer>): void {
 }
 
 const sockets = new Set<Socket>();
+const pendingDispatchSockets = new Set<Socket>();
+
+async function dispatchSocketRequest(
+  server: ReturnType<typeof createServer>,
+  socket: Socket,
+  requestLine: string,
+): Promise<void> {
+  let line: string | undefined = requestLine;
+  pendingRequests += 1;
+  clearTimeout(idleTimer);
+  idleTimer = undefined;
+  try {
+    // The locator becomes visible inside the publication lock. A first
+    // response must wait for its release: otherwise an immediate process
+    // death can strand an incomplete cleanup claim before the next write.
+    await publicationReady;
+    const input = line;
+    line = undefined;
+    const frame = await exchangeEffectRuntimeRequest(input, token, handlers);
+    if (frame === null || socket.destroyed || !socket.writable) socket.destroy();
+    else {
+      socket.setTimeout(idleMs);
+      socket.end(frame);
+    }
+  } catch {
+    socket.destroy();
+  } finally {
+    line = undefined;
+    pendingRequests -= 1;
+    if (pendingRequests === 0) {
+      resolveDrain?.();
+      resolveDrain = undefined;
+    }
+    // Stop accepting new work immediately on shutdown, but drain every
+    // already accepted handler, including those whose caller disconnected.
+    if (shutdownRequested) {
+      if (server.listening) server.close();
+      for (const idleSocket of pendingDispatchSockets) idleSocket.destroy();
+    }
+    resetIdleTimer(server);
+  }
+}
+
 const server = createServer((socket) => {
   sockets.add(socket);
-  socket.on("close", () => sockets.delete(socket));
+  pendingDispatchSockets.add(socket);
   resetIdleTimer(server);
   socket.setEncoding("utf8");
+  let raw = "";
+  let receivedBytes = 0;
+  let dispatched = false;
+  const clearIncomingBuffer = (): void => {
+    raw = "";
+    receivedBytes = 0;
+    socket.removeAllListeners("data");
+  };
+  socket.setTimeout(idleMs);
+  socket.on("timeout", () => {
+    if (!dispatched || socket.writableFinished) {
+      clearIncomingBuffer();
+      socket.destroy();
+    }
+  });
   // A caller may close while a response is still buffered (for example after
   // reaching its byte budget). That socket's failure must not kill the shared
   // runtime or another in-flight operation. Business receipt recovery stays
   // with the caller; disconnecting never retries or reverses the handler.
-  socket.on("error", () => socket.destroy());
-  let raw = "";
-  let receivedBytes = 0;
+  socket.on("error", () => {
+    clearIncomingBuffer();
+    pendingDispatchSockets.delete(socket);
+    socket.destroy();
+  });
+  socket.on("end", () => {
+    if (!dispatched) {
+      clearIncomingBuffer();
+      pendingDispatchSockets.delete(socket);
+    }
+  });
+  socket.on("close", () => {
+    clearIncomingBuffer();
+    pendingDispatchSockets.delete(socket);
+    sockets.delete(socket);
+  });
   socket.on("data", (chunk: string) => {
     receivedBytes += Buffer.byteLength(chunk, "utf8");
     if (receivedBytes > MAX_REQUEST_BYTES) {
-      raw = "";
+      dispatched = true;
+      clearIncomingBuffer();
+      pendingDispatchSockets.delete(socket);
       socket.pause();
-      socket.removeAllListeners("data");
+      socket.setTimeout(idleMs);
       socket.end(oversizedEffectRuntimeRequest());
       return;
     }
@@ -135,35 +210,19 @@ const server = createServer((socket) => {
     // Earlier chunks had no delimiter. Scanning the accumulated string on each
     // chunk repeatedly flattens it; only the newly received chunk can finish it.
     if (!chunk.includes("\n")) return;
+    dispatched = true;
+    const line = raw.slice(0, raw.indexOf("\n"));
+    clearIncomingBuffer();
+    pendingDispatchSockets.delete(socket);
+    socket.setTimeout(0);
     socket.pause();
-    pendingRequests += 1;
-    clearTimeout(idleTimer);
-    void (async () => {
-      try {
-        // The locator becomes visible inside the publication lock. A first
-        // response must wait for its release: otherwise an immediate process
-        // death can strand an incomplete cleanup claim before the next write.
-        await publicationReady;
-        const frame = await exchangeEffectRuntimeRequest(
-          raw.slice(0, raw.indexOf("\n")), token, handlers,
-        );
-        if (frame === null) socket.destroy();
-        else socket.end(frame);
-      } catch {
-        socket.destroy();
-      } finally {
-        pendingRequests -= 1;
-        if (pendingRequests === 0) resolveDrain?.();
-        // Stop accepting new work immediately on shutdown, but drain every
-        // already accepted handler, including those whose caller disconnected.
-        if (shutdownRequested && server.listening) server.close();
-        resetIdleTimer(server);
-      }
-    })();
+    void dispatchSocketRequest(server, socket, line);
   });
 });
 
 server.on("close", () => {
+  clearTimeout(idleTimer);
+  idleTimer = undefined;
   void (async () => {
     // TCP close does not wait for a handler after its client times out.
     if (pendingRequests > 0) {

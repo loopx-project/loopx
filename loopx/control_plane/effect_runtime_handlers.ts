@@ -47,10 +47,16 @@ function lazyHandler<Module>(
   load: () => Promise<Module>,
   select: (module: Module) => EffectRuntimeHandler,
 ): EffectRuntimeHandler {
-  let handler: Promise<EffectRuntimeHandler> | undefined;
+  let resolved: EffectRuntimeHandler | undefined;
+  let loading: Promise<EffectRuntimeHandler> | undefined;
   return async (params) => {
-    handler ??= load().then(select);
-    return (await handler)(params);
+    if (resolved !== undefined) return resolved(params);
+    loading ??= load().then(select).then((fn) => {
+      resolved = fn;
+      loading = undefined;
+      return fn;
+    });
+    return (await loading)(params);
   };
 }
 
