@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import uuid
 
 from ..file_lock import exclusive_file_lock
+from .journal import decode_chat_journal
 
 EventKey = tuple[str, str]
 EventFileRevision = tuple[int, int, int, int]
@@ -26,6 +27,19 @@ TERMINAL_CACHE_MAX_ENCODED_BYTES = 2 * 1024 * 1024
 
 def _event_revision_from_stat(stat: os.stat_result) -> EventFileRevision:
     return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def _read_event_snapshot(path: Path) -> tuple[EventRows, EventRevision]:
+    try:
+        with path.open("rb") as stream:
+            before = _event_revision_from_stat(os.fstat(stream.fileno()))
+            raw_bytes = stream.read()
+            after = _event_revision_from_stat(os.fstat(stream.fileno()))
+    except FileNotFoundError:
+        return [], None
+    if before != after or len(raw_bytes) != before[1]:
+        raise OSError("Chat event journal changed while reading")
+    return decode_chat_journal(raw_bytes.split(b"\n"), strict=False), before
 
 
 def _read_compactable_event_rows(path: Path) -> EventRows:
@@ -98,17 +112,16 @@ class ChatEventStreamMixin:
         def _event_path(self, session_id: str, turn_id: str) -> Path: ...
         def _event_flush_lock(self, key: EventKey) -> threading.Lock: ...
 
-    def _event_rows_locked(self, session_id: str, turn_id: str) -> EventRows:
-        from .. import chat_store as _store
-
+    def _event_rows_locked(self, session_id: str, turn_id: str) -> tuple[EventRows, EventRevision]:
         key = (session_id, turn_id)
         path = self._event_path(session_id, turn_id)
         revision = self._event_revision(path)
         rows = self._event_cache.get(key, revision)
         if rows is None:
-            rows = _store._read_jsonl(path)
-            self._event_cache.put(key, revision, rows)
-        return rows
+            rows, revision = _read_event_snapshot(path)
+            if revision is not None:
+                self._event_cache.put(key, revision, rows)
+        return rows, revision
 
     @staticmethod
     def _event_revision(path: Path) -> EventRevision:
@@ -160,12 +173,15 @@ class ChatEventStreamMixin:
                         append_started = False
                         try:
                             uncertain = any("sequence" in event for event, _ in pending)
+                            source_revision = None
                             if require_clean_source:
                                 rows = _read_compactable_event_rows(path)
                             elif uncertain:
                                 rows = _store._read_jsonl(path, raise_on_error=True)
                             else:
-                                rows = self._event_rows_locked(session_id, turn_id)
+                                rows, source_revision = self._event_rows_locked(session_id, turn_id)
+                                if source_revision != self._event_revision(path):
+                                    raise OSError("Chat event journal changed before append")
                             # A failed append may already have persisted all or part of
                             # its batch. Match only this store's stable append ids; two
                             # otherwise identical events are still separate writes.
@@ -186,11 +202,15 @@ class ChatEventStreamMixin:
                                 event["sequence"] = sequence
                                 to_append.append({**event, "_append_id": append_id})
                             append_started = True
-                            _store._append_jsonl_rows(path, to_append)
-                            if any(event["kind"] in _store.TERMINAL_EVENT_KINDS for event, _ in pending):
-                                self._event_cache.drop(key)
+                            written_revision = _store._append_jsonl_rows(path, to_append)
+                            if (
+                                written_revision is not None
+                                and source_revision == _event_revision_from_stat(written_revision[0])
+                                and not any(event["kind"] in _store.TERMINAL_EVENT_KINDS for event, _ in pending)
+                            ):
+                                self._event_cache.put(key, _event_revision_from_stat(written_revision[1]), [*rows, *to_append])
                             else:
-                                self._event_cache.put(key, self._event_revision(path), [*rows, *to_append])
+                                self._event_cache.drop(key)
                         except Exception:
                             if not append_started:
                                 raise
@@ -236,7 +256,11 @@ class ChatEventStreamMixin:
         rows = self._event_cache.get(key, revision)
         if rows is None:
             with exclusive_file_lock(path, agent_id="loopx-chat", operation="read_chat_events"):
-                rows = self._event_rows_locked(session_id, turn_id)
+                try:
+                    rows, _ = self._event_rows_locked(session_id, turn_id)
+                except OSError:
+                    self._event_cache.drop(key)
+                    return []
         # Relies on the sequence ordering maintained by flush_events and compaction;
         # gaps are valid, but inserting or rewriting rows must preserve that order.
         start = bisect_right(rows, after, key=lambda row: int(row.get("sequence") or 0))

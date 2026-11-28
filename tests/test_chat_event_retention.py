@@ -69,13 +69,15 @@ def test_completed_replay_reuses_log_until_an_external_append(tmp_path: Path, mo
     store.append_event(*key, kind="turn.completed", payload={})
     assert key not in store._event_cache._entries
     reads = []
-    read = chat_store._read_jsonl
+    original_open = Path.open
+    event_path = store._event_path(*key)
 
-    def counted(path):
-        reads.append(path)
-        return read(path)
+    def counted(path: Path, mode: str = "r", *args, **kwargs):
+        if path == event_path and mode == "rb":
+            reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(chat_store, "_read_jsonl", counted)
+    monkeypatch.setattr(Path, "open", counted)
     for _ in range(5):
         assert [row["sequence"] for row in store.events_after(*key, "0")] == [1, 2]
     assert len(reads) == 1
@@ -95,6 +97,81 @@ def test_completed_replay_refreshes_after_same_size_rewrite_with_preserved_mtime
     path = store._event_path(*key)
     _rewrite_preserving_mtime(path, path.read_bytes().replace(b'"older"', b'"newer"'))
     assert store.events_after(*key, None)[0]["payload"]["note"] == "newer"
+
+
+@pytest.mark.parametrize("switch", ["during-replay", "after-append"])
+def test_event_cache_revision_follows_the_opened_journal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, switch: str,
+) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    key = ("session", "view")
+    for turn_id in ("first", "other"):
+        store.append_event("session", turn_id, kind="manager.context", payload={"source": turn_id})
+        store.append_event("session", turn_id, kind="turn.completed", payload={})
+    first = store._event_path("session", "first")
+    other = store._event_path("session", "other")
+    journal = store._event_path(*key)
+
+    def select(target: Path) -> None:
+        replacement = journal.with_name("replacement")
+        replacement.symlink_to(target.name)
+        replacement.replace(journal)
+
+    try:
+        select(first)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"cannot create a local event journal symlink: {exc}")
+
+    if switch == "during-replay":
+        original_open = Path.open
+
+        def open_other_then_restore(path: Path, mode: str = "r", *args, **kwargs):
+            if path != journal or mode != "rb":
+                return original_open(path, mode, *args, **kwargs)
+            select(other)
+            try:
+                return original_open(path, mode, *args, **kwargs)
+            finally:
+                select(first)
+
+        with monkeypatch.context() as boundary:
+            boundary.setattr(Path, "open", open_other_then_restore)
+            assert store.events_after(*key, None)[0]["payload"]["source"] == "other"
+        assert store.events_after(*key, None)[0]["payload"]["source"] == "first"
+    else:
+        assert store.events_after(*key, None)[0]["payload"]["source"] == "first"
+        original_append = chat_store._append_jsonl_rows
+
+        def append_then_switch(path: Path, rows: list[dict]):
+            written = original_append(path, rows)
+            if path == journal:
+                select(other)
+            return written
+
+        with monkeypatch.context() as boundary:
+            boundary.setattr(chat_store, "_append_jsonl_rows", append_then_switch)
+            store.append_event(*key, kind="manager.context", payload={"source": "appended"})
+        assert store.events_after(*key, None)[0]["payload"]["source"] == "other"
+        assert len(store.events_after(*key, None)) == 2
+
+
+def test_stable_event_appends_use_the_cached_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    key = ("session", "turn")
+    store.append_event(*key, kind="manager.context", payload={"note": "start"})
+    assert len(store.events_after(*key, None)) == 1
+    journal = store._event_path(*key)
+    original_open = Path.open
+
+    def forbid_prefix_reload(path: Path, mode: str = "r", *args, **kwargs):
+        if path == journal and mode == "rb":
+            pytest.fail("a stable append should reuse the prefix")
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", forbid_prefix_reload)
+    for note in ("second", "third"):
+        store.append_event(*key, kind="manager.context", payload={"note": note})
+    assert [row["payload"]["note"] for row in store.events_after(*key, "1")] == ["second", "third"]
 
 
 def test_event_flush_retry_after_durable_fsync_keeps_distinct_identical_events(

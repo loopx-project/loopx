@@ -2714,6 +2714,48 @@ theorem steward_unchanged_opened_registry_still_reuses_its_digest
       (bindOpenedRegistrySnapshot prior opened opened opened.size goalDigest) opened = some goalDigest := by
   simp [bindOpenedRegistrySnapshot, reuseOpenedRegistryWitness]
 
+abbrev ChatJournalCacheEntry := List Int × List Nat
+
+/- The stamps are the filesystem observations. Rows are represented by
+   their identities. Both read snapshots and incremental appends must
+   carry the revision of the actual open file to the cache. -/
+def observeOpenedChatJournal (_pathStamp opened finished : List Int)
+    (expectedSize actualSize : Nat) (rows : List Nat) : Option ChatJournalCacheEntry :=
+  if opened = finished ∧ expectedSize = actualSize then some (opened, rows) else none
+
+def publishChatAppend (cached : Option ChatJournalCacheEntry) (before after _pathStamp : List Int)
+    (appended : List Nat) : Option ChatJournalCacheEntry :=
+  cached.bind fun (revision, rows) => if revision = before then some (after, rows ++ appended) else none
+
+def replayChatJournal (entry : Option ChatJournalCacheEntry) (current : List Int) : Option (List Nat) :=
+  entry.bind fun (stamp, rows) => if stamp = current then some rows else none
+
+theorem chat_changed_descriptor_never_publishes_replay_rows (path opened finished : List Int)
+    (expected actual : Nat) (rows : List Nat) (changed : opened ≠ finished) :
+    observeOpenedChatJournal path opened finished expected actual rows = none := by
+  simp [observeOpenedChatJournal, changed]
+
+theorem chat_restored_route_cannot_reuse_rows_from_a_different_file (prior opened : List Int)
+    (size : Nat) (rows : List Nat) (different : opened ≠ prior) :
+    replayChatJournal (observeOpenedChatJournal prior opened opened size size rows) prior = none := by
+  simp [observeOpenedChatJournal, replayChatJournal, different]
+
+theorem chat_append_does_not_publish_rows_with_a_different_prefix (cached before after current : List Int)
+    (rows appended : List Nat) (different : cached ≠ before) :
+    publishChatAppend (some (cached, rows)) before after current appended = none := by
+  simp [publishChatAppend, different]
+
+theorem chat_post_append_path_switch_cannot_relabel_the_written_rows (cached written other : List Int)
+    (rows appended : List Nat) (different : written ≠ other) :
+    replayChatJournal (publishChatAppend (some (cached, rows)) cached written other appended) other = none := by
+  simp [publishChatAppend, replayChatJournal, different]
+
+theorem chat_stable_append_still_reuses_its_complete_ordered_prefix
+    (cached written : List Int) (rows appended : List Nat) :
+    replayChatJournal (publishChatAppend (some (cached, rows)) cached written written appended) written =
+      some (rows ++ appended) := by
+  simp [publishChatAppend, replayChatJournal]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3022,5 +3064,10 @@ theorem steward_unchanged_opened_registry_still_reuses_its_digest
 #print axioms steward_short_registry_read_is_not_cached
 #print axioms steward_restored_registry_cannot_reuse_a_replacement_goal_digest
 #print axioms steward_unchanged_opened_registry_still_reuses_its_digest
+#print axioms chat_changed_descriptor_never_publishes_replay_rows
+#print axioms chat_restored_route_cannot_reuse_rows_from_a_different_file
+#print axioms chat_append_does_not_publish_rows_with_a_different_prefix
+#print axioms chat_post_append_path_switch_cannot_relabel_the_written_rows
+#print axioms chat_stable_append_still_reuses_its_complete_ordered_prefix
 
 end StewardPrSignalPagination

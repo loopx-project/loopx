@@ -158,18 +158,20 @@ def _repair_incomplete_jsonl_tail(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
-def _append_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> None:
+def _append_jsonl_rows(path: Path, rows: list[dict[str, Any]]) -> tuple[os.stat_result, os.stat_result] | None:
     if not rows:
-        return
+        return None
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     _repair_incomplete_jsonl_tail(path)
     with path.open("a", encoding="utf-8") as handle:
+        before = os.fstat(handle.fileno())
         for payload in rows:
             handle.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
             handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
-    os.chmod(path, 0o600)
+        os.chmod(path, 0o600)
+        return before, os.fstat(handle.fileno())
 
 
 def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
