@@ -19,6 +19,8 @@ from ..chat_agent import CodexChatAgentError, _host_tool_gate
 
 EventSink = Callable[[str, dict[str, Any]], None]
 
+DIRECT_ANTHROPIC_MAX_TOKENS = 8192
+
 _PRIVATE_PARTS = {".git", ".env", ".ssh", ".aws", ".config", "node_modules"}
 
 
@@ -378,7 +380,7 @@ class DirectModelAdapter:
             if self.provider == "anthropic":
                 payload = self._post(
                     "https://api.anthropic.com/v1/messages",
-                    {"model": self.model, "max_tokens": 2048, "messages": messages, "tools": _read_only_tools("anthropic")},
+                    {"model": self.model, "max_tokens": DIRECT_ANTHROPIC_MAX_TOKENS, "messages": messages, "tools": _read_only_tools("anthropic")},
                     {
                         "content-type": "application/json",
                         "x-api-key": self.api_key,
@@ -462,10 +464,10 @@ def direct_model_from_environment(
 ) -> DirectModelAdapter:
     if provider == "anthropic":
         key_name = "ANTHROPIC_API_KEY"
-        model = os.environ.get("LOOPX_ANTHROPIC_MODEL", "claude-sonnet-4-5")
+        model = os.environ.get("LOOPX_ANTHROPIC_MODEL", "claude-sonnet-5-5")
     elif provider == "openai":
         key_name = "OPENAI_API_KEY"
-        model = os.environ.get("LOOPX_OPENAI_MODEL", "gpt-5")
+        model = os.environ.get("LOOPX_OPENAI_MODEL", "gpt-6.1-sol")
     else:
         raise ValueError(f"unsupported direct model provider: {provider}")
     api_key = os.environ.get(key_name, "").strip()
