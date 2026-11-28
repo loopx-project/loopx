@@ -597,6 +597,7 @@ _GITHUB_PR_REVIEWS_PAGE_QUERY = """query($owner: String!, $name: String!, $numbe
       headRefOid
       updatedAt
       reviewDecision
+      latestReviews: reviews(last: 20) { ...StewardReviewPage }
       reviews(last: 20, before: $before) { ...StewardReviewPage }
     }
   }
@@ -914,6 +915,8 @@ def _backfill_pr_reviews(
         remaining_pages -= 1
         pr_data = read_older_page(number, head_oid, _GITHUB_PR_REVIEWS_PAGE_QUERY, cursor, remaining_seconds)
         if pr_data is None or _read_review_revision(pr_data) != revision:
+            break
+        if _read_graphql_review_page(pr_data.get("latestReviews")) != first_page:
             break
         page = _read_graphql_review_page(pr_data.get("reviews"))
         if page is None or not page.rows or page.total_count != first_page.total_count or ids & page.ids:

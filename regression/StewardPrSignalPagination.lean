@@ -1061,6 +1061,47 @@ theorem missing_last_review_revision_cannot_be_treated_as_a_null_decision (prior
       (prior, false) := by
   rfl
 
+/- Each pair represents a review ID and the value of its selected fields.
+   Readbacks carry the ordered first window, total count and previous cursor.
+   The list describes the older pages consumed by the bounded collector. -/
+structure FirstReviewWindow where
+  rows : List (Nat × Nat)
+  totalCount : Nat
+  previousCursor : Nat
+  deriving DecidableEq
+
+def useReviewsAtFirstWindow (initial : FirstReviewWindow) (readbacks : List (Option FirstReviewWindow))
+    (coveredRows : Option (List Nat)) : Option (List Nat) :=
+  if readbacks.all (fun window => window == some initial) then coveredRows else none
+
+theorem accepted_older_reviews_require_an_unchanged_first_window
+    (initial : FirstReviewWindow) (readbacks : List (Option FirstReviewWindow))
+    (coveredRows : Option (List Nat)) (acceptedRows : List Nat)
+    (accepted : useReviewsAtFirstWindow initial readbacks coveredRows = some acceptedRows) :
+    ∀ window ∈ readbacks, window = some initial := by
+  by_cases stable : readbacks.all (fun window => window == some initial) = true
+  · simpa [List.all_eq_true] using stable
+  · simp [useReviewsAtFirstWindow, stable] at accepted
+
+theorem same_review_id_with_changed_fields_preserves_prior :
+    observe [42] (useReviewsAtFirstWindow ⟨[(7, 1)], 21, 10⟩
+      [some ⟨[(7, 2)], 21, 10⟩] (some [])) = ([42], false) := by
+  decide
+
+theorem missing_last_first_window_readback_preserves_prior (prior : List Nat) :
+    observe prior (useReviewsAtFirstWindow ⟨[(7, 1)], 21, 10⟩
+      [some ⟨[(7, 1)], 21, 10⟩, none] (some [42])) = (prior, false) := rfl
+
+theorem verified_first_windows_allow_terminal_recovery (rows : List Nat) :
+    useReviewsAtFirstWindow ⟨[(7, 1)], 21, 10⟩
+      [some ⟨[(7, 1)], 21, 10⟩, some ⟨[(7, 1)], 21, 10⟩] (some rows) = some rows := rfl
+
+theorem changed_first_window_order_or_boundary_cannot_complete :
+    let initial : FirstReviewWindow := ⟨[(7, 1), (8, 1)], 21, 10⟩
+    useReviewsAtFirstWindow initial [some ⟨[(8, 1), (7, 1)], 21, 10⟩] (some [42]) = none ∧
+      useReviewsAtFirstWindow initial [some ⟨[(7, 1), (8, 1)], 21, 11⟩] (some [42]) = none := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1173,5 +1214,10 @@ theorem missing_last_review_revision_cannot_be_treated_as_a_null_decision (prior
 #print axioms changed_review_timestamp_with_equal_decision_cannot_remove
 #print axioms consistent_nullable_decisions_preserve_recovered_coverage
 #print axioms missing_last_review_revision_cannot_be_treated_as_a_null_decision
+#print axioms accepted_older_reviews_require_an_unchanged_first_window
+#print axioms same_review_id_with_changed_fields_preserves_prior
+#print axioms missing_last_first_window_readback_preserves_prior
+#print axioms verified_first_windows_allow_terminal_recovery
+#print axioms changed_first_window_order_or_boundary_cannot_complete
 
 end StewardPrSignalPagination

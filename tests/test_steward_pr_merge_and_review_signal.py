@@ -670,6 +670,12 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
         ("decision_drift", 1, False),
         ("age_drift", 1, False),
         ("last_page_drift", 2, False),
+        ("first_window_state_changed", 1, False),
+        ("first_window_body_changed", 1, False),
+        ("first_window_cursor_changed", 1, False),
+        ("first_window_reordered", 1, False),
+        ("missing_first_window", 1, False),
+        ("last_page_window_changed", 2, False),
         ("missing_initial_timestamp", 0, False),
         ("missing_older_decision", 1, False),
         ("invalid_timestamp", 0, False),
@@ -703,14 +709,14 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
         return {
             "id": review_id, "state": state, "commit": {"oid": head},
             "author": {"login": "maintainer" if state == "CHANGES_REQUESTED" else "visitor"},
-            "submittedAt": "2030-01-01T08:00:00Z",
+            "submittedAt": "2030-01-01T08:00:00Z", "body": "",
         }
 
     newest = [review(f"new-{i}") for i in range(20)]
-    if case == "age_drift":
+    if case in {"age_drift", "first_window_state_changed"}:
         newest[-1] = {**review("new-19", "CHANGES_REQUESTED"),
                       "author": {"login": "recent-reviewer"}, "submittedAt": "2030-01-03T07:00:00Z"}
-    older_count = {"multiple_pages": 21, "last_page_drift": 21, "repeated_cursor": 21,
+    older_count = {"multiple_pages": 21, "last_page_drift": 21, "last_page_window_changed": 21, "repeated_cursor": 21,
                    "over_budget": 61, "per_pr_budget": 60}.get(case, 1)
     count = len(newest) + older_count
     older = [review(f"old-{i}") for i in range(older_count - 1)]
@@ -753,6 +759,8 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
             query = next(arg for arg in cmd if arg.startswith("query="))
             revision_fields = query.split("pullRequest(number: $number) {", 1)[1].split("reviews(", 1)[0]
             assert {"updatedAt", "reviewDecision"}.issubset(revision_fields.split())
+            assert "latestReviews: reviews(last: 20) { ...StewardReviewPage }" in query
+            assert "reviews(last: 20, before: $before) { ...StewardReviewPage }" in query
             assert kwargs["timeout"] == 20
             cursors.append(cursor)
             page_index = review_cursors.index(cursor)
@@ -775,6 +783,7 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
             pr_data = {
                 "number": 42, "headRefOid": "b" * 40 if case == "head_changed" else head,
                 "updatedAt": node.get("updatedAt"), "reviewDecision": node["reviewDecision"],
+                "latestReviews": node["reviews"],
                 "reviews": _graphql_reviews(page_nodes, totalCount=count + (case == "count_drift"), pageInfo=page_info),
             }
             if case == "decision_drift" or (case == "last_page_drift" and cursor == "earlier"):
@@ -783,6 +792,22 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
                 pr_data["updatedAt"] = observed_time.isoformat().replace("+00:00", "Z")
             elif case == "missing_older_decision":
                 del pr_data["reviewDecision"]
+            if case == "missing_first_window":
+                del pr_data["latestReviews"]
+            elif case == "first_window_state_changed":
+                pr_data["latestReviews"] = {**node["reviews"], "nodes": [
+                    *newest[:-1], {**newest[-1], "state": "DISMISSED"},
+                ]}
+            elif case == "first_window_body_changed" or (case == "last_page_window_changed" and cursor == "earlier"):
+                pr_data["latestReviews"] = {**node["reviews"], "nodes": [
+                    *newest[:-1], {**newest[-1], "body": "Review body changed"},
+                ]}
+            elif case == "first_window_cursor_changed":
+                pr_data["latestReviews"] = {
+                    **node["reviews"], "pageInfo": {"hasPreviousPage": True, "startCursor": "changed-boundary"},
+                }
+            elif case == "first_window_reordered":
+                pr_data["latestReviews"] = {**node["reviews"], "nodes": newest[::-1]}
             payload = {"data": {"repository": {"pullRequest": pr_data}}}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
 
