@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from ..agent_registry import load_goal_from_registry
 from ..control_plane.agents.directory import build_peer_agent_directory
-from ..control_plane.effect_runtime import EffectRuntimeRemoteError
+from ..control_plane.effect_runtime import EffectRuntimeRemoteError, EffectRuntimeStartupError
+from ..control_plane.projection_envelope_facts import render_projection_envelope_markdown
 from ..status import AUTONOMOUS_REPLAN_PERIODIC_LOOKBACK, collect_status
 
 
@@ -68,7 +69,7 @@ def handle_agent_directory(args, registry_path, runtime_root, print_payload, out
             caller_agent_id=args.agent_id,
             cursor=args.cursor,
         )
-    except (ValueError, TypeError, OSError, KeyError, EffectRuntimeRemoteError) as exc:
+    except (ValueError, TypeError, OSError, KeyError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         payload = {
             "ok": False,
             "schema_version": "peer_agent_directory_v0",
@@ -131,6 +132,7 @@ def render_agent_directory(payload):
     presence = payload.get("presence_coverage") or {}
     lines.append(f"presence: {presence.get('state')} — {presence.get('note')}")
     lines.append("limitations: " + ", ".join(payload.get("limitations") or []))
+    lines.extend(render_projection_envelope_markdown(payload.get("projection_envelope")))
     lines.append(
         "Observation and delivery grant no claim, lease, priority or work edit."
     )

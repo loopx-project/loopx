@@ -17,6 +17,7 @@ Python-owned projections do so through `loopx/control_plane/projection_envelope_
 
 | Projection | `projection` | Coverage scope |
 | --- | --- | --- |
+| `loopx agent-directory` | `peer_agent_directory` | `goal_registered_agents` |
 | `loopx status` | `status` | `registry`, `goal` with `--goal-id`, or `activation.<state>` |
 | `loopx status --use-projection-cache` hit | `status`, `served_from_cache: true` | as stored |
 | `loopx global-summary` | `global_summary` | `global` |
