@@ -29,17 +29,22 @@ def _event_revision_from_stat(stat: os.stat_result) -> EventFileRevision:
     return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
-def _read_event_snapshot(path: Path, *, strict: bool = False) -> tuple[EventRows, EventRevision]:
+def _read_event_bytes(path: Path) -> tuple[bytes, EventRevision]:
     try:
         with path.open("rb") as stream:
             before = _event_revision_from_stat(os.fstat(stream.fileno()))
             raw_bytes = stream.read()
             after = _event_revision_from_stat(os.fstat(stream.fileno()))
     except FileNotFoundError:
-        return [], None
+        return b"", None
     if before != after or len(raw_bytes) != before[1]:
         raise OSError("Chat event journal changed while reading")
-    return decode_chat_journal(raw_bytes.split(b"\n"), strict=strict), before
+    return raw_bytes, before
+
+
+def _read_event_snapshot(path: Path, *, strict: bool = False) -> tuple[EventRows, EventRevision]:
+    raw_bytes, revision = _read_event_bytes(path)
+    return decode_chat_journal(raw_bytes.split(b"\n"), strict=strict), revision
 
 
 def _read_compactable_event_rows(path: Path) -> tuple[EventRows, EventRevision]:
@@ -334,15 +339,19 @@ class ChatEventStreamMixin:
                     continue
                 with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
                     try:
-                        rows, _ = _read_compactable_event_rows(event_path)
+                        rows, revision = _read_compactable_event_rows(event_path)
                     except (OSError, ValueError):
                         continue
                     retained = [row for row in rows if row["kind"] not in _store.REPLAY_ONLY_EVENT_KINDS]
-                    if len(retained) != len(rows):
-                        _store._replace_jsonl(event_path, retained)
-                        compacted += 1
-                    revision = self._event_revision(event_path)
                     self._event_cache.drop((session_id, turn_id))
+                    if len(retained) != len(rows):
+                        try:
+                            revision = _store._replace_jsonl(event_path, retained, expected_revision=revision)
+                        except _store.ChatJournalRevisionChanged:
+                            continue
+                        compacted += 1
+                        if revision is None:
+                            continue
                 with exclusive_file_lock(turn_path, agent_id="loopx-chat", operation="mark_chat_events_compacted"):
                     current = _store._read_json(turn_path)
                     if current.get("status") in _store.TERMINAL_TURN_STATES:

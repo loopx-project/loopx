@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import gc
 import inspect
@@ -572,6 +573,68 @@ def test_completed_event_compaction_marker_is_invalidated_by_a_new_event(
         restarted._event_revision(event_path) or ()
     )
     assert ("session", "turn") not in restarted._event_cache._entries
+
+
+@pytest.mark.parametrize("point", ["before-publish", "after-publish", "after-verification", "after-noop"])
+def test_compaction_preserves_a_new_journal_and_keeps_it_eligible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, point: str,
+) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    turn_path, event_path = _write_completed_turn(tmp_path)
+    if point == "after-noop":
+        event_path.write_bytes(event_path.read_bytes().splitlines(keepends=True)[1])
+
+    incoming = [
+        {"kind": "manager.context", "event_id": "3", "sequence": 3, "payload": {"source": "new"}},
+        {"kind": "answer.delta", "event_id": "4", "sequence": 4},
+        {"kind": "turn.completed", "event_id": "5", "sequence": 5},
+    ]
+    incoming_bytes = "".join(json.dumps(row) + "\n" for row in incoming).encode()
+    replacement = event_path.with_name("replacement")
+    replacement.write_bytes(incoming_bytes)
+    original_publish = chat_store._replace_jsonl
+    original_replace = os.replace
+    original_open = Path.open
+
+    def switch_journal() -> None:
+        original_replace(replacement, event_path)
+
+    def publish_with_interleaving(path: Path, rows: list[dict], **kwargs):
+        if path == event_path and point == "before-publish":
+            switch_journal()
+        published = original_publish(path, rows, **kwargs)
+        if path == event_path and point == "after-verification":
+            switch_journal()
+        return published
+
+    def replace_with_interleaving(source, destination, **kwargs):
+        original_replace(source, destination, **kwargs)
+        if Path(destination) == event_path:
+            switch_journal()
+
+    @contextmanager
+    def open_with_interleaving(path: Path, mode: str = "r", *args, **kwargs):
+        with original_open(path, mode, *args, **kwargs) as stream:
+            yield stream
+        if path == event_path and mode == "rb" and replacement.exists():
+            switch_journal()
+
+    with monkeypatch.context() as boundary:
+        if point == "after-publish":
+            boundary.setattr(os, "replace", replace_with_interleaving)
+        elif point == "after-noop":
+            boundary.setattr(Path, "open", open_with_interleaving)
+        else:
+            boundary.setattr(chat_store, "_replace_jsonl", publish_with_interleaving)
+        assert store.compact_completed_events() == int(point in {"after-publish", "after-verification"})
+
+    assert event_path.read_bytes() == incoming_bytes
+    turn = json.loads(turn_path.read_bytes())
+    assert turn.get("event_compaction_revision") != list(store._event_revision(event_path) or ())
+    assert list(event_path.parent.glob(f".{event_path.name}.*.tmp")) == []
+    assert store.compact_completed_events() == 1
+    assert chat_store._read_jsonl(event_path, strict=True) == [incoming[0], incoming[2]]
+    assert store.compact_completed_events() == 0
 
 
 @pytest.mark.parametrize(

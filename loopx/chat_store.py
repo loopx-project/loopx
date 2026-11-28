@@ -25,7 +25,8 @@ from .capabilities.native_chat.model_settings import (
     normalize_session_model_settings, session_model_settings_supported, normalize_session_model_changes,
 )
 from .chat.event_cache import (
-    ChatEventCache, ChatEventStreamMixin, EventRevision, _event_revision_from_stat, recover_completing_turns,
+    ChatEventCache, ChatEventStreamMixin, EventRevision, _event_revision_from_stat, _read_event_bytes,
+    recover_completing_turns,
 )
 from .chat.journal import CachedJournalRows, decode_chat_journal
 from .chat.ingress import (
@@ -156,7 +157,7 @@ def _repair_incomplete_jsonl_tail(handle: BinaryIO) -> None:
 
 
 class ChatJournalRevisionChanged(OSError):
-    """The writer did not open the journal used to allocate its event sequences."""
+    """The journal changed before the writer could use its observed contents."""
 
 
 def _append_jsonl_rows(
@@ -194,17 +195,37 @@ def _append_jsonl_rows(
         return before, os.fstat(handle.fileno())
 
 
-def _replace_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+def _replace_jsonl(
+    path: Path, rows: list[dict[str, Any]], *, expected_revision: EventRevision,
+) -> EventRevision:
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with temporary.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
-            handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)
+    digest = hashlib.sha256()
+    handle = temporary.open("xb")
+    try:
+        with handle:
+            for row in rows:
+                line = (json.dumps(row, ensure_ascii=False, separators=(",", ":")) + os.linesep).encode("utf-8")
+                handle.write(line)
+                digest.update(line)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        try:
+            current = _event_revision_from_stat(path.stat())
+        except FileNotFoundError:
+            current = None
+        if current != expected_revision:
+            raise ChatJournalRevisionChanged("Chat event journal changed before compaction")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    # A replacement can arrive after publication. Mark only verified output.
+    try:
+        raw_bytes, revision = _read_event_bytes(path)
+    except OSError:
+        return None
+    return revision if hashlib.sha256(raw_bytes).digest() == digest.digest() else None
 
 
 class ChatSessionStore(ChatEventStreamMixin, ChatIngressStore):

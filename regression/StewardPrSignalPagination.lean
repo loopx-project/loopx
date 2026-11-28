@@ -2786,6 +2786,41 @@ theorem chat_append_still_repairs_and_writes_the_matching_descriptor (revision :
 theorem chat_append_still_creates_a_new_journal_for_an_absent_prefix :
     chatAppendWritePlan none none = ⟨true, true, false⟩ := rfl
 
+/- A cooperative compactor checks the observed source under the journal
+   lock immediately before publication. Its marker records either the
+   validated output revision or the source of a no-op pass. -/
+def canPublishChatCompaction (processed current : List Int) : Bool :=
+  decide (processed = current)
+
+def chatCompactionMarker (processed _laterPath : List Int) (published : Bool)
+    (verifiedOutput : Option (List Int)) : Option (List Int) :=
+  if published then verifiedOutput else some processed
+
+def acceptsChatCompactionMarker (marker : Option (List Int)) (current : List Int) : Bool :=
+  decide (marker = some current)
+
+theorem chat_compaction_refuses_publication_after_source_replacement (processed current : List Int)
+    (different : processed ≠ current) :
+    canPublishChatCompaction processed current = false := by
+  simp [canPublishChatCompaction, different]
+
+theorem chat_compaction_still_publishes_from_the_current_source (source : List Int) :
+    canPublishChatCompaction source source = true := by
+  simp [canPublishChatCompaction]
+
+theorem chat_compaction_marker_does_not_cover_a_replacement_after_verified_publication
+    (source written current : List Int) (different : written ≠ current) :
+    acceptsChatCompactionMarker (chatCompactionMarker source current true (some written)) current = false := by
+  simp [chatCompactionMarker, acceptsChatCompactionMarker, different]
+
+theorem chat_unverified_compaction_output_is_not_marked (source current : List Int) :
+    chatCompactionMarker source current true none = none := rfl
+
+theorem chat_noop_compaction_marks_only_the_observed_source (source current : List Int)
+    (different : source ≠ current) :
+    acceptsChatCompactionMarker (chatCompactionMarker source current false none) current = false := by
+  simp [chatCompactionMarker, acceptsChatCompactionMarker, different]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3104,5 +3139,10 @@ theorem chat_append_still_creates_a_new_journal_for_an_absent_prefix :
 #print axioms chat_append_cannot_create_a_replacement_for_an_observed_journal
 #print axioms chat_append_still_repairs_and_writes_the_matching_descriptor
 #print axioms chat_append_still_creates_a_new_journal_for_an_absent_prefix
+#print axioms chat_compaction_refuses_publication_after_source_replacement
+#print axioms chat_compaction_still_publishes_from_the_current_source
+#print axioms chat_compaction_marker_does_not_cover_a_replacement_after_verified_publication
+#print axioms chat_unverified_compaction_output_is_not_marked
+#print axioms chat_noop_compaction_marks_only_the_observed_source
 
 end StewardPrSignalPagination
