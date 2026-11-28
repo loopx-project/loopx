@@ -59,6 +59,24 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
   let renewalTimer: ReturnType<typeof setTimeout> | undefined;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   let pending: Promise<void> | undefined;
+  let provedExpiry: number | undefined;
+  let lastMonotonic = performance.now();
+  let effectiveWall = Date.now();
+  const leaseTime = () => {
+    const monotonic = performance.now();
+    // Carry elapsed time across wall-clock corrections. A rollback cannot
+    // add time to an already observed execution window.
+    effectiveWall = Math.max(Date.now(), effectiveWall + (monotonic - lastMonotonic));
+    lastMonotonic = monotonic;
+    return effectiveWall;
+  };
+  const timeBeforeExpiry = () => {
+    const now = leaseTime();
+    if (provedExpiry !== undefined && now >= provedExpiry) {
+      throw new LeaseSupervisionFailure("proved_deadline_elapsed");
+    }
+    return now;
+  };
   // A receipt is historical. This exact claim replay proves the original
   // execution is still current and returns its latest version, not a new key.
   const currentProof = (raw: unknown): LeaseRecord => {
@@ -66,10 +84,14 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
     if (result.ok !== true) throw new LeaseSupervisionFailure("execution_proof_rejected");
     const record = requireJsonObject(result.lease, "delegated current lease");
     const observed = canonicalTaskLease(record, String(lease.goal_id), String(lease.todo_id));
-    if (!leaseIsActive(observed, new Date())) throw new LeaseSupervisionFailure("lease_inactive");
+    if (!leaseIsActive(observed, new Date(timeBeforeExpiry()))) throw new LeaseSupervisionFailure("lease_inactive");
+    const version = leaseVersion(observed), previousVersion = leaseVersion(lease);
     if (observed.owner !== lease.owner ||
         observed.idempotency_key !== lease.idempotency_key || leaseEpoch(observed) !== leaseEpoch(lease) ||
-        leaseVersion(observed) < leaseVersion(lease)) throw new LeaseSupervisionFailure("execution_identity_changed");
+        version < previousVersion) throw new LeaseSupervisionFailure("execution_identity_changed");
+    // leaseIsActive already validated the expiry timestamp.
+    const expiry = parseIsoTimestamp(String(observed.expires_at))!.valueOf();
+    provedExpiry = provedExpiry === undefined || version > previousVersion ? expiry : Math.min(provedExpiry, expiry);
     return observed;
   };
   const cli = async (argv: string[]): Promise<unknown> => {
@@ -90,18 +112,19 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
     failure ??= {reason: owner.aborted ? "owner_cancelled" : reason, boundary};
     abort();
   };
-  const reject = (error: unknown, boundary: LeaseFailureBoundary) =>
-    lose(error instanceof LeaseSupervisionFailure ? error.reason : "lease_observation_failed", boundary);
+  const reject = (error: unknown, boundary: LeaseFailureBoundary) => {
+    const reason = error instanceof LeaseSupervisionFailure ? error.reason : "lease_observation_failed";
+    lose(reason, reason === "proved_deadline_elapsed" ? "deadline" : boundary);
+  };
   const clearTimers = () => {
     clearTimeout(renewalTimer); clearTimeout(expiryTimer);
   };
   const schedule = () => {
     clearTimers();
-    const expires = parseIsoTimestamp(String(lease.expires_at));
-    const remaining = expires === null ? 0 : expires.valueOf() - Date.now();
+    const remaining = (provedExpiry ?? 0) - leaseTime();
     if (remaining <= 0) { lose("proved_deadline_elapsed", "deadline"); return; }
     // Stop at the last proved deadline even if renewal or its transport hangs.
-    expiryTimer = setTimeout(() => lose("proved_deadline_elapsed", "deadline"), remaining);
+    expiryTimer = setTimeout(() => lose("proved_deadline_elapsed", "deadline"), Math.ceil(remaining));
     // A returned Host still needs final proof under the latest proved expiry.
     // Only periodic renewal ends at Host return; expiry supervision does not.
     if (finished) return;
@@ -111,8 +134,8 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
           // Keep the existing revocation/proof cadence, but do not rewrite a
           // long-lived lease on every observation. Renew in its latter half;
           // this leaves the same retry/deadline supervision for short leases.
-          const deadline = parseIsoTimestamp(String(lease.expires_at));
-          const renew = deadline === null || deadline.valueOf() - Date.now() <= context.ttl_seconds * 500;
+          const remaining = (provedExpiry ?? 0) - timeBeforeExpiry();
+          const renew = remaining <= context.ttl_seconds * 500;
           if (renew) {
             const argv = [...context.renew_argv, "--expected-version", String(leaseVersion(lease)),
               "--ttl-seconds", String(context.ttl_seconds)];
@@ -136,9 +159,10 @@ export async function runLeasedHostProcess(request: HostProcessRequest, context:
   };
   try {
     // No Host input or process launch precedes current execution readback.
-    try { lease = currentProof(await cli(context.read_argv)); }
-    catch (error) { reject(error, "initial_proof"); }
-    schedule();
+    try {
+      lease = currentProof(await cli(context.read_argv));
+      schedule();
+    } catch (error) { reject(error, "initial_proof"); }
     // The CLI's TERM adapter unwinds the nested Host transport (bounded at
     // five seconds). Allow that acknowledgement before a forced group kill.
     // This is private supervisor behavior, not a model-controlled timeout.
