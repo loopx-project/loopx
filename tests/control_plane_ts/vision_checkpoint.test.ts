@@ -69,7 +69,7 @@ test("autonomous JSON authoring retains the complete current packet before chang
   assert.match(String(contract.authoring_hint), /JSON replaces the complete packet/);
   assert.match(String(contract.authoring_hint), /current Agent's complete packet and full vision_patch/);
   assert.match(String(contract.authoring_hint), /path_delta.retained text does not merge omitted fields/);
-  assert.doesNotMatch(String(visionAuthoringContract().authoring_hint), /JSON replaces/);
+  assert.match(String(visionAuthoringContract().authoring_hint), /JSON replaces the complete packet/);
   const existing = {
     state: "active", todo_delta: ["retain:todo_current001"],
     vision_patch: {
@@ -562,7 +562,9 @@ test("material closeout leaves an invalid path decision recoverable", () => {
   const pathAuthoring = authoring.path_delta as Record<string, unknown>;
   assert.deepEqual(pathAuthoring.open_progress_outcomes, allowedOutcomes);
   assert.deepEqual(pathAuthoring.outcomes, ["ask_human", "continue", "no_change", "replan", "stop", "wait"]);
-  assert.match(String(authoring.rule), /Progress wait: reentry_condition\. Gap allows wait\./);
+  assert.match(String(authoring.rule), /resume_when.*path_delta\.reentry_condition.*blocked gap allows wait/);
+  const todoAuthoring = (authoring.fields as Record<string, Record<string, unknown>>).todo_delta;
+  assert.equal(todoAuthoring.retain_existing, "retain:todo_<id>");
 
   const dependency = "Resume after the independent result is available.";
   const packet = (outcome: string) => ({
@@ -629,7 +631,9 @@ test("missing checkpoint offers unchanged only with a persisted vision", () => {
 
 test("advertised Todo delta limits match retained items and item validation", () => {
   const fields = visionAuthoringContract().fields as Record<string, unknown>;
-  assert.deepEqual(fields.todo_delta, {max_retained_items: 8, max_item_chars: 80});
+  const todoLimits = fields.todo_delta as Record<string, unknown>;
+  assert.equal(todoLimits.max_retained_items, 8);
+  assert.equal(todoLimits.max_item_chars, 80);
   const packet = (todo_delta: string[]) => prepareRequest({
     agent_vision_packet: {vision_summary: "Deliver the scoped result.", todo_delta},
   });

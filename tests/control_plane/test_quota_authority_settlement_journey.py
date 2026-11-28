@@ -652,7 +652,9 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     authoring = selected_context_values(page["content"])[selector]
     assert authoring["path_delta"]["open_progress_outcomes"] == ["continue", "no_change", "replan"]
     assert "wait" in authoring["path_delta"]["outcomes"]
-    assert "Progress wait: reentry_condition. Gap allows wait." in authoring["rule"]
+    assert "resume_when" in authoring["rule"]
+    assert "path_delta.reentry_condition" in authoring["rule"]
+    assert authoring["fields"]["todo_delta"]["retain_existing"] == "retain:todo_<id>"
 
     dependency = "Continue when the next verification input is available."
     vision = authoring["minimal_example"]

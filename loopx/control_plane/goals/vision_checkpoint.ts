@@ -91,6 +91,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       todo_delta: {
         max_retained_items: VISION_TODO_DELTA_ENTRY_LIMIT,
         max_item_chars: VISION_TODO_DELTA_TEXT_LIMIT,
+        retain_existing: "retain:todo_<id>",
       },
     },
     common_states: ["vision_patch_proposed", "vision_closed", "no_followup"],
@@ -107,11 +108,12 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
     },
     authoring_hint: "Adapt the example to observed evidence. Use its public-safe IDs or aliases in evidence_refs. " +
       "Keep raw paths with the artifact. Follow the live contract and total limit. " +
-      "Use retain:todo_<id> for existing work in todo_delta. Verbs are activate, create, reopen, resume and retain. " +
-      "Use a verified Todo ID after normal authoring/readback. These entries describe plans and grant no Todo mutation, claim or execution authority. " +
-      "For ordinary CLI writeback, pass --agent-vision-json <file>. " +
+      "Keep verified Todos still needed for acceptance in todo_delta, including deferred work. " +
+      "Verbs are activate, create, reopen, resume and retain. Use a Todo ID verified by authoring or readback. " +
+      "These entries describe plans and grant no Todo mutation, claim or execution authority. " +
+      "For ordinary CLI writeback, pass --agent-vision-json <file>. JSON replaces the complete packet. " +
       (autonomousReplan
-        ? "JSON replaces the complete packet. For an existing Vision, the sparse minimal_example shows syntax. " +
+        ? "For an existing Vision, the sparse minimal_example shows syntax. " +
           "Use the current Agent's complete packet and full vision_patch. Read canonical status/history if unavailable. Never reconstruct intent from summaries. " +
           "Edit only deliberately reviewed fields and supply a fresh path_delta. Keep the current state and all other fields. " +
           "path_delta.retained text does not merge omitted fields. "
@@ -132,7 +134,7 @@ export function visionAuthoringContract(autonomousReplan = false): JsonObject {
       )),
     },
     rule: "Material closeout: acceptance_summary + evidence-linked path_delta. " +
-      "Progress wait: reentry_condition. Gap allows wait. " +
+      "For a progress wait, set the Todo's resume_when and describe it in path_delta.reentry_condition. A blocked gap allows wait. " +
       (autonomousReplan
         ? `Autonomous review: changing ${GOAL_VISION_DURABLE_FIELDS.join(", ")} requires outcome=replan, even when the Goal objective stays unchanged. Retaining these fields permits continue/no_change. `
         : "Changed mainline: outcome=replan. ") +

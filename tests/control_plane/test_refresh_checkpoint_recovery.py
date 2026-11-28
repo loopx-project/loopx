@@ -472,8 +472,12 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
     authoring = selected[authoring_pointer]
     assert authoring["path_delta"]["open_progress_outcomes"] == ["continue", "no_change", "replan"]
     assert "wait" in authoring["path_delta"]["outcomes"]
-    assert "Progress wait: reentry_condition. Gap allows wait." in authoring["rule"]
-
+    assert "resume_when" in authoring["rule"]
+    assert "path_delta.reentry_condition" in authoring["rule"]
+    retained_todo = authoring["fields"]["todo_delta"]["retain_existing"].replace(
+        "todo_<id>", selected[identity_pointer]["todo_id"],
+    )
+    assert retained_todo == f"retain:{TODO_ID}"
     dependency = "Resume once the external condition changes."
 
     def vision(outcome: str, name: str) -> Path:
@@ -483,7 +487,9 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
             "state": "vision_patch_proposed",
             "vision_patch": {
                 "acceptance_summary": "The observed result and remaining route are verified.",
+                "advancement_policy": "as_needed",
             },
+            "todo_delta": [retained_todo],
             "path_delta": {
                 "schema_version": "goal_path_delta_v0",
                 "outcome": outcome,
@@ -496,7 +502,7 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
         }), encoding="utf-8")
         return path
 
-    def persisted_path_delta(receipt: dict) -> dict:
+    def persisted_vision(receipt: dict) -> dict:
         path = receipt.get("json_path")
         if path is None:
             readback = shlex.split(receipt["result_details"]["command"])
@@ -506,7 +512,7 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
             assert rc == 0 and detail["eof"], detail
             [entry] = json.loads(detail["content"])["selections"]
             path = entry["value"]
-        return json.loads(Path(path).read_text())["agent_vision"]["path_delta"]
+        return json.loads(Path(path).read_text())["agent_vision"]
 
     wait_packet = vision("wait", "wait.json")
     delivery = (
@@ -531,7 +537,7 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
     if delivery_outcome == "outcome_gap":
         assert first["vision_checkpoint"]["satisfied"] is True
         assert first["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
-        path = persisted_path_delta(first)
+        path = persisted_vision(first)["path_delta"]
         assert path["outcome"] == "wait"
         assert path["reentry_condition"] == dependency
         rc, replay = _run_cli(registry, runtime, *delivery, cwd=project)
@@ -561,12 +567,31 @@ def test_material_closeout_distinguishes_progress_from_blocked_wait(
     assert repaired["vision_checkpoint"]["satisfied"] is True
     assert repaired["settlement_identity"] == first["settlement_identity"]
     assert repaired["settlement_progress"]["state"] == "settled"
-    path = persisted_path_delta(repaired)
+    stored = persisted_vision(repaired)
+    assert stored["todo_delta"] == [f"retain:{TODO_ID}"]
+    path = stored["path_delta"]
     assert path["outcome"] == "no_change"
     assert path["reentry_condition"] == dependency
     rc, replay = _run_cli(registry, runtime, *corrected, cwd=project)
     assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
     assert replay["settlement_result"] == repaired["settlement_result"]
+    assert _spend_run_count(runtime) == 1
+
+    resume_when = "resume_at:2099-01-01T00:00:00Z"
+    rc, deferred = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--status", "deferred", "--resume-when", resume_when, cwd=project,
+    )
+    assert rc == 0 and deferred["ok"], deferred
+    rc, waiting = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "turn-after-material-closeout", cwd=project,
+    )
+    assert rc == 0 and waiting["effective_action"] == "agent_scope_wait", waiting
+    assert waiting["vision_wait_state"]["selected_todo_id"] == TODO_ID
+    assert waiting["vision_wait_state"]["resume_when"] == resume_when
+    assert waiting["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert "settlement_identity" not in waiting["heartbeat_receipt"]
     assert _spend_run_count(runtime) == 1
 
 
