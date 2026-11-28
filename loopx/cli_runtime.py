@@ -1098,10 +1098,14 @@ def _standalone_core() -> bool:
 		return False
 
 
-def _workspace_installed() -> bool:
-	from .python_install_owner import WORKSPACE_DISTRIBUTION, builtin_capability_installed
+def inspect_workspace_distribution(*, builtin_cli_present: bool | None = None) -> dict[str, Any]:
+	"""Inspect whether the optional Workspace wheel is installed and matches Core."""
+	from .python_install_owner import (
+		WORKSPACE_DISTRIBUTION,
+		inspect_builtin_capability_distribution,
+	)
 
-	return builtin_capability_installed(
+	return inspect_builtin_capability_distribution(
 		WORKSPACE_DISTRIBUTION,
 		(
 			"loopx.chat",
@@ -1122,13 +1126,17 @@ def _workspace_installed() -> bool:
 			"loopx.presentation.research_analysis_api",
 			"loopx.presentation.runtime_workspace",
 		),
-		builtin_cli_present=False,
+		builtin_cli_present=builtin_cli_present,
 		resources=(
 			"loopx/chat/endpoints.py",
 			"loopx/chat/lark_api.py",
 			"loopx/control_plane/collaboration/steward_reports.ts",
 		),
 	)
+
+
+def _workspace_installed() -> bool:
+	return bool(inspect_workspace_distribution(builtin_cli_present=False)["ready"])
 
 
 def _run_full_cli(raw_argv: list[str]) -> int:

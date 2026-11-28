@@ -497,3 +497,43 @@ def test_idle_canceled_step_with_corrupt_payload_retires_turn_without_cancel_rpc
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_chat_store_reexports_preserve_caller_imports_and_mypy_contracts() -> None:
+    from loopx import chat_store
+    from loopx.control_plane.collaboration import source_chat_observation
+
+    for symbol in (
+        "CHAT_SESSION_SCHEMA_VERSION",
+        "CHAT_TURN_SCHEMA_VERSION",
+        "_opaque_id",
+        "_read_json",
+    ):
+        assert getattr(chat_store, symbol) is getattr(source_chat_observation, symbol)
+
+    caller_paths = (
+        "loopx/chat/session_open.py",
+        "loopx/chat_runtime.py",
+        "loopx/chat/ingress.py",
+        "loopx/chat/event_cache.py",
+        "loopx/capabilities/native_chat/external_conversations.py",
+        "loopx/capabilities/native_chat/conversation_bindings.py",
+        "loopx/extensions/lark/owner_attention.py",
+        "loopx/extensions/lark/private_conversations.py",
+        "loopx/extensions/lark/private_delivery_discovery.py",
+        "loopx/extensions/lark/private_ingress.py",
+        "loopx/extensions/lark/private_mention_topics.py",
+        "loopx/extensions/lark/private_steward_triage.py",
+        "loopx/extensions/lark/steward_reports.py",
+    )
+    errors_by_file = _run_mypy_contract_probe(caller_paths)
+    for caller in caller_paths:
+        reexport_errors = [
+            err for err in errors_by_file[caller]
+            if 'Module "loopx.chat_store" does not explicitly export attribute' in err
+        ]
+        assert reexport_errors == [], f"{caller} hit implicit re-export error: {reexport_errors}"
+    assert (
+        len(errors_by_file["loopx/chat/session_open.py"])
+        <= _CALLER_ERROR_CAPS["loopx/chat/session_open.py"]
+    )
