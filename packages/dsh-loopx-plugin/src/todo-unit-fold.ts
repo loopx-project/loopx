@@ -39,6 +39,16 @@ export interface TodoUnitFoldPolicy {
   readonly coldPrefillAmortizationTokens?: number | undefined
   readonly maxObsOutputBytes?: number | undefined
   readonly rejectOnTruncation?: boolean | undefined
+  readonly obsNextCmd?: TodoUnitObsNextCommand | undefined
+  readonly resolveObsNextCmd?: ((context: {
+    readonly goalId: string
+    readonly agentId: string
+    readonly settledTodoId: string
+    readonly nextTodoId?: string | undefined
+    readonly quota: Record<string, unknown>
+  }) => TodoUnitObsNextCommand | undefined) | undefined
+  readonly defaultFailureFacts?: readonly string[] | undefined
+  readonly defaultOpenObligations?: readonly string[] | undefined
 }
 
 export interface TodoUnitAnchorInput {
@@ -99,6 +109,8 @@ export interface TodoUnitFoldRequest {
   readonly baselineTokens?: number | undefined
   readonly replacementTokens?: number | undefined
   readonly quiescentBoundary?: boolean | undefined
+  readonly nonQuiescentReason?: string | undefined
+  readonly expectedTailSeqs?: readonly SessionSeq[] | undefined
   readonly failureFacts?: readonly string[] | undefined
   readonly openObligations?: readonly string[] | undefined
 }
@@ -422,7 +434,7 @@ export function applyTodoUnitFoldAndPrefetch(
     return keepRawOutcome('disabled', 'disabled')
   }
   if (request.quiescentBoundary === false) {
-    return keepRawOutcome('fallback_keep_raw', 'non_quiescent_boundary')
+    return keepRawOutcome('fallback_keep_raw', request.nonQuiescentReason ?? 'non_quiescent_boundary')
   }
 
   const anchor = request.anchor ?? storedAnchor
@@ -473,6 +485,15 @@ export function applyTodoUnitFoldAndPrefetch(
   }
 
   const shadowedSeqs = nodes.slice(anchor.prefixNodeCount)
+  if (
+    request.expectedTailSeqs !== undefined
+    && (
+      shadowedSeqs.length !== request.expectedTailSeqs.length
+      || shadowedSeqs.some((seq, i) => seq !== request.expectedTailSeqs![i])
+    )
+  ) {
+    return keepRawOutcome('fallback_keep_raw', 'tail_changed_during_prefetch', undefined, undefined, livePrefixDigest)
+  }
   const startSeq = shadowedSeqs[0]
   const endSeq = shadowedSeqs.at(-1)
   if (startSeq === undefined || endSeq === undefined) {
@@ -675,6 +696,115 @@ export function validateTodoUnitObsForExecution(
   if (obs.output !== undefined && obs.exitCode !== undefined) return null
   const safety = validateReadOnlyObsCommand(obs.command, obs.initiator ?? 'turn_driver')
   return safety.allowed ? safety.argv : null
+}
+
+function asObj(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+export function extractTodoIdFromQuotaAndHeartbeat(
+  quota: Record<string, unknown>,
+  heartbeat?: Record<string, unknown>,
+): string | undefined {
+  const receiptIdentity = asObj(asObj(quota.heartbeat_receipt)?.settlement_identity)
+  const candidates = [
+    receiptIdentity?.todo_id,
+    asObj(quota.selected_todo)?.todo_id,
+    asObj(heartbeat?.selected_todo)?.todo_id,
+    heartbeat?.todo_id,
+  ]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  return undefined
+}
+
+export type DecodedQuotaSettlement =
+  | { readonly verified: true; readonly completionReceipt: TodoUnitCompletionReceipt }
+  | { readonly verified: false; readonly reason: string }
+
+export function decodeQuotaSettlementReadback(
+  payload: Record<string, unknown>,
+  expectedGoalId: string,
+  expectedAgentId: string,
+  expectedTurnInstanceId: string,
+  expectedTodoId?: string,
+): DecodedQuotaSettlement {
+  if (
+    payload.schema_version !== 'quota_receipt_readback_v0'
+    || payload.ok !== true
+    || payload.goal_id !== expectedGoalId
+    || payload.agent_id !== expectedAgentId
+    || payload.turn_instance_id !== expectedTurnInstanceId
+  ) {
+    return { verified: false, reason: 'invalid_settlement_identity' }
+  }
+  if (payload.settlement_verified !== true) {
+    return {
+      verified: false,
+      reason: typeof payload.settlement_conflict_reason === 'string'
+        ? payload.settlement_conflict_reason
+        : 'unsettled_turn',
+    }
+  }
+  const raw = asObj(payload.completion_receipt)
+  const rawSource = asObj(raw?.source_ref)
+  const todoId = typeof raw?.todo_id === 'string' ? raw.todo_id.trim() : ''
+  const receiptId = typeof raw?.completion_receipt_id === 'string' ? raw.completion_receipt_id.trim() : ''
+  const sha256 = typeof raw?.sha256 === 'string' ? raw.sha256 : ''
+  const sourcePath = typeof rawSource?.path === 'string' ? rawSource.path.trim() : ''
+  const sourceSha = typeof rawSource?.sha256 === 'string' ? rawSource.sha256 : ''
+  if (
+    !todoId
+    || (expectedTodoId !== undefined && expectedTodoId !== todoId)
+    || !receiptId
+    || raw?.exit_code !== 0
+    || !BARE_SHA256_RE.test(sha256)
+    || !sourcePath
+    || !BARE_SHA256_RE.test(sourceSha)
+  ) {
+    return { verified: false, reason: 'invalid_completion_receipt' }
+  }
+  return {
+    verified: true,
+    completionReceipt: {
+      todoId,
+      completionReceiptId: receiptId,
+      exitCode: 0,
+      sha256,
+      failureFacts: cleanFacts(Array.isArray(raw?.failure_facts) ? raw.failure_facts as string[] : undefined, 32),
+      openObligations: cleanFacts(Array.isArray(raw?.open_obligations) ? raw.open_obligations as string[] : undefined, 64),
+      sourceRef: { path: sourcePath, sha256: sourceSha },
+    },
+  }
+}
+
+export function createDefaultDshObsRunner(runner: FileRunner): TodoUnitObsRunner {
+  return async (argv, cwd) => {
+    const file = argv[0]
+    if (!file) {
+      return { exitCode: 127, output: '' }
+    }
+    try {
+      const res = await runner(file, argv.slice(1), {
+        cwd,
+        timeoutMs: 5_000,
+        maxOutputBytes: DEFAULT_TODO_FOLD_MAX_OBS_BYTES,
+      })
+      return {
+        exitCode: res.exitCode,
+        output: res.stdout,
+        timedOut: false,
+        truncated: Buffer.byteLength(res.stdout, 'utf8') > DEFAULT_TODO_FOLD_MAX_OBS_BYTES,
+      }
+    } catch {
+      return { exitCode: null, output: '', timedOut: true }
+    }
+  }
 }
 
 export type { FileRunner, LoopXCommand }

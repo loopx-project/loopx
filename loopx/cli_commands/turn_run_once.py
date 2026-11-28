@@ -962,6 +962,7 @@ def execute_turn_run_once(
             ) if raw_argv is not None and goal_admission is not None else None),
             epoch_prefetch=getattr(args, "epoch_prefetch_json", None),
             quiet_turn=quiet_turn_option,
+            semantic_unit_fold=getattr(args, "semantic_unit_fold_json", None),
             **({"host_input_renderer": None} if unmeasurable_operation_host else {}),
         )
         if args.execute:

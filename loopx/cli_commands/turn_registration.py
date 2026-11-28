@@ -367,6 +367,12 @@ def register_turn_commands(
         action="store_true",
         help="Opt-in Quiet-Turn zero-tax skip metadata evaluation when Turn state is unchanged (default-off).",
     )
+    run_once.add_argument(
+        "--semantic-unit-fold-json",
+        type=json.loads,
+        default=None,
+        help="Opt-in Todo semantic-unit fold & prefetch policy JSON (default-off).",
+    )
     run_once.add_argument("--limit", type=int, default=5)
 
 

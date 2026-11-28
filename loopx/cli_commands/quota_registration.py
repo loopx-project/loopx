@@ -443,4 +443,9 @@ def register_quota_command(
         default=120,
         help="Freshness window for --use-projection-cache. Defaults to 120 seconds.",
     )
+    quota_parser.add_argument(
+        "--include-settlement",
+        action="store_true",
+        help="For `quota receipt`, also verify committed Todo completion settlement readback (default-off).",
+    )
     quota_parser.add_argument("--limit", type=int, default=5)

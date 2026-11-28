@@ -898,10 +898,11 @@ def serialize_generic_cli_host_input(request: Mapping[str, Any]) -> str:
     """Serialize the exact JSON payload delivered on stdin to a generic-cli host."""
     host_input: Mapping[str, Any] = captured_turn_host_input(request) if "work_contract" in request else request
     if isinstance(host_input.get("epoch_prefetch"), Mapping):
-        host_input = {
-            **dict(host_input),
-            "epoch_prefetch": strip_internal_epoch_prefetch_audit_fields(host_input["epoch_prefetch"]),
-        }
+        host_input = {**dict(host_input), "epoch_prefetch": strip_internal_epoch_prefetch_audit_fields(host_input["epoch_prefetch"])}
+    if isinstance(host_input.get("semantic_unit_fold"), Mapping):
+        from .todo_unit_settlement import strip_internal_semantic_unit_fold_audit_fields
+
+        host_input = {**dict(host_input), "semantic_unit_fold": strip_internal_semantic_unit_fold_audit_fields(host_input["semantic_unit_fold"])}
     return json.dumps(host_input, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -1648,21 +1649,16 @@ def run_loopx_turn_once(
     host_launch_guard: Callable[[], AbstractContextManager[None]] | None = None,
     epoch_prefetch: Mapping[str, Any] | None = None,
     quiet_turn: bool | Mapping[str, Any] = False,
+    semantic_unit_fold: Mapping[str, Any] | None = None,
     host_input_renderer: HostInputRenderer | None | object = UNSET_HOST_INPUT_RENDERER,
 ) -> dict[str, Any]:
-    argv, host_projection = _prepare_host_invocation(
-        plan, host_argv=host_argv, host_runner=host_runner,
-        resume_existing_turn=resume_existing_turn,
-    )
-    transaction_plan = (
-        plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
-    )
+    argv, host_projection = _prepare_host_invocation(plan, host_argv=host_argv, host_runner=host_runner, resume_existing_turn=resume_existing_turn)
+    transaction_plan = plan.get("transaction") if isinstance(plan.get("transaction"), dict) else {}
     settlement_lineage = _ensure_turn_settlement_plan(plan, transaction_plan)
     planned_host = plan.get("host") if isinstance(plan.get("host"), Mapping) else {}
     quiet_options = {
-        "epoch_prefetch": epoch_prefetch,
-        "quiet_turn": quiet_turn,
-        "decision_capture_payload": decision_capture_payload,
+        "epoch_prefetch": epoch_prefetch, "quiet_turn": quiet_turn,
+        "semantic_unit_fold": semantic_unit_fold, "decision_capture_payload": decision_capture_payload,
         "host": "generic-cli" if argv is not None else str(planned_host.get("kind") or ""),
         "host_input_renderer": host_input_renderer,
     }
@@ -1864,12 +1860,8 @@ def run_loopx_turn_once(
         if capture is not None:
             plan, request = capture.publish_for_host(request)
         epoch_metadata, request = prepare_turn_execution_epoch_context(
-            plan=plan, request=request, journal_path=journal_path,
-            goal_id=goal_id, turn_key=turn_key, project=project,
-            settlement_lineage=settlement_lineage,
-            options=quiet_options,
-            existing_journal=journal, capture=capture, needs_host=needs_host,
-        )
+            plan=plan, request=request, journal_path=journal_path, goal_id=goal_id, turn_key=turn_key,
+            project=project, settlement_lineage=settlement_lineage, options=quiet_options, existing_journal=journal, capture=capture, needs_host=needs_host)
         if journal is not None and recovery_decision is not None:
             journal["recovery_audit"] = build_turn_recovery_audit(
                 recovery_decision, journal, status="started", host_invoked=None,
@@ -1995,5 +1987,6 @@ def run_loopx_turn_once(
             settled=settled, epoch_metadata=epoch_metadata, plan=plan,
             journal_path=journal_path, goal_id=goal_id,
             settlement_lineage=settlement_lineage, options=quiet_options,
+            result=result, journal=journal,
         )
         return finish_recovery(settled)

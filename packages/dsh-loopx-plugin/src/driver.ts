@@ -6,12 +6,13 @@ import type { Agent, AgentStatus, PreStepDecision } from '@deepseek-ai/dsh-agent
 import type {} from '@deepseek-ai/dsh-commands'
 import type {} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-session'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   LoopXCliError,
   cliErrorFields,
   coreRouteBin,
   resolveLoopXCommand,
+  runFile,
   runJsonCommand,
   supportedLoopXVersion,
 } from './cli.ts'
@@ -30,6 +31,9 @@ import type {
 } from './goalbar/protocol.ts'
 import {
   applyTodoUnitFoldAndPrefetch,
+  createDefaultDshObsRunner,
+  decodeQuotaSettlementReadback,
+  extractTodoIdFromQuotaAndHeartbeat,
   hasValidDshToolCallPairing,
   recordDshTodoUnitAnchor,
   validateTodoUnitObsForExecution,
@@ -121,14 +125,31 @@ interface Reservation extends Binding {
   preserveAcrossPause: boolean
 }
 
+interface ActiveTodoUnitState {
+  readonly goalId: string
+  readonly agentId: string
+  readonly todoId?: string | undefined
+  readonly turnInstanceId: string
+  readonly contextEpoch: string
+  readonly startStepIndex: number
+  endStepIndex: number
+  anchor?: TodoUnitAnchor | undefined
+  admittedSeq?: SessionSeq | undefined
+  completedCleanly?: boolean | undefined
+}
+
 interface SessionDriverRetention {
   readonly agent: Agent
   paused: boolean
   goalBarPaused?: boolean
   admissionFailure?: GoalBarAdmissionFailureCategoryV1 | undefined
   reservation?: Reservation | undefined
+  todoUnitContextEpoch?: string | undefined
+  todoUnitStepCount?: number | undefined
+  activeTodoUnit?: ActiveTodoUnitState | undefined
   todoUnitAnchors?: Map<string, TodoUnitAnchor> | undefined
   todoUnitFolds?: Map<string, TodoUnitFoldOutcome> | undefined
+  todoUnitFoldsInFlight?: Map<string, Promise<TodoUnitFoldOutcome>> | undefined
 }
 
 // HMR can replace this module while the same Agent and Session keep running.
@@ -187,6 +208,104 @@ interface QueuePlan extends Binding {
   readonly turnInstanceId: string
   readonly taskBody: string
   readonly selectionRequired: boolean
+  readonly todoId?: string | undefined
+}
+
+interface TodoUnitPrefetchPin {
+  readonly session: Agent['session']
+  readonly activationSession: Agent['session']
+  readonly activeUnit: ActiveTodoUnitState | undefined
+  readonly anchor: TodoUnitAnchor | undefined
+  readonly storedAnchor: TodoUnitAnchor | undefined
+  readonly stepCount: number
+  readonly nodes: readonly SessionSeq[]
+  readonly tailSeqs: readonly SessionSeq[]
+  readonly eventCount: number
+  readonly lastEventSeq: number
+}
+
+function isTodoUnitDriverQuiescent(agent: Agent, state: DriverState): boolean {
+  return agent.status === 'idle'
+    && !state.competing
+    && state.commands.size === 0
+    && !inboxHasPending(agent.inbox)
+    && state.activation.pendingModelCalls.size === 0
+    && agent.id === agent.session.id
+    && agent.id === agent.session.header.id
+}
+
+function captureTodoUnitPrefetchPin(
+  agent: Agent,
+  state: DriverState,
+  retained: SessionDriverRetention,
+  todoId: string,
+  anchor: TodoUnitAnchor | undefined,
+): TodoUnitPrefetchPin {
+  const session = agent.session
+  const nodes = [...session.surface.nodes]
+  const events = session.snapshotEvents()
+  const prefixCount = anchor?.prefixNodeCount ?? 0
+  return {
+    session,
+    activationSession: state.activation.session,
+    activeUnit: retained.activeTodoUnit,
+    anchor,
+    storedAnchor: todoId ? retained.todoUnitAnchors?.get(todoId) : undefined,
+    stepCount: retained.todoUnitStepCount ?? 0,
+    nodes,
+    tailSeqs: nodes.slice(prefixCount),
+    eventCount: events.length,
+    lastEventSeq: Number(events.at(-1)?.seq ?? 0),
+  }
+}
+
+function detectTodoUnitPrefetchInterference(
+  driverDisposed: boolean,
+  agent: Agent,
+  state: DriverState,
+  retained: SessionDriverRetention,
+  todoId: string,
+  anchorOverride: TodoUnitAnchor | undefined,
+  pin: TodoUnitPrefetchPin,
+): string | null {
+  if (
+    driverDisposed || state.stopping || agent.session !== pin.session
+    || state.activation.session !== pin.activationSession
+    || agent.id !== agent.session.id || agent.id !== agent.session.header.id
+  ) {
+    return 'session_changed_during_prefetch'
+  }
+  if (retained.activeTodoUnit !== pin.activeUnit) {
+    return 'active_unit_changed_during_prefetch'
+  }
+  const currentStoredAnchor = todoId ? retained.todoUnitAnchors?.get(todoId) : undefined
+  const currentAnchor = anchorOverride ?? currentStoredAnchor
+  if (
+    currentAnchor !== pin.anchor
+    || currentStoredAnchor !== pin.storedAnchor
+    || (retained.todoUnitStepCount ?? 0) !== pin.stepCount
+  ) {
+    return 'segment_advanced_during_prefetch'
+  }
+  const events = pin.session.snapshotEvents()
+  const newEvents = events.filter((ev, idx) => idx >= pin.eventCount || Number(ev.seq) > pin.lastEventSeq)
+  if (newEvents.some(ev => ev.type === 'user/message')) {
+    return 'user_message_during_prefetch'
+  }
+  if (newEvents.some(ev => (
+    ev.type === 'step/start' || ev.type === 'turn/start'
+    || ev.type === 'assistant/message' || ev.type === 'tool/call' || ev.type === 'tool/result'
+  ))) {
+    return 'segment_advanced_during_prefetch'
+  }
+  const liveNodes = pin.session.surface.nodes
+  if (liveNodes.length !== pin.nodes.length || liveNodes.some((seq, idx) => seq !== pin.nodes[idx])) {
+    return 'tail_changed_during_prefetch'
+  }
+  if (!isTodoUnitDriverQuiescent(agent, state)) {
+    return 'non_quiescent_boundary'
+  }
+  return null
 }
 
 interface WaitPlan {
@@ -635,6 +754,7 @@ async function readQuotaCapture(
   reference: string,
   options: QuotaReadOptions,
   revalidateOnly: boolean,
+  includeSelectedTodo = false,
 ): Promise<Record<string, unknown>> {
   // Entering a queued step requires the original Turn receipt. The scheduler
   // and reward memory are only used when first deciding whether to queue work.
@@ -651,7 +771,10 @@ async function readQuotaCapture(
     if (!QUOTA_REQUIRED_POINTERS.every(pointer => present.has(pointer))) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture lacks admission fields', false)
     }
-    pointers = [...QUOTA_REQUIRED_POINTERS, ...QUOTA_OPTIONAL_POINTERS.filter(pointer => present.has(pointer))]
+    const optional = includeSelectedTodo
+      ? [...QUOTA_OPTIONAL_POINTERS, '/selected_todo']
+      : QUOTA_OPTIONAL_POINTERS
+    pointers = [...QUOTA_REQUIRED_POINTERS, ...optional.filter(pointer => present.has(pointer))]
   }
   const selected = await readQuotaSelections(
     command, reference, pointers.flatMap(pointer => ['--select', pointer]), QUOTA_SELECTION_SCHEMA, options,
@@ -889,11 +1012,15 @@ export class LoopXContinuationDriver {
     this.onAdmissionChange = options.onAdmissionChange
     this.todoUnitFold = options.todoUnitFold
     this.runObsCommand = options.runObsCommand
+      ?? (options.todoUnitFold?.enabled === true
+        ? createDefaultDshObsRunner(options.runner ?? runFile)
+        : undefined)
   }
 
   /** Record a Todo semantic-unit anchor pinning parent KV prefix Q before exploratory steps. */
   anchorTodoUnit(agent: Agent, input: TodoUnitAnchorInput): TodoUnitAnchor | null {
     if (this.todoUnitFold?.enabled !== true) return null
+    if (typeof agent.session.deriveMessages !== 'function') return null
     const anchor = recordDshTodoUnitAnchor(agent.session, input)
     const retained = retainedState(agent, agent.session)
     retained.todoUnitAnchors ??= new Map()
@@ -906,10 +1033,10 @@ export class LoopXContinuationDriver {
    * atomically pops contiguous suffix `[anchor..now] -> [mu + Obs(next_cmd)]` on
    * quiescent boundaries while keeping parent prefix Q byte-identical and tool pairing valid.
    */
-  async onTodoUnitSettled(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
+  onTodoUnitSettled(agent: Agent, request: TodoUnitFoldRequest): Promise<TodoUnitFoldOutcome> {
     const policy = this.todoUnitFold
     if (policy?.enabled !== true) {
-      return applyTodoUnitFoldAndPrefetch(agent.session, policy, request)
+      return Promise.resolve(applyTodoUnitFoldAndPrefetch(agent.session, policy, request))
     }
     const state = this.stateFor(agent)
     const retained = retainedState(agent, agent.session)
@@ -918,24 +1045,62 @@ export class LoopXContinuationDriver {
       : undefined
     const cached = foldKey !== undefined ? retained.todoUnitFolds?.get(foldKey) : undefined
     if (cached !== undefined) {
-      return cached
+      return Promise.resolve(cached)
     }
-    const quiescent = agent.status === 'idle'
-      && state.commands.size === 0
-      && !inboxHasPending(agent.inbox)
-      && state.activation.pendingModelCalls.size === 0
-      && agent.id === agent.session.id
-      && agent.id === agent.session.header.id
+    if (foldKey !== undefined) {
+      const inFlight = retained.todoUnitFoldsInFlight?.get(foldKey)
+      if (inFlight !== undefined) {
+        return inFlight
+      }
+      const inFlightMap = retained.todoUnitFoldsInFlight ??= new Map()
+      let resolveExecution!: (outcome: TodoUnitFoldOutcome) => void
+      let rejectExecution!: (reason: unknown) => void
+      const execution = new Promise<TodoUnitFoldOutcome>((resolve, reject) => {
+        resolveExecution = resolve
+        rejectExecution = reject
+      })
+      // Register before invoking executeTodoUnitSettled so synchronous re-entry
+      // inside runObsCommand joins the single in-flight observation execution.
+      inFlightMap.set(foldKey, execution)
+      void this.executeTodoUnitSettled(agent, state, retained, policy, request, foldKey).then(
+        outcome => {
+          if (inFlightMap.get(foldKey) === execution) {
+            inFlightMap.delete(foldKey)
+          }
+          resolveExecution(outcome)
+        },
+        reason => {
+          if (inFlightMap.get(foldKey) === execution) {
+            inFlightMap.delete(foldKey)
+          }
+          rejectExecution(reason)
+        },
+      )
+      return execution
+    }
+    return this.executeTodoUnitSettled(agent, state, retained, policy, request, undefined)
+  }
+
+  private async executeTodoUnitSettled(
+    agent: Agent,
+    state: DriverState,
+    retained: SessionDriverRetention,
+    policy: TodoUnitFoldPolicy,
+    request: TodoUnitFoldRequest,
+    foldKey: string | undefined,
+  ): Promise<TodoUnitFoldOutcome> {
+    const quiescent = isTodoUnitDriverQuiescent(agent, state)
       && typeof agent.session.header.cwd === 'string'
       && agent.session.header.cwd.length > 0
       && request.quiescentBoundary !== false
     const sessionCwd = agent.session.header.cwd
-    const storedAnchor = retained.todoUnitAnchors?.get(request.todoId)
+    let storedAnchor = retained.todoUnitAnchors?.get(request.todoId)
     const activeAnchor = request.anchor ?? storedAnchor
     let effectiveRequest: TodoUnitFoldRequest = {
       ...request,
       quiescentBoundary: quiescent,
     }
+    let foldSession = agent.session
     if (
       quiescent
       && typeof sessionCwd === 'string'
@@ -951,21 +1116,52 @@ export class LoopXContinuationDriver {
     ) {
       const safeArgv = validateTodoUnitObsForExecution(request.obsNextCmd)
       if (safeArgv !== null && request.obsNextCmd !== undefined) {
+        const prefetchPin = captureTodoUnitPrefetchPin(agent, state, retained, request.todoId, activeAnchor)
         const obsRes = await this.runObsCommand(safeArgv, sessionCwd)
-        effectiveRequest = {
-          ...effectiveRequest,
-          obsNextCmd: {
-            ...request.obsNextCmd,
-            command: safeArgv,
-            exitCode: obsRes.exitCode,
-            output: obsRes.output,
-            timedOut: obsRes.timedOut,
-            truncated: obsRes.truncated,
-          },
+        const interferenceReason = detectTodoUnitPrefetchInterference(
+          this.disposed,
+          agent,
+          state,
+          retained,
+          request.todoId,
+          request.anchor,
+          prefetchPin,
+        )
+        const obsNextCmd = {
+          ...request.obsNextCmd,
+          command: safeArgv,
+          exitCode: obsRes.exitCode,
+          output: obsRes.output,
+          timedOut: obsRes.timedOut,
+          truncated: obsRes.truncated,
+        }
+        if (interferenceReason !== null) {
+          if (
+            interferenceReason === 'user_message_during_prefetch'
+            || interferenceReason === 'active_unit_changed_during_prefetch'
+            || interferenceReason === 'tail_changed_during_prefetch'
+          ) {
+            retained.todoUnitAnchors?.delete(request.todoId)
+          }
+          foldSession = prefetchPin.session
+          storedAnchor = prefetchPin.storedAnchor
+          effectiveRequest = {
+            ...effectiveRequest,
+            quiescentBoundary: false,
+            nonQuiescentReason: interferenceReason,
+            expectedTailSeqs: prefetchPin.tailSeqs,
+            obsNextCmd,
+          }
+        } else {
+          effectiveRequest = {
+            ...effectiveRequest,
+            expectedTailSeqs: prefetchPin.tailSeqs,
+            obsNextCmd,
+          }
         }
       }
     }
-    const outcome = applyTodoUnitFoldAndPrefetch(agent.session, policy, effectiveRequest, storedAnchor)
+    const outcome = applyTodoUnitFoldAndPrefetch(foldSession, policy, effectiveRequest, storedAnchor)
     if (outcome.operator === 'FoldToReceipt') {
       retained.todoUnitAnchors?.delete(request.todoId)
       if (foldKey !== undefined) {
@@ -1004,8 +1200,12 @@ export class LoopXContinuationDriver {
     state.schedulerToken = ''
     state.unchangedPolls = 0
     state.commands.clear()
-    retainedState(agent, agent.session).todoUnitAnchors?.clear()
-    retainedState(agent, agent.session).todoUnitFolds?.clear()
+    const retained = retainedState(agent, agent.session)
+    retained.todoUnitAnchors?.clear()
+    retained.todoUnitFolds?.clear()
+    retained.activeTodoUnit = undefined
+    retained.todoUnitContextEpoch = undefined
+    retained.todoUnitStepCount = 0
     state.activation = foldSessionActivation(agent.session)
     this.requestEvaluation(state)
   }
@@ -1163,12 +1363,30 @@ export class LoopXContinuationDriver {
       && state.reservation !== undefined
       && event.data.id === state.reservation.messageId) {
       state.reservation.phase = 'admitted'
+      const retained = retainedState(agent, agent.session)
+      if (retained.activeTodoUnit?.turnInstanceId === state.reservation.turnInstanceId) {
+        retained.activeTodoUnit.admittedSeq = event.seq
+      }
       return
     }
-    if (event.type === 'turn/end'
-      && (event.data.reason.kind === 'max-tokens' || event.data.reason.kind === 'aborted')) {
-      this.setErrorPause(state, true)
-      this.cancelPending(state)
+    if (event.type === 'user/message' && event.data.source?.kind === 'user') {
+      retainedState(agent, agent.session).activeTodoUnit = undefined
+    }
+    if (event.type === 'step/start') {
+      const retained = retainedState(agent, agent.session)
+      retained.todoUnitStepCount = (retained.todoUnitStepCount ?? 0) + 1
+    }
+    if (event.type === 'turn/end') {
+      const retained = retainedState(agent, agent.session)
+      const active = retained.activeTodoUnit
+      if (active !== undefined && active.completedCleanly === undefined) {
+        active.endStepIndex = Math.max(active.startStepIndex, retained.todoUnitStepCount ?? active.startStepIndex)
+        active.completedCleanly = event.data.reason.kind === 'completed'
+      }
+      if (event.data.reason.kind === 'max-tokens' || event.data.reason.kind === 'aborted') {
+        this.setErrorPause(state, true)
+        this.cancelPending(state)
+      }
     }
   }
 
@@ -1462,6 +1680,30 @@ export class LoopXContinuationDriver {
     this.clearAdmissionFailure(state)
     if (!this.ready(state) || state.agent.session !== plan.session) return true
     const message = automaticMessage(plan)
+    if (this.todoUnitFold?.enabled === true) {
+      const retained = retainedState(state.agent, plan.session)
+      const contextEpoch = retained.todoUnitContextEpoch
+        ??= `dsh:${plan.session.header.id}:${randomUUID()}`
+      const startStepIndex = retained.todoUnitStepCount ?? 0
+      const anchor = plan.todoId !== undefined
+        ? this.anchorTodoUnit(state.agent, {
+          todoId: plan.todoId,
+          turnInstanceId: plan.turnInstanceId,
+          contextEpoch,
+          anchorStepIndex: startStepIndex,
+        })
+        : null
+      retained.activeTodoUnit = {
+        goalId: plan.goalId,
+        agentId: plan.agentId,
+        todoId: plan.todoId,
+        turnInstanceId: plan.turnInstanceId,
+        contextEpoch,
+        startStepIndex,
+        endStepIndex: startStepIndex,
+        anchor: anchor ?? undefined,
+      }
+    }
     const reservation: Reservation = {
       messageId: message.id,
       content: message.content,
@@ -1477,6 +1719,15 @@ export class LoopXContinuationDriver {
     try {
       state.agent.followup(message)
     } catch (error: unknown) {
+      if (this.todoUnitFold?.enabled === true) {
+        const retained = retainedState(state.agent, plan.session)
+        if (retained.activeTodoUnit?.turnInstanceId === plan.turnInstanceId) {
+          if (retained.activeTodoUnit.todoId !== undefined) {
+            retained.todoUnitAnchors?.delete(retained.activeTodoUnit.todoId)
+          }
+          retained.activeTodoUnit = undefined
+        }
+      }
       this.retireReservation(state)
       this.warn(`dsh-loopx-driver: could not queue same-session work: ${renderThrown(error)}`)
     }
@@ -1540,7 +1791,13 @@ export class LoopXContinuationDriver {
     }
     state.retrySelection = false
     turnInstanceId ??= this.makeTurnInstanceId()
-    const quota = await this.readQuota(command, state.agent, binding, turnInstanceId, { signal })
+    const quota = await this.readQuota(
+      command,
+      state.agent,
+      binding,
+      turnInstanceId,
+      { signal, includeSelectedTodo: this.todoUnitFold?.enabled === true },
+    )
     this.ensureReady(state, signal, session)
     if (quota.ok !== true) {
       throw new LoopXCliError(
@@ -1556,6 +1813,10 @@ export class LoopXContinuationDriver {
         'LoopX quota response did not match the bound Goal and Agent',
         false,
       )
+    }
+    if (this.todoUnitFold?.enabled === true) {
+      await this.tryFoldSettledActiveTodoUnit(command, state, binding, quota, signal)
+      this.ensureReady(state, signal, session)
     }
     if (quota.should_run !== true) {
       const wait = schedulerWait(quota, state.schedulerToken, state.unchangedPolls)
@@ -1594,6 +1855,9 @@ export class LoopXContinuationDriver {
       )
     }
     const receipt = record(quota.heartbeat_receipt)
+    const todoId = this.todoUnitFold?.enabled === true
+      ? extractTodoIdFromQuotaAndHeartbeat(quota, heartbeat)
+      : undefined
     return {
       kind: 'queue',
       ...binding,
@@ -1602,6 +1866,7 @@ export class LoopXContinuationDriver {
       taskBody: taskBodyWithRewardMemory(taskBody, quota),
       selectionRequired: (receipt?.status === 'committed' || receipt?.status === 'replayed')
         && receipt.selection_required === true && receipt.settlement_binding_owed === true,
+      ...(todoId !== undefined ? { todoId } : {}),
     }
   }
 
@@ -1720,7 +1985,11 @@ export class LoopXContinuationDriver {
     agent: Agent,
     binding: Binding,
     turnInstanceId: string,
-    { signal, revalidateOnly = false }: { signal: AbortSignal; revalidateOnly?: boolean },
+    {
+      signal,
+      revalidateOnly = false,
+      includeSelectedTodo = false,
+    }: { signal: AbortSignal; revalidateOnly?: boolean; includeSelectedTodo?: boolean },
   ): Promise<Record<string, unknown>> {
     // The 2.3 CLI supplies immutable navigation and its bounded reader. Older
     // supported CLIs continue to answer this Host-only call with raw JSON.
@@ -1756,11 +2025,126 @@ export class LoopXContinuationDriver {
     const reference = progressive ? quotaNavigationReference(quota) : undefined
     if (reference === undefined) return quota
     // Retry the exact saved page on transport loss, outside the guard retry.
-    const decision = await readQuotaCapture(command, reference, options, revalidateOnly)
+    const decision = await readQuotaCapture(
+      command, reference, options, revalidateOnly, includeSelectedTodo,
+    )
     if (!rawAdmission(decision)) {
       throw new LoopXCliError('invalid_schema', 'LoopX quota capture did not match the bound Goal', false)
     }
     return decision
+  }
+
+  private async tryFoldSettledActiveTodoUnit(
+    command: LoopXCommand,
+    state: DriverState,
+    binding: Binding,
+    quota: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const policy = this.todoUnitFold
+    if (policy?.enabled !== true) return
+    const retained = retainedState(state.agent, state.activation.session)
+    const active = retained.activeTodoUnit
+    if (
+      active === undefined
+      || active.goalId !== binding.goalId
+      || active.agentId !== binding.agentId
+      || active.completedCleanly !== true
+      || state.activation.pendingSelection !== undefined
+      || state.pauseAfterTurnError
+    ) {
+      return
+    }
+    const recovery = record(quota.unsettled_host_turn_recovery)
+    if (
+      recovery?.schema_version === 'unsettled_host_turn_recovery_v0'
+      && recovery.state === 'attention_required'
+    ) {
+      retained.activeTodoUnit = undefined
+      return
+    }
+    const receiptAnchor = active.anchor
+      ?? (active.todoId !== undefined ? retained.todoUnitAnchors?.get(active.todoId) : undefined)
+    const receiptPin = captureTodoUnitPrefetchPin(
+      state.agent,
+      state,
+      retained,
+      active.todoId ?? '',
+      receiptAnchor,
+    )
+    try {
+      const readback = await runJsonCommand(command, [
+        '--registry', '.loopx/registry.json', '--format', 'json', 'quota', 'receipt',
+        '--include-settlement',
+        '--goal-id', binding.goalId, '--agent-id', binding.agentId,
+        '--turn-instance-id', active.turnInstanceId,
+      ], {
+        runner: this.runner,
+        cwd: state.agent.session.header.cwd,
+        signal,
+      })
+      this.ensureReady(state, signal, state.activation.session)
+      if (
+        detectTodoUnitPrefetchInterference(
+          this.disposed,
+          state.agent,
+          state,
+          retained,
+          active.todoId ?? '',
+          active.anchor,
+          receiptPin,
+        ) !== null
+      ) {
+        return
+      }
+      const decoded = decodeQuotaSettlementReadback(
+        readback,
+        binding.goalId,
+        binding.agentId,
+        active.turnInstanceId,
+        active.todoId,
+      )
+      if (!decoded.verified) {
+        retained.activeTodoUnit = undefined
+        return
+      }
+      const receipt = decoded.completionReceipt
+      if (active.anchor === undefined && active.admittedSeq !== undefined) {
+        this.anchorTodoUnit(state.agent, {
+          todoId: receipt.todoId,
+          turnInstanceId: active.turnInstanceId,
+          contextEpoch: active.contextEpoch,
+          anchorStepIndex: active.startStepIndex,
+          anchorSurfaceSeq: active.admittedSeq,
+        })
+      }
+      const nextTodoId = extractTodoIdFromQuotaAndHeartbeat(quota)
+      const obsNextCmd = policy.resolveObsNextCmd?.({
+        goalId: binding.goalId,
+        agentId: binding.agentId,
+        settledTodoId: receipt.todoId,
+        nextTodoId,
+        quota,
+      }) ?? policy.obsNextCmd
+      await this.onTodoUnitSettled(state.agent, {
+        todoId: receipt.todoId,
+        turnInstanceId: active.turnInstanceId,
+        contextEpoch: active.contextEpoch,
+        nowStepIndex: Math.max(active.startStepIndex, active.endStepIndex),
+        completionReceipt: receipt,
+        obsNextCmd,
+        failureFacts: [...receipt.failureFacts, ...(policy.defaultFailureFacts ?? [])],
+        openObligations: [...receipt.openObligations, ...(policy.defaultOpenObligations ?? [])],
+        quiescentBoundary: true,
+      })
+    } catch (error: unknown) {
+      if (error instanceof LoopXCliError && error.kind === 'aborted') throw error
+      this.warn(`dsh-loopx-driver: todo_unit_fold_kept_raw error=${renderThrown(error)}`)
+    } finally {
+      if (retained.activeTodoUnit === active) {
+        retained.activeTodoUnit = undefined
+      }
+    }
   }
 
   private async readSelectionReceipt(
@@ -1877,8 +2261,18 @@ export class LoopXContinuationDriver {
   }
 
   private retireReservation(state: DriverState): void {
-    if (state.reservation === undefined) return
-    state.reservation.phase = 'retired'
+    const reservation = state.reservation
+    if (reservation === undefined) return
+    if (reservation.phase !== 'admitted') {
+      const retained = retainedState(state.agent, state.activation.session)
+      if (retained.activeTodoUnit?.turnInstanceId === reservation.turnInstanceId) {
+        if (retained.activeTodoUnit.todoId !== undefined) {
+          retained.todoUnitAnchors?.delete(retained.activeTodoUnit.todoId)
+        }
+        retained.activeTodoUnit = undefined
+      }
+    }
+    reservation.phase = 'retired'
     state.reservation = undefined
   }
 
@@ -1963,13 +2357,17 @@ function watchReplacementUnload(ctx: Context): () => boolean {
   return () => moduleReplacement || (fiber !== undefined && fiber.uid !== null)
 }
 
-export function apply(ctx: Context): void {
+export function apply(
+  ctx: Context,
+  config?: { readonly todoUnitFold?: TodoUnitFoldPolicy | undefined },
+): void {
   const driver = new LoopXContinuationDriver({
     isLiveAgent: agent => ctx.agents.get(agent.id) === agent,
     resolveCommand: signal => resolvePluginLoopXCommand({ signal }),
     runDetached: operation => ctx.agents.withoutInitiator(operation),
     warn: message => { ctx.logger.warn(message) },
     onAdmissionChange: session => { goalBarCoordinator.publishAdmissionChange(session) },
+    ...(config?.todoUnitFold !== undefined ? { todoUnitFold: config.todoUnitFold } : {}),
   })
   const replacementUnload = watchReplacementUnload(ctx)
 

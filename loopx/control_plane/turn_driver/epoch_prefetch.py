@@ -1513,6 +1513,8 @@ def attach_turn_replay_epoch_metadata(
         payload["epoch_prefetch"] = replay_prefetch
     if replay_quiet is not None:
         payload["quiet_turn"] = replay_quiet
+    if isinstance(existing_journal.get("semantic_unit_fold"), Mapping):
+        payload["semantic_unit_fold"] = dict(existing_journal["semantic_unit_fold"])
     return payload
 
 
@@ -1531,6 +1533,11 @@ def prepare_turn_execution_epoch_context(
     needs_host: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Prepare opt-in Stage-then-Swap prefetch & Quiet-Turn state before Turn launch."""
+    from .todo_unit_settlement import (
+        extract_semantic_unit_fold_option,
+        prepare_turn_semantic_unit_context,
+    )
+
     epoch_prefetch = options.get("epoch_prefetch")
     quiet_turn = options.get("quiet_turn", False)
     decision_capture_payload = options.get("decision_capture_payload")
@@ -1540,7 +1547,10 @@ def prepare_turn_execution_epoch_context(
     quiet_opted_in = _is_turn_option_enabled(
         quiet_turn, decision_capture_payload, "quiet_turn", allow_bool_true=True,
     )
-    if not (epoch_opted_in or quiet_opted_in):
+    semantic_unit_opted_in = (
+        extract_semantic_unit_fold_option(options, decision_capture_payload) is not None
+    )
+    if not (epoch_opted_in or quiet_opted_in or semantic_unit_opted_in):
         return {}, dict(request)
 
     allow_execute = bool(
@@ -1551,24 +1561,49 @@ def prepare_turn_execution_epoch_context(
         )
     )
     effective_agent_id = _effective_agent_id(plan, settlement_lineage)
-    prefetch_receipt, quiet_meta, updated_request = prepare_turn_epoch_context(
-        plan=plan,
-        request=request,
-        journal_path=journal_path,
-        goal_id=goal_id,
-        agent_id=effective_agent_id,
-        turn_key=turn_key,
-        project=project,
-        epoch_prefetch=epoch_prefetch,
-        quiet_turn=quiet_turn,
-        decision_capture_payload=decision_capture_payload,
-        existing_journal=existing_journal,
-        capture=capture,
-        allow_execute=allow_execute,
-        host=options.get("host"),
-        host_input_renderer=options.get("host_input_renderer", UNSET_HOST_INPUT_RENDERER),
-    )
-    return {"epoch_prefetch": prefetch_receipt, "quiet_turn": quiet_meta}, updated_request
+    prefetch_receipt: dict[str, Any] | None = None
+    quiet_meta: dict[str, Any] | None = None
+    updated_request = dict(request)
+    if epoch_opted_in or quiet_opted_in:
+        prefetch_receipt, quiet_meta, updated_request = prepare_turn_epoch_context(
+            plan=plan,
+            request=updated_request,
+            journal_path=journal_path,
+            goal_id=goal_id,
+            agent_id=effective_agent_id,
+            turn_key=turn_key,
+            project=project,
+            epoch_prefetch=epoch_prefetch,
+            quiet_turn=quiet_turn,
+            decision_capture_payload=decision_capture_payload,
+            existing_journal=existing_journal,
+            capture=capture,
+            allow_execute=allow_execute,
+            host=options.get("host"),
+            host_input_renderer=options.get("host_input_renderer", UNSET_HOST_INPUT_RENDERER),
+        )
+    semantic_meta: dict[str, Any] | None = None
+    if semantic_unit_opted_in:
+        semantic_meta, updated_request = prepare_turn_semantic_unit_context(
+            plan=plan,
+            request=updated_request,
+            journal_path=journal_path,
+            goal_id=goal_id,
+            agent_id=effective_agent_id,
+            turn_key=turn_key,
+            settlement_lineage=settlement_lineage,
+            options=options,
+            existing_journal=existing_journal,
+            needs_host=needs_host,
+        )
+    metadata: dict[str, Any] = {}
+    if prefetch_receipt is not None or quiet_meta is not None:
+        metadata["epoch_prefetch"] = prefetch_receipt
+        metadata["quiet_turn"] = quiet_meta
+    if isinstance(semantic_meta, Mapping):
+        for key, value in semantic_meta.items():
+            metadata[str(key)] = value
+    return metadata, updated_request
 
 
 def attach_epoch_metadata_to_journal(
@@ -1584,6 +1619,10 @@ def attach_epoch_metadata_to_journal(
         journal["epoch_prefetch"] = dict(prefetch_receipt)
     if isinstance(quiet_meta, Mapping):
         journal["quiet_turn"] = dict(quiet_meta)
+    for key in ("semantic_unit_anchor", "semantic_unit_fold"):
+        value = epoch_metadata.get(key)
+        if isinstance(value, Mapping) and key not in journal:
+            journal[key] = dict(value)
 
 
 def reset_failed_turn_journal_with_epoch_metadata(

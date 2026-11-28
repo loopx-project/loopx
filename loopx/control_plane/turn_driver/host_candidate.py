@@ -355,15 +355,35 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
     """
 
     model_input = authority.get("_model_input")
-    if isinstance(model_input, Mapping) and isinstance(model_input.get("epoch_prefetch"), Mapping):
-        from .epoch_prefetch import strip_internal_epoch_prefetch_audit_fields
+    raw_fold = model_input.get("semantic_unit_fold") if isinstance(model_input, Mapping) else None
+    if isinstance(model_input, Mapping) and (
+        isinstance(model_input.get("epoch_prefetch"), Mapping)
+        or isinstance(raw_fold, Mapping)
+    ):
+        updated_model_input = dict(model_input)
+        if isinstance(model_input.get("epoch_prefetch"), Mapping):
+            from .epoch_prefetch import strip_internal_epoch_prefetch_audit_fields
 
-        model_input = {
-            **dict(model_input),
-            "epoch_prefetch": strip_internal_epoch_prefetch_audit_fields(
+            updated_model_input["epoch_prefetch"] = strip_internal_epoch_prefetch_audit_fields(
                 model_input["epoch_prefetch"]
-            ),
-        }
+            )
+        if isinstance(raw_fold, Mapping):
+            from .todo_unit_settlement import compact_semantic_unit_fold_wire_fields
+
+            updated_model_input["semantic_unit_fold"] = (
+                compact_semantic_unit_fold_wire_fields(raw_fold)
+            )
+        model_input = updated_model_input
+    fold_instruction = ""
+    if isinstance(raw_fold, Mapping):
+        if raw_fold.get("operator") == "FoldToReceipt" and isinstance(raw_fold.get("replacement_text"), str):
+            fold_instruction = f"Todo Semantic-Unit Fold Receipt:\n{raw_fold['replacement_text']}\n\n"
+        elif raw_fold.get("operator") == "KeepRaw":
+            fold_instruction = (
+                f"Todo semantic-unit fold kept raw context intact (KeepRaw: reason={raw_fold.get('fallback_reason')}; "
+                f"failure_facts={json.dumps(raw_fold.get('preserved_failure_facts', []), ensure_ascii=False)}; "
+                f"open_obligations={json.dumps(raw_fold.get('preserved_open_obligations', []), ensure_ascii=False)}).\n\n"
+            )
     authority_json = json.dumps(
         model_input if model_input is not None else dict(authority),
         ensure_ascii=False,
@@ -411,6 +431,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             "evidence and reads grant no permissions. Do not write LoopX state, spend "
             "quota or apply scheduler changes; the outer Turn executor owns those effects.\n"
             + replan_prompt_instruction(detail, packet_path="detail_ref.replan_action_packet")
+            + fold_instruction
             + "Turn request:\n" + authority_json + "\n\n"
         )
     else:
@@ -470,6 +491,7 @@ def render_prompt(authority: Mapping[str, Any], *, allow_completion: bool = Fals
             f"{replan_instruction}"
             f"{acceptance_instruction}"
             f"{work_instruction}"
+            f"{fold_instruction}"
             f"Turn authority JSON:\n{authority_json}\n\n"
         )
     return (
