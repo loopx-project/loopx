@@ -233,6 +233,21 @@ def _graphql_reviews(nodes: list[Any], **metadata: Any) -> dict[str, Any]:
     return {"nodes": nodes, "totalCount": len(nodes), "pageInfo": {"hasPreviousPage": False}, **metadata}
 
 
+def _joint_terminal_readback(pages: list[dict[str, Any]]) -> dict[str, Any]:
+    repository = {f"terminalWindow{index}": page for index, page in enumerate(pages)}
+    repository.update({f"terminalPr{row['number']}": row for page in pages for row in page["nodes"]})
+    return repository
+
+
+def _joint_terminal_rows(first: list[dict[str, Any]], tail: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    nodes = first + (tail or [])
+    pages = []
+    _graphql_page(first, has_next_page=bool(tail), end_cursor="tail" if tail else None, total_count=len(nodes), history=pages)
+    if tail:
+        _graphql_page(tail, total_count=len(nodes), history=pages)
+    return _joint_terminal_readback(pages)
+
+
 def _older_comment_row(initial: dict[str, Any], comments: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": initial["number"], "headRefOid": initial["headRefOid"],
@@ -884,15 +899,18 @@ def test_steward_terminal_list_readback_corroborates_earlier_reviews(case: str) 
 
     def runner(cmd, **kwargs):
         assert kwargs["timeout"] == 20
-        if "before=review-cursor" in cmd:
-            review_reads.append("review-cursor")
+        query = next(part for part in cmd if part.startswith("query="))
+        joint = "terminalWindow0:" in query
+        if "before=review-cursor" in cmd or joint:
+            review_reads.append("joint" if joint else "review-cursor")
             pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
             pr_data["latestReviews"] = earlier["reviews"]
-            pr_data["reviews"] = _graphql_reviews([approval("older", gemini)], totalCount=2)
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": {"pullRequest": pr_data}}}))
+            pr_data["page0" if joint else "reviews"] = _graphql_reviews([approval("older", gemini)], totalCount=2)
+            repository = _joint_terminal_readback(history) if joint else {}
+            repository["reviewPr1" if joint else "pullRequest"] = pr_data
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": repository}}))
         cursor = next((part.removeprefix("cursor=") for part in cmd if part.startswith("cursor=")), None)
         list_reads.append(cursor)
-        query = next(part for part in cmd if part.startswith("query="))
         if cursor is None:
             payload = _graphql_page(first_page, has_next_page=True, end_cursor="first", total_count=41, history=history)
         elif cursor == "first":
@@ -919,7 +937,7 @@ def test_steward_terminal_list_readback_corroborates_earlier_reviews(case: str) 
         "org/repo", runner=runner, select_review_backfill=lambda candidates, _: {row["number"] for row in candidates},
     )
     assert snapshot["status"] == "ok" and list_reads == [None, "first", "second"]
-    assert review_reads == (["review-cursor"] if case == "stable-truncated" else [])
+    assert review_reads == (["review-cursor", "joint"] if case == "stable-truncated" else [])
     scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
              "pr_filter": {"required_approver_declarations": ["gpt"], "exclude_drafts": True}}
     params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior", "signal_scope": scope}
@@ -977,15 +995,18 @@ def test_steward_terminal_list_readback_corroborates_earlier_reply_evidence(case
 
     def runner(cmd, **kwargs):
         assert kwargs["timeout"] == 20
-        if "before=comment-cursor" in cmd:
-            comment_reads.append("comment-cursor")
+        query = next(part for part in cmd if part.startswith("query="))
+        joint = "terminalWindow0:" in query
+        if "before=comment-cursor" in cmd or joint:
+            comment_reads.append("joint" if joint else "comment-cursor")
             pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
             pr_data["latestComments"] = earlier["comments"]
-            pr_data["comments"] = {"nodes": [reply], "pageInfo": {"hasPreviousPage": False}}
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": {"pullRequest": pr_data}}}))
+            pr_data["page0" if joint else "comments"] = {"nodes": [reply], "pageInfo": {"hasPreviousPage": False}}
+            repository = _joint_terminal_readback(history) if joint else {}
+            repository["commentPr1" if joint else "pullRequest"] = pr_data
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": repository}}))
         cursor = next((part.removeprefix("cursor=") for part in cmd if part.startswith("cursor=")), None)
         list_reads.append(cursor)
-        query = next(part for part in cmd if part.startswith("query="))
         if cursor is None:
             payload = _graphql_page(first_page, has_next_page=True, end_cursor="first", total_count=41, history=history)
         elif cursor == "first":
@@ -1010,7 +1031,7 @@ def test_steward_terminal_list_readback_corroborates_earlier_reply_evidence(case
 
     snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
     assert snapshot["status"] == "ok" and list_reads == [None, "first", "second"]
-    assert comment_reads == (["comment-cursor"] if case == "stable-truncated" else [])
+    assert comment_reads == (["comment-cursor", "joint"] if case == "stable-truncated" else [])
     author_mode = "include" if case == "young-without-bypass" else "exclude"
     scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
              "pr_filter": {"min_stalled_hours": 24, "exclude_drafts": True, "author_mode": author_mode,
@@ -1390,10 +1411,11 @@ def test_steward_publishes_multi_pr_comment_supplements_only_after_joint_corrobo
             reads.append("joint")
             assert "commentPr21: pullRequest" in query
             assert {"before1_0=comment-1", "before21_0=comment-21"}.issubset(cmd)
-            repositories = {
+            repositories = _joint_terminal_rows(earlier, [last])
+            repositories.update({
                 f"commentPr{number}": pr_comments(number, number == (1 if case == "stable" else 21), "page0")
                 for number in watched_rows
-            }
+            })
             if case == "missing":
                 del repositories["commentPr1"]
             elif case == "wrong-head":
@@ -1486,10 +1508,11 @@ def test_steward_publishes_multi_pr_review_supplements_only_after_joint_corrobor
             reads.append("joint")
             assert "reviewPr21: pullRequest" in query
             assert {"reviewBefore1_0=review-1", "reviewBefore21_0=review-21"}.issubset(cmd)
-            repositories = {
+            repositories = _joint_terminal_rows(earlier, [last])
+            repositories.update({
                 f"reviewPr{number}": review_payload(number, gpt if number == (1 if case == "stable" else 21) else gemini, "page0")
                 for number in watched
-            }
+            })
             if case == "missing":
                 del repositories["reviewPr1"]
             elif case == "changed-older-page":
@@ -1574,6 +1597,7 @@ def test_steward_corroborates_review_and_comment_supplements_together(monkeypatc
             joint_reads += 1
             assert all(f"commentPr{number}: pullRequest" in query for number in rows)
             repository = {
+                **_joint_terminal_rows(list(rows.values())),
                 "reviewPr1": review_payload("page0", "edited" if case == "review-changed" else ""),
                 "commentPr1": comment_payload(1, "page0", replied=case != "comment-changed"),
                 "commentPr2": comment_payload(2, "page0"),
@@ -1593,6 +1617,86 @@ def test_steward_corroborates_review_and_comment_supplements_together(monkeypatc
     assert first["author_replied_after_request_changes"] == (case == "match")
     assert second["author_replied_after_request_changes"] == (case != "combined-cap")
     assert joint_reads == (0 if case == "combined-cap" else 1)
+
+
+@pytest.mark.parametrize("case", [
+    "stable", "old-generation", "terminal-review-changed", "terminal-check-changed", "terminal-window-changed",
+    "terminal-row-missing", "terminal-review-cap",
+])
+def test_steward_binds_older_review_to_terminal_only_prs(monkeypatch, case: str) -> None:
+    from loopx.capabilities.native_chat import github_pr_evidence
+
+    head = "a" * 40
+    gpt = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    other = "model_agent · gemini-3.1-pro · Google (runtime_reported, high)"
+
+    def approval(number: int, reviewer: str) -> dict[str, Any]:
+        return {"id": f"approval-{number}", "state": "APPROVED", "author": {"login": "reviewer"},
+                "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
+                "body": _valid_bilingual_body(head_oid=head, verdict="APPROVE", reviewer=reviewer)}
+
+    rows = [_graphql_node(_sample_pr(number=number, head_oid=head, review_decision="APPROVED"))
+            for number in range(1, 22)]
+    first, last = rows[0], rows[-1]
+    recent = {**approval(1, other), "id": "recent", "state": "COMMENTED", "body": ""}
+    first["reviews"] = _graphql_reviews(
+        [recent], totalCount=2, pageInfo={"hasPreviousPage": True, "startCursor": "older-pr-1"},
+    )
+    last["reviews"] = _graphql_reviews([approval(21, other if case == "stable" else gpt)])
+    older = _graphql_reviews([approval(1, other if case == "old-generation" else gpt)], totalCount=2)
+    joint_requests = 0
+    if case == "terminal-review-cap":
+        monkeypatch.setattr(github_pr_evidence, "_GITHUB_PR_JOINT_REVIEW_ROW_CAP", 59)
+
+    def run(command, **kwargs):
+        nonlocal joint_requests
+        query = next(arg for arg in command if arg.startswith("query="))
+        revision = {field: first[field] for field in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+        if "before=older-pr-1" in command:
+            repository = {"pullRequest": {**revision, "latestReviews": first["reviews"], "reviews": older}}
+        elif "terminalWindow0:" in query:
+            joint_requests += 1
+            assert "terminalWindow1: pullRequests" in query and "terminalCursor1=tail" in command
+            assert "terminalPr21: pullRequest" in query and "reviewBefore1_0=older-pr-1" in command
+            repository = _joint_terminal_rows(rows[:20], [last])
+            repository["reviewPr1"] = {**revision, "latestReviews": first["reviews"], "page0": older}
+            if case == "terminal-review-changed":
+                repository["terminalPr21"] = {**last, "reviews": _graphql_reviews([approval(21, other)])}
+            if case == "terminal-check-changed":
+                repository["terminalPr21"] = _graphql_node(
+                    {**last, "reviews": last["reviews"]["nodes"]},
+                    contexts=[{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"}],
+                )
+            if case == "terminal-window-changed":
+                repository["terminalWindow1"] = {**repository["terminalWindow1"], "nodes": [{**last, "number": 22}]}
+            if case == "terminal-row-missing":
+                del repository["terminalPr21"]
+        elif "cursor=tail" in command:
+            repository = _graphql_page([last], total_count=21)["data"]["repository"]
+            repository["previousPrs0"] = _joint_terminal_rows(rows[:20], [last])["terminalWindow0"]
+        else:
+            repository = _graphql_page(
+                rows[:20], has_next_page=True, end_cursor="tail", total_count=21,
+            )["data"]["repository"]
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"data": {"repository": repository}}))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=run, select_review_backfill=lambda candidates, _: {item["number"] for item in candidates},
+    )
+    assert snapshot["status"] == "ok"
+    result = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": snapshot, "previous_hash": "sha256:last-trusted",
+        "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                         "include_inbox": False, "pr_filter": {"required_approver_declarations": ["gpt"]}},
+    })
+    if case in {"stable", "old-generation"}:
+        assert result["observation_incomplete"] is False
+        assert [item["number"] for item in result["scoped_repository_items"]] == ([1] if case == "stable" else [21])
+    else:
+        assert result["observation_incomplete"] is True
+        assert result["result_hash"] == "sha256:last-trusted"
+        assert result["material_change"] is False
+    assert joint_requests == (0 if case == "terminal-review-cap" else 1)
 
 
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
@@ -1739,13 +1843,14 @@ def test_observe_github_repository_prs_rejects_late_terminal_page(monkeypatch, l
         assert observed == {"status": "unavailable", "repository": "org/repo"}
 
 
-@pytest.mark.parametrize("comment_seconds", [5, 6])
+@pytest.mark.parametrize("comment_seconds", [4, 5, 6])
 def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     monkeypatch, comment_seconds,
 ) -> None:
     elapsed = 0
     list_pages = 0
     comment_timeouts = []
+    joint_timeouts = []
     initial_nodes = {}
     history = []
     head = "9" * 40
@@ -1757,11 +1862,19 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
 
     def fake_run(cmd, **kwargs):
         nonlocal elapsed, list_pages
+        query = next(arg for arg in cmd if arg.startswith("query="))
+        comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "older"}, "nodes": []}
         if any(arg.startswith("before=") for arg in cmd):
             comment_timeouts.append(kwargs["timeout"])
             elapsed += comment_seconds
-            comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "older"}, "nodes": []}
             response = {"data": {"repository": {"pullRequest": _older_comment_row(initial_nodes[1], comments)}}}
+        elif "terminalWindow0:" in query:
+            joint_timeouts.append(kwargs["timeout"])
+            repository = _joint_terminal_readback(history)
+            row = _older_comment_row(initial_nodes[1], comments)
+            row["page0"] = row.pop("comments")
+            repository["commentPr1"] = row
+            response = {"data": {"repository": repository}}
         else:
             list_pages += 1
             elapsed += 19
@@ -1778,13 +1891,16 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
 
     with monkeypatch.context() as provider:
         provider.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
-        observed = _observe_github_repository_prs("org/repo", backfill_comments=True)
+        observed = _observe_github_repository_prs(
+            "org/repo", backfill_comments=True, select_comment_backfill=lambda _rows, _seconds: {1},
+        )
 
     assert list_pages == 5
     assert comment_timeouts == [5]
+    assert joint_timeouts == ([1] if comment_seconds == 4 else [])
     assert observed["status"] == "ok"
     assert [item["number"] for item in observed["items"]] == [1, 2, 3, 4, 5]
-    assert observed["items"][0]["comments_coverage_incomplete"] is (comment_seconds > 5)
+    assert observed["items"][0]["comments_coverage_incomplete"] is (comment_seconds >= 5)
     assert observed["items"][1]["comments_coverage_incomplete"] is True
 
     observation = ChatConversationBindings._core(
@@ -1801,8 +1917,8 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
             },
         },
     )
-    assert observation["observation_incomplete"] is (comment_seconds > 5)
-    if comment_seconds > 5:
+    assert observation["observation_incomplete"] is (comment_seconds >= 5)
+    if comment_seconds >= 5:
         assert observation["result_hash"] == "sha256:prior-result"
         assert observation["material_change"] is False
 
@@ -3618,16 +3734,20 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
 
     def _age_backfill_runner(cmd, **_kw):
         nonlocal elapsed
-        if any(arg == "before=c20" for arg in cmd):
-            elapsed += 5
-            comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "c1"}, "nodes": [author_comment]}
-            payload = {"data": {"repository": {"pullRequest": _older_comment_row(truncated_node, comments)}}}
-            return subprocess.CompletedProcess(
-                cmd,
-                0,
-                stdout=json.dumps(payload),
-                stderr="",
-            )
+        query = next(arg for arg in cmd if arg.startswith("query="))
+        comments = {"pageInfo": {"hasPreviousPage": False, "startCursor": "c1"}, "nodes": [author_comment]}
+        if "before=c20" in cmd:
+            elapsed += 4
+            repository = {"pullRequest": _older_comment_row(truncated_node, comments)}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": repository}}))
+        if "terminalWindow0:" in query:
+            assert _kw["timeout"] == 1
+            elapsed += 1
+            repository = _joint_terminal_readback(history)
+            row = _older_comment_row(truncated_node, comments)
+            row["page0"] = row.pop("comments")
+            repository["commentPr501"] = row
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": repository}}))
         elapsed += 19
         page = _graphql_page(
             [next(pr_pages)], has_next_page=elapsed < 95, end_cursor=f"page-{elapsed}", total_count=5, history=history,
@@ -3637,7 +3757,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     with monkeypatch.context() as clock:
         clock.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed)
         obs_age, succ_age, cmds_age = _collect_with_gh(age_todo, _age_backfill_runner)
-    assert len(cmds_age) == 6
+    assert len(cmds_age) == 7
     backfill_targets = [arg for cmd in cmds_age for arg in cmd if arg.startswith("number=")]
     assert backfill_targets == ["number=501"]
     assert obs_age["material_change"] is True

@@ -1917,6 +1917,60 @@ theorem joint_supplement_readback_budgets
     reviewPrs ≤ 10 ∧ reviewPrs + reviewOlder ≤ 20 ∧ commentPrs ≤ 48 ∧ commentOlder ≤ 68 := by
   omega
 
+/- The first field represents the ordered, cursor-bound open windows. The second
+   represents the normalized terminal PR projections, including unsupplemented rows. -/
+structure RepositoryReadback where
+  windows : List (List Nat)
+  terminalRows : List (Nat × List Nat)
+  deriving DecidableEq
+
+def allowsRepositorySupplement (prCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback)
+    (joint : Option RepositoryReadback) : Bool :=
+  if prCount ≤ 1 then true else hasBudget && decide (joint = some terminal)
+
+theorem multi_pr_supplement_requires_matching_repository_readback
+    (prCount : Nat) (hasBudget : Bool) (terminal : RepositoryReadback) (joint : Option RepositoryReadback)
+    (multi : 1 < prCount) :
+    allowsRepositorySupplement prCount hasBudget terminal joint = true ↔
+      hasBudget = true ∧ joint = some terminal := by
+  have notSingle : ¬ prCount ≤ 1 := by omega
+  simp [allowsRepositorySupplement, notSingle]
+
+theorem changed_terminal_projection_precludes_older_supplement
+    (prCount : Nat) (terminal current : RepositoryReadback) (multi : 1 < prCount)
+    (changed : current.terminalRows ≠ terminal.terminalRows) :
+    allowsRepositorySupplement prCount true terminal (some current) = false := by
+  have different : current ≠ terminal := fun same => changed (congrArg RepositoryReadback.terminalRows same)
+  have notSingle : ¬ prCount ≤ 1 := by omega
+  simp [allowsRepositorySupplement, notSingle, different]
+
+theorem changed_open_window_precludes_older_supplement
+    (prCount : Nat) (terminal current : RepositoryReadback) (multi : 1 < prCount)
+    (changed : current.windows ≠ terminal.windows) :
+    allowsRepositorySupplement prCount true terminal (some current) = false := by
+  have different : current ≠ terminal := fun same => changed (congrArg RepositoryReadback.windows same)
+  have notSingle : ¬ prCount ≤ 1 := by omega
+  simp [allowsRepositorySupplement, notSingle, different]
+
+theorem single_pr_repository_does_not_require_a_joint_readback
+    (terminal : RepositoryReadback) :
+    allowsRepositorySupplement 1 false terminal none = true := rfl
+
+theorem one_supplement_mixed_with_a_terminal_pr_can_false_publish :
+    let terminal : RepositoryReadback := ⟨[[1], [21]], [(1, []), (21, [1])]⟩
+    let current : RepositoryReadback := ⟨[[1], [21]], [(1, []), (21, [])]⟩
+    observe [21] (some [1, 21]) = ([1, 21], true) ∧
+    observe [21] (if allowsRepositorySupplement 21 true terminal (some current) then some [1, 21] else none) =
+      ([21], false) := by
+  decide
+
+theorem repository_joint_readback_accounts_for_terminal_rows
+    (supplementReviews terminalReviews comments checks aliases windows : Nat)
+    (reviewBound : supplementReviews + terminalReviews ≤ 400)
+    (payloadBound : supplementReviews + terminalReviews + comments + checks + aliases + windows ≤ 3400) :
+    terminalReviews ≤ 400 ∧ checks + aliases + windows ≤ 3400 - (supplementReviews + terminalReviews + comments) := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2130,5 +2184,11 @@ theorem joint_supplement_readback_budgets
 #print axioms sequential_review_supplements_can_publish_a_mixed_scope
 #print axioms mixed_readback_keeps_a_matching_independent_comment
 #print axioms joint_supplement_readback_budgets
+#print axioms multi_pr_supplement_requires_matching_repository_readback
+#print axioms changed_terminal_projection_precludes_older_supplement
+#print axioms changed_open_window_precludes_older_supplement
+#print axioms single_pr_repository_does_not_require_a_joint_readback
+#print axioms one_supplement_mixed_with_a_terminal_pr_can_false_publish
+#print axioms repository_joint_readback_accounts_for_terminal_rows
 
 end StewardPrSignalPagination

@@ -753,10 +753,11 @@ fragment StewardCheckContextWindow on StatusCheckRollupContextConnection {
 }"""
 
 
-def _open_pr_check_readback(limit: int) -> str:
+def _open_pr_check_readback(limit: int, *, include_clocks: bool) -> str:
+    clocks = " committedDate pushedDate" if include_clocks else ""
     return f"""
         commits(last: 1) {{
-          nodes {{ commit {{ oid statusCheckRollup {{
+          nodes {{ commit {{ oid{clocks} statusCheckRollup {{
             contexts(first: {limit}) {{ ...StewardCheckContextWindow }}
           }} }} }}
         }}"""
@@ -769,8 +770,8 @@ class _OpenPrReadbackLimits(NamedTuple):
     comments: int | None
 
 
-def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
-    fields = _open_pr_check_readback(limits.checks) if limits.checks is not None else ""
+def _open_pr_readback_fields(limits: _OpenPrReadbackLimits, *, include_clocks: bool = False) -> str:
+    fields = _open_pr_check_readback(limits.checks, include_clocks=include_clocks) if limits.checks is not None else ""
     if limits.reviews is not None:
         fields += f"\n        reviews(last: {limits.reviews}) {{ ...StewardReviewPage }}"
     if limits.comments is not None:
@@ -778,19 +779,26 @@ def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
     return fields
 
 
-def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, include_terminal_fields: bool) -> str:
-    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
-    terminal_fields = "\n        ...StewardPrTerminalFields" if include_terminal_fields else ""
-    readbacks = "".join(
-        f"""
-    previousPrs{index}: pullRequests(
-      states: OPEN, first: {limits.page_size}, after: $previousCursor{index},
+def _open_pr_window_selection(alias: str, cursor_name: str, size: int, fields: str = "") -> str:
+    return f"""
+    {alias}: pullRequests(
+      states: OPEN, first: {size}, after: ${cursor_name},
       orderBy: {{field: UPDATED_AT, direction: DESC}}
     ) {{
       totalCount
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ ...StewardPrWindowRow{terminal_fields}{_open_pr_readback_fields(limits)} }}
+      nodes {{ ...StewardPrWindowRow{fields} }}
     }}"""
+
+
+def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, include_terminal_fields: bool) -> str:
+    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
+    terminal_fields = "\n        ...StewardPrTerminalFields" if include_terminal_fields else ""
+    readbacks = "".join(
+        _open_pr_window_selection(
+            f"previousPrs{index}", f"previousCursor{index}", limits.page_size,
+            terminal_fields + _open_pr_readback_fields(limits),
+        )
         for index, limits in enumerate(previous_limits)
     )
     return (
@@ -837,6 +845,12 @@ class _OpenPrWindow(NamedTuple):
     total_count: int
     next_cursor: str | None
     revisions: list[tuple[int, str, str, str | None]]
+
+
+class _JointPrWindow(NamedTuple):
+    cursor: str | None
+    expected: _OpenPrWindow
+    page_size: int
 
 
 def _read_open_pr_window(page: _OpenPrPage | None) -> _OpenPrWindow | None:
@@ -1238,18 +1252,25 @@ def _backfill_pr_reviews(
 def _joint_supplement_query(
     reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
     comments: Mapping[int, _SupplementEvidence[_CommentPage]],
+    windows: Sequence[_JointPrWindow],
+    terminal_limits: Mapping[int, _OpenPrReadbackLimits],
 ) -> tuple[str, dict[str, str]]:
     cursors = {}
-    fields = []
-    fragments = []
-    for kind, evidence, latest_size, older_size, fragment in (
-        ("review", reviews, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_FRAGMENT),
-        ("comment", comments, _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE, _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE,
-         _GITHUB_PR_COMMENT_PAGE_FRAGMENT),
+    fields = [
+        _open_pr_window_selection(f"terminalWindow{index}", f"terminalCursor{index}", window.page_size)
+        for index, window in enumerate(windows)
+    ]
+    fields.extend(
+        f"""
+    terminalPr{number}: pullRequest(number: {number}) {{
+      ...StewardPrWindowRow ...StewardPrTerminalFields{_open_pr_readback_fields(limits, include_clocks=True)}
+    }}"""
+        for number, limits in terminal_limits.items()
+    )
+    for kind, evidence, latest_size, older_size in (
+        ("review", reviews, _GITHUB_PR_REVIEW_PAGE_SIZE, _GITHUB_PR_REVIEW_PAGE_SIZE),
+        ("comment", comments, _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE, _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE),
     ):
-        if not evidence:
-            continue
-        fragments.append(fragment)
         connection = f"{kind}s"
         upper_kind = kind.title()
         spread = f"{{ ...Steward{upper_kind}Page }}"
@@ -1267,9 +1288,16 @@ def _joint_supplement_query(
       {' '.join(pages)}
     }}""")
     variables = "".join(f", ${name}: String!" for name in cursors)
+    variables += "".join(f", $terminalCursor{index}: String" for index in range(len(windows)))
+    cursors.update({
+        f"terminalCursor{index}": window.cursor for index, window in enumerate(windows) if window.cursor is not None
+    })
     query = f"""query($owner: String!, $name: String!{variables}) {{
   repository(owner: $owner, name: $name) {{ {''.join(fields)} }}
-}}""" + "".join(fragments)
+}}""" + (
+        _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_TERMINAL_FRAGMENT
+        + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
+    )
     return query, cursors
 
 
@@ -1292,16 +1320,29 @@ def _joint_supplement_matches(
 def _corroborate_supplements(
     reviews: Mapping[int, _SupplementEvidence[_ReviewPage]],
     comments: Mapping[int, _SupplementEvidence[_CommentPage]],
+    windows: Sequence[_JointPrWindow],
+    terminal_rows: Mapping[int, Mapping[str, Any]],
     *, owner: str, name: str, runner: Callable[..., Any], deadline: float,
 ) -> tuple[set[int], set[int]]:
+    terminal_limits = {
+        number: _OpenPrReadbackLimits(
+            1, _nested_check_readback_limit([row]) or 1, _review_readback_limit([row]), _comment_readback_limit([row]),
+        )
+        for number, row in terminal_rows.items()
+    }
     review_rows = sum((1 + len(supplement.pages)) * _GITHUB_PR_REVIEW_PAGE_SIZE for supplement in reviews.values())
+    review_rows += sum(limits.reviews or 0 for limits in terminal_limits.values())
     comment_rows = sum(
         _GITHUB_PR_LATEST_COMMENT_PAGE_SIZE + len(supplement.pages) * _GITHUB_PR_OLDER_COMMENT_PAGE_SIZE
         for supplement in comments.values()
     )
-    if review_rows > _GITHUB_PR_JOINT_REVIEW_ROW_CAP or review_rows + comment_rows > _GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP:
+    comment_rows += sum(limits.comments or 0 for limits in terminal_limits.values())
+    other_rows = sum(window.page_size for window in windows) + len(reviews) + len(comments)
+    other_rows += sum(2 + (limits.checks or 0) for limits in terminal_limits.values())
+    if (review_rows > _GITHUB_PR_JOINT_REVIEW_ROW_CAP
+        or review_rows + comment_rows + other_rows > _GITHUB_PR_JOINT_SUPPLEMENT_ROW_CAP):
         return set(), set()
-    query, cursors = _joint_supplement_query(reviews, comments)
+    query, cursors = _joint_supplement_query(reviews, comments, windows, terminal_limits)
     argv = ["gh", "api", "graphql", "-f", f"query={query}", "-f", f"owner={owner}", "-f", f"name={name}"]
     for variable, cursor in cursors.items():
         argv.extend(("-f", f"{variable}={cursor}"))
@@ -1309,7 +1350,7 @@ def _corroborate_supplements(
     if remaining_seconds <= 0:
         return set(), set()
     repo = _read_supplemental_repository(argv, remaining_seconds, runner=runner, deadline=deadline)
-    if repo is None:
+    if repo is None or not _joint_terminal_matches(repo, windows, terminal_rows):
         return set(), set()
     verified_reviews = {
         number for number, supplement in reviews.items()
@@ -1327,6 +1368,20 @@ def _corroborate_supplements(
         )
     }
     return verified_reviews, verified_comments
+
+
+def _joint_terminal_matches(
+    repository: Mapping[str, Any], windows: Sequence[_JointPrWindow], terminal_rows: Mapping[int, Mapping[str, Any]],
+) -> bool:
+    for index, window in enumerate(windows):
+        page = _read_open_pr_page(repository.get(f"terminalWindow{index}"), window.page_size)
+        if _read_open_pr_window(page) != window.expected:
+            return False
+    for number, original in terminal_rows.items():
+        readback = repository.get(f"terminalPr{number}")
+        if not isinstance(readback, Mapping) or _normalize_graphql_pr_node(readback) != _normalize_graphql_pr_node(original):
+            return False
+    return True
 
 
 def _backfill_pr_comments_if_needed(
@@ -1591,11 +1646,17 @@ def observe_github_repository_prs(
                     supplemented_comment_items[number] = summary
         # A PR with an unverified review cannot publish a comment result computed from that review.
         verified_comments = set(comment_supplements)
-        if len(review_supplements.keys() | comment_supplements.keys()) > 1:
+        if len(raw_nodes_by_number) > 1 and (review_supplements or comment_supplements):
             verified_reviews, verified_comments = set(), set()
-            if remaining_backfill_pages > 0:
+            terminal_window = _read_open_pr_window(page)
+            if remaining_backfill_pages > 0 and terminal_window is not None:
+                windows = [
+                    _JointPrWindow(previous_cursor, expected, limits.page_size)
+                    for previous_cursor, (expected, limits) in previous_pages.items()
+                ]
+                windows.append(_JointPrWindow(cursor, terminal_window, page_size))
                 verified_reviews, verified_comments = _corroborate_supplements(
-                    review_supplements, comment_supplements,
+                    review_supplements, comment_supplements, windows, raw_nodes_by_number,
                     owner=owner, name=name, runner=runner, deadline=deadline,
                 )
             for number in review_supplements.keys() - verified_reviews:
