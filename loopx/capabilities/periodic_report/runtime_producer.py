@@ -67,7 +67,8 @@ def _safe_durable_event(
     if kind not in {"todo_complete", "refresh_state", "quota_should_run"}:
         return None
     recorded_at = _timestamp(event.get("recorded_at"), f"{label}.recorded_at")
-    if not window_start <= _parsed_timestamp(recorded_at) <= window_end:
+    recorded_time = _parsed_timestamp(recorded_at)
+    if not window_start <= recorded_time <= window_end:
         return None
     event_id = _text(event.get("event_id"), f"{label}.event_id", maximum=128)
     boundary = _object(event.get("boundary"), f"{label}.boundary")
@@ -136,6 +137,7 @@ def _safe_durable_event(
         "event_id": event_id,
         "event_kind": kind,
         "recorded_at": recorded_at,
+        "recorded_time": recorded_time,
         "todo_id": str(event.get("todo_id") or "").strip() or None,
         "replan_recorded": details.get("autonomous_replan_recorded") is True,
         "stage_completion": stage_completion,
@@ -231,7 +233,7 @@ def build_periodic_report_runtime_trigger_decision(
             continue
         seen_event_ids.add(event_id)
         relevant.append(event)
-    relevant.sort(key=lambda item: (item["recorded_at"], item["event_id"]))
+    relevant.sort(key=lambda item: (item["recorded_time"], item["event_id"]))
 
     completions: list[dict[str, Any]] = []
     seen_completion_keys: set[str] = set()
@@ -265,7 +267,7 @@ def build_periodic_report_runtime_trigger_decision(
         completions_at_boundary = [
             event
             for event in completions
-            if event["recorded_at"] <= boundary_event["recorded_at"]
+            if event["recorded_time"] <= boundary_event["recorded_time"]
         ]
         transition = "segment_completed"
         contributing = [boundary_event]
