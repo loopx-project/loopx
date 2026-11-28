@@ -250,7 +250,7 @@ export function SideChat({
         // question: the history around it is the attribution. The boundary between inherited
         // history and this panel's turns is read before the question is sent, or the question
         // could be counted as inherited.
-        const forked = await api.forkThread(forkSourceId);
+        const forked = await api.forkThread(forkSourceId, { grouped: true, forkKind: 'ask' });
         created = await api.updateThread(forked.id, {
           title,
           ...(choiceChanged ? { ...choicePatch, rememberModelChoice: true } : {}),
@@ -259,7 +259,15 @@ export function SideChat({
       } else {
         // A fresh agent seeing a bare snippet has nothing to go on but the words, so the message
         // names the source thread and attaches a read-only snapshot of it when available.
-        created = await api.createThread({ agent, cwd, permissionMode, model: draftModel, effort: draftEffort, title });
+        created = await api.createThread({
+          agent,
+          cwd,
+          permissionMode,
+          model: draftModel,
+          effort: draftEffort,
+          title,
+          ...(sourceThreadId ? { forkGroup: sourceThreadId, forkKind: 'ask' as const } : {}),
+        });
         if (choiceChanged) created = await api.updateThread(created.id, { ...choicePatch, rememberModelChoice: true });
         const { notes, body } = splitNotes(text);
         const referenced = splitReferences(body);

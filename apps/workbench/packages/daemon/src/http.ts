@@ -716,13 +716,6 @@ export function createHttpServer(deps: HttpDeps): Server {
       if (method === 'PUT') return sendJson(res, 200, manager.autoHandover.configure(await readJson(req)));
     }
 
-    // Auto-compact: quota-aware context compression ahead of the handover. The agent named in the
-    // settings writes the brief (a bridge to third-party models spends no official-account quota).
-    if (parts.join('/') === 'api/autocompact-settings') {
-      if (method === 'GET') return sendJson(res, 200, { settings: manager.autoCompact.settings(), status: manager.autoCompact.status() });
-      if (method === 'PUT') return sendJson(res, 200, manager.autoCompact.configure(await readJson(req)));
-    }
-
     // GET /api/agents/:id/quota: plan usage, read outside any session and cached briefly.
     // ?refresh=1 skips the cache: the dashboard's refresh button means "ask again now".
     if (method === 'GET' && parts[0] === 'api' && parts[1] === 'agents' && parts[2] && parts[3] === 'quota') {
@@ -961,6 +954,8 @@ export function createHttpServer(deps: HttpDeps): Server {
             sectionId: body.sectionId,
             worktree: body.worktree === true,
             scratch: body.scratch === true,
+            ...(typeof body.forkGroup === 'string' && body.forkGroup ? { forkGroup: body.forkGroup } : {}),
+            ...(body.forkKind === 'fork' || body.forkKind === 'handoff' || body.forkKind === 'ask' ? { forkKind: body.forkKind } : {}),
           }),
         );
       }
@@ -1227,6 +1222,8 @@ export function createHttpServer(deps: HttpDeps): Server {
             snoozedUntil: body.snoozedUntil,
             done: body.done,
             stage: body.stage,
+            forkGroup: body.forkGroup,
+            forkKind: body.forkKind,
             forkTag: body.forkTag,
           }),
         );
@@ -1586,10 +1583,13 @@ export function createHttpServer(deps: HttpDeps): Server {
         return sendJson(res, 200, await manager.syncThread(threadId));
       }
 
-      if (method === 'GET' && sub === 'fork-options') return sendJson(res, 200, await manager.forkOptions(threadId));
+      if (method === 'GET' && sub === 'fork-options') {
+        return sendJson(res, 200, await manager.forkOptions(threadId, { lightweight: url.searchParams.get('lightweight') === '1' }));
+      }
 
       if (method === 'POST' && sub === 'fork') {
-        // An empty body copies the whole thread; `turnId` names the turn the copy ends with.
+        // An empty body copies the whole thread; `turnId` names the turn the copy ends with;
+        // `lightweight: true` opens a fresh session on any agent/model with a 0-token progress anchor.
         const body = await readJson(req);
         return sendJson(
           res,
@@ -1597,9 +1597,12 @@ export function createHttpServer(deps: HttpDeps): Server {
           await manager.forkThread(threadId, {
             ...(typeof body?.turnId === 'string' ? { turnId: body.turnId } : {}),
             ...(typeof body?.agent === 'string' && body.agent.trim() ? { agent: body.agent.trim() } : {}),
+            ...(typeof body?.model === 'string' && body.model ? { model: body.model } : body?.model === null ? { model: null } : {}),
             worktree: body?.worktree === true,
             ...(body?.grouped === true ? { grouped: true } : {}),
             ...(body?.lightweight === true ? { lightweight: true } : {}),
+            ...(body?.continueFromSource === true ? { continueFromSource: true } : {}),
+            ...(body?.forkKind === 'fork' || body?.forkKind === 'handoff' || body?.forkKind === 'ask' ? { forkKind: body.forkKind } : {}),
             ...(typeof body?.forkTag === 'string' ? { forkTag: body.forkTag } : {}),
             ...(typeof body?.firstMessage === 'string' ? { firstMessage: body.firstMessage } : {}),
           }),

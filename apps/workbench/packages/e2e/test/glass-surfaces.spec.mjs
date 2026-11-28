@@ -190,7 +190,6 @@ test('the phone edges wash only where text scrolls out, and the read-only handov
     assert.ok(Math.abs(plain.barWashHeight - (plain.bar + 30)) <= 1, 'the top wash eases out 30px below the bar');
     // Open the earlier segment: its note joins the slot, but the wash still follows the composer alone.
     await page.getByLabel('这个对话的更多操作').click();
-    await page.getByRole('menuitem', { name: '分叉与交接' }).click();
     await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
     await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
     await page.getByRole('menuitem').filter({ hasText: '原始会话' }).click();

@@ -226,25 +226,17 @@ export interface CoordinationMessage {
   resultFile?: { name: string; size: number; truncated?: boolean };
 }
 export interface HandoverTarget { agent: string; model?: string }
-/** How another account of the same agent takes over: a copy of the conversation, or a brief. Absent on older daemons. */
+/** Legacy compatibility type retained for older daemons. */
 export type HandoverMethod = 'resume' | 'summary';
 export interface HandoverSettings { enabled: boolean; threshold: number; orders: Record<string, HandoverTarget[]>; resume?: boolean; method?: HandoverMethod }
-/** Quota-aware context compression ahead of the handover: another agent (a third-party bridge,
- *  say) reads the hub's transcript and writes the brief, so official-account quota buys no summarizing.
- *  `agents` are asked in order, the next when one is unavailable or fails; none means a native
- *  /compact in place. Absent on older daemons. */
-export interface AutoCompactSettings { enabled: boolean; threshold: number; agents: HandoverTarget[]; minChars: number; chunkChars: number; maxChars: number }
-export interface AutoCompactStatus { last?: { threadId: string; successorId?: string; native: boolean; chars: number; chunks: number; at: string }; error?: { threadId: string; message: string; at: string }; skipped?: { threadId: string; reason: string; chars: number; at: string } }
 /** A watch waiting for the thread's agent quota to reset; the daemon then resends the failed turn. */
 export interface ResumeView { origin: 'user' | 'global'; resetsAt: string | null; nextCheckAt: string; lastError?: string }
 /** A transient failure the daemon is retrying by itself (`turn.retry` marks each attempt). */
 export interface AutoRetryView { attempts: number; max: number; nextAt: string }
 export interface AutoHandoverView {
   enabled: boolean; source: 'thread' | 'collaboration' | 'global'; override: boolean | null;
-  state?: 'checking' | 'preparing' | 'countdown' | 'stopped' | 'failed';
-  target?: HandoverTarget; deadline?: string; reason?: 'near' | 'exhausted'; error?: string;
-  /** Where a preparing handover is; all but `summary` are past the point of calling it off. */
-  step?: 'summary' | 'switch' | 'copy' | 'handover';
+  state?: 'checking' | 'forking' | 'forked' | 'preparing' | 'countdown' | 'stopped' | 'failed';
+  target?: HandoverTarget; deadline?: string; reason?: 'near' | 'exhausted'; forkedThreadId?: string; error?: string;
   /** Present when this thread waits for its quota to come back; absent on older daemons. */
   resume?: ResumeView | null;
 }
@@ -284,6 +276,8 @@ export interface Thread {
   forkedFrom: string | null;
   /** Root thread id of a grouped fork family, if this thread is a grouped sub-conversation. */
   forkGroup?: string | null;
+  /** Kind of derived thread nested under a topic: native fork, new-session handoff, or side-chat ask. */
+  forkKind?: 'fork' | 'handoff' | 'ask' | null;
   /** Short purpose tag for a forked sub-conversation (e.g. "analyze one-pager", "write code"). */
   forkTag?: string | null;
   handover?: { sourceId: string; title: string; agent: string; mode?: 'continue' | 'branch'; automatic?: boolean; detached?: boolean; method?: 'resume' | 'summary'; sourceSeq?: number; sourceMoved?: boolean } | null;
@@ -1530,6 +1524,10 @@ export class Api {
     worktree?: boolean;
     /** In no project: the hub gives the thread a scratch folder of its own; `cwd` is ignored. */
     scratch?: boolean;
+    /** Optional parent topic id to nest this derived thread under in the sidebar. */
+    forkGroup?: string | null;
+    /** Kind of derived thread nested under a parent topic. */
+    forkKind?: 'fork' | 'handoff' | 'ask' | null;
   }): Promise<Thread> {
     return this.request('POST', '/api/threads', input);
   }
@@ -1801,6 +1799,10 @@ export class Api {
       done?: boolean;
       /** Places the thread on the board by hand; clears done. */
       stage?: ProgressReport['stage'];
+      /** Root topic id to nest under, or null to promote out to a standalone topic. */
+      forkGroup?: string | null;
+      /** Kind of derived thread nested under a topic. */
+      forkKind?: 'fork' | 'handoff' | 'ask' | null;
       /** Short purpose tag for a grouped forked sub-conversation. */
       forkTag?: string | null;
     },
@@ -1851,14 +1853,28 @@ export class Api {
   /** With `turnId` the copy ends where that turn ended; with `worktree` it runs in a git worktree of its own. */
   forkThread(
     threadId: string,
-    opts: { turnId?: string; worktree?: boolean; agent?: string; grouped?: boolean; lightweight?: boolean; forkTag?: string | null; firstMessage?: string } = {},
+    opts: {
+      turnId?: string;
+      worktree?: boolean;
+      agent?: string;
+      model?: string | null;
+      grouped?: boolean;
+      lightweight?: boolean;
+      continueFromSource?: boolean;
+      forkKind?: 'fork' | 'handoff' | 'ask' | null;
+      forkTag?: string | null;
+      firstMessage?: string;
+    } = {},
   ): Promise<Thread> {
     const body = {
       ...(opts.turnId ? { turnId: opts.turnId } : {}),
       ...(opts.agent ? { agent: opts.agent } : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
       ...(opts.worktree ? { worktree: true } : {}),
       ...(opts.grouped ? { grouped: true } : {}),
       ...(opts.lightweight ? { lightweight: true } : {}),
+      ...(opts.continueFromSource ? { continueFromSource: true } : {}),
+      ...(opts.forkKind ? { forkKind: opts.forkKind } : {}),
       ...(typeof opts.forkTag === 'string' && opts.forkTag.trim() ? { forkTag: opts.forkTag.trim() } : {}),
       ...(typeof opts.firstMessage === 'string' && opts.firstMessage.trim() ? { firstMessage: opts.firstMessage.trim() } : {}),
     };
@@ -1866,8 +1882,8 @@ export class Api {
   }
 
   /** What forking this thread can offer besides a copy in the same directory. */
-  forkOptions(threadId: string): Promise<ForkOptions> {
-    return this.request('GET', `/api/threads/${threadId}/fork-options`);
+  forkOptions(threadId: string, opts: { lightweight?: boolean } = {}): Promise<ForkOptions> {
+    return this.request('GET', `/api/threads/${threadId}/fork-options${opts.lightweight ? '?lightweight=1' : ''}`);
   }
 
   /** Pulls in turns the terminal added to this thread's session. */
@@ -1888,8 +1904,6 @@ export class Api {
   /** Creates an empty successor in the same directory and worktree, without starting an agent turn. */
   handoverSettings(): Promise<HandoverSettings> { return this.request('GET', '/api/handover-settings'); }
   saveHandoverSettings(value: HandoverSettings): Promise<HandoverSettings> { return this.request('PUT', '/api/handover-settings', value); }
-  autoCompactSettings(): Promise<{ settings: AutoCompactSettings; status: AutoCompactStatus }> { return this.request('GET', '/api/autocompact-settings'); }
-  saveAutoCompactSettings(value: AutoCompactSettings): Promise<AutoCompactSettings> { return this.request('PUT', '/api/autocompact-settings', value); }
   autoHandover(id: string): Promise<AutoHandoverView & { targets: HandoverTarget[] }> { return this.request('GET', `/api/threads/${id}/auto-handover`); }
   /** The thread's native goal, for the goal card above the input. */
   threadGoal(id: string): Promise<{ goal: GoalView | null }> { return this.request('GET', `/api/threads/${id}/goal`); }

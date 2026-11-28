@@ -8,7 +8,6 @@ import { startDaemon, openUi, api, launchBrowser } from '../harness.mjs';
 const shots = '/tmp/loochat-handover-merged-shots';
 const chainDialog = async page => {
   await page.getByLabel('这个对话的更多操作').click();
-  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };

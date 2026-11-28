@@ -1,90 +1,178 @@
-/* Styles for grouped fork sub-conversations (kept separate from styles.css to respect UI budgets). */
+/* Styles for unified Fork sheet and sidebar fork rows (kept separate from styles.css to respect UI budgets). */
 .fork-subchat-dialog {
-  width: min(460px, calc(100vw - 32px));
+  width: min(440px, calc(100vw - 32px));
 }
 
-.fork-subchat-fields {
+.fork-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.fork-card-head .dialog-title {
+  margin: 0;
+}
+
+.fork-card-body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 10px 0 12px;
+  margin-bottom: 14px;
 }
 
-.fork-subchat-field {
+/* Codex-style unified composer capsule: borderless textarea + ghost Agent/Model bottom toolbar. */
+.fork-composer {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+  padding: 11px 12px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.fork-composer:focus-within {
+  border-color: color-mix(in srgb, var(--text) 32%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.fork-composer-field {
+  display: block;
+}
+
+.fork-composer-field textarea {
+  display: block;
+  width: 100%;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+}
+
+.fork-composer-field textarea::placeholder {
+  color: var(--faint);
+}
+
+.fork-composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.fork-composer-bar .context-btn {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
   gap: 5px;
 }
 
-.fork-subchat-field > span {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.fork-subchat-mode {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 4px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+.fork-composer-bar .context-btn:hover,
+.fork-composer-bar .context-btn[aria-expanded='true'] {
   background: var(--hover);
 }
 
-.fork-subchat-mode button {
-  min-height: 32px;
-  padding: 5px 10px;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
+.fork-composer-bar .agent-btn.has-mark > span {
+  display: inline;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-composer-agent-fixed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px;
   color: var(--muted);
-  font: inherit;
   font-size: 13px;
   font-weight: 500;
+}
+
+.fork-composer-sep {
+  color: var(--border-strong);
+  font-size: 12px;
+  user-select: none;
+}
+
+.fork-composer-model {
+  color: var(--muted);
+}
+
+.fork-composer-model:hover,
+.fork-composer-model[aria-expanded='true'] {
+  color: var(--text);
+}
+
+.fork-card-model-name {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fork-card-pop-note {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fork-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
   cursor: pointer;
 }
 
-.fork-subchat-mode button.active {
-  background: var(--bg);
-  color: var(--text);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.fork-subchat-mode button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.fork-subchat-mode-hint {
+.fork-check-row input {
+  width: 15px;
+  height: 15px;
   margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  color: var(--muted);
+  accent-color: var(--accent);
+  flex: none;
 }
 
-.fork-subchat-field input,
-.fork-subchat-field select,
-.fork-subchat-field textarea {
-  width: 100%;
-  padding: 9px 11px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.45;
+.fork-check-label {
+  min-width: 0;
 }
 
-.fork-subchat-field textarea {
-  resize: vertical;
+.fork-check-note {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 48%;
 }
 
-.fork-subchat-field input:focus,
-.fork-subchat-field select:focus,
-.fork-subchat-field textarea:focus {
-  outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
-  outline-offset: 1px;
+.fork-card-actions {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.fork-card-actions .primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .handover-member .fork-tag-pill {
@@ -106,6 +194,18 @@
   flex: none;
   display: inline-flex;
   align-items: center;
+}
+
+.handover-member .fork-kind-ico {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.handover-member.active .fork-kind-ico {
+  color: var(--text);
 }
 
 .handover-member .fork-handed-mark {
@@ -134,4 +234,17 @@
 .handover-members .fork-add-row:hover {
   background: var(--hover);
   color: var(--text);
+}
+
+.handover-member.is-done .handover-member-name {
+  color: var(--muted);
+}
+
+.handover-member .fork-done-mark {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  color: var(--muted);
 }

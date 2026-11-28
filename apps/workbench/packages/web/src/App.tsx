@@ -1545,7 +1545,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
   useEffect(() => {
     const el = scrollerRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [displayEvents, selected?.autoHandover?.state, selected?.autoHandover?.step]);
+  }, [displayEvents, selected?.autoHandover?.state]);
 
   // Screenshots and slow-rendering blocks grow the thread after the scroll above, which used to
   // leave a reopened thread parked at the top. Watching the thread's height keeps it pinned. The
@@ -2634,8 +2634,11 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
       ? [
           { id: 'rename', label: t('actions.rename'), hint: t('app.cmd.rename'), keywords: ['rename', 'name'] },
           { id: 'pin', label: selected.pinned ? t('actions.unpin') : t('actions.pin'), hint: t('app.cmd.pin'), keywords: ['pin'] },
-          ...(activeCaps?.fork && !forkBlocked(selected)
-            ? [{ id: 'fork', label: t('sidebar.fork'), hint: t('app.cmd.fork'), keywords: ['fork', 'branch', 'clone'] }]
+          ...(!selected.archivedAt
+            ? [
+                { id: 'fork', label: t('sidebar.fork'), hint: t('app.cmd.fork'), keywords: ['fork', 'branch', 'clone', 'worktree', '分叉'] },
+                { id: 'handoff', label: t('actions.handoffContinue'), hint: t('app.cmd.handoff'), keywords: ['handoff', 'handover', 'continue', 'relay', 'switch', '接力', '续跑', '交接'] },
+              ]
             : []),
           { id: 'export', label: t('app.cmd.exportLabel'), hint: t('app.cmd.export'), keywords: ['export', 'copy'] },
           { id: 'archive', label: t('actions.archive'), hint: t('app.cmd.archive'), keywords: ['archive'] },
@@ -2661,7 +2664,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
     if (id === 'model') return setModelSignal((n) => n + 1);
     if (id === 'permission') return setPermissionSignal((n) => n + 1);
     if (id === 'appearance') return openSettings('appearance');
-    if (selected && (id === 'rename' || id === 'pin' || id === 'fork' || id === 'archive')) threadActions.run(id, selected);
+    if (selected && (id === 'rename' || id === 'pin' || id === 'fork' || id === 'handoff' || id === 'archive')) threadActions.run(id, selected);
   };
 
   // The hub has its own controls for these; going through the agent would leave them out of sync.
@@ -3536,15 +3539,18 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               hasOlder={hasOlder}
               loadingOlder={loadingOlder}
               onLoadOlder={loadOlder}
-              // Under each answer, like Codex: one click copies the thread up to there and opens the
-              // copy. Only once there is a conversation to fork; a click while it cannot run says why.
+              // Under each answer, like Codex: 1-click native fork (or fallback handoff sheet while running).
               // The button appears the moment the log says a turn is over; the thread list hears of it
               // a beat later, so the log's word on whether a turn is running is the one to go by.
               onFork={
-                selected.agentSessionId && activeCaps?.fork
-                  ? (turnId) => threadActions.forkAt(timeline.running ? selected : { ...selected, status: 'idle' }, turnId)
+                !selected.archivedAt
+                  ? (turnId) => threadActions.forkAt(
+                      { ...selected, status: timeline.running || (!historyReady && selected.status === 'running') ? 'running' : 'idle' },
+                      turnId,
+                    )
                   : undefined
               }
+              onHandoff={!selected.archivedAt ? () => threadActions.handoff(selected) : undefined}
               forkAnyTurn={Boolean(activeCaps?.forkAt)}
               revision={historyRevision}
               onEdit={
@@ -3560,9 +3566,9 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
                 busy: takingOver,
                 go: takeoverChoice ? () => {
                   setTakingOver(true);
-                  void threadActions.takeOver(selected, takeoverChoice).catch(() => undefined).finally(() => setTakingOver(false));
+                  void threadActions.forkContinue(selected, takeoverChoice).catch(() => undefined).finally(() => setTakingOver(false));
                 } : undefined,
-                choose: () => threadActions.handover(selected),
+                choose: () => threadActions.forkSubchat(selected),
               } : null}
               resume={!api.demo && selected.autoHandover?.resume !== undefined ? {
                 armed: Boolean(selected.autoHandover.resume),
@@ -3584,7 +3590,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
               <h2>{draftScratch ? t('app.emptyScratch') : t('app.emptyIn', folderName(draftCwd))}</h2>
             </div>
           )}
-          {selected && <AutoHandoverNotice api={api} thread={selected} agents={agents} />}
+          {selected && <AutoHandoverNotice api={api} thread={selected} agents={agents} onOpenThread={openThreadById} />}
         </div>
         )}
 
@@ -3644,7 +3650,7 @@ function Hub({ token, onToken, connect, hostId = null, onHost, start, showcase }
           onStop={stop}
           header={header}
           writingMode={draftTeam ? undefined : { active: !!writing, disabled: writingBusy, onChange: active => void changeWriting(active ? 'draft' : null) }}
-          takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note, references) => threadActions.takeOver(selected!, agent, note, references) } : undefined}
+          takeover={outOfPlan && !voice.state.active ? { from: agentLabel(selected!.agent), current: selected!.agent, go: (agent, note) => threadActions.forkContinue(selected!, { agent }, note || undefined) } : undefined}
           banner={<>{selected && !api.demo && drivenByApp(selected.loopxInfo, selected.origin) && <p className="loopx-driven" role="status">{t('loopx.driven')}</p>}{writing && !draftTeam && <WritingBar writing={writing} busy={writingBusy} onStage={stage => void changeWriting(stage)} onEnd={() => void changeWriting(null)}
             onOpen={file => void openFileLink(file).catch(handleError)}
             habits={habitsPath ? { path: habitsPath, ready: habitsReady } : null}

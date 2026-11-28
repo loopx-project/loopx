@@ -232,6 +232,59 @@ for (const ending of ['slide', 'cancel']) test(`a previous suppression timer can
   });
 });
 
+test('tapping send on a phone while a turn is running queues the message without hitting stop or adjacent controls', async () => {
+  const title = `运行中发送 ${Date.now()}`;
+  const created = await api(daemon, '/api/threads', { method: 'POST', body: JSON.stringify({ agent: 'pi', cwd: daemon.workdir, title }) });
+  assert.ok(created.ok, await created.clone().text());
+  const thread = await created.json();
+  await api(daemon, `/api/threads/${thread.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'slow' }) });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  try {
+    const page = await context.newPage();
+    let cancels = 0;
+    const queued = [];
+    page.on('request', request => {
+      if (request.method() !== 'POST') return;
+      if (request.url().endsWith(`/api/threads/${thread.id}/cancel`)) cancels++;
+      if (request.url().endsWith(`/api/threads/${thread.id}/turns`)) queued.push(request.postDataJSON());
+    });
+    await openUi(page, daemon);
+    await page.locator('.menu-btn').tap();
+    await page.locator('.thread-row').filter({ hasText: title }).click();
+    const stop = page.locator('.composer .send-btn.stop');
+    const send = page.locator('.composer .send-btn:not(.stop)');
+    const input = page.locator('.composer textarea');
+    await stop.waitFor();
+    await input.tap();
+    const stopEmpty = await stop.boundingBox();
+    await input.fill('继续追问');
+    await send.waitFor();
+    const sendTyped = await send.boundingBox();
+    const stopTyped = await stop.boundingBox();
+    assert.ok(sendTyped && stopTyped && stopEmpty, 'both composer buttons are measurable');
+    assert.ok(stopTyped.x + stopTyped.width <= sendTyped.x + 1, 'stop sits to the left of queue send');
+    assert.ok(Math.abs(sendTyped.x - stopEmpty.x) <= 1, 'typing a draft places queue send in the corner');
+
+    await send.tap();
+    await page.locator('.queue-item', { hasText: '继续追问' }).waitFor();
+    await page.waitForTimeout(250);
+    assert.equal(cancels, 0, 'the compatibility click from tapping send must not hit stop even as it slides back');
+    assert.equal(await page.locator('.model-control-panel, .pop-panel').count(), 0, 'adjacent bar controls sliding left must not receive the compatibility click');
+    assert.deepEqual(queued.map(r => r.text), ['继续追问']);
+    const stopQueued = await stop.boundingBox();
+    assert.ok(stopQueued && Math.abs(stopQueued.x - stopEmpty.x) <= 1, 'stop returns to the corner after send unmounts');
+
+    // A separate deliberate tap on stop right away (still within the 500ms suppression window) works.
+    await stop.tap();
+    await send.waitFor();
+    assert.equal(cancels, 1, 'an explicit tap on stop cancels the running turn');
+    assert.equal(await input.inputValue(), '继续追问', 'stopping restores the queued draft to the box');
+  } finally {
+    await api(daemon, `/api/threads/${thread.id}/cancel`, { method: 'POST' });
+    await context.close();
+  }
+});
+
 test('desktop Enter keeps native IME guards and Shift+Enter behavior', async () => {
   await withComposer(async ({ page, input, requests }) => {
     await input.fill('desktop 中文');

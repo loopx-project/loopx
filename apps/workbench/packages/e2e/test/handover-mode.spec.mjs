@@ -26,17 +26,13 @@ const select = async (page, title, mobile) => {
   await page.locator('.sidebar .thread-item').filter({ has: page.locator('.thread-title', { hasText: new RegExp(`^${title}$`) }) }).click();
   if (mobile) await page.waitForFunction(() => getComputedStyle(document.querySelector('.sidebar')).visibility === 'hidden', null, { timeout: 5000 });
 };
-const dialog = async page => {
-  await page.getByLabel('这个对话的更多操作').click();
-  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click(); await page.getByRole('menuitem', { name: '交接', exact: true }).click();
-  const value = page.getByRole('dialog', { name: '交接', exact: true });
-  await value.locator('.handover-summary').waitFor(); return value;
-};
-const handover = async (page, modal) => {
-  const [response] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/handover-thread') && r.request().method() === 'POST'), modal.getByRole('button', { name: '新建接手对话', exact: true }).click()]);
-  assert.equal(response.status(), 201);
-  const next = await response.json(); await modal.waitFor({ state: 'detached' });
-  await page.locator('.topbar-title').filter({ hasText: next.title }).waitFor(); return next;
+const createManualBranch = async (page, sourceId, sourceTitle, mobile) => {
+  const next = await request(`/api/threads/${sourceId}/handover-thread`, 'POST', { agent: 'next', mode: 'branch' });
+  await sidebar(page, mobile);
+  await page.locator('.sidebar .handover-group').filter({ has: page.locator('.thread-title', { hasText: new RegExp(`^${sourceTitle}$`) }) }).waitFor();
+  await select(page, sourceTitle, mobile);
+  await page.locator('.topbar-title').filter({ hasText: next.title }).waitFor();
+  return next;
 };
 const uiSend = async (page, id, text) => {
   await page.locator('.composer textarea').fill(text);
@@ -46,7 +42,6 @@ const uiSend = async (page, id, text) => {
 };
 const chainDialog = async page => {
   await page.getByLabel('这个对话的更多操作').click();
-  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
   await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
   await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
 };
@@ -70,10 +65,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     try {
       await openUi(page, hub); await select(page, source.title, mobile);
-      const modal = await dialog(page);
-      assert.equal(await modal.locator('.handover-mode-choice').count(), 0);
-      await page.screenshot({ path: join(shots, `running-dialog-${name}.png`), animations: 'disabled' });
-      const branch = await handover(page, modal);
+      const branch = await createManualBranch(page, source.id, source.title, mobile);
       assert.equal(branch.handover.mode, 'branch');
       assert.equal((await request(`/api/threads/${source.id}`)).status, 'running');
       assert.equal(await page.locator('.handover-readonly, .current-segment').count(), 0);
@@ -103,10 +95,7 @@ for (const mobile of [false, true]) for (const theme of ['light', 'dark']) {
       await page.keyboard.press('Escape');
 
       const stoppedSource = await create(`已停手动任务 ${name}`); await send(stoppedSource.id, '已结束的任务'); await idle(stoppedSource.id);
-      await select(page, stoppedSource.title, mobile);
-      const stopped = await dialog(page);
-      assert.equal(await stopped.locator('.handover-mode-choice').count(), 0);
-      const stoppedBranch = await handover(page, stopped);
+      const stoppedBranch = await createManualBranch(page, stoppedSource.id, stoppedSource.title, mobile);
       assert.equal(stoppedBranch.handover.mode, 'branch');
       assert.equal(await page.locator('.handover-readonly, .current-segment').count(), 0);
       await uiSend(page, stoppedBranch.id, '手动新会话独立处理');

@@ -51,7 +51,6 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-sidebar.png` });
       await page.locator('.handover-group > .thread-row .thread-item').click();
       await page.getByLabel('这个对话的更多操作').click();
-      await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
       await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
       await page.getByRole('dialog', { name: '交接记录', exact: true }).waitFor();
       await page.waitForTimeout(250);
@@ -59,7 +58,6 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
       await page.locator('.handover-entry').filter({ hasText: '原始会话' }).click();
       await page.locator('.topbar-title').filter({ hasText: original.title }).waitFor();
       await page.getByLabel('这个对话的更多操作').click();
-      await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
       await page.getByRole('menuitem', { name: '交接记录', exact: true }).click();
       await page.locator('.handover-entry').filter({ hasText: '接手会话' }).first().click();
       await page.locator('.topbar-title').filter({ hasText: next.title }).waitFor();
@@ -74,7 +72,7 @@ test('handover groups and bidirectional navigation on desktop and phone in both 
   }
 });
 
-test('a turn stopped by a plan that ran out offers another account of the same type, which takes over in one click', async () => {
+test('a turn stopped by a plan that ran out offers another account of the same type, which forks and continues in one click', async () => {
   // One product with two accounts: the one-click suggestion stays inside the same adapter.
   const hub = await startDaemon({ LOOCHAT_AGENTS_JSON: JSON.stringify({ agents: [
     { id: 'claude', adapter: 'claude', command: ['fake-claude'] },
@@ -87,7 +85,7 @@ test('a turn stopped by a plan that ran out offers another account of the same t
     await api(hub, `/api/threads/${source.id}/turns`, { method: 'POST', body: JSON.stringify({ text: 'out of plan' }) });
     browser = await launchBrowser();
     mkdirSync('/tmp/loochat-handover-shots', { recursive: true });
-    // The takeover goes last: after it, the sidebar's top row for this task is the successor.
+    // The fork goes last: after it, the sidebar shows the grouped continuation under this task.
     for (const phone of [true, false]) for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 960 }, isMobile: phone, hasTouch: phone, colorScheme: theme });
       const page = await context.newPage();
@@ -100,18 +98,19 @@ test('a turn stopped by a plan that ran out offers another account of the same t
       const go = page.locator('.exhausted-note .exhausted-hand');
       await go.waitFor();
       assert.match(await page.locator('.exhausted-note').innerText(), /额度用尽/);
-      assert.match(await go.innerText(), /交给 .+ 接手/);
+      assert.match(await go.innerText(), /用 .+ 分叉继续/);
       await page.waitForTimeout(400);
       await page.screenshot({ path: `/tmp/loochat-handover-shots/${phone ? 'phone' : 'desktop'}-${theme}-exhausted.png` });
       if (phone || theme === 'light') { await context.close(); continue; }
-      const [takeover] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/takeover') && r.request().method() === 'POST'), go.click()]);
-      assert.equal(takeover.request().postDataJSON().agent, 'claude2');
-      assert.equal((await takeover.json()).agent, 'claude2');
-      assert.equal((await takeover.json()).handover.mode, 'continue');
-      await page.locator('.topbar-title').filter({ hasText: '（接手）' }).waitFor();
-      // The merged conversation keeps the handover details in a collapsed disclosure.
-      await page.locator('.merged-history').waitFor();
-      assert.equal(await page.locator('.handover-boundary').count(), 1);
+      const [forkRes] = await Promise.all([page.waitForResponse(r => r.url().endsWith('/fork') && r.request().method() === 'POST'), go.click()]);
+      assert.equal(forkRes.request().postDataJSON().agent, 'claude2');
+      assert.equal(forkRes.request().postDataJSON().lightweight, true);
+      assert.equal(forkRes.request().postDataJSON().continueFromSource, true);
+      const forked = await forkRes.json();
+      assert.equal(forked.agent, 'claude2');
+      assert.equal(forked.forkedFrom, source.id);
+      assert.equal(forked.forkGroup, source.id);
+      await page.locator('.topbar-title').filter({ hasText: '（继续）' }).waitFor();
       assert.deepEqual(errors, []);
       await context.close();
     }

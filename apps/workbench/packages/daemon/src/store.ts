@@ -45,6 +45,8 @@ type SignalRow = { key: string; at: string; payload: string; disposition: string
 const toSignal = (row: SignalRow): SignalRecord => ({ key: row.key, at: row.at, payload: JSON.parse(row.payload), disposition: JSON.parse(row.disposition), updatedAt: row.updated_at,
   ...(row.material ? { material: JSON.parse(row.material) as SignalMaterial } : {}) });
 
+export type ForkKind = 'fork' | 'handoff' | 'ask';
+
 export interface ThreadRecord {
   id: string;
   agent: string;
@@ -66,6 +68,8 @@ export interface ThreadRecord {
   forkedFrom: string | null;
   /** Root thread id of a grouped fork family (same-workspace sub-conversations that can read each other on demand). */
   forkGroup?: string | null;
+  /** Kind of derived thread nested under a topic: native fork, new-session handoff, or side-chat ask. */
+  forkKind?: ForkKind | null;
   /** Short purpose label for a forked sub-conversation (e.g. "analyze one-pager", "write code"). */
   forkTag?: string | null;
   handover?: HandoverLink | null;
@@ -378,6 +382,7 @@ interface ThreadRow {
   section_id: string | null;
   forked_from: string | null;
   fork_group: string | null;
+  fork_kind: string | null;
   fork_tag: string | null;
   handover: string | null;
   worktree: string | null;
@@ -420,6 +425,7 @@ const toThread = (r: ThreadRow): ThreadRecord => ({
   sectionId: r.section_id,
   forkedFrom: r.forked_from,
   forkGroup: r.fork_group ?? null,
+  forkKind: (r.fork_kind === 'fork' || r.fork_kind === 'handoff' || r.fork_kind === 'ask') ? r.fork_kind : null,
   forkTag: r.fork_tag ?? null,
   handover: r.handover ? JSON.parse(r.handover) : null,
   worktree: r.worktree ? (JSON.parse(r.worktree) as ThreadWorktree) : null,
@@ -557,6 +563,7 @@ export class Store {
     if (!cols.some((c) => c.name === 'handover')) this.db.exec('ALTER TABLE threads ADD COLUMN handover TEXT');
     if (!cols.some((c) => c.name === 'forked_from')) this.db.exec('ALTER TABLE threads ADD COLUMN forked_from TEXT');
     if (!cols.some((c) => c.name === 'fork_group')) this.db.exec('ALTER TABLE threads ADD COLUMN fork_group TEXT');
+    if (!cols.some((c) => c.name === 'fork_kind')) this.db.exec('ALTER TABLE threads ADD COLUMN fork_kind TEXT');
     if (!cols.some((c) => c.name === 'fork_tag')) this.db.exec('ALTER TABLE threads ADD COLUMN fork_tag TEXT');
     // Migration: the git worktree a forked thread stands in, as JSON.
     if (!cols.some((c) => c.name === 'worktree')) this.db.exec('ALTER TABLE threads ADD COLUMN worktree TEXT');
@@ -957,6 +964,7 @@ export class Store {
     > & {
       forkedFrom?: string | null;
       forkGroup?: string | null;
+      forkKind?: ForkKind | null;
       forkTag?: string | null;
       worktree?: ThreadWorktree | null;
       sectionId?: string | null;
@@ -966,7 +974,7 @@ export class Store {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        'INSERT INTO threads (id, agent, cwd, title, status, pinned, permission_mode, model, effort, forked_from, fork_group, fork_tag, worktree, section_id, created_at, updated_at, handover, schedule, work_mode, speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO threads (id, agent, cwd, title, status, pinned, permission_mode, model, effort, forked_from, fork_group, fork_kind, fork_tag, worktree, section_id, created_at, updated_at, handover, schedule, work_mode, speed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
       .run(
         t.id,
@@ -980,6 +988,7 @@ export class Store {
         t.effort,
         t.forkedFrom ?? null,
         t.forkGroup ?? null,
+        t.forkKind ?? null,
         t.forkTag ?? null,
         t.worktree ? JSON.stringify(t.worktree) : null,
         t.sectionId ?? null,
@@ -1101,6 +1110,7 @@ export class Store {
         | 'hubTurnAt'
         | 'externalAt'
         | 'forkGroup'
+        | 'forkKind'
         | 'forkTag'
       >
     >,
@@ -1115,7 +1125,7 @@ export class Store {
     const next = { ...current, ...patch, updatedAt: opts.touch ? new Date().toISOString() : current.updatedAt };
     this.db
       .prepare(
-        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, snoozed_until = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ?, fork_group = ?, fork_tag = ? WHERE id = ?',
+        'UPDATE threads SET title = ?, status = ?, agent_session_id = ?, pinned = ?, permission_mode = ?, model = ?, effort = ?, archived_at = ?, section_id = ?, unread = ?, snoozed_until = ?, preview = ?, hub_turn_at = ?, external_at = ?, updated_at = ?, work_mode = ?, speed = ?, fork_group = ?, fork_kind = ?, fork_tag = ? WHERE id = ?',
       )
       .run(
         next.title,
@@ -1136,6 +1146,7 @@ export class Store {
         next.workMode ?? 'execute',
         next.speed ?? null,
         next.forkGroup ?? null,
+        next.forkKind ?? null,
         next.forkTag ?? null,
         id,
       );

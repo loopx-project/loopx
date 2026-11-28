@@ -136,16 +136,13 @@ test('asking in the side chat opens a thread of its own', async () => {
   assert.equal(await page.locator('.side-chat .row.user .note-quote').innerText(), 'hi ther');
   assert.equal(await page.locator('.side-chat .row.user .bubble').last().innerText(), 'go on');
   assert.equal(await page.locator('.side-chat .row.user').count(), 1, 'inherited turns stay with the agent, not on the panel');
-  await page.waitForFunction(
-    () => document.querySelectorAll('.sidebar .thread-row').length === 2,
-    null,
-    { timeout: 10_000 },
-  );
-  const titles = await page.locator('.sidebar .thread-row .thread-title').allInnerTexts();
-  assert.match(titles.join('\n'), /^追问：hi ther$/m);
-  assert.equal(await page.locator('.sidebar .thread-fork').count(), 0);
-  assert.match(await page.locator('.sidebar .thread-item').filter({ hasText: '追问：hi ther' }).getAttribute('title'), /分叉/);
+  // The side chat nests under its parent topic drawer instead of cluttering the root list.
+  const drawerToggle = page.locator('.sidebar .handover-toggle').first();
+  await drawerToggle.waitFor({ timeout: 10_000 });
+  assert.equal(await page.locator('.sidebar .thread-row').count(), 1, 'root sidebar keeps only the parent topic');
   const sideThread = (await (await api(daemon, '/api/threads')).json()).find(thread => thread.title === '追问：hi ther');
+  assert.equal(sideThread.forkKind, 'ask');
+  assert.ok(sideThread.forkGroup, 'side chat is grouped under parent topic');
   assert.equal(sideThread.model, 'fake/plain');
 
   // After the thread exists, changing the model applies to the same thread rather than a new one,
@@ -167,6 +164,13 @@ test('asking in the side chat opens a thread of its own', async () => {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
   assert.equal(await page.locator('.side-chat').count(), 0);
+
+  // Expanding the parent topic drawer reveals the nested side chat with its 12px ask icon.
+  if ((await drawerToggle.getAttribute('aria-expanded')) !== 'true') await drawerToggle.click();
+  const nestedAsk = page.locator('.sidebar .handover-member', { hasText: 'hi ther' }).first();
+  await nestedAsk.waitFor({ timeout: 5_000 });
+  await nestedAsk.locator('.fork-kind-ico[aria-label="追问"]').waitFor({ timeout: 5_000 });
+  assert.match(await nestedAsk.getAttribute('title'), /追问：hi ther/);
 });
 
 test('a picture attached to the composer can be looked at full size before sending', async () => {

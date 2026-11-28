@@ -1,4 +1,5 @@
 import { replaceMessageTail, type StoredEvent } from './events.js';
+import { userRequest } from './context-history.js';
 
 /**
  * Handing a thread's task to another agent: the successor gets a brief that points at the source —
@@ -183,4 +184,83 @@ export function chainSegments<M extends { id: string; title: string; updatedAt: 
     at = next;
   }
   return segments;
+}
+
+/** The mark of the 0-token lightweight fork continuation anchor block. */
+export const FORK_ANCHOR_MARK = '<loochat-fork-anchor>';
+
+/**
+ * 0-Token continuation anchor assembled directly from the source thread's hub event log
+ * (zero LLM calls). Captures modified files, open plan entries, and the last 3 turns as paired
+ * user/assistant Q&A alongside a paired `loochat history --turns 6` pointer.
+ */
+export function buildForkAnchor(
+  source: {
+    id: string;
+    title: string;
+    cwd: string;
+    worktree?: { root: string; branch: string | null } | null;
+  },
+  events: StoredEvent[],
+): string | null {
+  const turns = new Map<string, StoredEvent[]>();
+  const turnOrder: string[] = [];
+  for (const ev of events) {
+    if (!ev.turnId) continue;
+    let list = turns.get(ev.turnId);
+    if (!list) {
+      list = [];
+      turns.set(ev.turnId, list);
+      turnOrder.push(ev.turnId);
+    }
+    list.push(ev);
+  }
+  const realTurns: Array<{ index: number; ask: string; answer: string; error: string }> = [];
+  let seqIndex = 0;
+  for (const turnId of turnOrder) {
+    const evs = turns.get(turnId)!;
+    const start = evs.find((e) => e.type === 'turn.started');
+    if (!start || start.data.handover || start.data.control || start.data.background) continue;
+    const ask = userRequest(start.data).replace(/\s+/g, ' ').trim();
+    const answer = turnMessage(evs).replace(/\s+/g, ' ').trim();
+    const err = [...evs].reverse().find((e) => e.type === 'turn.error');
+    const error = err ? [err.data.code, err.data.message ?? err.data.error].filter(Boolean).join('：') : '';
+    if (!ask && !answer && !error) continue;
+    seqIndex += 1;
+    realTurns.push({ index: seqIndex, ask, answer, error });
+  }
+  const files = changedFiles(events);
+  const plan = [...events].reverse().find((e) => e.type === 'plan.updated');
+  const openPlan = ((plan?.data.entries ?? []) as Array<Record<string, unknown>>)
+    .filter((en) => en.status !== 'completed')
+    .slice(0, 5);
+  if (!realTurns.length && !files.length && !openPlan.length) return null;
+
+  const place = source.worktree
+    ? `${source.cwd}（worktree ${source.worktree.root}，分支 ${source.worktree.branch ?? '游离 HEAD'}）`
+    : source.cwd;
+  const recent = realTurns.slice(-3);
+  const lines: string[] = [
+    FORK_ANCHOR_MARK,
+    `# 来源会话最近进度锚点（0-Token 规则整理，共 ${realTurns.length} 轮）`,
+    `- 来源会话：${source.title}（id: ${source.id}）`,
+    `- 工作目录：${place}`,
+    ...(files.length ? [`- 已改动文件（${files.length} 个）：${files.slice(0, 10).join('、')}${files.length > 10 ? ` 等 ${files.length} 个` : ''}`] : []),
+    ...(openPlan.length ? [`- 未完成计划：${openPlan.map((en) => trunc(String(en.content ?? ''), 80)).join('；')}`] : []),
+  ];
+  if (recent.length) {
+    lines.push('', `## 最近 ${recent.length} 轮问答要点`);
+    for (const item of recent) {
+      lines.push(`### 第 ${item.index} 轮`);
+      if (item.ask) lines.push(`- 用户：${trunc(item.ask, 400)}`);
+      lines.push(`- 助手：${item.answer ? trunc(item.answer, 650) : '（工具执行/无正文）'}`);
+      if (item.error) lines.push(`- 中断原因：${trunc(item.error, 160)}`);
+    }
+  }
+  lines.push(
+    '',
+    `说明：若本轮是接着来源会话继续做，请直接基于以上锚点继续，并按需运行 \`loochat history ${source.id} --turns 6\` 读取更早轮次的成对问答（不要只靠 \`--user-inputs\` 猜结论；\`--user-inputs\` 仅作轮次目录用于定位 \`--turn <turnId>\`）。若本轮开启的是全新独立话题，可忽略上述锚点。`,
+    '</loochat-fork-anchor>',
+  );
+  return lines.join('\n');
 }

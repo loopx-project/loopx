@@ -3,13 +3,12 @@ import { ApiError, type AgentInfo, type Api, type HandoverTarget, type Section, 
 import { conversationPointer, copyText } from '../clipboard';
 import { referenceMachine, useReferenceMachine } from '../reference-input';
 import { folderName } from '../paths';
-import { ChoiceDialog, Dialog } from './Dialog';
+import { Dialog } from './Dialog';
 import { ForkSubchatDialog } from './ForkSubchatDialog';
 import { HandoverChainDialog } from './HandoverTrail';
-import { HandoverDialog } from './HandoverDialog';
 import { Menu, type MenuEntry } from './Menu';
 import { ChatQuotaMenu } from './ChatQuotaMenu';
-import { IconArchive, IconBoard, IconCheck, IconClock, IconCopy, IconDot, IconEdit, IconFiles, IconFork, IconHand, IconHandover, IconList, IconPin, IconPlus, IconSparkle, IconTerminal, IconTrace, IconTrash, IconWorktree } from './icons';
+import { IconArchive, IconBoard, IconCheck, IconClock, IconCopy, IconDot, IconEdit, IconExternal, IconFiles, IconFork, IconHandover, IconList, IconPin, IconPlus, IconSparkle, IconTerminal, IconTrace, IconTrash, IconWorktree } from './icons';
 import { formatList, t } from '../i18n';
 import { boardStage, snoozed, threadAttention, type BoardStage } from '../sidebar';
 
@@ -66,21 +65,17 @@ type DialogState =
   | { kind: 'delete'; thread: Thread }
   /** The worktree to be deleted holds work that exists nowhere else: asked once more, with the count. */
   | { kind: 'delete-worktree'; thread: Thread; agentSession: boolean; changes: number; commits: number }
-  /** Where the copy should run: beside the original, or in a git worktree of its own. */
-  | { kind: 'fork'; thread: Thread; turnId?: string; branch: string | null; changes: number }
-  /** One-step grouped sub-conversation fork in the current directory (optional tag, first message, worktree, agent). */
-  | { kind: 'fork-subchat'; thread: Thread; turnId?: string; worktreeAvailable: boolean; allowFullFork: boolean }
+  /** Codex-style composer sheet for either new-session handoff (`handoff`) or native full-history fork (`fork`). */
+  | { kind: 'fork-subchat'; thread: Thread; mode: 'fork' | 'handoff'; worktreeAvailable: boolean; worktreeBranch: string | null }
   /** Edit the short purpose tag of a grouped forked sub-conversation. */
   | { kind: 'fork-tag'; thread: Thread }
   | { kind: 'new-section'; thread: Thread | null }
   | { kind: 'rename-section'; section: Section }
   | { kind: 'delete-section'; section: Section }
-  /** Get source-session coordinates and progress for another agent to continue in the same directory. */
-  | { kind: 'handover'; thread: Thread }
   /** The audit trail of a handover chain this thread belongs to. */
   | { kind: 'chain'; thread: Thread };
 
-export type ThreadAction = 'rename' | 'pin' | 'fork' | 'fork-subchat' | 'fork-tag' | 'archive' | 'restore' | 'delete';
+export type ThreadAction = 'rename' | 'pin' | 'fork' | 'handoff' | 'fork-lightweight' | 'fork-subchat' | 'fork-tag' | 'archive' | 'restore' | 'delete';
 
 /** Why a thread cannot be forked right now, or null when it can. */
 export function forkBlocked(thread: Thread, turnId?: string): string | null {
@@ -135,29 +130,81 @@ export function useThreadActions(deps: Deps) {
     }
   };
 
-  // The agent copies its side of the conversation, which can take a few seconds. With a turn, the
-  // copy ends where that turn ended; the agent's own history is read to find that place.
-  //
-  // `where` is left out when the user has not been asked yet. They are asked only when there is
-  // something to choose: the agent can move a copy, and the thread stands in a git repository.
-  const fork = async (thread: Thread, turnId?: string, where?: 'here' | 'worktree') => {
+  const fullForkBlocked = (thread: Thread, turnId?: string): string | null => {
+    const caps = agents.find((a) => a.id === thread.agent)?.capabilities;
+    if (!caps?.fork) return t('actions.forkFullUnsupported');
+    if (turnId && !caps.forkAt) return t('actions.forkFullUnsupported');
+    if (!thread.agentSessionId) return t('actions.forkEmpty');
+    if (thread.status === 'running' && (!turnId || !caps.forkAt)) return t('actions.forkRunning');
+    return null;
+  };
+
+  /** One-click lightweight fork continuation onto a chosen agent/model (with 0-token Arm 2 anchor). */
+  const forkContinue = async (thread: Thread, target: HandoverTarget, firstMessage?: string) => {
     if (!api) return;
-    const blocked = forkBlocked(thread, turnId);
-    if (blocked) return onError(blocked);
-    if (!where && agents.find((a) => a.id === thread.agent)?.capabilities.forkInto) {
-      // An older daemon has no such question to answer; then the copy is made in place, as before.
-      const options = await api.forkOptions(thread.id).catch(() => null);
-      if (options?.worktree.available) {
-        return setDialog({ kind: 'fork', thread, turnId, branch: options.worktree.branch ?? null, changes: options.worktree.changes ?? 0 });
-      }
-    }
-    onBusy({ threadId: thread.id, message: where === 'worktree' ? t('actions.forkingWorktree') : t('actions.forking') });
+    onBusy({ threadId: thread.id, message: t('actions.forking') });
     try {
-      const copy = await api.forkThread(thread.id, { turnId, worktree: where === 'worktree' });
+      const copy = await api.forkThread(thread.id, {
+        grouped: true,
+        lightweight: true,
+        forkKind: 'handoff',
+        agent: target.agent,
+        ...(target.model !== undefined ? { model: target.model } : {}),
+        continueFromSource: true,
+        ...(firstMessage ? { firstMessage } : {}),
+      });
       onThreadOpen(copy);
     } catch (e) {
-      // The agent keeps its own record of the conversation. A turn it has no record of (one that
-      // never reached it, say) is not a place its copy can stop.
+      onError(e);
+      throw e;
+    } finally {
+      onBusy(null);
+    }
+  };
+
+  const openForkSheet = async (thread: Thread, mode: 'fork' | 'handoff') => {
+    if (!api) return;
+    const isHandoff = mode === 'handoff';
+    const [options, fresh] = await Promise.all([
+      api.forkOptions(thread.id, { lightweight: isHandoff }).catch(() => null),
+      thread.agentSessionId ? Promise.resolve(thread) : api.thread(thread.id).catch(() => thread),
+    ]);
+    const target = fresh.agentSessionId && !thread.agentSessionId
+      ? { ...fresh, status: thread.status }
+      : thread;
+    const effectiveMode = !isHandoff && fullForkBlocked(target) ? 'handoff' : mode;
+    setDialog({
+      kind: 'fork-subchat',
+      thread: target,
+      mode: effectiveMode,
+      worktreeAvailable: Boolean(options?.worktree.available),
+      worktreeBranch: options?.worktree.branch ?? null,
+    });
+  };
+
+  /**
+   * Codex-style 1-click native fork from a reply's fork icon (grouped under the parent topic).
+   * Falls back cleanly to the "Continue in new chat" sheet while running or when the agent lacks native fork.
+   */
+  const forkDirect = async (thread: Thread, turnId?: string) => {
+    if (!api) return;
+    const fresh = thread.agentSessionId ? thread : await api.thread(thread.id).catch(() => thread);
+    const target = fresh.agentSessionId && !thread.agentSessionId
+      ? { ...fresh, status: thread.status }
+      : thread;
+    if (fullForkBlocked(target, turnId)) {
+      return void openForkSheet(target, 'handoff');
+    }
+    onBusy({ threadId: target.id, message: t('actions.forking') });
+    try {
+      const copy = await api.forkThread(target.id, {
+        ...(turnId ? { turnId } : {}),
+        grouped: true,
+        lightweight: false,
+        forkKind: 'fork',
+      });
+      onThreadOpen(copy);
+    } catch (e) {
       if (turnId && e instanceof Error && /own history|cannot stop a copy|whole conversation/.test(e.message)) {
         return onError(t('actions.forkMismatch'));
       }
@@ -167,22 +214,14 @@ export function useThreadActions(deps: Deps) {
     }
   };
 
-  const openForkSubchat = async (thread: Thread, turnId?: string) => {
-    if (!api) return;
-    const blocked = forkBlocked(thread, turnId);
-    if (turnId && blocked) return onError(blocked);
-    const agentInfo = agents.find((a) => a.id === thread.agent);
-    const allowFullFork = Boolean(agentInfo?.capabilities.fork) && blocked === null;
-    const options = await api.forkOptions(thread.id).catch(() => null);
-    setDialog({ kind: 'fork-subchat', thread, turnId, worktreeAvailable: Boolean(options?.worktree.available), allowFullFork });
-  };
-
   const run = (action: ThreadAction, thread: Thread) => {
     switch (action) {
       case 'fork':
-        return void fork(thread);
+        return void openForkSheet(thread, 'fork');
+      case 'handoff':
+      case 'fork-lightweight':
       case 'fork-subchat':
-        return void openForkSubchat(thread);
+        return void openForkSheet(thread, 'handoff');
       case 'fork-tag':
         return setDialog({ kind: 'fork-tag', thread });
       case 'rename':
@@ -255,6 +294,10 @@ export function useThreadActions(deps: Deps) {
       onSelect: () => void (id === 'done' ? patch(thread, { done: stage !== 'done' }) : stage !== id && patch(thread, { stage: id })),
     });
     return [
+      ...(!thread.archivedAt ? [
+        { id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: Boolean(fullForkBlocked(thread)), onSelect: () => run('fork', thread) },
+        { id: 'handoff', label: t('actions.handoffContinue'), icon: IconHandover, onSelect: () => run('handoff', thread) },
+      ] : []),
       { id: 'pin', label: thread.pinned ? t('actions.unpin') : t('actions.pin'), icon: IconPin, onSelect: () => run('pin', thread) },
       {
         id: 'unread',
@@ -264,7 +307,10 @@ export function useThreadActions(deps: Deps) {
       },
       snoozeMenu(thread),
       { id: 'rename', label: t('actions.rename'), icon: IconEdit, onSelect: () => run('rename', thread) },
-      ...(thread.forkGroup ? [{ id: 'fork-tag', label: t('actions.editForkTag'), icon: IconFork, onSelect: () => run('fork-tag', thread) }] : []),
+      ...(thread.forkGroup ? [
+        { id: 'fork-tag', label: t('actions.editForkTag'), icon: IconFork, onSelect: () => run('fork-tag', thread) },
+        { id: 'fork-promote', label: t('actions.forkPromote'), icon: IconExternal, onSelect: () => void patch(thread, { forkGroup: null }) },
+      ] : []),
       ...(autotitle ? [{ id: 'autotitle', label: t('actions.autotitle'), icon: IconSparkle, onSelect: () => void autoName(thread) }] : []),
       ...(board ? [{ id: 'board', label: t('actions.board'), icon: IconBoard, submenu: (['backlog', 'doing', 'blocked', 'review', 'done'] as const).map(place) }] : []),
       {
@@ -360,17 +406,18 @@ export function useThreadActions(deps: Deps) {
           onSelect: () => void copy(thread.agentSessionId),
         },
         { id: 'copy-cwd', label: t('actions.cwd'), onSelect: () => void copy(thread.cwd) },
+        ...(api && !api.demo ? [{ id: 'copy-handover', label: t('handover.copy'), onSelect: () => void copy(api.handoverSummary(thread.id).then((r) => ('summary' in r ? r.summary : ''))) }] : []),
       ],
     },
-    { id: 'continuation', label: t('actions.forkAndHandover'), icon: IconHand, submenu: [
-      { id: 'fork-subchat', label: t('actions.forkSubchat'), icon: IconFork, onSelect: () => run('fork-subchat', thread) },
-      ...(agents.find((a) => a.id === thread.agent)?.capabilities.fork
-        ? [{ id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: forkBlocked(thread) !== null, onSelect: () => run('fork', thread) }]
-        : []),
-      ...(thread.forkGroup ? [{ id: 'fork-tag', label: t('actions.editForkTag'), icon: IconEdit, onSelect: () => run('fork-tag', thread) }] : []),
-      { id: 'handover', label: t('handover.title'), icon: IconHand, onSelect: () => setDialog({ kind: 'handover', thread }) },
-      ...(chainOf(thread) ? [{ id: 'chain', label: t('handover.trail.title'), icon: IconHandover, onSelect: () => setDialog({ kind: 'chain', thread }) }] : []),
-    ] },
+    ...(!thread.archivedAt
+      ? [
+          { id: 'fork', label: t('sidebar.fork'), icon: IconFork, disabled: Boolean(fullForkBlocked(thread)), onSelect: () => run('fork', thread) },
+          { id: 'handoff', label: t('actions.handoffContinue'), icon: IconHandover, onSelect: () => run('handoff', thread) },
+        ]
+      : []),
+    ...(chainOf(thread)
+      ? [{ id: 'chain', label: t('handover.trail.title'), icon: IconHandover, onSelect: () => setDialog({ kind: 'chain', thread }) }]
+      : []),
     // A phone reaches the trace from the overview instead, so the bar keeps no button of its own.
     ...(onOpenTrace ? [{ id: 'trace', label: t('trace.openTrace'), icon: IconTrace, onSelect: onOpenTrace }] : []),
     'separator',
@@ -465,24 +512,31 @@ export function useThreadActions(deps: Deps) {
         />
       );
     } else if (dialog.kind === 'fork-subchat') {
-      const { thread, turnId, worktreeAvailable, allowFullFork } = dialog;
+      const { thread, mode, worktreeAvailable, worktreeBranch } = dialog;
       dialogNode = (
         <ForkSubchatDialog
-          worktreeAvailable={worktreeAvailable}
-          allowLightweight={!turnId}
-          allowFullFork={allowFullFork}
+          api={api}
           agents={agents}
-          currentAgent={thread.agent}
-          onConfirm={({ forkTag, firstMessage, worktree, lightweight, agent }) => {
+          thread={thread}
+          mode={mode}
+          worktreeAvailable={worktreeAvailable}
+          worktreeBranch={worktreeBranch}
+          onConfirm={({ agent, model, firstMessage, worktree, lightweight, continueFromSource, forkKind }) => {
             close();
             onBusy({ threadId: thread.id, message: worktree ? t('actions.forkingWorktree') : t('actions.forking') });
             void api
-              .forkThread(thread.id, { turnId, worktree, grouped: true, lightweight, forkTag, firstMessage, ...(agent ? { agent } : {}) })
-              .then((copy) => {
-                if (firstMessage) onThreadChange(copy);
-                else onThreadOpen(copy);
+              .forkThread(thread.id, {
+                agent,
+                model,
+                worktree,
+                grouped: true,
+                lightweight,
+                continueFromSource,
+                forkKind,
+                firstMessage: firstMessage || undefined,
               })
-              .catch(onError)
+              .then((copy) => onThreadOpen(copy))
+              .catch((e) => onError(e))
               .finally(() => onBusy(null));
           }}
           onCancel={close}
@@ -496,29 +550,6 @@ export function useThreadActions(deps: Deps) {
           input={{ initial: thread.forkTag ?? '', label: t('actions.forkTagLabel') }}
           confirmLabel={t('actions.save')}
           onConfirm={(value) => void guard(async () => onThreadChange(await api.updateThread(thread.id, { forkTag: (value ?? '').trim() || null })))}
-          onCancel={close}
-        />
-      );
-    } else if (dialog.kind === 'fork') {
-      const { thread, turnId, branch, changes } = dialog;
-      dialogNode = (
-        <ChoiceDialog
-          title={t('actions.forkTitle')}
-          choices={[
-            { id: 'lightweight', icon: <IconFork size={18} />, label: t('actions.forkModeLightweight'), hint: t('actions.forkModeLightweightHint') },
-            { id: 'here', icon: <IconFork size={18} />, label: t('actions.forkHere'), hint: t('actions.forkHereHint') },
-            {
-              id: 'worktree',
-              icon: <IconWorktree size={18} />,
-              label: t('actions.forkWorktree'),
-              hint: t('actions.forkWorktreeHint', branch, changes),
-            },
-          ]}
-          onPick={(id) => {
-            close();
-            if (id === 'lightweight') setDialog({ kind: 'fork-subchat', thread, worktreeAvailable: true, allowFullFork: true });
-            else void fork(thread, turnId, id === 'worktree' ? 'worktree' : 'here');
-          }}
           onCancel={close}
         />
       );
@@ -555,11 +586,6 @@ export function useThreadActions(deps: Deps) {
           }
           onCancel={close}
         />
-      );
-    } else if (dialog.kind === 'handover') {
-      const { thread } = dialog;
-      dialogNode = (
-        <HandoverDialog api={api} thread={thread} agents={agents} onOpen={onThreadOpen} onClose={close} />
       );
     } else if (dialog.kind === 'chain') {
       const record = chainOf(dialog.thread);
@@ -616,8 +642,14 @@ export function useThreadActions(deps: Deps) {
     openSectionMenu: (section: Section, x: number, y: number) => setMenu({ section, x, y, where: 'list' }),
     copyConversation: (thread: Thread) => void copy(markdownOf(thread)),
     newSection: () => setDialog({ kind: 'new-section', thread: null }),
-    /** Opens the handover, to pick who takes over or copy what it says. */
-    handover: (thread: Thread) => setDialog({ kind: 'handover', thread }),
+    /** Opens the unified Fork/Handoff sheet. */
+    autoHandover: (thread: Thread) => void openForkSheet(thread, 'handoff'),
+    /** One-click lightweight fork continuation onto a target agent/model. */
+    forkContinue,
+    /** Opens the handover chain, where an automatic takeover can be called off. */
+    chain: (thread: Thread) => setDialog({ kind: 'chain', thread }),
+    /** Whether the thread is part of a handover chain, so the chain dialog applies to it. */
+    inChain: (thread: Thread) => Boolean(chainOf(thread)),
     /**
      * Hands the thread to `target` at once: the hub continues it in a new conversation in the same
      * place, with its queue and collaboration lead. For when the thread's own agent cannot go on, so
@@ -632,10 +664,12 @@ export function useThreadActions(deps: Deps) {
         throw e;
       }
     },
-    /** Forks so that the copy ends with the given turn. */
-    forkAt: (thread: Thread, turnId: string) => void fork(thread, turnId),
-    /** Opens the one-step grouped sub-conversation fork dialog. */
-    forkSubchat: (thread: Thread, turnId?: string) => void openForkSubchat(thread, turnId),
+    /** Codex-style 1-click native fork (or fallback handoff sheet while running / unsupported). */
+    forkAt: (thread: Thread, turnId?: string) => void forkDirect(thread, turnId),
+    /** Opens the "Continue in new chat" composer sheet (0-token anchor + cross-Agent/Model switching). */
+    handoff: (thread: Thread) => void openForkSheet(thread, 'handoff'),
+    /** Alias for opening the new-session continuation sheet from sidebar / recovery controls. */
+    forkSubchat: (thread: Thread) => void openForkSheet(thread, 'handoff'),
     run,
     layer,
   };

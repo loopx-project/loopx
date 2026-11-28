@@ -13,7 +13,7 @@ type Props = ViewProps & {
   api: Api; thread: Thread; merged: boolean; ready: boolean;
   agentLabel: (id: string) => string;
   onBrowseOlder: () => void;
-  onSegmentFork: (thread: Thread, turn: string) => void;
+  onSegmentFork: (thread: Thread, turn?: string) => void;
   canFork: (thread: Thread) => { enabled: boolean; any: boolean };
   onSegmentFile: (thread: Thread, path: string) => Promise<void>;
   onSegmentPreview: (thread: Thread, path: string) => void;
@@ -158,7 +158,7 @@ export function MergedHistory({ api, thread, merged, ready, agentLabel, laterOf,
 
 function EarlierSegment({ segment, api, agentLabel, fork, onFork, onQuote, onMessageContext, onHandToAssistant, onOpenFile, onPreview, older, prefix }: {
   segment: Segment; api: Api; agentLabel: Props['agentLabel']; fork: ReturnType<Props['canFork']>;
-  onFork: (id: string) => void; onOpenFile: (path: string) => Promise<void>; onPreview: (path: string) => void;
+  onFork: (id?: string) => void; onOpenFile: (path: string) => Promise<void>; onPreview: (path: string) => void;
   older: Partial<ViewProps>; prefix: ReactNode; onQuote?: ViewProps['onQuote']; onMessageContext?: ViewProps['onMessageContext']; onHandToAssistant?: ViewProps['onHandToAssistant'];
 }) {
   const { thread, page } = segment;

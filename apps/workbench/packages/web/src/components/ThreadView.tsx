@@ -95,8 +95,10 @@ interface Props {
   revealTurnId?: string;
   loadingOlder?: boolean;
   onLoadOlder?: () => void;
-  /** Copies the thread as it stands and opens the copy. Missing when the agent cannot fork, or there is no session yet. */
-  onFork?: (turnId: string) => void;
+  /** Codex-style 1-click native fork (omitting turnId on the latest reply), falling back to handoff while running. */
+  onFork?: (turnId?: string) => void;
+  /** Opens the "Continue in new chat" composer sheet from the reply's overflow / context menu. */
+  onHandoff?: () => void;
   onQuote?: (text: string, turnId: string, threadId?: string) => void;
   onMessageContext?: (text: string, turnId: string, threadId?: string) => Promise<void>;
   onHandToAssistant?: (text: string, turnId: string, threadId?: string) => Promise<void>;
@@ -154,7 +156,7 @@ const NEAR_TOP_PX = 600;
 /** Nearest scrollable container for a thread: panel scrollers first, falling back to the main page scroller. */
 const THREAD_SCROLLER = '.chat-flow, .agent-panel-body, .thread-peek-body, .side-chat-body, .scroller';
 
-export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, beforeItems, olderLabel, olderError, revealTurnId, historyApi, historyThreadId, historyTitle, items: originalItems, roots, loadImage, loadFile, onOpenFile, onPreview, hasOlder, loadingOlder, onLoadOlder, onFork, onQuote, onMessageContext, onHandToAssistant, forkAnyTurn, onEdit, revision = 0, takeover, resume, autoRetry, memberThreadId, onOpenMemberThread, threads, onOpenThread }: Props) {
+export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, beforeItems, olderLabel, olderError, revealTurnId, historyApi, historyThreadId, historyTitle, items: originalItems, roots, loadImage, loadFile, onOpenFile, onPreview, hasOlder, loadingOlder, onLoadOlder, onFork, onHandoff, onQuote, onMessageContext, onHandToAssistant, forkAnyTurn, onEdit, revision = 0, takeover, resume, autoRetry, memberThreadId, onOpenMemberThread, threads, onOpenThread }: Props) {
   const machineId = useReferenceMachine(historyApi?.demo ? null : historyApi);
   const sourceTitle = historyTitle ?? threads?.find(thread => thread.id === historyThreadId)?.title ?? historyThreadId ?? '';
   const [selection, setSelection] = useState<{ text: string; turnId: string } | null>(null);
@@ -172,6 +174,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
     ...(onQuote ? [{ key: 'quote', label: t('references.quote'), icon: IconQuote, run: () => onQuote(text, turnId, historyThreadId) }] : []),
     ...(onHandToAssistant ? [{ key: 'assistant', label: t('messageActions.assistant'), icon: IconSparkle, run: () => onHandToAssistant(text, turnId, historyThreadId) }] : []),
     ...(onMessageContext ? [{ key: 'context', label: t('messageActions.context'), icon: IconPaperclip, run: () => onMessageContext(text, turnId, historyThreadId) }] : []),
+    ...(onHandoff ? [{ key: 'handoff', label: t('actions.handoffContinue'), icon: IconHandover, run: () => onHandoff() }] : []),
     { key: 'select', label: t('messageActions.select'), icon: IconRead, run: () => setSelection({ text, turnId }) },
     ...(element?.querySelector('.message-edit-btn') ? [{ key: 'edit', label: t('view.editMessage'), icon: IconEdit, run: () => element.querySelector<HTMLButtonElement>('.message-edit-btn')?.click() }] : []),
   ];
@@ -317,11 +320,9 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
       scroller.removeEventListener('pointerdown', onPointerDown);
     };
   }, [chain]);
-  // A fork from the last answer copies the whole thread; it is offered while that answer is the
-  // last thing in it. Where the agent can end a copy at an earlier turn, every answer offers one.
-  // The mark a fork starts with is not part of the conversation: the answer above it is still the last.
-  const tail = [...items].reverse().find((it) => it.kind !== 'fork');
-  const lastKey = tail?.kind === 'actions' ? tail.key : null;
+  // A fork from the last answer copies the whole thread (or opens handoff while a newer turn is
+  // running). Where the agent can end a copy at an earlier turn, every answer offers one.
+  const lastActionsKey = [...items].reverse().find((it) => it.kind === 'actions')?.key ?? null;
 
   const renderItems = (list: Item[]) =>
     list.map((item, idx) => {
@@ -442,13 +443,13 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
               <CopyButton text={item.text} label={t('view.copyAnswer')} />
               {onQuote && <button type="button" className="quiet-btn" aria-label={t('references.quote')} title={t('references.quote')} onClick={() => onQuote(item.text, item.turnId, historyThreadId)}><IconQuote size={15} /></button>}
               {actionsFor(item.text, item.turnId).filter(action => action.key === 'assistant' || action.key === 'context').map(action => <MessageActionButton key={action.key} action={action} />)}
-              {onFork && (forkAnyTurn || item.key === lastKey) && (
+              {onFork && (forkAnyTurn || item.key === lastActionsKey) && (
                 <button
                   type="button"
                   className="quiet-btn"
                   aria-label={t('sidebar.fork')}
-                  title={item.key === lastKey ? t('view.forkLast') : t('view.forkHere')}
-                  onClick={() => onFork(item.turnId)}
+                  title={item.key === lastActionsKey ? t('view.forkLast') : t('view.forkHere')}
+                  onClick={() => onFork(item.key === lastActionsKey ? undefined : item.turnId)}
                 >
                   <IconFork size={15} />
                 </button>
@@ -465,7 +466,7 @@ export function ThreadView({ onOpenFinds, chain = false, observeOlder = true, be
           <ErrorNotice key={item.key} item={item}>
             {item.planExhausted && item === items[items.length - 1] && (takeover || resume) && <div className="exhausted-actions">
               {takeover?.go && takeover.label && <button className="exhausted-hand" onClick={takeover.go} disabled={takeover.busy}>
-                {takeover.busy ? t('view.handingOver') : t('view.handTo', takeover.label)}
+                {takeover.busy ? t('actions.forking') : t('view.forkContinueWith', takeover.label)}
                 <IconArrowRight size={14} />
               </button>}
               {takeover && <button className="exhausted-quiet" onClick={takeover.choose} disabled={takeover.busy}>{t('view.chooseOtherShort')}</button>}

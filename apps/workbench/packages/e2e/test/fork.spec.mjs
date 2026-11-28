@@ -46,7 +46,9 @@ test('the fork button copies the thread and opens the copy', async () => {
   // The button sits in the row under the answer, with copy and the time the turn ended.
   await forkButton().waitFor();
   assert.match(await page.locator('.message-actions .message-time').innerText(), /^\d\d:\d\d$/);
+  // Codex-style 1-click native fork: clicking the reply-footer fork icon copies immediately without a modal.
   await forkButton().click();
+  assert.equal(await page.locator('.fork-subchat-dialog').count(), 0);
 
   // The copy opens: the title carries the fork mark, and the conversation came with it.
   await page.locator('.topbar-title', { hasText: '（分叉）' }).waitFor({ timeout: 10_000 });
@@ -84,7 +86,9 @@ test('forking under an earlier answer copies the thread up to that turn only', a
     }),
   );
 
+  // Clicking fork under an earlier answer copies up to that turn immediately with zero modal.
   await forkButton().first().click();
+  assert.equal(await page.locator('.fork-subchat-dialog').count(), 0);
   await page.locator('.topbar-title', { hasText: '（分叉）（分叉）' }).waitFor({ timeout: 10_000 });
   await page.getByText('hi there hello fork').waitFor({ timeout: 5_000 });
   // The second turn stayed behind.

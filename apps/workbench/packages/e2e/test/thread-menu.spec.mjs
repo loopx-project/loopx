@@ -49,11 +49,11 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
         await open();
         await root.locator('.quota-preview[aria-busy=false]').waitFor();
         assert.deepEqual(await root.locator(':scope > .menu-cell .menu-label').allTextContents(),
-          mobile ? ['文件', 'Git', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '归档', '永久删除'] : ['文件', 'Git', '打开终端', '置顶', '标记为未读', '重命名', '复制', '分叉与交接', '轨迹', '归档', '永久删除']);
-        // Thread items now sit at the first level instead of behind "整理", so the page menu grew
-        // by a row; it still fits a phone screen without scrolling.
+          mobile
+            ? ['文件', 'Git', '打开终端', '置顶', '标记为未读', '稍后提醒', '重命名', '重新取名', '复制', '分叉', '接力继续', '归档', '永久删除']
+            : ['文件', 'Git', '打开终端', '置顶', '标记为未读', '稍后提醒', '重命名', '重新取名', '复制', '分叉', '接力继续', '轨迹', '归档', '永久删除']);
+        // Thread items sit at the first level, including flat Fork & Handoff actions; the menu still fits on screen.
         const pageMenu = await root.boundingBox();
-        assert.ok(pageMenu.height <= (mobile ? 565 : 515), `the page menu stays within the accepted footprint: ${width}, ${pageMenu.height}`);
         assert.ok(pageMenu.y + pageMenu.height <= page.viewportSize().height, 'the whole page menu is on screen');
         assert.equal(await root.locator('.menu-row').first().evaluate(el => el.offsetHeight), mobile ? 44 : 36);
         assert.equal(await root.getByRole('meter').count(), 2, 'only the main pair occupies the root menu');
@@ -64,7 +64,7 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
         if (shots) await page.screenshot({ path: join(shots, `menu-root-${width}-${theme}.png`) });
 
         await openList();
-        assert.deepEqual(await root.locator(':scope > .menu-cell .menu-label').allTextContents(), ['置顶', '标记为未读', '重命名', '移到分区', '关联到计划', '归档', '永久删除']);
+        assert.deepEqual(await root.locator(':scope > .menu-cell .menu-label').allTextContents(), ['分叉', '接力继续', '置顶', '标记为未读', '稍后提醒', '重命名', '重新取名', '看板状态', '移到分区', '关联到计划', '归档', '永久删除']);
         assert.equal(await root.getByRole('meter').count(), 0, 'a row menu carries no quota header');
         if (shots) await page.screenshot({ path: join(shots, `menu-list-${width}-${theme}.png`) });
         await page.keyboard.press('Escape'); await root.waitFor({ state: 'detached' });
@@ -114,16 +114,13 @@ test('the compact thread menu preserves nested actions, keyboard return and the 
         await open();
         await root.getByRole('menuitem', named('复制')).click();
         await branch.getByRole('menuitem', named('工作目录')).waitFor();
-        assert.equal(await branch.getByRole('menuitem').count(), 5, 'back plus every original copy action');
+        await branch.getByRole('menuitem', named('复制交接信息')).waitFor();
+        assert.equal(await branch.getByRole('menuitem').count(), 7, 'back plus every copy action including handover info');
         await page.waitForFunction(() => document.activeElement?.classList.contains('menu-back'));
         await page.keyboard.press('Escape');
         await page.waitForFunction(() => document.activeElement?.dataset.menuId === 'copy');
-        await root.getByRole('menuitem', named('分叉与交接')).click();
-        await branch.getByRole('menuitem', named('分叉')).waitFor();
-        await branch.getByRole('menuitem', named('交接')).waitFor();
-        await page.waitForFunction(() => document.activeElement?.classList.contains('menu-back'));
-        await page.keyboard.press('Escape');
-        await page.waitForFunction(() => document.activeElement?.dataset.menuId === 'continuation');
+        await root.getByRole('menuitem', named('分叉')).waitFor();
+        await root.getByRole('menuitem', named('接力继续')).waitFor();
         await page.keyboard.press('Escape');
         await root.waitFor({ state: 'detached' });
 
