@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import datetime
@@ -6,6 +7,7 @@ import pytest
 
 from loopx.capabilities.periodic_report.cadence_journal import (
     admit_cadence_window,
+    cadence_journal_path,
     cadence_intent,
     read_cadence_journal,
     validate_cadence_window,
@@ -65,13 +67,16 @@ def test_cadence_is_eligible_without_a_fake_stage_or_user(tmp_path):
 
 def test_configuration_change_supersedes_only_unprepared_window(tmp_path):
     first = admit(tmp_path)
+    original = read_cadence_journal(runtime_root=tmp_path, goal_id="example")
     updated = {**config(), "effective_revision": "sha256:" + "b" * 64}
     second = admit(tmp_path, subscription=updated)
     assert second["status"] == "pending"
     assert second["window"]["window_id"] != first["window"]["window_id"]
     assert second["mutated"] is True
     persisted = read_cadence_journal(runtime_root=tmp_path, goal_id="example")
-    assert persisted["supersedes"] == first["window"]["window_id"]
+    journal = cadence_journal_path(tmp_path, "example")
+    predecessor = journal.parent / "superseded-cadence" / f"{persisted['supersedes']}.json"
+    assert json.loads(predecessor.read_text()) == original
     assert persisted["publication"] is None
     assert admit(tmp_path, subscription=updated)["mutated"] is False
     from loopx.capabilities.periodic_report.pending_intent import _attempt_dir

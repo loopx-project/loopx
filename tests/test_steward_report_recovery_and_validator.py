@@ -908,7 +908,10 @@ def test_steward_antigravity_exhausted_timeout_recovery_advances_at_next_boundar
         assert latest["due_at"] == old["next_due_at"]
         assert done["loopx_request"]["report_window_id"] == latest["window_id"]
         assert done["loopx_request"]["todo_id"] != old_todo_id
-        superseded = json.loads((reports.root / "goals" / actor["goal_id"] / "periodic_reports" / "superseded-cadence" / f"{old['window_id']}.json").read_text())
+        latest_journal = read_cadence_journal(runtime_root=reports.root, goal_id=actor["goal_id"])
+        archive_dir = reports.root / "goals" / actor["goal_id"] / "periodic_reports/superseded-cadence"
+        archive = archive_dir / f"{latest_journal['supersedes']}.json"
+        superseded = json.loads(archive.read_text())
         assert superseded == previous_journal
         proof = json.loads((old_folder / REPORT_FAILURE_PROOF).read_text())
         assert proof["adapter_kind"] == "antigravity_ls"

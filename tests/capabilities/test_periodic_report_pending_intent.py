@@ -253,6 +253,37 @@ def test_calendar_hook_to_editorial_to_delivery_todo_preserves_window(tmp_path: 
     assert read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)["publication"]["publication_id"] == "fixture-verified-publication"
 
 
+def test_calendar_route_can_switch_back_and_forth_in_one_window(tmp_path):
+    from datetime import datetime
+    from loopx.capabilities.periodic_report.cadence_journal import cadence_journal_path, read_cadence_journal
+    from loopx.capabilities.periodic_report.cadence_runtime import extend_cadence_turn_start_dispatch
+    from loopx.configure_goal import configure_goal
+
+    registry, runtime = _calendar_fixture(tmp_path)
+    config = json.loads(registry.read_text())["goals"][0]["control_plane"]["periodic_report"]
+    journal_path = cadence_journal_path(runtime, GOAL_ID)
+    now = datetime.fromisoformat("2026-09-11T10:00:00Z")
+    documents = []
+    for route in ("route-a", "route-b", "route-a", "route-b"):
+        configure_goal(registry_path=registry, goal_id=GOAL_ID,
+                       periodic_report_configuration={**config, "route_ref": route}, execute=True)
+        dispatch = extend_cadence_turn_start_dispatch({}, registry_path=registry, runtime_root=runtime,
+            goal_id=GOAL_ID, agent_id=AGENT_ID, now=now)
+        assert dispatch["failures"] == []
+        assert dispatch["results"][0]["agent_read_required"] is True
+        current = read_cadence_journal(runtime_root=runtime, goal_id=GOAL_ID)
+        if documents:
+            archive = journal_path.parent / "superseded-cadence" / f"{current['supersedes']}.json"
+            assert json.loads(archive.read_text()) == documents[-1]
+        documents.append(current)
+
+    assert documents[0]["window"] == documents[2]["window"]
+    assert documents[1]["window"] == documents[3]["window"]
+    assert len({entry["admitted_at"] for entry in documents}) == 1
+    assert len({entry["supersedes"] for entry in documents[1:]}) == 3
+    assert all(entry["publication"] is None for entry in documents)
+
+
 @pytest.mark.parametrize("prepared", [False, True])
 def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prepared):
     from datetime import datetime
@@ -283,7 +314,8 @@ def test_calendar_reporter_replacement_uses_admitted_window_state(tmp_path, prep
     else:
         assert result["error_code"] is None
         assert result["agent_read_required"] is True
-        assert current["supersedes"] == original["window"]["window_id"]
+        archive = runtime / "goals" / GOAL_ID / "periodic_reports/superseded-cadence" / f"{current['supersedes']}.json"
+        assert json.loads(archive.read_text()) == original
         assert current["window"]["agent_id"] == "replacement-peer"
         assert current["publication"] is None
 
