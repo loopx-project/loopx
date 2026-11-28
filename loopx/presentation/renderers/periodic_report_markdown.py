@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -13,6 +12,11 @@ from ...capabilities.periodic_report.adapters import (
     DOCUMENT_SCHEMA,
     PeriodicReportRendererAdapter,
     validate_periodic_report_editorial,
+)
+from ...capabilities.periodic_report.field_shapes import (
+    INLINE_MARKDOWN_LINK_RAW_MULTIPLIER,
+    iter_periodic_report_inline_segments,
+    validate_periodic_report_http_url,
 )
 from ..public_safety import redact_public_text
 
@@ -31,6 +35,46 @@ def _safe(value: object, *, maximum: int) -> str:
     return str(redact_public_text(value, limit=maximum))
 
 
+def _safe_inline_markdown(
+    value: object,
+    *,
+    maximum: int,
+    _legacy_inline_links: bool = False,
+) -> str:
+    if _legacy_inline_links:
+        return _safe(value, maximum=maximum)
+    redacted = str(
+        redact_public_text(
+            value,
+            limit=maximum * INLINE_MARKDOWN_LINK_RAW_MULTIPLIER,
+        )
+    )
+    if not redacted:
+        return ""
+    segments = iter_periodic_report_inline_segments(redacted)
+    visible_total = sum(len(label) for label, _url in segments)
+    truncated = visible_total > maximum
+    budget = max(0, maximum - 1) if truncated else maximum
+    rendered: list[str] = []
+    remaining = budget
+    for label, url in segments:
+        if remaining <= 0:
+            break
+        if url is None:
+            piece = label[:remaining]
+            rendered.append(piece)
+            remaining -= len(piece)
+        elif len(label) <= remaining:
+            destination = quote(url, safe=":/?#[]@!$&'*+,;=%-._~")
+            rendered.append(f"[{label}]({destination})")
+            remaining -= len(label)
+        else:
+            rendered.append(label[:remaining])
+            remaining = 0
+    result = "".join(rendered)
+    return result.rstrip() + "..." if truncated else result
+
+
 def _visibility(item: Mapping[str, Any]) -> str:
     return str(item.get("visibility") or "primary")
 
@@ -42,20 +86,9 @@ def periodic_report_source_url(value: object, *, _legacy_source_links: bool = Fa
         raw = _safe(value, maximum=500)
         parsed = urlsplit(raw)
         return raw if parsed.scheme in {"http", "https"} and parsed.netloc else None
-    if not isinstance(value, str) or not value or value != _safe(value, maximum=500):
+    if not isinstance(value, str) or value != _safe(value, maximum=500):
         return None
-    if any(char.isspace() or unicodedata.category(char).startswith("C")
-           or char in "<>\\`" for char in value):
-        return None
-    try:
-        parsed = urlsplit(value)
-        if (parsed.scheme not in {"http", "https"} or not parsed.hostname
-                or parsed.username is not None or parsed.password is not None):
-            return None
-        parsed.port  # Reject malformed ports rather than linking a different address.
-    except ValueError:
-        return None
-    return value
+    return validate_periodic_report_http_url(value)
 
 
 def _markdown_source(value: object, labels: Mapping[str, str], *, _legacy_source_links: bool = False) -> str:
@@ -115,6 +148,7 @@ def _render_markdown_item(
     labels: Mapping[str, str],
     references: Mapping[str, int],
     _legacy_source_links: bool = False,
+    _legacy_inline_links: bool = False,
 ) -> None:
     item_title = _safe(item.get("title"), maximum=240)
     source_ref = item.get("source_ref")
@@ -128,14 +162,24 @@ def _render_markdown_item(
         else:
             headline += f" · {_markdown_source(source_ref, labels, _legacy_source_links=_legacy_source_links)}"
     lines.append(headline)
-    lines.append(f"  - {_safe(item.get('summary'), maximum=1000)}")
+    lines.append(
+        f"  - {_safe_inline_markdown(item.get('summary'), maximum=1000, _legacy_inline_links=_legacy_inline_links)}"
+    )
     for detail in _items(item.get("details")):
         detail_label = _safe(detail.get("label"), maximum=40)
-        detail_text = _safe(detail.get("text"), maximum=500)
+        detail_text = _safe_inline_markdown(
+            detail.get("text"),
+            maximum=500,
+            _legacy_inline_links=_legacy_inline_links,
+        )
         lines.append(
             f"  - **{detail_label}{labels['label_separator']}** {detail_text}"
         )
-    next_action = _safe(item.get("next_action"), maximum=500)
+    next_action = _safe_inline_markdown(
+        item.get("next_action"),
+        maximum=500,
+        _legacy_inline_links=_legacy_inline_links,
+    )
     if next_action:
         lines.append(
             f"  - **{labels['next']}{labels['label_separator']}** {next_action}"
@@ -147,14 +191,16 @@ def render_periodic_report_markdown(
     *,
     _legacy_source_links: bool = False,
     _legacy_layout: bool = False,
+    _legacy_inline_links: bool = False,
 ) -> dict[str, Any]:
     """Render normalized sections without changing ordering or business meaning."""
 
     if document.get("schema_version") != DOCUMENT_SCHEMA:
         raise ValueError(f"document must use {DOCUMENT_SCHEMA}")
-    validate_periodic_report_editorial(document)
     # Read-only reconstruction of artifacts frozen before these presentation fixes.
     _legacy_layout = _legacy_layout or _legacy_source_links
+    _legacy_inline_links = _legacy_inline_links or _legacy_layout
+    validate_periodic_report_editorial(document, _legacy_inline_links=_legacy_inline_links)
     references = {} if _legacy_layout else _source_references(document)
     title = _safe(document.get("title"), maximum=200)
     window = _mapping(document.get("period_window"))
@@ -177,7 +223,11 @@ def render_periodic_report_markdown(
         for highlight in highlights:
             label = _safe(highlight.get("label"), maximum=80)
             value = _safe(highlight.get("value"), maximum=48)
-            detail = _safe(highlight.get("detail"), maximum=160)
+            detail = _safe_inline_markdown(
+                highlight.get("detail"),
+                maximum=160,
+                _legacy_inline_links=_legacy_inline_links,
+            )
             lines.append(f"- **{label}{labels['label_separator']}{value}**" + (f" · {detail}" if detail else ""))
     elif summary:
         lines.extend(["", summary])
@@ -201,13 +251,27 @@ def render_periodic_report_markdown(
             lines.append(f"- {labels['no_items']}")
             continue
         for item in section_items:
-            _render_markdown_item(lines, item, labels=labels, references=references, _legacy_source_links=_legacy_source_links)
+            _render_markdown_item(
+                lines,
+                item,
+                labels=labels,
+                references=references,
+                _legacy_source_links=_legacy_source_links,
+                _legacy_inline_links=_legacy_inline_links,
+            )
     if supporting_sections:
         lines.extend(["", f"## {labels['supporting_appendix']}"])
         for section, section_items in supporting_sections:
             lines.extend(["", f"### {_safe(section.get('title'), maximum=160)}", ""])
             for item in section_items:
-                _render_markdown_item(lines, item, labels=labels, references=references, _legacy_source_links=_legacy_source_links)
+                _render_markdown_item(
+                    lines,
+                    item,
+                    labels=labels,
+                    references=references,
+                    _legacy_source_links=_legacy_source_links,
+                    _legacy_inline_links=_legacy_inline_links,
+                )
     if references:
         lines.extend(["", f"## {labels['source_references']}", ""])
         for reference, number in references.items():

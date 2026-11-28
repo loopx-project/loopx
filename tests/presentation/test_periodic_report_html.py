@@ -456,3 +456,140 @@ def test_process_narration_is_compiled_out_of_the_hero() -> None:
     assert "本期进展：交付形成规模。" in primary
     assert process_narration not in primary
     assert process_narration in supporting
+
+
+def test_inline_markdown_links_render_safely_and_reject_unsafe_targets() -> None:
+    for unsafe_summary in (
+        "Leak [cred](https://user:pass@example.test/p)",
+        "Leak [secret](https://example.test/p?api_key=secretvalue123456)",
+        "Leak [local](/Users/fixture/private.md)",
+    ):
+        with pytest.raises(ValueError, match="private path or credential-like value"):
+            build_periodic_report_source_result(
+                source_id="pr_checklist",
+                source_kind="review_readiness",
+                status="complete",
+                observed_at="2026-07-20T00:40:00Z",
+                sections=[
+                    {
+                        "section_id": "ready_prs",
+                        "title": "Ready PRs",
+                        "items": [
+                            {
+                                "item_id": "unsafe_item",
+                                "title": "Unsafe",
+                                "summary": unsafe_summary,
+                                "content_kind": "outcome",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+    source = build_periodic_report_source_result(
+        source_id="pr_checklist",
+        source_kind="review_readiness",
+        status="complete",
+        observed_at="2026-07-20T00:40:00Z",
+        sections=[
+            {
+                "section_id": "ready_prs",
+                "title": "Ready PRs",
+                "order": 10,
+                "items": [
+                    {
+                        "item_id": "gpt_approved_prs",
+                        "title": "Approved mergeable checklist",
+                        "summary": (
+                            "Verified [#9219](https://github.com/loopx-project/loopx/pull/9219) "
+                            "and rejected [xss](javascript:alert(1)) "
+                            "plus [badport](https://example.test:broken/p)."
+                        ),
+                        "next_action": (
+                            "Merge [#9219](https://github.com/loopx-project/loopx/pull/9219) "
+                            "after owner check."
+                        ),
+                        "content_kind": "outcome",
+                        "details": [
+                            {
+                                "label": "Batch",
+                                "text": " ".join(
+                                    f"[#{n}](https://github.com/loopx-project/loopx/pull/{n})"
+                                    for n in range(9101, 9110)
+                                ),
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+    document = build_periodic_report_document(
+        title="PR readiness report",
+        generated_at="2026-07-20T01:00:00Z",
+        period_window={
+            "start_at": "2026-07-13T00:00:00Z",
+            "end_at": "2026-07-20T00:00:00Z",
+        },
+        profile={"profile_id": "maintenance", "profile_version": "v1"},
+        sources=[source],
+        editorial={"language": "en", "kicker": "Readiness"},
+    )
+    # Compiled hero summary strips hidden URL destination without mid-link slicing.
+    assert document["editorial"]["summary"] == (
+        "Outcome: Approved mergeable checklist. "
+        "Next: Merge #9219 after owner check."
+    )
+
+    # Also prove renderer defense-in-depth if raw document details carry unsafe shapes.
+    document["sections"][0]["items"][0]["details"].append(
+        {
+            "label": "Untrusted",
+            "text": (
+                "[cred](https://user:pass@example.test/p) "
+                "[secret](https://example.test/p?api_key=secretvalue123456) "
+                "[local](/Users/fixture/private.md)"
+            ),
+        }
+    )
+
+    markdown = periodic_report_markdown_renderer_adapter().render(document)["content"]
+    html = periodic_report_html_renderer_adapter().render(document)["content"]
+
+    assert "[#9219](https://github.com/loopx-project/loopx/pull/9219)" in markdown
+    assert "[#9109](https://github.com/loopx-project/loopx/pull/9109)" in markdown
+    assert "<local-path-redacted>" in markdown
+    assert "/Users/fixture" not in markdown
+    assert '<a href="https://github.com/loopx-project/loopx/pull/9219" target="_blank" rel="noopener noreferrer">#9219</a>' in html
+    assert '<a href="https://github.com/loopx-project/loopx/pull/9109" target="_blank" rel="noopener noreferrer">#9109</a>' in html
+    assert 'href="javascript:' not in html
+    assert 'href="https://example.test:broken/p"' not in html
+    assert 'href="https://user:pass@example.test/p"' not in html
+    assert 'href="https://example.test/p?api_key=secretvalue123456"' not in html
+    assert "/Users/fixture" not in html
+
+    # Visible text exceeding 360 chars still fails even when valid links are present.
+    with pytest.raises(ValueError, match="360-character primary readability"):
+        build_periodic_report_source_result(
+            source_id="overflow",
+            source_kind="review_readiness",
+            status="complete",
+            observed_at="2026-07-20T00:40:00Z",
+            sections=[
+                {
+                    "section_id": "ready_prs",
+                    "title": "Ready PRs",
+                    "items": [
+                        {
+                            "item_id": "too_long",
+                            "title": "Too long",
+                            "summary": (
+                                "[#9219](https://github.com/loopx-project/loopx/pull/9219) "
+                                + "x" * 356
+                            ),
+                            "content_kind": "outcome",
+                        }
+                    ],
+                }
+            ],
+        )

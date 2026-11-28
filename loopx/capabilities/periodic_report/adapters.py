@@ -19,9 +19,11 @@ from ...control_plane.digest_envelope import sha256_envelope
 from ...public_safe_text import PUBLIC_SAFE_SLUG_PATTERN
 from .field_shapes import (
     DOCUMENT_SCHEMA,
+    INLINE_MARKDOWN_LINK_RAW_MULTIPLIER,
     ITEM_VISIBILITIES,
     REPORT_LANGUAGE_PATTERN,
     SUPPORTING_CONTENT_KINDS,
+    periodic_report_visible_text,
 )
 
 
@@ -78,6 +80,29 @@ def _optional_text(
     if value is None:
         return None
     return _text(value, label, maximum=maximum)
+
+
+def _rich_text(value: object, label: str, *, maximum: int = 1000) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} is required")
+    if (
+        len(text) > maximum * INLINE_MARKDOWN_LINK_RAW_MULTIPLIER
+        or len(periodic_report_visible_text(text)) > maximum
+    ):
+        raise ValueError(f"{label} exceeds {maximum} characters")
+    return text
+
+
+def _optional_rich_text(
+    value: object,
+    label: str,
+    *,
+    maximum: int = 1000,
+) -> str | None:
+    if value is None:
+        return None
+    return _rich_text(value, label, maximum=maximum)
 
 
 def _token(value: object, label: str) -> str:
@@ -146,7 +171,7 @@ def _normalize_item(raw: object, *, label: str) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "item_id": _token(item.get("item_id"), f"{label}.item_id"),
         "title": _text(item.get("title"), f"{label}.title", maximum=240),
-        "summary": _text(item.get("summary"), f"{label}.summary", maximum=1000),
+        "summary": _rich_text(item.get("summary"), f"{label}.summary", maximum=1000),
         "value_rank": _integer(
             item.get("value_rank", 500),
             f"{label}.value_rank",
@@ -156,11 +181,15 @@ def _normalize_item(raw: object, *, label: str) -> dict[str, Any]:
     for field, maximum in (
         ("status", 80),
         ("source_ref", 500),
-        ("next_action", 500),
     ):
         value = _optional_text(item.get(field), f"{label}.{field}", maximum=maximum)
         if value:
             normalized[field] = value
+    next_action = _optional_rich_text(
+        item.get("next_action"), f"{label}.next_action", maximum=500
+    )
+    if next_action:
+        normalized["next_action"] = next_action
     tags = sorted(
         {
             _token(value, f"{label}.tags[]")
@@ -204,7 +233,7 @@ def _normalize_item(raw: object, *, label: str) -> dict[str, Any]:
                 "label": _text(
                     detail.get("label"), f"{detail_label}.label", maximum=40
                 ),
-                "text": _text(
+                "text": _rich_text(
                     detail.get("text"), f"{detail_label}.text", maximum=360
                 ),
             }
@@ -232,7 +261,10 @@ def _normalize_item(raw: object, *, label: str) -> dict[str, Any]:
             f"{label}.visibility must be supporting for {content_kind} content"
         )
     effective_visibility = visibility or "primary"
-    if effective_visibility == "primary" and len(str(normalized["summary"])) > 360:
+    if (
+        effective_visibility == "primary"
+        and len(periodic_report_visible_text(str(normalized["summary"]))) > 360
+    ):
         raise ValueError(
             f"{label}.summary exceeds the 360-character primary readability limit; "
             "split supporting facts into details"
@@ -290,7 +322,7 @@ def _normalize_editorial(raw: object) -> dict[str, Any] | None:
             "value": _text(highlight.get("value"), f"{label}.value", maximum=48),
             "label": _text(highlight.get("label"), f"{label}.label", maximum=80),
         }
-        detail = _optional_text(highlight.get("detail"), f"{label}.detail", maximum=160)
+        detail = _optional_rich_text(highlight.get("detail"), f"{label}.detail", maximum=160)
         if detail:
             normalized_highlight["detail"] = detail
         tone = _optional_text(highlight.get("tone"), f"{label}.tone", maximum=128)
@@ -347,8 +379,8 @@ def _normalize_sections(raw: object, *, label: str) -> list[dict[str, Any]]:
     return sorted(sections, key=lambda item: (int(item["order"]), item["section_id"]))
 
 
-def _summary_excerpt(value: object, *, maximum: int = 120) -> str:
-    text = " ".join(str(value or "").split()).strip()
+def _summary_excerpt(text: str, *, maximum: int = 120) -> str:
+    text = " ".join(text.split())
     if len(text) <= maximum:
         return text.rstrip("。.!?；; ")
     shortened = text[: maximum - 1].rstrip("，,、；;:：。.!? ")
@@ -395,6 +427,7 @@ def _derive_editorial_summary(
     sections: Sequence[Mapping[str, Any]],
     *,
     language: object,
+    legacy_inline_links: bool,
 ) -> tuple[str | None, list[dict[str, str]]]:
     items = _ordered_primary_items(sections)
 
@@ -435,7 +468,11 @@ def _derive_editorial_summary(
             ("next_action", outcome, "next_action", str(outcome["next_action"]))
         )
 
-    parts = [part for part in parts if _summary_excerpt(part[3])]
+    excerpts = [
+        (role, item, field, _summary_excerpt(text if legacy_inline_links else periodic_report_visible_text(text)))
+        for role, item, field, text in parts
+    ]
+    parts = [part for part in excerpts if part[3]]
     if not parts:
         return None, []
     chinese = str(language or "").lower().startswith("zh")
@@ -456,9 +493,9 @@ def _derive_editorial_summary(
     )
     ending = "。" if chinese else "."
     sentences = [
-        f"{labels[role]}：{_summary_excerpt(text)}{ending}"
+        f"{labels[role]}：{text}{ending}"
         if chinese
-        else f"{labels[role]}: {_summary_excerpt(text)}{ending}"
+        else f"{labels[role]}: {text}{ending}"
         for role, _item, _field, text in parts
     ]
     refs = [
@@ -477,6 +514,7 @@ def build_periodic_report_editorial(
     *,
     sections: Sequence[Mapping[str, Any]],
     editorial: Mapping[str, Any] | None = None,
+    _legacy_inline_links: bool = False,
 ) -> dict[str, Any] | None:
     """Compile audience editorial copy from typed primary report items."""
 
@@ -485,6 +523,7 @@ def build_periodic_report_editorial(
     summary, refs = _derive_editorial_summary(
         sections,
         language=compiled.get("language"),
+        legacy_inline_links=_legacy_inline_links,
     )
     if summary:
         compiled["summary"] = _text(summary, "editorial.summary", maximum=600)
@@ -497,7 +536,9 @@ def build_periodic_report_editorial(
     return compiled or None
 
 
-def validate_periodic_report_editorial(document: Mapping[str, Any]) -> None:
+def validate_periodic_report_editorial(
+    document: Mapping[str, Any], *, _legacy_inline_links: bool = False,
+) -> None:
     """Require renderer input to carry the canonical compiled editorial summary."""
 
     raw_editorial = document.get("editorial")
@@ -513,6 +554,7 @@ def validate_periodic_report_editorial(document: Mapping[str, Any]) -> None:
             for section in _sequence(document.get("sections", []), "document.sections")
         ],
         editorial=profile_fields or None,
+        _legacy_inline_links=_legacy_inline_links,
     ) or {}
     if actual.get("summary") != expected.get("summary"):
         raise ValueError(
@@ -610,6 +652,7 @@ def build_periodic_report_document(
     sources: Sequence[Mapping[str, Any]],
     editorial: Mapping[str, Any] | None = None,
     trigger_receipt: Mapping[str, Any] | None = None,
+    _legacy_inline_links: bool = False,
 ) -> dict[str, Any]:
     """Merge normalized source sections into one renderer-neutral document."""
 
@@ -673,6 +716,7 @@ def build_periodic_report_document(
     normalized_editorial = build_periodic_report_editorial(
         sections=normalized_sections,
         editorial=editorial,
+        _legacy_inline_links=_legacy_inline_links,
     )
     normalized_profile = {
         "profile_id": _token(profile.get("profile_id"), "profile.profile_id"),
@@ -725,7 +769,7 @@ def build_periodic_report_document(
         document["editorial"] = normalized_editorial
     if normalized_trigger:
         document["trigger_receipt"] = normalized_trigger
-    validate_periodic_report_editorial(document)
+    validate_periodic_report_editorial(document, _legacy_inline_links=_legacy_inline_links)
     _reject_private_fields(document, "document")
     return document
 

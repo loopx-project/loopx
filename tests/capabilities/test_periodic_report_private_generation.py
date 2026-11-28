@@ -498,3 +498,130 @@ def test_frozen_report_keeps_prior_presentations_across_renderer_upgrade(
     assert validate_private_generation(folder) == receipt
     assert validate_private_generation(folder) == receipt  # Restart/readback is effect-free.
     assert {path.name: path.read_bytes() for path in folder.iterdir() if path.is_file()} == original
+
+
+def test_private_report_preserves_multi_pr_inline_links_and_legacy_plain_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.capabilities.periodic_report.private_generation import report_prompt
+    from loopx.presentation.renderers import periodic_report_html as html_renderer
+    from loopx.presentation.renderers import periodic_report_markdown as md_renderer
+
+    root, window, response = _prepared_report(tmp_path)
+    folder = attempt_directory(root, window)
+    request = json.loads((folder / "editorial-request.json").read_text(encoding="utf-8"))
+    prompt_text = report_prompt(request, folder)
+    assert "[#1234](https://github.com/owner/repo/pull/1234)" in prompt_text
+
+    seven_pr_links = "、".join(
+        f"[#{num}](https://github.com/loopx-project/loopx/pull/{num})@658b0cf7（修通评审）"
+        for num in (9129, 8776, 8772, 9219, 9212, 8791, 8949)
+    )
+    four_pr_links = "、".join(
+        f"[#{num}](https://github.com/loopx-project/loopx/pull/{num})@58ba9a79（重构清零）"
+        for num in (9209, 9206, 8965, 8953)
+    )
+    assert len(seven_pr_links) > 500  # Exceeds raw 360/500 chars while visible text stays compact.
+
+    checklist_item = response["sections"][3]["items"][0]
+    checklist_item["title"] = "需要本人处理的事项与十一条批准可合并清单"
+    checklist_item["summary"] = (
+        "经实时核验，当前共十一条开放且无冲突的变更具备独立评审批准，"
+        "含高优修复 [#9219](https://github.com/loopx-project/loopx/pull/9219) "
+        "与重构 [#9206](https://github.com/loopx-project/loopx/pull/9206)，可按需合并。"
+    )
+    checklist_item["details"] = [
+        {"label": "高优可合入（七条）", "text": f"外部与运行时补丁：{seven_pr_links}。"},
+        {"label": "其余可合入（四条）", "text": f"契约与重构补丁：{four_pr_links}。"},
+    ]
+    checklist_item["next_action"] = (
+        "优先合并 [#9219](https://github.com/loopx-project/loopx/pull/9219) "
+        "并跟进 [#9226](https://github.com/loopx-project/loopx/pull/9226) 独立评审。"
+    )
+    response["highlights"][0]["detail"] = (
+        "十一条可合入含 [#9219](https://github.com/loopx-project/loopx/pull/9219) "
+        "与 [#9206](https://github.com/loopx-project/loopx/pull/9206)"
+    )
+
+    receipt = freeze_private_report(root=root, window=window, response=response)
+    assert validate_private_generation(folder) == receipt
+    rendered_md = (folder / "report.md").read_text(encoding="utf-8")
+    bundle = json.loads((folder / "generation-bundle.json").read_text(encoding="utf-8"))
+    rendered_html = next(
+        item["content"] for item in bundle["artifacts"] if item["renderer_kind"] == "html"
+    )
+    for num in (9129, 8776, 8772, 9219, 9212, 8791, 8949, 9209, 9206, 8965, 8953):
+        expected_url = f"https://github.com/loopx-project/loopx/pull/{num}"
+        assert f"[#{num}]({expected_url})" in rendered_md
+        assert f'<a href="{expected_url}" target="_blank" rel="noopener noreferrer">#{num}</a>' in rendered_html
+
+    # Also verify a pre-upgrade frozen bundle whose inline [label](https://...) was plain-escaped.
+    legacy_root, legacy_window, legacy_response = _prepared_report(tmp_path / "legacy-inline")
+    legacy_response["sections"][0]["items"][0]["summary"] = (
+        "本期已核验 [#9219](https://github.com/loopx-project/loopx/pull/9219) 可直接合并。"
+    )
+    prior_md = md_renderer.render_periodic_report_markdown
+    prior_html = html_renderer.render_periodic_report_html
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            md_renderer,
+            "render_periodic_report_markdown",
+            lambda document, **kw: prior_md(document, **{**kw, "_legacy_inline_links": True}),
+        )
+        mp.setattr(
+            html_renderer,
+            "render_periodic_report_html",
+            lambda document, **kw: prior_html(document, **{**kw, "_legacy_inline_links": True}),
+        )
+        legacy_receipt = freeze_private_report(
+            root=legacy_root, window=legacy_window, response=legacy_response
+        )
+    legacy_folder = attempt_directory(legacy_root, legacy_window)
+    assert validate_private_generation(legacy_folder) == legacy_receipt
+
+
+@pytest.mark.parametrize(("linked_title", "old_wrap", "expected_html"), [
+    (True, False, "a906f21816b00a69ae7c37f922d5aa27c1d23af374a9d629430cf411098ef762"),
+    (False, True, "7650f36362a70de0de6c995618fe50cc02bde9561d4ecb101722273c92e9bb2d"),
+    (True, True, "34bb2c774d6a68b41df31d50d687722233e4a13b6f4535aadfa135fbde041314"),
+])
+def test_replay_pre_inline_link_report(tmp_path, monkeypatch, linked_title, old_wrap, expected_html):
+    from loopx.capabilities.periodic_report import adapters
+    from loopx.presentation.renderers import periodic_report_html as html
+    from loopx.presentation.renderers import periodic_report_markdown as markdown
+
+    root, window, response = _prepared_report(tmp_path)
+    link = " [核验记录](https://example.org/reports/42)"
+    item = response["sections"][0]["items"][0]
+    if linked_title:
+        item["title"] += link
+    item["summary"] += link
+    with monkeypatch.context() as old:
+        old.setattr(adapters, "periodic_report_visible_text", str)
+        old.setattr(markdown, "_safe_inline_markdown", lambda value, *, maximum, **_: markdown._safe(value, maximum=maximum))
+        old.setattr(html, "_safe_inline_html", lambda value, *, maximum, **_: html._safe_text(value, maximum=maximum))
+        if old_wrap:
+            old.setattr(html, "_CSS", html._CSS.replace("\n  overflow-wrap: anywhere;", "", 1))
+        receipt = freeze_private_report(root=root, window=window, response=response)
+
+    folder = attempt_directory(root, window)
+    original = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+    bundle = json.loads(original["generation-bundle.json"])
+    artifact = next(a for a in bundle["artifacts"] if a["renderer_kind"] == "html")
+    # Fingerprints from the pre-link freezer (25176a31). Only the generation
+    # timestamp and its document digest vary between runs.
+    stable_html = artifact["content"].replace(bundle["document"]["generated_at"], "TIMESTAMP")
+    stable_html = stable_html.replace(artifact["document_digest"], "DOCUMENT_DIGEST")
+    assert hashlib.sha256(stable_html.encode()).hexdigest() == expected_html
+    expected_md = ("dbc438db17810578c7d530d5e464c31829131598e2e2d5d8a40eda3ab7b1b0e7" if linked_title else
+                   "3c60f6f44b6bbb06ca0002dc50ea5de0ac1dca0695d75a2dc726938d957262fd")
+    assert hashlib.sha256(original["report.md"]).hexdigest() == expected_md
+    assert validate_private_generation(folder) == receipt
+    assert {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()} == original
+
+    bundle["document"]["editorial"]["summary"] += "未获证实。"
+    atomic_write_json(folder / "generation-bundle.json", bundle)
+    atomic_write_json(folder / "private-generation.json", {**receipt, "bundle_sha256": _canonical_digest(bundle)})
+    with pytest.raises(ValueError, match="frozen generation"):
+        validate_private_generation(folder)

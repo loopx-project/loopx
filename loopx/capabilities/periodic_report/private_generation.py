@@ -26,6 +26,7 @@ _SOURCE_NARRATIVE_REQUIREMENTS = (
     "Current source state is observed at collection time, not reconstructed as of the period end. Disclose the collection time when available and retain unreadable views as gaps.",
     "Use recorded completion/evidence times for the exact half-open window [window.start_at, window.due_at). Separate its outcomes, older history and changes at or after its end; a later completed Task is not proof of an in-window outcome. Unknown times stay unknown.",
     "Describe current work and relevant completed Tasks. Preserve concrete outcomes, quantified before/after comparisons, relevant counterevidence and the responsible owner's next action in the body. State shared limitations once; supporting evidence must not crowd out the substantive findings.",
+    "Format verified public GitHub PRs, Issues, Releases, and workflow runs (especially in mergeable or stalled PR checklists and owner action items) as inline clickable Markdown links such as [#1234](https://github.com/owner/repo/pull/1234) instead of bare #1234 tokens; never fabricate URLs from opaque digests or private records.",
 )
 
 
@@ -204,8 +205,11 @@ def report_prompt(request: dict[str, Any], folder: Path) -> str:
         "a concise Chinese-first title without the separately rendered period or timezone, "
         "2-4 Chinese highlights ({highlight_id: unique lower_snake token, label: <=80 chars, value: <=48 chars, "
         "detail: <=160 chars, tone: attention|neutral|positive}) and sections in the supplied exact order/titles. "
-        "Each section has nonempty items with title (<=240 chars), substantive summary (<=360 chars) "
-        "and a supplied fact's source_ref; causal items require 2-4 details, each {label: <=40 chars, text: <=360 chars}. "
+        "Each section has nonempty items with title (<=240 chars), substantive summary (<=360 visible chars) "
+        "and a supplied fact's source_ref; causal items require 2-4 details, each {label: <=40 chars, text: <=360 visible chars}. "
+        "Whenever citing verified public GitHub PRs, Issues, Releases, or workflow runs (especially in mergeable/stalled PR checklists), "
+        "format them as inline clickable Markdown links like [#1234](https://github.com/owner/repo/pull/1234) rather than bare #1234 numbers "
+        "(inline HTTP URL targets do not count against the 360-character visible limit or Chinese density; never fabricate URLs from opaque digests). "
         "Do not supply item_id, content_kind or value_rank. Include at least six substantive items in total, "
         "covering " + coverage + " and material gaps. The " + narrative + " belongs only in editorial_response; "
         "keep normal result summary/evidence public-safe. A validated report generation is distinct from " + delivery + ".\n"
@@ -350,14 +354,37 @@ def freeze_private_report(*, root: Path, window: dict[str, Any], response: dict[
         return receipt
 
 
+def _matches_frozen_presentation(
+    document: dict[str, Any], bundle: dict[str, Any], *, legacy_inline_links: bool,
+) -> bool:
+    from .bindings import build_periodic_report_generation_bundle
+    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
+    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
+
+    layouts = (
+        ({}, {}),
+        ({}, {"_legacy_highlight_wrap": True}),
+        ({}, {"_legacy_masthead": True}),
+        ({"_legacy_layout": True}, {"_legacy_layout": True}),
+        ({"_legacy_source_links": True}, {"_legacy_source_links": True}),
+    ) if legacy_inline_links else (({}, {}),)
+    for markdown_options, html_options in layouts:
+        markdown = render_periodic_report_markdown(
+            document, _legacy_inline_links=legacy_inline_links, **markdown_options,
+        )
+        html = render_periodic_report_html(
+            document, _legacy_inline_links=legacy_inline_links, **html_options,
+        )
+        if build_periodic_report_generation_bundle(document=document, artifacts=[markdown, html]) == bundle:
+            return True
+    return False
+
+
 def validate_private_generation(folder: Path) -> dict[str, Any]:
     """Independent frozen-content check used by the native Turn validator."""
-    from .bindings import build_periodic_report_generation_bundle
     from .incremental import build_periodic_report_publication_candidate
     from .adapters import build_periodic_report_document
     from .post_writeback_hook import evaluate_periodic_report_trigger_evaluation_intent
-    from ...presentation.renderers.periodic_report_markdown import render_periodic_report_markdown
-    from ...presentation.renderers.periodic_report_html import render_periodic_report_html
 
     receipt = _read(folder / "private-generation.json")
     request = _read(folder / "editorial-request.json")
@@ -371,42 +398,41 @@ def validate_private_generation(folder: Path) -> dict[str, Any]:
         raise ValueError("frozen report source binding changed")
     _verify_source_facts(request, source)
     window = validate_cadence_window(request["window"])
-    document = build_periodic_report_document(title=authored["title"], generated_at=receipt["generated_at"],
-        period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
-        profile=window["profile_ref"], sources=_report_sources(authored, request, receipt["generated_at"]),
-        editorial=authored["editorial"],
-        trigger_receipt=evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window)))
     bundle = _read(folder / "generation-bundle.json")
-    # Reconstruct only shipped presentations, never rewrite frozen artifacts.
-    # Each still requires full bundle, source and body equality below.
-    for markdown_options, html_options in (
-        ({}, {}),
-        ({}, {"_legacy_highlight_wrap": True}),
-        ({}, {"_legacy_masthead": True}),
-        ({"_legacy_layout": True}, {"_legacy_layout": True}),
-        ({"_legacy_source_links": True}, {"_legacy_source_links": True}),
-    ):
-        checked = build_periodic_report_generation_bundle(document=bundle["document"], artifacts=[
-            render_periodic_report_markdown(bundle["document"], **markdown_options),
-            render_periodic_report_html(bundle["document"], **html_options)])
-        if checked == bundle:
+    sources = _report_sources(authored, request, receipt["generated_at"])
+    trigger = evaluate_periodic_report_trigger_evaluation_intent(cadence_intent(window))
+    # Every layout before inline-link rendering used raw Markdown for excerpts
+    # and escaped inline text in both artifacts. Rebuild each generation from
+    # its original inputs before comparing any stored presentation.
+    for legacy_inline_links in (False, True):
+        document = build_periodic_report_document(
+            title=authored["title"], generated_at=receipt["generated_at"],
+            period_window={"start_at": window["start_at"], "end_at": window["due_at"]},
+            profile=window["profile_ref"], sources=sources, editorial=authored["editorial"],
+            trigger_receipt=trigger, _legacy_inline_links=legacy_inline_links,
+        )
+        if document != bundle["document"]:
+            continue
+        if _matches_frozen_presentation(document, bundle, legacy_inline_links=legacy_inline_links):
             break
+    else:
+        raise ValueError("frozen generation or full report body changed")
     candidate = _read(folder / "publication-candidate.json")
     expected_candidate = build_periodic_report_publication_candidate(goal_id=window["goal_id"],
-        agent_id=window["agent_id"], generation_id=checked["generation_receipt"]["generation_id"],
+        agent_id=window["agent_id"], generation_id=bundle["generation_receipt"]["generation_id"],
         trigger_receipt=document["trigger_receipt"], facts=request["facts"],
         baseline=candidate.get("incremental_baseline"))
     report_bytes = (folder / "report.md").read_bytes()
-    if (document != bundle["document"] or checked != bundle or receipt["bundle_sha256"] != _canonical_digest(checked)
+    if (receipt["bundle_sha256"] != _canonical_digest(bundle)
             or receipt["window_id"] != window["window_id"]
-            or receipt["generation_id"] != checked["generation_receipt"]["generation_id"]
+            or receipt["generation_id"] != bundle["generation_receipt"]["generation_id"]
             or candidate != expected_candidate
             or receipt["publication_candidate_id"] != candidate["candidate_id"]
             or receipt["publication_candidate_sha256"] != _canonical_digest(candidate)
             or receipt["request_digest"] != request["request_digest"]
             or receipt["body_sha256"] != hashlib.sha256(report_bytes).hexdigest()
             or report_bytes.decode("utf-8") != next(
-                artifact["content"] for artifact in checked["artifacts"]
+                artifact["content"] for artifact in bundle["artifacts"]
                 if artifact["renderer_kind"] == "markdown")):
         raise ValueError("frozen generation or full report body changed")
     return receipt
