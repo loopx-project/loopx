@@ -2081,6 +2081,53 @@ theorem supplemental_request_includes_both_recent_windows_with_bounded_rows (old
     20 + 20 + 20 * olderPages ≤ 100 ∧ 20 + 20 + 50 * olderPages ≤ 190 := by
   omega
 
+structure RepositoryMonitorState where
+  trustedPrs : List Nat
+  independentHash : Option Nat
+  pollCount : Nat
+  deriving DecidableEq
+
+/-
+  This step assumes an unavailable repository and an eligible original Turn.
+  The trusted PRs come from the last committed observation.
+  A supplied independent hash denotes enabled, readable independent sources.
+  The retry flag records whether the original Turn has already used its one recovery.
+-/
+def unavailableRepositoryStep (state : RepositoryMonitorState) (independent : Option Nat) (retried : Bool) :
+    RepositoryMonitorState × Bool × Bool :=
+  if independent.isSome && independent != state.independentHash then
+    ({ state with independentHash := independent, pollCount := state.pollCount + 1 }, true, false)
+  else (state, false, !retried)
+
+theorem repository_only_unavailability_preserves_poll_state (state : RepositoryMonitorState) :
+    unavailableRepositoryStep state none false = (state, false, true) := rfl
+
+theorem repository_only_repeat_failure_leaves_the_next_due_monitor_eligible (state : RepositoryMonitorState) :
+    unavailableRepositoryStep state none true = (state, false, false) := rfl
+
+theorem combined_independent_change_polls_once_without_replacing_prs
+    (state : RepositoryMonitorState) (independent : Nat) (retried : Bool)
+    (changed : some independent ≠ state.independentHash) :
+    unavailableRepositoryStep state (some independent) retried =
+      ({ state with independentHash := some independent, pollCount := state.pollCount + 1 }, true, false) := by
+  simp [unavailableRepositoryStep, changed]
+
+theorem unchanged_independent_sources_do_not_consume_a_poll
+    (state : RepositoryMonitorState) (retried : Bool) :
+    unavailableRepositoryStep state state.independentHash retried = (state, false, !retried) := by
+  simp [unavailableRepositoryStep]
+
+theorem unavailable_repository_always_retains_the_trusted_prs
+    (state : RepositoryMonitorState) (independent : Option Nat) (retried : Bool) :
+    (unavailableRepositoryStep state independent retried).1.trustedPrs = state.trustedPrs := by
+  unfold unavailableRepositoryStep
+  split <;> rfl
+
+theorem combined_scope_publishes_independent_change_without_recovery :
+    let prior : RepositoryMonitorState := ⟨[42], some 9, 1⟩
+    unavailableRepositoryStep prior (some 10) false = (⟨[42], some 10, 2⟩, true, false) := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2312,5 +2359,11 @@ theorem supplemental_request_includes_both_recent_windows_with_bounded_rows (old
 #print axioms mixing_older_review_with_stale_recent_reply_can_false_remove
 #print axioms mixing_older_reply_with_stale_recent_review_can_false_remove
 #print axioms supplemental_request_includes_both_recent_windows_with_bounded_rows
+#print axioms repository_only_unavailability_preserves_poll_state
+#print axioms repository_only_repeat_failure_leaves_the_next_due_monitor_eligible
+#print axioms combined_independent_change_polls_once_without_replacing_prs
+#print axioms unchanged_independent_sources_do_not_consume_a_poll
+#print axioms unavailable_repository_always_retains_the_trusted_prs
+#print axioms combined_scope_publishes_independent_change_without_recovery
 
 end StewardPrSignalPagination

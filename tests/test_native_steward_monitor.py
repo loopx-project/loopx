@@ -1,5 +1,6 @@
 """Actual native Todo/deadline/Chat worker/poll path; no model is needed to observe."""
 from datetime import datetime, timedelta, timezone
+import json
 import time
 
 import pytest
@@ -1287,10 +1288,16 @@ def test_fresh_scope_includes_a_new_stopped_goal_without_reusing_or_rewriting_mo
     assert monitor.current(actor)["result_hash"] == first_hash
 
 
-def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_monitors(
-    steward, tmp_path, monkeypatch,
+@pytest.mark.parametrize("scope", ["repository-only", "combined"])
+def test_repository_unavailability_preserves_poll_and_recovery_scope(
+    steward, tmp_path, monkeypatch, scope,
 ):
     from test_steward_generic_monitor_todo import _set_signal_source_policy
+    from loopx.capabilities.native_chat.steward_commands import native_command
+    from loopx.capabilities.native_chat.steward_monitor_turns import (
+        steward_monitor_snapshot_path,
+        write_steward_monitor_scope,
+    )
 
     store, runtime, _, transport, binding, _, _ = steward
     sid, actor, monitor = prepared(steward, tmp_path, monkeypatch, "sqlite")
@@ -1307,8 +1314,7 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
         (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
     )
 
-    from loopx.capabilities.native_chat.steward_commands import native_command
-
+    target = "steward-stalled-pr-monitor"
     first_due = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
     second_due = (datetime.now(timezone.utc) - timedelta(seconds=5)).isoformat()
     added_first = native_command(
@@ -1321,7 +1327,7 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
             "--action-kind", "local_runtime_observe",
             "--continuation-policy", "same_agent_non_delivery",
             "--required-capability", "filesystem",
-            "--target-key", "steward-stalled-pr-monitor",
+            "--target-key", target,
             "--task-repository", "git:github.com/org/repo",
             "--watch-only",
             "--cadence", "30m",
@@ -1348,9 +1354,44 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     )
     pr_todo_id = added_first["todo_id"]
     secondary_todo_id = added_second["todo_id"]
+    root = runtime.coordination_runtime_root
+    snapshot_path = steward_monitor_snapshot_path(root, actor["goal_id"], pr_todo_id)
+    if scope == "repository-only":
+        write_steward_monitor_scope(root, actor["goal_id"], target, {
+            "schema_version": "steward_signal_monitor_scope_v0",
+            "include_portfolio": False,
+            "include_inbox": False,
+            "pr_filter": {"exclude_drafts": True},
+        })
     transport.reconcile()
 
-    # 1. Fail due[0] inside _observe_github_repository_prs before any poll receipt.
+    def poll_events(turn):
+        return [event for event in store.events_after(turn["session_id"], turn["turn_id"], None)
+                if event["kind"] == "native_loopx.monitor_poll"]
+
+    verified_repository = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
+    if scope == "combined":
+        from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, _root, _write, plan_request_publication
+
+        monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+                            lambda *_args, **_kwargs: verified_repository)
+        runtime._steward_monitor_next_check.clear()
+        seed_turns = pump_steward_monitors(runtime)
+        assert len(seed_turns) == 1 and seed_turns[0]["loopx_request"]["todo_id"] == pr_todo_id
+        seed = finish(runtime, seed_turns[0])
+        assert seed["status"] == "completed" and len(poll_events(seed)) == 1
+        assert json.loads(snapshot_path.read_bytes())["repository_snapshot"] == verified_repository
+        outage_due = (datetime.fromisoformat(first_due) - timedelta(seconds=1)).isoformat()
+        edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", outage_due)
+        receiver = {key: actor[key] for key in ("goal_id", "agent_id")}
+        source = "synthetic-recovery-control"
+        request_id = _hash([source, receiver])
+        entry = plan_request_publication({
+            "schema_version": ENTRY_SCHEMA, "request_id": request_id, "source_id": source,
+            **receiver, "message": "Inspect the independent inbox signal.",
+        }, entry=None)["entry"]
+        _write(_root(root) / "entries" / _hash(receiver) / f"{request_id}.json", entry)
+
     calls = {"count": 0}
 
     def flaky_repo_observe(repo_slug, **_kwargs):
@@ -1363,13 +1404,46 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
         "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
         flaky_repo_observe,
     )
+    before = local_watch_row(runtime, actor, pr_todo_id)
+    quota_before = spent_slots(monitor, actor)
     runtime._steward_monitor_next_check.clear()
     initial = pump_steward_monitors(runtime)
     assert len(initial) == 1 and initial[0]["loopx_request"]["todo_id"] == pr_todo_id
-    failed = finish(runtime, initial[0])
+    first = finish(runtime, initial[0])
+    assert calls["count"] == 1
+    if scope == "combined":
+        assert first["status"] == "completed"
+        native = first["response"]["native_loopx"]
+        assert not native["model_invoked"] and not native["quota_spent"]
+        observed = native["monitor"]
+        assert observed["observation_incomplete"] is False
+        assert observed["repository_observation_incomplete"] is True
+        assert observed["material_change"] is True and observed["result_hash"] != before["result_hash"]
+        snapshot = json.loads(snapshot_path.read_bytes())
+        assert snapshot["repository_snapshot"] == verified_repository
+        assert snapshot["repository_observation_incomplete"] is True
+        assert snapshot["inbox_items"] == [{"request_id": request_id, "source_id": source}]
+        assert snapshot["result_hash"] == observed["result_hash"]
+        assert len(poll_events(first)) == 1
+        after = local_watch_row(runtime, actor, pr_todo_id)
+        assert after["result_hash"] == observed["result_hash"] and after["next_due_at"] != before["next_due_at"]
+        runtime._steward_monitor_next_check.clear()
+        next_due = pump_steward_monitors(runtime)
+        assert len(next_due) == 1 and next_due[0]["loopx_request"]["todo_id"] == secondary_todo_id
+        assert "monitor_restart_recovery" not in next_due[0]["loopx_request"]
+        assert finish(runtime, next_due[0])["status"] == "completed"
+        assert spent_slots(monitor, actor) == quota_before
+        return
+
+    failed = first
     assert failed["status"] == "failed"
     assert failed["error_code"] == "runtime_error"
     assert failed["error"] == "steward monitor external signal source temporarily unavailable"
+    assert not poll_events(failed) and not snapshot_path.exists()
+    poll_fields = ("result_hash", "last_checked_at", "next_due_at", "material_change_generation")
+    after_first_failure = local_watch_row(runtime, actor, pr_todo_id)
+    for field in poll_fields:
+        assert after_first_failure.get(field) == before.get(field)
 
     # 2. If due[0] stays unavailable on recovery, it executes its ONE bounded retry and stops failing over itself.
     # Replace flaky mock to fail a second time so we prove 1-retry cap AND non-starvation of due[1]!
@@ -1384,6 +1458,10 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     assert recovery[0]["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == failed["turn_id"]
     failed_again = finish(runtime, recovery[0])
     assert failed_again["status"] == "failed"
+    assert not poll_events(failed_again) and not snapshot_path.exists()
+    after_second_failure = local_watch_row(runtime, actor, pr_todo_id)
+    for field in poll_fields:
+        assert after_second_failure.get(field) == before.get(field)
 
     # 3. Next pump skips the unrecoverable due[0] and dispatches due[1] instead of starving it!
     runtime._steward_monitor_next_check.clear()
@@ -1409,7 +1487,11 @@ def test_signal_unavailable_monitor_recovers_once_and_does_not_starve_other_due_
     assert len(recovered_try) == 1
     recovered_done = finish(runtime, recovered_try[0])
     assert recovered_done["status"] == "completed", recovered_done
-    assert local_watch_row(runtime, actor, pr_todo_id)["next_due_at"] != third_due
+    assert len(poll_events(recovered_done)) == 1
+    recovered_watch = local_watch_row(runtime, actor, pr_todo_id)
+    assert recovered_watch["next_due_at"] != third_due
+    assert recovered_watch["result_hash"] == json.loads(snapshot_path.read_bytes())["result_hash"]
+    assert spent_slots(monitor, actor) == quota_before
 
 
 @pytest.mark.parametrize(
