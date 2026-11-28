@@ -185,7 +185,7 @@ def _rpc_post(
     )
     try:
         with _loopback_rpc_opener().open(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+            raw = resp.read().decode("utf-8")
             data: object = json.loads(raw) if raw.strip() else {}
             if not _is_dict(data):
                 raise ValueError("Antigravity RPC response must be a JSON object")

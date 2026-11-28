@@ -2906,6 +2906,29 @@ theorem antigravity_malformed_json_remains_a_transport_failure :
 theorem antigravity_http_error_precedes_response_shape (body : AntigravityRpcBody) :
     classifyAntigravityRpcReply false body = .httpFailure := rfl
 
+/- The transport checks HTTP status before decoding. JSON classification
+   receives text only when the entire response is valid UTF-8. -/
+def classifyAntigravityEncodedReply (httpOk utf8Valid : Bool)
+    (body : AntigravityRpcBody) : AntigravityRpcOutcome :=
+  if !httpOk then .httpFailure
+  else if !utf8Valid then .invalidResponse
+  else classifyAntigravityRpcReply true body
+
+theorem antigravity_invalid_utf8_cannot_acknowledge_an_object :
+    classifyAntigravityEncodedReply true false .object = .invalidResponse := rfl
+
+theorem antigravity_valid_unicode_object_still_acknowledges :
+    classifyAntigravityEncodedReply true true .object = .accepted := rfl
+
+theorem antigravity_valid_blank_encoded_reply_still_acknowledges :
+    classifyAntigravityEncodedReply true true .blank = .accepted := rfl
+
+theorem antigravity_valid_utf8_does_not_bypass_json_object_validation :
+    classifyAntigravityEncodedReply true true .nonobject = .invalidResponse := rfl
+
+theorem antigravity_http_error_precedes_encoding_validation (utf8Valid : Bool) (body : AntigravityRpcBody) :
+    classifyAntigravityEncodedReply false utf8Valid body = .httpFailure := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3244,5 +3267,10 @@ theorem antigravity_http_error_precedes_response_shape (body : AntigravityRpcBod
 #print axioms antigravity_json_object_rpc_reply_remains_valid
 #print axioms antigravity_malformed_json_remains_a_transport_failure
 #print axioms antigravity_http_error_precedes_response_shape
+#print axioms antigravity_invalid_utf8_cannot_acknowledge_an_object
+#print axioms antigravity_valid_unicode_object_still_acknowledges
+#print axioms antigravity_valid_blank_encoded_reply_still_acknowledges
+#print axioms antigravity_valid_utf8_does_not_bypass_json_object_validation
+#print axioms antigravity_http_error_precedes_encoding_validation
 
 end StewardPrSignalPagination

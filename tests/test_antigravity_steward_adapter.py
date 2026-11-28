@@ -973,6 +973,9 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     ("status", "body", "expected"),
     [
         (200, b'{"fixture":true}', {"fixture": True}),
+        (200, '{"fixture":"before�after"}'.encode("utf-8"), {"fixture": "before�after"}),
+        (200, b'{"fixture":"before\xffafter"}', "antigravity_transport_error"),
+        (200, b'{"fixture":"incomplete\xe2\x82"}', "antigravity_transport_error"),
         (200, b"{}", {}),
         (200, b"", {}),
         (200, b" \n\t", {}),
@@ -983,9 +986,11 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (200, b'"fixture"', "antigravity_transport_error"),
         (200, b"{", "antigravity_transport_error"),
         (503, b"[]", "antigravity_rpc_error"),
+        (503, b"\xff", "antigravity_rpc_error"),
     ],
-    ids=["object", "empty-object", "empty-body", "whitespace", "array", "null", "boolean",
-         "number", "string", "malformed-json", "http-error"],
+    ids=["object", "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
+         "whitespace", "array", "null", "boolean", "number", "string", "malformed-json",
+         "http-error", "http-error-invalid-utf8"],
 )
 def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
     from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post
