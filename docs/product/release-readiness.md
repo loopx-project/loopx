@@ -109,6 +109,7 @@ boundary, explicit override, and skill preflight stop).
 | Concurrent same-second install | Two promoted installs race with a shared release-id seed | Partial: each waiter serializes under the guard/lock before its own swap | Each run gets a distinct release directory (`id`, `id-2`, …); one audited default symlink remains after both finish | Treat distinct release ids as expected. Do not hand-edit release directory names mid-install |
 | Incomplete candidate (doctor fail) | Candidate package fails deep doctor or required package-root checks | Yes: candidate directory is removed; previous default target is preserved | No waiter swap occurs. Re-run only after the checkout is complete and doctor-clean | Stop promoting. Fix the checkout; do not set `LOOPX_PROMOTE_DEFAULT=1` to bypass doctor |
 | Skill preflight blocked | Exact-host entry skill cannot be materialized (for example a user-owned colliding skill) | Yes: release candidate is removed; existing default binary stays unchanged | Failure is local to the install attempt; no partial default promotion | Stop. Resolve the skill ownership collision or install without that skill surface before retrying |
+| Ambiguous authority upgrade route | The authority upgrade sees state in both default runtime roots and has no explicit route | Yes: authority upgrade runs before either launcher is switched | The installer keeps the candidate and any upgrade backups. Inspect the registry and runtime roots before retrying the same candidate | Use the verified registry and runtime for preflight. Leave both roots and backups in place |
 | Untrusted checkout (auto mode) | Checkout is dirty, not on the approved default ref, or otherwise untrusted | Yes for default: installer never builds a promoted release snapshot | Installer exits canary-only (`promotion mode: canary_only_untrusted_checkout`), leaves the existing default executable alone, and may refresh `loopx-canary` | Use `loopx-canary` for validation. Do not set `LOOPX_PROMOTE_DEFAULT=1` unless you are explicitly approving this checkout as a maintainer-owned default |
 | Explicit override | `LOOPX_PROMOTE_DEFAULT=1` on an otherwise untrusted checkout | No: this is the intentional swap path after candidate validation | Promotion is auditable as `explicit_override` in `release.json` and doctor provenance | Contributor boundary ends here. Explicit default promotion, moving public `stable`, tagging, and PyPI publish remain maintainer-only |
 
@@ -122,6 +123,21 @@ Contributor-safe defaults:
 - Do not document, script, or smoke a contributor path that moves `stable`,
   publishes packages, or claims default promotion without
   `LOOPX_PROMOTE_DEFAULT=1` plus an explicit maintainer approval.
+
+For an ambiguous authority upgrade route, run the retained candidate's
+`scripts/loopx` with `--format json authority-archive upgrade --all-known`.
+Set `LOOPX_REGISTRY` to the verified project registry and `LOOPX_RUNTIME_ROOT`
+to its intended runtime. This previews the discovered stores and registry
+changes. Use `--require-current` if the stores are expected to need no
+migration. Review the complete preview before an authorized installer retry
+with the same route. Check the current default launchers first. Another
+installer may already have promoted a build containing the intended fix.
+
+After activation, run `loopx doctor --deep --installation-only` from the
+default executable and verify its manifest source revision. For a recovery
+change, also read back the original Turn's recorded writeback and quota
+settlement through the selected runtime. Compare the receipt identities from
+before and after the switch to verify continuity across the upgrade.
 
 ## Merged Is Not Runtime-Active
 
