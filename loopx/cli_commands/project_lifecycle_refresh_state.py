@@ -62,11 +62,6 @@ from .project_lifecycle_checkpoint_context import (
 from .project_lifecycle_inputs import (
     parse_refresh_state_inputs,
 )
-from .project_lifecycle_sinks import (
-    apply_external_sink_postcondition,
-    lark_explore_graph_syncer,
-    sync_goal_channel_notifications_after_refresh,
-)
 from .quota_reward_memory import (
     attach_reward_memory_ingest_after_spend,
     reward_memory_candidate_details,
@@ -890,6 +885,12 @@ def handle_refresh_state_command(
             attach_refresh_settlement_recovery(payload, args, registry_path, goal_ref)
             print_payload(compact_refresh_state_cli_payload(payload) if fmt == "json" else payload, fmt, render_state_refresh_markdown)
             return 0 if payload.get("ok") else 1
+        from .project_lifecycle_sinks import (
+            apply_external_sink_postcondition,
+            lark_explore_graph_syncer,
+            sync_goal_channel_notifications_after_refresh,
+        )
+
         graph_sync = sync_explore_graph_after_material_refresh(
             registry_path=registry_path,
             goal_id=args.goal_id,

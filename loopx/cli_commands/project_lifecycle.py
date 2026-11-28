@@ -3,36 +3,13 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..cli_runtime import PROJECT_LIFECYCLE_COMMANDS as PROJECT_LIFECYCLE_COMMANDS
-from ..control_plane.capability_hooks import (
-    PostWritebackHookRegistration,
-)
-from ..control_plane.actor_identity import OWNER_CONTROLLER_ACTOR_CHOICES
-from ..feedback import (
-    LESSON_KINDS,
-    append_human_reward,
-    compact_reward,
-    render_reward_markdown,
-)
-from ..operator_gate import (
-    DEFAULT_OPERATOR_GATE,
-    OPERATOR_GATE_DECISIONS,
-    record_operator_gate,
-    render_operator_gate_markdown,
-)
-from ..project_map import (
-    DEFAULT_PROJECT_MAP_CLASSIFICATION,
-    read_only_project_map_run,
-    render_read_only_project_map_markdown,
-)
-from .post_writeback import (
-    PostWritebackProjectionBuilder,
-)
-from .project_lifecycle_refresh_state import (
-    handle_refresh_state_command,
-    register_refresh_state_command,
-)
+
+if TYPE_CHECKING:
+    from ..control_plane.capability_hooks import PostWritebackHookRegistration
+    from .post_writeback import PostWritebackProjectionBuilder
 
 PrintPayload = Callable[
     [dict[str, object], str, Callable[[dict[str, object]], str]],
@@ -41,153 +18,169 @@ PrintPayload = Callable[
 OutputFormat = Callable[[argparse.Namespace], str]
 AppendCliRolloutEvent = Callable[..., dict[str, object]]
 
+
 def register_project_lifecycle_commands(
     subparsers: argparse._SubParsersAction,
     add_subcommand_format: Callable[[argparse.ArgumentParser], None],
+    *,
+    command: str | None = None,
 ) -> None:
-    register_refresh_state_command(subparsers, add_subcommand_format)
+    if command is None or command in {"refresh-state", "checkpoint-context"}:
+        from .project_lifecycle_refresh_state import register_refresh_state_command
 
-    read_only_map_parser = subparsers.add_parser(
-        "read-only-map",
-        help="Append a generic read-only project-map run for a connected project.",
-    )
-    add_subcommand_format(read_only_map_parser)
-    read_only_map_parser.add_argument(
-        "--goal-id",
-        required=True,
-        help="Goal id whose project should be mapped.",
-    )
-    read_only_map_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")
-    read_only_map_parser.add_argument(
-        "--state-file",
-        help="Active goal state path. Defaults to the registry goal state_file.",
-    )
-    read_only_map_parser.add_argument(
-        "--classification",
-        default=DEFAULT_PROJECT_MAP_CLASSIFICATION,
-        help=f"Project-map run classification. Defaults to {DEFAULT_PROJECT_MAP_CLASSIFICATION}.",
-    )
-    read_only_map_parser.add_argument(
-        "--recommended-action",
-        help=(
-            "Local-control next action. Private project refs are allowed; "
-            "inline secrets are rejected. Defaults to the first item from the "
-            "active state's Next Action."
-        ),
-    )
-    read_only_map_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the project-map payload without appending.",
-    )
-    read_only_map_parser.add_argument(
-        "--no-global-sync",
-        action="store_true",
-        help="Do not refresh the shared global registry after writing the project-map run.",
-    )
+        register_refresh_state_command(subparsers, add_subcommand_format)
 
-    reward_parser = subparsers.add_parser(
-        "reward",
-        help="Append a compact human reward overlay to a goal run index.",
-    )
-    add_subcommand_format(reward_parser)
-    reward_parser.add_argument("--goal-id", required=True, help="Goal id whose latest run should receive feedback.")
-    reward_parser.add_argument(
-        "--run-generated-at",
-        help="Exact run generated_at timestamp. Defaults to the latest compact run for the goal.",
-    )
-    reward_parser.add_argument("--recorded-at", help="Reward timestamp. Defaults to current UTC time.")
-    reward_parser.add_argument(
-        "--actor-kind",
-        choices=OWNER_CONTROLLER_ACTOR_CHOICES,
-        help=(
-            "Explicit non-Agent actor for the durable append. Anonymous dry-run "
-            "remains available when this option is omitted."
-        ),
-    )
-    reward_parser.add_argument("--decision", required=True, help="Operator decision label, such as continue_route.")
-    reward_parser.add_argument(
-        "--reward",
-        required=True,
-        choices=["positive", "negative", "mixed", "neutral"],
-        help="Compact reward polarity.",
-    )
-    reward_parser.add_argument(
-        "--reason-summary",
-        required=True,
-        help="Short public-safe reason. Do not include raw private evidence.",
-    )
-    reward_parser.add_argument("--follow-up", help="Optional next handoff or experiment condition.")
-    reward_parser.add_argument(
-        "--lesson-kind",
-        choices=sorted(LESSON_KINDS),
-        help="Optional public-safe lesson kind when this reward records an explicit user correction.",
-    )
-    reward_parser.add_argument(
-        "--lesson-summary",
-        help="Short public-safe lesson summary. Required when --lesson-kind is set.",
-    )
-    reward_parser.add_argument(
-        "--lesson-avoid",
-        action="append",
-        default=[],
-        help="Public-safe phrase/action that future recommended_action should avoid. Repeatable.",
-    )
-    reward_parser.add_argument(
-        "--lesson-prefer",
-        action="append",
-        default=[],
-        help="Public-safe phrase/action that future recommended_action should prefer. Repeatable.",
-    )
-    reward_parser.add_argument(
-        "--state-file",
-        help="Active goal state path for optional summary writeback. Defaults to the registry goal state_file.",
-    )
-    reward_parser.add_argument(
-        "--write-active-state-summary",
-        action="store_true",
-        help="After a real append, also add the returned active_state_summary to the active state's Progress Ledger. With --dry-run, preview only.",
-    )
-    reward_parser.add_argument("--dry-run", action="store_true", help="Print the overlay without appending it.")
+    if command is None or command == "read-only-map":
+        from ..project_map import DEFAULT_PROJECT_MAP_CLASSIFICATION
 
-    gate_parser = subparsers.add_parser(
-        "operator-gate",
-        help="Record an operator gate decision such as read-only map opt-in.",
-    )
-    add_subcommand_format(gate_parser)
-    gate_parser.add_argument("--goal-id", required=True, help="Goal id whose operator gate is being judged.")
-    gate_parser.add_argument("--gate", default=DEFAULT_OPERATOR_GATE, help=f"Gate id. Defaults to {DEFAULT_OPERATOR_GATE}.")
-    gate_parser.add_argument(
-        "--decision",
-        required=True,
-        choices=sorted(OPERATOR_GATE_DECISIONS),
-        help="Operator decision for this gate.",
-    )
-    gate_parser.add_argument("--recorded-at", help="Decision timestamp. Defaults to current local time.")
-    gate_parser.add_argument(
-        "--operator-question",
-        help="Human-facing question being answered. Defaults from --gate and --goal-id.",
-    )
-    gate_parser.add_argument(
-        "--reason-summary",
-        required=True,
-        help="Short public-safe reason. Do not include raw private evidence.",
-    )
-    gate_parser.add_argument("--follow-up", help="Optional next handoff or evidence condition.")
-    gate_parser.add_argument(
-        "--agent-command",
-        help="Target-agent command that becomes valid after approval. Defaults for read_only_map_opt_in approvals.",
-    )
-    gate_parser.add_argument(
-        "--recommended-action",
-        help="Local-control next action for status/dashboard; inline secrets are rejected.",
-    )
-    gate_parser.add_argument("--dry-run", action="store_true", help="Print the decision run without appending it.")
-    gate_parser.add_argument(
-        "--no-global-sync",
-        action="store_true",
-        help="Do not refresh the shared global registry after writing the gate decision.",
-    )
+        read_only_map_parser = subparsers.add_parser(
+            "read-only-map",
+            help="Append a generic read-only project-map run for a connected project.",
+        )
+        add_subcommand_format(read_only_map_parser)
+        read_only_map_parser.add_argument(
+            "--goal-id",
+            required=True,
+            help="Goal id whose project should be mapped.",
+        )
+        read_only_map_parser.add_argument("--project", help="Project root. Defaults to the registry goal repo.")
+        read_only_map_parser.add_argument(
+            "--state-file",
+            help="Active goal state path. Defaults to the registry goal state_file.",
+        )
+        read_only_map_parser.add_argument(
+            "--classification",
+            default=DEFAULT_PROJECT_MAP_CLASSIFICATION,
+            help=f"Project-map run classification. Defaults to {DEFAULT_PROJECT_MAP_CLASSIFICATION}.",
+        )
+        read_only_map_parser.add_argument(
+            "--recommended-action",
+            help=(
+                "Local-control next action. Private project refs are allowed; "
+                "inline secrets are rejected. Defaults to the first item from the "
+                "active state's Next Action."
+            ),
+        )
+        read_only_map_parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="Print the project-map payload without appending.",
+        )
+        read_only_map_parser.add_argument(
+            "--no-global-sync",
+            action="store_true",
+            help="Do not refresh the shared global registry after writing the project-map run.",
+        )
+
+    if command is None or command == "reward":
+        from ..control_plane.actor_identity import OWNER_CONTROLLER_ACTOR_CHOICES
+        from ..feedback import LESSON_KINDS
+
+        reward_parser = subparsers.add_parser(
+            "reward",
+            help="Append a compact human reward overlay to a goal run index.",
+        )
+        add_subcommand_format(reward_parser)
+        reward_parser.add_argument("--goal-id", required=True, help="Goal id whose latest run should receive feedback.")
+        reward_parser.add_argument(
+            "--run-generated-at",
+            help="Exact run generated_at timestamp. Defaults to the latest compact run for the goal.",
+        )
+        reward_parser.add_argument("--recorded-at", help="Reward timestamp. Defaults to current UTC time.")
+        reward_parser.add_argument(
+            "--actor-kind",
+            choices=OWNER_CONTROLLER_ACTOR_CHOICES,
+            help=(
+                "Explicit non-Agent actor for the durable append. Anonymous dry-run "
+                "remains available when this option is omitted."
+            ),
+        )
+        reward_parser.add_argument("--decision", required=True, help="Operator decision label, such as continue_route.")
+        reward_parser.add_argument(
+            "--reward",
+            required=True,
+            choices=["positive", "negative", "mixed", "neutral"],
+            help="Compact reward polarity.",
+        )
+        reward_parser.add_argument(
+            "--reason-summary",
+            required=True,
+            help="Short public-safe reason. Do not include raw private evidence.",
+        )
+        reward_parser.add_argument("--follow-up", help="Optional next handoff or experiment condition.")
+        reward_parser.add_argument(
+            "--lesson-kind",
+            choices=sorted(LESSON_KINDS),
+            help="Optional public-safe lesson kind when this reward records an explicit user correction.",
+        )
+        reward_parser.add_argument(
+            "--lesson-summary",
+            help="Short public-safe lesson summary. Required when --lesson-kind is set.",
+        )
+        reward_parser.add_argument(
+            "--lesson-avoid",
+            action="append",
+            default=[],
+            help="Public-safe phrase/action that future recommended_action should avoid. Repeatable.",
+        )
+        reward_parser.add_argument(
+            "--lesson-prefer",
+            action="append",
+            default=[],
+            help="Public-safe phrase/action that future recommended_action should prefer. Repeatable.",
+        )
+        reward_parser.add_argument(
+            "--state-file",
+            help="Active goal state path for optional summary writeback. Defaults to the registry goal state_file.",
+        )
+        reward_parser.add_argument(
+            "--write-active-state-summary",
+            action="store_true",
+            help="After a real append, also add the returned active_state_summary to the active state's Progress Ledger. With --dry-run, preview only.",
+        )
+        reward_parser.add_argument("--dry-run", action="store_true", help="Print the overlay without appending it.")
+
+    if command is None or command == "operator-gate":
+        from ..operator_gate import DEFAULT_OPERATOR_GATE, OPERATOR_GATE_DECISIONS
+
+        gate_parser = subparsers.add_parser(
+            "operator-gate",
+            help="Record an operator gate decision such as read-only map opt-in.",
+        )
+        add_subcommand_format(gate_parser)
+        gate_parser.add_argument("--goal-id", required=True, help="Goal id whose operator gate is being judged.")
+        gate_parser.add_argument("--gate", default=DEFAULT_OPERATOR_GATE, help=f"Gate id. Defaults to {DEFAULT_OPERATOR_GATE}.")
+        gate_parser.add_argument(
+            "--decision",
+            required=True,
+            choices=sorted(OPERATOR_GATE_DECISIONS),
+            help="Operator decision for this gate.",
+        )
+        gate_parser.add_argument("--recorded-at", help="Decision timestamp. Defaults to current local time.")
+        gate_parser.add_argument(
+            "--operator-question",
+            help="Human-facing question being answered. Defaults from --gate and --goal-id.",
+        )
+        gate_parser.add_argument(
+            "--reason-summary",
+            required=True,
+            help="Short public-safe reason. Do not include raw private evidence.",
+        )
+        gate_parser.add_argument("--follow-up", help="Optional next handoff or evidence condition.")
+        gate_parser.add_argument(
+            "--agent-command",
+            help="Target-agent command that becomes valid after approval. Defaults for read_only_map_opt_in approvals.",
+        )
+        gate_parser.add_argument(
+            "--recommended-action",
+            help="Local-control next action for status/dashboard; inline secrets are rejected.",
+        )
+        gate_parser.add_argument("--dry-run", action="store_true", help="Print the decision run without appending it.")
+        gate_parser.add_argument(
+            "--no-global-sync",
+            action="store_true",
+            help="Do not refresh the shared global registry after writing the gate decision.",
+        )
 
 
 def handle_project_lifecycle_command(
@@ -204,19 +197,27 @@ def handle_project_lifecycle_command(
         return None
 
     fmt = output_format(args)
-    refresh_state_result = handle_refresh_state_command(
-        args,
-        registry_path=registry_path,
-        print_payload=print_payload,
-        output_format=output_format,
-        append_cli_rollout_event=append_cli_rollout_event,
-        post_writeback_hooks=post_writeback_hooks,
-        post_writeback_projection_builder=post_writeback_projection_builder,
-    )
-    if refresh_state_result is not None:
-        return refresh_state_result
+    if args.command in {"refresh-state", "checkpoint-context"}:
+        from .project_lifecycle_refresh_state import handle_refresh_state_command
+
+        refresh_state_result = handle_refresh_state_command(
+            args,
+            registry_path=registry_path,
+            print_payload=print_payload,
+            output_format=output_format,
+            append_cli_rollout_event=append_cli_rollout_event,
+            post_writeback_hooks=post_writeback_hooks,
+            post_writeback_projection_builder=post_writeback_projection_builder,
+        )
+        if refresh_state_result is not None:
+            return refresh_state_result
 
     if args.command == "read-only-map":
+        from ..project_map import (
+            read_only_project_map_run,
+            render_read_only_project_map_markdown,
+        )
+
         try:
             payload = read_only_project_map_run(
                 registry_path=registry_path,
@@ -245,6 +246,12 @@ def handle_project_lifecycle_command(
         return 0 if payload.get("ok") else 1
 
     if args.command == "reward":
+        from ..feedback import (
+            append_human_reward,
+            compact_reward,
+            render_reward_markdown,
+        )
+
         try:
             reward = compact_reward(
                 recorded_at=args.recorded_at,
@@ -285,6 +292,8 @@ def handle_project_lifecycle_command(
             }
         print_payload(payload, fmt, render_reward_markdown)
         return 0 if payload.get("ok") else 1
+
+    from ..operator_gate import record_operator_gate, render_operator_gate_markdown
 
     try:
         payload = record_operator_gate(

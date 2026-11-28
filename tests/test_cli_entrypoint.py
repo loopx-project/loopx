@@ -2410,3 +2410,144 @@ def test_standalone_core_excludes_explore_from_selected_commands_and_refuses_dis
             cli_runtime.main(argv)
         assert exc.value.code == 2
         assert "unavailable in the standalone core" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "canary",
+        "pr-review",
+        "benchmark",
+        "issue-fix",
+        "deepresearch",
+        "external-evidence",
+        "agent-turn-recall",
+        "chat",
+        "chat-endpoint",
+        "dashboard",
+    ],
+)
+def test_full_install_selected_command_help_matches_full_cli_without_loading_cli(
+    command: str,
+) -> None:
+    argv = [command, "--help"]
+    selected = run_cli_main(
+        "loopx.entrypoint",
+        argv,
+        forbidden_modules=("loopx.cli",),
+        environment={"LOOPX_USAGE_PING": "0"},
+    )
+    full = run_cli_main("loopx.cli", argv, environment={"LOOPX_USAGE_PING": "0"})
+    assert (selected.returncode, selected.stdout, selected.stderr) == (
+        full.returncode,
+        full.stdout,
+        full.stderr,
+    )
+    assert selected.returncode == 0
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["canary", "--unknown-flag"],
+        ["pr-review", "--unknown-flag"],
+        ["benchmark", "--unknown-flag"],
+        ["canary", "profiles", "--format", "json"],
+    ],
+)
+def test_full_install_selected_commands_keep_canonical_diagnostics_and_functional_parity(
+    argv: list[str],
+) -> None:
+    forbidden = ("loopx.cli",) if "--unknown-flag" not in argv else ()
+    selected = run_cli_main(
+        "loopx.entrypoint",
+        argv,
+        forbidden_modules=forbidden,
+        environment={"LOOPX_USAGE_PING": "0"},
+    )
+    full = run_cli_main("loopx.cli", argv, environment={"LOOPX_USAGE_PING": "0"})
+    assert (selected.returncode, selected.stdout, selected.stderr) == (
+        full.returncode,
+        full.stdout,
+        full.stderr,
+    )
+    if "--unknown-flag" in argv:
+        assert selected.returncode == 2
+    else:
+        assert selected.returncode == 0
+
+
+def test_standalone_core_keeps_canary_excluded_and_refused(monkeypatch, capsys) -> None:
+    import builtins
+    import loopx.cli_runtime as cli_runtime
+
+    monkeypatch.setattr(cli_runtime, "_standalone_core", lambda: True)
+    assert "canary" not in cli_runtime._available_selected_commands()
+
+    real_import = builtins.__import__
+
+    def _missing_full_cli(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "cli" and level == 1 and (globals or {}).get("__package__") == "loopx":
+            raise ModuleNotFoundError("No module named 'loopx.cli'", name="loopx.cli")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _missing_full_cli)
+    with pytest.raises(SystemExit) as exc:
+        cli_runtime.main(["canary", "--help"])
+    assert exc.value.code == 2
+    assert "unavailable in the standalone core" in capsys.readouterr().err
+
+
+def test_lazy_project_lifecycle_and_todo_bypass_unrelated_subcommand_imports(tmp_path: Path) -> None:
+    refresh_help = run_cli_main(
+        "loopx.entrypoint",
+        ["refresh-state", "--help"],
+        forbidden_modules=(
+            "loopx.cli",
+            "loopx.operator_gate",
+            "loopx.project_map",
+            "loopx.cli_commands.project_lifecycle_sinks",
+            "loopx.extensions.lark.goal_channel_lifecycle",
+            "loopx.capabilities.periodic_report.post_writeback_hook",
+        ),
+        environment={"LOOPX_USAGE_PING": "0"},
+    )
+    assert refresh_help.returncode == 0, refresh_help.stderr
+
+    for lifecycle_cmd, extra_forbidden in (
+        ("reward", ("loopx.state_refresh", "loopx.operator_gate", "loopx.project_map")),
+        ("operator-gate", ("loopx.state_refresh", "loopx.project_map")),
+        ("read-only-map", ("loopx.operator_gate",)),
+    ):
+        res = run_cli_main(
+            "loopx.entrypoint",
+            [lifecycle_cmd, "--help"],
+            forbidden_modules=(
+                "loopx.cli",
+                "loopx.cli_commands.project_lifecycle_refresh_state",
+                "loopx.cli_commands.project_lifecycle_sinks",
+                "loopx.capabilities.periodic_report.post_writeback_hook",
+                *extra_forbidden,
+            ),
+            environment={"LOOPX_USAGE_PING": "0"},
+        )
+        assert res.returncode == 0, (lifecycle_cmd, res.stderr)
+
+    todo_schema = run_cli_main(
+        "loopx.entrypoint",
+        [
+            "--runtime-root",
+            str(tmp_path / "rt"),
+            "--format",
+            "json",
+            "todo",
+            "plan-batch",
+            "--schema",
+        ],
+        forbidden_modules=(
+            "loopx.cli",
+            "loopx.capabilities.periodic_report.post_writeback_hook",
+        ),
+        environment={"LOOPX_USAGE_PING": "0"},
+    )
+    assert todo_schema.returncode == 0, todo_schema.stderr
