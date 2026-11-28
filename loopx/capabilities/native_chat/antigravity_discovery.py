@@ -211,7 +211,7 @@ def _rpc_post(
                 object_pairs_hook=_parse_rpc_object,
                 parse_constant=_reject_nonstandard_rpc_number,
                 parse_float=_parse_rpc_finite_float,
-            ) if raw.strip() else {}
+            ) if raw.strip(" \t\r\n") else {}
             if not _is_dict(data):
                 raise ValueError("Antigravity RPC response must be a JSON object")
             return as_rpc_response(data)

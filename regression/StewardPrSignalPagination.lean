@@ -3027,6 +3027,55 @@ theorem antigravity_http_error_precedes_object_name_validation (objects : List (
 theorem antigravity_object_name_validation_preserves_invalid_replies (objects : List (List String)) :
     classifyAntigravityUniqueObjectReply .invalidResponse objects = .invalidResponse := rfl
 
+/- Only JSON whitespace can bypass parsing after a successful UTF-8 decode.
+   Nonblank bodies carry the outcome of the existing JSON parser. -/
+def antigravityJsonWhitespace (character : Char) : Bool :=
+  character == ' ' || character == '\t' || character == '\r' || character == '\n'
+
+def antigravityBlankBody (body : List Char) : Bool :=
+  body.all antigravityJsonWhitespace
+
+def classifyAntigravityBlankBody (httpOk utf8Valid : Bool) (body : List Char)
+    (parsed : AntigravityRpcOutcome) : AntigravityRpcOutcome :=
+  if !httpOk then .httpFailure
+  else if !utf8Valid then .invalidResponse
+  else if antigravityBlankBody body then .accepted
+  else parsed
+
+theorem antigravity_blank_body_iff_json_whitespace (body : List Char) :
+    antigravityBlankBody body = true ↔
+      ∀ character ∈ body, character = ' ' ∨ character = '\t' ∨ character = '\r' ∨ character = '\n' := by
+  simp [antigravityBlankBody, antigravityJsonWhitespace, or_assoc]
+
+theorem antigravity_non_json_whitespace_keeps_parser_outcome
+    (body : List Char) (parsed : AntigravityRpcOutcome) (character : Char)
+    (present : character ∈ body) (outside : antigravityJsonWhitespace character = false) :
+    classifyAntigravityBlankBody true true body parsed = parsed := by
+  cases blank : antigravityBlankBody body with
+  | false => simp [classifyAntigravityBlankBody, blank]
+  | true =>
+    have checked := List.all_eq_true.mp blank character present
+    simp [outside] at checked
+
+theorem antigravity_empty_body_still_acknowledges :
+    classifyAntigravityBlankBody true true [] .invalidResponse = .accepted := rfl
+
+theorem antigravity_json_whitespace_still_acknowledges :
+    classifyAntigravityBlankBody true true [' ', '\t', '\r', '\n'] .invalidResponse = .accepted := rfl
+
+theorem antigravity_form_feed_is_not_a_blank_acknowledgment :
+    classifyAntigravityBlankBody true true [Char.ofNat 12] .invalidResponse = .invalidResponse := rfl
+
+theorem antigravity_nonbreaking_space_is_not_a_blank_acknowledgment :
+    classifyAntigravityBlankBody true true [' ', Char.ofNat 160] .invalidResponse = .invalidResponse := rfl
+
+theorem antigravity_http_error_precedes_blank_body (utf8Valid : Bool) (body : List Char)
+    (parsed : AntigravityRpcOutcome) :
+    classifyAntigravityBlankBody false utf8Valid body parsed = .httpFailure := rfl
+
+theorem antigravity_blank_body_requires_valid_utf8 (body : List Char) (parsed : AntigravityRpcOutcome) :
+    classifyAntigravityBlankBody true false body parsed = .invalidResponse := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3387,5 +3436,13 @@ theorem antigravity_object_name_validation_preserves_invalid_replies (objects : 
 #print axioms antigravity_blank_reply_has_no_object_names
 #print axioms antigravity_http_error_precedes_object_name_validation
 #print axioms antigravity_object_name_validation_preserves_invalid_replies
+#print axioms antigravity_blank_body_iff_json_whitespace
+#print axioms antigravity_non_json_whitespace_keeps_parser_outcome
+#print axioms antigravity_empty_body_still_acknowledges
+#print axioms antigravity_json_whitespace_still_acknowledges
+#print axioms antigravity_form_feed_is_not_a_blank_acknowledgment
+#print axioms antigravity_nonbreaking_space_is_not_a_blank_acknowledgment
+#print axioms antigravity_http_error_precedes_blank_body
+#print axioms antigravity_blank_body_requires_valid_utf8
 
 end StewardPrSignalPagination
