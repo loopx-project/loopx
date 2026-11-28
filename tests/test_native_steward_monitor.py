@@ -1006,7 +1006,10 @@ def test_due_monitor_observes_without_selecting_it_over_open_advancement(steward
 
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-@pytest.mark.parametrize("fault", [None, "different_error", "native_started", "delta", "interrupted", "retry_fails"])
+@pytest.mark.parametrize("fault", [
+    None, "different_error", "native_started", "delta", "interrupted", "retry_fails",
+    "recorded_poll", "damaged_poll", "missing_poll", "missing_journal",
+])
 def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(steward, tmp_path, monkeypatch, provider, fault):
     import copy
     from loopx.capabilities.native_chat.steward_commands import native_command
@@ -1029,11 +1032,31 @@ def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(stewar
     first = pump_steward_monitors(runtime)[0]
     failed = finish(runtime, first)
     assert failed["status"] == "failed" and "auxiliary_monitor_not_selectable" in failed["error"]
-    if fault and fault != "retry_fails":
-        change = {"different_error": {"error": "An unknown observation failed."},
-            "native_started": {"upstream_turn_id": "unknown-native-turn"},
-            "delta": {"delta_count": 1}, "interrupted": {"status": "interrupted"}}[fault]
-        store.update_turn(first["session_id"], first["turn_id"], **change)
+    turn_changes = {
+        "different_error": {"error": "An unknown observation failed."},
+        "native_started": {"upstream_turn_id": "unknown-native-turn"},
+        "delta": {"delta_count": 1},
+        "interrupted": {"status": "interrupted"},
+    }
+    session_id, turn_id = first["session_id"], first["turn_id"]
+    if fault in turn_changes:
+        store.update_turn(session_id, turn_id, **turn_changes[fault])
+    if fault in {"recorded_poll", "damaged_poll", "missing_poll", "missing_journal"}:
+        journal = store._event_path(session_id, turn_id)
+        if fault == "missing_journal":
+            journal.unlink()
+        else:
+            prefix, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 1)
+            failed_event = json.loads(terminal)
+            assert failed_event["kind"] == "turn.failed"
+            journal.write_bytes(prefix + b"\n")
+            store.append_event(session_id, turn_id, kind="native_loopx.monitor_poll", payload={})
+            store.append_event(session_id, turn_id, kind="turn.failed", payload=failed_event["payload"])
+            if fault in {"damaged_poll", "missing_poll"}:
+                prefix, poll, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 2)
+                assert json.loads(poll)["kind"] == "native_loopx.monitor_poll"
+                malformed = poll[:-1] + b"\n" if fault == "damaged_poll" else b""
+                journal.write_bytes(prefix + b"\n" + malformed + terminal + b"\n")
     retained = copy.deepcopy(store.load_turn(first["session_id"], first["turn_id"]))
     monkeypatch.setattr(StewardMonitor, "observe", legacy if fault == "retry_fails" else observe)
     runtime._steward_monitor_next_check.clear()

@@ -2392,6 +2392,47 @@ theorem pre_dispatch_persisted_unstarted_failure_waits_for_cooldown (cooldownEla
     authorizePreDispatchRetry ⟨some none, some none, some none, some none, some 0, false, false⟩
       true cooldownElapsed = cooldownElapsed := rfl
 
+inductive MonitorJournalEvent where
+  | queued | failed | poll | other
+  deriving BEq, DecidableEq
+
+def monitorSequencesAreComplete (events : List (Nat × MonitorJournalEvent)) : Bool :=
+  (events.zipIdx 1).all fun (row, expected) => row.1 == expected
+
+/- A missing or unreadable journal has no observation. The decoder supplies
+   typed sequences and kinds before the selector checks journal completeness. -/
+def authorizeLegacyMonitorRetry (eligibleFailure : Bool)
+    (journal : Option (List (Nat × MonitorJournalEvent))) : Bool :=
+  eligibleFailure && journal.any fun events =>
+    decide (events.head?.map Prod.snd = some .queued) &&
+    decide (events.getLast?.map Prod.snd = some .failed) &&
+    monitorSequencesAreComplete events &&
+    !(events.any fun row => row.2 == .poll)
+
+theorem legacy_monitor_retry_requires_complete_no_poll_journal
+    (eligibleFailure : Bool) (events : List (Nat × MonitorJournalEvent)) :
+    authorizeLegacyMonitorRetry eligibleFailure (some events) = true ↔
+      eligibleFailure = true ∧ events.head?.map Prod.snd = some .queued ∧
+      events.getLast?.map Prod.snd = some .failed ∧ monitorSequencesAreComplete events = true ∧
+      (events.any fun row => row.2 == .poll) = false := by
+  simp [authorizeLegacyMonitorRetry, and_assoc]
+
+theorem legacy_monitor_retry_requires_readable_journal (eligibleFailure : Bool) :
+    authorizeLegacyMonitorRetry eligibleFailure none = false := by
+  simp [authorizeLegacyMonitorRetry]
+
+theorem legacy_monitor_retry_rejects_a_missing_poll_row :
+    authorizeLegacyMonitorRetry true (some [(1, .queued), (3, .failed)]) = false := by decide
+
+theorem legacy_monitor_retry_holds_when_a_poll_was_recorded :
+    authorizeLegacyMonitorRetry true (some [(1, .queued), (2, .poll), (3, .failed)]) = false := by decide
+
+theorem legacy_monitor_retry_requires_the_terminal_failure :
+    authorizeLegacyMonitorRetry true (some [(1, .queued), (2, .other)]) = false := by decide
+
+theorem legacy_monitor_retry_accepts_a_complete_unpolled_failure :
+    authorizeLegacyMonitorRetry true (some [(1, .queued), (2, .other), (3, .failed)]) = true := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2660,5 +2701,11 @@ theorem pre_dispatch_persisted_unstarted_failure_waits_for_cooldown (cooldownEla
 #print axioms pre_dispatch_missing_start_holds_even_when_other_fields_are_complete
 #print axioms pre_dispatch_known_start_holds_even_when_other_fields_are_complete
 #print axioms pre_dispatch_persisted_unstarted_failure_waits_for_cooldown
+#print axioms legacy_monitor_retry_requires_complete_no_poll_journal
+#print axioms legacy_monitor_retry_requires_readable_journal
+#print axioms legacy_monitor_retry_rejects_a_missing_poll_row
+#print axioms legacy_monitor_retry_holds_when_a_poll_was_recorded
+#print axioms legacy_monitor_retry_requires_the_terminal_failure
+#print axioms legacy_monitor_retry_accepts_a_complete_unpolled_failure
 
 end StewardPrSignalPagination

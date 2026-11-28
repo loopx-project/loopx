@@ -54,16 +54,33 @@ def monitor_selection_failed_before_poll(
     turn: Mapping[str, object],
 ) -> bool:
     """Recognize only the legacy pre-poll monitor selection failure at the Chat boundary."""
-    return (
+    if not (
         turn.get("status") == "failed"
         and turn.get("error_code") == "runtime_error"
         and turn.get("error") == _MONITOR_PRE_POLL_ERROR
         and turn.get("delta_count") == 0
         and turn.get("upstream_turn_id") is None
         and turn.get("response") is None
-        and not any(
-            row.get("kind") == "native_loopx.monitor_poll"
-            for row in store.events_after(str(turn["session_id"]), str(turn["turn_id"]), None)
+    ):
+        return False
+    from ...chat_store import _read_jsonl
+
+    try:
+        journal = _read_jsonl(
+            store._event_path(str(turn["session_id"]), str(turn["turn_id"])), raise_on_error=True, strict=True,
+        )
+    except (OSError, ValueError):
+        return False
+    # Missing rows and replay compaction leave gaps in the original sequence.
+    return bool(journal) and (
+        journal[0].get("kind") == "turn.queued"
+        and journal[-1].get("kind") == "turn.failed"
+        and all(
+            type(row.get("sequence")) is int
+            and row["sequence"] == expected_sequence
+            and isinstance(row.get("kind"), str)
+            and row["kind"] not in {"", "native_loopx.monitor_poll"}
+            for expected_sequence, row in enumerate(journal, start=1)
         )
     )
 

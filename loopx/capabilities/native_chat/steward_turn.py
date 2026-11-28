@@ -719,12 +719,11 @@ class StewardTurnHost:
                     request = quota_request
                     client_id = native_steward_client_id(actor, str(request["turn_instance_id"]))
                     existing = None
-        if existing is not None:
-            recovery = (
-                self.monitor_restart_carrier(existing, client_id)
-                if work_kind == "monitor" and not self._monitor_selection_failed_before_poll(existing)
-                else None
-            )
+        monitor_retry = (
+            existing is not None and work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
+        )
+        if existing is not None and work_kind == "monitor" and not monitor_retry:
+            recovery = self.monitor_restart_carrier(existing, client_id)
             if recovery is not None:
                 if "turn" in recovery:
                     return {"turn": recovery["turn"]}
@@ -732,7 +731,6 @@ class StewardTurnHost:
                 client_id = str(recovery["client_id"])
                 existing = None
         if existing is not None:
-            monitor_retry = work_kind == "monitor" and self._monitor_selection_failed_before_poll(existing)
             if not monitor_retry and work_kind != "report":
                 return {"turn": existing}
             client_id = native_steward_client_id(actor, turn_instance_id + ".admission-retry")
