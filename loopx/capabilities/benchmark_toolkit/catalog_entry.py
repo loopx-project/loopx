@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION, builtin_capability_installed
+from ...python_install_owner import BENCHMARK_TOOLKIT_DISTRIBUTION, inspect_builtin_capability_distribution
 from .four_arm_contract import (
     BENCHMARK_FOUR_ARM_ATTESTATIONS,
     BENCHMARK_FOUR_ARM_RUNNER_OBLIGATIONS,
@@ -28,11 +28,20 @@ BENCHMARK_TOOLKIT_STARTUP_MODULES = (
 )
 
 
-def benchmark_toolkit_installed(*, builtin_cli_present: bool | None = None) -> bool:
-    return builtin_capability_installed(
+def inspect_benchmark_toolkit_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    """Inspect whether the optional benchmark-toolkit wheel is installed and matches Core."""
+    return inspect_builtin_capability_distribution(
         BENCHMARK_TOOLKIT_DISTRIBUTION,
         BENCHMARK_TOOLKIT_STARTUP_MODULES,
         builtin_cli_present=builtin_cli_present,
+    )
+
+
+def benchmark_toolkit_installed(*, builtin_cli_present: bool | None = None) -> bool:
+    return bool(
+        inspect_benchmark_toolkit_distribution(builtin_cli_present=builtin_cli_present)["ready"]
     )
 
 

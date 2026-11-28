@@ -1410,17 +1410,19 @@ Inspect the original execution and canonical lease before recovery. These
 observations do not extend deadlines, grant authority, or change stop settlement.
 Successful and ordinary unleased Host results retain their existing shape.
 After the Host returns, periodic renewal stops but final execution readback
-remains bounded by the latest proved lease expiry. An in-flight renewal that
-finishes with fresh canonical proof advances that deadline; a committed renewal
-whose proof is unavailable does not.
+remains bounded by the latest proved lease expiry. The supervisor carries
+elapsed monotonic time across wall-clock corrections. Re-reading the same
+version can only retain or shorten its deadline. A newer proof can extend
+the deadline when it arrives within the previously proved window.
 
 受管委派错误通过 `lease:<boundary>/<reason>` 保留首个类型化租约失败原因，
 区分启动前证明失败、续期拒绝和已证明期限到达。仅有 Host 的 `cancelled`
 结果不代表用户请求停止，也不证明租约已释放；恢复前需读回原执行与 canonical
 租约。这些诊断不延长期限、不授予权限，也不改变停止结算条件；成功执行与普通
 无租约 Host 的结果结构保持不变。Host 返回后不再安排周期续期，但最终执行读回
-仍受最新已证明的租约期限约束；进行中的续期取得新鲜 canonical 证明后更新该期限，
-仅有续期提交而没有及时取得证明不能延长执行权限。
+仍受最新已证明的租约期限约束。监督进程跟踪单调时钟的已逝时间，系统时钟回拨
+时仍继续计时。再次读回同一版本只能保留或缩短截止时间。更高版本的证明必须在
+原截止时间之前到达，才可以延长执行期限。
 
 | Interruption | Behavior and recovery |
 | --- | --- |

@@ -317,3 +317,31 @@ test("the spawned Host group is reported once before input, and an unrecorded gr
     throw new Error("record unavailable"); }});
   assert.equal(refused.outcome, "cancelled"); assert.equal(refused.output_complete, false);
 });
+
+test("an unchanged lease proof cannot extend a running Host after wall clock rollback", async t => {
+  const directory = await mkdtemp(join(tmpdir(), "host-clock-rollback-"));
+  t.after(() => rm(directory, {recursive: true, force: true}));
+  const marker = join(directory, "late-completion");
+  const reads = join(directory, "reads");
+  const wall = Date.now();
+  const lease = {schema_version: "task_lease_v0", goal_id: "goal-clock", todo_id: "todo_clock",
+    owner: "agent-a", status: "active", version: 1, lease_epoch: 1, idempotency_key: "original",
+    expires_at: new Date(wall + 2400).toISOString()};
+  const context = decodeDelegatedHostLease({lease, ttl_seconds: 1,
+    read_argv: request(`require('fs').appendFileSync(${JSON.stringify(reads)}, 'r');
+      console.log(${JSON.stringify(JSON.stringify({ok: true, lease}))});`).argv,
+    // The supervisor appends lease flags. Keep them out of the Node option parser.
+    renew_argv: [...request("setTimeout(() => console.log(JSON.stringify({ok: false})), 5000)").argv, "--"]});
+  t.mock.timers.enable({apis: ["Date"], now: wall});
+  const child = request(`setTimeout(() => {
+    require('fs').writeFileSync(${JSON.stringify(marker)}, 'finished');
+    console.log('late result');
+  }, 3400)`, {timeout_ms: 4500});
+  const result = await runLeasedHostProcess(child, context, async () => {},
+    new AbortController().signal, async () => t.mock.timers.setTime(wall - 30_000));
+
+  assert.ok((await readFile(reads, "utf8")).length >= 2, "the supervisor observed the unchanged proof again");
+  assert.deepEqual({outcome: result.outcome, leaseFailure: result.lease_failure, lateMarker: existsSync(marker)}, {
+    outcome: "cancelled", leaseFailure: {reason: "proved_deadline_elapsed", boundary: "deadline"}, lateMarker: false,
+  });
+});
