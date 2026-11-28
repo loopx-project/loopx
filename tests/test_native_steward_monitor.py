@@ -521,6 +521,17 @@ def interrupt_unstarted_watch(store, turn):
     store.update_session(sid, active_turn_id=None, status="ready")
 
 
+def append_watch_event_before_failure(store, turn, kind, payload):
+    session_id, turn_id = turn["session_id"], turn["turn_id"]
+    journal = store._event_path(session_id, turn_id)
+    prefix, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 1)
+    failed_event = json.loads(terminal)
+    assert failed_event["kind"] == "turn.failed"
+    journal.write_bytes(prefix + b"\n")
+    store.append_event(session_id, turn_id, kind=kind, payload=payload)
+    store.append_event(session_id, turn_id, kind="turn.failed", payload=failed_event["payload"])
+
+
 def scope_refused_watch(steward, tmp_path, monkeypatch, provider):
     import loopx.chat_manager_context as context_owner
     _, runtime, _, transport, *_ = steward
@@ -787,6 +798,42 @@ def test_restart_before_observation_recovers_the_original_due_watch_once(
     assert spent_slots(StewardMonitor(runtime), actor) == used
 
 
+@pytest.mark.parametrize("journal_state", ["recorded_poll", "missing_poll", "retained_at_compaction"])
+def test_typed_monitor_restart_requires_original_event_evidence(steward, tmp_path, monkeypatch, journal_state):
+    store, runtime, _, _, _, capture, _ = steward
+    _, actor, todo_id, original = stopped_watch(steward, tmp_path, monkeypatch, "sqlite", "steward")
+    session_id, turn_id = original["session_id"], original["turn_id"]
+    journal = store._event_path(session_id, turn_id)
+    if journal_state == "retained_at_compaction":
+        append_watch_event_before_failure(store, original, "agent.phase", {"phase": "manager_context"})
+        store.update_turn(session_id, turn_id, completed_at="2000-01-01T00:00:00Z")
+        original_bytes = journal.read_bytes()
+        store.compact_completed_events(older_than_hours=24)
+        assert journal.read_bytes() == original_bytes
+    else:
+        append_watch_event_before_failure(store, original, "native_loopx.monitor_poll", {})
+        if journal_state == "missing_poll":
+            prefix, poll, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 2)
+            assert json.loads(poll)["kind"] == "native_loopx.monitor_poll"
+            journal.write_bytes(prefix + b"\n" + terminal + b"\n")
+            assert [json.loads(line)["sequence"] for line in journal.read_bytes().splitlines()] == [1, 3]
+
+    retained = store.load_turn(session_id, turn_id)
+    watch = local_watch_row(runtime, actor, todo_id)
+    calls = capture.read_bytes()
+    runtime._steward_monitor_next_check.clear()
+    recovered = pump_steward_monitors(runtime)
+    if journal_state == "retained_at_compaction":
+        carrier, = recovered
+        assert carrier["loopx_request"]["monitor_restart_recovery"]["original_turn_id"] == turn_id
+        assert finish(runtime, carrier)["response"]["native_loopx"]["status"] == "observed"
+    else:
+        assert recovered == []
+        assert local_watch_row(runtime, actor, todo_id) == watch
+    assert store.load_turn(session_id, turn_id) == retained
+    assert capture.read_bytes() == calls
+
+
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 @pytest.mark.parametrize("audience", ["steward", "managed"])
 @pytest.mark.parametrize("fault", ["unknown_error", "native_started", "delta", "unknown_event", "broken_history",
@@ -1046,12 +1093,7 @@ def test_original_monitor_recovers_only_the_known_pre_poll_rejection_once(stewar
         if fault == "missing_journal":
             journal.unlink()
         else:
-            prefix, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 1)
-            failed_event = json.loads(terminal)
-            assert failed_event["kind"] == "turn.failed"
-            journal.write_bytes(prefix + b"\n")
-            store.append_event(session_id, turn_id, kind="native_loopx.monitor_poll", payload={})
-            store.append_event(session_id, turn_id, kind="turn.failed", payload=failed_event["payload"])
+            append_watch_event_before_failure(store, first, "native_loopx.monitor_poll", {})
             if fault in {"damaged_poll", "missing_poll"}:
                 prefix, poll, terminal = journal.read_bytes().rstrip(b"\n").rsplit(b"\n", 2)
                 assert json.loads(poll)["kind"] == "native_loopx.monitor_poll"

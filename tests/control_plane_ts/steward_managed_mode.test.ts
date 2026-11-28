@@ -61,7 +61,7 @@ test("identity-refused watches need independent collector evidence and retain cu
     delta_count: 0, loopx_request: prior};
   const basis = {original, contexts: [], phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
   const monitor = {todo_id: "todo_watch", task_class: "continuous_monitor", target_key: "steward-portfolio-watch",
     watch_only: true, claimed_by: "steward", status: "open", next_due_at: prior.monitor_deadline};
   const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
@@ -72,6 +72,7 @@ test("identity-refused watches need independent collector evidence and retain cu
     {phases: []}, {phases: [{phase: "model_start"}]}, {phases: [{phase: "manager_context"}, {phase: "manager_context"}]},
     {contexts: [{}]}, {event_kinds: ["turn.queued", "turn.failed"]},
     {event_kinds: [...basis.event_kinds, "agent.phase"]},
+    {event_journal_complete: false}, {event_journal_complete: undefined},
     {poll_absent: false}, {old_worker_excluded: false}, {lease_available: false},
     {original: {...original, error: "Unknown identity failure"}},
     {original: {...original, upstream_turn_id: "unknown-model-turn"}},
@@ -96,7 +97,7 @@ test("signal-unavailable custom monitors admit exactly one zero-effect recovery 
   const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
     phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
   const monitor = {todo_id: "todo_signal_watch", task_class: "continuous_monitor",
     target_key: "steward-stalled-pr-monitor", claimed_by: "steward", status: "open",
     next_due_at: prior.monitor_deadline};
@@ -453,7 +454,7 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
       origin: "native_loopx", loopx_execution: true, upstream_turn_id: null, response: null,
       delta_count: 0, loopx_request: prior};
     const basis = {original, contexts: scenario.contexts, phases: [{phase: "manager_context"}],
-      event_kinds: scenario.event_kinds, poll_absent: true, old_worker_excluded: true, lease_available: true};
+      event_kinds: scenario.event_kinds, event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
     const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
       request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
       monitor_todo: monitor, monitor_restart_basis: basis};
@@ -484,7 +485,7 @@ test("zero-effect worker exit, storage I/O, and runtime unavailability monitors 
     const basis = {original, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
       phases: [{phase: "manager_context"}],
       event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-      poll_absent: true, old_worker_excluded: true, lease_available: true};
+      event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true};
     assert.throws(() => admitStewardManagedTurn({
       ...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
       request: {...prior, monitor_restart_recovery: {original_turn_id: original.turn_id}},
@@ -513,7 +514,7 @@ test("chained post-context transient watch carriers recover only after cooldown 
   const basis = {original: carrier, contexts: [{schema_version: "manager_turn_context_v1", goals: [goal]}],
     phases: [{phase: "manager_context"}],
     event_kinds: ["turn.queued", "agent.phase", "manager.context", "turn.failed"],
-    poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
+    event_journal_complete: true, poll_absent: true, old_worker_excluded: true, lease_available: true, observed_at: completedSec + 300};
   const input = {...params, goal, goal_active: true, binding: {...params.binding, managed_actor: actor},
     request: {...baseRequest, monitor_restart_recovery: {original_turn_id: carrier.turn_id}},
     monitor_todo: monitor, monitor_restart_basis: basis};

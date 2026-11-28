@@ -2393,21 +2393,23 @@ theorem pre_dispatch_persisted_unstarted_failure_waits_for_cooldown (cooldownEla
       true cooldownElapsed = cooldownElapsed := rfl
 
 inductive MonitorJournalEvent where
-  | queued | failed | poll | other
+  | queued | failed | poll | other | replay
   deriving BEq, DecidableEq
 
 def monitorSequencesAreComplete (events : List (Nat × MonitorJournalEvent)) : Bool :=
   (events.zipIdx 1).all fun (row, expected) => row.1 == expected
+
+def originalMonitorJournalComplete (events : List (Nat × MonitorJournalEvent)) : Bool :=
+  decide (events.head?.map Prod.snd = some .queued) &&
+  decide (events.getLast?.map Prod.snd = some .failed) &&
+  monitorSequencesAreComplete events
 
 /- A missing or unreadable journal has no observation. The decoder supplies
    typed sequences and kinds before the selector checks journal completeness. -/
 def authorizeLegacyMonitorRetry (eligibleFailure : Bool)
     (journal : Option (List (Nat × MonitorJournalEvent))) : Bool :=
   eligibleFailure && journal.any fun events =>
-    decide (events.head?.map Prod.snd = some .queued) &&
-    decide (events.getLast?.map Prod.snd = some .failed) &&
-    monitorSequencesAreComplete events &&
-    !(events.any fun row => row.2 == .poll)
+    originalMonitorJournalComplete events && !(events.any fun row => row.2 == .poll)
 
 theorem legacy_monitor_retry_requires_complete_no_poll_journal
     (eligibleFailure : Bool) (events : List (Nat × MonitorJournalEvent)) :
@@ -2415,7 +2417,7 @@ theorem legacy_monitor_retry_requires_complete_no_poll_journal
       eligibleFailure = true ∧ events.head?.map Prod.snd = some .queued ∧
       events.getLast?.map Prod.snd = some .failed ∧ monitorSequencesAreComplete events = true ∧
       (events.any fun row => row.2 == .poll) = false := by
-  simp [authorizeLegacyMonitorRetry, and_assoc]
+  simp [authorizeLegacyMonitorRetry, originalMonitorJournalComplete, and_assoc]
 
 theorem legacy_monitor_retry_requires_readable_journal (eligibleFailure : Bool) :
     authorizeLegacyMonitorRetry eligibleFailure none = false := by
@@ -2432,6 +2434,42 @@ theorem legacy_monitor_retry_requires_the_terminal_failure :
 
 theorem legacy_monitor_retry_accepts_a_complete_unpolled_failure :
     authorizeLegacyMonitorRetry true (some [(1, .queued), (2, .other), (3, .failed)]) = true := by decide
+
+/- Python projects a complete-journal observation. Typed admission also
+   requires the existing worker, poll, lease and identity evidence. -/
+def authorizeTypedMonitorRestart (otherwiseEligible : Bool) (journalComplete : Option Bool)
+    (observedPoll : Bool) : Bool :=
+  otherwiseEligible && journalComplete == some true && !observedPoll
+
+def compactMonitorJournal (retainFailedNativeMonitor : Bool)
+    (events : List (Nat × MonitorJournalEvent)) : List (Nat × MonitorJournalEvent) :=
+  if retainFailedNativeMonitor then events else events.filter fun row => row.2 != .replay
+
+theorem typed_monitor_restart_requires_positive_journal_evidence
+    (otherwiseEligible observedPoll : Bool) (journalComplete : Option Bool) :
+    authorizeTypedMonitorRestart otherwiseEligible journalComplete observedPoll = true ↔
+      otherwiseEligible = true ∧ journalComplete = some true ∧ observedPoll = false := by
+  simp [authorizeTypedMonitorRestart, and_assoc]
+
+theorem typed_monitor_restart_rejects_a_missing_observation :
+    authorizeTypedMonitorRestart true none false = false := rfl
+
+theorem typed_monitor_restart_holds_a_gap_despite_other_clearance :
+    authorizeTypedMonitorRestart true
+      (some (originalMonitorJournalComplete [(1, .queued), (3, .failed)])) false = false := by decide
+
+theorem monitor_compaction_retains_failed_native_evidence (events : List (Nat × MonitorJournalEvent)) :
+    compactMonitorJournal true events = events := rfl
+
+theorem an_aged_unpolled_watch_stays_recoverable_after_compaction :
+    let events := [(1, .queued), (2, .replay), (3, .failed)]
+    authorizeTypedMonitorRestart true
+      (some (originalMonitorJournalComplete (compactMonitorJournal true events))) false = true := by decide
+
+theorem a_previously_compacted_gap_is_still_unproven :
+    let events := [(1, .queued), (2, .replay), (3, .failed)]
+    authorizeTypedMonitorRestart true
+      (some (originalMonitorJournalComplete (compactMonitorJournal false events))) false = false := by decide
 
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
@@ -2707,5 +2745,11 @@ theorem legacy_monitor_retry_accepts_a_complete_unpolled_failure :
 #print axioms legacy_monitor_retry_holds_when_a_poll_was_recorded
 #print axioms legacy_monitor_retry_requires_the_terminal_failure
 #print axioms legacy_monitor_retry_accepts_a_complete_unpolled_failure
+#print axioms typed_monitor_restart_requires_positive_journal_evidence
+#print axioms typed_monitor_restart_rejects_a_missing_observation
+#print axioms typed_monitor_restart_holds_a_gap_despite_other_clearance
+#print axioms monitor_compaction_retains_failed_native_evidence
+#print axioms an_aged_unpolled_watch_stays_recoverable_after_compaction
+#print axioms a_previously_compacted_gap_is_still_unproven
 
 end StewardPrSignalPagination

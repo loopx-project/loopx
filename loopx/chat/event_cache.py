@@ -278,6 +278,16 @@ class ChatEventStreamMixin:
                 completed = _store._instant(turn.get("completed_at"))
                 if completed is None or completed > cutoff:
                     continue
+                request = turn.get("loopx_request")
+                if (
+                    turn.get("status") == "failed"
+                    and turn.get("origin") == "native_loopx"
+                    and turn.get("loopx_execution") is True
+                    and isinstance(request, dict)
+                    and request.get("work_kind") == "monitor"
+                ):
+                    # Monitor recovery needs the original sequence and phase evidence.
+                    continue
                 self.flush_events(session_id, turn_id)
                 event_path = turn_path.with_name(f"{turn_id}.events.jsonl")
                 revision = self._event_revision(event_path)

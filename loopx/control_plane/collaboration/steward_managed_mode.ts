@@ -157,6 +157,7 @@ function admitMonitorRestartRecovery(
         || typeof predecessor.original_turn_id !== "string" || !/^[a-f0-9]{32}$/.test(predecessor.original_turn_id)
         || predecessor.original_turn_id === original.turn_id))
       || basis.old_worker_excluded !== true || basis.poll_absent !== true || basis.lease_available !== true
+      || basis.event_journal_complete !== true
       || !Array.isArray(events) || !events.includes("turn.failed")
       || events.some(kind => !["turn.queued", "agent.phase", "manager.context", "turn.failed"].includes(String(kind)))
       || priorKeys.length !== keys.length

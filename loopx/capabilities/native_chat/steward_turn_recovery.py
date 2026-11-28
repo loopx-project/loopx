@@ -49,6 +49,20 @@ class _ReportServiceProtocol(Protocol):
     def delivery_current(self, owner_key: str, window: Mapping[str, object]) -> bool: ...
 
 
+def _complete_failed_monitor_journal(journal: Sequence[Mapping[str, object]]) -> bool:
+    return bool(journal) and (
+        journal[0].get("kind") == "turn.queued"
+        and journal[-1].get("kind") == "turn.failed"
+        and all(
+            type(row.get("sequence")) is int
+            and row["sequence"] == expected_sequence
+            and isinstance(row.get("kind"), str)
+            and row["kind"] != ""
+            for expected_sequence, row in enumerate(journal, start=1)
+        )
+    )
+
+
 def monitor_selection_failed_before_poll(
     store: StewardStoreProtocol,
     turn: Mapping[str, object],
@@ -71,17 +85,8 @@ def monitor_selection_failed_before_poll(
         )
     except (OSError, ValueError):
         return False
-    # Missing rows and replay compaction leave gaps in the original sequence.
-    return bool(journal) and (
-        journal[0].get("kind") == "turn.queued"
-        and journal[-1].get("kind") == "turn.failed"
-        and all(
-            type(row.get("sequence")) is int
-            and row["sequence"] == expected_sequence
-            and isinstance(row.get("kind"), str)
-            and row["kind"] not in {"", "native_loopx.monitor_poll"}
-            for expected_sequence, row in enumerate(journal, start=1)
-        )
+    return _complete_failed_monitor_journal(journal) and all(
+        row["kind"] != "native_loopx.monitor_poll" for row in journal
     )
 
 
@@ -181,10 +186,11 @@ def monitor_restart_basis(
         return {
             "monitor_restart_basis": {
                 "original": original,
-                "event_kinds": [row["kind"] for row in events],
+                "event_journal_complete": _complete_failed_monitor_journal(events),
+                "event_kinds": [row.get("kind") for row in events],
                 "poll_absent": not present,
-                "contexts": [row["payload"] for row in events if row["kind"] == "manager.context"],
-                "phases": [row["payload"] for row in events if row["kind"] == "agent.phase"],
+                "contexts": [row["payload"] for row in events if row.get("kind") == "manager.context"],
+                "phases": [row["payload"] for row in events if row.get("kind") == "agent.phase"],
                 "old_worker_excluded": True,
                 "lease_available": available,
                 "observed_at": time.time(),
