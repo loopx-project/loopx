@@ -71,7 +71,10 @@ test("another Todo's activity cannot establish execution or benefit of the decla
       observation_refs: ["evidence:experiment"]}]}};
   const review = {reference_decision_ref: previous, adoption: "executed", information_gain: "new_evidence",
     goal_gain: "improved", evidence_refs: ["evidence:other"], lesson: "An unrelated task completed."};
-  assert.match(String(strideReviewMismatch({...proposal, previous_review: review}, context)), /declared work/);
+  const mismatch = String(strideReviewMismatch({...proposal, previous_review: review}, context));
+  assert.match(mismatch, /declared work/);
+  assert.match(mismatch, /reference_decision_ref/);
+  assert.match(mismatch, /"unknown" for adoption and goal_gain/);
   assert.equal(strideReviewMismatch({...proposal, previous_review: {...review,
     adoption: "not_executed", goal_gain: "unknown"}}, context), null);
   // Negative experiments may complete; neither a score threshold nor success is required.

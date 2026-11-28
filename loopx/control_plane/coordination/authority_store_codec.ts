@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 
 import type { JsonObject } from "../effect_program.ts";
 import type { AuthorityStoreCommit } from "./authority_store.ts";
@@ -147,20 +147,16 @@ function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: b
   stack.add(value);
   try {
     const keys = Object.keys(value);
-    if (!canonicalKeys) {
-      // Fill without inherited setters (including __proto__), then normalize
-      // to the same ordinary object as Object.fromEntries. No per-field tuples.
-      const copy: JsonObject = Object.create(null);
-      for (const key of keys) copy[key] = cloneAuthorityJson(value[key], stack, false);
-      return Object.setPrototypeOf(copy, Object.prototype);
+    if (canonicalKeys && keys.length > 1) {
+      keys.sort(authorityUnicodeCompare);
     }
-    keys.sort(authorityUnicodeCompare);
-    return Object.fromEntries(
-      keys.map((key) => [
-        key,
-        cloneAuthorityJson(value[key], stack, canonicalKeys),
-      ]),
-    );
+    // Fill without inherited setters (including __proto__), then normalize
+    // to an ordinary object. Avoids intermediate per-field tuple arrays.
+    const copy: JsonObject = Object.create(null);
+    for (const key of keys) {
+      copy[key] = cloneAuthorityJson(value[key], stack, canonicalKeys);
+    }
+    return Object.setPrototypeOf(copy, Object.prototype);
   } finally {
     stack.delete(value);
   }
@@ -194,6 +190,23 @@ export function canonicalAuthorityBytes(value: unknown): Buffer {
 
 export function canonicalAuthoritySha256(value: unknown): string {
   return createHash("sha256").update(canonicalAuthorityBytes(value)).digest("hex");
+}
+
+/**
+ * Hash a commit envelope when the caller already owns the canonicalized
+ * `next_projection` bytes or stream, avoiding a duplicate full-tree clone.
+ */
+export function hashCanonicalCommitEnvelope(
+  fields: Omit<AuthorityStoreCommit, "next_projection">,
+  writeProjection: (hash: Hash) => void,
+): string {
+  const envelope = canonicalAuthorityObject({...fields, next_projection: null}, "commit proof");
+  const keys = Object.keys(envelope), split = keys.indexOf("next_projection");
+  const field = (key: string) => JSON.stringify(key) + ":" + JSON.stringify(envelope[key]);
+  const before = keys.slice(0, split).map(field), after = keys.slice(split + 1).map(field);
+  const hash = createHash("sha256").update("{" + (before.length ? before.join(",") + "," : "") + '"next_projection":');
+  writeProjection(hash);
+  return hash.update((after.length ? "," + after.join(",") : "") + "}").digest("hex");
 }
 
 export function parseAuthorityCursor(value: string | null): bigint {

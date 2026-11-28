@@ -354,8 +354,8 @@ def handle_external_evidence_command(
                     raise ValueError("Explore readback projection requires both --goal-id and --explore-node")
                 if admission_obj is None:
                     raise ValueError("Explore readback projection requires --admission-json")
-                from ...paths import default_registry_path, resolve_runtime_root
-                from ...control_plane.projects.registry_codec import load_registry
+                from ...control_plane.runtime.runtime_projection_route import resolve_goal_source_runtime_route
+                from ...paths import default_registry_path
                 from ..explore.research_bridge import project_external_evidence_to_explore
 
                 reg_arg = getattr(args, "registry", None)
@@ -364,13 +364,14 @@ def handle_external_evidence_command(
                     if registry_path is not None
                     else (Path(reg_arg).expanduser() if reg_arg else default_registry_path())
                 )
-                rt_root = resolve_runtime_root(
-                    load_registry(reg_path) if reg_path.exists() else {},
-                    getattr(args, "runtime_root", None),
+                route = resolve_goal_source_runtime_route(
+                    registry_path=reg_path,
+                    goal_id=goal_target,
+                    runtime_root_override=getattr(args, "runtime_root", None),
                 )
                 explore_result = project_external_evidence_to_explore(
-                    registry_path=reg_path,
-                    runtime_root=rt_root,
+                    registry_path=Path(str(route["source_registry"])),
+                    runtime_root=Path(str(route["source_runtime_root"])),
                     goal_id=goal_target,
                     node_id=explore_node,
                     plan=plan_obj,

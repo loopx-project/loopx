@@ -11,7 +11,6 @@ from typing import Any, Sequence
 
 from .command_invocation import command_argv
 from .python_install_owner import (
-    RESEARCH_DISTRIBUTION,
     distribution_record_path,
     installed_loopx_distribution,
     verified_distribution_console,
@@ -311,7 +310,6 @@ def collect_companion_distribution_diagnostics(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
     """Inspect installed optional companion wheels for standalone loopx-core."""
     from importlib.util import find_spec
-    from .capabilities.deep_research.catalog_entry import inspect_research_workflow_distribution
 
     if find_spec("loopx.cli") is not None:
         return [], [], None
@@ -321,9 +319,24 @@ def collect_companion_distribution_diagnostics(
         return [], [], None
     if getattr(installed, "name", None) != "loopx-core":
         return [], [], None
+    from .capabilities.agent_turn_recall.catalog_entry import inspect_agent_turn_recall_distribution
+    from .capabilities.benchmark_toolkit.catalog_entry import inspect_benchmark_toolkit_distribution
+    from .capabilities.deep_research.catalog_entry import inspect_research_workflow_distribution
+    from .capabilities.issue_fix.catalog_entry import inspect_issue_fix_workflow_distribution
+    from .capabilities.pr_review_queue.catalog_entry import inspect_pull_request_review_distribution
+    from .cli_runtime import inspect_workspace_distribution
+
+    inspectors = (
+        inspect_workspace_distribution,
+        inspect_benchmark_toolkit_distribution,
+        inspect_agent_turn_recall_distribution,
+        inspect_pull_request_review_distribution,
+        inspect_issue_fix_workflow_distribution,
+        inspect_research_workflow_distribution,
+    )
     companions = [
         item
-        for item in (inspect_research_workflow_distribution(builtin_cli_present=False),)
+        for item in (inspect_fn(builtin_cli_present=False) for inspect_fn in inspectors)
         if item["installed"]
     ]
     checks: list[dict[str, Any]] = []
@@ -346,10 +359,15 @@ def collect_companion_distribution_diagnostics(
                 if missing:
                     summary += f" [{', '.join(missing)}]"
                 details.append(summary)
-                fix_parts.append(
-                    f"Reinstall matching `{item['distribution']}=={item['core_version']}` "
-                    f"or uninstall `{item['distribution']}`."
-                )
+                if item["core_version"]:
+                    fix_parts.append(
+                        f"Reinstall matching `{item['distribution']}=={item['core_version']}` "
+                        f"or uninstall `{item['distribution']}`."
+                    )
+                else:
+                    fix_parts.append(
+                        f"Reinstall matching `{item['distribution']}` or uninstall `{item['distribution']}`."
+                    )
             checks.append(
                 {
                     "id": "companion_distributions_compatible",
@@ -396,9 +414,15 @@ def collect_companion_distribution_diagnostics(
             }
         )
         if not fingerprint_ok and not fix_parts:
-            fix_parts.append(
-                f"Repair or reinstall `loopx-core` and any `{RESEARCH_DISTRIBUTION}` companion at the exact Core version."
-            )
+            companion_names = ", ".join(f"`{item['distribution']}`" for item in companions)
+            if companion_names:
+                fix_parts.append(
+                    f"Repair or reinstall `loopx-core` and installed companions ({companion_names}) at the exact Core version."
+                )
+            else:
+                fix_parts.append(
+                    "Repair or reinstall `loopx-core` and any optional companion wheel at the exact Core version."
+                )
     return companions, checks, " ".join(fix_parts) if fix_parts else None
 
 

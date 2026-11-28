@@ -2,19 +2,31 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...python_install_owner import builtin_capability_installed
+from ...python_install_owner import inspect_builtin_capability_distribution
 from .command_templates import build_issue_fix_pr_lifecycle_command
 
 
 ISSUE_FIX_DISTRIBUTION = "loopx-capability-issue-fix"
 ISSUE_FIX_INSTALL_HINT = f"Install the matching {ISSUE_FIX_DISTRIBUTION} wheel in this Core environment."
+ISSUE_FIX_MODULES = tuple(
+    f"{__package__}.{name}" for name in ("cli", "candidate_preflight", "workflow_plan", "acceptance_loop")
+)
+
+
+def inspect_issue_fix_workflow_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    """Inspect whether the optional issue-fix wheel is installed and matches Core."""
+    return inspect_builtin_capability_distribution(
+        ISSUE_FIX_DISTRIBUTION,
+        ISSUE_FIX_MODULES,
+        builtin_cli_present=builtin_cli_present,
+    )
 
 
 def issue_fix_workflow_installed(*, builtin_cli_present: bool | None = None) -> bool:
-    return builtin_capability_installed(
-        ISSUE_FIX_DISTRIBUTION,
-        tuple(f"{__package__}.{name}" for name in ("cli", "candidate_preflight", "workflow_plan", "acceptance_loop")),
-        builtin_cli_present=builtin_cli_present,
+    return bool(
+        inspect_issue_fix_workflow_distribution(builtin_cli_present=builtin_cli_present)["ready"]
     )
 
 

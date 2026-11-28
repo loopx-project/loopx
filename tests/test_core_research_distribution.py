@@ -299,14 +299,18 @@ def _run_explore_and_bridge_journey(python_bin: str, tmp_path: Path, *, check_mo
     project_b = tmp_path / "proj-b"
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"
+    shared_runtime = tmp_path / "shared-runtime"
+    global_registry = tmp_path / "registry.global.json"
     project_a.mkdir()
     project_b.mkdir()
-    prefix = ["--registry", str(registry), "--runtime-root", str(runtime), "--format", "json"]
 
-    def cli(*args: str, expected: int = 0) -> dict:
+    def cli(*args: str, expected: int = 0, via_global_registry: bool = False) -> dict:
+        route = ["--registry", str(global_registry)] if via_global_registry else [
+            "--registry", str(registry), "--runtime-root", str(runtime),
+        ]
         interpreter = [python_bin, "-I"] if check_module_laziness else [python_bin]
         result = subprocess.run(
-            [*interpreter, "-m", "loopx.entrypoint", *prefix, *args],
+            [*interpreter, "-m", "loopx.entrypoint", *route, "--format", "json", *args],
             cwd=tmp_path if check_module_laziness else REPOSITORY,
             env=_environment(python_bin), capture_output=True, text=True, timeout=60,
         )
@@ -469,24 +473,42 @@ def _run_explore_and_bridge_journey(python_bin: str, tmp_path: Path, *, check_mo
     goal_b_before = cli("explore", "summary", "--goal-id", "goal-b")
     assert goal_b_before["counts"]["finding_count"] == 0
 
-    # Dry-run readback & observe-external must not append.
-    dry = cli(
+    # The global registry references the source Goal without copying its Explore configuration.
+    alias = {
+        "schema_version": 1,
+        "registry_role": "global-local",
+        "common_runtime_root": str(shared_runtime),
+        "goals": [{"id": "goal-a", "repo": str(project_a), "source_registry": registry.name}],
+    }
+    readback_args = (
         "external-evidence", "readback", "--goal-id", "goal-a", "--explore-node", "q_primary",
         "--plan-json", str(plan_file), "--receipt-json", str(receipt_file),
-        "--admission-json", str(admit_file),
+        "--admission-json", str(admit_file), "--agent-id", "researcher",
     )
-    assert dry["explore_projection"]["dry_run"] is True and dry["explore_projection"]["written"] is False
+    log_file = Path(readback["log_path"]).resolve()
+    shared_log = shared_runtime / log_file.relative_to(runtime.resolve())
+    before_readback = log_file.read_bytes()
+    global_registry.write_text(json.dumps(alias), encoding="utf-8")
+    for via_global_registry in (False, True):
+        dry = cli(*readback_args, via_global_registry=via_global_registry)["explore_projection"]
+        assert dry["dry_run"] is True and dry["written"] is False
+        assert Path(dry["log_path"]).resolve() == log_file
+    assert log_file.read_bytes() == before_readback and not shared_log.exists()
+
+    alias["goals"][0]["source_registry"] = "missing.json"
+    global_registry.write_text(json.dumps(alias), encoding="utf-8")
+    missing = cli(*readback_args, "--execute", expected=1, via_global_registry=True)
+    assert "source_registry is missing" in missing["error"]
+    assert log_file.read_bytes() == before_readback and not shared_log.exists()
+    alias["goals"][0]["source_registry"] = registry.name
+    global_registry.write_text(json.dumps(alias), encoding="utf-8")
 
     # Apply with --execute: sanitizes local paths, rejects credentials, and replays idempotently.
-    applied = cli(
-        "explore", "observe-external", "--goal-id", "goal-a", "--node", "q_primary",
-        "--plan-json", str(plan_file), "--receipt-json", str(receipt_file),
-        "--admission-json", str(admit_file), "--execute",
-    )
+    applied = cli(*readback_args, "--execute", via_global_registry=True)["explore_projection"]
     assert applied["ok"] is True and applied["written"] is True and applied["appended_count"] == 2
     assert applied["redacted_source_count"] >= 2 and applied["automatic_execution"] is False
+    assert Path(applied["log_path"]).resolve() == log_file and not shared_log.exists()
 
-    log_file = Path(applied["log_path"])
     after_apply_bytes = log_file.read_bytes()
     log_text = after_apply_bytes.decode("utf-8")
     assert ("/" + "Users/") not in log_text and "secret_brief.md" not in log_text and "local.txt" not in log_text
@@ -495,7 +517,8 @@ def _run_explore_and_bridge_journey(python_bin: str, tmp_path: Path, *, check_mo
     replay = cli(
         "explore", "observe-external", "--goal-id", "goal-a", "--node", "q_primary",
         "--plan-json", str(plan_file), "--receipt-json", str(receipt_file),
-        "--admission-json", str(admit_file), "--execute",
+        "--admission-json", str(admit_file), "--agent-id", "researcher", "--execute",
+        via_global_registry=True,
     )
     assert replay["ok"] is True and replay["written"] is False and replay["replayed"] is True and replay["appended_count"] == 0
     assert log_file.read_bytes() == after_apply_bytes

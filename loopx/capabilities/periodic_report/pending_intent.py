@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -666,18 +666,6 @@ def _build_editorial_request(
     facts: list[dict[str, Any]],
     incremental_baseline: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    work_window = _actual_work_window(
-        runtime_root=runtime_root,
-        goal_id=goal_id,
-        agent_id=agent_id,
-        facts=facts,
-        completed_at=completed_at,
-        publication_boundary=(
-            str(incremental_baseline.get("covered_until") or "")
-            if isinstance(incremental_baseline, Mapping)
-            else None
-        ),
-    )
     cadence_window = intent.get("payload", {}).get("cadence_window")
     if isinstance(cadence_window, Mapping):
         from zoneinfo import ZoneInfo
@@ -687,6 +675,19 @@ def _build_editorial_request(
         work_window = {"start_at": cadence_window["start_at"], "end_at": cadence_window["due_at"],
             "period_label": f"{start.astimezone(zone):%Y-%m-%d %H:%M} — {end.astimezone(zone):%Y-%m-%d %H:%M}（{zone.key}）",
             "source": "frozen_calendar_window"}
+    else:
+        work_window = _actual_work_window(
+            runtime_root=runtime_root,
+            goal_id=goal_id,
+            agent_id=agent_id,
+            facts=facts,
+            completed_at=completed_at,
+            publication_boundary=(
+                str(incremental_baseline.get("covered_until") or "")
+                if isinstance(incremental_baseline, Mapping)
+                else None
+            ),
+        )
     request: dict[str, Any] = {
         "schema_version": EDITORIAL_REQUEST_SCHEMA,
         "goal_id": goal_id,
@@ -786,20 +787,18 @@ def _actual_work_window(
     # The document protocol requires a non-empty half-open window. A stage with
     # only one timestamp still represents that exact completion instant.
     document_start = start if start < end else end - timedelta(microseconds=1)
-    display_tz = end.tzinfo
-    timezone_label = "UTC"
-    registry_tz = None
-    try:
-        from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-        registry_tz = ZoneInfo("Asia/Shanghai")
-    except (ImportError, ValueError):
-        registry_tz = None
-    if registry_tz is not None:
-        display_tz = registry_tz
+    try:
+        display_tz = ZoneInfo("Asia/Shanghai")
+        display_start = start.astimezone(display_tz)
+        display_end = end.astimezone(display_tz)
+    except (ZoneInfoNotFoundError, ValueError, OverflowError):
+        display_start = start.astimezone(timezone.utc)
+        display_end = end.astimezone(timezone.utc)
+        timezone_label = "UTC"
+    else:
         timezone_label = "北京时间"
-    display_start = start.astimezone(display_tz)
-    display_end = end.astimezone(display_tz)
     offset = display_end.utcoffset()
     if offset not in {timedelta(hours=8), timedelta(0)}:
         total_minutes = int((offset or timedelta()).total_seconds() // 60)
@@ -1194,7 +1193,7 @@ def _consume_pending_periodic_report_intent(
         start = datetime.fromisoformat(cadence_window["start_at"].replace("Z", "+00:00"))
         end = datetime.fromisoformat(cadence_window["due_at"].replace("Z", "+00:00"))
         facts = [fact for fact in facts if fact.get("status") != "done" or (
-            start < datetime.fromisoformat(str(fact["completed_at"]).replace("Z", "+00:00")) <= end
+            start <= datetime.fromisoformat(str(fact["completed_at"]).replace("Z", "+00:00")) < end
         )]
         facts.append(_cadence_coverage_fact(cadence_window))
     request_path = _editorial_request_path(

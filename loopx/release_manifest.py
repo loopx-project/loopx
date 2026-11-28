@@ -17,6 +17,7 @@ from .python_install_owner import (
     distribution_recorded_files,
     installed_loopx_distribution,
     is_distribution_artifact,
+    read_editable_direct_url,
 )
 
 
@@ -324,8 +325,8 @@ _CORE_COMPANION_DISTRIBUTIONS = (
 
 
 def _owned_runtime_files(installed: Distribution) -> dict[str, Path]:
-    direct_url = json.loads(installed.read_text("direct_url.json") or "{}")
-    if direct_url.get("dir_info", {}).get("editable") or installed.version != __version__:
+    editable_flag = read_editable_direct_url(installed)
+    if editable_flag is None or editable_flag or installed.version != __version__:
         return {}
     entries = distribution_recorded_files(installed)
     if entries is None:

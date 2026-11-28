@@ -105,9 +105,13 @@ verified publication cursor does so.
 
 Registration reordering retains the frozen reporter. A subscription edit can
 supersede an unprepared window: admission archives the predecessor before
-replacing it, under the same lock used by editorial preparation. Restarting
-between those writes repeats the replacement safely; it does not record a
-publication. The replacement uses the current subscription and elected reporter.
+replacing it, under the same lock used by editorial preparation. New archive
+references identify the complete admission record. Returning to the same
+configuration in the same window retains distinct admissions. The journal
+reader also accepts earlier references based on window IDs. A restart between
+the archive and replacement writes reuses the same predecessor archive. This
+transition leaves publication unset. The replacement uses the current
+subscription and elected reporter.
 Admission resolves registration, lifecycle and subscription again under its
 journal lock; a previously constructed hook is not current authority.
 
@@ -138,9 +142,10 @@ exclusive switches and they do not create two delivery pipelines:
 - A **cadence digest** is retrospective. `cadence_due` is only the eligibility
   signal. The run must cover the latest completed interval as a half-open
   window, `[period_window.start_at, period_window.end_at)`, and the end of that
-  window must not be later than `generated_at`. Restarting or a late wake may
-  coalesce missed calendar boundaries, but it never turns an in-progress
-  interval into a report.
+  window must not be later than `generated_at`. A Todo completed exactly at a
+  shared boundary belongs to the interval that starts there. Restarting or a
+  late wake may coalesce missed calendar boundaries, but it never turns an
+  in-progress interval into a report.
 - An **automatic update** is event-driven. Material blockers, recoveries,
   decisions, validated outcomes, and bounded milestones map to
   `exception_update` or `milestone_update` (and an explicit request maps to
@@ -218,6 +223,12 @@ the reasoning agent authors the required response, then consumes again to
 freeze a generation and queue the existing delivery Todo. A fully unattended
 managed Turn runner still needs an adapter for that editorial handoff; the
 calendar setting alone does not supply one.
+
+Derived work-window labels use Beijing time when both endpoints can be
+displayed in that zone. If the display zone is unavailable or either endpoint
+falls outside its calendar range, the label uses UTC for both endpoints.
+Display conversion preserves the recorded instants. Calendar reports label
+the frozen window using the configured schedule timezone.
 
 `periodic_report_activation_v0` is the effect-free inspection receipt. It
 records whether generation is allowed, the normalized profile digest, and the
@@ -461,7 +472,9 @@ updates, while authorized manual runs, validated primary outcomes, validated
 vision closures, and primary-path blockers may bypass it. The output records
 the selected and coalesced ids, every suppression reason, cooldown state, and
 the report kind (`cadence_digest`, `milestone_update`, `exception_update`, or
-`manual_update`).
+`manual_update`). When cooldown suppresses an otherwise eligible report,
+`next_eligible_at` is the prior delivery time plus `minimum_interval_seconds`,
+with the delivery timestamp's microseconds preserved.
 
 `bounded_segment_milestone` is derived from the same goal-vision and frontier
 facts that drive autonomous replan, but it is a stricter success-path result.

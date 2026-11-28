@@ -23,6 +23,7 @@ import {
   canonicalAuthorityObject,
   canonicalAuthoritySha256,
   copyAuthorityJson,
+  hashCanonicalCommitEnvelope,
   isAuthorityJsonObject,
 } from "./authority_store_codec.ts";
 
@@ -238,12 +239,9 @@ export class AuthorityStateReplay {
     // Canonicalize the ordinary envelope, inserting our owned projection's
     // exact bytes at its key. This is the existing v0 digest, not a Merkle hash
     // or a new persistent proof. Integer-like keys obey native JSON ordering.
-    const envelope = canonicalAuthorityObject({...fields, next_projection: null}, "commit proof");
-    const keys = Object.keys(envelope), split = keys.indexOf("next_projection");
-    const field = (key: string) => JSON.stringify(key) + ":" + JSON.stringify(envelope[key]);
-    const before = keys.slice(0, split).map(field), after = keys.slice(split + 1).map(field);
-    const hash = createHash("sha256").update("{" + (before.length ? before.join(",") + "," : "") + '"next_projection":');
-    return this.#updateProjection(hash).update((after.length ? "," + after.join(",") : "") + "}").digest("hex");
+    return hashCanonicalCommitEnvelope(fields, (hash) => {
+      this.#updateProjection(hash);
+    });
   }
 
   #updateProjection(hash: Hash): Hash {
