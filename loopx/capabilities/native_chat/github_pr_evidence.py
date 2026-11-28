@@ -390,6 +390,9 @@ def _summarize_request_changes_stall(
         # Both the age and the set of post-anchor replies depend on this clock's identity.
         return _StallEvidence(latest_review_id=latest_rc_review_id, stalled_since_unknown=True)
 
+    if row.get("_comment_readback_incomplete") is True:
+        return _StallEvidence(latest_review_id=latest_rc_review_id, stalled_since=stalled_since, comments_incomplete=True)
+
     earliest_comment_dt: datetime | None = None
     has_post_anchor_comment_reply = False
     post_replies: list[tuple[datetime, int, str | None]] = []
@@ -754,12 +757,15 @@ class _OpenPrReadbackLimits(NamedTuple):
     page_size: int
     checks: int | None
     reviews: int | None
+    comments: int | None
 
 
 def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
     fields = _open_pr_check_readback(limits.checks) if limits.checks is not None else ""
     if limits.reviews is not None:
         fields += f"\n        reviews(last: {limits.reviews}) {{ ...StewardReviewPage }}"
+    if limits.comments is not None:
+        fields += f"\n        comments(last: {limits.comments}) {{ ...StewardCommentPage }}"
     return fields
 
 
@@ -869,6 +875,21 @@ def _read_graphql_comment_page(connection: object, *, max_rows: int) -> _Comment
         return None
     has_previous, cursor = _graphql_comment_page_info(connection.get("pageInfo"))
     return _CommentPage(rows, has_previous, cursor)
+
+
+def _comment_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int:
+    limit = 1
+    for row in rows:
+        page = _read_graphql_comment_page(row.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+        if page is not None:
+            limit = max(limit, len(page.rows))
+    return limit
+
+
+def _earlier_pr_comments_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    initial = _read_graphql_comment_page(original.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    terminal = _read_graphql_comment_page(readback.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    return initial is not None and initial == terminal
 
 
 class _ReviewPage(NamedTuple):
@@ -1257,13 +1278,14 @@ def observe_github_repository_prs(
     previous_pages: dict[str | None, tuple[_OpenPrWindow, _OpenPrReadbackLimits]] = {}
     unverified_checks: set[int] = set()
     unverified_reviews: set[int] = set()
+    unverified_comments: set[int] = set()
     page_size = _GITHUB_PR_LIST_PAGE_SIZE
     deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
         for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
             can_finish = expected_total is not None and len(raw_nodes_by_number) + page_size >= expected_total
             previous_limits = [
-                limits if can_finish else _OpenPrReadbackLimits(limits.page_size, None, None)
+                limits if can_finish else _OpenPrReadbackLimits(limits.page_size, None, None, None)
                 for _window, limits in previous_pages.values()
             ]
             cmd = [
@@ -1324,13 +1346,18 @@ def observe_github_repository_prs(
                         unverified_checks.add(number)
                     if not _earlier_pr_reviews_agree(original, readback_row):
                         unverified_reviews.add(number)
+                    if not _earlier_pr_comments_agree(original, readback_row):
+                        unverified_comments.add(number)
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)
             if page.next_cursor is None:
                 break
             window = _read_open_pr_window(page)
             if window is None or page.next_cursor == cursor or page.next_cursor in previous_pages:
                 return {"status": "unavailable", "repository": repo_slug}
-            limits = _OpenPrReadbackLimits(page_size, _nested_check_readback_limit(page.rows), _review_readback_limit(page.rows))
+            limits = _OpenPrReadbackLimits(
+                page_size, _nested_check_readback_limit(page.rows), _review_readback_limit(page.rows),
+                _comment_readback_limit(page.rows),
+            )
             previous_pages[cursor] = (window, limits)
             cursor = page.next_cursor
             if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
@@ -1349,6 +1376,8 @@ def observe_github_repository_prs(
         for number in unverified_reviews:
             normalized_nodes[number]["review_readback_incomplete"] = True
             normalized_nodes[number]["review_coverage_incomplete"] = True
+        for number in unverified_comments:
+            normalized_nodes[number]["_comment_readback_incomplete"] = True
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
         review_pages_read: dict[int, int] = {}
@@ -1388,7 +1417,8 @@ def observe_github_repository_prs(
         if backfill_comments:
             candidates = [
                 number for number, item in items.items()
-                if item["comments_coverage_incomplete"] and not item.get("review_coverage_incomplete")
+                if number not in unverified_comments
+                and item["comments_coverage_incomplete"] and not item.get("review_coverage_incomplete")
             ]
             remaining_seconds = deadline - monotonic()
             if select_comment_backfill is not None and candidates and remaining_seconds > 0:

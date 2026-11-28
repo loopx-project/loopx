@@ -933,6 +933,99 @@ def test_steward_terminal_list_readback_corroborates_earlier_reviews(case: str) 
         assert snapshot["items"][0].get("review_coverage_incomplete") is (True if case == "excluded" else None)
 
 
+@pytest.mark.parametrize("case", [
+    "actor-drift", "missing", "boundary-drift", "excluded-draft", "young-without-bypass", "fresh-overlap",
+    "stable", "stable-truncated", "changed-truncated", "no-anchor",
+])
+def test_steward_terminal_list_readback_corroborates_earlier_reply_evidence(case: str) -> None:
+    from copy import deepcopy
+
+    head = "a" * 40
+    review = {
+        "id": "change-request", "state": "CHANGES_REQUESTED", "author": {"login": "maintainer"},
+        "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
+    }
+    reply = {"createdAt": "2030-01-01T09:00:00Z", "author": {"login": "contributor"}}
+
+    def pr(number: int, *, reviews: list[dict[str, Any]], comments: list[dict[str, Any]]) -> dict[str, Any]:
+        row = _graphql_node(_sample_pr(number=number, head_oid=head, author="contributor", reviews=reviews,
+                                       review_decision="CHANGES_REQUESTED"))
+        row["comments"] = {"nodes": comments, "pageInfo": {"hasPreviousPage": False}}
+        row["updatedAt"] = "2030-01-01T10:00:00Z"
+        return row
+
+    earlier = pr(1, reviews=[] if case == "no-anchor" else [review], comments=[reply])
+    if case.endswith("-truncated"):
+        earlier["comments"] = {"nodes": [], "pageInfo": {"hasPreviousPage": True, "startCursor": "comment-cursor"}}
+    if case == "excluded-draft":
+        earlier["isDraft"] = True
+    first_page = [earlier, *(pr(number, reviews=[], comments=[]) for number in range(2, 21))]
+    second_page = [pr(21, reviews=[], comments=[reply, reply]), *(pr(number, reviews=[], comments=[]) for number in range(22, 41))]
+    terminal = [pr(41, reviews=[{**review, "submittedAt": "2029-12-30T08:00:00Z"}], comments=[reply])]
+    if case == "fresh-overlap":
+        terminal.append(pr(1, reviews=[review], comments=[]))
+    history = []
+    list_reads = []
+    comment_reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        if "before=comment-cursor" in cmd:
+            comment_reads.append("comment-cursor")
+            pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+            pr_data["latestComments"] = earlier["comments"]
+            pr_data["comments"] = {"nodes": [reply], "pageInfo": {"hasPreviousPage": False}}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": {"pullRequest": pr_data}}}))
+        cursor = next((part.removeprefix("cursor=") for part in cmd if part.startswith("cursor=")), None)
+        list_reads.append(cursor)
+        query = next(part for part in cmd if part.startswith("query="))
+        if cursor is None:
+            payload = _graphql_page(first_page, has_next_page=True, end_cursor="first", total_count=41, history=history)
+        elif cursor == "first":
+            assert "comments(last:" not in query.split("previousPrs0:", 1)[1]
+            payload = _graphql_page(second_page, has_next_page=True, end_cursor="second", total_count=41, history=history)
+        else:
+            assert cursor == "second"
+            assert "comments(last: 1)" in query.split("previousPrs0:", 1)[1].split("previousPrs1:", 1)[0]
+            assert "comments(last: 2)" in query.split("previousPrs1:", 1)[1]
+            payload = _graphql_page(terminal, total_count=41, history=history)
+            repository = payload["data"]["repository"]
+            readback = deepcopy(repository["previousPrs0"])
+            row = readback["nodes"][0]
+            if case == "missing":
+                del row["comments"]
+            elif case in {"boundary-drift", "changed-truncated"}:
+                row["comments"]["pageInfo"] = {"hasPreviousPage": True, "startCursor": "different-cursor"}
+            elif case not in {"stable", "stable-truncated"}:
+                row["comments"]["nodes"][0]["author"] = {"login": "observer"}
+            repository["previousPrs0"] = readback
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
+    assert snapshot["status"] == "ok" and list_reads == [None, "first", "second"]
+    assert comment_reads == (["comment-cursor"] if case == "stable-truncated" else [])
+    author_mode = "include" if case == "young-without-bypass" else "exclude"
+    scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+             "pr_filter": {"min_stalled_hours": 24, "exclude_drafts": True, "author_mode": author_mode,
+                           "authors": ["contributor" if author_mode == "include" else "maintainer"]}}
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior", "signal_scope": scope,
+              "observed_at": "2030-01-01T12:00:00Z"}
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if case in {"actor-drift", "missing", "boundary-drift", "changed-truncated"}:
+        assert snapshot["items"][0]["comments_coverage_incomplete"] is True
+        assert snapshot["items"][0]["author_replied_after_request_changes"] is False
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior" and observation["material_change"] is False
+        unscoped = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            **params, "signal_scope": None,
+        })
+        assert unscoped["observation_incomplete"] is False
+    else:
+        assert observation["observation_incomplete"] is False
+        numbers = [row["number"] for row in observation["scoped_repository_items"]]
+        assert numbers == ([1, 41] if case in {"stable", "stable-truncated"} else [41])
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):

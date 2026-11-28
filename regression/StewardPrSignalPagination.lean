@@ -1621,6 +1621,72 @@ theorem terminal_request_bounds_nested_review_rows
     previousReviews ≤ 1900 ∧ previousReviews + currentReviews ≤ 2400 := by
   omega
 
+/- The terminal list response must corroborate an earlier readable recent-comment
+   window before its reply or older-comment cursor can affect a stall decision.
+   The row tokens represent only the author, association and time information. -/
+def useCarriedCommentWindow (original current : Option CommentWindow) (decision : Option (List Nat)) :
+    Option (List Nat) :=
+  match original with
+  | none => none
+  | some first => if current = some first then decision else none
+
+theorem published_carried_reply_requires_both_readable_comment_windows
+    (original current : Option CommentWindow) (rows : List Nat) :
+    useCarriedCommentWindow original current (some rows) = some rows ↔
+      ∃ first, original = some first ∧ current = some first := by
+  cases original with
+  | none => simp [useCarriedCommentWindow]
+  | some first =>
+    by_cases same : current = some first <;> simp [useCarriedCommentWindow, same]
+
+def observeCarriedReplyScope (prior : List Nat) (independentlyExcluded replyDependent : Bool)
+    (original current : Option CommentWindow) (rows : List Nat) : List Nat × Bool :=
+  observe prior (if independentlyExcluded then some []
+    else if replyDependent then useCarriedCommentWindow original current (some rows) else some rows)
+
+theorem changed_carried_comments_keep_reply_dependent_scope
+    (prior rows : List Nat) (original current : Option CommentWindow) (changed : original ≠ current) :
+    observeCarriedReplyScope prior false true original current rows = (prior, false) := by
+  cases original with
+  | none => rfl
+  | some first =>
+    have mismatch : current ≠ some first := fun equality => changed equality.symm
+    simp [observeCarriedReplyScope, useCarriedCommentWindow, mismatch, observe]
+
+theorem scope_independent_of_replies_can_publish_despite_comment_drift
+    (prior rows : List Nat) (original current : Option CommentWindow) :
+    observeCarriedReplyScope prior false false original current rows = observe prior (some rows) ∧
+    observeCarriedReplyScope prior true true original current rows = observe prior (some []) := by
+  constructor <;> rfl
+
+theorem corroborated_carried_comments_keep_older_recovery_decision
+    (initial : CommentWindow) (olderCoverage : Option (List Nat)) :
+    useCarriedCommentWindow (some initial) (some initial) olderCoverage = olderCoverage := by
+  simp [useCarriedCommentWindow]
+
+theorem unchanged_comment_cursor_can_hide_a_changed_reply_actor :
+    let earlier : CommentWindow := ⟨[7], .terminal⟩
+    let later : CommentWindow := ⟨[8], .terminal⟩
+    observe [1] (some [1, 21]) = ([1, 21], true) ∧
+    observeCarriedReplyScope [1] false true (some earlier) (some later) [1, 21] = ([1], false) := by
+  decide
+
+theorem terminal_request_bounds_nested_recent_comment_rows
+    (previousPrs currentPrs previousComments currentComments : Nat) (previousCap : previousPrs ≤ 95)
+    (currentCap : currentPrs ≤ 25) (previousWindow : previousComments ≤ 20 * previousPrs)
+    (currentWindow : currentComments ≤ 20 * currentPrs) :
+    previousComments ≤ 1900 ∧ previousComments + currentComments ≤ 2400 := by
+  omega
+
+theorem terminal_request_bounds_combined_nested_rows
+    (previousPrs currentPrs previousChecks previousReviews previousComments currentRows : Nat)
+    (previousCap : previousPrs ≤ 95) (currentCap : currentPrs ≤ 25)
+    (checkWindow : previousChecks ≤ 30 * previousPrs) (reviewWindow : previousReviews ≤ 20 * previousPrs)
+    (commentWindow : previousComments ≤ 20 * previousPrs) (currentWindow : currentRows ≤ 70 * currentPrs) :
+    previousChecks + previousReviews + previousComments ≤ 6650 ∧
+      previousChecks + previousReviews + previousComments + currentRows ≤ 8400 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1795,5 +1861,12 @@ theorem terminal_request_bounds_nested_review_rows
 #print axioms corroborated_carried_review_keeps_older_recovery_decision
 #print axioms unchanged_review_id_and_count_can_hide_a_changed_declaration
 #print axioms terminal_request_bounds_nested_review_rows
+#print axioms published_carried_reply_requires_both_readable_comment_windows
+#print axioms changed_carried_comments_keep_reply_dependent_scope
+#print axioms scope_independent_of_replies_can_publish_despite_comment_drift
+#print axioms corroborated_carried_comments_keep_older_recovery_decision
+#print axioms unchanged_comment_cursor_can_hide_a_changed_reply_actor
+#print axioms terminal_request_bounds_nested_recent_comment_rows
+#print axioms terminal_request_bounds_combined_nested_rows
 
 end StewardPrSignalPagination
