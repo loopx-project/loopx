@@ -209,7 +209,9 @@ def test_retirement_reads_target_manifest_lazily_once(
     }
     facade_reads = dict.fromkeys(facade_files, 0)
     manifest_reads = 0
+    manifest_stats = 0
     original_read_text = Path.read_text
+    original_stat = Path.stat
 
     def count_reads(path, encoding=None, errors=None):
         nonlocal manifest_reads
@@ -219,14 +221,95 @@ def test_retirement_reads_target_manifest_lazily_once(
             facade_reads[path] += 1
         return original_read_text(path, encoding=encoding, errors=errors)
 
+    def count_stats(path, *, follow_symlinks=True):
+        nonlocal manifest_stats
+        if path == target_manifest:
+            manifest_stats += 1
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
     monkeypatch.setattr(Path, "read_text", count_reads)
+    monkeypatch.setattr(Path, "stat", count_stats)
     result = readback.retire_duplicate_managed_skills(
         target, alternate_root=alternate, execute=True
     )
 
     assert result["retired"] == sorted(skill_ids)
     assert manifest_reads == expected_manifest_reads
+    if facade:
+        assert manifest_stats == 0
     assert facade_reads == dict.fromkeys(facade_files, 1)
+
+
+@pytest.mark.parametrize("execute", [False, True], ids=["preview", "execute"])
+@pytest.mark.parametrize("manifest_change", ["replace", "delete"])
+@pytest.mark.parametrize("change_at", ["between_candidates", "candidate_hash", "manifest_read"])
+def test_retirement_skips_candidates_with_stale_target_proof(
+    tmp_path, monkeypatch, execute, manifest_change, change_at
+):
+    target, alternate = tmp_path / "target", tmp_path / "alternate"
+    first_id, second_id = "loopx-a", "loopx-b"
+    skill_ids = [first_id, second_id]
+    for root in (target, alternate):
+        for skill_id in skill_ids:
+            skill(root, skill_id, f"# {skill_id} workflow\n")
+        readback.write_skill_install_readback(
+            skills_dir=root, skill_ids=skill_ids, source_root=tmp_path
+        )
+
+    target_manifest = target / readback.SKILL_INSTALL_READBACK_FILENAME
+    manifest_changed = False
+
+    def change_manifest():
+        nonlocal manifest_changed
+        manifest_changed = True
+        if manifest_change == "delete":
+            target_manifest.unlink()
+        else:
+            retained_id = second_id if change_at == "manifest_read" else first_id
+            readback.write_skill_install_readback(
+                skills_dir=target, skill_ids=[retained_id], source_root=tmp_path
+            )
+
+    if change_at == "candidate_hash":
+        original_open = Path.open
+        candidate_skill = alternate / second_id / "SKILL.md"
+
+        def open_and_change_manifest(path, mode="r", *args, **kwargs):
+            if path == candidate_skill and mode == "rb" and not manifest_changed:
+                change_manifest()
+            return original_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", open_and_change_manifest)
+    else:
+        original_read_text = Path.read_text
+        change_after_read = (
+            target_manifest if change_at == "manifest_read" else target / second_id / "SKILL.md"
+        )
+
+        def read_and_change_manifest(path, *args, **kwargs):
+            content = original_read_text(path, *args, **kwargs)
+            if path == change_after_read and not manifest_changed:
+                change_manifest()
+            return content
+
+        monkeypatch.setattr(Path, "read_text", read_and_change_manifest)
+
+    result = readback.retire_duplicate_managed_skills(
+        target, alternate_root=alternate, execute=execute
+    )
+
+    assert manifest_changed
+    if change_at == "manifest_read":
+        accepted = [second_id] if manifest_change == "replace" else []
+    else:
+        accepted = [first_id]
+    skipped = [skill_id for skill_id in skill_ids if skill_id not in accepted]
+    assert result["would_retire"] == ([] if execute else accepted)
+    assert result["retired"] == (accepted if execute else [])
+    assert result["skipped"] == skipped
+    assert sorted(path.parent.name for path in alternate.glob("*/SKILL.md")) == (
+        skipped if execute else skill_ids
+    )
 
 
 @pytest.mark.parametrize(

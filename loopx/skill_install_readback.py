@@ -108,11 +108,23 @@ def _replacement_paths_are_safe(candidate: Path, replacement: Path, target: Path
     )
 
 
-def _read_target_skill_manifest(target: Path) -> tuple[object, object]:
+def _manifest_stat_signature(path: Path) -> tuple[int, int, int, int, int] | None:
     try:
-        manifest = json.loads(
-            (target / SKILL_INSTALL_READBACK_FILENAME).read_text(encoding="utf-8")
-        )
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return (
+        stat_result.st_dev,
+        stat_result.st_ino,
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        stat_result.st_ctime_ns,
+    )
+
+
+def _read_target_skill_manifest(manifest_path: Path) -> tuple[object, object]:
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}, None
     skills = manifest.get("skills") if isinstance(manifest, dict) else None
@@ -195,9 +207,11 @@ def retire_duplicate_managed_skills(
                 seen_candidates.add(path)
                 candidate_dirs.append(path)
 
+    target_manifest_path = target / SKILL_INSTALL_READBACK_FILENAME
     target_manifest_loaded = False
+    target_manifest_sig: tuple[int, int, int, int, int] | None = None
     target_manifest: object = {}
-    target_items: object = {}
+    target_items: object = None
 
     for candidate in sorted(candidate_dirs):
         if not candidate.is_dir() or not (candidate / "SKILL.md").is_file():
@@ -225,9 +239,16 @@ def retire_duplicate_managed_skills(
             skipped.append(skill_id)
             continue
         if not replacement_is_facade:
-            if not target_manifest_loaded:
+            current_sig = _manifest_stat_signature(target_manifest_path)
+            if not target_manifest_loaded or current_sig != target_manifest_sig:
                 target_manifest_loaded = True
-                target_manifest, target_items = _read_target_skill_manifest(target)
+                target_manifest_sig = None
+                target_manifest, target_items = {}, None
+                if current_sig is not None:
+                    manifest_read, items_read = _read_target_skill_manifest(target_manifest_path)
+                    if _manifest_stat_signature(target_manifest_path) == current_sig:
+                        target_manifest, target_items = manifest_read, items_read
+                        target_manifest_sig = current_sig
             if (
                 not isinstance(target_manifest, dict)
                 or target_manifest.get("owner") not in SKILL_INSTALL_OWNERS
@@ -261,6 +282,12 @@ def retire_duplicate_managed_skills(
             if metadata.exists() and LOOPX_MANAGED_SLASH_COMMAND_MARKER not in metadata.read_text(encoding="utf-8"):
                 skipped.append(skill_id)
                 continue
+        if (
+            not replacement_is_facade
+            and _manifest_stat_signature(target_manifest_path) != target_manifest_sig
+        ):
+            skipped.append(skill_id)
+            continue
         if execute:
             shutil.rmtree(candidate)
             retired.append(skill_id)
