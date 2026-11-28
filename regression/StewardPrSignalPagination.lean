@@ -2929,6 +2929,30 @@ theorem antigravity_valid_utf8_does_not_bypass_json_object_validation :
 theorem antigravity_http_error_precedes_encoding_validation (utf8Valid : Bool) (body : AntigravityRpcBody) :
     classifyAntigravityEncodedReply false utf8Valid body = .httpFailure := rfl
 
+/- The JSON parser rejects nonstandard numeric constants at any depth
+   before the decoded top-level object can acknowledge a call. -/
+def classifyAntigravityNumericReply (httpOk utf8Valid standardNumbers : Bool)
+    (body : AntigravityRpcBody) : AntigravityRpcOutcome :=
+  if !httpOk then .httpFailure
+  else if !standardNumbers then .invalidResponse
+  else classifyAntigravityEncodedReply true utf8Valid body
+
+theorem antigravity_nonstandard_numeric_token_cannot_acknowledge_an_object :
+    classifyAntigravityNumericReply true true false .object = .invalidResponse := rfl
+
+theorem antigravity_valid_numeric_object_still_acknowledges :
+    classifyAntigravityNumericReply true true true .object = .accepted := rfl
+
+theorem antigravity_blank_reply_needs_no_numeric_tokens :
+    classifyAntigravityNumericReply true true true .blank = .accepted := rfl
+
+theorem antigravity_standard_numbers_do_not_bypass_encoding_validation :
+    classifyAntigravityNumericReply true false true .object = .invalidResponse := rfl
+
+theorem antigravity_http_error_precedes_numeric_validation (utf8Valid standardNumbers : Bool)
+    (body : AntigravityRpcBody) :
+    classifyAntigravityNumericReply false utf8Valid standardNumbers body = .httpFailure := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3272,5 +3296,10 @@ theorem antigravity_http_error_precedes_encoding_validation (utf8Valid : Bool) (
 #print axioms antigravity_valid_blank_encoded_reply_still_acknowledges
 #print axioms antigravity_valid_utf8_does_not_bypass_json_object_validation
 #print axioms antigravity_http_error_precedes_encoding_validation
+#print axioms antigravity_nonstandard_numeric_token_cannot_acknowledge_an_object
+#print axioms antigravity_valid_numeric_object_still_acknowledges
+#print axioms antigravity_blank_reply_needs_no_numeric_tokens
+#print axioms antigravity_standard_numbers_do_not_bypass_encoding_validation
+#print axioms antigravity_http_error_precedes_numeric_validation
 
 end StewardPrSignalPagination

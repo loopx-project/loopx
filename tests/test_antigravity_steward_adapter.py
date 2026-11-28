@@ -973,6 +973,10 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
     ("status", "body", "expected"),
     [
         (200, b'{"fixture":true}', {"fixture": True}),
+        (200, b'{"fixture":[42,-7.25,5e2,"NaN","Infinity"]}', {"fixture": [42, -7.25, 500.0, "NaN", "Infinity"]}),
+        (200, b'{"fixture":{"nested":[NaN]}}', "antigravity_transport_error"),
+        (200, b'{"fixture":Infinity}', "antigravity_transport_error"),
+        (200, b'{"fixture":-Infinity}', "antigravity_transport_error"),
         (200, '{"fixture":"before�after"}'.encode("utf-8"), {"fixture": "before�after"}),
         (200, b'{"fixture":"before\xffafter"}', "antigravity_transport_error"),
         (200, b'{"fixture":"incomplete\xe2\x82"}', "antigravity_transport_error"),
@@ -988,7 +992,8 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (503, b"[]", "antigravity_rpc_error"),
         (503, b"\xff", "antigravity_rpc_error"),
     ],
-    ids=["object", "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
+    ids=["object", "finite-numbers-and-text", "nested-nan", "infinity", "negative-infinity",
+         "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
          "whitespace", "array", "null", "boolean", "number", "string", "malformed-json",
          "http-error", "http-error-invalid-utf8"],
 )
