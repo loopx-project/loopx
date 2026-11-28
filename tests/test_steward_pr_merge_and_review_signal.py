@@ -235,6 +235,7 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
     copied = dict(row)
     default_contexts = copied.pop("statusCheckRollup", [])
     rollup_contexts = contexts if contexts is not None else default_contexts
+    rollup_contexts = [{"id": f"check-{index}", **context} for index, context in enumerate(rollup_contexts)]
     copied["reviews"] = _graphql_reviews(copied.get("reviews") or [])
     copied.setdefault("comments", {"nodes": [], "pageInfo": {"hasPreviousPage": False}})
     copied["commits"] = {
@@ -245,6 +246,8 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
                     "statusCheckRollup": {
                         "contexts": {
                             "nodes": rollup_contexts,
+                            "totalCount": len(rollup_contexts),
+                            "pageInfo": {"hasNextPage": False},
                         }
                     }
                 }
@@ -262,6 +265,16 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
         ("missing_rollup", None),
         ("missing_contexts", None),
         ("unreadable_context", None),
+        ("truncated_checks", None),
+        ("missing_page_info", None),
+        ("invalid_page_info", None),
+        ("missing_total", None),
+        ("wrong_total", None),
+        ("over_cap", None),
+        ("missing_check_id", None),
+        ("duplicate_check_id", None),
+        ("full_page", 1),
+        ("distinct_ids_same_name", 1),
         ("matching_failure", 1),
         ("trusted_top_level", 0),
         ("confirmed_empty", 0),
@@ -272,8 +285,17 @@ def _graphql_node(row: dict[str, Any], *, contexts: list[dict[str, Any]] | None 
 def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failure_count: int | None) -> None:
     head = "a" * 40
     failure = {"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}
-    node = _graphql_node(_sample_pr(number=42, head_oid=head), contexts=[failure])
+    success = {**failure, "conclusion": "SUCCESS"}
+    checks = {
+        "truncated_checks": [success] * 30,
+        "over_cap": [failure] + [success] * 30,
+        "full_page": [failure] + [success] * 29,
+        "distinct_ids_same_name": [failure, success],
+        "duplicate_check_id": [{**failure, "id": "duplicate"}, {**success, "id": "duplicate"}],
+    }.get(case, [failure])
+    node = _graphql_node(_sample_pr(number=42, head_oid=head), contexts=checks)
     commit = node["commits"]["nodes"][0]["commit"]
+    contexts = commit["statusCheckRollup"]["contexts"]
     if case in {"foreign_failure", "trusted_top_level", "draft_excluded"}:
         commit["oid"] = "b" * 40
     elif case == "matching_failure":
@@ -285,9 +307,23 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
     elif case == "missing_contexts":
         commit["statusCheckRollup"] = {}
     elif case == "unreadable_context":
-        commit["statusCheckRollup"]["contexts"]["nodes"] = [None, failure]
+        contexts["nodes"] = [None]
+    elif case == "truncated_checks":
+        contexts["totalCount"] = 31
+        contexts["pageInfo"]["hasNextPage"] = True
+    elif case == "missing_page_info":
+        del contexts["pageInfo"]
+    elif case == "invalid_page_info":
+        contexts["pageInfo"]["hasNextPage"] = "false"
+    elif case == "missing_total":
+        del contexts["totalCount"]
+    elif case == "wrong_total":
+        contexts["totalCount"] = 2
+    elif case == "missing_check_id":
+        del contexts["nodes"][0]["id"]
     elif case == "confirmed_empty":
-        commit["statusCheckRollup"]["contexts"]["nodes"] = []
+        contexts["nodes"] = []
+        contexts["totalCount"] = 0
     elif case == "nullable_rollup":
         commit["statusCheckRollup"] = None
 
@@ -298,6 +334,9 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
 
     def runner(cmd, **_kwargs):
         assert not any(arg.startswith("before=") for arg in cmd)
+        query = next(arg for arg in cmd if arg.startswith("query="))
+        selection = query.split("contexts(first: 30) {", 1)[1].split("... on CheckRun", 1)[0]
+        assert {"totalCount", "hasNextPage"}.issubset(selection.split())
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(_graphql_page([node])), stderr="")
 
     snapshot = observe_github_repository_prs("org/repo", runner=runner)
@@ -328,6 +367,9 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
         assert item.get("checks_coverage_incomplete") is None
         assert item["checks_summary"]["fail_count"] == failure_count
         assert ("FAILING_CHECKS" in item["bypassed_gates"]) is (failure_count > 0)
+        if case == "distinct_ids_same_name":
+            assert item["checks_summary"]["total"] == 2
+            assert item["checks_summary"]["pass_count"] == 1
 
 
 def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> None:

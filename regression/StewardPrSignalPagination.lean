@@ -1198,6 +1198,53 @@ theorem genuine_current_head_check_failure_can_publish :
       ([2], true) := by
   decide
 
+/- The commit identity has already been verified. HasNext is the provider's
+   terminal evidence for this forward connection. Optional naturals stand
+   for readable check IDs, with none representing a malformed row. -/
+def checkContextWindowComplete (hasNext : Option Bool) (total : Option Nat)
+    (rows : List (Option Nat)) : Bool :=
+  decide (rows.length ≤ 30) && reviewWindowComplete true hasNext total rows
+
+def useCheckContextWindow (hasNext : Option Bool) (total : Option Nat)
+    (rows : List (Option Nat)) : Option (List Nat) :=
+  if checkContextWindowComplete hasNext total rows then some (rows.filterMap id) else none
+
+theorem check_context_window_check_is_sound_and_complete (hasNext : Option Bool)
+    (total : Option Nat) (rows : List (Option Nat)) :
+    checkContextWindowComplete hasNext total rows = true ↔
+      rows.length ≤ 30 ∧ hasNext = some false ∧ total = some rows.length ∧
+        (∀ row ∈ rows, row.isSome = true) ∧ rows.Nodup := by
+  simp [checkContextWindowComplete, review_window_check_is_sound_and_complete]
+
+theorem incomplete_check_context_window_preserves_prior
+    (prior : List Nat) (hasNext : Option Bool) (total : Option Nat) (rows : List (Option Nat))
+    (incomplete : checkContextWindowComplete hasNext total rows = false) :
+    observe prior (useCheckContextWindow hasNext total rows) = (prior, false) := by
+  simp [useCheckContextWindow, incomplete, observe]
+
+theorem terminal_check_window_at_cap_differs_from_truncated_prefix :
+    let rows := (List.range 30).map some
+    useCheckContextWindow (some false) (some 30) rows = some (List.range 30) ∧
+      observe [42] (useCheckContextWindow (some true) (some 31) rows) = ([42], false) := by
+  decide
+
+theorem duplicate_check_ids_do_not_establish_complete_coverage :
+    useCheckContextWindow (some false) (some 2) [some 7, some 7] = none := by
+  decide
+
+theorem absent_terminal_marker_and_verified_empty_checks_are_distinct :
+    useCheckContextWindow none (some 0) [] = none ∧
+      useCheckContextWindow (some false) (some 0) [] = some [] := by
+  decide
+
+theorem matching_reported_count_cannot_override_a_check_continuation :
+    useCheckContextWindow (some true) (some 1) [some 7] = none := by
+  decide
+
+theorem over_cap_checks_cannot_be_verified_as_a_requested_window :
+    useCheckContextWindow (some false) (some 31) ((List.range 31).map some) = none := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1327,5 +1374,12 @@ theorem genuine_current_head_check_failure_can_publish :
 #print axioms direct_pr_checks_remain_authoritative
 #print axioms independent_exclusion_survives_unavailable_checks
 #print axioms genuine_current_head_check_failure_can_publish
+#print axioms check_context_window_check_is_sound_and_complete
+#print axioms incomplete_check_context_window_preserves_prior
+#print axioms terminal_check_window_at_cap_differs_from_truncated_prefix
+#print axioms duplicate_check_ids_do_not_establish_complete_coverage
+#print axioms absent_terminal_marker_and_verified_empty_checks_are_distinct
+#print axioms matching_reported_count_cannot_override_a_check_continuation
+#print axioms over_cap_checks_cannot_be_verified_as_a_requested_window
 
 end StewardPrSignalPagination

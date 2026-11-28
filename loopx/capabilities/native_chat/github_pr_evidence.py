@@ -580,6 +580,7 @@ _GITHUB_PR_BACKFILL_BUDGET = (
     _GITHUB_PR_LIST_STANDARD_CAPACITY * _GITHUB_PR_MAX_BACKFILL_PAGES
 )
 _GITHUB_PR_REVIEW_PAGE_SIZE = 20
+_GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE = 30
 _GITHUB_PR_REVIEW_PAGE_FRAGMENT = """
 fragment StewardReviewPage on PullRequestReviewConnection {
   totalCount
@@ -691,14 +692,18 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
               pushedDate
               statusCheckRollup {
                 contexts(first: 30) {
+                  totalCount
+                  pageInfo { hasNextPage }
                   nodes {
                     __typename
                     ... on CheckRun {
+                      id
                       name
                       status
                       conclusion
                     }
                     ... on StatusContext {
+                      id
                       context
                       state
                     }
@@ -778,6 +783,28 @@ def _read_graphql_review_page(connection: object) -> _ReviewPage | None:
     return _ReviewPage(rows, seen_ids, total_count, cursor)
 
 
+def _read_graphql_check_contexts(contexts: object) -> list[Mapping[str, Any]] | None:
+    if not isinstance(contexts, Mapping):
+        return None
+    nodes = contexts.get("nodes")
+    page_info = contexts.get("pageInfo")
+    total_count = contexts.get("totalCount")
+    if (
+        not isinstance(nodes, list) or len(nodes) > _GITHUB_PR_CHECK_CONTEXT_PAGE_SIZE
+        or not isinstance(page_info, Mapping) or page_info.get("hasNextPage") is not False
+        or type(total_count) is not int or total_count != len(nodes)
+    ):
+        return None
+    seen_ids: set[str] = set()
+    for check in nodes:
+        raw_id = check.get("id") if isinstance(check, Mapping) else None
+        check_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        if not check_id or check_id in seen_ids:
+            return None
+        seen_ids.add(check_id)
+    return nodes
+
+
 def _read_graphql_head_check_rollup(node: Mapping[str, Any], commit: object) -> list[Mapping[str, Any]] | None:
     # Some adapters provide check evidence directly on the PR row.
     direct = node.get("statusCheckRollup")
@@ -794,9 +821,7 @@ def _read_graphql_head_check_rollup(node: Mapping[str, Any], commit: object) -> 
     rollup = commit["statusCheckRollup"]
     if rollup is None:
         return []
-    contexts = rollup.get("contexts") if isinstance(rollup, Mapping) else None
-    nodes = contexts.get("nodes") if isinstance(contexts, Mapping) else None
-    return nodes if isinstance(nodes, list) and all(isinstance(check, Mapping) for check in nodes) else None
+    return _read_graphql_check_contexts(rollup.get("contexts")) if isinstance(rollup, Mapping) else None
 
 
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
