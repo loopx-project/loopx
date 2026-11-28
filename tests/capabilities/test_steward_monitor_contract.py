@@ -1403,8 +1403,9 @@ def test_witness_backoff_ignores_unrelated_goal_and_binding_edits(
     assert todos_calls == [1000.0, 1004.0, 1006.0]
 
 
+@pytest.mark.parametrize("read_failure", [OSError, FileNotFoundError], ids=["read-error", "transient-absence"])
 def test_registry_read_recovery_releases_backoff_without_a_file_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_failure: type[OSError],
 ) -> None:
     clock = {"now": 1000.0}
     monkeypatch.setattr(steward_monitor_pump.time, "monotonic", lambda: clock["now"])
@@ -1428,11 +1429,17 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
     registry_unavailable = False
     failed_reads: list[float] = []
     original_read = Path.read_bytes
+    original_exists = Path.exists
+
+    def registry_exists(path: Path) -> bool:
+        if path == registry and registry_unavailable and read_failure is FileNotFoundError:
+            return False
+        return original_exists(path)
 
     def read_registry_with_transient_error(path: Path) -> bytes:
         if path == registry and registry_unavailable:
             failed_reads.append(clock["now"])
-            raise OSError("registry read temporarily unavailable")
+            raise read_failure("registry read temporarily unavailable")
         return original_read(path)
 
     todo_reads: list[float] = []
@@ -1445,10 +1452,11 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
             raise RuntimeError("first poll failed")
         return []
 
+    monkeypatch.setattr(Path, "exists", registry_exists)
     monkeypatch.setattr(Path, "read_bytes", read_registry_with_transient_error)
     monkeypatch.setattr(StewardMonitor, "todos", read_todos)
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
-    assert todo_reads == [1000.0] and failed_reads == [1000.0]
+    assert todo_reads == [1000.0]
 
     clock["now"] = 1003.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
@@ -1458,10 +1466,34 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
     clock["now"] = 1004.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
     assert todo_reads == [1000.0, 1004.0]
+    assert 1000.0 in failed_reads
     after = registry.stat()
     assert (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size, after.st_ctime_ns) == (
         before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size, before.st_ctime_ns,
     )
+
+
+def test_registry_witness_reuses_a_successfully_decoded_empty_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from loopx.control_plane.projects.registry_codec import load_registry
+
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    assert load_registry(registry) == {}
+    _write_test_registry_envelope(registry, [])
+    reads: list[Path] = []
+    original_read = Path.read_bytes
+
+    def count_registry_reads(path: Path) -> bytes:
+        if path == registry:
+            reads.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(Path, "read_bytes", count_registry_reads)
+    assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-a") == "missing"
+    assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-b") == "missing"
+    assert reads == [registry]
 
 
 def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(

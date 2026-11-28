@@ -14,7 +14,7 @@ import time
 from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
-from ...control_plane.projects.registry_codec import load_registry
+from ...control_plane.projects.registry_codec import decode_registry_snapshot
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...registry import registry_goals
 from .steward_monitor_turns import (
@@ -129,7 +129,8 @@ def _registry_goal_witness_token(
     if cached is not None and cached[0] == stat_version:
         return cached[1].get(goal_id, "missing")
     try:
-        registry = load_registry(registry_path)
+        # Keep an absent read distinct from a decoded registry with no Goals.
+        registry = decode_registry_snapshot(registry_path, registry_path.read_bytes())
         goal_digests = {
             str(goal["id"]): hashlib.sha256(_canonical_json_bytes(goal)).hexdigest()
             for goal in registry_goals(registry)
@@ -138,6 +139,8 @@ def _registry_goal_witness_token(
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         # A transient error can clear without a change in the file stamp.
         reg_cache.pop(key, None)
+        if isinstance(exc, FileNotFoundError):
+            return "missing"
         return f"err:{type(exc).__name__}"
     if len(reg_cache) >= 8 and key not in reg_cache:
         reg_cache.clear()

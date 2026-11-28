@@ -2615,8 +2615,13 @@ def observeStewardRegistryRead (cached : Option StewardRegistryRead)
     | _ => none
   (witness, retained)
 
+def stewardRegistryReadToken : StewardRegistryRead → Sum Nat (Option Nat)
+  | .unavailable errorClass => .inl errorClass
+  | .absent => .inr none
+  | .loaded goal => .inr goal
+
 def releaseStewardBackoffAfterRegistryRead (failure current : StewardRegistryRead) : Bool :=
-  decide (failure ≠ current)
+  decide (stewardRegistryReadToken failure ≠ stewardRegistryReadToken current)
 
 theorem steward_registry_read_error_is_not_cached (errorClass : Nat) :
     observeStewardRegistryRead none (.unavailable errorClass) =
@@ -2640,6 +2645,30 @@ theorem steward_valid_registry_snapshot_reuses_its_goal_digest (goal : Option Na
 
 theorem steward_absent_registry_is_not_a_cached_snapshot :
     observeStewardRegistryRead none .absent = (.absent, none) := rfl
+
+/- None means the file read failed with absence before any bytes were
+   decoded. Loaded none means the decoded file has no selected Goal. -/
+def observeStewardRegistryFile (cached decoded : Option StewardRegistryRead) :
+    StewardRegistryRead × Option StewardRegistryRead :=
+  observeStewardRegistryRead cached (decoded.getD .absent)
+
+theorem steward_registry_missing_bytes_are_not_a_parsed_empty_snapshot :
+    observeStewardRegistryFile none none = (.absent, none) := rfl
+
+theorem steward_decoded_registry_without_the_goal_is_reusable :
+    let decoded := observeStewardRegistryFile none (some (.loaded none))
+    decoded = (.loaded none, some (.loaded none)) ∧
+      observeStewardRegistryFile decoded.2 none = decoded := by decide
+
+theorem steward_transient_absence_does_not_hide_recovered_goal (goal : Nat) :
+    let missing := observeStewardRegistryFile none none
+    let recovered := observeStewardRegistryFile missing.2 (some (.loaded (some goal)))
+    releaseStewardBackoffAfterRegistryRead missing.1 recovered.1 = true := rfl
+
+theorem steward_restored_registry_without_the_goal_still_keeps_backoff :
+    let missing := observeStewardRegistryFile none none
+    let recovered := observeStewardRegistryFile missing.2 (some (.loaded none))
+    releaseStewardBackoffAfterRegistryRead missing.1 recovered.1 = false := rfl
 
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
@@ -2940,5 +2969,9 @@ theorem steward_absent_registry_is_not_a_cached_snapshot :
 #print axioms steward_same_registry_error_keeps_failure_backoff
 #print axioms steward_valid_registry_snapshot_reuses_its_goal_digest
 #print axioms steward_absent_registry_is_not_a_cached_snapshot
+#print axioms steward_registry_missing_bytes_are_not_a_parsed_empty_snapshot
+#print axioms steward_decoded_registry_without_the_goal_is_reusable
+#print axioms steward_transient_absence_does_not_hide_recovered_goal
+#print axioms steward_restored_registry_without_the_goal_still_keeps_backoff
 
 end StewardPrSignalPagination
