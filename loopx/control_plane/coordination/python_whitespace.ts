@@ -6,18 +6,31 @@ const PYTHON_WHITESPACE_CLASS =
   "[\\t\\n\\v\\f\\r \\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
 const PYTHON_LEADING_TRAILING_WHITESPACE = new RegExp(
   `^${PYTHON_WHITESPACE_CLASS}+|${PYTHON_WHITESPACE_CLASS}+$`,
-  "gu",
+  "g",
 );
-const PYTHON_WHITESPACE_RUN = new RegExp(`${PYTHON_WHITESPACE_CLASS}+`, "gu");
+const PYTHON_WHITESPACE_RUN = new RegExp(`${PYTHON_WHITESPACE_CLASS}+`, "g");
+const PYTHON_NEEDS_COMPACT = new RegExp(
+  "[\\t\\n\\v\\f\\r\\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]|  ",
+);
 
 /** Strip exactly the characters removed by Python str.strip(). */
 export function stripPythonWhitespace(value: string): string {
+  if (!value) return "";
+  const first = value.charCodeAt(0);
+  const last = value.charCodeAt(value.length - 1);
+  if (first > 0x20 && first < 0x85 && last > 0x20 && last < 0x85) {
+    return value;
+  }
   return value.replace(PYTHON_LEADING_TRAILING_WHITESPACE, "");
 }
 
 /** Match Python's ``" ".join(str(value).strip().split())`` text compaction. */
 export function compactPythonWhitespace(value: string): string {
-  return stripPythonWhitespace(value).replace(PYTHON_WHITESPACE_RUN, " ");
+  const stripped = stripPythonWhitespace(value);
+  if (!stripped || !PYTHON_NEEDS_COMPACT.test(stripped)) {
+    return stripped;
+  }
+  return stripped.replace(PYTHON_WHITESPACE_RUN, " ");
 }
 
 /** Match Python's bool(str(value).strip()) presence contract. */

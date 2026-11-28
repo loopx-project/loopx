@@ -6,8 +6,8 @@ import test from "node:test";
 import { createRequire } from "node:module";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { SqliteAuthorityStore } from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
-import { AUTHORITY_STATE_CHECKPOINT_INTERVAL } from "../../loopx/control_plane/coordination/authority_state_log.ts";
+import { commitDigest, SqliteAuthorityStore } from "../../loopx/control_plane/coordination/sqlite_authority_store.ts";
+import { AUTHORITY_STATE_CHECKPOINT_INTERVAL, AuthorityStateReplay, canonicalCommitEnvelopeDigest } from "../../loopx/control_plane/coordination/authority_state_log.ts";
 import { canonicalAuthorityBytes } from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 import { authorityStoreCommitFixture, registerAuthorityStoreConformance } from "./authority_store_conformance.ts";
 
@@ -618,3 +618,55 @@ for (const construction of ["new", "explicit V1 migration"]) {
     } finally { readback.close(); }
   });
 }
+
+test("SQLite single-pass commit digest matches replay digest and fails closed on head/commit tampering", async (t) => {
+  const identity = "sqlite:0123456789abcdef0123456789abcdef";
+  const projection = JSON.parse('{"😀":4,"__proto__":{"z":2,"a":1},"2":2,"0":0,"10":10}') as Record<string, unknown>;
+  const events = [{kind: "created", seq: 1}];
+  const receipts = [{operation_id: "op-digest-parity", ok: true}];
+  const canonicalBytes = canonicalAuthorityBytes(projection);
+
+  const fromFull = commitDigest(identity, 1n, "op-digest-parity", projection, events, receipts);
+  const fromReplay = new AuthorityStateReplay(projection).commitDigest({
+    expected_provider_revision: null,
+    operation_id: "op-digest-parity",
+    events,
+    receipts,
+  });
+  const fromEnvelope = canonicalCommitEnvelopeDigest(
+    {expected_provider_revision: null, operation_id: "op-digest-parity", events, receipts},
+    (hash) => hash.update(canonicalBytes),
+  );
+  assert.equal(fromEnvelope, fromFull);
+  assert.equal(fromReplay, fromFull);
+
+  const {DatabaseSync} = createRequire(import.meta.url)("node:sqlite");
+  for (const field of ["projection", "state_digest", "commit_digest"] as const) {
+    const {store} = await fixture(t);
+    const committed = await store.commitAuthority({
+      expected_provider_revision: null,
+      operation_id: `tamper-${field}`,
+      next_projection: projection,
+      events,
+      receipts,
+    });
+    assert.equal(committed.status, "applied");
+    const db: import("node:sqlite").DatabaseSync = new DatabaseSync(store.path);
+    try {
+      if (field === "projection") {
+        db.prepare("UPDATE head SET projection=? WHERE singleton=1").run('{"tampered":true}');
+      } else if (field === "state_digest") {
+        db.prepare("UPDATE head SET state_digest=? WHERE singleton=1").run("0".repeat(64));
+      } else {
+        db.prepare("UPDATE commits SET commit_digest=? WHERE cursor=1").run("f".repeat(64));
+      }
+    } finally {
+      db.close();
+    }
+    const loaded = await store.loadAuthority();
+    assert.equal(loaded.status, "failed");
+    if (loaded.status === "failed") {
+      assert.equal(loaded.reason_code, "provider_protocol_violation");
+    }
+  }
+});

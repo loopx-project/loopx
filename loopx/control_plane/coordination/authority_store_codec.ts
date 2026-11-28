@@ -155,12 +155,9 @@ function cloneAuthorityJson(value: unknown, stack: Set<object>, canonicalKeys: b
       return Object.setPrototypeOf(copy, Object.prototype);
     }
     keys.sort(authorityUnicodeCompare);
-    return Object.fromEntries(
-      keys.map((key) => [
-        key,
-        cloneAuthorityJson(value[key], stack, canonicalKeys),
-      ]),
-    );
+    const copy: JsonObject = Object.create(null);
+    for (const key of keys) copy[key] = cloneAuthorityJson(value[key], stack, true);
+    return Object.setPrototypeOf(copy, Object.prototype);
   } finally {
     stack.delete(value);
   }
