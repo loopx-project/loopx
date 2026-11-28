@@ -2670,6 +2670,50 @@ theorem steward_restored_registry_without_the_goal_still_keeps_backoff :
     let recovered := observeStewardRegistryFile missing.2 (some (.loaded none))
     releaseStewardBackoffAfterRegistryRead missing.1 recovered.1 = false := rfl
 
+structure OpenRegistryRevision where
+  stamp : List Int
+  size : Nat
+  deriving DecidableEq
+
+/- The path stat is only a cache lookup hint. On a miss, descriptor
+   observations before and after a complete read identify decoded bytes. -/
+def bindOpenedRegistrySnapshot (_pathStamp opened finished : OpenRegistryRevision)
+    (size goalDigest : Nat) : Option (OpenRegistryRevision × Nat) :=
+  if opened = finished ∧ size = opened.size then some (opened, goalDigest) else none
+
+def reuseOpenedRegistryWitness (entry : Option (OpenRegistryRevision × Nat))
+    (current : OpenRegistryRevision) : Option Nat :=
+  entry.bind fun (recorded, digest) => if recorded = current then some digest else none
+
+theorem steward_stable_registry_read_binds_to_the_open_file
+    (pathStamp opened : OpenRegistryRevision) (goalDigest : Nat) :
+    bindOpenedRegistrySnapshot pathStamp opened opened opened.size goalDigest =
+      some (opened, goalDigest) := by simp [bindOpenedRegistrySnapshot]
+
+theorem steward_changed_open_registry_is_not_cached
+    (pathStamp opened finished : OpenRegistryRevision) (size goalDigest : Nat)
+    (changed : opened ≠ finished) :
+    bindOpenedRegistrySnapshot pathStamp opened finished size goalDigest = none := by
+  simp [bindOpenedRegistrySnapshot, changed]
+
+theorem steward_short_registry_read_is_not_cached
+    (pathStamp opened : OpenRegistryRevision) (size goalDigest : Nat)
+    (incomplete : size ≠ opened.size) :
+    bindOpenedRegistrySnapshot pathStamp opened opened size goalDigest = none := by
+  simp [bindOpenedRegistrySnapshot, incomplete]
+
+theorem steward_restored_registry_cannot_reuse_a_replacement_goal_digest
+    (prior opened : OpenRegistryRevision) (goalDigest : Nat) (changed : opened ≠ prior) :
+    reuseOpenedRegistryWitness
+      (bindOpenedRegistrySnapshot prior opened opened opened.size goalDigest) prior = none := by
+  simp [bindOpenedRegistrySnapshot, reuseOpenedRegistryWitness, changed]
+
+theorem steward_unchanged_opened_registry_still_reuses_its_digest
+    (prior opened : OpenRegistryRevision) (goalDigest : Nat) :
+    reuseOpenedRegistryWitness
+      (bindOpenedRegistrySnapshot prior opened opened opened.size goalDigest) opened = some goalDigest := by
+  simp [bindOpenedRegistrySnapshot, reuseOpenedRegistryWitness]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2973,5 +3017,10 @@ theorem steward_restored_registry_without_the_goal_still_keeps_backoff :
 #print axioms steward_decoded_registry_without_the_goal_is_reusable
 #print axioms steward_transient_absence_does_not_hide_recovered_goal
 #print axioms steward_restored_registry_without_the_goal_still_keeps_backoff
+#print axioms steward_stable_registry_read_binds_to_the_open_file
+#print axioms steward_changed_open_registry_is_not_cached
+#print axioms steward_short_registry_read_is_not_cached
+#print axioms steward_restored_registry_cannot_reuse_a_replacement_goal_digest
+#print axioms steward_unchanged_opened_registry_still_reuses_its_digest
 
 end StewardPrSignalPagination

@@ -14,7 +14,11 @@ import time
 from typing import Protocol, TypeVar
 
 from ...agent_registry import load_goal_from_registry
-from ...control_plane.projects.registry_codec import decode_registry_snapshot
+from ...control_plane.projects.registry_codec import (
+    RegistryFileRevision,
+    read_registry_with_revision,
+    registry_file_revision,
+)
 from ...control_plane.scheduler.monitor_todo import monitor_todo_is_due
 from ...registry import registry_goals
 from .steward_monitor_turns import (
@@ -47,8 +51,7 @@ class _HashDigest(Protocol):
 
 
 _WitnessRecord = tuple[str, tuple[Path, ...]]
-_StatVersion = tuple[int, int, int, int, int]
-_RegistryCacheEntry = tuple[_StatVersion, dict[str, str]]
+_RegistryCacheEntry = tuple[RegistryFileRevision, dict[str, str]]
 _V = TypeVar("_V")
 
 
@@ -118,8 +121,7 @@ def _registry_goal_witness_token(
     )
     key = str(registry_path)
     try:
-        st = registry_path.stat()
-        stat_version: _StatVersion = (st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_ctime_ns)
+        stat_version = registry_file_revision(registry_path.stat())
     except FileNotFoundError:
         reg_cache.pop(key, None)
         return "missing"
@@ -129,8 +131,7 @@ def _registry_goal_witness_token(
     if cached is not None and cached[0] == stat_version:
         return cached[1].get(goal_id, "missing")
     try:
-        # Keep an absent read distinct from a decoded registry with no Goals.
-        registry = decode_registry_snapshot(registry_path, registry_path.read_bytes())
+        registry, read_version = read_registry_with_revision(registry_path)
         goal_digests = {
             str(goal["id"]): hashlib.sha256(_canonical_json_bytes(goal)).hexdigest()
             for goal in registry_goals(registry)
@@ -144,7 +145,7 @@ def _registry_goal_witness_token(
         return f"err:{type(exc).__name__}"
     if len(reg_cache) >= 8 and key not in reg_cache:
         reg_cache.clear()
-    reg_cache[key] = (stat_version, goal_digests)
+    reg_cache[key] = (read_version, goal_digests)
     return goal_digests.get(goal_id, "missing")
 
 

@@ -1428,7 +1428,7 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
 
     registry_unavailable = False
     failed_reads: list[float] = []
-    original_read = Path.read_bytes
+    original_open = Path.open
     original_exists = Path.exists
 
     def registry_exists(path: Path) -> bool:
@@ -1436,11 +1436,11 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
             return False
         return original_exists(path)
 
-    def read_registry_with_transient_error(path: Path) -> bytes:
-        if path == registry and registry_unavailable:
+    def open_registry_with_transient_error(path: Path, mode: str = "r", *args, **kwargs):
+        if path == registry and mode == "rb" and registry_unavailable:
             failed_reads.append(clock["now"])
             raise read_failure("registry read temporarily unavailable")
-        return original_read(path)
+        return original_open(path, mode, *args, **kwargs)
 
     todo_reads: list[float] = []
 
@@ -1453,7 +1453,7 @@ def test_registry_read_recovery_releases_backoff_without_a_file_change(
         return []
 
     monkeypatch.setattr(Path, "exists", registry_exists)
-    monkeypatch.setattr(Path, "read_bytes", read_registry_with_transient_error)
+    monkeypatch.setattr(Path, "open", open_registry_with_transient_error)
     monkeypatch.setattr(StewardMonitor, "todos", read_todos)
     steward_monitor_pump.pump_steward_monitors(_as_controller(controller))
     assert todo_reads == [1000.0]
@@ -1483,17 +1483,91 @@ def test_registry_witness_reuses_a_successfully_decoded_empty_registry(
     assert load_registry(registry) == {}
     _write_test_registry_envelope(registry, [])
     reads: list[Path] = []
-    original_read = Path.read_bytes
+    original_open = Path.open
 
-    def count_registry_reads(path: Path) -> bytes:
-        if path == registry:
+    def count_registry_reads(path: Path, mode: str = "r", *args, **kwargs):
+        if path == registry and mode == "rb":
             reads.append(path)
-        return original_read(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", count_registry_reads)
+    monkeypatch.setattr(Path, "open", count_registry_reads)
     assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-a") == "missing"
     assert steward_monitor_pump._registry_goal_witness_token(_as_controller(ctrl), registry, "missing-b") == "missing"
     assert reads == [registry]
+
+
+def test_registry_cache_uses_the_revision_of_the_file_opened_during_a_path_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    goal_id = "steward-goal-target"
+    _write_test_registry_envelope(first, [{"id": goal_id, "description": "first"}])
+    _write_test_registry_envelope(second, [{"id": goal_id, "description": "other"}])
+    try:
+        registry.symlink_to(first.name)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"cannot create a local registry symlink: {exc}")
+    witness = steward_monitor_pump._registry_goal_witness_token
+    first_digest = witness(_as_controller(ctrl), first, goal_id)
+    second_digest = witness(_as_controller(ctrl), second, goal_id)
+    assert first_digest != second_digest
+    original_open = Path.open
+
+    def switch_registry_target(target: Path) -> None:
+        replacement = tmp_path / "replacement"
+        replacement.symlink_to(target.name)
+        replacement.replace(registry)
+
+    def open_between_registry_path_changes(path: Path, mode: str = "r", *args, **kwargs):
+        if path != registry or mode != "rb":
+            return original_open(path, mode, *args, **kwargs)
+        switch_registry_target(second)
+        try:
+            return original_open(path, mode, *args, **kwargs)
+        finally:
+            switch_registry_target(first)
+
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path, "open", open_between_registry_path_changes)
+        assert witness(_as_controller(ctrl), registry, goal_id) == second_digest
+
+    assert registry.resolve() == first
+    assert witness(_as_controller(ctrl), registry, goal_id) == first_digest
+
+
+def test_registry_cache_rejects_a_snapshot_changed_during_the_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctrl = _StubController(tmp_path)
+    registry = ctrl.registry_path
+    goal_id = "steward-goal-target"
+    _write_test_registry_envelope(registry, [{"id": goal_id, "description": "first"}])
+    original_open = Path.open
+
+    def open_with_concurrent_registry_write(path: Path, mode: str = "r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == registry and mode == "rb":
+            original_read = stream.read
+
+            def read_then_rewrite() -> bytes:
+                observed = original_read()
+                before = registry.stat()
+                _write_test_registry_envelope(registry, [{"id": goal_id, "description": "other"}])
+                os.utime(registry, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+                return observed
+
+            monkeypatch.setattr(stream, "read", read_then_rewrite)
+        return stream
+
+    witness = steward_monitor_pump._registry_goal_witness_token
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path, "open", open_with_concurrent_registry_write)
+        assert witness(_as_controller(ctrl), registry, goal_id) == "err:ProjectRegistryError"
+    fresh = witness(_as_controller(_StubController(tmp_path)), registry, goal_id)
+    assert len(fresh) == 64
+    assert witness(_as_controller(ctrl), registry, goal_id) == fresh
 
 
 def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
@@ -1542,29 +1616,28 @@ def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
 
     monkeypatch.setattr(store, "load_session", tracked_load)
 
-    reg_read_bytes: list[int] = []
-    orig_read_bytes = Path.read_bytes
+    registry_reads: list[Path] = []
+    original_open = Path.open
 
-    def tracked_read_bytes(self: Path) -> bytes:
-        data = orig_read_bytes(self)
-        if self == ctrl.registry_path:
-            reg_read_bytes.append(len(data))
-        return data
+    def track_registry_reads(path: Path, mode: str = "r", *args, **kwargs):
+        if path == ctrl.registry_path and mode == "rb":
+            registry_reads.append(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    monkeypatch.setattr(Path, "open", track_registry_reads)
 
     # Initial failing tick across 4 corrupt sessions reads registry.json at most once.
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
     assert load_calls == corrupt_sids
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
 
     # Over 4 unchanged idle ticks, registry.json is read 0 times (0 bytes) with 0 premature retries.
-    reg_read_bytes.clear()
+    registry_reads.clear()
     before_idle = len(load_calls)
     for _ in range(4):
         clock["now"] += 3.0
         steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert reg_read_bytes == []
+    assert registry_reads == []
     assert len(load_calls) == before_idle
 
     # Mutating an unrelated Goal reloads registry.json at most once and preserves all 4 active backoffs.
@@ -1572,18 +1645,18 @@ def test_registry_goal_witness_cache_reuses_snapshot_across_four_bindings(
     _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert len(load_calls) == before_idle
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert len(load_calls) == before_idle
 
     # Mutating target Goal #2 reloads once and immediately invalidates ONLY binding #2's witness.
-    reg_read_bytes.clear()
+    registry_reads.clear()
     target_goals[2]["description"] = "target-2-edited"
     _write_test_registry_envelope(ctrl.registry_path, [*target_goals, *unrelated_goals])
     clock["now"] += 3.0
     steward_monitor_pump.pump_steward_monitors(_as_controller(ctrl))
-    assert len(reg_read_bytes) == 1
+    assert len(registry_reads) == 1
     assert load_calls[before_idle:] == [corrupt_sids[2]]
