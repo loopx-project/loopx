@@ -43,14 +43,33 @@ export async function startCadenceAuthority() {
   const child = spawn(resolveTestPython(), ["-u", "-c", `
 from pathlib import Path
 import sys
+from contextlib import contextmanager
+import json
 from loopx.chat_server import ChatHTTPServer, ChatRequestHandler
+from loopx.control_plane.goals import configure_goal_service
+fixture_root = Path(sys.argv[1]).resolve()
+real_projection_lock = configure_goal_service.exclusive_cross_runtime_file_lock
+@contextmanager
+def fixture_projection_lock(path, **kwargs):
+    target = Path(path).resolve()
+    inside = target.is_relative_to(fixture_root)
+    with (fixture_root / "projection-lock-requests.jsonl").open("a") as log:
+        log.write(json.dumps({"relative_path": str(target.relative_to(fixture_root)) if inside else None, "inside_fixture": inside}) + "\\n")
+    if not inside:
+        raise RuntimeError("Cadence fixture attempted a projection lock outside its temporary root")
+    with real_projection_lock(path, **kwargs) as held:
+        yield held
+# Observe the real projection locks before acquisition, without replacing their
+# locking semantics or granting access to a developer's default/legacy runtime.
+configure_goal_service.exclusive_cross_runtime_file_lock = fixture_projection_lock
 server = ChatHTTPServer(("127.0.0.1", 0), ChatRequestHandler)
 server.registry_path = Path(sys.argv[1]) / "registry.json"
 server.runtime_root = Path(sys.argv[1]) / "runtime"
+server.runtime_root_override = str(server.runtime_root)
 # Goal writes use their registry's route, not only the HTTP server runtime.
 from loopx.control_plane.goals.configure_goal_service import resolve_configure_goal_sync_target
 route = resolve_configure_goal_sync_target(registry_path=server.registry_path,
-    goal_id="multi-agent-projection", runtime_root_override=None)
+    goal_id="multi-agent-projection", runtime_root_override=server.runtime_root_override)
 assert Path(route["target_runtime_root"]).resolve() == server.runtime_root.resolve()
 server.verbose = False
 print(server.server_address[1], flush=True)
