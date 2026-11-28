@@ -294,6 +294,29 @@ def _clamp_admitted_lease_version(
         fields["prepared_lease_version"] = admitted_version
 
 
+def active_task_lease_matches_prepared_receipt(
+    *,
+    runtime_root: Path,
+    goal_id: str,
+    todo_id: str,
+    agent_id: str,
+    prepared_lease: Mapping[str, Any] | None,
+) -> bool:
+    """Check that the admitted generation still grants live execution."""
+    if not prepared_lease:
+        return False
+    snapshot = _read_execution_snapshot(runtime_root, goal_id, todo_id)
+    if snapshot is None or snapshot.get("handoff_mode") != "hard_lease":
+        return False
+    current = _project_execution_facts(_execution_facts(snapshot, goal_id, todo_id, agent_id))
+    if current.get("state") != "ready":
+        return False
+    epoch = current.get("lease_epoch") if "prepared_lease_epoch" in prepared_lease else None
+    observed = prepared_lease_receipt_fields(current["lease_proof"], lease_epoch=epoch)
+    _clamp_admitted_lease_version(observed, prepared_lease=prepared_lease)
+    return observed == prepared_lease
+
+
 def _recovery_lease_bound(
     *,
     prepared_lease: Mapping[str, Any] | None,

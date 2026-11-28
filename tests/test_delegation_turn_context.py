@@ -85,6 +85,152 @@ def test_outgoing_request_and_return_require_explicit_consumption(tmp_path):
     assert agenda(root, registry, "reviewer")["items"] == []
 
 
+@pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
+    from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
+    from tests.control_plane.codex_checkpoint_fixture import selected_context_values
+    from tests.control_plane.test_quota_settlement_cli import (
+        AGENT_ID, GOAL_ID, TODO_ID, TURN_ID, _initialize_fixture_authority, _run_cli, _write_fixture,
+    )
+
+    isolate_sqlite_runtime(tmp_path, monkeypatch)
+    session = "83c54a45-d582-4637-8aa3-e4ff63cb8d27"
+    monkeypatch.setenv("CODEX_THREAD_ID", session)
+    project, runtime, registry = _write_fixture(tmp_path)
+    configured = json.loads(registry.read_text())
+    coordination = configured["goals"][0]["coordination"]
+    reviewer = "fixture-reviewer"
+    coordination["registered_agents"].append(reviewer)
+    coordination["thread_agent_bindings"] = [{
+        "host_surface": "codex-app", "thread_id": session, "agent_id": AGENT_ID,
+    }]
+    registry.write_text(json.dumps(configured))
+    _initialize_fixture_authority(project, runtime, provider=provider, handoff_mode="hard_lease")
+
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
+    subprocess.run(["git", "-C", str(project), "-c", "user.name=Fixture",
+        "-c", "user.email=fixture@example.org", "commit", "--allow-empty", "-qm", "Fixture"], check=True)
+    workspace = tmp_path / "work"
+    subprocess.run(["git", "-C", str(project), "worktree", "add", "--quiet", "--detach",
+        str(workspace), "HEAD"], check=True)
+
+    brief = {
+        "schema_version": "collaboration_brief_v0", "purpose": "Review one candidate",
+        "context": "Confirm exact version and proof.", "constraints": [], "inputs": [],
+        "acceptance": ["Return the actual verdict"], "return_requirement": "Return to requester",
+    }
+
+    def deliver_review(operation_id):
+        item = request(runtime, registry, GOAL_ID, AGENT_ID, reviewer, operation_id, brief)
+        request_id = item["request_id"]
+        acknowledge(runtime, GOAL_ID, reviewer, request_id, "adopt", "Review current candidate", registry=registry)
+        report(runtime, GOAL_ID, reviewer, request_id, "conclusion", "The candidate passed.", registry=registry)
+        return request_id
+
+    rid = deliver_review("fixture-independent-review")
+    capture = runtime / "context-delivery"
+    capture.mkdir(mode=0o700)
+    context = codex_context_directory(root=str(capture), create=True)
+    codex_context_hook(context, {"session_id": session, "cwd": str(project),
+        "hook_event_name": "SessionStart", "source": "startup"})
+    args = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
+
+    def inbox(*extra, cwd=workspace, request_id=rid):
+        code, result = _run_cli(registry, runtime, "manager-inbox", "read", "--attention-only",
+            *args, *extra, cwd=cwd)
+        assert code == 0 and result["ok"], result
+        return next(row for row in result["peer_returns"]["items"] if row["request_id"] == request_id)
+
+    def lease(action, *extra):
+        code, result = _run_cli(registry, runtime, "task-lease", action,
+            "--goal-id", GOAL_ID, "--todo-id", TODO_ID, *extra, cwd=workspace)
+        assert code == 0 and result["ok"], result
+        return result["lease"]
+
+    def run_generated(command):
+        result = subprocess.run(shlex.split(command), cwd=workspace, text=True, capture_output=True, timeout=60)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return result.stdout
+
+    def read_generated(command):
+        payload = json.loads(run_generated(command))
+        assert payload["ok"], payload
+        return payload
+
+    def read_capture(command):
+        content = []
+        offset = 0
+        while command:
+            page = read_generated(command)
+            assert page["offset"] == offset
+            content.append(page["content"])
+            offset = page["next_offset"]
+            command = None if page["eof"] else page["next_command"]
+        return "".join(content)
+
+    assert "acknowledge_command" not in inbox("--turn-instance-id", TURN_ID)
+    code, claim = _run_cli(registry, runtime, "todo", "claim", *args, "--todo-id", TODO_ID,
+        "--claimed-by", AGENT_ID, cwd=workspace)
+    assert code == 0 and claim["ok"], claim
+    code, decision = _run_cli(registry, runtime, "quota", "should-run", *args, "--todo-id", TODO_ID,
+        "--codex-app", "--turn-instance-id", TURN_ID, "--context-delivery", "on",
+        "--decision-output-root", str(capture), "--codex-context-root", str(capture), cwd=workspace)
+    assert code == 0 and decision["ok"], decision
+    assert decision["schema_version"] == "context_capture_navigation_v1"
+    opening = selected_context_values(read_capture(decision["first_read_command"]))
+    assert opening["/interaction_contract/agent_channel/delivery_allowed"] is True
+    if "remaining_read_command" in decision:
+        read_capture(decision["remaining_read_command"])
+
+    assert "acknowledge_command" not in inbox(cwd=project)
+    assert "acknowledge_command" not in inbox("--turn-instance-id", "another-turn")
+    with monkeypatch.context() as other:
+        other.setenv("CODEX_THREAD_ID", "5f7143c7-0187-48ae-843c-a4434c545eef")
+        assert "acknowledge_command" not in inbox("--turn-instance-id", TURN_ID)
+    with monkeypatch.context() as disabled:
+        disabled.setenv("LOOPX_CONTEXT_DELIVERY", "off")
+        assert "acknowledge_command" not in inbox()
+    original_registry = registry.read_bytes()
+    coordination["thread_agent_bindings"][0]["agent_id"] = reviewer
+    registry.write_text(json.dumps(configured))
+    assert "acknowledge_command" not in inbox()
+    registry.write_bytes(original_registry)
+    inbox_read = next(row for row in opening["/interaction_contract/agent_channel/required_reads"]
+        if row["kind"] == "operator_inbox")
+    markdown = run_generated(inbox_read["command"])
+    delivery = json.loads(markdown.split("```json\n", 1)[1].split("\n```", 1)[0])
+    if delivery.get("read_complete") is False:
+        delivery = json.loads(read_capture(delivery["command"]))
+    item = next(row for row in delivery["peer_returns"]["items"] if row["request_id"] == rid)
+    assert item["text"] == "The candidate passed."
+    current = lease("inspect")
+    owner = ("--owner", AGENT_ID, "--idempotency-key", current["idempotency_key"])
+    renewed = lease("renew", *owner, "--expected-version", str(current["version"]))
+    assert renewed["version"] > current["version"]
+    assert item["acknowledge_command"] == inbox()["acknowledge_command"]
+    ack = shlex.split(item["acknowledge_command"])
+    assert ack[ack.index("--turn-instance-id") + 1] == TURN_ID
+    code, refused = _run_cli(registry, runtime, "manager-inbox", "acknowledge-return", *args,
+        "--request-id", rid, "--turn-instance-id", "another-turn",
+        "--disposition", "accepted", cwd=workspace)
+    assert code != 0 and not refused["ok"]
+
+    ack[ack.index("--disposition") + 1] = "accepted"
+    for replay in (False, True):
+        receipt = read_generated(shlex.join(ack))
+        assert receipt["status"] == "consumed" and receipt.get("replay", False) is replay, receipt
+    code, after = _run_cli(registry, runtime, "manager-inbox", "read", "--attention-only", *args,
+        cwd=workspace)
+    assert code == 0 and after["ok"], after
+    assert not any(row["request_id"] == rid for row in after.get("peer_returns", {}).get("items", []))
+
+    lease("release", *owner, "--expected-version", str(renewed["version"]))
+    second = deliver_review("fixture-review-after-release")
+    assert "acknowledge_command" not in inbox(request_id=second)
+
+
 def test_peer_return_deferral_survives_until_a_later_turn(flow):
     root, registry, _store, _create = flow
     configured = json.loads(registry.read_text())

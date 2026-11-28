@@ -254,7 +254,9 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--update-id", help="For report: stable identity for a later conclusion; retry the same id and text.")
     parser.add_argument("--result-key", help="For acknowledge-return: the exact peer result read; defaults to the initial conclusion.")
     parser.add_argument("--read-token", help="For acknowledge-return: the read_token supplied with the peer result, if present.")
-    parser.add_argument("--turn-instance-id", help="For acknowledge-return: identify the work Turn that already received the peer result.")
+    parser.add_argument("--turn-instance-id", help=(
+        "For read: restrict a verified native read to this Turn. For acknowledge-return: identify the "
+        "work Turn that already received the peer result."))
     parser.add_argument("--disposition", choices=("accepted", "deferred", "rejected"),
                         help="For acknowledge-return: whether this Turn used, deferred, or rejected the peer result.")
     parser.add_argument("--related-todo-id", action="append", default=[])
@@ -479,11 +481,17 @@ def handle_manager_inbox(args, registry_path, runtime_root):
             )
         elif args.manager_inbox_action == "read":
             from ..control_plane.collaboration.peers import read_inbox
+            from ..control_plane.turn_driver.codex_context import native_inbox_read_turn
+
             request_id = getattr(args, "request_id", None)
-            # Only the invocation-bound host reader can record Turn delivery.
+            turn_id = native_inbox_read_turn(
+                registry_path=registry_path, runtime_root=runtime_root,
+                goal_id=args.goal_id, agent_id=args.agent_id,
+                requested_turn_id=getattr(args, "turn_instance_id", None),
+            )
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,
-                                request_id=request_id, attention_only=attention_only)
+                                request_id=request_id, attention_only=attention_only, turn_instance_id=turn_id)
             result["instruction"] += " " + collaboration_answer_instruction()
             if request_id is None:
                 result["followthrough"] += (
