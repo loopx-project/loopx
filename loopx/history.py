@@ -427,84 +427,6 @@ def _observe_run_artifacts(
             record[target] = observed[key]
 
 
-def _append_index_item(
-    item: dict[str, object],
-    records: list[dict[str, object]],
-    positions: dict[tuple[str, str, str], int],
-) -> None:
-    key = index_identity(item)
-    # These are observations, never persisted index authority.
-    item.pop("json_exists", None)
-    item.pop("markdown_exists", None)
-    if key in positions:
-        records[positions[key]].update(item)
-    else:
-        positions[key] = len(records)
-        records.append(item)
-
-
-def _decode_index_lines_per_line(
-    raw_lines: Iterable[bytes],
-    *,
-    tolerate_undecodable: bool,
-    skip_invalid_encoding: bool,
-    records: list[dict[str, object]],
-    positions: dict[tuple[str, str, str], int],
-) -> tuple[int, int, int]:
-    raw_count = 0
-    invalid_count = 0
-    undecodable_count = 0
-    for encoded_line in raw_lines:
-        try:
-            line = encoded_line.decode("utf-8")
-        except UnicodeDecodeError:
-            if not (tolerate_undecodable or skip_invalid_encoding):
-                raise
-            # A write torn inside a multibyte character leaves bytes that
-            # are not text. The caller asked to see the damage as a count.
-            raw_count += 1
-            invalid_count += 1
-            if tolerate_undecodable:
-                undecodable_count += 1
-            continue
-        if not line.strip():
-            continue
-        raw_count += 1
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            invalid_count += 1
-            continue
-        if not isinstance(item, dict):
-            invalid_count += 1
-            continue
-        _append_index_item(item, records, positions)
-    return raw_count, invalid_count, undecodable_count
-
-
-def _decode_index_text_per_line(
-    text: str,
-    records: list[dict[str, object]],
-    positions: dict[tuple[str, str, str], int],
-) -> tuple[int, int]:
-    raw_count = 0
-    invalid_count = 0
-    for line in text.split("\n"):
-        if not line.strip():
-            continue
-        raw_count += 1
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            invalid_count += 1
-            continue
-        if not isinstance(item, dict):
-            invalid_count += 1
-            continue
-        _append_index_item(item, records, positions)
-    return raw_count, invalid_count
-
-
 def load_index_snapshot(
     path: Path,
     *,
@@ -529,35 +451,53 @@ def load_index_snapshot(
     still receive the decoding error.
     """
     try:
-        raw_bytes = path.read_bytes()
+        stream = path.open("rb")
     except FileNotFoundError:
         return RunIndexSnapshot(records=[], raw_count=0, digest=None)
 
     records: list[dict[str, object]] = []
     positions: dict[tuple[str, str, str], int] = {}
-    file_digest = hashlib.sha256(raw_bytes).hexdigest()
     raw_count = 0
     invalid_count = 0
     undecodable_count = 0
+    digest = hashlib.sha256()
 
-    try:
-        decoded_text = raw_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        if not (tolerate_undecodable or skip_invalid_encoding):
-            raise
-        raw_count, invalid_count, undecodable_count = _decode_index_lines_per_line(
-            raw_bytes.split(b"\n"),
-            tolerate_undecodable=tolerate_undecodable,
-            skip_invalid_encoding=skip_invalid_encoding,
-            records=records,
-            positions=positions,
-        )
-    else:
-        raw_count, invalid_count = _decode_index_text_per_line(
-            decoded_text,
-            records,
-            positions,
-        )
+    with stream:
+        for encoded_line in stream:
+            digest.update(encoded_line)
+            try:
+                line = encoded_line.decode("utf-8")
+            except UnicodeDecodeError:
+                if not (tolerate_undecodable or skip_invalid_encoding):
+                    raise
+                # A write torn inside a multibyte character leaves bytes that
+                # are not text. The caller asked to see the damage as a count.
+                raw_count += 1
+                invalid_count += 1
+                if tolerate_undecodable:
+                    undecodable_count += 1
+                continue
+            if not line.strip():
+                continue
+            raw_count += 1
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                invalid_count += 1
+                continue
+            if not isinstance(item, dict):
+                invalid_count += 1
+                continue
+
+            key = index_identity(item)
+            # These are observations, never persisted index authority.
+            item.pop("json_exists", None)
+            item.pop("markdown_exists", None)
+            if key in positions:
+                records[positions[key]].update(item)
+            else:
+                positions[key] = len(records)
+                records.append(item)
 
     if include_artifact_status:
         observed_runs = runs_dir
@@ -578,7 +518,7 @@ def load_index_snapshot(
     return RunIndexSnapshot(
         records=records,
         raw_count=raw_count,
-        digest=f"sha256:{file_digest}",
+        digest=f"sha256:{digest.hexdigest()}",
         invalid_count=invalid_count,
         undecodable_count=undecodable_count,
     )
