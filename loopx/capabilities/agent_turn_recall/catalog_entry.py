@@ -2,19 +2,30 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...python_install_owner import builtin_capability_installed
+from ...python_install_owner import inspect_builtin_capability_distribution
 
 
 AGENT_TURN_RECALL_SCHEMA_VERSION = "agent_turn_recall_v0"
 AGENT_TURN_RECALL_SURFACE_ID = "agent_workflow.turn_admission"
 RECALL_DISTRIBUTION = "loopx-capability-agent-turn-recall"
 RECALL_INSTALL_HINT = f"Install the matching {RECALL_DISTRIBUTION} wheel in this Core environment."
+RECALL_MODULES = (f"{__package__}.cli", f"{__package__}.core")
+
+
+def inspect_agent_turn_recall_distribution(
+    *, builtin_cli_present: bool | None = None,
+) -> dict[str, Any]:
+    """Inspect whether the optional agent-turn-recall wheel is installed and matches Core."""
+    return inspect_builtin_capability_distribution(
+        RECALL_DISTRIBUTION,
+        RECALL_MODULES,
+        builtin_cli_present=builtin_cli_present,
+    )
 
 
 def agent_turn_recall_installed(*, builtin_cli_present: bool | None = None) -> bool:
-    return builtin_capability_installed(
-        RECALL_DISTRIBUTION, (f"{__package__}.cli", f"{__package__}.core"),
-        builtin_cli_present=builtin_cli_present,
+    return bool(
+        inspect_agent_turn_recall_distribution(builtin_cli_present=builtin_cli_present)["ready"]
     )
 
 
