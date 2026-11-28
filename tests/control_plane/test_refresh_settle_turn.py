@@ -384,6 +384,16 @@ def test_exact_spend_and_refresh_reject_another_turns_debit_file(
 
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
 def test_receipt_capture_failure_keeps_committed_receipts_and_exact_retry(tmp_path, monkeypatch, provider):
+    from loopx.control_plane.turn_driver import decision_capture
+
+    if not decision_capture.private_capture_supported():
+        # This case models a real capture-privacy failure by loosening POSIX
+        # mode bits. Hosts without private capture support never reach that
+        # branch: the composed settlement returns the evaluated result inline
+        # with `quota_decision_capture_unsupported`, which
+        # test_composed_settlement_keeps_commit_when_private_capture_is_unsupported
+        # covers cross-platform.
+        pytest.skip("chmod cannot revoke private capture on this host")
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     project, runtime, registry = _write_fixture(tmp_path)
     _initialize_fixture_authority(project, runtime, provider=provider)
