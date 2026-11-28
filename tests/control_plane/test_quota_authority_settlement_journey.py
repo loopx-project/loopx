@@ -636,8 +636,36 @@ def test_migrated_hard_lease_can_write_settle_retry_and_continue(tmp_path, provi
     prep = ready["interaction_contract"]["cli_channel"]["execution_preparation"]
     assert prep["state"] == "ready"
     assert prep["lease_proof"] == {"idempotency_key": lease_key, "expected_version": int(version)}
-    code, refreshed = _refresh(project, runtime, registry, *proof_args)
+
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    code, captured = run(
+        "quota", "should-run", "--codex-app", "--agent-id", cli.AGENT_ID, "--todo-id", cli.TODO_ID,
+        "--turn-instance-id", cli.TURN_ID, "--context-delivery", "on", "--delta-delivery", "off",
+        "--decision-output-root", str(captures), "--codex-context-root", str(captures),
+    )
+    assert code == 0 and captured["ok"], captured
+    selector = "/interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring"
+    reader = shlex.split(captured["recovery"]["command"])
+    code, page = cli._run_cli(registry, runtime, *reader[reader.index("quota"):], "--select", selector, cwd=project)
+    assert code == 0 and page["eof"], page
+    authoring = selected_context_values(page["content"])[selector]
+    assert authoring["path_delta"]["open_progress_outcomes"] == ["continue", "no_change", "replan"]
+    assert "wait" in authoring["path_delta"]["outcomes"]
+    assert "resume_when" in authoring["rule"]
+    assert "path_delta.reentry_condition" in authoring["rule"]
+    assert authoring["fields"]["todo_delta"]["retain_existing"] == "retain:todo_<id>"
+
+    dependency = "Continue when the next verification input is available."
+    vision = authoring["minimal_example"]
+    vision["path_delta"]["reentry_condition"] = dependency
+    vision_file = tmp_path / "vision.json"
+    vision_file.write_text(json.dumps(vision))
+    code, refreshed = _refresh(project, runtime, registry, *proof_args, "--agent-vision-json", str(vision_file))
     assert code == 0, refreshed
+    assert refreshed["vision_checkpoint"]["satisfied"] is True
+    persisted = json.loads(Path(refreshed["json_path"]).read_text())
+    assert persisted["agent_vision"]["path_delta"]["reentry_condition"] == dependency
     command = refreshed["settlement_owed"]["command"]
     code, spent = _execute(command, project, runtime, registry)
     assert code == 0 and spent["appended"] is True, spent

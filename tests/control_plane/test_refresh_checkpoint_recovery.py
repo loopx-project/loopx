@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -438,18 +439,46 @@ def test_checkpoint_only_recovery_bypasses_open_todo_completion_validation(
     assert _spend_run_count(runtime) == 0
 
 
-def test_invalid_material_path_decision_uses_checkpoint_supplement(tmp_path: Path) -> None:
-    project, runtime, registry = _write_fixture(tmp_path, provider="sqlite")
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+@pytest.mark.parametrize("delivery_outcome", ["outcome_progress", "outcome_gap"])
+def test_material_closeout_distinguishes_progress_from_blocked_wait(
+    tmp_path: Path, provider: str, delivery_outcome: str,
+) -> None:
+    project, runtime, registry = _write_fixture(tmp_path, provider=provider)
     binding = (
         "--agent-id", AGENT_ID,
         "--todo-id", TODO_ID,
         "--turn-instance-id", "turn-invalid-material-path",
     )
-    rc, guard = _run_cli(
+    captures = tmp_path / "captures"
+    captures.mkdir(mode=0o700)
+    rc, captured = _run_cli(
         registry, runtime, "quota", "should-run", "--codex-app",
-        "--goal-id", GOAL_ID, *binding, cwd=project,
+        "--goal-id", GOAL_ID, *binding, "--context-delivery", "on", "--delta-delivery", "off",
+        "--decision-output-root", str(captures), "--codex-context-root", str(captures),
+        cwd=project,
     )
-    assert rc == 0 and guard["decision"] == "run", guard
+    assert rc == 0 and captured["ok"], captured
+    reader = shlex.split(captured["recovery"]["command"])
+    identity_pointer = "/heartbeat_receipt/settlement_identity"
+    authoring_pointer = "/interaction_contract/cli_channel/settlement_plan/ordered_steps/1/vision_authoring"
+    rc, page = _run_cli(
+        registry, runtime, *reader[reader.index("quota"):], "--select", identity_pointer,
+        "--select", authoring_pointer, cwd=project,
+    )
+    assert rc == 0 and page["eof"], page
+    assert len(page["content"].encode()) == page["total_bytes"]
+    selected = {row["pointer"]: row["value"] for row in json.loads(page["content"])["selections"]}
+    authoring = selected[authoring_pointer]
+    assert authoring["path_delta"]["open_progress_outcomes"] == ["continue", "no_change", "replan"]
+    assert "wait" in authoring["path_delta"]["outcomes"]
+    assert "resume_when" in authoring["rule"]
+    assert "path_delta.reentry_condition" in authoring["rule"]
+    retained_todo = authoring["fields"]["todo_delta"]["retain_existing"].replace(
+        "todo_<id>", selected[identity_pointer]["todo_id"],
+    )
+    assert retained_todo == f"retain:{TODO_ID}"
+    dependency = "Resume once the external condition changes."
 
     def vision(outcome: str, name: str) -> Path:
         path = tmp_path / name
@@ -458,7 +487,9 @@ def test_invalid_material_path_decision_uses_checkpoint_supplement(tmp_path: Pat
             "state": "vision_patch_proposed",
             "vision_patch": {
                 "acceptance_summary": "The observed result and remaining route are verified.",
+                "advancement_policy": "as_needed",
             },
+            "todo_delta": [retained_todo],
             "path_delta": {
                 "schema_version": "goal_path_delta_v0",
                 "outcome": outcome,
@@ -466,21 +497,55 @@ def test_invalid_material_path_decision_uses_checkpoint_supplement(tmp_path: Pat
                 "observed_reality": "The external condition has not changed yet.",
                 "retained": ["Preserve the verified route and evidence."],
                 "evidence_refs": ["evidence:material-path"],
+                "reentry_condition": dependency,
             },
         }), encoding="utf-8")
         return path
+
+    def persisted_vision(receipt: dict) -> dict:
+        path = receipt.get("json_path")
+        if path is None:
+            readback = shlex.split(receipt["result_details"]["command"])
+            rc, detail = _run_cli(
+                registry, runtime, *readback[readback.index("quota"):], "--select", "/json_path", cwd=project,
+            )
+            assert rc == 0 and detail["eof"], detail
+            [entry] = json.loads(detail["content"])["selections"]
+            path = entry["value"]
+        return json.loads(Path(path).read_text())["agent_vision"]
 
     wait_packet = vision("wait", "wait.json")
     delivery = (
         "refresh-state", "--goal-id", GOAL_ID, *binding,
         "--classification", "verified_wait",
         "--delivery-batch-scale", "single_surface",
-        "--delivery-outcome", "outcome_progress",
+        "--delivery-boundary", "semantic_closeout",
+        "--delivery-outcome", delivery_outcome,
         "--agent-vision-json", str(wait_packet),
         "--no-global-sync", "--suppress-external-sinks",
     )
+    if delivery_outcome == "outcome_gap":
+        delivery += (
+            "--progress-result-class", "blocked", "--progress-work-item-id", TODO_ID,
+            "--progress-blocker-id", "blocker:external-condition",
+            "--progress-evidence-id", "evidence:material-path", "--settle-turn", "--settlement-receipt",
+        )
     rc, first = _run_cli(registry, runtime, *delivery, cwd=project)
     assert rc == 0 and first["appended"] is True, first
+    assert first["settlement_identity"] == selected[identity_pointer]
+    assert _spend_run_count(runtime) == 0
+    if delivery_outcome == "outcome_gap":
+        assert first["vision_checkpoint"]["satisfied"] is True
+        assert first["settlement_progress"]["closeout_kind"] == "typed_blocked_writeback_no_spend"
+        path = persisted_vision(first)["path_delta"]
+        assert path["outcome"] == "wait"
+        assert path["reentry_condition"] == dependency
+        rc, replay = _run_cli(registry, runtime, *delivery, cwd=project)
+        assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+        assert replay["settlement_result"] == first["settlement_result"]
+        assert _spend_run_count(runtime) == 0
+        return
+
     assert first["vision_checkpoint"]["decision"] == "missing_required"
     assert first["vision_checkpoint"]["satisfied"] is False
     assert first["vision_checkpoint"]["unqualified_components"] == [
@@ -494,14 +559,40 @@ def test_invalid_material_path_decision_uses_checkpoint_supplement(tmp_path: Pat
     assert rc == 0, context
     corrected = list(delivery)
     corrected[corrected.index(str(wait_packet))] = str(vision("no_change", "corrected.json"))
-    corrected += ["--checkpoint-read-context", context["read_context_id"]]
+    corrected += ["--checkpoint-read-context", context["read_context_id"], "--settle-turn", "--settlement-receipt"]
     rc, repaired = _run_cli(registry, runtime, *corrected, cwd=project)
     assert rc == 0 and repaired["appended"] is True, repaired
     assert repaired["refresh_recovery"]["decision"] == "supplement_checkpoint"
     assert repaired["vision_checkpoint"]["decision"] == "patched"
     assert repaired["vision_checkpoint"]["satisfied"] is True
     assert repaired["settlement_identity"] == first["settlement_identity"]
-    assert _spend_run_count(runtime) == 0
+    assert repaired["settlement_progress"]["state"] == "settled"
+    stored = persisted_vision(repaired)
+    assert stored["todo_delta"] == [f"retain:{TODO_ID}"]
+    path = stored["path_delta"]
+    assert path["outcome"] == "no_change"
+    assert path["reentry_condition"] == dependency
+    rc, replay = _run_cli(registry, runtime, *corrected, cwd=project)
+    assert rc == 0 and replay["idempotent_replay"] and not replay["appended"], replay
+    assert replay["settlement_result"] == repaired["settlement_result"]
+    assert _spend_run_count(runtime) == 1
+
+    resume_when = "resume_at:2099-01-01T00:00:00Z"
+    rc, deferred = _run_cli(
+        registry, runtime, "todo", "update", "--goal-id", GOAL_ID, "--agent-id", AGENT_ID,
+        "--todo-id", TODO_ID, "--status", "deferred", "--resume-when", resume_when, cwd=project,
+    )
+    assert rc == 0 and deferred["ok"], deferred
+    rc, waiting = _run_cli(
+        registry, runtime, "quota", "should-run", "--codex-app", "--goal-id", GOAL_ID,
+        "--agent-id", AGENT_ID, "--turn-instance-id", "turn-after-material-closeout", cwd=project,
+    )
+    assert rc == 0 and waiting["effective_action"] == "agent_scope_wait", waiting
+    assert waiting["vision_wait_state"]["selected_todo_id"] == TODO_ID
+    assert waiting["vision_wait_state"]["resume_when"] == resume_when
+    assert waiting["interaction_contract"]["agent_channel"]["must_attempt"] is False
+    assert "settlement_identity" not in waiting["heartbeat_receipt"]
+    assert _spend_run_count(runtime) == 1
 
 
 def test_invalid_supplement_leaves_original_writeback_intact(tmp_path: Path):

@@ -69,7 +69,7 @@ test("autonomous JSON authoring retains the complete current packet before chang
   assert.match(String(contract.authoring_hint), /JSON replaces the complete packet/);
   assert.match(String(contract.authoring_hint), /current Agent's complete packet and full vision_patch/);
   assert.match(String(contract.authoring_hint), /path_delta.retained text does not merge omitted fields/);
-  assert.doesNotMatch(String(visionAuthoringContract().authoring_hint), /JSON replaces/);
+  assert.match(String(visionAuthoringContract().authoring_hint), /JSON replaces the complete packet/);
   const existing = {
     state: "active", todo_delta: ["retain:todo_current001"],
     vision_patch: {
@@ -557,6 +557,16 @@ test("semantic closeout retains the strict material vision checkpoint", () => {
 });
 
 test("material closeout leaves an invalid path decision recoverable", () => {
+  const allowedOutcomes = ["continue", "no_change", "replan"];
+  const authoring = visionAuthoringContract();
+  const pathAuthoring = authoring.path_delta as Record<string, unknown>;
+  assert.deepEqual(pathAuthoring.open_progress_outcomes, allowedOutcomes);
+  assert.deepEqual(pathAuthoring.outcomes, ["ask_human", "continue", "no_change", "replan", "stop", "wait"]);
+  assert.match(String(authoring.rule), /resume_when.*path_delta\.reentry_condition.*blocked gap allows wait/);
+  const todoAuthoring = (authoring.fields as Record<string, Record<string, unknown>>).todo_delta;
+  assert.equal(todoAuthoring.retain_existing, "retain:todo_<id>");
+
+  const dependency = "Resume after the independent result is available.";
   const packet = (outcome: string) => ({
     state: "vision_patch_proposed",
     vision_patch: {acceptance_summary: "Verified result; scoped work remains."},
@@ -566,6 +576,7 @@ test("material closeout leaves an invalid path decision recoverable", () => {
       observed_reality: "Fresh evidence confirms the bounded next step.",
       retained: ["Continue from the verified evidence."],
       evidence_refs: ["evidence:verified-result"],
+      reentry_condition: dependency,
     },
   });
   const prepared = (outcome: string) =>
@@ -573,8 +584,10 @@ test("material closeout leaves an invalid path decision recoverable", () => {
       agent_vision_packet: packet(outcome),
     })).agent_vision;
 
-  for (const outcome of ["continue", "no_change", "replan"]) {
-    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: prepared(outcome)}));
+  for (const outcome of allowedOutcomes) {
+    const vision = prepared(outcome) as {path_delta: Record<string, unknown>};
+    assert.equal(vision.path_delta.reentry_condition, dependency);
+    const result = buildVisionCheckpoint(finalizeRequest({agent_vision: vision}));
     assert.equal(result.decision, "patched");
     assert.equal(result.satisfied, true);
   }
@@ -588,9 +601,10 @@ test("material closeout leaves an invalid path decision recoverable", () => {
 
   const reportedGap = buildVisionCheckpoint(finalizeRequest({
     delivery_outcome: "outcome_gap",
-    agent_vision: prepared("replan"),
+    agent_vision: prepared("wait"),
   }));
   assert.equal(reportedGap.decision, "patched");
+  assert.equal(reportedGap.satisfied, true);
 });
 
 test("missing checkpoint offers unchanged only with a persisted vision", () => {
@@ -617,7 +631,9 @@ test("missing checkpoint offers unchanged only with a persisted vision", () => {
 
 test("advertised Todo delta limits match retained items and item validation", () => {
   const fields = visionAuthoringContract().fields as Record<string, unknown>;
-  assert.deepEqual(fields.todo_delta, {max_retained_items: 8, max_item_chars: 80});
+  const todoLimits = fields.todo_delta as Record<string, unknown>;
+  assert.equal(todoLimits.max_retained_items, 8);
+  assert.equal(todoLimits.max_item_chars, 80);
   const packet = (todo_delta: string[]) => prepareRequest({
     agent_vision_packet: {vision_summary: "Deliver the scoped result.", todo_delta},
   });
