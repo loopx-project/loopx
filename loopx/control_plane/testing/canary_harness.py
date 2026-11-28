@@ -240,7 +240,9 @@ def _run_json_cli_in_process(
     stderr = io.StringIO()
     with _IN_PROCESS_CLI_LOCK:
         previous_context_delivery = os.environ.get("LOOPX_CONTEXT_DELIVERY")
+        previous_usage_ping = os.environ.get("LOOPX_USAGE_PING")
         os.environ["LOOPX_CONTEXT_DELIVERY"] = "off"
+        os.environ["LOOPX_USAGE_PING"] = "0"
         try:
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 try:
@@ -258,6 +260,10 @@ def _run_json_cli_in_process(
                 os.environ.pop("LOOPX_CONTEXT_DELIVERY", None)
             else:
                 os.environ["LOOPX_CONTEXT_DELIVERY"] = previous_context_delivery
+            if previous_usage_ping is None:
+                os.environ.pop("LOOPX_USAGE_PING", None)
+            else:
+                os.environ["LOOPX_USAGE_PING"] = previous_usage_ping
     stdout_text = stdout.getvalue()
     stderr_text = stderr.getvalue()
     if raw_code != 0:

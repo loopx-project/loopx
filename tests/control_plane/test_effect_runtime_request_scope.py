@@ -432,3 +432,73 @@ def test_scan_runtime_source_snapshot_matches_walk_and_skips_pycache(tmp_path: P
 
     names = [relative for relative, *_meta in effect_runtime._scan_runtime_source_snapshot(root)]
     assert names == ["linked.ts", "runtime/private_permissions.py"]
+
+
+def test_scan_runtime_source_snapshot_preserves_path_is_file_error_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+
+    root = tmp_path / "src"
+    root.mkdir()
+    blocked = root / "blocked.ts"
+    blocked.write_text("export const blocked = true;\n", encoding="utf-8")
+
+    # Simulate an entry whose DirEntry.stat raises OSError (for instance EACCES on
+    # dereference), verifying delegation to Path.is_file() propagates PermissionError
+    # just like pathlib on Python 3.11/3.12 instead of collapsing via os.path.isfile.
+    class _FailingEntry:
+        name = "blocked.ts"
+        path = str(blocked)
+
+        def is_dir(self, *, follow_symlinks: bool = True) -> bool:
+            return False
+
+        def stat(self, *, follow_symlinks: bool = True) -> os.stat_result:
+            raise PermissionError(13, "Permission denied", self.path)
+
+    class _FakeScandir:
+        def __enter__(self) -> list[_FailingEntry]:
+            return [_FailingEntry()]
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    original_is_file = Path.is_file
+
+    def raise_permission(path: Path) -> bool:
+        if path == blocked:
+            raise PermissionError(13, "Permission denied", str(path))
+        return original_is_file(path)
+
+    monkeypatch.setattr(effect_runtime.os, "scandir", lambda _directory: _FakeScandir())
+    monkeypatch.setattr(Path, "is_file", raise_permission)
+    with pytest.raises(PermissionError):
+        effect_runtime._scan_runtime_source_snapshot(root)
+    monkeypatch.undo()
+
+    if os.name != "nt" and getattr(os, "geteuid", lambda: 0)() != 0:
+        outside = tmp_path / "restricted"
+        outside.mkdir()
+        target = outside / "target.ts"
+        target.write_text("export const ok = 1;\n", encoding="utf-8")
+        link_root = tmp_path / "pkg_perm"
+        link_root.mkdir()
+        link = link_root / "alias.ts"
+        link.symlink_to(target)
+        outside.chmod(0o000)
+        try:
+            try:
+                expected_is_file = link.is_file()
+            except PermissionError:
+                with pytest.raises(PermissionError):
+                    effect_runtime._scan_runtime_source_snapshot(link_root)
+            else:
+                expected = () if not expected_is_file else (
+                    ("alias.ts", target.stat().st_mtime_ns, target.stat().st_ctime_ns, target.stat().st_size),
+                )
+                assert effect_runtime._scan_runtime_source_snapshot(link_root) == expected
+        finally:
+            outside.chmod(0o700)
+        restored = effect_runtime._scan_runtime_source_snapshot(link_root)
+        assert [relative for relative, *_meta in restored] == ["alias.ts"]

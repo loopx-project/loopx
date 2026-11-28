@@ -296,7 +296,7 @@ def _scan_runtime_source_snapshot(root: Path) -> _RuntimeSourceSnapshot:
                     metadata = entry.stat(follow_symlinks=True)
                 except OSError:
                     # Preserve pathlib's missing-file and platform-specific error policy.
-                    if not os.path.isfile(entry.path):
+                    if not Path(entry.path).is_file():
                         continue
                     raise
                 except ValueError:

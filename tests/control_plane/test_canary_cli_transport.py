@@ -172,3 +172,29 @@ def test_import_fixture_authority_fast_path_preserves_env_and_subprocess_hook(
     canary_harness.import_fixture_authority(registry_hook, fixture.GOAL_ID)
     assert len(calls) == 3
     assert os.environ["LOOPX_CONTEXT_DELIVERY"] == parent_mode
+
+
+@pytest.mark.parametrize("initial_ping", ["1", None])
+def test_import_fixture_authority_isolates_usage_ping_and_restores_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, initial_ping: str | None,
+) -> None:
+    import loopx.entrypoint as entrypoint_module
+    from tests.control_plane import test_quota_settlement_cli as fixture
+
+    _project, _runtime, registry = fixture._write_fixture(tmp_path)
+    if initial_ping is None:
+        monkeypatch.delenv("LOOPX_USAGE_PING", raising=False)
+    else:
+        monkeypatch.setenv("LOOPX_USAGE_PING", initial_ping)
+
+    observed: list[tuple[str | None, str | None]] = []
+    original_main = entrypoint_module.main
+
+    def recording_main(argv=None):
+        observed.append((os.environ.get("LOOPX_USAGE_PING"), os.environ.get("LOOPX_CONTEXT_DELIVERY")))
+        return original_main(argv)
+
+    monkeypatch.setattr(entrypoint_module, "main", recording_main)
+    canary_harness.import_fixture_authority(registry, fixture.GOAL_ID)
+    assert observed == [("0", "off"), ("0", "off"), ("0", "off")]
+    assert os.environ.get("LOOPX_USAGE_PING") == initial_ping
