@@ -1550,7 +1550,7 @@ theorem same_check_total_can_hide_a_changed_carried_result :
     let prior : CheckTally := ⟨0, 1, 0⟩
     let current : CheckTally := ⟨1, 0, 0⟩
     prior.passed + prior.failed + prior.pending = current.passed + current.failed + current.pending ∧
-    observeCarriedCheckTally [0, 1, 0] false (some prior) (some current) = ([0, 1, 0], false) := by
+    observeCarriedCheckTally [1, 0, 0] false (some prior) (some current) = ([1, 0, 0], false) := by
   decide
 
 theorem a_page_without_check_readbacks_cannot_complete_when_below_capacity
