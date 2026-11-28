@@ -12,6 +12,11 @@ import shutil
 import subprocess
 import sys
 
+from . import (
+    build_antigravity_host_runtime_args,
+    resolve_antigravity_runtime_bins,
+)
+
 DEFAULT_LAUNCHD_INTERVAL_SECONDS = 300
 MIN_LAUNCHD_INTERVAL_SECONDS = 60
 DEFAULT_LONG_IDLE_SECONDS = 2400
@@ -34,11 +39,6 @@ def _resolved_optional_path(
     return str(Path(stripped).expanduser().resolve())
 
 
-def _resolved_executable_path(binary: str) -> str:
-    expanded = os.path.expanduser(binary)
-    return os.path.abspath(expanded)
-
-
 def _resolved_launchd_path(
     env_path: str | None = None,
     *,
@@ -59,6 +59,7 @@ def _resolved_launchd_path(
         for candidate in (python_bin, cli_bin):
             if candidate and Path(candidate).is_absolute():
                 extras.append(str(Path(candidate).parent))
+        extras.extend(["/usr/bin", "/bin"])
         for entry in extras:
             if entry not in parts:
                 parts.append(entry)
@@ -112,17 +113,8 @@ def build_antigravity_launchd_plist(
     resolved_label = validated_launchd_label(
         label, goal_id=goal_id, agent_id=agent_id, conversation_id=conversation_id
     )
-    python_bin = (
-        _resolved_executable_path(sys.executable)
-        if resolve_local_executable
-        else "python3"
-    )
-    found_cli = shutil.which(cli_bin) if resolve_local_executable else None
-    resolved_cli_bin = (
-        _resolved_executable_path(found_cli or cli_bin)
-        if resolve_local_executable
-        and (found_cli is not None or os.sep in cli_bin or cli_bin.startswith("."))
-        else cli_bin
+    python_bin, resolved_cli_bin = resolve_antigravity_runtime_bins(
+        cli_bin, resolve_local_executable=resolve_local_executable
     )
     resolved_state = _resolved_optional_path(state_dir) or str(
         (Path.home() / ".loopx/host-state/antigravity").resolve()
@@ -134,32 +126,25 @@ def build_antigravity_launchd_plist(
         registry, preserve_tokens=frozenset({_HOST_GLOBAL_REGISTRY_SELECTOR})
     )
     resolved_runtime_root = _resolved_optional_path(runtime_root)
-    program_args = [
-        python_bin,
-        "-E",
-        "-P",
-        "-m",
-        "loopx.hosts.agy.host_runtime",
+    program_args = build_antigravity_host_runtime_args(
         "heartbeat-tick",
-        "--cli-bin",
-        resolved_cli_bin,
-        "--goal-id",
-        goal_id,
-        "--agent-id",
-        agent_id,
-        "--conversation-id",
-        conversation_id,
-        "--state-dir",
-        resolved_state,
-        "--long-idle-seconds",
-        str(max(60, int(long_idle_seconds))),
-        "--cooldown-seconds",
-        str(max(MIN_STALL_COOLDOWN_SECONDS, int(cooldown_seconds))),
-    ]
-    if resolved_registry:
-        program_args.extend(["--registry", resolved_registry])
-    if resolved_runtime_root:
-        program_args.extend(["--runtime-root", resolved_runtime_root])
+        cli_bin=resolved_cli_bin,
+        goal_id=goal_id,
+        agent_id=agent_id,
+        conversation_id=conversation_id,
+        runtime_root=resolved_runtime_root,
+        registry=resolved_registry,
+        resolve_local_executable=resolve_local_executable,
+        extra_args=[
+            "--state-dir",
+            resolved_state,
+            "--long-idle-seconds",
+            str(max(60, int(long_idle_seconds))),
+            "--cooldown-seconds",
+            str(max(MIN_STALL_COOLDOWN_SECONDS, int(cooldown_seconds))),
+        ],
+        resolved_bins=(python_bin, resolved_cli_bin),
+    )
     return {
         "Label": resolved_label,
         "ProgramArguments": program_args,
