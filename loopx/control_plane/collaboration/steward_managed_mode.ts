@@ -1191,9 +1191,10 @@ function filterScopedRepositoryItems(
       if (login && authorMode === "include" && !authors.has(login)) continue;
       if (login && authorMode === "exclude" && authors.has(login)) continue;
     }
-    if (requiresCompleteReviews && item.review_coverage_incomplete === true) {
+    const reviewReadbackIncomplete = item.review_readback_incomplete === true;
+    if (reviewReadbackIncomplete || (requiresCompleteReviews && item.review_coverage_incomplete === true)) {
       if (plan === undefined) return { items: [], observationIncomplete: true };
-      if (plan.source === "review") plan.add(item);
+      if (plan.source === "review" && !reviewReadbackIncomplete) plan.add(item);
       continue;
     }
     if (plan?.source === "review") continue;
@@ -1376,7 +1377,7 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
   const baseRepoItems = scopedRepoItems ?? repoItems;
-  if (baseRepoItems?.some((item) => item.checks_coverage_incomplete === true)) {
+  if (baseRepoItems?.some((item) => item.checks_coverage_incomplete === true || item.review_readback_incomplete === true)) {
     return incompleteObservation;
   }
   const hashedRepoItems = baseRepoItems === null

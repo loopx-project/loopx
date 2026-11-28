@@ -565,6 +565,7 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
         "updatedAt": row.get("updatedAt"),
         "stalled_since": stall.stalled_since,
         **({"review_coverage_incomplete": True} if row.get("review_coverage_incomplete") is True else {}),
+        **({"review_readback_incomplete": True} if row.get("review_readback_incomplete") is True else {}),
         **({"stalled_since_unknown": True} if stall.stalled_since_unknown else {}),
         "author_replied_after_request_changes": stall.author_replied,
         "comments_coverage_incomplete": stall.comments_incomplete,
@@ -749,19 +750,32 @@ def _open_pr_check_readback(limit: int) -> str:
         }}"""
 
 
-def _open_prs_graphql_query(previous_limits: Sequence[tuple[int, int | None]]) -> str:
+class _OpenPrReadbackLimits(NamedTuple):
+    page_size: int
+    checks: int | None
+    reviews: int | None
+
+
+def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
+    fields = _open_pr_check_readback(limits.checks) if limits.checks is not None else ""
+    if limits.reviews is not None:
+        fields += f"\n        reviews(last: {limits.reviews}) {{ ...StewardReviewPage }}"
+    return fields
+
+
+def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits]) -> str:
     variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
     readbacks = "".join(
         f"""
     previousPrs{index}: pullRequests(
-      states: OPEN, first: {size}, after: $previousCursor{index},
+      states: OPEN, first: {limits.page_size}, after: $previousCursor{index},
       orderBy: {{field: UPDATED_AT, direction: DESC}}
     ) {{
       totalCount
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ ...StewardPrWindowRow{_open_pr_check_readback(limit) if limit is not None else ''} }}
+      nodes {{ ...StewardPrWindowRow{_open_pr_readback_fields(limits)} }}
     }}"""
-        for index, (size, limit) in enumerate(previous_limits)
+        for index, limits in enumerate(previous_limits)
     )
     return (
         f"""query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!{variables}) {{
@@ -899,6 +913,18 @@ def _read_graphql_review_page(connection: object) -> _ReviewPage | None:
             return None
         seen_ids.add(review_id)
     return _ReviewPage(rows, seen_ids, total_count, cursor)
+
+
+def _review_readback_limit(rows: Sequence[Mapping[str, Any]]) -> int:
+    return max(
+        (max(1, len(page.rows)) for row in rows if (page := _read_graphql_review_page(row.get("reviews"))) is not None),
+        default=1,
+    )
+
+
+def _earlier_pr_reviews_agree(original: Mapping[str, Any], readback: Mapping[str, Any]) -> bool:
+    original_page = _read_graphql_review_page(original.get("reviews"))
+    return original_page is not None and original_page == _read_graphql_review_page(readback.get("reviews"))
 
 
 def _read_graphql_check_contexts(contexts: object) -> list[Mapping[str, Any]] | None:
@@ -1228,14 +1254,18 @@ def observe_github_repository_prs(
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
     expected_total: int | None = None
     cursor: str | None = None
-    previous_pages: dict[str | None, tuple[int, _OpenPrWindow, int | None]] = {}
+    previous_pages: dict[str | None, tuple[_OpenPrWindow, _OpenPrReadbackLimits]] = {}
     unverified_checks: set[int] = set()
+    unverified_reviews: set[int] = set()
     page_size = _GITHUB_PR_LIST_PAGE_SIZE
     deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
         for _ in range(_GITHUB_PR_LIST_MAX_PAGES):
             can_finish = expected_total is not None and len(raw_nodes_by_number) + page_size >= expected_total
-            previous_limits = [(size, limit if can_finish else None) for size, _window, limit in previous_pages.values()]
+            previous_limits = [
+                limits if can_finish else _OpenPrReadbackLimits(limits.page_size, None, None)
+                for _window, limits in previous_pages.values()
+            ]
             cmd = [
                 "gh",
                 "api",
@@ -1277,8 +1307,8 @@ def observe_github_repository_prs(
             if page is None or (expected_total is not None and page.total_count != expected_total):
                 return {"status": "unavailable", "repository": repo_slug}
             earlier_rows = {}
-            for index, (size, expected_window, _limit) in enumerate(previous_pages.values()):
-                readback = _read_open_pr_page(repo.get(f"previousPrs{index}"), size)
+            for index, (expected_window, limits) in enumerate(previous_pages.values()):
+                readback = _read_open_pr_page(repo.get(f"previousPrs{index}"), limits.page_size)
                 if readback is None or _read_open_pr_window(readback) != expected_window:
                     return {"status": "unavailable", "repository": repo_slug}
                 if page.next_cursor is None:
@@ -1286,17 +1316,22 @@ def observe_github_repository_prs(
             expected_total = page.total_count
             if page.next_cursor is None:
                 fresh_numbers = {row["number"] for row in page.rows}
-                unverified_checks = {
-                    number for number, original in raw_nodes_by_number.items()
-                    if number not in fresh_numbers and not _earlier_pr_checks_agree(original, earlier_rows.get(number, {}))
-                }
+                for number, original in raw_nodes_by_number.items():
+                    if number in fresh_numbers:
+                        continue
+                    readback_row = earlier_rows.get(number, {})
+                    if not _earlier_pr_checks_agree(original, readback_row):
+                        unverified_checks.add(number)
+                    if not _earlier_pr_reviews_agree(original, readback_row):
+                        unverified_reviews.add(number)
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)
             if page.next_cursor is None:
                 break
             window = _read_open_pr_window(page)
             if window is None or page.next_cursor == cursor or page.next_cursor in previous_pages:
                 return {"status": "unavailable", "repository": repo_slug}
-            previous_pages[cursor] = (page_size, window, _nested_check_readback_limit(page.rows))
+            limits = _OpenPrReadbackLimits(page_size, _nested_check_readback_limit(page.rows), _review_readback_limit(page.rows))
+            previous_pages[cursor] = (window, limits)
             cursor = page.next_cursor
             if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
                 page_size = _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
@@ -1311,6 +1346,9 @@ def observe_github_repository_prs(
         }
         for number in unverified_checks:
             normalized_nodes[number]["checks_coverage_incomplete"] = True
+        for number in unverified_reviews:
+            normalized_nodes[number]["review_readback_incomplete"] = True
+            normalized_nodes[number]["review_coverage_incomplete"] = True
         items = {number: summarize_github_pr_signal(node) for number, node in normalized_nodes.items()}
         remaining_backfill_pages = _GITHUB_PR_BACKFILL_BUDGET
         review_pages_read: dict[int, int] = {}
@@ -1320,6 +1358,8 @@ def observe_github_repository_prs(
         if select_review_backfill is not None:
             review_candidates = {}
             for number, node in normalized_nodes.items():
+                if number in unverified_reviews:
+                    continue
                 if not node["review_coverage_incomplete"] or not isinstance(node["headRefOid"], str) or not node["headRefOid"]:
                     continue
                 raw_node = raw_nodes_by_number[number]

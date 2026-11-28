@@ -838,6 +838,101 @@ def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: s
         assert failures == [41]
 
 
+@pytest.mark.parametrize("case", [
+    "body-drift", "missing", "count-drift", "excluded", "fresh-overlap", "stable",
+    "stable-truncated", "changed-truncated",
+])
+def test_steward_terminal_list_readback_corroborates_earlier_reviews(case: str) -> None:
+    from copy import deepcopy
+
+    head = "a" * 40
+    gpt = "model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)"
+    gemini = "model_agent · gemini-3.1-pro · Google (runtime_reported, high)"
+
+    def approval(identifier: str, declaration: str) -> dict[str, Any]:
+        return {
+            "id": identifier, "state": "APPROVED", "author": {"login": "reviewer"},
+            "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
+            "body": _valid_bilingual_body(head_oid=head, verdict="APPROVE", reviewer=declaration),
+        }
+
+    def reviewed_pr(number: int, reviews: list[dict[str, Any]]) -> dict[str, Any]:
+        return _graphql_node(_sample_pr(number=number, head_oid=head, reviews=reviews, review_decision="APPROVED"))
+
+    earlier = reviewed_pr(1, [approval("newest", gpt)])
+    if case.endswith("-truncated"):
+        earlier["reviews"]["totalCount"] = 2
+        earlier["reviews"]["pageInfo"] = {"hasPreviousPage": True, "startCursor": "review-cursor"}
+    if case == "excluded":
+        earlier["isDraft"] = True
+    first_page = [earlier, *(_graphql_node(_sample_pr(number=number)) for number in range(2, 21))]
+    second_page = [reviewed_pr(21, [approval("r1", gemini), approval("r2", gemini)]),
+                   *(_graphql_node(_sample_pr(number=number)) for number in range(22, 41))]
+    terminal = [reviewed_pr(41, [approval("tail", gpt)])]
+    if case == "fresh-overlap":
+        terminal.append(reviewed_pr(1, [approval("newest", gemini)]))
+    history = []
+    list_reads = []
+    review_reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        if "before=review-cursor" in cmd:
+            review_reads.append("review-cursor")
+            pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+            pr_data["latestReviews"] = earlier["reviews"]
+            pr_data["reviews"] = _graphql_reviews([approval("older", gemini)], totalCount=2)
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"data": {"repository": {"pullRequest": pr_data}}}))
+        cursor = next((part.removeprefix("cursor=") for part in cmd if part.startswith("cursor=")), None)
+        list_reads.append(cursor)
+        query = next(part for part in cmd if part.startswith("query="))
+        if cursor is None:
+            payload = _graphql_page(first_page, has_next_page=True, end_cursor="first", total_count=41, history=history)
+        elif cursor == "first":
+            assert "reviews(last:" not in query.split("previousPrs0:", 1)[1]
+            payload = _graphql_page(second_page, has_next_page=True, end_cursor="second", total_count=41, history=history)
+        else:
+            assert cursor == "second"
+            assert "reviews(last: 1)" in query.split("previousPrs0:", 1)[1].split("previousPrs1:", 1)[0]
+            assert "reviews(last: 2)" in query.split("previousPrs1:", 1)[1]
+            payload = _graphql_page(terminal, total_count=41, history=history)
+            repository = payload["data"]["repository"]
+            readback = deepcopy(repository["previousPrs0"])
+            row = readback["nodes"][0]
+            if case == "missing":
+                del row["reviews"]
+            elif case == "count-drift":
+                row["reviews"]["totalCount"] += 1
+            elif case not in {"stable", "stable-truncated"}:
+                row["reviews"]["nodes"][0]["body"] = approval("newest", gemini)["body"]
+            repository["previousPrs0"] = readback
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=runner, select_review_backfill=lambda candidates, _: {row["number"] for row in candidates},
+    )
+    assert snapshot["status"] == "ok" and list_reads == [None, "first", "second"]
+    assert review_reads == (["review-cursor"] if case == "stable-truncated" else [])
+    scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False,
+             "pr_filter": {"required_approver_declarations": ["gpt"], "exclude_drafts": True}}
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior", "signal_scope": scope}
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if case in {"body-drift", "missing", "count-drift", "changed-truncated"}:
+        assert snapshot["items"][0]["review_readback_incomplete"] is True
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior"
+        assert observation["material_change"] is False
+        unscoped = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            **params, "signal_scope": None,
+        })
+        assert unscoped["observation_incomplete"] is True and unscoped["result_hash"] == "sha256:verified-prior"
+    else:
+        assert observation["observation_incomplete"] is False
+        numbers = [row["number"] for row in observation["scoped_repository_items"]]
+        assert numbers == ([41] if case in {"excluded", "fresh-overlap"} else [1, 41])
+        assert snapshot["items"][0].get("review_coverage_incomplete") is (True if case == "excluded" else None)
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):

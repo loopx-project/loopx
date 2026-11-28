@@ -1565,6 +1565,62 @@ theorem terminal_request_bounds_check_context_rows
     previousChecks ≤ 2850 ∧ previousChecks + currentChecks ≤ 3600 := by
   omega
 
+/- A row token covers the raw review fields used to derive declaration, verdict
+   and timing. An unreadable initial or terminal window has no evidence. -/
+def useCarriedReviewWindow (original current : Option FirstReviewWindow) (decision : Option (List Nat)) :
+    Option (List Nat) :=
+  match original with
+  | none => none
+  | some first => if current = some first then decision else none
+
+theorem published_carried_review_requires_both_windows
+    (original current : Option FirstReviewWindow) (rows : List Nat) :
+    useCarriedReviewWindow original current (some rows) = some rows ↔
+      ∃ first, original = some first ∧ current = some first := by
+  cases original with
+  | none => simp [useCarriedReviewWindow]
+  | some first =>
+    by_cases same : current = some first <;> simp [useCarriedReviewWindow, same]
+
+def observeCarriedReviewWindow (prior : List Nat) (independentlyExcluded : Bool)
+    (original current : Option FirstReviewWindow) (decision : Option (List Nat)) : List Nat × Bool :=
+  observe prior (if independentlyExcluded then some [] else useCarriedReviewWindow original current decision)
+
+theorem changed_or_missing_carried_review_keeps_prior
+    (prior : List Nat) (original current : Option FirstReviewWindow) (decision : Option (List Nat))
+    (changed : original ≠ current) :
+    observeCarriedReviewWindow prior false original current decision = (prior, false) := by
+  cases original with
+  | none => rfl
+  | some first =>
+    have mismatch : current ≠ some first := fun equal => changed equal.symm
+    simp [observeCarriedReviewWindow, useCarriedReviewWindow, mismatch, observe]
+
+theorem independent_exclusion_with_unreadable_carried_review_can_publish
+    (prior : List Nat) (original current : Option FirstReviewWindow) (decision : Option (List Nat)) :
+    observeCarriedReviewWindow prior true original current decision = ([], prior != []) := rfl
+
+theorem corroborated_carried_review_keeps_older_recovery_decision
+    (initial : FirstReviewWindow) (readbacks : List (Option FirstReviewWindow))
+    (covered : Option (List Nat)) :
+    useCarriedReviewWindow (some initial) (some initial) (useReviewsAtFirstWindow initial readbacks covered) =
+      useReviewsAtFirstWindow initial readbacks covered := by
+  simp [useCarriedReviewWindow]
+
+theorem unchanged_review_id_and_count_can_hide_a_changed_declaration :
+    let earlier : FirstReviewWindow := ⟨[(7, 1)], 1, 0⟩
+    let later : FirstReviewWindow := ⟨[(7, 2)], 1, 0⟩
+    observe [1] (some [1, 21]) = ([1, 21], true) ∧
+    observeCarriedReviewWindow [1] false (some earlier) (some later) (some [1, 21]) = ([1], false) := by
+  decide
+
+theorem terminal_request_bounds_nested_review_rows
+    (previousPrs currentPrs previousReviews currentReviews : Nat) (previousCap : previousPrs ≤ 95)
+    (currentCap : currentPrs ≤ 25) (previousWindow : previousReviews ≤ 20 * previousPrs)
+    (currentWindow : currentReviews ≤ 20 * currentPrs) :
+    previousReviews ≤ 1900 ∧ previousReviews + currentReviews ≤ 2400 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1733,5 +1789,11 @@ theorem terminal_request_bounds_check_context_rows
 #print axioms same_check_total_can_hide_a_changed_carried_result
 #print axioms a_page_without_check_readbacks_cannot_complete_when_below_capacity
 #print axioms terminal_request_bounds_check_context_rows
+#print axioms published_carried_review_requires_both_windows
+#print axioms changed_or_missing_carried_review_keeps_prior
+#print axioms independent_exclusion_with_unreadable_carried_review_can_publish
+#print axioms corroborated_carried_review_keeps_older_recovery_decision
+#print axioms unchanged_review_id_and_count_can_hide_a_changed_declaration
+#print axioms terminal_request_bounds_nested_review_rows
 
 end StewardPrSignalPagination
