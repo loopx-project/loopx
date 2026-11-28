@@ -29,7 +29,7 @@ def _event_revision_from_stat(stat: os.stat_result) -> EventFileRevision:
     return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
-def _read_event_snapshot(path: Path) -> tuple[EventRows, EventRevision]:
+def _read_event_snapshot(path: Path, *, strict: bool = False) -> tuple[EventRows, EventRevision]:
     try:
         with path.open("rb") as stream:
             before = _event_revision_from_stat(os.fstat(stream.fileno()))
@@ -39,13 +39,11 @@ def _read_event_snapshot(path: Path) -> tuple[EventRows, EventRevision]:
         return [], None
     if before != after or len(raw_bytes) != before[1]:
         raise OSError("Chat event journal changed while reading")
-    return decode_chat_journal(raw_bytes.split(b"\n"), strict=False), before
+    return decode_chat_journal(raw_bytes.split(b"\n"), strict=strict), before
 
 
-def _read_compactable_event_rows(path: Path) -> EventRows:
-    from ..chat_store import _read_jsonl
-
-    rows = _read_jsonl(path, raise_on_error=True, strict=True)
+def _read_compactable_event_rows(path: Path) -> tuple[EventRows, EventRevision]:
+    rows, revision = _read_event_snapshot(path, strict=True)
     previous_sequence = 0
     for row in rows:
         sequence = row.get("sequence")
@@ -53,7 +51,7 @@ def _read_compactable_event_rows(path: Path) -> EventRows:
         if type(sequence) is not int or sequence <= previous_sequence or not isinstance(kind, str) or not kind:
             raise ValueError("invalid Chat event order or kind")
         previous_sequence = sequence
-    return rows
+    return rows, revision
 
 
 def _durable_by_append_id(rows: EventRows) -> dict[str, dict[str, Any]]:
@@ -173,15 +171,12 @@ class ChatEventStreamMixin:
                         append_started = False
                         try:
                             uncertain = any("sequence" in event for event, _ in pending)
-                            source_revision = None
                             if require_clean_source:
-                                rows = _read_compactable_event_rows(path)
+                                rows, source_revision = _read_compactable_event_rows(path)
                             elif uncertain:
-                                rows = _store._read_jsonl(path, raise_on_error=True)
+                                rows, source_revision = _read_event_snapshot(path)
                             else:
                                 rows, source_revision = self._event_rows_locked(session_id, turn_id)
-                                if source_revision != self._event_revision(path):
-                                    raise OSError("Chat event journal changed before append")
                             # A failed append may already have persisted all or part of
                             # its batch. Match only this store's stable append ids; two
                             # otherwise identical events are still separate writes.
@@ -202,7 +197,7 @@ class ChatEventStreamMixin:
                                 event["sequence"] = sequence
                                 to_append.append({**event, "_append_id": append_id})
                             append_started = True
-                            written_revision = _store._append_jsonl_rows(path, to_append)
+                            written_revision = _store._append_jsonl_rows(path, to_append, expected_revision=source_revision)
                             if (
                                 written_revision is not None
                                 and source_revision == _event_revision_from_stat(written_revision[0])
@@ -211,8 +206,8 @@ class ChatEventStreamMixin:
                                 self._event_cache.put(key, _event_revision_from_stat(written_revision[1]), [*rows, *to_append])
                             else:
                                 self._event_cache.drop(key)
-                        except Exception:
-                            if not append_started:
+                        except Exception as exc:
+                            if not append_started or isinstance(exc, _store.ChatJournalRevisionChanged):
                                 raise
                             # Confirm visible writes before releasing the file lock:
                             # another store may compact old events before our retry.
@@ -339,7 +334,7 @@ class ChatEventStreamMixin:
                     continue
                 with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
                     try:
-                        rows = _read_compactable_event_rows(event_path)
+                        rows, _ = _read_compactable_event_rows(event_path)
                     except (OSError, ValueError):
                         continue
                     retained = [row for row in rows if row["kind"] not in _store.REPLAY_ONLY_EVENT_KINDS]

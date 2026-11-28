@@ -142,8 +142,8 @@ def test_event_cache_revision_follows_the_opened_journal(
         assert store.events_after(*key, None)[0]["payload"]["source"] == "first"
         original_append = chat_store._append_jsonl_rows
 
-        def append_then_switch(path: Path, rows: list[dict]):
-            written = original_append(path, rows)
+        def append_then_switch(path: Path, rows: list[dict], **kwargs):
+            written = original_append(path, rows, **kwargs)
             if path == journal:
                 select(other)
             return written
@@ -172,6 +172,63 @@ def test_stable_event_appends_use_the_cached_prefix(tmp_path: Path, monkeypatch:
     for note in ("second", "third"):
         store.append_event(*key, kind="manager.context", payload={"note": note})
     assert [row["payload"]["note"] for row in store.events_after(*key, "1")] == ["second", "third"]
+
+
+@pytest.mark.parametrize("exists_before_flush", [True, False], ids=["existing-prefix", "absent-prefix"])
+def test_event_append_rechecks_its_opened_destination_before_repair_or_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists_before_flush: bool,
+) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    key = ("session", "view")
+    store.append_event("session", "first", kind="manager.context", payload={"source": "first"})
+    store.append_event("session", "other", kind="manager.context", payload={"source": "other"})
+    first = store._event_path("session", "first")
+    other = store._event_path("session", "other")
+    journal = store._event_path(*key)
+    with other.open("ab") as stream:
+        stream.write(b'{"kind":')
+    original_first, original_other = first.read_bytes(), other.read_bytes()
+
+    def select(target: Path) -> None:
+        link = journal.with_name("replacement")
+        link.symlink_to(target.name)
+        link.replace(journal)
+
+    try:
+        select(first)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"cannot create a local event journal symlink: {exc}")
+    if not exists_before_flush:
+        journal.unlink()
+
+    original_open = Path.open
+
+    def switch_on_write_open(path: Path, mode: str = "r", *args, **kwargs):
+        if path != journal or mode not in {"a", "r+b", "x+b"}:
+            return original_open(path, mode, *args, **kwargs)
+        select(other)
+        try:
+            return original_open(path, mode, *args, **kwargs)
+        finally:
+            if exists_before_flush:
+                select(first)
+            else:
+                journal.unlink()
+
+    pending = store.append_event(*key, kind="manager.context", payload={"source": "pending"}, buffered=True)
+    with monkeypatch.context() as boundary:
+        boundary.setattr(Path, "open", switch_on_write_open)
+        with pytest.raises(OSError):
+            store.flush_events(*key)
+    assert first.read_bytes() == original_first
+    assert other.read_bytes() == original_other
+    assert journal.exists() == exists_before_flush
+
+    assert store.flush_events(*key) == 1
+    assert store.flush_events(*key) == 0
+    rows = store.events_after(*key, None)
+    assert [row["payload"]["source"] for row in rows] == (["first", "pending"] if exists_before_flush else ["pending"])
+    assert pending["sequence"] == (2 if exists_before_flush else 1)
 
 
 def test_event_flush_retry_after_durable_fsync_keeps_distinct_identical_events(
@@ -264,12 +321,13 @@ def test_failed_flush_does_not_resurrect_events_after_other_store_compacts(
     append_rows = chat_store._append_jsonl_rows
     failed = False
 
-    def durable_then_lose_result(path: Path, rows: list[dict]) -> None:
+    def durable_then_lose_result(path: Path, rows: list[dict], **kwargs):
         nonlocal failed
-        append_rows(path, rows)
+        written = append_rows(path, rows, **kwargs)
         if not failed:
             failed = True
             raise OSError("durable write result lost")
+        return written
 
     monkeypatch.setattr(chat_store, "_append_jsonl_rows", durable_then_lose_result)
     with pytest.raises(OSError, match="result lost"):
@@ -298,30 +356,31 @@ def test_failed_flush_keeps_uncertain_events_if_locked_readback_fails(
     event = store.append_event(*key, kind="assistant.delta", payload={}, buffered=True)
     event_path = store._event_path(*key)
     append_rows = chat_store._append_jsonl_rows
-    read_bytes = Path.read_bytes
+    original_open = Path.open
     readback_failures = 0
     result_lost = False
     nonempty_appends = 0
 
-    def lose_result(path: Path, rows: list[dict]) -> None:
+    def lose_result(path: Path, rows: list[dict], **kwargs):
         nonlocal readback_failures, result_lost, nonempty_appends
         if rows:
             nonempty_appends += 1
-        append_rows(path, rows)
+        written = append_rows(path, rows, **kwargs)
         if not result_lost:
             result_lost = True
             readback_failures = 2
             raise OSError("append result lost")
+        return written
 
-    def fail_two_reads(path: Path) -> bytes:
+    def fail_two_reads(path: Path, mode: str = "r", *args, **kwargs):
         nonlocal readback_failures
-        if path == event_path and readback_failures:
+        if path == event_path and mode == "rb" and readback_failures:
             readback_failures -= 1
             raise PermissionError("readback temporarily unavailable")
-        return read_bytes(path)
+        return original_open(path, mode, *args, **kwargs)
 
     monkeypatch.setattr(chat_store, "_append_jsonl_rows", lose_result)
-    monkeypatch.setattr(Path, "read_bytes", fail_two_reads)
+    monkeypatch.setattr(Path, "open", fail_two_reads)
     with pytest.raises(OSError, match="append result lost"):
         store.flush_events(*key)
     persisted_size = event_path.stat().st_size
@@ -349,13 +408,13 @@ def test_event_flush_retry_after_partial_batch_and_concurrent_writer(
     append_rows = chat_store._append_jsonl_rows
     failed = False
 
-    def partially_durable(path: Path, rows: list[dict]) -> None:
+    def partially_durable(path: Path, rows: list[dict], **kwargs):
         nonlocal failed
         if not failed:
             failed = True
-            append_rows(path, rows[:1])
+            append_rows(path, rows[:1], **kwargs)
             raise OSError("batch interrupted after one durable row")
-        append_rows(path, rows)
+        return append_rows(path, rows, **kwargs)
 
     monkeypatch.setattr(chat_store, "_append_jsonl_rows", partially_durable)
     with pytest.raises(OSError, match="one durable row"):
@@ -384,12 +443,12 @@ def test_event_flush_retry_after_no_write_preserves_once_only_readback(
     append_rows = chat_store._append_jsonl_rows
     failed = False
 
-    def fail_before_write(path: Path, rows: list[dict]) -> None:
+    def fail_before_write(path: Path, rows: list[dict], **kwargs):
         nonlocal failed
         if not failed:
             failed = True
             raise OSError("write never started")
-        append_rows(path, rows)
+        return append_rows(path, rows, **kwargs)
 
     monkeypatch.setattr(chat_store, "_append_jsonl_rows", fail_before_write)
     with pytest.raises(OSError, match="write never started"):
@@ -479,14 +538,14 @@ def test_completed_event_compaction_is_skipped_until_the_file_changes(
     )
     assert ("session", "turn") not in first._event_cache._entries
 
-    original_read_jsonl = chat_store._read_jsonl
+    original_open = Path.open
 
-    def reject_redundant_event_read(path: Path):
-        if path == event_path:
+    def reject_redundant_event_read(path: Path, mode: str = "r", *args, **kwargs):
+        if path == event_path and mode == "rb":
             raise AssertionError("an unchanged compacted event stream was read again")
-        return original_read_jsonl(path)
+        return original_open(path, mode, *args, **kwargs)
 
-    monkeypatch.setattr(chat_store, "_read_jsonl", reject_redundant_event_read)
+    monkeypatch.setattr(Path, "open", reject_redundant_event_read)
     restarted = ChatSessionStore(tmp_path)
 
     assert not restarted._event_cache._entries

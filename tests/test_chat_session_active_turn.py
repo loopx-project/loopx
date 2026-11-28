@@ -582,7 +582,8 @@ def test_managed_acceptance_repairs_an_incomplete_jsonl_tail(
     def append_with_interruption(
         path: Path,
         rows: list[dict[str, object]],
-    ) -> None:
+        **kwargs,
+    ):
         nonlocal failed
         selected = (
             path.name == "messages.jsonl"
@@ -596,7 +597,7 @@ def test_managed_acceptance_repairs_an_incomplete_jsonl_tail(
                 handle.write(b'{"text":"\xe4')
                 handle.flush()
             raise OSError(f"interrupted {interrupted_log} append")
-        original_append(path, rows)
+        return original_append(path, rows, **kwargs)
 
     monkeypatch.setattr(
         chat_store,

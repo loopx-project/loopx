@@ -2756,6 +2756,36 @@ theorem chat_stable_append_still_reuses_its_complete_ordered_prefix
       some (rows ++ appended) := by
   simp [publishChatAppend, replayChatJournal]
 
+structure ChatAppendWritePlan where
+  repairTail : Bool
+  appendRows : Bool
+  retainPending : Bool
+  deriving DecidableEq
+
+/- The prefix revision is captured before allocating sequences. On the
+   write side, none represents a successful exclusive creation. Normal
+   callers hold the file lock while repairing and writing the descriptor. -/
+def chatAppendWritePlan (expected opened : Option (List Int)) : ChatAppendWritePlan :=
+  if expected = opened then ⟨true, true, false⟩ else ⟨false, false, true⟩
+
+theorem chat_mismatched_append_descriptor_cannot_repair_or_write_the_alternate
+    (expected opened : List Int) (different : expected ≠ opened) :
+    chatAppendWritePlan (some expected) (some opened) = ⟨false, false, true⟩ := by
+  simp [chatAppendWritePlan, different]
+
+theorem chat_append_with_an_absent_prefix_cannot_write_a_newly_present_journal (opened : List Int) :
+    chatAppendWritePlan none (some opened) = ⟨false, false, true⟩ := rfl
+
+theorem chat_append_cannot_create_a_replacement_for_an_observed_journal (expected : List Int) :
+    chatAppendWritePlan (some expected) none = ⟨false, false, true⟩ := rfl
+
+theorem chat_append_still_repairs_and_writes_the_matching_descriptor (revision : List Int) :
+    chatAppendWritePlan (some revision) (some revision) = ⟨true, true, false⟩ := by
+  simp [chatAppendWritePlan]
+
+theorem chat_append_still_creates_a_new_journal_for_an_absent_prefix :
+    chatAppendWritePlan none none = ⟨true, true, false⟩ := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3069,5 +3099,10 @@ theorem chat_stable_append_still_reuses_its_complete_ordered_prefix
 #print axioms chat_append_does_not_publish_rows_with_a_different_prefix
 #print axioms chat_post_append_path_switch_cannot_relabel_the_written_rows
 #print axioms chat_stable_append_still_reuses_its_complete_ordered_prefix
+#print axioms chat_mismatched_append_descriptor_cannot_repair_or_write_the_alternate
+#print axioms chat_append_with_an_absent_prefix_cannot_write_a_newly_present_journal
+#print axioms chat_append_cannot_create_a_replacement_for_an_observed_journal
+#print axioms chat_append_still_repairs_and_writes_the_matching_descriptor
+#print axioms chat_append_still_creates_a_new_journal_for_an_absent_prefix
 
 end StewardPrSignalPagination
