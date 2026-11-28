@@ -11,7 +11,10 @@ const CREDENTIAL = /(?<![\p{L}\p{N}_])(?:bearer +[^ ]+|authorization *:|(?:ak|sk
 function compact(value: unknown, limit: number): string | null {
   if (typeof value !== "string") throw new EffectRuntimeRequestError("handoff text fact must be a string");
   const text = compactPythonWhitespace(value);
-  if (!text || CREDENTIAL.test(text.replace(/[\u0130\u0131]/gu, "i"))) return null;
+  if (!text) return null;
+  const probe = text.includes("\u0130") || text.includes("\u0131") ? text.replace(/[\u0130\u0131]/gu, "i") : text;
+  if ((probe.includes(":") || probe.includes("=") || /bearer /i.test(probe)) && CREDENTIAL.test(probe)) return null;
+  if (text.length <= limit) return text;
   const points = Array.from(text);
   return points.length <= limit ? text : stripPythonWhitespace(points.slice(0, limit - 1).join("")) + "...";
 }

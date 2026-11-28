@@ -18,8 +18,8 @@ import {
   authorityStateCheckpointCursor,
   authorityStateDelta,
   authorityStateDeltaReconstructs,
-  authorityStateDigest,
   authorityStateReplayBudget,
+  canonicalCommitEnvelopeDigest,
   decodeAuthorityStateDelta,
   isAuthorityStateCheckpoint,
   type AuthorityStateDelta,
@@ -361,8 +361,11 @@ export class SqliteAuthorityStore implements AuthorityStore {
     }
     const projection = canonicalAuthorityObject(this.parseJson(row.projection, "SQLite head projection"),
       "SQLite head projection");
+    const projectionBytes = Buffer.from(JSON.stringify(projection), "utf8");
     const digest = this.requireDigest(row.state_digest, "SQLite head state digest");
-    if (authorityStateDigest(projection) !== digest) protocol("SQLite authority head digest mismatch");
+    if (createHash("sha256").update(projectionBytes).digest("hex") !== digest) {
+      protocol("SQLite authority head digest mismatch");
+    }
     const retained = db.prepare(`SELECT ${COMMIT_COLUMNS} FROM commits WHERE cursor = ?`).get(row.sequence);
     if (!retained) protocol("SQLite authority head has no retained transaction");
     const newest = this.decodeCommitRow(retained as unknown as Record<string, unknown>);
@@ -375,7 +378,7 @@ export class SqliteAuthorityStore implements AuthorityStore {
       protocol("SQLite authority head parent lineage is invalid");
     }
     if (newest.commit_digest !==
-      commitDigest(identity, cursor, newest.operation_id, projection, newest.events, newest.receipts)) {
+      commitDigestFromCanonicalProjectionBytes(identity, cursor, newest.operation_id, projectionBytes, newest.events, newest.receipts)) {
       protocol("SQLite committed row digest mismatch");
     }
     // Recovery of this head resumes from one retained checkpoint, so its
@@ -521,19 +524,23 @@ export class SqliteAuthorityStore implements AuthorityStore {
       if (!authorityStateDeltaReconstructs(before.projection, delta, nextState)) {
         protocol("SQLite authority state delta does not reconstruct its commit");
       }
-      const stateDigest = authorityStateDigest(nextState);
+      const nextJson = JSON.stringify(nextState);
+      const nextBytes = Buffer.from(nextJson, "utf8");
+      const stateDigest = createHash("sha256").update(nextBytes).digest("hex");
       if (isAuthorityStateCheckpoint(next)) {
         db.prepare("INSERT INTO checkpoints VALUES (?, ?, ?)")
-          .run(next.toString(), JSON.stringify(nextState), stateDigest);
+          .run(next.toString(), nextJson, stateDigest);
       }
       db.prepare("INSERT INTO commits VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(next.toString(),
         normalized.operation_id,
-        commitDigest(identity, next, normalized.operation_id, nextState, normalized.events, normalized.receipts),
+        commitDigestFromCanonicalProjectionBytes(
+          identity, next, normalized.operation_id, nextBytes, normalized.events, normalized.receipts,
+        ),
         stateDigest, cursor === null ? null : before.digest,
         JSON.stringify(delta), JSON.stringify(normalized.events), JSON.stringify(normalized.receipts));
       db.prepare(`INSERT INTO head VALUES (1, ?, ?, ?)
         ON CONFLICT(singleton) DO UPDATE SET cursor = excluded.cursor, projection = excluded.projection,
-          state_digest = excluded.state_digest`).run(next.toString(), JSON.stringify(nextState), stateDigest);
+          state_digest = excluded.state_digest`).run(next.toString(), nextJson, stateDigest);
       committing = true;
       db.exec("COMMIT"); transactionOpen = false;
       return {status: "applied", provider_revision: `${identity}:${next}`, cursor: next.toString()};
@@ -729,6 +736,20 @@ export class SqliteAuthorityStore implements AuthorityStore {
     } catch (error) { return readFailure(error); }
     finally { db?.close(); }
   }
+}
+
+function commitDigestFromCanonicalProjectionBytes(
+  identity: string,
+  cursor: bigint,
+  operationId: string,
+  projectionBytes: Buffer,
+  events: readonly JsonObject[],
+  receipts: readonly JsonObject[],
+): string {
+  return canonicalCommitEnvelopeDigest(
+    commitFields(identity, cursor, operationId, events, receipts),
+    (hash) => hash.update(projectionBytes),
+  );
 }
 
 /** The exact v0 commit proof, retained so stored digests stay comparable. */

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
 import test from "node:test";
-import {authorityUnicodeCompare, canonicalAuthorityBytes, canonicalAuthoritySha256, copyAuthorityJson}
+import {authorityUnicodeCompare, canonicalAuthorityBytes, canonicalAuthorityJson, canonicalAuthoritySha256, copyAuthorityJson}
   from "../../loopx/control_plane/coordination/authority_store_codec.ts";
 
 // Frozen pre-optimization comparator: persisted revisions depend on code points,
@@ -58,4 +58,20 @@ test("canonical bytes and digest retain JSON enumeration, scalar and special-key
   for (const invalid of [cyclic, {n: NaN}, {n: Infinity}, {x: undefined}, {x: new Date()}, [undefined]]) {
     assert.throws(() => canonicalAuthorityBytes(invalid));
   }
+});
+
+test("canonicalAuthorityJson preserves __proto__, integer keys, and supplementary Unicode keys", () => {
+  const input = JSON.parse('{"😀":4,"\\ue000":3,"__proto__":{"z":2,"a":1},"2":2,"0":0,"10":10}');
+  const canonical = canonicalAuthorityJson(input) as Record<string, unknown>;
+  assert.equal(Object.getPrototypeOf(canonical), Object.prototype);
+  assert.equal(Object.hasOwn(canonical, "__proto__"), true);
+  assert.deepEqual(Object.keys(canonical), ["0", "2", "10", "__proto__", "\ue000", "😀"]);
+  assert.deepEqual(
+    JSON.stringify(canonical),
+    canonicalAuthorityBytes(input).toString("utf8"),
+  );
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(canonical), "utf8").digest("hex"),
+    canonicalAuthoritySha256(input),
+  );
 });

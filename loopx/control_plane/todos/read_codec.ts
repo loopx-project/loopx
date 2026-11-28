@@ -30,12 +30,16 @@ const hash = (value: string): string => createHash("sha256").update(value).diges
 export const withoutNull = (value: JsonObject): JsonObject => Object.fromEntries(Object.entries(value).filter(([, v]) => v != null));
 
 export function compactTodoReadText(value: string, limit: number | null = 500): string {
-  const full = compactPythonWhitespace(value), points = Array.from(full);
-  return limit === null || points.length <= limit ? full : stripPythonWhitespace(points.slice(0, limit - 1).join("")) + "…";
+  const full = compactPythonWhitespace(value);
+  if (limit === null || full.length <= limit) return full;
+  const points = Array.from(full);
+  return points.length <= limit ? full : stripPythonWhitespace(points.slice(0, limit - 1).join("")) + "…";
 }
 export function pythonJson(value: unknown): string {
-  return JSON.stringify(canonicalAuthorityJson(value)).replace(/[\u007f-\uffff]/g,
-    ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"));
+  const serialized = JSON.stringify(canonicalAuthorityJson(value));
+  return /[\u007f-\uffff]/.test(serialized)
+    ? serialized.replace(/[\u007f-\uffff]/g, ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
+    : serialized;
 }
 const boundary = "(?:(?<=[\\p{L}\\p{N}_])(?![\\p{L}\\p{N}_])|(?<![\\p{L}\\p{N}_])(?=[\\p{L}\\p{N}_]))";
 const patterns = (values: string[]) => values.map(pattern => new RegExp(pattern.replace("(?i)", "").replaceAll("\\b", boundary).replaceAll("\\s", " "), "iu"));
