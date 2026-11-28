@@ -53,74 +53,101 @@ export function oversizedEffectRuntimeRequest(): Buffer {
   )));
 }
 
-async function encodeResponse(response: JsonObject, sink: FileHandle | null): Promise<Buffer | null> {
-  const encoded = encode(response);
+async function writeEncodedResponse(
+  requestId: unknown,
+  encoded: Buffer,
+  sink: FileHandle | null,
+): Promise<Buffer | null> {
   if (encoded.length <= MAX_INLINE_RESPONSE_BYTES) return encoded;
   // A success may already be durable. Return no frame when the existing
   // bounded snapshot path cannot deliver it, so callers recover its receipt.
   if (sink === null) return null;
   return encode({
     schema_version: RESPONSE_SCHEMA,
-    request_id: response.request_id,
+    request_id: requestId,
     ok: true,
     result_ref: await writePrivateResponse(sink, encoded),
   });
 }
 
+function decodeExchangeEnvelope(
+  line: string,
+  token: string,
+  onRequestId: (id: string) => void,
+): { requestId: string; method: string; paramsRef: unknown; inlineParams: JsonObject; responseSinkRef: unknown } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    throw new EffectRuntimeRequestError(
+      "Effect runtime request is not valid JSON",
+      "malformed_json",
+    );
+  }
+  const request = requiredObject(parsed, "Effect runtime request");
+  const requestId = requiredString(request.request_id, "request_id");
+  onRequestId(requestId);
+  if (request.schema_version !== REQUEST_SCHEMA || request.token !== token) {
+    throw new EffectRuntimeRequestError(
+      "Effect runtime request authentication failed",
+      "authentication_failed",
+    );
+  }
+  const method = requiredString(request.method, "method");
+  if (request.params_ref !== undefined || request.response_sink !== undefined) {
+    if (!LOCAL_SNAPSHOT_METHODS.has(method) || request.response_sink === undefined ||
+        (request.params_ref !== undefined && request.params !== undefined)) {
+      throw new EffectRuntimeRequestError("local snapshot transport is unavailable for this request");
+    }
+  }
+  return {
+    requestId,
+    method,
+    paramsRef: request.params_ref,
+    inlineParams: asParams(request.params),
+    responseSinkRef: request.response_sink,
+  };
+}
+
 export async function exchangeEffectRuntimeRequest(
-  line: string, token: string, handlers: ReadonlyMap<string, EffectRuntimeHandler>,
+  rawLine: string, token: string, handlers: ReadonlyMap<string, EffectRuntimeHandler>,
 ): Promise<Buffer | null> {
+  let line: string | undefined = rawLine;
   let requestId = "unknown";
   let sink: FileHandle | null = null;
-  let response: JsonObject;
+  let encoded: Buffer;
   try {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      throw new EffectRuntimeRequestError(
-        "Effect runtime request is not valid JSON",
-        "malformed_json",
-      );
+    const envelope = decodeExchangeEnvelope(line, token, (id) => { requestId = id; });
+    // Drop the raw wire string before running async snapshot reads or handlers.
+    line = undefined;
+    if (envelope.responseSinkRef !== undefined) {
+      sink = await openPrivateResponseSink(envelope.responseSinkRef);
     }
-    const request = requiredObject(parsed, "Effect runtime request");
-    requestId = requiredString(request.request_id, "request_id");
-    if (request.schema_version !== REQUEST_SCHEMA || request.token !== token) {
-      throw new EffectRuntimeRequestError(
-        "Effect runtime request authentication failed",
-        "authentication_failed",
-      );
-    }
-    const method = requiredString(request.method, "method");
-    if (request.params_ref !== undefined || request.response_sink !== undefined) {
-      if (!LOCAL_SNAPSHOT_METHODS.has(method) || request.response_sink === undefined ||
-          (request.params_ref !== undefined && request.params !== undefined)) {
-        throw new EffectRuntimeRequestError("local snapshot transport is unavailable for this request");
-      }
-      sink = await openPrivateResponseSink(request.response_sink);
-    }
-    let params: JsonObject;
-    if (request.params_ref !== undefined) {
-      const ref = requiredObject(request.params_ref, "params snapshot reference");
+    let params: JsonObject | undefined;
+    if (envelope.paramsRef !== undefined) {
+      const ref = requiredObject(envelope.paramsRef, "params snapshot reference");
       if (ref.schema_version !== "loopx_effect_runtime_snapshot_v0") {
         throw new EffectRuntimeRequestError("invalid local snapshot schema");
       }
       params = requiredObject(await readPrivateJsonSnapshot(ref), "snapshot params");
     } else {
-      params = asParams(request.params);
+      params = envelope.inlineParams;
     }
-    const result = await dispatchEffectRuntimeMethod(handlers, method, params);
-    response = {
+    const callParams = params;
+    params = undefined;
+    const result = await dispatchEffectRuntimeMethod(handlers, envelope.method, callParams);
+    encoded = encode({
       schema_version: RESPONSE_SCHEMA,
       request_id: requestId,
       ok: true,
       result,
-    };
+    });
   } catch (error) {
-    response = failure(requestId, error);
+    line = undefined;
+    encoded = encode(failure(requestId, error));
   }
   try {
-    return await encodeResponse(response, sink);
+    return await writeEncodedResponse(requestId, encoded, sink);
   } finally {
     await sink?.close();
   }

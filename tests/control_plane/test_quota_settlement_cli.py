@@ -5118,6 +5118,7 @@ def test_unbound_visible_goal_spend_returns_typed_mismatch_without_receipt(
 
 def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> None:
     project, runtime, registry_path = _write_fixture(tmp_path)
+    _initialize_fixture_authority(project, runtime)
 
     guard_rc, guard = _run_cli(
         registry_path,
@@ -5139,10 +5140,31 @@ def test_begin_turn_rejects_a_non_receipt_runtime_profile(tmp_path: Path) -> Non
     # Kiro CLI, ZCode, agy, Gemini CLI, Cursor and custom runners all land on
     # generic_cli and mint their own identity instead.
     assert guard["reason"] == (
-        "--begin-turn requires runtime-profile codex_app_heartbeat, "
-        "trae_app, or codex_app_ssh_goal; every other host starts its turn by "
-        "passing its own --turn-instance-id"
+        "--begin-turn requires runtime-profile antigravity_app, "
+        "codex_app_heartbeat, codex_app_ssh_goal, or trae_app; every other "
+        "host starts its turn by passing its own --turn-instance-id"
     )
+    from loopx.control_plane.scheduler.execution_context import (
+        GUIDED_START_TURN_RUNTIME_PROFILES,
+    )
+
+    for allowed in GUIDED_START_TURN_RUNTIME_PROFILES:
+        assert allowed.value in guard["reason"]
+
+    antigravity_rc, antigravity_guard = _run_cli(
+        registry_path,
+        runtime,
+        "quota",
+        "should-run",
+        "--runtime-profile",
+        "antigravity_app",
+        "--goal-id",
+        GOAL_ID,
+        "--agent-id",
+        AGENT_ID,
+        "--begin-turn",
+    )
+    assert antigravity_rc == 0, antigravity_guard
 
 
 @pytest.mark.parametrize(
