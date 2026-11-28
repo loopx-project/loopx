@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import os
@@ -10,7 +11,10 @@ import subprocess
 
 SCHEMA = "loopx_ci_job_plan_v1"
 ROOT_DOCS = {"README.md", "README.zh-CN.md", "README.ja.md", "CHANGELOG.md", "CONTRIBUTING.md"}
-POLICY_PATHS = ("scripts/ci/impact_plan.py", "scripts/ci/review_gate.py", ".github/workflows/python-tests.yml")
+POLICY_PATHS = (
+    "scripts/ci/impact_plan.py", "scripts/ci/pull_request_diff.py",
+    "scripts/ci/review_gate.py", ".github/workflows/python-tests.yml",
+)
 OUTPUTS = (
     "core_tests",
     "backend_tests",
@@ -95,6 +99,14 @@ class Change:
     path: str
 
 
+@dataclass(frozen=True)
+class Comparison:
+    base_sha: str
+    head_sha: str
+    merge_base_sha: str
+    changes: list[Change]
+
+
 def is_document(path: str) -> bool:
     return path in ROOT_DOCS or (path.startswith("docs/") and PurePosixPath(path).suffix == ".md")
 
@@ -157,7 +169,11 @@ def job_flags(kind: str, *, presentation: bool = False) -> dict[str, bool]:
 
 
 def git(*args: str) -> bytes:
-    return subprocess.check_output(["git", *args])
+    return subprocess.check_output(
+        ["git", "--no-replace-objects", *args],
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0"},
+        stderr=subprocess.PIPE, timeout=30,
+    )
 
 
 def revision(ref: str) -> str:
@@ -165,10 +181,26 @@ def revision(ref: str) -> str:
 
 
 def diff_changes(base: str, head: str) -> list[Change]:
-    raw = git("diff", "--name-status", "--no-renames", "-z", base, head, "--").split(b"\0")
+    raw = git(
+        "diff", "--no-ext-diff", "--no-textconv", "--name-status", "--no-renames",
+        "-z", base, head, "--",
+    ).split(b"\0")
     if raw[-1] != b"" or (len(raw) - 1) % 2:
         raise ValueError("malformed NUL-delimited Git changes")
     return [Change(os.fsdecode(raw[i]), os.fsdecode(raw[i + 1])) for i in range(0, len(raw) - 1, 2)]
+
+
+def merge_base(base: str, head: str) -> str:
+    bases = git("merge-base", "--all", base, head).decode("ascii").splitlines()
+    if len(bases) != 1:
+        raise ValueError("Git comparison requires one unambiguous merge base")
+    return bases[0]
+
+
+def compare(base: str, head: str) -> Comparison:
+    base_sha, head_sha = revision(base), revision(head)
+    ancestor = merge_base(base_sha, head_sha)
+    return Comparison(base_sha, head_sha, ancestor, diff_changes(ancestor, head_sha))
 
 
 def trusted_policy(base: str, head: str) -> bool:
@@ -203,20 +235,29 @@ def declared_python_shards(checkout_sha: str) -> int:
     return len(shards)
 
 
-def plan(base: str, head: str, *, pull_request: bool = True, force_full: bool = False) -> dict:
-    base_sha, head_sha = revision(base), revision(head)
-    merge_base = git("merge-base", base_sha, head_sha).decode().strip()
-    changes = diff_changes(merge_base, head_sha)
+def plan(
+    base: str,
+    head: str,
+    *,
+    pull_request: bool = True,
+    force_full: bool = False,
+    verify_pr_diff: Callable[[Comparison], str | None] | None = None,
+) -> dict:
+    comparison = compare(base, head)
+    base_sha, head_sha, changes = comparison.base_sha, comparison.head_sha, comparison.changes
+    unverified = verify_pr_diff(comparison) if verify_pr_diff is not None else None
     kind, reason = candidate(changes, pull_request=pull_request)
     presentation = kind in {"presentation", "mixed"}
     policy_change = any(item.path.startswith("scripts/ci/") or item.path == POLICY_PATHS[-1] for item in changes)
-    if kind != "full":
+    if kind != "full" and unverified is None:
         for item in changes:
-            for sha in (merge_base, head_sha):
+            for sha in (comparison.merge_base_sha, head_sha):
                 mode = git("ls-tree", "--format=%(objectmode)", sha, "--", item.path).decode().strip()
                 if mode and mode not in {"100644", "100755"}:
                     kind, reason = "full", "symlinks and nonregular Git objects cannot grant an exemption"
-    if force_full:
+    if unverified is not None:
+        kind, reason = "full", f"{unverified}; run full qualification"
+    elif force_full:
         kind, reason = "full", "explicit force-full override"
     elif kind in {"presentation", "backend", "mixed"} and not trusted_policy(base_sha, head_sha):
         kind, reason = "full", "CI exemption policy is not already trusted on the target branch"
@@ -229,12 +270,15 @@ def plan(base: str, head: str, *, pull_request: bool = True, force_full: bool = 
         if flags["backend_tests"]
         else "no Python coverage claim"
     )
-    return {"schema_version": SCHEMA, "base_sha": base_sha, "head_sha": head_sha,
-            "merge_base_sha": merge_base, "checkout_sha": checkout_sha, "change_kind": kind,
+    packet = {"schema_version": SCHEMA, "base_sha": base_sha, "head_sha": head_sha,
+            "merge_base_sha": comparison.merge_base_sha, "checkout_sha": checkout_sha, "change_kind": kind,
             "force_full": force_full, "reason": reason, **flags,
             "changes": [{"status": item.status, "path": item.path} for item in changes],
             "coverage_scope": coverage_scope,
             "python_shards": declared_python_shards(checkout_sha) if flags["python_tests"] else 0}
+    if verify_pr_diff is not None:
+        packet["published_diff"] = {"verified": unverified is None, "unavailable_reason": unverified}
+    return packet
 
 
 def write_plan(packet: dict, output: str) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -87,7 +88,8 @@ def _run_git_name_only(repo_root: Path, args: list[str]) -> dict[str, Any]:
     # `core.quotePath` escapes non-ASCII pathnames, and a repository may turn
     # that off, at which point a path can carry U+0085/U+2028/U+2029 raw and
     # `str.splitlines()` splits one path into two.
-    command = ["git", "-C", str(repo_root), *args, "-z"]
+    subcommand, *arguments = args
+    command = ["git", "-C", str(repo_root), subcommand, "-z", *arguments, "--"]
     completed = subprocess.run(
         command,
         check=False,
@@ -133,6 +135,69 @@ def _resolve_git_repo_root(candidate: Path) -> Path:
     return candidate.resolve()
 
 
+def _run_git_text(repo_root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", "--no-replace-objects", "-C", str(repo_root), *args],
+        check=False,
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0"},
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _failed_base_source(
+    completed: subprocess.CompletedProcess[str],
+    *,
+    returncode: int | None = None,
+    path_error: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "returncode": completed.returncode if returncode is None else returncode,
+        "command": list(completed.args),
+        "changed_files": [],
+        "undecodable_path_count": 0,
+        "path_error": path_error,
+        "stderr_tail": completed.stderr[-800:],
+    }
+
+
+def _resolve_base_diff_source(
+    repo_root: Path, base_ref: str
+) -> tuple[dict[str, Any], str | None]:
+    base_rev = _run_git_text(
+        repo_root, ["rev-parse", "--verify", "--end-of-options", f"{base_ref}^{{commit}}"]
+    )
+    if base_rev.returncode != 0:
+        return _failed_base_source(base_rev), None
+    head_rev = _run_git_text(
+        repo_root, ["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"]
+    )
+    if head_rev.returncode != 0:
+        return _failed_base_source(head_rev), None
+    base_sha = base_rev.stdout.strip()
+    head_sha = head_rev.stdout.strip()
+    merge_bases = _run_git_text(repo_root, ["merge-base", "--all", base_sha, head_sha])
+    bases = [line.strip() for line in merge_bases.stdout.splitlines() if line.strip()]
+    if merge_bases.returncode != 0 or not bases:
+        return _failed_base_source(merge_bases, returncode=merge_bases.returncode or 1), None
+    if len(bases) > 1:
+        detail = (
+            f"Git comparison of {base_ref!r} and HEAD requires one unambiguous merge base "
+            f"(found {len(bases)}); specify an explicit --git-diff-base with a single common ancestor."
+        )
+        return _failed_base_source(merge_bases, returncode=1, path_error=detail), detail
+    return (
+        _run_git_name_only(
+            repo_root, ["diff", "--name-only", "--end-of-options", f"{bases[0]}..{head_sha}"]
+        ),
+        None,
+    )
+
+
 def collect_git_diff_changed_files(
     *,
     repo_root: Path,
@@ -141,8 +206,9 @@ def collect_git_diff_changed_files(
     """Collect committed, staged, unstaged, and untracked paths for canary selection."""
 
     base_ref = (base_ref or "origin/main").strip() or "origin/main"
+    base_source, base_error = _resolve_base_diff_source(repo_root, base_ref)
     sources = {
-        "base": _run_git_name_only(repo_root, ["diff", "--name-only", f"{base_ref}...HEAD"]),
+        "base": base_source,
         "staged": _run_git_name_only(repo_root, ["diff", "--name-only", "--cached"]),
         "unstaged": _run_git_name_only(repo_root, ["diff", "--name-only"]),
         "untracked": _run_git_name_only(repo_root, ["ls-files", "--others", "--exclude-standard"]),
@@ -173,21 +239,30 @@ def collect_git_diff_changed_files(
         int(source.get("undecodable_path_count") or 0)
         for source in sources.values()
     )
-    path_error = (
+    error = (
         "Git returned changed pathnames that are not valid UTF-8; canary "
         "cannot preserve their identity in the selector output"
         if undecodable_path_count
         else None
     )
+    if error is None and not sources["base"]["ok"]:
+        error = base_error or (
+            f"Git could not compare {base_ref!r} with HEAD. Fetch the target branch "
+            "or set --git-diff-base to a revision with shared history."
+        )
+    elif error is None and warnings:
+        failed = ", ".join(warning["source"] for warning in warnings)
+        error = f"Git could not read changed paths from {failed}; selection is incomplete."
+    selected = changed_files if error is None else []
     return {
-        "ok": bool(successful_sources) and path_error is None,
+        "ok": error is None,
         "base_ref": base_ref,
         "repo_root": str(repo_root),
-        "changed_files": [] if path_error is not None else changed_files,
-        "changed_file_count": len(changed_files),
+        "changed_files": selected,
+        "changed_file_count": len(selected),
         "successful_sources": successful_sources,
         "undecodable_path_count": undecodable_path_count,
-        **({"error": path_error} if path_error else {}),
+        **({"error": error} if error else {}),
         "warnings": warnings,
     }
 

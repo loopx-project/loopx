@@ -16,6 +16,21 @@ and runs heavyweight cross-OS, full 6-shard Python/coverage, Node compatibility,
 Stage 2C, and release/package dry-run matrices on Nightly `schedule`, `push` to
 `main`, `merge_group`, `workflow_dispatch`, CI-policy/manifest changes, and `ci:full`.
 
+For open PRs, `changes` verifies the complete published PR file inventory
+against the Git comparison before granting exemptions. It rechecks PR identity
+after reading all pages and allows base-branch advances that keep the same merge
+base. A confirmed difference or comparison change fails classification and
+therefore `merge-gate`. Unavailable or capped file data selects full
+qualification and records why. CI Maintenance runs the same verification from
+its pinned trusted workflow checkout using read-only GitHub access. Fork
+commits are fetched as Git objects for comparison.
+
+开放 PR 的 `changes` 先核对已发布的完整文件清单与 Git 比较，再决定能否免跑。
+分页结束后重新确认 PR 身份，目标分支推进但 merge base 一致时继续。确认清单
+或比较范围不一致会使分类失败，并阻止 `merge-gate`。文件数据不可用或达到 API
+上限时执行全量检查并记录原因。CI Maintenance 在固定的可信 workflow checkout
+运行同一核对，GitHub 权限仅为只读。Fork 提交以 Git 对象的形式用于比较。
+
 | Whole PR / Event (`change_kind`) | Backend static/TS/contracts (`backend_tests`) | Browser / UI (`frontend_tests`, `presentation_tests`) | Node compat (`compat_tests`) | 6-shard Python / Windows (`python_tests`) | Stage 2C (`stage2c_tests`) |
 | --- | --- | --- | --- | --- | --- |
 | Allowlisted root Markdown or `docs/**/*.md` (`docs`) | Skip | Skip | Skip | Skip | Skip |

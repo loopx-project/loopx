@@ -5,7 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from impact_plan import Change, OUTPUTS, candidate, job_flags, plan, write_plan
+from impact_plan import Change, OUTPUTS, candidate, compare, job_flags, plan, write_plan
+from pull_request_diff import PullRequestDiff
 
 JOB_OUTPUT = {
     "checks": "core_tests",
@@ -65,11 +66,38 @@ def main() -> None:
     classify.add_argument("--plan")
     classify.add_argument("--non-pr", action="store_true")
     classify.add_argument("--force-full", action="store_true")
+    classify.add_argument("--verify-pr-diff", action="store_true")
+    sub.add_parser("inspect-pr-diff")
     sub.add_parser("verify")
     sub.add_parser("verify-core")
     args = parser.parse_args()
+    if args.command == "inspect-pr-diff":
+        pr = PullRequestDiff.from_workflow()
+        pr.fetch_event_commits()
+        comparison = compare(pr.base_sha, pr.head_sha)
+        try:
+            unverified = pr.verify(comparison)
+        except ValueError as exc:
+            parser.exit(1, f"{exc}\n")
+        if unverified:
+            print(f"::warning::{unverified}. CI must use full qualification.")
+        else:
+            print(f"Verified the published PR inventory against {comparison.merge_base_sha}...{pr.head_sha}.")
+        return
     if args.command == "classify":
-        packet = plan(args.base, args.head, pull_request=not args.non_pr, force_full=args.force_full)
+        pr = None
+        if args.verify_pr_diff:
+            if args.non_pr:
+                parser.error("--verify-pr-diff requires a pull request")
+            pr = PullRequestDiff.from_workflow()
+            pr.fetch_event_commits()
+        try:
+            packet = plan(
+                args.base, args.head, pull_request=not args.non_pr,
+                force_full=args.force_full, verify_pr_diff=pr.verify if pr is not None else None,
+            )
+        except ValueError as exc:
+            parser.exit(1, f"{exc}\n")
         if args.plan:
             write_plan(packet, args.plan)
             print(f"change_kind={packet['change_kind']}")

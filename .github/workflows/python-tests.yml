@@ -48,6 +48,9 @@ jobs:
     if: github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.action != 'closed')
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       core_tests: ${{ steps.classify.outputs.core_tests }}
       backend_tests: ${{ steps.classify.outputs.backend_tests }}
@@ -61,6 +64,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -81,13 +85,14 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           CHECKOUT_SHA: ${{ github.sha }}
           FORCE_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          extra=()
-          if [[ "$FORCE_FULL" == true ]]; then extra+=(--force-full); fi
+          set --
+          if [[ "$FORCE_FULL" == true ]]; then set -- --force-full; fi
           if [[ "$EVENT_NAME" == pull_request ]]; then
-            python scripts/ci/review_gate.py classify --base "$BASE_SHA" --head "$HEAD_SHA" --plan impact-plan.json "${extra[@]}" >> "$GITHUB_OUTPUT"
+            python scripts/ci/review_gate.py classify --base "$BASE_SHA" --head "$HEAD_SHA" --verify-pr-diff --plan impact-plan.json "$@" >> "$GITHUB_OUTPUT"
           else
             python scripts/ci/review_gate.py classify --base "$CHECKOUT_SHA" --head "$CHECKOUT_SHA" --non-pr --plan impact-plan.json >> "$GITHUB_OUTPUT"
           fi
@@ -99,6 +104,8 @@ jobs:
               summary.write("## CI job exemptions\n\n")
               summary.write(f"Change kind: **{plan['change_kind']}**; Python shards: **{plan['python_shards']}**.\n\n")
               summary.write(plan['reason'] + ".\n\n")
+              if plan.get("published_diff", {}).get("verified"):
+                  summary.write(f"Published files match Git comparison `{plan['merge_base_sha']}...{plan['head_sha']}`.\n\n")
               summary.write(
                   f"Backend: {plan['backend_tests']}; Frontend browser: {plan['frontend_tests']}; "
                   f"Compat: {plan['compat_tests']}; Python: {plan['python_tests']}; "
