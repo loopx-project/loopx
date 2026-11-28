@@ -2821,6 +2821,34 @@ theorem chat_noop_compaction_marks_only_the_observed_source (source current : Li
     acceptsChatCompactionMarker (chatCompactionMarker source current false none) current = false := by
   simp [chatCompactionMarker, acceptsChatCompactionMarker, different]
 
+abbrev ChatAppendIdentity := Nat × Nat
+
+/- The compactor records the identities of removed durable rows in the
+   replacement journal itself. A retry observes only that journal's live
+   rows and receipts, with live evidence taking precedence. -/
+def chatDurableAppendSequence (live compacted : List ChatAppendIdentity)
+    (appendId : Nat) : Option Nat :=
+  ((live ++ compacted).find? fun entry => entry.1 == appendId).map Prod.snd
+
+def nextChatAppendSequence (liveLast compactedThrough : Nat) : Nat :=
+  max liveLast compactedThrough + 1
+
+theorem chat_compacted_append_retry_keeps_the_recorded_sequence (appendId sequence : Nat) :
+    chatDurableAppendSequence [] [(appendId, sequence)] appendId = some sequence := by
+  simp [chatDurableAppendSequence]
+
+theorem chat_compacted_sequence_does_not_acknowledge_a_different_append_id :
+    chatDurableAppendSequence [(3, 2)] [(7, 1)] 9 = none := by decide
+
+theorem chat_live_append_evidence_takes_precedence_over_a_compacted_receipt :
+    chatDurableAppendSequence [(7, 3)] [(7, 1)] 7 = some 3 := by decide
+
+theorem chat_a_second_compaction_retains_the_first_append_identity :
+    chatDurableAppendSequence [] ([(8, 3)] ++ [(7, 1)]) 7 = some 1 := by decide
+
+theorem chat_fully_compacted_journal_allocates_above_the_sequence_floor (through : Nat) :
+    nextChatAppendSequence 0 through = through + 1 := by simp [nextChatAppendSequence]
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3144,5 +3172,10 @@ theorem chat_noop_compaction_marks_only_the_observed_source (source current : Li
 #print axioms chat_compaction_marker_does_not_cover_a_replacement_after_verified_publication
 #print axioms chat_unverified_compaction_output_is_not_marked
 #print axioms chat_noop_compaction_marks_only_the_observed_source
+#print axioms chat_compacted_append_retry_keeps_the_recorded_sequence
+#print axioms chat_compacted_sequence_does_not_acknowledge_a_different_append_id
+#print axioms chat_live_append_evidence_takes_precedence_over_a_compacted_receipt
+#print axioms chat_a_second_compaction_retains_the_first_append_identity
+#print axioms chat_fully_compacted_journal_allocates_above_the_sequence_floor
 
 end StewardPrSignalPagination

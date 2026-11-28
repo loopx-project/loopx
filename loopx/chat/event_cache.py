@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import uuid
 
 from ..file_lock import exclusive_file_lock
-from .journal import decode_chat_journal
+from .journal import CompactedEventAppends, decode_chat_event_journal
 
 EventKey = tuple[str, str]
 EventFileRevision = tuple[int, int, int, int]
@@ -42,13 +42,16 @@ def _read_event_bytes(path: Path) -> tuple[bytes, EventRevision]:
     return raw_bytes, before
 
 
-def _read_event_snapshot(path: Path, *, strict: bool = False) -> tuple[EventRows, EventRevision]:
+def _read_event_snapshot(
+    path: Path, *, strict: bool = False,
+) -> tuple[EventRows, EventRevision, CompactedEventAppends | None]:
     raw_bytes, revision = _read_event_bytes(path)
-    return decode_chat_journal(raw_bytes.split(b"\n"), strict=strict), revision
+    rows, compacted = decode_chat_event_journal(raw_bytes.split(b"\n"), strict=strict)
+    return rows, revision, compacted
 
 
-def _read_compactable_event_rows(path: Path) -> tuple[EventRows, EventRevision]:
-    rows, revision = _read_event_snapshot(path, strict=True)
+def _read_compactable_event_rows(path: Path) -> tuple[EventRows, EventRevision, CompactedEventAppends | None]:
+    rows, revision, compacted = _read_event_snapshot(path, strict=True)
     previous_sequence = 0
     for row in rows:
         sequence = row.get("sequence")
@@ -56,32 +59,37 @@ def _read_compactable_event_rows(path: Path) -> tuple[EventRows, EventRevision]:
         if type(sequence) is not int or sequence <= previous_sequence or not isinstance(kind, str) or not kind:
             raise ValueError("invalid Chat event order or kind")
         previous_sequence = sequence
-    return rows, revision
+    return rows, revision, compacted
 
 
-def _durable_by_append_id(rows: EventRows) -> dict[str, dict[str, Any]]:
-    return {
-        row["_append_id"]: row
-        for row in rows
-        if isinstance(row.get("_append_id"), str)
-    }
+def _durable_by_append_id(
+    rows: EventRows, compacted: CompactedEventAppends | None,
+) -> dict[str, dict[str, Any]]:
+    receipts = {
+        append_id: {"event_id": str(sequence), "sequence": sequence}
+        for append_id, sequence in compacted.sequences.items()
+    } if compacted is not None else {}
+    receipts.update((row["_append_id"], row) for row in rows if isinstance(row.get("_append_id"), str))
+    return receipts
 
 
 class ChatEventCache:
     def __init__(self, lock: threading.RLock) -> None:
         self._lock = lock
-        self._entries: dict[EventKey, tuple[EventRevision, EventRows]] = {}
+        self._entries: dict[EventKey, tuple[EventRevision, EventRows, CompactedEventAppends | None]] = {}
         self._finished: dict[EventKey, tuple[int, int]] = {}
 
-    def get(self, key: EventKey, revision: EventRevision) -> EventRows | None:
+    def get(self, key: EventKey, revision: EventRevision) -> tuple[EventRows, CompactedEventAppends | None] | None:
         with self._lock:
             entry = self._entries.get(key)
-            return entry[1] if entry is not None and entry[0] == revision else None
+            return (entry[1], entry[2]) if entry is not None and entry[0] == revision else None
 
-    def put(self, key: EventKey, revision: EventRevision, rows: EventRows) -> None:
+    def put(
+        self, key: EventKey, revision: EventRevision, rows: EventRows, compacted: CompactedEventAppends | None = None,
+    ) -> None:
         with self._lock:
             self._finished.pop(key, None)
-            self._entries[key] = (revision, rows)
+            self._entries[key] = (revision, rows, compacted)
 
     def drop(self, key: EventKey) -> None:
         with self._lock:
@@ -115,16 +123,20 @@ class ChatEventStreamMixin:
         def _event_path(self, session_id: str, turn_id: str) -> Path: ...
         def _event_flush_lock(self, key: EventKey) -> threading.Lock: ...
 
-    def _event_rows_locked(self, session_id: str, turn_id: str) -> tuple[EventRows, EventRevision]:
+    def _event_rows_locked(
+        self, session_id: str, turn_id: str,
+    ) -> tuple[EventRows, EventRevision, CompactedEventAppends | None]:
         key = (session_id, turn_id)
         path = self._event_path(session_id, turn_id)
         revision = self._event_revision(path)
-        rows = self._event_cache.get(key, revision)
-        if rows is None:
-            rows, revision = _read_event_snapshot(path)
-            if revision is not None:
-                self._event_cache.put(key, revision, rows)
-        return rows, revision
+        cached = self._event_cache.get(key, revision)
+        if cached is not None:
+            rows, compacted = cached
+            return rows, revision, compacted
+        rows, revision, compacted = _read_event_snapshot(path)
+        if revision is not None:
+            self._event_cache.put(key, revision, rows, compacted)
+        return rows, revision, compacted
 
     @staticmethod
     def _event_revision(path: Path) -> EventRevision:
@@ -177,19 +189,21 @@ class ChatEventStreamMixin:
                         try:
                             uncertain = any("sequence" in event for event, _ in pending)
                             if require_clean_source:
-                                rows, source_revision = _read_compactable_event_rows(path)
+                                rows, source_revision, compacted = _read_compactable_event_rows(path)
                             elif uncertain:
-                                rows, source_revision = _read_event_snapshot(path)
+                                rows, source_revision, compacted = _read_event_snapshot(path)
                             else:
-                                rows, source_revision = self._event_rows_locked(session_id, turn_id)
+                                rows, source_revision, compacted = self._event_rows_locked(session_id, turn_id)
                             # A failed append may already have persisted all or part of
                             # its batch. Match only this store's stable append ids; two
                             # otherwise identical events are still separate writes.
-                            durable = _durable_by_append_id(rows) if uncertain else {}
+                            durable = _durable_by_append_id(rows, compacted) if uncertain else {}
                             # Allocate after the last persisted sequence under the same
                             # file lock. Compaction may leave gaps; another writer may
                             # have appended after a partial failed batch.
                             sequence = int(rows[-1].get("sequence") or 0) if rows else 0
+                            if compacted is not None:
+                                sequence = max(sequence, compacted.through)
                             to_append: EventRows = []
                             for event, append_id in pending:
                                 committed = durable.get(append_id)
@@ -208,7 +222,9 @@ class ChatEventStreamMixin:
                                 and source_revision == _event_revision_from_stat(written_revision[0])
                                 and not any(event["kind"] in _store.TERMINAL_EVENT_KINDS for event, _ in pending)
                             ):
-                                self._event_cache.put(key, _event_revision_from_stat(written_revision[1]), [*rows, *to_append])
+                                self._event_cache.put(
+                                    key, _event_revision_from_stat(written_revision[1]), [*rows, *to_append], compacted,
+                                )
                             else:
                                 self._event_cache.drop(key)
                         except Exception as exc:
@@ -217,8 +233,9 @@ class ChatEventStreamMixin:
                             # Confirm visible writes before releasing the file lock:
                             # another store may compact old events before our retry.
                             try:
-                                written = _durable_by_append_id(_store._read_jsonl(path, raise_on_error=True))
-                            except OSError:
+                                observed, _, receipts = _read_event_snapshot(path)
+                                written = _durable_by_append_id(observed, receipts)
+                            except (OSError, ValueError):
                                 pass  # Keep all uncertain events for a later retry.
                             else:
                                 remaining = []
@@ -253,19 +270,21 @@ class ChatEventStreamMixin:
         key = (session_id, turn_id)
         path = self._event_path(session_id, turn_id)
         revision = self._event_revision(path)
-        rows = self._event_cache.get(key, revision)
-        if rows is None:
+        cached = self._event_cache.get(key, revision)
+        if cached is None:
             with exclusive_file_lock(path, agent_id="loopx-chat", operation="read_chat_events"):
                 try:
-                    rows, _ = self._event_rows_locked(session_id, turn_id)
-                except OSError:
+                    rows, _, compacted = self._event_rows_locked(session_id, turn_id)
+                except (OSError, ValueError):
                     self._event_cache.drop(key)
                     return []
+        else:
+            rows, compacted = cached
         # Relies on the sequence ordering maintained by flush_events and compaction;
         # gaps are valid, but inserting or rewriting rows must preserve that order.
         start = bisect_right(rows, after, key=lambda row: int(row.get("sequence") or 0))
         result = rows[start:]
-        if rows and rows[-1].get("kind") in _store.TERMINAL_EVENT_KINDS:
+        if compacted is not None or (rows and rows[-1].get("kind") in _store.TERMINAL_EVENT_KINDS):
             self._event_cache.retain_terminal(key, rows)
         return [
             {field: value for field, value in row.items() if field != "_append_id"}
@@ -339,14 +358,22 @@ class ChatEventStreamMixin:
                     continue
                 with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
                     try:
-                        rows, revision = _read_compactable_event_rows(event_path)
+                        rows, revision, receipts = _read_compactable_event_rows(event_path)
                     except (OSError, ValueError):
                         continue
-                    retained = [row for row in rows if row["kind"] not in _store.REPLAY_ONLY_EVENT_KINDS]
+                    retained: EventRows = []
+                    sequences = dict(receipts.sequences) if receipts is not None else {}
+                    for row in rows:
+                        if row["kind"] not in _store.REPLAY_ONLY_EVENT_KINDS:
+                            retained.append(row)
+                        elif isinstance(append_id := row.get("_append_id"), str):
+                            sequences[append_id] = row["sequence"]
                     self._event_cache.drop((session_id, turn_id))
                     if len(retained) != len(rows):
+                        through = max(rows[-1]["sequence"], receipts.through if receipts is not None else 0)
+                        record = CompactedEventAppends(through, sequences).record()
                         try:
-                            revision = _store._replace_jsonl(event_path, retained, expected_revision=revision)
+                            revision = _store._replace_jsonl(event_path, [record, *retained], expected_revision=revision)
                         except _store.ChatJournalRevisionChanged:
                             continue
                         compacted += 1

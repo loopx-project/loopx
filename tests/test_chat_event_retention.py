@@ -395,6 +395,70 @@ def test_failed_flush_keeps_uncertain_events_if_locked_readback_fails(
     assert event["sequence"] == 1
 
 
+@pytest.mark.parametrize("durable", [True, False], ids=["compacted-append", "unwritten-append"])
+def test_uncertain_append_retry_matches_compaction_receipts_by_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, durable: bool,
+) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    _, path = _write_completed_turn(tmp_path, with_events=False)
+    key = ("session", "turn")
+    pending = store.append_event(*key, kind="assistant.delta", payload={"text": "pending"}, buffered=True)
+    original_append, original_open = chat_store._append_jsonl_rows, Path.open
+    readback_fault = False
+
+    def lose_result(target: Path, rows: list[dict], **kwargs):
+        nonlocal readback_fault
+        if durable:
+            original_append(target, rows, **kwargs)
+        readback_fault = True
+        raise OSError("append result unavailable")
+
+    def lose_readback(target: Path, mode: str = "r", *args, **kwargs):
+        nonlocal readback_fault
+        if target == path and mode == "rb" and readback_fault:
+            readback_fault = False
+            raise OSError("readback unavailable")
+        return original_open(target, mode, *args, **kwargs)
+
+    with monkeypatch.context() as boundary:
+        boundary.setattr(chat_store, "_append_jsonl_rows", lose_result)
+        boundary.setattr(Path, "open", lose_readback)
+        with pytest.raises(OSError, match="append result unavailable"):
+            store.flush_events(*key)
+    assert not readback_fault
+    assert pending["sequence"] == 1
+
+    other = ChatSessionStore(tmp_path, startup_maintenance=False)
+    if not durable:
+        other.append_event(*key, kind="assistant.delta", payload={"text": "independent event"})
+    other.append_event(*key, kind="turn.completed", payload={})
+    assert other.compact_completed_events() == 1
+    assert [row["sequence"] for row in other.events_after(*key, None)] == [2]
+
+    assert store.flush_events(*key) == 1
+    assert store.flush_events(*key) == 0
+    replay = store.events_after(*key, None)
+    assert [row["sequence"] for row in replay] == ([2] if durable else [2, 3])
+    assert pending["sequence"] == (1 if durable else 3)
+
+
+def test_compacted_journal_keeps_the_sequence_floor_when_no_rows_remain(tmp_path: Path) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    _write_completed_turn(tmp_path, with_events=False)
+    key = ("session", "turn")
+    store.append_event(*key, kind="assistant.delta", payload={"text": "first"})
+    assert store.compact_completed_events() == 1
+    assert store.events_after(*key, None) == []
+    assert key in store._event_cache._finished
+
+    store.append_event(*key, kind="assistant.delta", payload={"text": "second"})
+    assert [row["sequence"] for row in store.events_after(*key, "1")] == [2]
+    assert store.compact_completed_events() == 1
+    assert store.events_after(*key, None) == []
+    store.append_event(*key, kind="turn.completed", payload={})
+    assert [row["sequence"] for row in store.events_after(*key, "2")] == [3]
+
+
 def test_event_flush_retry_after_partial_batch_and_concurrent_writer(
     tmp_path: Path, monkeypatch,
 ) -> None:
