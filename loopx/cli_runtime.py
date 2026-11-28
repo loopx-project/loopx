@@ -79,10 +79,23 @@ _SELECTED_COMMANDS = _STATUS_COMMANDS | GLOBAL_READ_COMMANDS | PROJECT_LIFECYCLE
 	"history",
 }
 # Retired from Core-only suppression once Explore CLI ships via RESEARCH_DISTRIBUTION.
-_FULL_INSTALL_SELECTED_COMMANDS: frozenset[str] = frozenset()
+# Full-install selected commands bypass the eager full-CLI facade while
+# preserving standalone-core distribution checks and install-hint refusals.
+_WORKSPACE_COMMANDS = frozenset({"chat", "chat-endpoint", "dashboard"})
+_FULL_INSTALL_SELECTED_COMMANDS: frozenset[str] = frozenset(
+	{
+		"explore",
+		"canary",
+		"pr-review",
+		"benchmark",
+		"issue-fix",
+		"deepresearch",
+		"external-evidence",
+		"agent-turn-recall",
+	}
+) | _WORKSPACE_COMMANDS
 # Existing CLI vocabulary; this set chooses loading, not operation authority.
 _CAPABILITY_DISCOVERY_COMMANDS = frozenset({"list", "show"})
-_WORKSPACE_COMMANDS = frozenset({"chat", "chat-endpoint", "dashboard"})
 
 
 class LoopXArgumentParser(argparse.ArgumentParser):
@@ -469,7 +482,7 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 	elif command in PROJECT_LIFECYCLE_COMMANDS:
 		from .cli_commands.project_lifecycle import register_project_lifecycle_commands
 
-		register_project_lifecycle_commands(subparsers, add_subcommand_format)
+		register_project_lifecycle_commands(subparsers, add_subcommand_format, command=command)
 	elif command == "todo":
 		from .cli_commands.todo_registration import register_todo_command
 
@@ -578,6 +591,38 @@ def _build_selected_parser(command: str) -> LoopXArgumentParser:
 		from .cli_commands.explore import register_explore_commands
 
 		register_explore_commands(subparsers, add_subcommand_format)
+	elif command == "canary":
+		from .cli_commands.canary import register_canary_commands
+
+		register_canary_commands(subparsers, add_subcommand_format)
+	elif command == "pr-review":
+		from .cli_commands.pr_review import register_pr_review_command
+
+		register_pr_review_command(subparsers, add_subcommand_format)
+	elif command == "benchmark":
+		from .cli_commands.benchmark_dispatch import register_benchmark_command_group
+
+		register_benchmark_command_group(subparsers, add_subcommand_format)
+	elif command == "agent-turn-recall":
+		from .capabilities.agent_turn_recall.cli import register_agent_turn_recall_commands
+
+		register_agent_turn_recall_commands(subparsers, add_subcommand_format)
+	elif command == "issue-fix":
+		from .capabilities.issue_fix.cli import register_issue_fix_commands
+
+		register_issue_fix_commands(subparsers, add_subcommand_format)
+	elif command == "deepresearch":
+		from .cli_commands.deepresearch import register_deepresearch_command
+
+		register_deepresearch_command(subparsers, add_subcommand_format)
+	elif command == "external-evidence":
+		from .capabilities.external_research.cli import register_external_evidence_commands
+
+		register_external_evidence_commands(subparsers, add_subcommand_format)
+	elif command in _WORKSPACE_COMMANDS:
+		from .cli_commands.support_control_chat import register_chat_and_dashboard_commands
+
+		register_chat_and_dashboard_commands(subparsers, add_subcommand_format)
 	else:  # pragma: no cover - caller guards the private interface
 		raise ValueError(f"unsupported selected command: {command}")
 	return parser
@@ -683,7 +728,7 @@ def _dispatch_common_command(
 	if args.command in PROJECT_LIFECYCLE_COMMANDS:
 		from .cli_commands.project_lifecycle import handle_project_lifecycle_command
 		from .cli_rollout import append_cli_rollout_event
-		if args.command == "refresh-state" and getattr(args, "execution_loss_closeout", False):
+		if args.command != "refresh-state" or getattr(args, "execution_loss_closeout", False):
 			return handle_project_lifecycle_command(
 				args, registry_path=registry_path, print_payload=print_payload,
 				output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
@@ -697,12 +742,11 @@ def _dispatch_common_command(
 		return handle_project_lifecycle_command(
 			args, registry_path=registry_path, print_payload=print_payload,
 			output_format=output_format, append_cli_rollout_event=append_cli_rollout_event,
-			post_writeback_hooks=(periodic_report_post_writeback_hooks_for_goal(
+			post_writeback_hooks=periodic_report_post_writeback_hooks_for_goal(
 				registry_path=registry_path, goal_id=args.goal_id,
 				runtime_root=effective_runtime_root(registry_path, args.runtime_root),
-			) if args.command == "refresh-state" else ()),
-			post_writeback_projection_builder=(build_periodic_report_post_writeback_projection
-				if args.command == "refresh-state" else None),
+			),
+			post_writeback_projection_builder=build_periodic_report_post_writeback_projection,
 		)
 	if args.command == "manager-inbox":
 		from .cli_commands.manager_inbox import handle_manager_inbox
@@ -863,15 +907,27 @@ def _dispatch_common_command(
 				print_payload=print_payload,
 				append_cli_rollout_event=append_cli_rollout_event,
 			)
-		from .capabilities.periodic_report.post_writeback_hook import (
-			build_periodic_report_post_writeback_projection,
-			periodic_report_post_writeback_hooks_for_goal,
-		)
 		from .cli_commands.todo import handle_todo_command
 		from .cli_rollout import append_cli_rollout_event
-		from .paths import (
-			effective_runtime_root,
-		)
+		if args.todo_command == "complete":
+			from .capabilities.periodic_report.post_writeback_hook import (
+				build_periodic_report_post_writeback_projection,
+				periodic_report_post_writeback_hooks_for_goal,
+			)
+			from .paths import effective_runtime_root
+
+			post_writeback_hooks = periodic_report_post_writeback_hooks_for_goal(
+				registry_path=registry_path,
+				goal_id=args.goal_id,
+				runtime_root=effective_runtime_root(
+					registry_path,
+					args.runtime_root,
+				),
+			)
+			post_writeback_projection_builder = build_periodic_report_post_writeback_projection
+		else:
+			post_writeback_hooks = ()
+			post_writeback_projection_builder = None
 
 		return handle_todo_command(
 			args,
@@ -880,23 +936,8 @@ def _dispatch_common_command(
 			format_name=output_format(args),
 			print_payload=print_payload,
 			append_cli_rollout_event=append_cli_rollout_event,
-			post_writeback_hooks=(
-				periodic_report_post_writeback_hooks_for_goal(
-					registry_path=registry_path,
-					goal_id=args.goal_id,
-					runtime_root=effective_runtime_root(
-						registry_path,
-						args.runtime_root,
-					),
-				)
-				if args.todo_command == "complete"
-				else ()
-			),
-			post_writeback_projection_builder=(
-				build_periodic_report_post_writeback_projection
-				if args.todo_command == "complete"
-				else None
-			),
+			post_writeback_hooks=post_writeback_hooks,
+			post_writeback_projection_builder=post_writeback_projection_builder,
 		)
 	if args.command == "quota":
 		from .cli_commands.quota import handle_quota_command
@@ -1033,6 +1074,16 @@ def _dispatch_selected(args: argparse.Namespace, raw_argv: list[str]) -> int:
 			args, registry_path=registry_path,
 			registry_was_supplied=user_supplied_registry(raw_argv),
 			print_payload=print_payload, output_format=output_format,
+		)
+	elif args.command == "canary":
+		from .cli_commands.canary import handle_canary_command
+
+		result = handle_canary_command(
+			args,
+			registry_path=registry_path,
+			runtime_root_arg=args.runtime_root,
+			output_format=output_format,
+			print_payload=print_payload,
 		)
 	elif args.command == "deepresearch":
 		from .cli_commands.deepresearch import handle_deepresearch_command
@@ -1278,7 +1329,9 @@ def _run_command(command: str | None, raw_argv: list[str]) -> int:
 	if command == "history" and "loopx.cli" in sys.modules:
 		# An explicitly loaded facade keeps its existing handler/renderer bindings.
 		return _run_full_cli(raw_argv)
-	if command in _SELECTED_COMMANDS or (command == "explore" and not _standalone_core()):
+	if command in _SELECTED_COMMANDS or (
+		command in _FULL_INSTALL_SELECTED_COMMANDS and not _standalone_core()
+	):
 		try:
 			args = parse_cli_args(_build_selected_parser(command), raw_argv)
 		except _SelectedParseRejected:
