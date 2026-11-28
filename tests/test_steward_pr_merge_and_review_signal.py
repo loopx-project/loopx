@@ -3605,6 +3605,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from loopx.capabilities.native_chat.steward_monitor import StewardMonitor
     from loopx.capabilities.native_chat.steward_monitor_turns import steward_monitor_snapshot_path
+    from loopx.chat_store import _atomic_write_json
 
     isolate_sqlite_runtime(tmp_path, monkeypatch)
     _store, runtime, _provider, transport, binding, _capture, _ = steward
@@ -3734,7 +3735,12 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
 
         with monkeypatch.context() as mp:
             mp.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", wrapped)
-            obs, succ = monitor._collect_signal_monitor(actor, context, todo_row)
+            obs, succ, snapshot = monitor._collect_signal_monitor(actor, context, todo_row)
+        snapshot_path = steward_monitor_snapshot_path(
+            runtime.coordination_runtime_root, actor["goal_id"], todo_row["todo_id"],
+        )
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_json(snapshot_path, snapshot)
         return obs, succ, seen_cmds
 
     # 1. Pre-#9207 persisted hash parity + unscoped (signal_scope=None) monitor:
@@ -3855,7 +3861,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
             "loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
             lambda _repo: {"status": "ok", "repository": "org/repo", "items": [pre9207_item]},
         )
-        legacy_obs, legacy_succ = monitor._collect_signal_monitor(actor, context, no_age_todo_with_pre)
+        legacy_obs, legacy_succ, _ = monitor._collect_signal_monitor(actor, context, no_age_todo_with_pre)
     assert legacy_obs["observation_incomplete"] is False
     assert legacy_obs["result_hash"] == pre9207_no_age_obs["result_hash"]
     assert legacy_obs["material_change"] is False

@@ -2128,6 +2128,66 @@ theorem combined_scope_publishes_independent_change_without_recovery :
     unavailableRepositoryStep prior (some 10) false = (⟨[42], some 10, 2⟩, true, false) := by
   decide
 
+structure FencedRepositorySnapshot where
+  poll : Nat
+  resultHash : Nat
+  prs : List Nat
+  deriving DecidableEq
+
+structure SignalSnapshotSlots where
+  published : Option FencedRepositorySnapshot
+  pending : Option FencedRepositorySnapshot
+  deriving DecidableEq
+
+/- The receipt is available only after the quota index committed the original
+   poll. The poll number stands for the exact Goal, agent, Todo and Turn tuple. -/
+def selectCommittedSnapshot (slots : SignalSnapshotSlots) (receipt : Option (Nat × Nat)) :
+    Option FencedRepositorySnapshot :=
+  match slots.pending with
+  | some draft =>
+    if receipt = some (draft.poll, draft.resultHash) then some draft else slots.published
+  | none => slots.published
+
+def stageSignalSnapshot (slots : SignalSnapshotSlots) (receipt : Option (Nat × Nat))
+    (next : FencedRepositorySnapshot) : SignalSnapshotSlots :=
+  ⟨selectCommittedSnapshot slots receipt, some next⟩
+
+theorem rejected_poll_cannot_replace_a_published_snapshot
+    (previous candidate : FencedRepositorySnapshot) :
+    selectCommittedSnapshot ⟨some previous, some candidate⟩ none = some previous := by
+  simp [selectCommittedSnapshot]
+
+theorem matching_hash_from_another_poll_cannot_publish
+    (previous candidate : FencedRepositorySnapshot) (other : Nat) (different : other ≠ candidate.poll) :
+    selectCommittedSnapshot ⟨some previous, some candidate⟩ (some (other, candidate.resultHash)) =
+      some previous := by
+  simp [selectCommittedSnapshot, different]
+
+theorem matching_poll_with_another_hash_cannot_publish
+    (previous candidate : FencedRepositorySnapshot) (other : Nat) (different : other ≠ candidate.resultHash) :
+    selectCommittedSnapshot ⟨some previous, some candidate⟩ (some (candidate.poll, other)) =
+      some previous := by
+  simp [selectCommittedSnapshot, different]
+
+theorem a_lost_poll_reply_recovers_the_exact_committed_snapshot
+    (previous candidate : FencedRepositorySnapshot) :
+    selectCommittedSnapshot ⟨some previous, some candidate⟩ (some (candidate.poll, candidate.resultHash)) =
+      some candidate := by
+  simp [selectCommittedSnapshot]
+
+theorem staging_another_poll_keeps_a_recovered_commit
+    (previous recovered next : FencedRepositorySnapshot) :
+    let slots := stageSignalSnapshot ⟨some previous, some recovered⟩
+      (some (recovered.poll, recovered.resultHash)) next
+    selectCommittedSnapshot slots none = some recovered := by
+  simp [stageSignalSnapshot, selectCommittedSnapshot]
+
+theorem uncommitted_pr_43_does_not_replace_committed_pr_42 :
+    let previous : FencedRepositorySnapshot := ⟨1, 7, [42]⟩
+    let rejected : FencedRepositorySnapshot := ⟨2, 9, [43]⟩
+    selectCommittedSnapshot ⟨some previous, some rejected⟩ none = some previous := by
+  decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2365,5 +2425,11 @@ theorem combined_scope_publishes_independent_change_without_recovery :
 #print axioms unchanged_independent_sources_do_not_consume_a_poll
 #print axioms unavailable_repository_always_retains_the_trusted_prs
 #print axioms combined_scope_publishes_independent_change_without_recovery
+#print axioms rejected_poll_cannot_replace_a_published_snapshot
+#print axioms matching_hash_from_another_poll_cannot_publish
+#print axioms matching_poll_with_another_hash_cannot_publish
+#print axioms a_lost_poll_reply_recovers_the_exact_committed_snapshot
+#print axioms staging_another_poll_keeps_a_recovered_commit
+#print axioms uncommitted_pr_43_does_not_replace_committed_pr_42
 
 end StewardPrSignalPagination

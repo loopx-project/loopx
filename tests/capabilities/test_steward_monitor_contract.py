@@ -473,12 +473,12 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
         return list(open_todos)
 
     monkeypatch.setattr(monitor, "todos", counting_todos)
-    obs, args = monitor._collect_signal_monitor(actor, {}, todo)
+    obs, args, snap = monitor._collect_signal_monitor(actor, {}, todo)
     assert obs["material_change"] is False and args == [] and todo_read_count == 0
     snap_path = steward_monitor_snapshot_path(
         controller.coordination_runtime_root, "steward-agent-b2", "todo-sig-1"
     )
-    snap = json.loads(snap_path.read_text(encoding="utf-8"))
+    assert not snap_path.exists()
     assert "signal_scope" not in snap
     assert snap["repository_snapshot"]["items"] == [{"number": 11}, {"number": 12}]
 
@@ -490,11 +490,11 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
     bindings.core_responses["collaboration.steward.monitor.signal_observation"] = {
         "result_hash": "sig-changed", "material_change": True, "scoped_repository_items": [{"number": 11}],
     }
-    obs2, args2 = monitor._collect_signal_monitor(actor, {}, todo)
+    obs2, args2, snap2 = monitor._collect_signal_monitor(actor, {}, todo)
     assert obs2["material_change"] is True and todo_read_count == 1
     assert "--next-target-key" in args2 and f"{FOLLOWUP_TARGET_PREFIX}todo-sig-1" in args2
-    snap2 = json.loads(snap_path.read_text(encoding="utf-8"))
     assert snap2["signal_scope"] == saved_scope and snap2["repository_snapshot"]["items"] == [{"number": 11}]
+    assert not snap_path.exists()
 
     bindings.core_responses["collaboration.steward.monitor.signal_observation"] = {
         "result_hash": "sig-bad", "material_change": True, "scoped_repository_items": None,
@@ -508,7 +508,7 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
 
     # Pre-existing open follow-up suppresses duplicate --next-target-key emission.
     open_todos.append({"target_key": f"{FOLLOWUP_TARGET_PREFIX}todo-sig-1", "status": "open"})
-    _, args3 = monitor._collect_signal_monitor(actor, {}, todo)
+    _, args3, _ = monitor._collect_signal_monitor(actor, {}, todo)
     assert args3 == [] and todo_read_count == 2
 
     # Monkeypatching steward_monitor.native_command intercepts _rearm_exhausted_followup_if_needed.
@@ -556,16 +556,18 @@ def test_incomplete_repository_retains_snapshot_and_allows_new_inbox_followup(
     })
     verified_repository: dict[str, object] = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
     repository = verified_repository
+    snapshot_path = steward_monitor_snapshot_path(runtime_root, actor["goal_id"], "watch-1")
 
     def collect() -> tuple[dict[str, object], list[str]]:
-        return steward_monitor_signals.collect_signal_monitor(
+        observation, args, snapshot = steward_monitor_signals.collect_signal_monitor(
             _as_controller(controller), actor=actor, context={}, todo=todo,
             session_scope_for_actor=lambda _: [], read_todos=lambda _: [], observe_github_prs=lambda _: repository,
         )
+        _write(snapshot_path, snapshot)
+        return observation, args
 
     baseline, _ = collect()
     todo["result_hash"] = baseline["result_hash"]
-    snapshot_path = steward_monitor_snapshot_path(runtime_root, actor["goal_id"], "watch-1")
     baseline_snapshot = snapshot_path.read_bytes()
 
     source_id = "synthetic-source"

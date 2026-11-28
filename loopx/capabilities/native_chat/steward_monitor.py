@@ -22,7 +22,9 @@ from .steward_monitor_pump import (
     pump_managed_session_monitors as pump_managed_session_monitors,
     pump_steward_monitors as pump_steward_monitors,
 )
+from .steward_monitor_snapshots import commit_signal_snapshot
 from .steward_monitor_signals import (
+    SignalMonitorCollection,
     _accepts_backfill_comments as _accepts_backfill_comments,
     _github_repo_slug as _github_repo_slug,
     _signal_scope_uses_stalled_age as _signal_scope_uses_stalled_age,
@@ -239,6 +241,8 @@ class StewardMonitor:
         turn: Mapping[str, object],
         context: Mapping[str, object],
         argv: list[str],
+        *,
+        signal_snapshot: dict[str, object] | None = None,
     ) -> dict[str, object]:
         # Configuration and revocation use this original binding fence too.
         # Keep the final scoped admission and native write in one ordering;
@@ -278,7 +282,16 @@ class StewardMonitor:
                 or admitted["observed_scope_id"] != context["authorization_scope_id"]
             ):
                 raise ValueError("the portfolio scope changed after observation")
-            return self._native_poll(argv)
+            if signal_snapshot is None:
+                return self._native_poll(argv)
+            return commit_signal_snapshot(
+                self.controller.coordination_runtime_root,
+                self.controller.registry_path,
+                signal_snapshot,
+                agent_id=str(actor["agent_id"]),
+                turn_instance_id=str(request["turn_instance_id"]),
+                poll=lambda: self._native_poll(argv),
+            )
 
     def _native_poll(self, argv: Sequence[str]) -> dict[str, object]:
         """Use the native poll owner; a Chat observation is no heartbeat task."""
@@ -392,7 +405,7 @@ class StewardMonitor:
         actor: Mapping[str, object],
         context: Mapping[str, object],
         todo: Mapping[str, object],
-    ) -> tuple[dict[str, object], list[str]]:
+    ) -> SignalMonitorCollection:
         return collect_signal_monitor(
             self.controller,
             actor=actor,
@@ -453,6 +466,7 @@ class StewardMonitor:
         ]
         host._admit(_coerce_dict(request), turn=_coerce_dict(turn))
         successor_args: list[str] = []
+        signal_snapshot = None
         if actor.get("schema_version") == "loopx_managed_session_actor_v0":
             from .conversation_bindings import ChatConversationBindings
 
@@ -466,7 +480,7 @@ class StewardMonitor:
                 },
             )
         elif todo.get("target_key") != TARGET:
-            observation, successor_args = self._collect_signal_monitor(
+            observation, successor_args, signal_snapshot = self._collect_signal_monitor(
                 actor, context, todo
             )
         else:
@@ -516,6 +530,7 @@ class StewardMonitor:
                     *(["--material-change"] if observation["material_change"] else []),
                     *successor_args,
                 ],
+                **({"signal_snapshot": signal_snapshot} if signal_snapshot is not None else {}),
             )
         finally:
             self._release(actor, todo, lease)

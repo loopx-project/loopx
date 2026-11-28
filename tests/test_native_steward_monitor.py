@@ -1288,7 +1288,7 @@ def test_fresh_scope_includes_a_new_stopped_goal_without_reusing_or_rewriting_mo
     assert monitor.current(actor)["result_hash"] == first_hash
 
 
-@pytest.mark.parametrize("scope", ["repository-only", "combined"])
+@pytest.mark.parametrize("scope", ["repository-only", "combined", "rejected-poll", "lost-commit-reply"])
 def test_repository_unavailability_preserves_poll_and_recovery_scope(
     steward, tmp_path, monkeypatch, scope,
 ):
@@ -1370,7 +1370,7 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
                 if event["kind"] == "native_loopx.monitor_poll"]
 
     verified_repository = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
-    if scope == "combined":
+    if scope != "repository-only":
         from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, _root, _write, plan_request_publication
 
         monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
@@ -1381,7 +1381,38 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
         seed = finish(runtime, seed_turns[0])
         assert seed["status"] == "completed" and len(poll_events(seed)) == 1
         assert json.loads(snapshot_path.read_bytes())["repository_snapshot"] == verified_repository
-        outage_due = (datetime.fromisoformat(first_due) - timedelta(seconds=1)).isoformat()
+        trusted_repository = verified_repository
+        if scope in {"rejected-poll", "lost-commit-reply"}:
+            candidate_repository = {**verified_repository, "items": [{"number": 43}]}
+            verified_snapshot = snapshot_path.read_bytes()
+            committed = local_watch_row(runtime, actor, pr_todo_id)
+            candidate_due = (datetime.fromisoformat(first_due) - timedelta(seconds=1)).isoformat()
+            edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", candidate_due)
+            native_poll = StewardMonitor._native_poll
+
+            def lose_poll_response(owner, argv):
+                if scope == "lost-commit-reply":
+                    assert native_poll(owner, argv)["ok"] is True
+                raise RuntimeError("synthetic fault at the native poll response boundary")
+
+            with monkeypatch.context() as fault:
+                fault.setattr("loopx.capabilities.native_chat.steward_monitor._observe_github_repository_prs",
+                              lambda *_args, **_kwargs: candidate_repository)
+                fault.setattr(StewardMonitor, "_native_poll", lose_poll_response)
+                runtime._steward_monitor_next_check.clear()
+                attempts = pump_steward_monitors(runtime)
+                assert len(attempts) == 1 and attempts[0]["loopx_request"]["todo_id"] == pr_todo_id
+                failed_attempt = finish(runtime, attempts[0])
+            assert failed_attempt["status"] == "failed" and not poll_events(failed_attempt)
+            assert snapshot_path.read_bytes() == verified_snapshot
+            after_attempt = local_watch_row(runtime, actor, pr_todo_id)
+            if scope == "rejected-poll":
+                assert after_attempt["result_hash"] == committed["result_hash"]
+                assert after_attempt["last_checked_at"] == committed["last_checked_at"]
+            else:
+                assert after_attempt["result_hash"] != committed["result_hash"]
+                trusted_repository = candidate_repository
+        outage_due = (datetime.fromisoformat(first_due) - timedelta(seconds=2)).isoformat()
         edit_local_watch(runtime, actor, pr_todo_id, "--next-due-at", outage_due)
         receiver = {key: actor[key] for key in ("goal_id", "agent_id")}
         source = "synthetic-recovery-control"
@@ -1411,7 +1442,7 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
     assert len(initial) == 1 and initial[0]["loopx_request"]["todo_id"] == pr_todo_id
     first = finish(runtime, initial[0])
     assert calls["count"] == 1
-    if scope == "combined":
+    if scope != "repository-only":
         assert first["status"] == "completed"
         native = first["response"]["native_loopx"]
         assert not native["model_invoked"] and not native["quota_spent"]
@@ -1420,7 +1451,7 @@ def test_repository_unavailability_preserves_poll_and_recovery_scope(
         assert observed["repository_observation_incomplete"] is True
         assert observed["material_change"] is True and observed["result_hash"] != before["result_hash"]
         snapshot = json.loads(snapshot_path.read_bytes())
-        assert snapshot["repository_snapshot"] == verified_repository
+        assert snapshot["repository_snapshot"] == trusted_repository
         assert snapshot["repository_observation_incomplete"] is True
         assert snapshot["inbox_items"] == [{"request_id": request_id, "source_id": source}]
         assert snapshot["result_hash"] == observed["result_hash"]
