@@ -37,10 +37,10 @@ from .control_plane.chat_turn_acceptance import (
     plan_managed_turn_acceptance,
 )
 from .control_plane.collaboration.source_chat_observation import (
-    CHAT_SESSION_SCHEMA_VERSION,
-    CHAT_TURN_SCHEMA_VERSION,
-    _opaque_id,
-    _read_json,
+    CHAT_SESSION_SCHEMA_VERSION as CHAT_SESSION_SCHEMA_VERSION,
+    CHAT_TURN_SCHEMA_VERSION as CHAT_TURN_SCHEMA_VERSION,
+    _opaque_id as _opaque_id,
+    _read_json as _read_json,
 )
 from .file_lock import exclusive_file_lock, try_exclusive_file_lock, write_json_atomic
 
