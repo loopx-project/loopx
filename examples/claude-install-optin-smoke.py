@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "scripts" / "install-local.sh"
-INSTALLER = REPO_ROOT / "loopx" / "claude_goal_mode" / "scripts" / "install.py"
+INSTALLER = REPO_ROOT / "loopx" / "hosts" / "claude" / "scripts" / "install.py"
 
 
 def _run(cmd, **kw):

@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
-import {NativeGoalController, type BindingState, type NativeHost} from "../../loopx/zcode_goal_mode/runtime.ts";
-import type {NativeObservation, NativeRequest} from "../../loopx/zcode_goal_mode/contract.ts";
+import {NativeGoalController, type BindingState, type NativeHost} from "../../loopx/hosts/zcode/runtime.ts";
+import type {NativeObservation, NativeRequest} from "../../loopx/hosts/zcode/contract.ts";
 
 function fixture() {
   const request: NativeRequest = {action: "bind", project: "/project", registry: "/registry",
@@ -326,7 +326,7 @@ test("a legacy journal file is read back byte for byte and left unchanged by a r
   const {mkdtemp, readFile, rm} = await import("node:fs/promises");
   const {join} = await import("node:path");
   const {tmpdir} = await import("node:os");
-  const {atomicState, readState} = await import("../../loopx/zcode_goal_mode/runtime.ts");
+  const {atomicState, readState} = await import("../../loopx/hosts/zcode/runtime.ts");
   const dir = await mkdtemp(join(tmpdir(), "zcode-legacy-"));
   try {
     const path = join(dir, "binding.json");
@@ -374,7 +374,7 @@ test("a malformed recorded basis is an unsupported binding", async () => {
   const {writeFile, mkdtemp, rm} = await import("node:fs/promises");
   const {join} = await import("node:path");
   const {tmpdir} = await import("node:os");
-  const {readState} = await import("../../loopx/zcode_goal_mode/runtime.ts");
+  const {readState} = await import("../../loopx/hosts/zcode/runtime.ts");
   const dir = await mkdtemp(join(tmpdir(), "zcode-basis-"));
   try {
     const path = join(dir, "binding.json");

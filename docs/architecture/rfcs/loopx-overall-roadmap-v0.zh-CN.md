@@ -146,9 +146,9 @@ LoopX 的权威与决策基座（`AuthorityStore`、`CAS`、`claim/lease`、`Tur
   [统一契约的退役门禁](controller-executor-unified-contract-v0.zh-CN.md#3-具名退役清单与棘轮规则)与
   [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json)，将
   `9` 个顶层 `loopx/*_goal_mode/` 包迁入 `loopx/hosts/` 并收敛至共享 `HostHarnessCapabilities`
-  投影（已迁入 `6` 个：`hosts/agy`、`hosts/dsh`、`hosts/kiro_cli`、`hosts/opencode`、
-  `hosts/opencode2`、`hosts/pi`；待迁移 `3` 个：`claude_goal_mode`、`kunluncode_goal_mode`、
-  `zcode_goal_mode`），仅在调用方切换完成前保留 CLI 兼容别名。
+  投影（已迁入 `9` 个：`hosts/agy`、`hosts/claude`、`hosts/dsh`、`hosts/kiro_cli`、
+  `hosts/kunluncode`、`hosts/opencode`、`hosts/opencode2`、`hosts/pi`、
+  `hosts/zcode`；待迁移 `0` 个），仅在调用方切换完成前保留 CLI 兼容别名。
 - **漏斗验证门禁：** `BoundaryCLI`、`OrchestratedApp` 与 `InTree` 的协同优化（`Quiet-Turn`、
   `EpochReset`、`Subagent Scope`、`FoldAndPrefetch`）在通过[四层漏斗验证协议](long-horizon-harness-benchmark-research-program-v0.zh-CN.md#55-四层漏斗验证协议)前均为架构与设计目标，不直接等同已测收益或默认切换。
 

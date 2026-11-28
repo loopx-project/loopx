@@ -392,7 +392,7 @@ def test_default_install_migrates_stale_managed_kiro_mcp_and_preserves_other_ent
 ) -> None:
     """Default `slash-commands --install` (`surfaces=all`, what `self-update` runs)
     migrates a sidecar-verified Kiro MCP registration whose server path moved."""
-    from loopx.claude_goal_mode.scripts import install as claude_install
+    from loopx.hosts.claude.scripts import install as claude_install
 
     provision_calls = 0
 

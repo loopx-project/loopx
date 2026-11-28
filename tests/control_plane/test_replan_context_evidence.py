@@ -445,7 +445,7 @@ def test_unscoped_replan_assignment_ignores_evidence_and_presentation_changes():
 
 
 def test_native_recovery_reads_its_event_source_without_the_removed_cli(tmp_path: Path):
-    from loopx.kunluncode_goal_mode.control_plane import LoopXControlPlane
+    from loopx.hosts.kunluncode.control_plane import LoopXControlPlane
 
     runtime = tmp_path / "runtime"
     registry = tmp_path / "registry.json"

@@ -1388,3 +1388,1033 @@ def test_antigravity_resident_guidance_is_isolated_to_antigravity_surfaces(tmp_p
     codex_text = (codex_home / "skills" / "loopx" / "SKILL.md").read_text(encoding="utf-8")
     assert "Antigravity App fixed resident session" not in codex_text
     assert "--with-agy-hooks" not in codex_text
+
+
+def _seed_legacy_claude_dir(
+    claude_dir: Path,
+    *,
+    legacy_root: str = "/opt/old-loopx/loopx/claude_goal_mode",
+    include_custom_statusline: bool = False,
+) -> tuple[Path, Path]:
+    cmd_dir = claude_dir / "commands"
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    cmd_path = cmd_dir / "loopx.md"
+    cmd_path.write_text(
+        "---\n"
+        "description: loopx goal-mode setup. `/loopx <task>` sets up a goal + writes .claude/loop.md; "
+        "drive the loop with native /loop. bare /loopx = arm; off | status.\n"
+        "argument-hint: <task to do>  |  (no args = arm)  |  off  |  status\n"
+        "allowed-tools: Bash('/old/python3':*)\n"
+        "---\n\n"
+        "Run the loopx setup helper and read its output:\n\n"
+        f"!`'/old/python3' '{legacy_root}/scripts/goalmode_cmd.py' $ARGUMENTS`\n\n"
+        "Show it to the user VERBATIM and STOP.\n",
+        encoding="utf-8",
+    )
+    settings_path = claude_dir / "settings.json"
+    settings_payload: dict[str, object] = {
+        "permissions": {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]},
+        "env": {"CUSTOM_FLAG": "keep"},
+        "model": "sonnet",
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "echo user-owned-hook"}],
+                },
+                {
+                    "matcher": "*",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"/old/python3 '{legacy_root}/hooks/goal_policy.py'",
+                            "timeout": 10,
+                        }
+                    ],
+                },
+            ]
+        },
+        "statusLine": (
+            {"type": "command", "command": "custom-user-statusline.sh"}
+            if include_custom_statusline
+            else {
+                "type": "command",
+                "command": f"/old/python3 '{legacy_root}/statusline/goal_status.py'",
+            }
+        ),
+    }
+    settings_path.write_text(json.dumps(settings_payload, indent=2), encoding="utf-8")
+    return cmd_path, settings_path
+
+
+def test_default_install_migrates_legacy_claude_project_and_user_preserving_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    proj = tmp_path / "proj"
+    proj_claude = proj / ".claude"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-proj",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-proj",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    user_cmd, user_settings = _seed_legacy_claude_dir(user_claude, include_custom_statusline=True)
+    proj_cmd, proj_settings = _seed_legacy_claude_dir(proj_claude, include_custom_statusline=False)
+    proj_mcp = proj / ".mcp.json"
+    proj_mcp.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "other": {"command": "other-bin", "args": ["--serve"]},
+                    "loopx": {
+                        "command": "/old/python3",
+                        "args": ["/opt/old-loopx/loopx/claude_goal_mode/mcp/loopx_mcp.py"],
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Dry-run reports planned migrations without writing any file.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    before_proj_cmd = proj_cmd.read_text(encoding="utf-8")
+    before_proj_settings = proj_settings.read_text(encoding="utf-8")
+    dry_payload = install_slash_commands(
+        execute=False,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert dry_payload["ok"] is True
+    assert proj_cmd.read_text(encoding="utf-8") == before_proj_cmd
+    assert proj_settings.read_text(encoding="utf-8") == before_proj_settings
+    migrated_dry = [
+        row
+        for row in dry_payload["installed"]  # type: ignore[attr-defined]
+        if isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+    ]
+    assert {row["status"] for row in migrated_dry} == {"would_write"}
+    assert len(migrated_dry) == 5
+
+    # Default install migrates both user and project entries cleanly while preserving user config.
+    applied = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert applied["ok"] is True
+    migrated = [
+        row
+        for row in applied["installed"]  # type: ignore[attr-defined]
+        if isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+    ]
+    assert {row["status"] for row in migrated} == {"updated"}
+    assert len(migrated) == 5
+
+    # Idempotent on repeated default install.
+    second = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert not any(
+        isinstance(row, dict) and row.get("mechanism") == "claude_goal_mode_legacy_migration"
+        for row in second["installed"]  # type: ignore[attr-defined]
+    )
+
+    user_settings_data = json.loads(user_settings.read_text(encoding="utf-8"))
+    assert user_settings_data["statusLine"] == {"type": "command", "command": "custom-user-statusline.sh"}
+    assert "/loopx/hosts/claude/commands/" not in user_cmd.read_text(encoding="utf-8")
+    assert "/loopx/hosts/claude/scripts/goalmode_cmd.py" in user_cmd.read_text(encoding="utf-8")
+
+    proj_settings_data = json.loads(proj_settings.read_text(encoding="utf-8"))
+    assert proj_settings_data["permissions"] == {"allow": ["Bash(ls:*)"], "deny": ["Read(~/.ssh/**)"]}
+    assert proj_settings_data["env"] == {"CUSTOM_FLAG": "keep"}
+    assert proj_settings_data["model"] == "sonnet"
+    hooks_cmds = [
+        h["command"]
+        for g in proj_settings_data["hooks"]["PreToolUse"]
+        for h in g["hooks"]
+    ]
+    assert "echo user-owned-hook" in hooks_cmds
+    assert any("/loopx/hosts/claude/hooks/goal_policy.py" in c for c in hooks_cmds)
+    assert "/loopx/hosts/claude/statusline/goal_status.py" in proj_settings_data["statusLine"]["command"]
+
+    mcp_data = json.loads(proj_mcp.read_text(encoding="utf-8"))
+    assert mcp_data["mcpServers"]["other"] == {"command": "other-bin", "args": ["--serve"]}
+    assert mcp_data["mcpServers"]["loopx"]["args"][0].endswith("/loopx/hosts/claude/mcp/loopx_mcp.py")
+
+    # Execute the migrated /loopx status command and statusLine command verbatim against proj.
+    cmd_lines = [
+        line.strip()
+        for line in proj_cmd.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("!`") and line.strip().endswith("`")
+    ]
+    assert len(cmd_lines) == 1
+    status_tokens = shlex.split(cmd_lines[0][2:-1].replace("$ARGUMENTS", "status"))
+    status_run = subprocess.run(
+        status_tokens,
+        cwd=str(proj),
+        capture_output=True,
+        text=True,
+        env={**slash_command_install.os.environ, "HOME": str(home), "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        check=False,
+    )
+    assert status_run.returncode == 0, status_run.stderr + status_run.stdout
+    assert "goal      : cc-proj" in status_run.stdout
+
+    sl_tokens = shlex.split(proj_settings_data["statusLine"]["command"])
+    sl_run = subprocess.run(
+        sl_tokens,
+        input=json.dumps({"cwd": str(proj)}),
+        capture_output=True,
+        text=True,
+        env={**slash_command_install.os.environ, "HOME": str(home), "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        check=False,
+    )
+    assert sl_run.returncode == 0, sl_run.stderr + sl_run.stdout
+    assert sys.executable
+
+
+def test_claude_legacy_migration_skips_targeted_uninstall_and_unowned_or_corrupt_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    _seed_legacy_claude_dir(user_claude)
+    user_cmd = user_claude / "commands" / "loopx.md"
+    user_settings = user_claude / "settings.json"
+    before_cmd = user_cmd.read_bytes()
+    before_settings = user_settings.read_bytes()
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.chdir(tmp_path)
+
+    # 1. Explicit --surface codex never probes or modifies Claude configs.
+    monkeypatch.setattr(
+        slash_command_install,
+        "_migrate_legacy_claude_configs",
+        lambda **_kw: pytest.fail("explicit --surface codex must not probe legacy Claude configs"),
+    )
+    codex_payload = install_slash_commands(
+        execute=True,
+        surfaces=["codex"],
+        codex_home=str(home / ".codex"),
+    )
+    assert codex_payload["ok"] is True
+    assert user_cmd.read_bytes() == before_cmd
+    assert user_settings.read_bytes() == before_settings
+
+    # 2. --uninstall never migrates legacy Claude configs.
+    monkeypatch.undo()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.chdir(tmp_path)
+    uninstall_payload = install_slash_commands(
+        execute=True,
+        uninstall=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert uninstall_payload["ok"] is True
+    assert user_cmd.read_bytes() == before_cmd
+    assert user_settings.read_bytes() == before_settings
+
+    # 3. Unowned commands/loopx.md and non-UTF-8 settings.json / global registry fail closed cleanly.
+    user_cmd.write_text("---\ndescription: user custom loopx\n---\n!`echo custom`\n", encoding="utf-8")
+    custom_cmd_bytes = user_cmd.read_bytes()
+    user_settings.write_bytes(b"\xff\xfe\x00not-utf8-settings")
+    corrupt_settings_bytes = user_settings.read_bytes()
+    (home / ".loopx").mkdir(parents=True, exist_ok=True)
+    (home / ".loopx" / "registry.global.json").write_bytes(b"\xff\xfe\x00bad-registry")
+
+    default_payload = install_slash_commands(
+        execute=True,
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert default_payload["ok"] is True
+    assert user_cmd.read_bytes() == custom_cmd_bytes
+    assert user_settings.read_bytes() == corrupt_settings_bytes
+
+
+def test_claude_legacy_migration_preserves_wrapped_commands_and_reads_v2_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import hashlib
+    import sys
+
+    from loopx.control_plane.projects.registry_codec import (
+        SOURCE_SESSION_PROFILE_ID,
+        SOURCE_SESSION_SCHEMA_VERSION,
+        SOURCE_SESSION_WRITER_PROTOCOL,
+    )
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-v2"
+    (proj / ".loopx").mkdir(parents=True)
+    payload = {
+        "schema_version": "0.1",
+        "profile_id": SOURCE_SESSION_PROFILE_ID,
+        "goals": [{"id": "cc-v2", "repo": str(proj)}],
+    }
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            [
+                {
+                    "schema_version": SOURCE_SESSION_SCHEMA_VERSION,
+                    "minimum_writer_protocol": SOURCE_SESSION_WRITER_PROTOCOL,
+                    "payload_sha256": digest,
+                },
+                payload,
+            ],
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    proj_settings = proj_claude / "settings.json"
+    proj_settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "env FOO=bar /old/python3 "
+                                        "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py --flag"
+                                    ),
+                                    "timeout": 10,
+                                },
+                                {
+                                    "type": "command",
+                                    "command": (
+                                        "sh -c 'BAR=\"a b\" /old/python3 -I "
+                                        "\"/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py\" --inner'"
+                                    ),
+                                },
+                            ],
+                        }
+                    ]
+                },
+                "statusLine": {
+                    "type": "command",
+                    "command": (
+                        "env BAZ='x y' /old/python3 -u "
+                        "\"/opt/old/loopx/claude_goal_mode/statusline/goal_status.py\" --compact"
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.delenv("LOOPX_RUNTIME_ROOT", raising=False)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert slash_command_install._projects_from_registry_file(proj / ".loopx" / "registry.json") == [proj]
+
+    result = install_slash_commands(
+        execute=True,
+        registry_path=str(proj / ".loopx" / "registry.json"),
+        codex_home=str(home / ".codex"),
+        opencode_home=str(home / ".config" / "opencode"),
+    )
+    assert result["ok"] is True
+
+    migrated = json.loads(proj_settings.read_text(encoding="utf-8"))
+    hook_cmds = [h["command"] for h in migrated["hooks"]["PreToolUse"][0]["hooks"]]
+    assert hook_cmds[0].startswith("env FOO=bar ")
+    assert "/old/python3" not in hook_cmds[0]
+    assert sys.executable in hook_cmds[0]
+    assert "/loopx/hosts/claude/hooks/goal_policy.py" in hook_cmds[0]
+    assert hook_cmds[0].endswith(" --flag")
+
+    assert "BAR=\"a b\"" in hook_cmds[1]
+    assert "/loopx/hosts/claude/hooks/goal_policy.py" in hook_cmds[1]
+    assert hook_cmds[1].endswith("--inner'")
+
+    sl_cmd = migrated["statusLine"]["command"]
+    assert sl_cmd.startswith("env BAZ='x y' ")
+    assert " -u " in sl_cmd
+    assert "/loopx/hosts/claude/statusline/goal_status.py" in sl_cmd
+    assert sl_cmd.endswith(" --compact")
+
+    # Idempotent after migration.
+    assert claude_install._migrated_settings_payload(migrated, py_exe=sys.executable) is None
+
+    # PowerShell wrapped command preserves `&`, prefix, and flags.
+    ps_migrated = claude_install._rewrite_legacy_claude_command(
+        "& 'C:\\old\\python.exe' 'C:\\old\\loopx\\claude_goal_mode\\hooks\\goal_policy.py' --flag",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=claude_install._p("hooks", "goal_policy.py"),
+        py_exe="/new/python.exe",
+        powershell=True,
+    )
+    assert ps_migrated is not None
+    assert ps_migrated.startswith("& '/new/python.exe' ")
+    assert ps_migrated.endswith(" --flag")
+    assert "& &" not in ps_migrated
+
+
+def test_claude_legacy_migration_command_position_and_operator_boundaries(
+    tmp_path: Path,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-cmd-pos"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-pos",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-pos",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_status = "/opt/old dir/loopx/claude_goal_mode/statusline/goal_status.py"
+    legacy_hook = "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py"
+    new_status = claude_install._p("statusline", "goal_status.py")
+    new_hook = claude_install._p("hooks", "goal_policy.py")
+
+    # Data-argument, query, redirection, and non-script Python invocations stay untouched.
+    untouched_commands = [
+        f"printf '%s\\n' {shlex.quote(legacy_status)}",
+        f"echo {shlex.quote(legacy_status)}",
+        f"FOO=1 env BAR=2 printf '%s\\n' {shlex.quote(legacy_status)}",
+        f"command -v {shlex.quote(legacy_status)}",
+        f"cat <{shlex.quote(legacy_status)}",
+        f"echo hi>{shlex.quote(legacy_status)}",
+        f"/old/python3 -c \"print('{legacy_status}')\"",
+        f"/old/python3 -m user_tool {shlex.quote(legacy_status)}",
+        f"/old/python3 /user/custom_tool.py {shlex.quote(legacy_status)}",
+        f"sh -c 'printf \"%s\\n\" \"{legacy_status}\"'",
+        f"FOO={shlex.quote(legacy_status)} printf '%s\\n' ok",
+    ]
+    for raw in untouched_commands:
+        assert (
+            claude_install._rewrite_legacy_claude_command(
+                raw,
+                legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+                new_script=new_status,
+                py_exe=sys.executable,
+                powershell=False,
+            )
+            is None
+        ), raw
+
+    # Executed commands right before adjacent unquoted shell operators migrate cleanly.
+    adjacent_status = f"/old/python3 -u {shlex.quote(legacy_status)}&&echo AFTER_STATUS"
+    migrated_adj = claude_install._rewrite_legacy_claude_command(
+        adjacent_status,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_adj is not None
+    assert migrated_adj.endswith("&&echo AFTER_STATUS")
+    assert "/old/python3" not in migrated_adj
+    assert " -u " in migrated_adj
+    assert new_status in migrated_adj
+
+    # Direct adjacent operator with no interpreter prefix and pipe/semicolon/or-else boundaries.
+    for sep in ("&&", "||", ";", "|"):
+        direct_cmd = f"/opt/old{legacy_hook.removeprefix('/opt/old')}{sep}cat"
+        migrated_direct = claude_install._rewrite_legacy_claude_command(
+            direct_cmd,
+            legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+            new_script=new_hook,
+            py_exe=sys.executable,
+            powershell=False,
+        )
+        assert migrated_direct is not None, sep
+        assert migrated_direct.endswith(f"{sep}cat")
+        assert new_hook in migrated_direct
+        assert "/claude_goal_mode/" not in migrated_direct
+
+    # Mixed print-then-execute leaves the printed data arg intact and upgrades only the launcher.
+    print_then_run_adj = f"printf '%s\\n' {shlex.quote(legacy_status)}&&/old/python3 {shlex.quote(legacy_status)}"
+    migrated_mix = claude_install._rewrite_legacy_claude_command(
+        print_then_run_adj,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_mix is not None
+    head_part, tail_part = migrated_mix.split("&&", 1)
+    assert head_part == f"printf '%s\\n' {shlex.quote(legacy_status)}"
+    assert "/old/python3" not in tail_part
+    assert new_status in tail_part
+
+    # Nested sh -c with both print-data segment and adjacent executed launcher.
+    nested_mix = f"env WRAP=1 sh -ec 'printf \"%s\\n\" \"{legacy_status}\"&&/old/python3 \"{legacy_status}\"'"
+    migrated_nested = claude_install._rewrite_legacy_claude_command(
+        nested_mix,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_nested is not None
+    assert legacy_status in migrated_nested
+    assert new_status in migrated_nested
+    assert "/old/python3" not in migrated_nested
+
+    # PowerShell mixed literal arg + executed command keeps literal arg and `&`.
+    ps_mix = (
+        "printf '%s' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'; "
+        "& 'C:\\old\\python.exe' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'"
+    )
+    migrated_ps_mix = claude_install._rewrite_legacy_claude_command(
+        ps_mix,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe="/new/python.exe",
+        powershell=True,
+    )
+    assert migrated_ps_mix is not None
+    assert migrated_ps_mix.startswith(
+        "printf '%s' 'C:\\old\\loopx\\claude_goal_mode\\statusline\\goal_status.py'; & '/new/python.exe' "
+    )
+
+    # Full migrate_legacy_claude_dir + actual /bin/sh execution for print-only, adjacent-&&, and print-then-launch.
+    env_exec = {
+        **slash_command_install.os.environ,
+        "HOME": str(home),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "LOOPX_GOAL_FORCE": "1",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "PATH": f"{Path(sys.executable).parent}:{slash_command_install.os.environ.get('PATH', '')}",
+    }
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    (proj_claude / "loop.md").write_text("<!-- loopx:armed {\"goal_id\": \"cc-pos\"} -->\n", encoding="utf-8")
+    proj_settings = proj_claude / "settings.json"
+    cases = [
+        ("print_only", f"printf '%s\\n' {shlex.quote(legacy_status)}", legacy_status, False),
+        ("adjacent_and", f"/old/python3 {shlex.quote(legacy_status)}&&echo CHAIN_OK", "CHAIN_OK", True),
+        (
+            "print_then_launch",
+            f"printf '%s\\n' {shlex.quote(legacy_status)}&&/old/python3 {shlex.quote(legacy_status)}",
+            legacy_status,
+            True,
+        ),
+    ]
+    for name, raw_cmd, expected_line, expect_status_output in cases:
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": raw_cmd}}),
+            encoding="utf-8",
+        )
+        res = claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True)
+        if expect_status_output:
+            assert res == [{"path": str(proj_settings), "status": "updated"}], name
+        else:
+            assert res == [], name
+        updated_cmd = json.loads(proj_settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+        proc = subprocess.run(
+            ["/bin/sh", "-c", updated_cmd],
+            input=json.dumps({"cwd": str(proj)}),
+            capture_output=True,
+            text=True,
+            env=env_exec,
+            check=False,
+        )
+        assert proc.returncode == 0, f"{name}: {proc.stderr} {proc.stdout}"
+        assert expected_line in proc.stdout, (name, proc.stdout)
+        if expect_status_output:
+            assert "cc-pos" in proc.stdout, (name, proc.stdout)
+        # Idempotent on repeat run.
+        assert claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True) == []
+
+
+def test_claude_legacy_migration_heredocs_compound_clauses_and_manual_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shlex
+    import subprocess
+    import sys
+
+    from loopx.hosts.claude.scripts import install as claude_install
+
+    home = tmp_path / "home"
+    user_claude = home / ".claude"
+    user_claude.mkdir(parents=True)
+    proj = tmp_path / "proj-compound"
+    (proj / ".loopx").mkdir(parents=True)
+    (proj / ".loopx" / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-comp",
+                        "repo": str(proj),
+                        "coordination": {"agent_model": "peer_v1", "registered_agents": ["cc"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime_root = home / ".loopx"
+    runtime_root.mkdir(parents=True)
+    (runtime_root / "registry.global.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "0.1",
+                "goals": [
+                    {
+                        "id": "cc-comp",
+                        "repo": str(proj),
+                        "source_registry": str(proj / ".loopx" / "registry.json"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    legacy_status = "/opt/old dir/loopx/claude_goal_mode/statusline/goal_status.py"
+    legacy_hook = "/opt/old/loopx/claude_goal_mode/hooks/goal_policy.py"
+    new_status = claude_install._p("statusline", "goal_status.py")
+    new_hook = claude_install._p("hooks", "goal_policy.py")
+
+    # 1. Quoted/tab-stripped here-document bodies remain byte-verbatim (even with unmatched quotes),
+    # while executable launchers on the header line or after the closing delimiter migrate.
+    heredoc_only = f"cat <<'EOF'\n{legacy_status}\nEOF"
+    assert claude_install._inspect_legacy_claude_command(
+        heredoc_only,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+
+    heredoc_and_post = (
+        f"cat <<'EOF'\n{legacy_status}\nit's raw text\nEOF\n"
+        f"/old/python3 {shlex.quote(legacy_status)}"
+    )
+    migrated_hd, hd_reason = claude_install._inspect_legacy_claude_command(
+        heredoc_and_post,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert hd_reason is None
+    assert migrated_hd is not None
+    hd_prefix, hd_tail = migrated_hd.split("\nEOF\n", 1)
+    assert hd_prefix == f"cat <<'EOF'\n{legacy_status}\nit's raw text"
+    assert "/old/python3" not in hd_tail
+    assert new_status in hd_tail
+
+    tab_heredoc = (
+        f"cat <<-EOF && echo ok\n\t{legacy_status}\n\tEOF\n"
+        f"{legacy_hook}"
+    )
+    migrated_tab = claude_install._rewrite_legacy_claude_command(
+        tab_heredoc,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_tab is not None
+    assert migrated_tab.startswith(f"cat <<-EOF && echo ok\n\t{legacy_status}\n\tEOF\n")
+    assert migrated_tab.endswith(shlex.quote(new_hook))
+
+    # 2. Compound POSIX control clauses migrate executed positions while skipping loop lists,
+    # case patterns, and quoted keyword literals.
+    if_cmd = f"if [ -n \"$HOME\" ]; then /old/python3 {shlex.quote(legacy_status)}; fi"
+    migrated_if = claude_install._rewrite_legacy_claude_command(
+        if_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_if is not None
+    assert migrated_if.startswith("if [ -n \"$HOME\" ]; then ")
+    assert migrated_if.endswith("; fi")
+    assert new_status in migrated_if and "/old/python3" not in migrated_if
+
+    elif_else_cmd = (
+        f"if {legacy_hook}; then echo a; elif {legacy_hook}; then echo b; "
+        f"else /old/python3 {legacy_hook}; fi"
+    )
+    migrated_branch = claude_install._rewrite_legacy_claude_command(
+        elif_else_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_branch is not None
+    assert "/claude_goal_mode/" not in migrated_branch
+    assert migrated_branch.count(new_hook) == 3
+
+    brace_subshell_while = (
+        f"while {legacy_hook}; do {{ /old/python3 {legacy_hook}; }}; done && ( {legacy_hook} )"
+    )
+    migrated_complex = claude_install._rewrite_legacy_claude_command(
+        brace_subshell_while,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_complex is not None
+    assert "/claude_goal_mode/" not in migrated_complex
+    assert migrated_complex.count(new_hook) == 3
+
+    # Non-command positions in for/case/quoted-'then' stay intact; case arm body updates.
+    for_non_exec = f"for s in {shlex.quote(legacy_status)}; do echo \"$s\"; done"
+    assert claude_install._rewrite_legacy_claude_command(
+        for_non_exec,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
+    assert claude_install._rewrite_legacy_claude_command(
+        f"'then' {shlex.quote(legacy_status)}",
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
+
+    case_cmd = (
+        f"case \"$MODE\" in {shlex.quote(legacy_status)}) echo pat;; "
+        f"run) /old/python3 {shlex.quote(legacy_status)};; esac"
+    )
+    migrated_case = claude_install._rewrite_legacy_claude_command(
+        case_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_case is not None
+    first_arm, second_arm = migrated_case.split(";;", 1)
+    assert shlex.quote(legacy_status) in first_arm
+    assert new_status in second_arm and "/old/python3" not in second_arm
+
+    # 3. Execute real migrated heredoc-then-launch and if/then statusLine commands via /bin/sh.
+    env_exec = {
+        **slash_command_install.os.environ,
+        "HOME": str(home),
+        "LOOPX_RUNTIME_ROOT": str(runtime_root),
+        "LOOPX_GOAL_FORCE": "1",
+        "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
+        "PATH": f"{Path(sys.executable).parent}:{slash_command_install.os.environ.get('PATH', '')}",
+    }
+    proj_claude = proj / ".claude"
+    proj_claude.mkdir(parents=True)
+    (proj_claude / "loop.md").write_text("<!-- loopx:armed {\"goal_id\": \"cc-comp\"} -->\n", encoding="utf-8")
+    proj_settings = proj_claude / "settings.json"
+    for label, raw_cmd, expected_verbatim in (
+        ("heredoc_then_launch", heredoc_and_post, f"{legacy_status}\nit's raw text\n"),
+        ("if_then_branch", if_cmd, ""),
+    ):
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": raw_cmd}}),
+            encoding="utf-8",
+        )
+        mig = claude_install.migrate_legacy_claude_dir(proj_claude, project_dir=proj, execute=True)
+        assert mig == [{"path": str(proj_settings), "status": "updated"}], label
+        updated_cmd = json.loads(proj_settings.read_text(encoding="utf-8"))["statusLine"]["command"]
+        proc = subprocess.run(
+            ["/bin/sh", "-c", updated_cmd],
+            input=json.dumps({"cwd": str(proj)}),
+            capture_output=True,
+            text=True,
+            env=env_exec,
+            check=False,
+        )
+        assert proc.returncode == 0, f"{label}: {proc.stderr} {proc.stdout}"
+        if expected_verbatim:
+            assert proc.stdout.startswith(expected_verbatim), (label, proc.stdout)
+        assert "cc-comp" in proc.stdout, (label, proc.stdout)
+
+    # 4. Uncertifiable dynamic syntax (`eval` / `env -S` / unterminated heredoc) stays untouched
+    # and reports `manual_migration_required` with explicit recovery guidance through install_slash_commands.
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(user_claude))
+    monkeypatch.setenv("LOOPX_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.chdir(tmp_path)
+
+    for bad_cmd in (
+        f"eval '/old/python3 {shlex.quote(legacy_status)}'",
+        f"env -S '/old/python3 {shlex.quote(legacy_status)}'",
+        f"cat <<EOF\n{legacy_status}",
+    ):
+        proj_settings.write_text(
+            json.dumps({"statusLine": {"type": "command", "command": bad_cmd}}),
+            encoding="utf-8",
+        )
+        before_bytes = proj_settings.read_bytes()
+        payload = install_slash_commands(
+            execute=True,
+            registry_path=str(proj / ".loopx" / "registry.json"),
+            codex_home=str(home / ".codex"),
+            opencode_home=str(home / ".config" / "opencode"),
+        )
+        assert payload["ok"] is True
+        assert proj_settings.read_bytes() == before_bytes
+        manual_rows = [
+            row
+            for row in payload["installed"]  # type: ignore[attr-defined]
+            if isinstance(row, dict) and row.get("status") == "manual_migration_required"
+        ]
+        assert len(manual_rows) == 1, bad_cmd
+        assert "--harden" in str(manual_rows[0].get("recovery", ""))
+        assert any("--harden" in str(n) for n in payload["notes"])  # type: ignore[attr-defined]
+        md = slash_command_install.render_slash_command_install_markdown(payload)
+        assert "manual_migration_required" in md and "--harden" in md
+
+    # 5. POSIX backslash-newline line continuations and unquoted `# comments` containing
+    # apostrophes stay cleanly separated from executable tokens, while `#` inside quotes or
+    # mid-word remains literal.
+    continued_if_cmd = (
+        f"if true; then \\\n"
+        f"  /old/python3 {shlex.quote(legacy_hook)} --flag # don't strip launcher's comment\n"
+        f"fi"
+    )
+    migrated_cont_if = claude_install._rewrite_legacy_claude_command(
+        continued_if_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_cont_if is not None
+    assert migrated_cont_if.startswith("if true; then \\\n  ")
+    assert new_hook in migrated_cont_if and "/old/python3" not in migrated_cont_if
+    assert migrated_cont_if.endswith(" --flag # don't strip launcher's comment\nfi")
+
+    continued_hook = legacy_hook.replace("claude_goal_mode", "claude_goal_mode\\\n")
+    attached_cont_if = (
+        f"if true; then\\\n"
+        f"  /old/py\\\nthon3 {continued_hook}\n"
+        f"fi"
+    )
+    migrated_attached = claude_install._rewrite_legacy_claude_command(
+        attached_cont_if,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_attached is not None
+    assert migrated_attached.startswith("if true; then\\\n  ")
+    assert new_hook in migrated_attached
+    assert "/old/py" not in migrated_attached and "/claude_goal_mode/" not in migrated_attached
+
+    quoted_cont_cmd = f'/old/python3 "{legacy_status[:20]}\\\n{legacy_status[20:]}" # it\'s fine'
+    migrated_q_cont = claude_install._rewrite_legacy_claude_command(
+        quoted_cont_cmd,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_q_cont is not None
+    assert new_status in migrated_q_cont and "/old/python3" not in migrated_q_cont
+    assert migrated_q_cont.endswith(" # it's fine")
+
+    # Literal `#` inside quotes or mid-word is NOT treated as a comment boundary.
+    literal_hash_cmd = (
+        f"# leading comment's ok\n"
+        f"/old/python3 {shlex.quote(legacy_hook)} arg#keep 'x#y' \"z#'w\""
+    )
+    migrated_lit_hash = claude_install._rewrite_legacy_claude_command(
+        literal_hash_cmd,
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert migrated_lit_hash is not None
+    assert migrated_lit_hash.startswith("# leading comment's ok\n")
+    assert migrated_lit_hash.endswith(" arg#keep 'x#y' \"z#'w\"")
+    assert new_hook in migrated_lit_hash and "/old/python3" not in migrated_lit_hash
+
+    assert claude_install._inspect_legacy_claude_command(
+        f"# don't run /old/python3 {legacy_hook}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+    assert claude_install._rewrite_legacy_claude_command(
+        f"echo foo#bar /old/python3 {legacy_hook}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    ) is None
+
+    # 6. Cross-version live shims under this installation stay intact unless their python fails
+    # or another segment in the same command references a stale/missing legacy path.
+    live_shim_root = claude_install.REPO_ROOT / "loopx" / "claude_goal_mode"
+    live_cmd_shim = str(live_shim_root / "scripts" / "goalmode_cmd.py")
+    live_status_shim = str(live_shim_root / "statusline" / "goal_status.py")
+    live_hook_shim = str(live_shim_root / "hooks" / "goal_policy.py")
+    live_mcp_shim = str(live_shim_root / "mcp" / "loopx_mcp.py")
+
+    live_md = (
+        "---\n"
+        "description: loopx goal-mode setup. `/loopx <task>`.\n"
+        f"allowed-tools: Bash({shlex.quote(sys.executable)}:*)\n"
+        "---\n"
+        f"!`{shlex.quote(sys.executable)} {shlex.quote(live_cmd_shim)} $ARGUMENTS`\n"
+        "<!-- preserve comment -->\n"
+    )
+    assert claude_install._migrated_command_md_text(live_md, py_exe=sys.executable) is None
+
+    broken_py_live_md = live_md.replace(shlex.quote(sys.executable), "'/old/python3'")
+    migrated_broken_md = claude_install._migrated_command_md_text(broken_py_live_md, py_exe=sys.executable)
+    assert migrated_broken_md is not None
+    assert "/loopx/hosts/claude/scripts/goalmode_cmd.py" in migrated_broken_md
+    assert "<!-- preserve comment -->" in migrated_broken_md
+
+    assert claude_install._inspect_legacy_claude_command(
+        f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)}",
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    ) == (None, None)
+
+    mixed_live_and_stale = (
+        f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)} && "
+        f"/old/python3 {shlex.quote(legacy_status)}"
+    )
+    migrated_mixed, mixed_reason = claude_install._inspect_legacy_claude_command(
+        mixed_live_and_stale,
+        legacy_suffix=claude_install._LEGACY_STATUSLINE_SCRIPT_SUFFIX,
+        new_script=new_status,
+        py_exe=sys.executable,
+        powershell=False,
+    )
+    assert mixed_reason is None
+    assert migrated_mixed is not None
+    assert migrated_mixed.startswith(f"{shlex.quote(sys.executable)} {shlex.quote(live_status_shim)} && ")
+    assert new_status in migrated_mixed and "/old/python3" not in migrated_mixed
+
+    assert claude_install._migrated_mcp_json_payload(
+        {"mcpServers": {"loopx": {"command": sys.executable, "args": [live_mcp_shim]}}}
+    ) is None
+    assert claude_install._migrated_mcp_json_payload(
+        {"mcpServers": {"loopx": {"command": "/old/python3", "args": [live_mcp_shim]}}}
+    )["mcpServers"]["loopx"]["args"][0].endswith("/loopx/hosts/claude/mcp/loopx_mcp.py")
+    assert claude_install._inspect_legacy_claude_command(
+        f"/old/python3 {shlex.quote(live_hook_shim)}",
+        legacy_suffix=claude_install._LEGACY_POLICY_HOOK_SUFFIX,
+        new_script=new_hook,
+        py_exe=sys.executable,
+        powershell=False,
+    )[0] is not None

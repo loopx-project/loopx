@@ -48,7 +48,7 @@ fixture.body = [
     if not any(
         isinstance(value, ast.Constant)
         and value.value
-        == "loopx.zcode_goal_mode.diagnostics.collect_zcode_host_diagnostics"
+        == "loopx.hosts.zcode.diagnostics.collect_zcode_host_diagnostics"
         for value in ast.walk(node)
     )
 ]

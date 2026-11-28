@@ -2,7 +2,7 @@ import {CircleHelp} from "lucide-react";
 import {ContextHelp} from "./context-help";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchZCodeGoal, updateZCodeGoal } from "../../data/zcode-goal";
-import type { ZCodeGoalAction, ZCodeGoalReadback, ZCodeModelSelection } from "../../../../../../loopx/zcode_goal_mode/contract.js";
+import type { ZCodeGoalAction, ZCodeGoalReadback, ZCodeModelSelection } from "../../../../../../loopx/hosts/zcode/contract.js";
 import { useWorkspaceI18n, type WorkspaceTranslate } from "./i18n";
 import type { WorkspaceGoal } from "./personal-workspace-model";
 import "./zcode-goal-control.css";

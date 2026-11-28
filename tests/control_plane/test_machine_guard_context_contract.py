@@ -10,9 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from loopx.claude_goal_mode.scripts import goalmode_cmd
-from loopx.claude_goal_mode.statusline import goal_status
-from loopx.claude_goal_mode.hooks import goal_policy
+from loopx.hosts.claude.scripts import goalmode_cmd
+from loopx.hosts.claude.statusline import goal_status
+from loopx.hosts.claude.hooks import goal_policy
 from loopx.control_plane.host_adapter_settlement import HostTodoSettlementRequest, _prepare
 from loopx.goal_mode_mcp import GoalModeMCPConfig, GoalModeMCPControlPlane
 from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime

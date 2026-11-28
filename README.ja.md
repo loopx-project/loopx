@@ -308,8 +308,8 @@ Todo として計画して、ホストの有効化をガイドします。アク
 [Getting Started](docs/guides/getting-started.md) にあります。ホスト連携では、
 [Codex App のホストコマンドレジストリ契約](docs/reference/protocols/codex-app-host-command-registry-v0.md)、
 [Codex CLI のパッケージインストール手順](docs/product/runtimes/codex-cli/codex-cli-packaged-install.md)、
-[Claude Code アダプター](loopx/claude_goal_mode/README.md)、
-[KunlunCode のネイティブ Goal アダプター](loopx/kunluncode_goal_mode/README.md)、
+[Claude Code アダプター](loopx/hosts/claude/README.md)、
+[KunlunCode のネイティブ Goal アダプター](loopx/hosts/kunluncode/README.md)、
 [Kiro CLI の goal-mode アダプター](loopx/hosts/kiro_cli/README.md)、または
 [DeepSeek Harness のターンアダプター](loopx/hosts/dsh/README.md)を確認できます。
 

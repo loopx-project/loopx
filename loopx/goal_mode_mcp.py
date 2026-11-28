@@ -157,7 +157,7 @@ class GoalModeMCPControlPlane:
         return self.should_run()
 
     def host_prompt(self) -> str:
-        from .claude_goal_mode.scripts.goalmode_cmd import loop_execution_content
+        from .hosts.claude.scripts.goalmode_cmd import loop_execution_content
         state = self.state()
         goal_id, agent_id = state.get("goal_id"), state.get("agent_id")
         if not goal_id or not agent_id:

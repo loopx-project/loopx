@@ -121,13 +121,13 @@ def verify_mcp_completions(events: list[dict], expected_todos: set[str] | None =
 
 
 def exercise_host(root: Path, project: Path, launcher: Path, claude: str, timeout: int) -> list[dict]:
-    from loopx.claude_goal_mode.scripts.goalmode_cmd import write_loop_md
+    from loopx.hosts.claude.scripts.goalmode_cmd import write_loop_md
 
     write_loop_md(project, shared.GOAL, shared.AGENT)
     config = root / "mcp.json"
     config.write_text(json.dumps({"mcpServers": {"loopx": {
         "command": sys.executable,
-        "args": [str(REPO / "loopx/claude_goal_mode/mcp/loopx_mcp.py")],
+        "args": [str(REPO / "loopx/hosts/claude/mcp/loopx_mcp.py")],
     }}}))
     command = [
         claude, "--bare", "--setting-sources", "", "--no-session-persistence",

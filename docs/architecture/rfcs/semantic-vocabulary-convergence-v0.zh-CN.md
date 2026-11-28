@@ -98,8 +98,8 @@ LoopX 由大量小型 agent 驱动的 PR 生长而成。每个 PR 在需要之�
 - 同名不同值：`DECISION_CONTEXT_CAPABILITY_ID` 在
   `capabilities/decision_context/packets.py:18` 是 `decision_context`，在
   `extension_provider.py:24` 是 `decision-context`；`MCP_REQUIREMENT` 在
-  `kunluncode_goal_mode/cli.py:28` 是 `mcp==1.28.1`，在
-  `claude_goal_mode/scripts/install.py:83` 是 `mcp<2`。另外 16 个名字是模块内
+  `hosts/kunluncode/cli.py:41` 是 `mcp==1.28.1`，在
+  `hosts/claude/scripts/install.py:215` 是 `mcp<2`。另外 16 个名字是模块内
   通用常量（`SCHEMA_VERSION`、`COMMAND`、`CAPABILITY_ID`），今天的碰撞无害，
   明天却不可见。
 - Turn 结果种类靠手工维护了两份：`transaction.py:28` 的 `LoopXTurnResultKind`

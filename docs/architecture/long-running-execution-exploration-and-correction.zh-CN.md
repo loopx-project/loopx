@@ -175,7 +175,7 @@ Explore 依据。它验证声明的来源与结构，不认证 Agent 解释为�
 
 ### LoopX：已有原生 Goal provider 及恢复边界
 
-[Managed ZCode provider](../../loopx/zcode_goal_mode/README.md)是 LoopX 内部的
+[Managed ZCode provider](../../loopx/hosts/zcode/README.md)是 LoopX 内部的
 具体接入示例，不是第五个上游运行时的独立审计。当前调用链区分绑定、启动与恢复：
 
 ```text
@@ -191,8 +191,8 @@ CLI / Goal drawer → bridge 验证 canonical Goal/Agent/project
   native completed → 仅观察，不自动写 Core 完成或额度扣减
 ```
 
-[`zcode_goal_operation`](../../loopx/zcode_goal_mode/bridge.py)在 bind/start
-生成新的规范 heartbeat 正文；[`NativeGoalController`](../../loopx/zcode_goal_mode/runtime.ts)
+[`zcode_goal_operation`](../../loopx/hosts/zcode/bridge.py)在 bind/start
+生成新的规范 heartbeat 正文；[`NativeGoalController`](../../loopx/hosts/zcode/runtime.ts)
 串行执行操作，resume 保留原 native session/target，准入为 validation→quota→validation。
 `setGoal` 回执丢失时，仅有持久获准 start intent 与匹配 objective hash 才能恢复；
 冷恢复先暂停原 target，不自动续跑。[Controller 测试](../../tests/control_plane_ts/zcode_native_goal.test.ts)
@@ -207,7 +207,7 @@ Agent 读取当前 Core 状态。待补组合验收应保持同一 Goal instance
 无法支持该刷新边界时保持 pending/paused。不能用整段 prompt hash 代替这项证据，
 也不能改写旧回执。
 
-[Broker](../../loopx/zcode_goal_mode/cli.ts)在一次串行检查结束后约两秒再安排下次
+[Broker](../../loopx/hosts/zcode/cli.ts)在一次串行检查结束后约两秒再安排下次
 monitor，每个准入子进程有十秒 timeout。在线 status 可以重查 quota 并暂停 target，
 不是对 Host 完全只读。Pause/stop 同样与串行队列竞争。每次执行的一小时安全期限
 既不是整个 Goal 的 token 预算，也不是硬实时停机保证；native 用量仍未知。
@@ -618,7 +618,7 @@ Grok 的[第三方声明](https://github.com/xai-org/grok-build/blob/2bdd1d6a636
 | 最后 drain 与 idle 之间提交结果；重复通知、停止后旧 wake，再加入新获准输入 | 持久工作可发现；旧 wake 不复活已停执行；新输入由原接续 owner 按当前准入处理 | 复用[已验收结果 wake](../../loopx/chat_loopx_mode.py) 和 Host 接续路径；同时验证不重复启动与不丢工作，不能只验证锁 |
 | 工具、上下文准备或终结期间投递/重试 exact-Turn steer | 文本、ingress、目标不变；如实显示 pending/consumed/refused 和许可 fallback；steering 不等于工具取消 | [Steering 测试](../../tests/test_chat_turn_steering.py) 加每个 Host 的声明消费边界，不推广为全部 Host 通过 |
 | Native set 已发生但回执丢失；重放旧操作后再准入新恢复工作 | 只恢复匹配持久 start intent 的 target；冷恢复暂停；旧重放幂等，新 accountable Turn 仍履行结算 | 复用原生控制器和 [Turn recovery](../../loopx/control_plane/turn_driver/turn_journal.ts)，分别检查原操作与新 Turn 回执 |
-| Validation/quota 变慢时请求停止；到单次 deadline 后多次显式恢复 | 分别测请求排队、原生取消与确认 drain；跨计时器保留配置的累计预算及 unknown 用量 | [ZCode runtime/broker](../../loopx/zcode_goal_mode/cli.ts) 是测量候选，不是已证明的停止 SLO 或 token 用量限制 |
+| Validation/quota 变慢时请求停止；到单次 deadline 后多次显式恢复 | 分别测请求排队、原生取消与确认 drain；跨计时器保留配置的累计预算及 unknown 用量 | [ZCode runtime/broker](../../loopx/hosts/zcode/cli.ts) 是测量候选，不是已证明的停止 SLO 或 token 用量限制 |
 | 经合法/伪造/陈旧/跨消费者页引用省略结果；新增与旧反证条件不同的正 finding | 当前来源重放；反证保留适用范围及读取入口；坏页与来源不可用分开。同依据页保留准入身份，源漂移可在原 Turn 更新 basis | [分页测试](../../tests/control_plane_ts/stride_explore_pagination.test.ts) 与 Stride §7.6 已有合同；仍须验证实际采用省略证据 |
 | 主工作提交后丢失 Explore 附件/关联确认 | 主工作仍成功；原操作下补回附件，不重复工作、不宣称已采用 | [Explore 回写测试](../../tests/control_plane/test_explore_result_writeback.py) 提供恢复接缝，验证产品重试与回读 |
 | 遍历启用策略的周期复核出口，再关闭策略或不声明 direction | Progress/successor/blocker/terminal 保留现有义务；关闭保留普通行为/历史；未声明 Direction M1 不加投影或权限 | [Stride 测试](../../tests/control_plane_ts/stride_policy.test.ts) 与 [direction 测试](../../tests/control_plane_ts/direction_baseline.test.ts)；压缩、轮询、UI 刷新不能解除工作义务 |

@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from loopx.control_plane.goals.activation import build_goal_activation
-from loopx.zcode_goal_mode import bridge
-from loopx.zcode_goal_mode.api import ZCodeGoalRequestMixin, public_zcode_goal_readback
+from loopx.hosts.zcode import bridge
+from loopx.hosts.zcode.api import ZCodeGoalRequestMixin, public_zcode_goal_readback
 
 INSTANCE_A = "ginst_" + "a" * 32
 INSTANCE_B = "ginst_" + "b" * 32
@@ -281,7 +281,7 @@ def test_cli_bridge_pins_interpreter_and_scopes_runtime_state(authority, monkeyp
     assert "--thin" in heartbeat_command
     assert heartbeat_command[heartbeat_command.index("--runtime-profile") + 1] == "generic_cli"
     assert native_request["loopx_command"] == [sys.executable, "-m", "loopx.cli"]
-    assert native_request["validation_command"] == [sys.executable, "-m", "loopx.zcode_goal_mode.bridge", "--validate-binding"]
+    assert native_request["validation_command"] == [sys.executable, "-m", "loopx.hosts.zcode.bridge", "--validate-binding"]
     assert native_request["cli_command"] == ["qualified-node", str(cli.resolve()), "app-server"]
     assert native_request["cli_path"] == str(cli.resolve())
     assert Path(native_request["state_path"]).parent == tmp_path / "runtime" / "zcode-goal"
@@ -321,7 +321,7 @@ def test_foreign_provider_readback_is_rejected(authority, monkeypatch):
 def test_internal_binding_guard_runs_on_selected_interpreter(authority):
     registry, project, payload = authority
     request = {"action": "start", "registry": str(registry), "project": str(project), "goal_id": "delivery", "agent_id": "zcode-worker", "goal_ref": {"goal_id": "delivery", "goal_instance_id": INSTANCE_A}}
-    command = [sys.executable, "-X", "utf8", "-B", "-m", "loopx.zcode_goal_mode.bridge", "--validate-binding"]
+    command = [sys.executable, "-X", "utf8", "-B", "-m", "loopx.hosts.zcode.bridge", "--validate-binding"]
     valid = subprocess.run(command, input=json.dumps(request), encoding="utf-8", capture_output=True, timeout=15)
     assert valid.returncode == 0, valid.stderr
     assert json.loads(valid.stdout)["goal_ref"] == request["goal_ref"]
@@ -373,7 +373,7 @@ def test_api_public_projection_keeps_same_session_evidence():
 
 @pytest.mark.parametrize("case", ["remote_server", "foreign_origin", "project_injection", "missing_action", "invalid_cli", "query"])
 def test_api_rejects_outside_authority_before_provider(authority, monkeypatch, case):
-    from loopx.zcode_goal_mode import api
+    from loopx.hosts.zcode import api
     registry, _, _ = authority
     handler = Handler(registry, host="0.0.0.0" if case == "remote_server" else "127.0.0.1", allowed=case != "foreign_origin", body={"action": "bind"})
     if case == "project_injection":
@@ -413,7 +413,7 @@ def test_api_cannot_borrow_ordinary_project_chat_authority(authority, monkeypatc
 
 
 def test_api_get_and_post_share_canonical_bridge(authority, monkeypatch):
-    from loopx.zcode_goal_mode import api
+    from loopx.hosts.zcode import api
     registry, _, _ = authority
     seen = []
     def operation(**kwargs):
@@ -449,7 +449,7 @@ def test_real_chat_http_route_preserves_scoped_readback(authority, monkeypatch):
     from urllib.request import Request, urlopen
     from urllib.error import HTTPError
     from loopx.chat_server import ChatRequestHandler
-    from loopx.zcode_goal_mode import api
+    from loopx.hosts.zcode import api
     registry, _, _ = authority
     seen = []
     def operation(**kwargs):
@@ -622,7 +622,7 @@ def test_internal_guard_requires_known_action_and_validates_inactive_cleanup(aut
     )
     registry.write_text(json.dumps(payload), encoding="utf-8")
     request = {"registry": str(registry), "project": str(project), "goal_id": "delivery", "agent_id": "zcode-worker", "goal_ref": {"goal_id": "delivery", "goal_instance_id": INSTANCE_A}}
-    command = [sys.executable, "-X", "utf8", "-B", "-m", "loopx.zcode_goal_mode.bridge", "--validate-binding"]
+    command = [sys.executable, "-X", "utf8", "-B", "-m", "loopx.hosts.zcode.bridge", "--validate-binding"]
     def invoke(action):
         body = dict(request)
         if action is not None:
@@ -673,7 +673,7 @@ def test_stale_expected_binding_rejects_before_any_provider_effect(authority, mo
 
 
 def test_api_mutations_require_readback_expectation(authority, monkeypatch):
-    from loopx.zcode_goal_mode import api
+    from loopx.hosts.zcode import api
     registry, _, _ = authority
     handler = Handler(registry, body={"action": "start"})
     monkeypatch.setattr(api, "zcode_goal_operation", lambda **kwargs: pytest.fail("missing expectation reached provider"))

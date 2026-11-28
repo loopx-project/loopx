@@ -20,7 +20,7 @@ from .presentation.codex_accounts_api import CodexAccountService
 if TYPE_CHECKING:
     from .capabilities.native_chat.transports import ChatConversationTransports
 from .attached_session_api import AttachedSessionRequestMixin
-from .zcode_goal_mode.api import ZCodeGoalRequestMixin
+from .hosts.zcode.api import ZCodeGoalRequestMixin
 from .chat import TodoReviewPreviewConflict, redact_local_paths
 from .chat_agent import CodexChatAgentError
 from .capabilities.native_chat.project_context import ChatProjectContexts

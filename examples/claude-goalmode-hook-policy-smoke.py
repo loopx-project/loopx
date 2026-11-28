@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "loopx" / "claude_goal_mode" / "hooks"))
+sys.path.insert(0, str(REPO_ROOT / "loopx" / "hosts" / "claude" / "hooks"))
 import goal_policy  # noqa: E402
 
 CTX = {"goal_id": "g", "registry": "/r", "agent_id": "cc",

@@ -814,7 +814,7 @@ active users and recoverable dependency definitions. Keep this an explicit maint
 目录较旧不能证明无人使用；清理应作为显式维护操作进行。
 
 `npm run typecheck:control-plane` discovers all TypeScript sources under
-`loopx/control_plane/` and `loopx/zcode_goal_mode/`, including standalone bridges
+`loopx/control_plane/` and `loopx/hosts/zcode/`, including standalone bridges
 launched from Python and control-plane test drivers. New source files in these
 owners need no per-file compiler registration. Tests and examples retain their
 explicit compile entries; `npm run test:control-plane` separately discovers and executes

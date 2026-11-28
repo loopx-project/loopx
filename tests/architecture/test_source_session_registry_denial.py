@@ -24,7 +24,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/capabilities/manager_context/roundtrip.py",
     "loopx/capabilities/issue_fix/correction_settlement.py",
     "loopx/capabilities/native_chat/project_context.py",
-    "loopx/claude_goal_mode/scripts/connect.py",
+    "loopx/hosts/claude/scripts/connect.py",
     "loopx/cli_runtime.py",
     "loopx/cli_commands/coordination_shadow.py",
     "loopx/cli_commands/manager_inbox.py",
@@ -46,7 +46,7 @@ DIRECT_LOADER_ALLOWLIST = {
     "loopx/control_plane/projects/registry.py",
     "loopx/control_plane/quota/execution_preparation.py",
     "loopx/control_plane/turn_driver/codex_sessions.py",
-    "loopx/kunluncode_goal_mode/cli.py",
+    "loopx/hosts/kunluncode/cli.py",
     "loopx/state_migration.py",
     "loopx/hosts/managed_service_runtime.py",
 }

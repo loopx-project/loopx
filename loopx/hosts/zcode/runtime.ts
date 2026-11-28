@@ -1,9 +1,9 @@
 /** One native session owner. Quota admission and revocation reuse Core CLI decisions. */
 import {createHash} from "node:crypto";
 import {readFile} from "node:fs/promises";
-import {durableWriteJson} from "../control_plane/effect_runtime_io.ts";
-import {BARE_SHA256_PATTERN} from "../control_plane/content_digest.ts";
-import type {JsonObject} from "../control_plane/effect_program.ts";
+import {durableWriteJson} from "../../control_plane/effect_runtime_io.ts";
+import {BARE_SHA256_PATTERN} from "../../control_plane/content_digest.ts";
+import type {JsonObject} from "../../control_plane/effect_program.ts";
 import type {GoalBasis, NativeObservation, NativeRequest, QuotaObservation, ZCodeModelSelection, ZCodeGoalAction, ZCodeGoalReadback} from "./contract.ts";
 import {isGoalBasis, sameBinding, sameGoalBasis, ZCodeGoalError, safeFailure} from "./contract.ts";
 

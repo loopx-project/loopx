@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 from loopx.capabilities.change_quality import scope
-from loopx.claude_goal_mode.scripts import goalmode_cmd
+from loopx.hosts.claude.scripts import goalmode_cmd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

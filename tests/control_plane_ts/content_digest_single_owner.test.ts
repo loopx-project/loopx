@@ -195,8 +195,8 @@ const CANONICAL_CONSUMERS = [
   "control_plane/work_items/task_lease_lifecycle_request.ts",
   "control_plane/work_items/task_lease_workspace.ts",
   "control_plane/work_items/yardstick_decision.ts",
-  "zcode_goal_mode/cli.ts",
-  "zcode_goal_mode/runtime.ts",
+  "hosts/zcode/cli.ts",
+  "hosts/zcode/runtime.ts",
 ];
 
 function packageFiles(dir: string, base = ""): string[] {

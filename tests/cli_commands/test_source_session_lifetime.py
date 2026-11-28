@@ -11,7 +11,7 @@ import time
 import pytest
 
 from loopx.cli import main
-from loopx.claude_goal_mode.scripts import connect as claude_connect
+from loopx.hosts.claude.scripts import connect as claude_connect
 from loopx.control_plane.goals import (
     source_session_recreation,
     source_session_registration,

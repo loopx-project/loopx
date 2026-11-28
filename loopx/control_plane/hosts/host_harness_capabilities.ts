@@ -391,7 +391,7 @@ export const CLAUDE_HOST_CAPABILITIES: HostHarnessCapabilities =
   defineHostHarnessCapabilities({
     host_id: "claude",
     integration_tier: "boundary_cli",
-    adapter_module: "loopx.claude_goal_mode",
+    adapter_module: "loopx.hosts.claude",
     supported_capabilities: ["verifier_hook"],
     hook_events: ["PreToolUse"],
     requires_utf8_stdio: true,

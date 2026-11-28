@@ -5,8 +5,8 @@ import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join, resolve, sep} from "node:path";
 import {fileURLToPath} from "node:url";
-import {ZCodeAppServer, terminateOwnedProcess} from "../../loopx/zcode_goal_mode/app-server.ts";
-const guardian = fileURLToPath(new URL("../../loopx/zcode_goal_mode/guard.ts",import.meta.url));
+import {ZCodeAppServer, terminateOwnedProcess} from "../../loopx/hosts/zcode/app-server.ts";
+const guardian = fileURLToPath(new URL("../../loopx/hosts/zcode/guard.ts",import.meta.url));
 const writer = String.raw`const fs=require('node:fs');const path=process.argv[1];let n=0;setInterval(()=>fs.writeFileSync(path,String(++n)),20);`;
 const cli = String.raw`const cp=require('node:child_process'),fs=require('node:fs');const path=process.argv[1];let n=0;const owned=cp.spawn(process.execPath,['-e',process.argv[2],path+'.child'],{stdio:'ignore',windowsHide:true});setInterval(()=>fs.writeFileSync(path,String(++n)),20);process.stdout.write(JSON.stringify({childPid:owned.pid})+'\n');process.stdin.resume();`;
 async function pulse(path:string):Promise<string|null>{try{return await readFile(path,"utf8");}catch{return null;}}

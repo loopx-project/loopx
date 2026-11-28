@@ -1,26 +1,25 @@
-"""KunlunCode stdio MCP entrypoint."""
+"""Compatibility entrypoint forwarding ``loopx.kunluncode_goal_mode.server`` to ``loopx.hosts.kunluncode.server``."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
-from loopx.goal_mode_mcp import GoalModeMCPConfig, create_fastmcp_server
-from loopx.kunluncode_goal_mode.context import goal_context
-from loopx.kunluncode_goal_mode.guards import guard_native_controller_writeback
+if not __package__:
+    _package_parent = str(Path(__file__).resolve().parents[2])
+    if _package_parent not in sys.path:
+        sys.path.insert(0, _package_parent)
 
-
-CONFIG = GoalModeMCPConfig(
-    server_name="loopx-kunluncode",
-    runtime_profile="kunluncode",
-    legacy_host_surface="kunluncode",
-    setup_hint="run loopx-kunluncode connect --project <dir> --goal-id <goal>",
-)
-mcp, control = create_fastmcp_server(CONFIG, lambda: goal_context(Path.cwd()))
-guard_native_controller_writeback(control)
+from loopx.hosts.kunluncode import server as _target  # noqa: E402
+from loopx.hosts.kunluncode.server import main  # noqa: E402
 
 
-def main() -> None:
-    mcp.run()
+def __getattr__(name: str) -> object:
+    return getattr(_target, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(dir(_target)) | {"main"})
 
 
 if __name__ == "__main__":

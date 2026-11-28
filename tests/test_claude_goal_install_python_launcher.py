@@ -44,7 +44,7 @@ from pathlib import Path
 
 import pytest
 
-from loopx.claude_goal_mode.scripts import install as claude_install
+from loopx.hosts.claude.scripts import install as claude_install
 
 
 def _dead_python3_alias(tmp_path: Path) -> Path:

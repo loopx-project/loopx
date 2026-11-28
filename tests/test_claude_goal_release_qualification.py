@@ -71,7 +71,7 @@ def test_child_environment_allowlist_drops_unrelated_secrets_and_operator_home(m
 
 
 def test_claude_loop_uses_current_contract_not_segment_or_empty_list_stop():
-    from loopx.claude_goal_mode.scripts.goalmode_cmd import loop_execution_content, loop_md_content
+    from loopx.hosts.claude.scripts.goalmode_cmd import loop_execution_content, loop_md_content
     from loopx.control_plane.heartbeat.rules import SCOPE_BOUNDED_WORK_RULE
 
     bootstrap = loop_md_content("goal-a", "agent-a")
@@ -130,7 +130,7 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
     pytest.importorskip("mcp.server.fastmcp")
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
-    from loopx.claude_goal_mode.scripts.goalmode_cmd import write_loop_md
+    from loopx.hosts.claude.scripts.goalmode_cmd import write_loop_md
 
     project, _, launcher = runner.shared.setup(tmp_path)
     write_loop_md(project, runner.shared.GOAL, runner.shared.AGENT)
@@ -138,7 +138,7 @@ def test_real_claude_stdio_mcp_binding_and_identity_gate(tmp_path):
     before = state.read_bytes()
     params = StdioServerParameters(
         command=sys.executable,
-        args=[str(REPO / "loopx/claude_goal_mode/mcp/loopx_mcp.py")],
+        args=[str(REPO / "loopx/hosts/claude/mcp/loopx_mcp.py")],
         cwd=str(project), env=runner.shared.host_environment(tmp_path, launcher),
     )
     async def exercise():

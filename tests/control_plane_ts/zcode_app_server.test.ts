@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
-import { ZCodeAppServer, ZCodeProtocolError } from "../../loopx/zcode_goal_mode/app-server.ts";
+import { ZCodeAppServer, ZCodeProtocolError } from "../../loopx/hosts/zcode/app-server.ts";
 
 // An independent native host fixture, with strict CAS and a self-running Goal.
 const HOST = String.raw`

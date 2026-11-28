@@ -190,10 +190,10 @@ top-level packages:
   fence fidelity—never claiming autonomous execution or budget enforcement a host
   cannot verify.
 - **Consolidating `loopx/*_goal_mode/` into `loopx/hosts/`:** migrate the `9`
-  top-level `loopx/*_goal_mode/` packages (`6` migrated into `loopx/hosts/`:
-  `hosts/agy`, `hosts/dsh`, `hosts/kiro_cli`, `hosts/opencode`, `hosts/opencode2`,
-  `hosts/pi`; `3` remaining: `claude_goal_mode`, `kunluncode_goal_mode`,
-  `zcode_goal_mode`) under shared `HostHarnessCapabilities` projections per
+  top-level `loopx/*_goal_mode/` packages (`9` migrated into `loopx/hosts/`:
+  `hosts/agy`, `hosts/claude`, `hosts/dsh`, `hosts/kiro_cli`, `hosts/kunluncode`,
+  `hosts/opencode`, `hosts/opencode2`, `hosts/pi`, `hosts/zcode`; `0` remaining)
+  under shared `HostHarnessCapabilities` projections per
   [the unified contract's retirement gate](controller-executor-unified-contract-v0.md#3-normative-retirement-backlog-and-ratchet-rules)
   and [`top_level_module_budget.json`](../../../tests/architecture/top_level_module_budget.json),
   keeping CLI compatibility aliases strictly until caller cutover completes.
@@ -470,7 +470,7 @@ in the existing milestones; there is no parallel delivery program.
 
 The bounded S6/S8 source-reading slice provides a [read-only MCP adapter for an existing Ego Page](../../integrations/ego-source-reader.md): rendered text, image indices and one indexed rendered image region within configured origins and an exact URL fence. It creates no Session, material authority or browser service. Text/image navigation now has a bounded semantic-content readiness check scoped to primary semantic content rather than an ancillary sidebar article; navigation text alone cannot satisfy it, busy content ancestors still delay extraction, and image reads accept loaded visible pixels without requiring a caption. One native Bot text round read the observed article through its final paragraph and returned streamed progress and the answer in the original conversation; its first-answer latency remains unqualified. Native Bot single-image consumption has also been observed, but neither proves all images or the referenced primary post. Source capture, verification walls, truncation, unloaded images and optional provider setup keep their separate acceptance boundaries; this slice does not close the materials journey.
 
-The bounded S4/S5/S7/S8/S12 [ZCode native CLI provider](../../../loopx/zcode_goal_mode/README.md)
+The bounded S4/S5/S7/S8/S12 [ZCode native CLI provider](../../../loopx/hosts/zcode/README.md)
 adds explicit binding, model selection, start/pause/resume/stop and live readback
 through the existing CLI and Goal detail drawer. It reuses Core Goal/Agent
 identity and quota admission/revocation, isolates the managed session and keeps

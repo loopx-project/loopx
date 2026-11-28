@@ -398,7 +398,7 @@ def test_frontend_source_inputs_ignore_placeholder_checkout_line_endings(tmp_pat
 @pytest.mark.parametrize("name", ["contract.ts", "contract.json"])
 def test_provider_contract_update_invalidates_packaged_frontend(source, tmp_path, name):
     # A changed caller contract must not ship with previously built controls.
-    contract = tmp_path / "loopx/zcode_goal_mode" / name
+    contract = tmp_path / "loopx/hosts/zcode" / name
     contract.parent.mkdir(parents=True)
     contract.write_text("original contract", encoding="utf-8")
     builder.build(None)

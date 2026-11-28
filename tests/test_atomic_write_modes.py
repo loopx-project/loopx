@@ -18,7 +18,7 @@ import pytest
 from loopx import chat_store, file_lock
 from loopx.chat import endpoints as chat_endpoints
 from loopx.extensions.lark import private_json
-from loopx.kunluncode_goal_mode.context import read_binding, write_binding
+from loopx.hosts.kunluncode.context import read_binding, write_binding
 from loopx.registry import atomic_write_json
 
 
