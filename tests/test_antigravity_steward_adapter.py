@@ -996,6 +996,14 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (200, b'{"fixture":Infinity}', "antigravity_transport_error"),
         (200, b'{"fixture":-Infinity}', "antigravity_transport_error"),
         (200, '{"fixture":"before�after"}'.encode("utf-8"), {"fixture": "before�after"}),
+        (
+            200,
+            '{"literal":"🙂",'.encode("utf-8")
+            + br'"\ud83d\ude42":"\ud83d\ude42","boundaries":["\ud7ff","\ue000"],"escaped":"\\ud800"}',
+            {"literal": "🙂", "🙂": "🙂", "boundaries": ["\ud7ff", "\ue000"], "escaped": r"\ud800"},
+        ),
+        (200, br'{"fixture":[["\ud800"]]}', "antigravity_transport_error"),
+        (200, br'{"fixture":{"\udfff":true}}', "antigravity_transport_error"),
         (200, b'{"fixture":"before\xffafter"}', "antigravity_transport_error"),
         (200, b'{"fixture":"incomplete\xe2\x82"}', "antigravity_transport_error"),
         (200, b"{}", {}),
@@ -1015,15 +1023,17 @@ def test_explicit_remote_endpoint_and_redirect_never_forward_token(language_serv
         (503, b'{"fixture":1e400}', "antigravity_rpc_error"),
         (503, b'{"value":1,"value":2}', "antigravity_rpc_error"),
         (503, b"\x0c", "antigravity_rpc_error"),
+        (503, br'{"fixture":"\ud800"}', "antigravity_rpc_error"),
     ],
     ids=["object", "same-key-different-objects", "duplicate-key", "nested-duplicate-key", "escaped-duplicate-key",
          "finite-numbers-and-text", "finite-float-boundaries", "float-overflow", "nested-negative-overflow",
          "nested-nan", "infinity", "negative-infinity",
-         "valid-unicode", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
+         "valid-unicode", "unicode-scalars-and-literal-escape", "nested-unpaired-surrogate-value",
+         "nested-unpaired-surrogate-key", "invalid-utf8", "incomplete-utf8", "empty-object", "empty-body",
          "json-whitespace-only", "form-feed-only", "with-nonbreaking-space", "whitespace-inside-string",
          "array", "null", "boolean", "number", "string", "malformed-json",
          "http-error", "http-error-invalid-utf8", "http-error-with-overflow", "http-error-with-duplicate-key",
-         "http-error-with-non-json-whitespace"],
+         "http-error-with-non-json-whitespace", "http-error-with-unpaired-surrogate"],
 )
 def test_rpc_validates_response_shape_and_keeps_typed_errors(language_server, status, body, expected):
     from loopx.capabilities.native_chat.antigravity_discovery import _rpc_post

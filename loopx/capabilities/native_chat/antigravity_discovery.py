@@ -7,6 +7,7 @@ from email.message import Message
 from functools import lru_cache
 import hashlib
 import ipaddress
+from itertools import chain
 import json
 import math
 import os
@@ -15,7 +16,7 @@ import re
 import shutil
 import subprocess
 import time
-from typing import Callable, IO, Mapping, NoReturn, Protocol, TypeAlias, TypeGuard
+from typing import Callable, IO, Iterator, Mapping, NoReturn, Protocol, TypeAlias, TypeGuard
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -184,6 +185,27 @@ def _parse_rpc_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return fields
 
 
+_SURROGATE_CODE_POINT = re.compile(r"[\ud800-\udfff]")
+
+
+def _validate_rpc_strings(response: JsonDict) -> None:
+    # JSON decoding combines valid UTF-16 pairs before exposing strings.
+    pending: list[Iterator[object]] = [chain(response, response.values())]
+    while pending:
+        try:
+            member = next(pending[-1])
+        except StopIteration:
+            pending.pop()
+            continue
+        if isinstance(member, str):
+            if _SURROGATE_CODE_POINT.search(member):
+                raise ValueError("Antigravity RPC response contains an unpaired Unicode surrogate")
+        elif isinstance(member, dict):
+            pending.append(chain(member, member.values()))
+        elif isinstance(member, list):
+            pending.append(iter(member))
+
+
 def _rpc_post(
     base_url: str,
     csrf_token: str,
@@ -214,6 +236,7 @@ def _rpc_post(
             ) if raw.strip(" \t\r\n") else {}
             if not _is_dict(data):
                 raise ValueError("Antigravity RPC response must be a JSON object")
+            _validate_rpc_strings(data)
             return as_rpc_response(data)
     except urllib.error.HTTPError as exc:
         raise CodexChatAgentError(

@@ -3076,6 +3076,63 @@ theorem antigravity_http_error_precedes_blank_body (utf8Valid : Bool) (body : Li
 theorem antigravity_blank_body_requires_valid_utf8 (body : List Char) (parsed : AntigravityRpcOutcome) :
     classifyAntigravityBlankBody true false body parsed = .invalidResponse := rfl
 
+/- The decoded tree supplies every string, including object keys and strings
+   in nested arrays. Fin captures the Python code point range before validation. -/
+abbrev AntigravityDecodedStrings := List (List (Fin 0x110000))
+
+def antigravityCodePointIsScalar (point : Fin 0x110000) : Bool :=
+  decide (point.val < 0xD800 ∨ 0xDFFF < point.val)
+
+def antigravityAllDecodedStringsAreScalar (strings : AntigravityDecodedStrings) : Bool :=
+  strings.all (fun text => text.all antigravityCodePointIsScalar)
+
+def classifyAntigravityScalarReply (previous : AntigravityRpcOutcome)
+    (strings : AntigravityDecodedStrings) : AntigravityRpcOutcome :=
+  match previous with
+  | .accepted => if antigravityAllDecodedStringsAreScalar strings then .accepted else .invalidResponse
+  | outcome => outcome
+
+theorem antigravity_scalar_strings_iff (strings : AntigravityDecodedStrings) :
+    antigravityAllDecodedStringsAreScalar strings = true ↔
+      ∀ text ∈ strings, ∀ point ∈ text, point.val < 0xD800 ∨ 0xDFFF < point.val := by
+  simp [antigravityAllDecodedStringsAreScalar, antigravityCodePointIsScalar]
+
+theorem antigravity_scalar_reply_acceptance_iff (strings : AntigravityDecodedStrings) :
+    classifyAntigravityScalarReply .accepted strings = .accepted ↔
+      ∀ text ∈ strings, ∀ point ∈ text, point.val < 0xD800 ∨ 0xDFFF < point.val := by
+  rw [← antigravity_scalar_strings_iff strings]
+  by_cases checked : antigravityAllDecodedStringsAreScalar strings = true <;>
+    simp [classifyAntigravityScalarReply, checked]
+
+theorem antigravity_surrogate_in_any_decoded_string_is_a_transport_failure
+    (strings : AntigravityDecodedStrings) (text : List (Fin 0x110000)) (point : Fin 0x110000)
+    (inReply : text ∈ strings) (inText : point ∈ text)
+    (lower : 0xD800 ≤ point.val) (upper : point.val ≤ 0xDFFF) :
+    classifyAntigravityScalarReply .accepted strings = .invalidResponse := by
+  cases checked : antigravityAllDecodedStringsAreScalar strings with
+  | false => simp [classifyAntigravityScalarReply, checked]
+  | true =>
+    have scalar := (antigravity_scalar_strings_iff strings).mp checked text inReply point inText
+    omega
+
+theorem antigravity_adjacent_scalars_and_supplementary_scalars_survive :
+    classifyAntigravityScalarReply .accepted [[0xD7FF, 0xE000, 0x1F642, 0x10FFFF]] = .accepted := rfl
+
+theorem antigravity_first_high_surrogate_is_rejected :
+    classifyAntigravityScalarReply .accepted [[0xD800]] = .invalidResponse := rfl
+
+theorem antigravity_last_low_surrogate_is_rejected :
+    classifyAntigravityScalarReply .accepted [[0xDFFF]] = .invalidResponse := rfl
+
+theorem antigravity_blank_reply_has_no_scalar_validation_failure :
+    classifyAntigravityScalarReply .accepted [] = .accepted := rfl
+
+theorem antigravity_http_failure_precedes_scalar_validation (strings : AntigravityDecodedStrings) :
+    classifyAntigravityScalarReply .httpFailure strings = .httpFailure := rfl
+
+theorem antigravity_scalar_validation_preserves_invalid_reply (strings : AntigravityDecodedStrings) :
+    classifyAntigravityScalarReply .invalidResponse strings = .invalidResponse := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -3444,5 +3501,14 @@ theorem antigravity_blank_body_requires_valid_utf8 (body : List Char) (parsed : 
 #print axioms antigravity_nonbreaking_space_is_not_a_blank_acknowledgment
 #print axioms antigravity_http_error_precedes_blank_body
 #print axioms antigravity_blank_body_requires_valid_utf8
+#print axioms antigravity_scalar_strings_iff
+#print axioms antigravity_scalar_reply_acceptance_iff
+#print axioms antigravity_surrogate_in_any_decoded_string_is_a_transport_failure
+#print axioms antigravity_adjacent_scalars_and_supplementary_scalars_survive
+#print axioms antigravity_first_high_surrogate_is_rejected
+#print axioms antigravity_last_low_surrogate_is_rejected
+#print axioms antigravity_blank_reply_has_no_scalar_validation_failure
+#print axioms antigravity_http_failure_precedes_scalar_validation
+#print axioms antigravity_scalar_validation_preserves_invalid_reply
 
 end StewardPrSignalPagination
