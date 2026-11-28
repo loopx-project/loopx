@@ -573,6 +573,7 @@ function requalifyHeartbeatReceipt(
   identity: SettlementIdentity,
   replayPhase: ReceiptBoundReplayPhase,
   closeoutStarted: boolean,
+  completedTurnEvent: JsonObject | null = null,
 ): JsonObject {
   const work = heartbeatWorkRequalification(
     heartbeatReceipt,
@@ -580,6 +581,7 @@ function requalifyHeartbeatReceipt(
     identity,
     replayPhase,
     closeoutStarted,
+    completedTurnEvent,
   );
   if (work.append === true || replayPhase !== "open" || closeoutStarted ||
       identity.binding_kind !== "autonomous_replan") return work;
@@ -706,7 +708,8 @@ function heartbeatValidationEvent(
   identity: SettlementIdentity,
 ): JsonObject | null {
   const continuation = (event: JsonObject): boolean => isHeartbeatLeaseReadiness(event)
-    || details(event).settlement_receipt_revision === "lease_takeover";
+    || details(event).settlement_receipt_revision === "lease_takeover"
+    || details(event).settlement_receipt_revision === "completed_lease_takeover";
   if (!continuation(receipt)) return receipt;
   // Readiness appends to the same Turn; only its original positive work
   // admission can serve as validation. Follow durable links toward that root.
@@ -1401,6 +1404,12 @@ function readQuotaSettlementFromRequest(
     matchedSpend.admissionSource = receiptDetails.quota_spend_source;
   }
   const completionEvent = findStepEvent(events, identity, "todo_complete");
+  if (
+    receiptDetails.settlement_receipt_revision === "completed_lease_takeover" &&
+    (completionEvent === null || receiptDetails.takeover_completion_event_id !== completionEvent.event_id)
+  ) {
+    throw new EffectRuntimeRequestError("completed lease takeover completion receipt mismatch", "malformed_settlement_state");
+  }
   const supersedeEvent = findStepEvent(events, identity, "todo_supersede");
   const executionLoss = writebackRun !== null && (
     writebackRun.classification === "execution_loss_closeout" ||
@@ -1441,8 +1450,9 @@ function readQuotaSettlementFromRequest(
         "malformed_settlement_state");
     }
   }
-  const closeoutStarted = [writebackRun, writebackEvent, spendRun, spendEvent, completionEvent, supersedeEvent]
+  const accountingStarted = [writebackRun, writebackEvent, spendRun, spendEvent, supersedeEvent]
     .some((receipt) => receipt !== null);
+  const closeoutStarted = accountingStarted || completionEvent !== null;
 
   const writeback = writebackResult(identity, writebackRun, writebackEvent);
   const spend = spendResult(identity, spendRun, spendEvent);
@@ -1613,7 +1623,8 @@ function readQuotaSettlementFromRequest(
     ),
     ...(request.heartbeat_reentry_guard === null ? {} : {
       heartbeat_reentry_qualification: requalifyHeartbeatReceipt(heartbeatReceipt,
-        request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted),
+        request.heartbeat_reentry_guard, identity, replayPhase, closeoutStarted,
+        !accountingStarted ? completionEvent : null),
     }),
   };
 }
