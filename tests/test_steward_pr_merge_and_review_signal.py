@@ -1026,6 +1026,107 @@ def test_steward_terminal_list_readback_corroborates_earlier_reply_evidence(case
         assert numbers == ([1, 41] if case in {"stable", "stable-truncated"} else [41])
 
 
+@pytest.mark.parametrize("case", [
+    "mergeability-drift", "draft-drift", "author-drift", "unknown-mergeability", "missing-mergeability",
+    "missing-draft", "unreadable-author", "unknown-excluded-by-draft", "missing-draft-excluded-by-conflict",
+    "unknown-excluded-by-review", "author-changes-review", "unreadable-review-author",
+    "unreadable-review-author-excluded-by-draft",
+])
+def test_steward_uses_terminal_scope_fields_and_holds_only_on_decisive_unknowns(case: str) -> None:
+    from copy import deepcopy
+
+    checks_conflicts = case in {
+        "mergeability-drift", "unknown-mergeability", "missing-mergeability",
+        "unknown-excluded-by-draft", "missing-draft-excluded-by-conflict", "unknown-excluded-by-review",
+    }
+    checks_drafts = case in {
+        "draft-drift", "missing-draft", "unknown-excluded-by-draft", "missing-draft-excluded-by-conflict",
+        "unreadable-review-author-excluded-by-draft",
+    }
+    checks_author = case in {"author-drift", "unreadable-author"}
+    checks_review_author = case in {
+        "author-changes-review", "unreadable-review-author", "unreadable-review-author-excluded-by-draft",
+    }
+    scope_filter = {"exclude_conflicting": checks_conflicts, "exclude_drafts": checks_drafts}
+    if checks_author:
+        scope_filter.update(author_mode="include", authors=["selected"])
+    if checks_review_author:
+        scope_filter["effective_verdicts"] = ["APPROVE"]
+
+    def pr(number: int) -> dict[str, Any]:
+        eligible = number in {1, 21}
+        node = _graphql_node(_sample_pr(
+            number=number, mergeable="MERGEABLE" if eligible else "CONFLICTING",
+            author="selected" if eligible else "outside",
+        ))
+        node["isDraft"] = not eligible
+        if (eligible and checks_review_author) or (number == 1 and case == "unknown-excluded-by-review"):
+            review = {"id": "approval", "state": "APPROVED", "author": {"login": "reviewer"},
+                      "commit": {"oid": node["headRefOid"]}, "submittedAt": "2030-01-01T10:00:00Z"}
+            if case == "unknown-excluded-by-review":
+                review["body"] = _valid_bilingual_body(
+                    head_oid=node["headRefOid"], verdict="REQUEST_CHANGES", reviewer="model_agent · gpt-6.2-sol · OpenAI (runtime_reported, max)",
+                )
+            node["reviews"] = _graphql_reviews([review])
+        return node
+
+    first = [pr(number) for number in range(1, 21)]
+    readback = deepcopy(first)
+    field_values = {
+        "mergeability-drift": {"mergeable": "CONFLICTING"},
+        "draft-drift": {"isDraft": True},
+        "author-drift": {"author": {"login": "outside"}},
+        "unknown-mergeability": {"mergeable": "UNKNOWN"},
+        "unreadable-author": {"author": "selected"},
+        "unknown-excluded-by-draft": {"mergeable": "UNKNOWN", "isDraft": True},
+        "missing-draft-excluded-by-conflict": {"mergeable": "CONFLICTING"},
+        "unknown-excluded-by-review": {"mergeable": "UNKNOWN"},
+        "author-changes-review": {"author": {"login": "reviewer"}},
+        "unreadable-review-author": {"author": None},
+        "unreadable-review-author-excluded-by-draft": {"author": None, "isDraft": True},
+    }
+    readback[0].update(field_values.get(case, {}))
+    if case == "missing-mergeability":
+        del readback[0]["mergeable"]
+    if case in {"missing-draft", "missing-draft-excluded-by-conflict"}:
+        del readback[0]["isDraft"]
+    reads = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        tail = "cursor=tail" in cmd
+        reads.append(tail)
+        if tail:
+            query = next(part for part in cmd if part.startswith("query="))
+            alias = query.split("previousPrs0:", 1)[1].split("fragment StewardPrWindowRow", 1)[0]
+            assert "...StewardPrScopeFields" in alias
+            payload = _graphql_page([pr(21)], total_count=21)
+            prior_window = _graphql_page(readback, has_next_page=True, end_cursor="tail", total_count=21)
+            payload["data"]["repository"]["previousPrs0"] = prior_window["data"]["repository"]["pullRequests"]
+        else:
+            payload = _graphql_page(first, has_next_page=True, end_cursor="tail", total_count=21)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner)
+    assert snapshot["status"] == "ok" and reads == [False, True]
+    assert snapshot["items"][0]["isDraft"] == readback[0].get("isDraft")
+    assert snapshot["items"][0]["mergeable"] == readback[0].get("mergeable")
+    assert snapshot["items"][0]["author"] == (None if case == "unreadable-author" else readback[0].get("author"))
+    params = {"repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+              "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                               "include_inbox": False, "pr_filter": scope_filter}}
+    observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", params)
+    if case in {"unknown-mergeability", "missing-mergeability", "missing-draft", "unreadable-author", "unreadable-review-author"}:
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior" and observation["material_change"] is False
+        assert ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            **params, "signal_scope": None,
+        })["observation_incomplete"] is False
+    else:
+        assert observation["observation_incomplete"] is False
+        assert [row["number"] for row in observation["scoped_repository_items"]] == [21]
+
+
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
 def test_observe_github_repository_prs_rejects_unverified_total_count(monkeypatch, invalid_count) -> None:
     def fake_run(cmd, **_kwargs):

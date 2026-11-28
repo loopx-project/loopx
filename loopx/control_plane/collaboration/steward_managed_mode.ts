@@ -1172,34 +1172,40 @@ function filterScopedRepositoryItems(
   const authorMode = typeof filter?.author_mode === "string" ? filter.author_mode : null;
   const authors = Array.isArray(filter?.authors) ? new Set(filter.authors.map(String)) : null;
   const canBypassAge = authorMode === "exclude";
-  const requiresCompleteReviews = minStalledHours !== null || effectiveVerdicts !== null
-    || requiredApprovers !== null || filter?.exclude_conflicting === true;
+  const excludeDrafts = filter?.exclude_drafts === true;
+  const excludeConflicting = filter?.exclude_conflicting === true;
+  const usesReviewVerdicts = effectiveVerdicts !== null || requiredApprovers !== null || excludeConflicting;
+  const requiresCompleteReviews = minStalledHours !== null || usesReviewVerdicts;
 
   const matched: RepositoryItem[] = [];
   for (const item of items) {
-    if (filter?.exclude_drafts === true && item.isDraft === true) continue;
-    if (
-      filter?.exclude_conflicting === true
-      && String(item.mergeable ?? "").toUpperCase() === "CONFLICTING"
-    ) {
-      continue;
-    }
-    let authorMembershipUncertain = false;
+    if (excludeDrafts && item.isDraft === true) continue;
+    const mergeable = typeof item.mergeable === "string" ? item.mergeable.trim().toUpperCase() : null;
+    if (excludeConflicting && mergeable === "CONFLICTING") continue;
+    // Native readbacks carry null when unavailable. Older observations can omit these fields.
+    let membershipUncertain = (excludeDrafts && item.isDraft !== undefined && typeof item.isDraft !== "boolean")
+      || (excludeConflicting && item.mergeable !== undefined && mergeable !== "MERGEABLE");
+    const login = prAuthorLogin(item);
     if (authorMode !== null && authors !== null) {
-      const login = prAuthorLogin(item);
-      authorMembershipUncertain = !login;
+      membershipUncertain ||= !login;
       if (login && authorMode === "include" && !authors.has(login)) continue;
       if (login && authorMode === "exclude" && authors.has(login)) continue;
     }
+    const reviewSummary = jsonObject(item.review_summary);
+    const exactReviews = reviewSummary?.exact_head_reviews;
+    const reviewAuthorUnknown = usesReviewVerdicts && item.author !== undefined && !login && Array.isArray(exactReviews)
+      && exactReviews.some((entry) => {
+        const state = jsonObject(entry)?.state;
+        return state === "APPROVED" || state === "CHANGES_REQUESTED" || state === "COMMENTED";
+      });
     const reviewReadbackIncomplete = item.review_readback_incomplete === true;
-    if (reviewReadbackIncomplete || (requiresCompleteReviews && item.review_coverage_incomplete === true)) {
+    if (reviewReadbackIncomplete || reviewAuthorUnknown || (requiresCompleteReviews && item.review_coverage_incomplete === true)) {
       if (plan === undefined) return { items: [], observationIncomplete: true };
-      if (plan.source === "review" && !reviewReadbackIncomplete) plan.add(item);
+      if (plan.source === "review" && !reviewReadbackIncomplete && !reviewAuthorUnknown) plan.add(item);
       continue;
     }
     if (plan?.source === "review") continue;
-    const reviewSummary = jsonObject(item.review_summary);
-    if (filter?.exclude_conflicting === true && reviewSummary?.has_review_conflict === true) continue;
+    if (excludeConflicting && reviewSummary?.has_review_conflict === true) continue;
     if (effectiveVerdicts !== null) {
       const verdict = String(reviewSummary?.effective_verdict ?? "NONE");
       if (!effectiveVerdicts.has(verdict)) continue;
@@ -1239,8 +1245,8 @@ function filterScopedRepositoryItems(
         || reviewSummary?.comments_coverage_incomplete === true;
       if (commentsCoverageIncomplete && (basisKnown || canBypassAge)) {
         if (plan === undefined) return { items: [], observationIncomplete: true };
-        // Backfill cannot resolve missing creator or clock evidence.
-        if (!authorMembershipUncertain || (canBypassAge && basisKnown && !thresholdMet)) {
+        // Backfill can exclude under-age items even when another scope field is uncertain.
+        if (!membershipUncertain || (canBypassAge && basisKnown && !thresholdMet)) {
           plan.add(item);
         }
         continue;
@@ -1257,7 +1263,7 @@ function filterScopedRepositoryItems(
         stalled_bucket: classifyStalledBucket(stalledAgeMs, authorReplyBypass),
       };
     }
-    if (authorMembershipUncertain) {
+    if (membershipUncertain) {
       if (plan === undefined) return { items: [], observationIncomplete: true };
       continue;
     }

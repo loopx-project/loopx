@@ -1687,6 +1687,52 @@ theorem terminal_request_bounds_combined_nested_rows
       previousChecks + previousReviews + previousComments + currentRows ≤ 8400 := by
   omega
 
+/- A gate is absent when a requested predicate lacks decisive evidence. A known
+   exclusion short-circuits other predicates. Fresh terminal fields determine
+   the draft, conflict and author gates for carried rows. -/
+def decideTerminalScope (gates : List (Option Bool)) : Option Bool :=
+  if some false ∈ gates then some false else if none ∈ gates then none else some true
+
+theorem terminal_scope_can_include_iff_no_gate_is_unknown_or_excludes (gates : List (Option Bool)) :
+    decideTerminalScope gates = some true ↔ some false ∉ gates ∧ none ∉ gates := by
+  by_cases excludes : some false ∈ gates <;> by_cases unknown : none ∈ gates <;>
+    simp [decideTerminalScope, excludes, unknown]
+
+def observeTerminalScope (prior rows : List Nat) (gates : List (Option Bool)) : List Nat × Bool :=
+  observe prior ((decideTerminalScope gates).map (fun included => if included then rows else []))
+
+theorem decisive_unknown_terminal_scope_retains_prior (prior rows : List Nat) (gates : List (Option Bool))
+    (unknown : none ∈ gates) (noExclusion : some false ∉ gates) :
+    observeTerminalScope prior rows gates = (prior, false) := by
+  simp [observeTerminalScope, decideTerminalScope, noExclusion, unknown, observe]
+
+theorem verified_terminal_exclusion_overrides_other_scope_unknowns
+    (prior rows : List Nat) (gates : List (Option Bool)) (excludes : some false ∈ gates) :
+    observeTerminalScope prior rows gates = observe prior (some []) := by
+  simp [observeTerminalScope, decideTerminalScope, excludes]
+
+theorem verified_terminal_fields_may_reverse_an_earlier_scope_decision :
+    observeTerminalScope [1] [1] [some true, some true, some true] = ([1], false) ∧
+    observeTerminalScope [1] [1] [some false, some true, some true] = ([], true) := by
+  decide
+
+theorem treating_unknown_mergeability_as_nonconflicting_can_publish_unsupported_scope :
+    observeTerminalScope [21] [1, 21] [some true, none, some true] = ([21], false) ∧
+    observeTerminalScope [21] [1, 21] [some true, some true, some true] = ([1, 21], true) := by
+  decide
+
+theorem terminal_request_bounds_scope_readback_fields (previousPrs : Nat) (previousCap : previousPrs ≤ 95) :
+    3 * previousPrs ≤ 285 := by
+  omega
+
+def nonAuthorApproval (reviewerIsAuthor : Option Bool) : Option Bool :=
+  reviewerIsAuthor.map not
+
+theorem approval_scope_with_unknown_author_retains_prior (prior rows : List Nat) :
+    observeTerminalScope prior rows [some true, nonAuthorApproval none] = (prior, false) ∧
+    observeTerminalScope prior rows [some false, nonAuthorApproval none] = observe prior (some []) := by
+  constructor <;> rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1868,5 +1914,12 @@ theorem terminal_request_bounds_combined_nested_rows
 #print axioms unchanged_comment_cursor_can_hide_a_changed_reply_actor
 #print axioms terminal_request_bounds_nested_recent_comment_rows
 #print axioms terminal_request_bounds_combined_nested_rows
+#print axioms terminal_scope_can_include_iff_no_gate_is_unknown_or_excludes
+#print axioms decisive_unknown_terminal_scope_retains_prior
+#print axioms verified_terminal_exclusion_overrides_other_scope_unknowns
+#print axioms verified_terminal_fields_may_reverse_an_earlier_scope_decision
+#print axioms treating_unknown_mergeability_as_nonconflicting_can_publish_unsupported_scope
+#print axioms terminal_request_bounds_scope_readback_fields
+#print axioms approval_scope_with_unknown_author_retains_prior
 
 end StewardPrSignalPagination

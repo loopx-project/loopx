@@ -692,16 +692,12 @@ _GITHUB_OPEN_PR_FIELDS = """
       }
       nodes {
         ...StewardPrWindowRow
+        ...StewardPrScopeFields
         title
         url
         headRefName
         baseRefName
-        isDraft
         mergeStateStatus
-        mergeable
-        author {
-          login
-        }
         comments(last: 20) {
           ...StewardCommentPage
         }
@@ -731,6 +727,13 @@ fragment StewardPrWindowRow on PullRequest {
   headRefOid
   updatedAt
   reviewDecision
+}"""
+
+_GITHUB_OPEN_PR_SCOPE_FRAGMENT = """
+fragment StewardPrScopeFields on PullRequest {
+  isDraft
+  mergeable
+  author { login }
 }"""
 
 _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT = """
@@ -769,8 +772,9 @@ def _open_pr_readback_fields(limits: _OpenPrReadbackLimits) -> str:
     return fields
 
 
-def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits]) -> str:
+def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits], *, terminal_scope: bool) -> str:
     variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_limits)))
+    scope_fields = "\n        ...StewardPrScopeFields" if terminal_scope else ""
     readbacks = "".join(
         f"""
     previousPrs{index}: pullRequests(
@@ -779,7 +783,7 @@ def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits]) ->
     ) {{
       totalCount
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ ...StewardPrWindowRow{_open_pr_readback_fields(limits)} }}
+      nodes {{ ...StewardPrWindowRow{scope_fields}{_open_pr_readback_fields(limits)} }}
     }}"""
         for index, limits in enumerate(previous_limits)
     )
@@ -789,7 +793,8 @@ def _open_prs_graphql_query(previous_limits: Sequence[_OpenPrReadbackLimits]) ->
 {_GITHUB_OPEN_PR_FIELDS}{readbacks}
   }}
 }}"""
-        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_OPEN_PR_SCOPE_FRAGMENT
+        + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
         + _GITHUB_CHECK_CONTEXT_WINDOW_FRAGMENT
     )
 
@@ -1293,7 +1298,7 @@ def observe_github_repository_prs(
                 "api",
                 "graphql",
                 "-f",
-                f"query={_open_prs_graphql_query(previous_limits)}",
+                f"query={_open_prs_graphql_query(previous_limits, terminal_scope=can_finish)}",
                 "-f",
                 f"owner={owner}",
                 "-f",
@@ -1348,6 +1353,13 @@ def observe_github_repository_prs(
                         unverified_reviews.add(number)
                     if not _earlier_pr_comments_agree(original, readback_row):
                         unverified_comments.add(number)
+                    author = readback_row.get("author")
+                    raw_nodes_by_number[number] = {
+                        **original,
+                        "isDraft": readback_row.get("isDraft"),
+                        "mergeable": readback_row.get("mergeable"),
+                        "author": author if isinstance(author, Mapping) else None,
+                    }
             raw_nodes_by_number.update((row["number"], row) for row in page.rows)
             if page.next_cursor is None:
                 break
