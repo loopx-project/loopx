@@ -1,3 +1,5 @@
+import {AuthorityStoreProtocolError} from "./coordination/authority_store_codec.ts";
+
 export const EFFECT_RUNTIME_ERROR_KINDS = [
   "request_rejected",
   "conflict",
@@ -95,6 +97,10 @@ function isNodeSystemError(error: unknown): boolean {
 export function effectRuntimeErrorPayload(
   error: unknown,
 ): EffectRuntimeErrorPayload {
+  // A provider may attach an explicitly public diagnostic to a local error.
+  if (error instanceof AuthorityStoreProtocolError && error.cause instanceof EffectRuntimeRequestError) {
+    error = error.cause;
+  }
   if (error instanceof EffectRuntimeBoundaryError) {
     const payload: EffectRuntimeErrorPayload = {
       kind: error.kind,

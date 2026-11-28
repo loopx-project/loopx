@@ -240,6 +240,31 @@ def test_unqualified_serving_runtime_is_reported_with_a_restart_action(
     effect_runtime.effect_runtime_result("runtime.shutdown", {}, retry_safe=False)
 
 
+def test_unqualified_sqlite_backup_returns_a_public_diagnostic_over_socket(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _isolate_runtime(tmp_path, monkeypatch)
+    monkeypatch.setenv("LOOPX_EFFECT_RUNTIME_TRANSPORT", "tcp")
+    flags = os.environ.get("NODE_OPTIONS", "")
+    monkeypatch.setenv("NODE_OPTIONS", f"{flags} --no-experimental-sqlite".strip())
+    source, destination = tmp_path / "source.sqlite", tmp_path / "destination.sqlite"
+    try:
+        with pytest.raises(effect_runtime.EffectRuntimeRejected) as rejected:
+            effect_runtime.effect_runtime_result(
+                "coordination.sqlite_backup.snapshot",
+                {"source_path": str(source), "destination_path": str(destination)},
+            )
+        error = rejected.value
+        assert error.diagnostic_code == "sqlite_runtime_unqualified"
+        assert "Node 22.22.3 or newer" in str(error)
+        assert "loopx doctor --restart-runtime" in str(error)
+        assert str(tmp_path) not in str(error)
+        assert not destination.exists()
+        assert effect_runtime.effect_runtime_result("runtime.ping", {})["pid"] > 0
+    finally:
+        effect_runtime.restart_effect_runtime()
+
+
 def test_deep_readiness_reports_the_identity_of_the_runtime_it_started(
     tmp_path: Path,
     monkeypatch,

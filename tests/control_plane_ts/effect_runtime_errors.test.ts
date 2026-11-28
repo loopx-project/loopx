@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {AuthorityStoreProtocolError} from "../../loopx/control_plane/coordination/authority_store_codec.ts";
+
 import {
   EffectRuntimeConflictError,
   EffectRuntimeLockTimeoutError,
@@ -58,6 +60,23 @@ test("filesystem and unexpected failures do not expose private diagnostics", () 
     kind: "internal_failure",
     code: "unexpected_handler_error",
     message: "Effect runtime handler failed unexpectedly",
+  });
+});
+
+test("only explicitly public authority diagnostics cross the response boundary", () => {
+  const fallback = {
+    kind: "internal_failure",
+    code: "unexpected_handler_error",
+    message: "Effect runtime handler failed unexpectedly",
+  };
+  assert.deepEqual(effectRuntimeErrorPayload(Object.create(null)), fallback);
+  assert.deepEqual(effectRuntimeErrorPayload(new AuthorityStoreProtocolError("internal detail")), fallback);
+  const publicError = new EffectRuntimeRequestError("Rerun with a qualified runtime.", "fixture_unqualified");
+  const localError = new AuthorityStoreProtocolError("internal detail", {cause: publicError});
+  assert.deepEqual(effectRuntimeErrorPayload(localError), {
+    kind: "request_rejected",
+    code: "fixture_unqualified",
+    message: "Rerun with a qualified runtime.",
   });
 });
 
