@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
@@ -91,6 +92,7 @@ def _saved_context_transport_failure(
 def project_saved_context_capture(
     args: argparse.Namespace, *, hook_session: str | None = None,
     registry_path: Path | None = None, runtime_root_arg: str | None = None,
+    delivery_proof: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Present an immutable already-decided quota capture.
 
@@ -217,7 +219,10 @@ def project_saved_context_capture(
             with publication_guard():
                 if saved_page:
                     return _saved_context_read_page(args, navigation, initial_reference=None,
-                        initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv)
+                        initial_read_plan=None, output_limit=output_limit, reader_argv=reader_argv,
+                        delivery_proof=delivery_proof)
+                if delivery_proof is not None and isinstance(navigation, dict):
+                    delivery_proof["captured_payload"] = payload
                 return navigation
         except NativeRecoveryLeaseUnavailable as exc:
             return authority_refusal(exc)
@@ -339,7 +344,10 @@ def project_saved_context_capture(
         with nullcontext() if native_prepared else publication_guard():
             if saved_page:
                 return _saved_context_read_page(args, navigation, initial_reference=initial_reference,
-                    initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv)
+                    initial_read_plan=initial_read_plan, output_limit=output_limit, reader_argv=reader_argv,
+                    delivery_proof=delivery_proof)
+            if delivery_proof is not None and isinstance(navigation, dict):
+                delivery_proof["captured_payload"] = payload
             return navigation
     except NativeRecoveryLeaseUnavailable as exc:
         return authority_refusal(exc)
@@ -617,13 +625,23 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
             maybe_commit_captured_peer_coordination_cursor,
         )
 
-        payload = project_saved_context_capture(args, registry_path=registry_path, runtime_root_arg=runtime_root_arg)
+        delivery_proof: dict[str, Any] = {}
+        payload = project_saved_context_capture(
+            args,
+            registry_path=registry_path,
+            runtime_root_arg=runtime_root_arg,
+            delivery_proof=delivery_proof,
+        )
         print_payload(payload, args.format, lambda value: str(value.get("command", value.get("reason", ""))))
+        sys.stdout.flush()
         if payload.get("ok") is True:
             try:
                 maybe_commit_captured_peer_coordination_cursor(
-                    args, emitted_payload=payload,
-                    registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                    args,
+                    emitted_payload=payload,
+                    delivery_proof=delivery_proof,
+                    registry_path=registry_path,
+                    runtime_root_arg=runtime_root_arg,
                 )
             except Exception:  # noqa: BLE001 - best-effort cursor commit never blocks delivered projection.
                 pass
@@ -636,13 +654,22 @@ def handle_native_context_command(args: argparse.Namespace, *, print_payload: Ca
 
         # Presentation recovery reads the original capture, never current Goal
         # state. In particular it must not evaluate a guard or append a receipt.
-        payload = quota_capture.read_context_capture(args, reader_argv=current_loopx_cli_argv())
+        delivery_proof = {}
+        payload = quota_capture.read_context_capture(
+            args,
+            reader_argv=current_loopx_cli_argv(),
+            delivery_proof=delivery_proof,
+        )
         print_payload(payload, args.format, lambda value: str(value.get("content", value.get("reason", ""))))
+        sys.stdout.flush()
         if payload.get("ok") is True:
             try:
                 maybe_commit_captured_peer_coordination_cursor(
-                    args, emitted_payload=payload,
-                    registry_path=registry_path, runtime_root_arg=runtime_root_arg,
+                    args,
+                    emitted_payload=payload,
+                    delivery_proof=delivery_proof,
+                    registry_path=registry_path,
+                    runtime_root_arg=runtime_root_arg,
                 )
             except Exception:  # noqa: BLE001 - best-effort cursor commit never blocks delivered readback.
                 pass

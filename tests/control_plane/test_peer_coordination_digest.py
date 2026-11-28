@@ -888,3 +888,194 @@ def test_prepared_capture_reference_defers_cursor_until_selected_read_and_stdout
     assert read_peer_coordination_cursor_state(
         paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
     ) == ([collision_id], ["turn-prep"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_buffered_stdout_flush_failure_preserves_cursor_and_next_turn_delivers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    import sys
+
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=_sample_multi_agent_todos(),
+        provider=provider,
+    )
+    cursor = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    class _BufferedBrokenPipeStdout:
+        def __init__(self) -> None:
+            self.buffered: list[str] = []
+            self.delivered = bytearray()
+
+        def write(self, data: str) -> int:
+            self.buffered.append(data)
+            return len(data)
+
+        def flush(self) -> None:
+            raise BrokenPipeError("broken pipe on stdout flush")
+
+    broken_stdout = _BufferedBrokenPipeStdout()
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", broken_stdout)
+        with pytest.raises(BrokenPipeError, match="broken pipe on stdout flush"):
+            cli_main(
+                [
+                    "--registry",
+                    str(paths["registry"]),
+                    "--runtime-root",
+                    str(paths["runtime"]),
+                    "--format",
+                    "json",
+                    "quota",
+                    "should-run",
+                    "--goal-id",
+                    GOAL_ID,
+                    "--agent-id",
+                    "agent-a",
+                    "--turn-instance-id",
+                    "turn-buf-fail",
+                    "--context-delivery",
+                    "off",
+                ]
+            )
+    assert len(broken_stdout.delivered) == 0
+    assert not cursor.exists()
+
+    # Subsequent live Turn must still surface the unseen collision opportunity.
+    next_code, next_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--turn-instance-id", "turn-buf-next"),
+    )
+    assert next_code == 0 and next_payload["ok"] is True
+    next_digest = next_payload["peer_coordination_digest"]
+    assert [item["kind"] for item in next_digest["items"]] == ["collision"]
+    assert next_digest.get("omitted") == 1
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([next_digest["items"][0]["id"]], ["turn-buf-next"])
+
+
+@pytest.mark.parametrize("provider", ["file", "sqlite"])
+def test_tail_only_raw_and_selected_context_read_preserve_cursor_until_full_digest_delivered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    if provider == "sqlite":
+        isolate_sqlite_runtime(tmp_path, monkeypatch)
+    paths = _write_m1_fixture(
+        tmp_path,
+        agents=("agent-a", "agent-b"),
+        todos=_sample_multi_agent_todos(),
+        provider=provider,
+    )
+    cursor = peer_coordination_cursor_path(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    )
+
+    from loopx.cli_commands import quota_result_delivery
+    from loopx.control_plane.quota.error_codes import QuotaDecisionTransportError
+
+    with monkeypatch.context() as patch:
+        def _fail_handoff(*_args: Any, **_kwargs: Any) -> Any:
+            raise QuotaDecisionTransportError("simulated handoff transport failure")
+
+        patch.setattr(quota_result_delivery, "handoff_decision", _fail_handoff)
+        fail_code, fail_payload = _run_should_run(
+            registry=paths["registry"],
+            runtime=paths["runtime"],
+            agent_id="agent-a",
+            extra_args=(
+                "--turn-instance-id",
+                "turn-tail-fail",
+                "--decision-output-dir",
+                str(tmp_path / "cap-tail"),
+            ),
+        )
+    assert fail_code == 1 and fail_payload["error_code"] == "quota_decision_transport_failed"
+    assert not cursor.exists()
+    captured_ref = fail_payload["captured_decision"]
+    raw_len = len(Path(captured_ref["path"]).read_bytes())
+
+    # 1. Bare capture tail-only page (1 byte, eof=True) must NOT advance cursor.
+    raw_tail_code, raw_tail = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--offset",
+            str(raw_len - 1),
+        ),
+    )
+    assert raw_tail_code == 0 and raw_tail["ok"] is True and raw_tail["eof"] is True
+    assert len(raw_tail["content"].encode("utf-8")) == 1
+    assert not cursor.exists()
+
+    # 2. Explicit selection head chunk truncated before digest end (eof=False) must NOT advance cursor.
+    sel_head_code, sel_head = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--select",
+            "/peer_coordination_digest",
+            "--page-bytes",
+            "256",
+            "--offset",
+            "0",
+        ),
+    )
+    assert sel_head_code == 0 and sel_head["ok"] is True and sel_head["eof"] is False
+    assert not cursor.exists()
+
+    # 3. Jumping directly to the tail page of the explicit selection (1 byte, eof=True) must NOT advance cursor.
+    sel_total = int(sel_head["total_bytes"])
+    sel_tail_code, sel_tail = _run_quota_cli(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        subcommand="context-read",
+        extra_args=(
+            "--capture-file",
+            captured_ref["path"],
+            "--capture-sha256",
+            captured_ref["sha256"],
+            "--select",
+            "/peer_coordination_digest",
+            "--selection-sha256",
+            str(sel_head["selection_sha256"]),
+            "--offset",
+            str(sel_total - 1),
+        ),
+    )
+    assert sel_tail_code == 0 and sel_tail["ok"] is True and sel_tail["eof"] is True
+    assert len(sel_tail["content"].encode("utf-8")) == 1
+    assert not cursor.exists()
+
+    # 4. Subsequent normal live Turn must STILL see the collision item.
+    next_code, next_payload = _run_should_run(
+        registry=paths["registry"],
+        runtime=paths["runtime"],
+        agent_id="agent-a",
+        extra_args=("--turn-instance-id", "turn-after-tail"),
+    )
+    assert next_code == 0 and next_payload["ok"] is True
+    next_digest = next_payload["peer_coordination_digest"]
+    assert [item["kind"] for item in next_digest["items"]] == ["collision"]
+    assert next_digest.get("omitted") == 1
+    assert read_peer_coordination_cursor_state(
+        paths["runtime"], goal_id=GOAL_ID, agent_id="agent-a"
+    ) == ([next_digest["items"][0]["id"]], ["turn-after-tail"])

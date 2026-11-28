@@ -127,9 +127,9 @@ def print_payload(
 	if fmt == "json":
 		# JSON is the machine contract; retain every value and remove only
 		# presentation whitespace. Human-readable output remains Markdown.
-		print(report_json_text(payload))
+		print(report_json_text(payload), flush=True)
 	else:
-		print(markdown_renderer(payload))
+		print(markdown_renderer(payload), flush=True)
 
 
 def add_subcommand_format(arg_parser: argparse.ArgumentParser) -> None:

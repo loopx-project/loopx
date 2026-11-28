@@ -277,7 +277,8 @@ def _validate_pinned_selection(selection: dict[str, Any]) -> None:
 def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, Any] | None = None,
                          next_page_bytes: int | None = None,
                          next_page_output_bytes: int | None = None,
-                         reader_argv: list[str] | None = None) -> dict[str, Any]:
+                         reader_argv: list[str] | None = None,
+                         delivery_proof: dict[str, Any] | None = None) -> dict[str, Any]:
     """Bounded local IO over immutable JSON.
 
     Verify the complete byte digest on every page. The cursor addresses bytes
@@ -453,12 +454,29 @@ def read_context_capture(args: argparse.Namespace, *, presentation: dict[str, An
                     reference_file, bound_route = None, None
         if offset > len(raw) or (offset < len(raw) and raw[offset] & 0xC0 == 0x80):
             raise ValueError("capture offset is outside the file or not a UTF-8 boundary; use the returned next offset")
-        return _capture_page(path, raw, digest, offset=offset, size=size,
+        page = _capture_page(path, raw, digest, offset=offset, size=size,
             output_limit=output_limit, instruction=bool(context_dir),
             presentation=presentation, next_page_bytes=next_page_bytes,
             next_page_output_bytes=next_page_output_bytes, select=selectors, selection_sha256=selection_digest,
             list_fields=list_fields, list_depth=list_depth, initial_read=initial_read, reference_file=reference_file,
             reader_argv=reader_argv, compact_reader=bound_route is not None)
+        if delivery_proof is not None and page.get("ok") is True:
+            from ..control_plane.goals.peer_coordination_digest_source import (
+                prove_page_delivered_peer_digest,
+            )
+
+            delivered_digest = prove_page_delivered_peer_digest(
+                payload,
+                raw=raw,
+                content=str(page.get("content") or ""),
+                offset=int(page["offset"]),
+                list_fields=list_fields,
+                is_selection=selectors is not None or initial_read,
+            )
+            if delivered_digest is not None:
+                delivery_proof["delivered_digest"] = delivered_digest
+                delivery_proof["captured_payload"] = payload
+        return page
     except (OSError, ValueError, RecursionError, EffectRuntimeRemoteError, EffectRuntimeStartupError) as exc:
         # Recovery is presentation-only: keep failures separate from quota's
         # collection error path and retain the existing receipt/capture.
@@ -721,7 +739,8 @@ def budgeted_ready_opening(navigation: dict[str, Any], plan: dict[str, Any],
 def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
                           page_bytes: int, output_bytes: int, reader_argv: list[str] | None,
                           attach_page: bool = True, remaining_reference: Path | None = None,
-                          ordinary_page: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                          ordinary_page: dict[str, Any] | None = None,
+                          delivery_proof: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Try the typed opening and keep the remainder pinned to the same capture."""
     if "opening" not in plan or "first_read_command" not in navigation:
         return None
@@ -763,14 +782,33 @@ def _bounded_initial_read(navigation: dict[str, Any], plan: dict[str, Any], *,
             "and its next_command cursor through the remaining initial context. Both views pin the same capture. "
             "EOF does not establish retention, authority or freshness.")
         page["navigation"] = navigation
-        return page if len(_native_output_bytes(page)) <= output_bytes else None
+        if len(_native_output_bytes(page)) > output_bytes:
+            return None
+        if delivery_proof is not None:
+            from ..control_plane.goals.peer_coordination_digest_source import (
+                prove_page_delivered_peer_digest,
+            )
+
+            delivered_digest = prove_page_delivered_peer_digest(
+                document,
+                raw=content,
+                content=str(page.get("content") or ""),
+                offset=int(page["offset"]),
+                list_fields=False,
+                is_selection=True,
+            )
+            if delivered_digest is not None:
+                delivery_proof["delivered_digest"] = delivered_digest
+                delivery_proof["captured_payload"] = document
+        return page
     except (OSError, ValueError):
         return None  # The same-capture ordinary reader is already available.
 
 
 def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any], *,
                              initial_reference: str | None, initial_read_plan: dict[str, Any] | None,
-                             output_limit: int | None, reader_argv: list[str]) -> dict[str, Any]:
+                             output_limit: int | None, reader_argv: list[str],
+                             delivery_proof: dict[str, Any] | None = None) -> dict[str, Any]:
     """Use the ordinary verified reader; the first page and navigation share its output budget."""
     recovery = navigation["recovery"]
     pinned = initial_reference if args.initial_read else None
@@ -780,13 +818,15 @@ def _saved_context_read_page(args: argparse.Namespace, navigation: dict[str, Any
         "capture_sha256": None if reference else recovery["sha256"],
         "max_page_output_bytes": output_limit,
         "codex_context_dir": None, "codex_context_root": None, "initial_read": bool(args.initial_read and not pinned)})
-    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv)
+    page = read_context_capture(read_args, presentation={"navigation": navigation}, reader_argv=reader_argv,
+        delivery_proof=delivery_proof)
     if page["ok"]:
         if (pinned and initial_read_plan and output_limit is not None and not page["eof"]
                 and "previously_delivered_fields" not in page
                 and (opening := _bounded_initial_read(navigation, initial_read_plan,
                     page_bytes=args.page_bytes if args.page_bytes is not None else output_limit,
-                    output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page)) is not None):
+                    output_bytes=output_limit, reader_argv=reader_argv, ordinary_page=page,
+                    delivery_proof=delivery_proof)) is not None):
             return opening
         # Keep the already-budgeted page and cursor ahead of recovery metadata.
         page["navigation"] = page.pop("navigation")

@@ -631,55 +631,171 @@ def maybe_commit_turn_peer_coordination_cursor(
     )
 
 
-def _page_delivers_peer_digest(args: Any, emitted_payload: Mapping[str, Any]) -> bool:
-    """Return True only when emitted_payload completely delivered peer_coordination_digest."""
+def _skip_json_ws(text: str, pos: int) -> int:
+    while pos < len(text) and text[pos] in " \t\r\n":
+        pos += 1
+    return pos
 
-    if emitted_payload.get("ok") is not True or emitted_payload.get("list_fields") is True:
-        return False
-    if extract_delivered_peer_coordination_digest(emitted_payload) is not None:
-        return True
-    schema = emitted_payload.get("schema_version")
-    if schema not in {"context_capture_page_v1", "context_capture_selection_page_v1"}:
-        return False
-    if emitted_payload.get("eof") is not True:
-        return False
 
-    reference_file = getattr(args, "reference_file", None)
-    pinned_selection: Mapping[str, Any] | None = None
-    if reference_file:
-        from ..turn_driver.decision_capture import read_context_read_reference
+def _top_level_digest_byte_spans(
+    raw_text: str, expected_digest: Mapping[str, Any]
+) -> list[tuple[int, int]]:
+    decoder = json.JSONDecoder()
+    pos = _skip_json_ws(raw_text, 0)
+    if pos >= len(raw_text) or raw_text[pos] != "{":
+        return []
+    pos += 1
+    spans: list[tuple[int, int]] = []
+    expected = dict(expected_digest)
+    while pos < len(raw_text):
+        pos = _skip_json_ws(raw_text, pos)
+        if pos >= len(raw_text) or raw_text[pos] == "}":
+            break
+        if raw_text[pos] == ",":
+            pos = _skip_json_ws(raw_text, pos + 1)
+            if pos >= len(raw_text) or raw_text[pos] == "}":
+                break
+        key_start = pos
+        key, pos = decoder.raw_decode(raw_text, pos)
+        pos = _skip_json_ws(raw_text, pos)
+        if pos >= len(raw_text) or raw_text[pos] != ":":
+            break
+        pos = _skip_json_ws(raw_text, pos + 1)
+        val, val_end = decoder.raw_decode(raw_text, pos)
+        if key == "peer_coordination_digest" and isinstance(val, Mapping) and dict(val) == expected:
+            spans.append(
+                (
+                    len(raw_text[:key_start].encode("utf-8")),
+                    len(raw_text[:val_end].encode("utf-8")),
+                )
+            )
+        pos = val_end
+    return spans
 
-        try:
-            _ref_path, ref_payload = read_context_read_reference(str(reference_file))
-            candidate = ref_payload.get("selection")
-            if isinstance(candidate, Mapping):
-                pinned_selection = candidate
-        except (OSError, ValueError):
-            return False
 
-    has_selection = (
-        "selection_sha256" in emitted_payload
-        or schema == "context_capture_selection_page_v1"
-        or pinned_selection is not None
-        or getattr(args, "select", None) is not None
-        or bool(getattr(args, "initial_read", False))
-    )
-    if not has_selection:
-        return True
-    if bool(getattr(args, "initial_read", False)) or (
-        isinstance(pinned_selection, Mapping) and pinned_selection.get("initial_read") is True
-    ):
-        return True
-    pointers = emitted_payload.get("selected_pointers")
-    if not isinstance(pointers, Sequence) or isinstance(pointers, (str, bytes)):
-        if isinstance(pinned_selection, Mapping):
-            pointers = pinned_selection.get("select")
-        else:
-            pointers = getattr(args, "select", None)
-    if not isinstance(pointers, Sequence) or isinstance(pointers, (str, bytes)):
-        return False
-    allowed = {"", "/peer_coordination_digest", "/work_opening", "/work_opening/peer_coordination_digest"}
-    return any(isinstance(ptr, str) and ptr in allowed for ptr in pointers)
+def _selection_digest_byte_spans(
+    raw_text: str, expected_digest: Mapping[str, Any]
+) -> list[tuple[int, int]]:
+    decoder = json.JSONDecoder()
+    pos = _skip_json_ws(raw_text, 0)
+    if pos >= len(raw_text) or raw_text[pos] != "{":
+        return []
+    pos += 1
+    spans: list[tuple[int, int]] = []
+    expected = dict(expected_digest)
+    while pos < len(raw_text):
+        pos = _skip_json_ws(raw_text, pos)
+        if pos >= len(raw_text) or raw_text[pos] == "}":
+            break
+        if raw_text[pos] == ",":
+            pos = _skip_json_ws(raw_text, pos + 1)
+            if pos >= len(raw_text) or raw_text[pos] == "}":
+                break
+        key, pos = decoder.raw_decode(raw_text, pos)
+        pos = _skip_json_ws(raw_text, pos)
+        if pos >= len(raw_text) or raw_text[pos] != ":":
+            break
+        pos = _skip_json_ws(raw_text, pos + 1)
+        if key != "selections":
+            _val, pos = decoder.raw_decode(raw_text, pos)
+            continue
+        if pos >= len(raw_text) or raw_text[pos] != "[":
+            break
+        arr_pos = pos + 1
+        while arr_pos < len(raw_text):
+            arr_pos = _skip_json_ws(raw_text, arr_pos)
+            if arr_pos >= len(raw_text) or raw_text[arr_pos] == "]":
+                arr_pos += 1
+                break
+            if raw_text[arr_pos] == ",":
+                arr_pos = _skip_json_ws(raw_text, arr_pos + 1)
+                if arr_pos >= len(raw_text) or raw_text[arr_pos] == "]":
+                    arr_pos += 1
+                    break
+            elem_start = arr_pos
+            elem, elem_end = decoder.raw_decode(raw_text, elem_start)
+            if isinstance(elem, Mapping):
+                ptr = elem.get("pointer")
+                val = elem.get("value")
+                if ptr in ("/peer_coordination_digest", "/work_opening/peer_coordination_digest"):
+                    if isinstance(val, Mapping) and dict(val) == expected:
+                        spans.append(
+                            (
+                                len(raw_text[:elem_start].encode("utf-8")),
+                                len(raw_text[:elem_end].encode("utf-8")),
+                            )
+                        )
+                elif ptr in ("", "/work_opening") and isinstance(val, Mapping):
+                    nested_spans = _top_level_digest_byte_spans(
+                        raw_text[elem_start:elem_end], expected
+                    )
+                    if not nested_spans:
+                        # Handle wrapper object {"pointer":..., "value":{...}} by walking into "value"
+                        val_match_pos = _skip_json_ws(raw_text, elem_start + 1)
+                        while val_match_pos < elem_end:
+                            val_match_pos = _skip_json_ws(raw_text, val_match_pos)
+                            if raw_text[val_match_pos] == ",":
+                                val_match_pos = _skip_json_ws(raw_text, val_match_pos + 1)
+                            if raw_text[val_match_pos] == "}":
+                                break
+                            ekey, val_match_pos = decoder.raw_decode(raw_text, val_match_pos)
+                            val_match_pos = _skip_json_ws(raw_text, val_match_pos)
+                            if raw_text[val_match_pos] != ":":
+                                break
+                            val_match_pos = _skip_json_ws(raw_text, val_match_pos + 1)
+                            if ekey == "value":
+                                for s_start, s_end in _top_level_digest_byte_spans(
+                                    raw_text[val_match_pos:elem_end], expected
+                                ):
+                                    spans.append(
+                                        (
+                                            len(raw_text[: val_match_pos + s_start].encode("utf-8")),
+                                            len(raw_text[: val_match_pos + s_end].encode("utf-8")),
+                                        )
+                                    )
+                                break
+                            _ev, val_match_pos = decoder.raw_decode(raw_text, val_match_pos)
+            arr_pos = elem_end
+        pos = arr_pos
+    return spans
+
+
+def prove_page_delivered_peer_digest(
+    source_payload: Mapping[str, Any] | Any,
+    *,
+    raw: bytes,
+    content: str,
+    offset: int,
+    list_fields: bool = False,
+    is_selection: bool = False,
+) -> Mapping[str, Any] | None:
+    """Return expected digest iff this page's actual bytes cover the full digest object."""
+
+    if list_fields or not isinstance(source_payload, Mapping):
+        return None
+    expected_digest = extract_delivered_peer_coordination_digest(source_payload)
+    if expected_digest is None:
+        return None
+    content_bytes = content.encode("utf-8")
+    page_start = offset
+    page_end = offset + len(content_bytes)
+    if page_start < 0 or page_end > len(raw) or raw[page_start:page_end] != content_bytes:
+        return None
+    try:
+        raw_text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    try:
+        spans = (
+            _selection_digest_byte_spans(raw_text, expected_digest)
+            if is_selection
+            else _top_level_digest_byte_spans(raw_text, expected_digest)
+        )
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if any(page_start <= span_start and span_end <= page_end for span_start, span_end in spans):
+        return expected_digest
+    return None
 
 
 def _resolve_captured_decision_for_readback(
@@ -728,17 +844,32 @@ def maybe_commit_captured_peer_coordination_cursor(
     *,
     emitted_payload: Mapping[str, Any],
     captured_payload: Mapping[str, Any] | None = None,
+    delivery_proof: Mapping[str, Any] | None = None,
     registry_path: Path | None = None,
     runtime_root_arg: str | None = None,
 ) -> bool:
-    """Advance cursor idempotently when context-read/context-project delivers a live Turn digest."""
+    """Advance cursor idempotently only when output actually delivered the complete digest."""
 
-    if not _page_delivers_peer_digest(args, emitted_payload):
+    if emitted_payload.get("ok") is not True or emitted_payload.get("list_fields") is True:
+        return False
+    inline_digest = extract_delivered_peer_coordination_digest(emitted_payload)
+    proved_digest = (
+        delivery_proof.get("delivered_digest")
+        if isinstance(delivery_proof, Mapping)
+        and isinstance(delivery_proof.get("delivered_digest"), Mapping)
+        else None
+    )
+    if inline_digest is None and proved_digest is None:
         return False
     source = (
         captured_payload
         if isinstance(captured_payload, Mapping)
-        else _resolve_captured_decision_for_readback(args, emitted_payload=emitted_payload)
+        else (
+            delivery_proof.get("captured_payload")
+            if isinstance(delivery_proof, Mapping)
+            and isinstance(delivery_proof.get("captured_payload"), Mapping)
+            else _resolve_captured_decision_for_readback(args, emitted_payload=emitted_payload)
+        )
     )
     if not isinstance(source, Mapping):
         return False

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -95,6 +96,7 @@ def _emit_and_prune_result(
 ) -> int:
     print_payload(payload, args.format, renderer)
     if exit_code == 0 and on_delivered is not None:
+        sys.stdout.flush()
         try:
             on_delivered(payload)
         except Exception:  # noqa: BLE001 - best-effort cursor commit never breaks delivered output.
