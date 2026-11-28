@@ -16,7 +16,7 @@ import { HostSwitcher } from './Hosts';
 import { Menu } from './Menu';
 import type { HostIconName } from '@calli/extension-api';
 import { HostIcon } from '../extensions/ui';
-import { AgentMark, IconAgents, IconBell, IconCheck, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFork, IconHandover, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSparkle, IconServer } from './icons';
+import { AgentMark, IconAgents, IconBell, IconCheck, IconChevron, IconCrab, IconClock, IconClose, IconDesktop, IconEdit, IconFork, IconHandover, IconFolder, IconList, IconMore, IconPin, IconPlus, IconSearch, IconSettings, IconSidebar, IconSideChat, IconSparkle, IconServer } from './icons';
 import { t } from '../i18n';
 import './fork-subchat.css';
 
@@ -469,22 +469,34 @@ export function Sidebar({
   const parallelList = (keyThread: Thread, forkItems: ForkSubchatItem[], team: Thread[]) => {
     const allThreads = [...forkItems.map((f) => f.thread), ...team];
     if (!parallelOpenFor(keyThread.id, allThreads)) return null;
+    const sortedForks = [...forkItems].sort((a, b) => Number(Boolean(a.thread.doneAt)) - Number(Boolean(b.thread.doneAt)));
     const sortedTeam = [...team].sort(teamOrder);
+    const askPrefix = t('sideChat.threadTitle', '');
     return <div className="handover-members">
-      {forkItems.map(({ thread: f, handedOver }) => {
+      {sortedForks.map(({ thread: f, handedOver }) => {
         const mark = threadMark(f, f.id === selectedId, hasDraft(f.id));
+        const kind = f.forkKind ?? (f.agentSessionId && f.forkedFrom ? 'fork' : 'handoff');
+        const kindLabel = kind === 'handoff' ? t('sidebar.kind.handoff') : kind === 'ask' ? t('sidebar.kind.ask') : t('sidebar.kind.fork');
+        const displayTitle = kind === 'ask' && askPrefix && f.title.startsWith(askPrefix)
+          ? f.title.slice(askPrefix.length) || f.title
+          : f.title;
         return <button
           key={f.id}
-          className={`handover-member${f.id === selectedId ? ' active' : ''}`}
+          className={`handover-member${f.id === selectedId ? ' active' : ''}${f.doneAt ? ' is-done' : ''}`}
           aria-current={f.id === selectedId ? 'true' : undefined}
-          title={f.forkTag ? `${f.forkTag} · ${f.title}` : f.title}
+          title={f.forkTag ? `${kindLabel} · ${f.forkTag} · ${f.title}` : `${kindLabel} · ${f.title}`}
           onClick={() => onSelect(f.id)}
           onContextMenu={(e) => { e.preventDefault(); onThreadMenu(f, e.clientX, e.clientY); }}
           {...longPress(f)}
         >
-          <span className={`dot ${mark ?? 'idle'}`} role="img" aria-label={mark === 'waiting' ? waitingLabel(f) : mark ? MARK_LABELS[mark] : t('status.idle')} />
+          {f.doneAt
+            ? <span className="fork-done-mark" role="img" aria-label={t('sidebar.done')} title={t('sidebar.done')}><IconCheck size={12} /></span>
+            : <span className={`dot ${mark ?? 'idle'}`} role="img" aria-label={mark === 'waiting' ? waitingLabel(f) : mark ? MARK_LABELS[mark] : t('status.idle')} />}
+          <span className="fork-kind-ico" role="img" aria-label={kindLabel} title={kindLabel}>
+            {kind === 'handoff' ? <IconHandover size={12} /> : kind === 'ask' ? <IconSideChat size={12} /> : <IconFork size={12} />}
+          </span>
           {f.forkTag ? <span className="fork-tag-pill">{f.forkTag}</span> : null}
-          {(!f.forkTag || f.title !== f.forkTag) ? <span className="handover-member-name">{f.title}</span> : <span className="handover-member-name" />}
+          {(!f.forkTag || displayTitle !== f.forkTag) ? <span className="handover-member-name">{displayTitle}</span> : <span className="handover-member-name" />}
           {handedOver ? <span className="fork-handed-mark" title={t('sidebar.forkHandedOver')} aria-label={t('sidebar.forkHandedOver')}><IconHandover size={12} /></span> : null}
           <time className="handover-member-time" dateTime={f.updatedAt}>{timeAgo(f.updatedAt, now)}</time>
         </button>;
@@ -502,6 +514,7 @@ export function Sidebar({
           {...longPress(m)}
         >
           <span className={`dot ${mark ?? 'idle'}`} role="img" aria-label={mark === 'waiting' ? waitingLabel(m) : mark ? MARK_LABELS[mark] : t('status.idle')} />
+          <span className="fork-kind-ico" role="img" aria-label={t('sidebar.kind.team')} title={t('sidebar.kind.team')}><IconAgents size={12} /></span>
           {agent?.icon ? <span className="agent-mark" role="img" aria-label={agent.label}><AgentMark path={agent.icon} size={compact ? 14 : 13} /></span> : null}
           <span className="handover-member-name team-member-text">{deliveredPreview(m.coordination?.doing ?? '') || m.title}</span>
           <time className="handover-member-time" dateTime={m.updatedAt}>{timeAgo(m.updatedAt, now)}</time>

@@ -173,33 +173,32 @@ test('on a phone, switching machines stays on the thread list', async () => {
   }
 });
 
-test('handover creates and persists a draft only on the selected remote machine', async () => {
-  await page.getByRole('tab',{name:'devbox'}).click();
-  await page.locator('.sidebar .thread-item',{hasText:'开发机上的对话'}).click();
-  const beforeLocal=await (await api(hub,'/api/threads')).json();
-  const beforeRemote=await (await api(node,'/api/threads')).json();
+test('handoff creates a continuation thread only on the selected remote machine', async () => {
+  await page.getByRole('tab', { name: 'devbox' }).click();
+  await page.locator('.sidebar .thread-item', { hasText: '开发机上的对话' }).click();
+  const beforeLocal = await (await api(hub, '/api/threads')).json();
+  const beforeRemote = await (await api(node, '/api/threads')).json();
   await page.getByLabel('这个对话的更多操作').click();
-  await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
-  await page.getByRole('menuitem',{name:'交接',exact:true}).click();
-  const dialog=page.getByRole('dialog',{name:'交接',exact:true});
-  await dialog.locator('.handover-summary').waitFor();
-  const summary=await dialog.locator('.handover-summary').innerText();
-  assert.ok(summary.includes('远端机器（ID：devbox）'));
-  await dialog.getByRole('button',{name:'新建接手对话'}).click();
-  await dialog.waitFor({state:'detached'});
-  await page.locator('.topbar-title',{hasText:'开发机上的对话（接手）'}).waitFor();
-  assert.equal(await page.locator('.composer textarea').inputValue(),summary);
-  const created=(await (await api(node,'/api/threads')).json()).filter(t=>!beforeRemote.some(old=>old.id===t.id));
-  assert.equal(created.length,1);assert.equal(created[0].cwd,node.workdir);assert.equal(created[0].agentSessionId,null);
-  assert.equal((await (await api(hub,'/api/threads')).json()).length,beforeLocal.length);
-  const key=`host:devbox:${created[0].id}`;
-  assert.equal(await page.evaluate(key=>JSON.parse(localStorage.getItem('calli.drafts'))[key].text,key),summary);
-  await page.getByRole('tab',{name:'本机'}).click();
-  await page.locator('.sidebar .thread-title',{hasText:'本机的对话'}).waitFor();
-  assert.equal(await page.locator('.composer textarea').inputValue(),'');
-  await page.getByRole('tab',{name:'devbox'}).click();
-  await page.locator('.sidebar .handover-group .thread-item',{hasText:'开发机上的对话'}).click();
-  assert.equal(await page.locator('.composer textarea').inputValue(),summary);
+  await page.getByRole('menuitem', { name: '接力继续', exact: true }).click();
+  const dialog = page.locator('.fork-subchat-dialog');
+  await dialog.waitFor();
+  await dialog.locator('.fork-composer textarea').fill('在远端继续排查');
+  const [forkRes] = await Promise.all([
+    page.waitForResponse(r => r.url().includes('/hosts/devbox/proxy/threads/') && r.url().endsWith('/fork') && r.request().method() === 'POST'),
+    dialog.getByRole('button', { name: '接力并发送', exact: true }).click(),
+  ]);
+  assert.equal(forkRes.status(), 201);
+  await dialog.waitFor({ state: 'detached' });
+  await page.locator('.topbar-title', { hasText: '在远端继续排查' }).waitFor();
+  const created = (await (await api(node, '/api/threads')).json()).filter(t => !beforeRemote.some(old => old.id === t.id));
+  assert.equal(created.length, 1);
+  assert.equal(created[0].cwd, node.workdir);
+  assert.equal(created[0].forkKind, 'handoff');
+  assert.equal((await (await api(hub, '/api/threads')).json()).length, beforeLocal.length);
+  await page.getByRole('tab', { name: '本机' }).click();
+  await page.locator('.sidebar .thread-title', { hasText: '本机的对话' }).waitFor();
+  await page.getByRole('tab', { name: 'devbox' }).click();
+  await page.locator('.sidebar .handover-group .thread-item', { hasText: '开发机上的对话' }).waitFor();
 });
 
 test('a machine that drops says so in place of its threads, and is back after a retry', async () => {

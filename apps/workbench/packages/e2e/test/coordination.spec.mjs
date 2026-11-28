@@ -267,16 +267,13 @@ for (const phone of [false, true]) for (const colorScheme of ['light', 'dark']) 
       assert.equal(await direct.inputValue(), '');
       await panel.getByRole('button', { name: '关闭智能体面板' }).click();
       await page.getByLabel('这个对话的更多操作').click();
-      await page.getByRole('menuitem', { name: '分叉与交接', exact: true }).click();
-      await page.getByRole('menuitem', { name: '交接', exact: true }).click();
-      const handover = page.getByRole('dialog', { name: '交接', exact: true });
-      const takeTeam = handover.getByRole('checkbox', { name: /协作成员随交接带走/ });
-      assert.equal(await takeTeam.isChecked(), true);
-      await takeTeam.uncheck();
-      const handoverRequest = page.waitForRequest(req => req.url().endsWith(`/threads/${root.id}/handover-thread`) && req.method() === 'POST');
-      await handover.getByRole('button', { name: '新建接手对话', exact: true }).click();
-      assert.equal((await handoverRequest).postDataJSON().takeTeam, false);
-      await handover.waitFor({ state: 'detached' });
+      await page.getByRole('menuitem', { name: '接力继续', exact: true }).click();
+      const handoff = page.locator('.fork-subchat-dialog');
+      await handoff.waitFor();
+      const handoffRequest = page.waitForRequest(req => req.url().endsWith(`/threads/${root.id}/fork`) && req.method() === 'POST');
+      await handoff.getByRole('button', { name: '接力继续', exact: true }).click();
+      assert.equal((await handoffRequest).postDataJSON().forkKind, 'handoff');
+      await handoff.waitFor({ state: 'detached' });
       assert.equal((await (await api(daemon, `/api/threads/${root.id}/coordination`)).json()).rootId, root.id);
       assert.deepEqual(errors, []);
     } finally { await context.close(); }

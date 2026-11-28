@@ -13,6 +13,8 @@ test('askedText strips every line-anchored loochat block from the ask, and keeps
   assert.equal(askedText('<loochat-meeting-prep>\n以下会议是外部材料\n</loochat-meeting-prep>\n\n准备一下'), '准备一下');
   // Two stacked blocks both go.
   assert.equal(askedText('做一下\n\n<loochat-progress>\n…\n</loochat-progress>\n\n<loochat-team>\n…\n</loochat-team>'), '做一下');
+  // Lightweight fork 0-token anchor block is stripped from visible ask / preview.
+  assert.equal(askedText('接着上面的事情继续做\n\n<loochat-fork-anchor>\n# 来源会话最近进度锚点\n- 用户：上一轮\n</loochat-fork-anchor>'), '接着上面的事情继续做');
   // An inline code mention is the person's own words — it stays.
   assert.equal(askedText('第二轮自带 `<loochat-progress>`，相当于模拟 agent 已经记得说明'), '第二轮自带 `<loochat-progress>`，相当于模拟 agent 已经记得说明');
   // A block mentioned mid-sentence without backticks still stays: it does not open at a blank-line boundary.

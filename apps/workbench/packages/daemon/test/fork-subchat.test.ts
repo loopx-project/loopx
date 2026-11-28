@@ -194,3 +194,156 @@ test('grouped fork keeps same cwd, supports optional firstMessage and forkTag, a
     await h.close();
   }
 });
+
+test('lightweight fork succeeds while the source thread is running (including before its first turn finishes)', async () => {
+  const h = await setup();
+  try {
+    // 1. Start a slow first turn so the root thread is actively running before any turn has completed.
+    const root = await h.manager.createThread({ agent: 'pi-a', cwd: h.dir, title: '运行中主线' });
+    await h.manager.startTurn(root.id, { text: 'slow 正在执行长任务', fromUser: true });
+    for (let i = 0; i < 100 && h.manager.getThread(root.id).status !== 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(h.manager.getThread(root.id).status, 'running');
+
+    // Full fork before agentSessionId exists (400) or while a later turn runs (409) is still refused.
+    const fullBeforeSession = await h.req('POST', `/api/threads/${root.id}/fork`, { grouped: true });
+    assert.ok(fullBeforeSession.status === 400 || fullBeforeSession.status === 409, `expected 400 or 409, got ${fullBeforeSession.status}`);
+
+    // 2. Quick lightweight fork (no firstMessage) succeeds immediately while root is running.
+    const quickRes = await h.req('POST', `/api/threads/${root.id}/fork`, {
+      grouped: true,
+      lightweight: true,
+    });
+    assert.equal(quickRes.status, 201);
+    const quick = await quickRes.json();
+    assert.equal(quick.forkGroup, root.id);
+    assert.equal(quick.agentSessionId, null);
+    assert.equal(quick.status, 'idle');
+    assert.equal(h.manager.getThread(root.id).status, 'running');
+
+    // 3. Lightweight fork with firstMessage runs concurrently in the background while root keeps running.
+    const bgRes = await h.req('POST', `/api/threads/${root.id}/fork`, {
+      grouped: true,
+      lightweight: true,
+      forkTag: '并行查问题',
+      firstMessage: '帮我查个无关的小问题',
+    });
+    assert.equal(bgRes.status, 201);
+    const bg = await bgRes.json();
+    await h.idle(bg.id);
+    assert.equal(h.manager.getThread(root.id).status, 'running');
+
+    const bgTurn = h.store.listEventsOfType(bg.id, 'turn.started').at(-1)!;
+    assert.match(String(bgTurn.data.text), /<loochat-forks>[\s\S]*运行中主线[\s\S]*运行中[\s\S]*<\/loochat-forks>/);
+    const bgReadsRoot = (await h.manager.references.command(bg.id, { op: 'history', target: root.id, userInputs: true })) as any;
+    assert.ok(Array.isArray(bgReadsRoot.inputs) && bgReadsRoot.inputs.some((i: any) => String(i.text).includes('正在执行长任务')));
+
+    // 4. fork-options accepts ?lightweight=1 cleanly.
+    const optsRes = await h.req('GET', `/api/threads/${root.id}/fork-options?lightweight=1`);
+    assert.equal(optsRes.status, 200);
+    const opts = await optsRes.json();
+    assert.equal(opts.worktree.available, false);
+
+    // 5. After a turn finishes (agentSessionId established) and a second turn runs, full fork returns 409 while lightweight still returns 201.
+    await h.manager.cancelTurn(root.id);
+    await h.idle(root.id);
+    await h.manager.startTurn(root.id, { text: '建立会话', fromUser: true });
+    await h.idle(root.id);
+    assert.ok(h.manager.getThread(root.id).agentSessionId);
+    await h.manager.startTurn(root.id, { text: 'slow 二轮运行中', fromUser: true });
+    for (let i = 0; i < 100 && h.manager.getThread(root.id).status !== 'running'; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal((await h.req('POST', `/api/threads/${root.id}/fork`, { grouped: true })).status, 409);
+    assert.equal((await h.req('POST', `/api/threads/${root.id}/fork`, { grouped: true, lightweight: true })).status, 201);
+
+    // Cleanly stop the slow turn on root.
+    await h.manager.cancelTurn(root.id);
+    await h.idle(root.id);
+  } finally {
+    await h.close();
+  }
+});
+
+test('lightweight fork supports cross-agent continuation with 0-token Arm 2 anchor, forkKind, and promote', async () => {
+  const h = await setup();
+  try {
+    const root = await h.manager.createThread({ agent: 'pi-a', cwd: h.dir, title: '主线优化' });
+    for (const msg of ['第1轮问题', '第2轮方案A与C', '第3轮确认约束', '第4轮最后进度']) {
+      await h.manager.startTurn(root.id, { text: msg, fromUser: true });
+      await h.idle(root.id);
+    }
+
+    // Cross-agent lightweight fork with continueFromSource starts Turn 1 automatically.
+    const contRes = await h.req('POST', `/api/threads/${root.id}/fork`, {
+      grouped: true,
+      lightweight: true,
+      agent: 'pi-b',
+      continueFromSource: true,
+    });
+    assert.equal(contRes.status, 201);
+    const cont = await contRes.json();
+    assert.equal(cont.agent, 'pi-b');
+    assert.equal(cont.forkGroup, root.id);
+    assert.equal(cont.title, '主线优化（继续）');
+    await h.idle(cont.id);
+
+    const starts = h.store.listEventsOfType(cont.id, 'turn.started');
+    assert.equal(starts.length, 1);
+    const rawPrompt = String(starts[0].data.text);
+    // Prompt carries 0-token Arm 2 paired last-3-turns Q&A anchor + paired `loochat history --turns 6` pointer.
+    assert.match(rawPrompt, /<loochat-fork-anchor>/);
+    assert.match(rawPrompt, /共 4 轮/);
+    assert.doesNotMatch(rawPrompt, /第1轮问题/, 'anchor keeps only the last 3 turns');
+    assert.match(rawPrompt, /第2轮方案A与C/);
+    assert.match(rawPrompt, /第3轮确认约束/);
+    assert.match(rawPrompt, /第4轮最后进度/);
+    assert.match(rawPrompt, /hi there 第4轮最后进度/, 'anchor includes paired assistant answers');
+    assert.match(rawPrompt, new RegExp(`loochat history ${root.id} --turns 6`));
+    // <loochat-forks> also points to paired --turns 6 rather than --user-inputs alone.
+    assert.match(rawPrompt, /<loochat-forks>[\s\S]*--turns 6[\s\S]*<\/loochat-forks>/);
+    // Visible displayText & preview never leak <loochat-fork-anchor>.
+    assert.equal(askedText(rawPrompt), '接着上面的事情继续做');
+    assert.equal(String(starts[0].data.displayText ?? ''), '接着上面的事情继续做');
+    assert.equal(h.store.getThread(cont.id)!.preview, '接着上面的事情继续做');
+
+    // Turn 2 on the same lightweight fork must NOT re-inject <loochat-fork-anchor>.
+    await h.manager.startTurn(cont.id, { text: '第二轮追问', fromUser: true });
+    await h.idle(cont.id);
+    const turn2Prompt = String(h.store.listEventsOfType(cont.id, 'turn.started').at(-1)!.data.text);
+    assert.doesNotMatch(turn2Prompt, /<loochat-fork-anchor>/);
+
+    // Cross-agent lightweight fork can still read parent history on demand.
+    const historyRead = (await h.manager.references.command(cont.id, { op: 'history', target: root.id, turns: 2 })) as any;
+    assert.ok(Array.isArray(historyRead.turns) && historyRead.turns.length === 2);
+
+    // Derived kinds (`fork`, `handoff`, `ask`) persist across fork/create and can be promoted out to top-level topics.
+    assert.equal(cont.forkKind, 'handoff');
+    const nativeRes = await h.req('POST', `/api/threads/${root.id}/fork`, { grouped: true, lightweight: false, forkKind: 'fork' });
+    assert.equal(nativeRes.status, 201);
+    const nativeFork = await nativeRes.json();
+    assert.equal(nativeFork.forkGroup, root.id);
+    assert.equal(nativeFork.forkKind, 'fork');
+
+    const askRes = await h.req('POST', '/api/threads', {
+      agent: 'pi-a',
+      cwd: h.dir,
+      title: '追问：默认标签',
+      forkGroup: cont.id, // nesting under a child resolves flatly to the root topic
+      forkKind: 'ask',
+    });
+    assert.equal(askRes.status, 201);
+    const ask = await askRes.json();
+    assert.equal(ask.forkGroup, root.id);
+    assert.equal(ask.forkKind, 'ask');
+
+    const promoteRes = await h.req('PATCH', `/api/threads/${ask.id}`, { forkGroup: null });
+    assert.equal(promoteRes.status, 200);
+    const promoted = await promoteRes.json();
+    assert.equal(promoted.forkGroup, null);
+    assert.equal(promoted.forkKind, null);
+  } finally {
+    await h.close();
+  }
+});

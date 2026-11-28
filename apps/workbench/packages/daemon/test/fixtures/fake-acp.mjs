@@ -350,8 +350,11 @@ rl.on('line', (line) => {
       recordSession(dsh ? 'dsh' : traex ? 'traex' : 'claude', msg.params.sessionId);
       const blocks = msg.params.prompt;
       let text = blocks.filter((p) => p.type === 'text').map((p) => p.text).join('');
-      // Fixture commands belong to the current ask, not the interrupted request in its envelope.
+      // Fixture commands belong to the current ask, not the interrupted request or fork context envelopes.
       if (text.includes('[Loochat interrupted-turn context]\n')) text = text.split('\nCurrent user message:\n').at(-1);
+      const askBody = text
+        .replace(/<loochat-fork-anchor>[\s\S]*?<\/loochat-fork-anchor>/g, '')
+        .replace(/<loochat-forks>[\s\S]*?<\/loochat-forks>/g, '');
       const lifecycle = text.match(/approval lifecycle (after-cancel|error|end|exit)/)?.[1];
       if (lifecycle) {
         if (lifecycle === 'after-cancel') {
@@ -604,14 +607,14 @@ rl.on('line', (line) => {
         });
       }
       // A provider error that is not about quota; its request number differs on every attempt.
-      if (text.includes('flaky')) {
+      if (askBody.includes('flaky')) {
         return out({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: `Internal error: upstream connection reset (request ${Math.floor(Math.random() * 90000) + 10000})` } });
       }
       // FAKE_ACP_PLAN_LEFT stands for another account whose plan still has room.
-      if (text.includes('out of plan') && !process.env.FAKE_ACP_PLAN_LEFT) {
+      if (askBody.includes('out of plan') && !process.env.FAKE_ACP_PLAN_LEFT) {
         return out({ jsonrpc: '2.0', id: msg.id, error: { code: -32603, message: "Internal error: You've hit your session limit · resets 10:10am (UTC)" } });
       }
-      if (text.includes('slow')) {
+      if (askBody.includes('slow')) {
         pendingPrompt = { id: msg.id };
         return;
       }

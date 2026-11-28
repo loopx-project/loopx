@@ -21,7 +21,7 @@ const wait = async (fn, timeout = 20000) => {
   for (;;) { const value = await fn(); if (value) return value; if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 60)); }
 };
 const thread = (id) => request(`/api/threads/${id}`);
-const idle = id => wait(async () => { const t = await thread(id); return t.status !== 'running' && !['checking', 'preparing', 'countdown'].includes(t.autoHandover?.state) && !t.queued.length && t; });
+const idle = id => wait(async () => { const t = await thread(id); return t.status !== 'running' && !['checking', 'forking'].includes(t.autoHandover?.state) && !t.queued.length && t; });
 const create = title => request('/api/threads', 'POST', { agent: 'agy', model: 'gemini-pro', cwd: daemon.workdir, title });
 const send = (id, text) => request(`/api/threads/${id}/turns`, 'POST', { text });
 const configure = (settings) => request('/api/handover-settings', 'PUT', { enabled: false, threshold: 90, orders: {}, ...settings });
@@ -57,7 +57,7 @@ test('the exhausted turn offers waiting beside takeover; arming shows the reset 
   try {
     await openUi(page, daemon); await select(page, source.title);
     const card = page.locator('.exhausted-note');
-    await card.getByRole('button', { name: '交给 Agent 2 接手', exact: true }).waitFor();
+    await card.getByRole('button', { name: '用 Agent 2 分叉继续', exact: true }).waitFor();
     const link = card.getByRole('button', { name: '等额度恢复后自动继续', exact: true });
     await link.waitFor();
     await card.scrollIntoViewIfNeeded();
@@ -110,8 +110,8 @@ test('the handover settings carry the global resume switch', async () => {
   try {
     await openUi(page, daemon);
     await page.locator('.sidebar').getByRole('button', { name: '配置', exact: true }).click();
-    await page.locator('.settings-nav').getByRole('button', { name: '自动交接', exact: true }).click();
-    const dialog = page.getByRole('region', { name: '自动交接', exact: true });
+    await page.locator('.settings-nav').getByRole('button', { name: '自动续跑', exact: true }).click();
+    const dialog = page.getByRole('region', { name: '自动续跑', exact: true });
     const row = dialog.locator('.auto-setting-line').filter({ hasText: '额度恢复后自动继续' });
     await row.getByRole('switch', { name: '额度恢复后自动继续' }).waitFor();
     await page.screenshot({ path: join(shots, 'settings-desktop-light.png'), animations: 'disabled' });

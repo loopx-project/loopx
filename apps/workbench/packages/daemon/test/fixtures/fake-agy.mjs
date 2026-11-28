@@ -192,7 +192,13 @@ function runTurn(text) {
     result({ status: 'SUCCESS', response: reply });
     return;
   }
-  const body = text.replace(/<loochat-context>[\s\S]*?<\/loochat-context>/g, '').split(/<loochat-(?:coordination|team|tools|todo|progress)>/)[0].trim();
+  const body = text
+    .replace(/<loochat-context>[\s\S]*?<\/loochat-context>/g, '')
+    .replace(/<loochat-fork-anchor>[\s\S]*?<\/loochat-fork-anchor>/g, '')
+    .replace(/<loochat-forks>[\s\S]*?<\/loochat-forks>/g, '')
+    .split(/<loochat-(?:coordination|team|tools|todo|progress)>/)[0]
+    .trim();
+  const isForkContinuation = text.includes('<loochat-fork-anchor>');
   // FAKE_AGY_ADVANCE names a script file consumed one line per turn, in order: "wait:<what>[:<minutes>]"
   // ends the reply with a `[进度] 等外部` line, "doing:<note>" with `[进度] 进行中`, "review" / "blocked"
   // with their stages, "error:<message>" fails the turn, "plain:<text>" answers with no progress
@@ -229,7 +235,7 @@ function runTurn(text) {
     result({ status: 'ERROR', error: body.slice('provider-error:'.length).trim() });
     return;
   }
-  const exhaustTrigger = model !== 'claude-sonnet' && (body === 'quota-exhausted' || body.startsWith('[协作消息') && body.endsWith('quota-exhausted'));
+  const exhaustTrigger = !isForkContinuation && model !== 'claude-sonnet' && (body === 'quota-exhausted' || body.startsWith('[协作消息') && body.endsWith('quota-exhausted'));
   // FAKE_HANDOVER_EXHAUST_ONCE names a marker file of conversation ids: the quota error happens
   // once per conversation, so a test can watch the daemon retry the same ask after the "reset".
   // FAKE_HANDOVER_EXHAUST_DELAY_MS stalls the failure so a follow-up can queue behind it.
