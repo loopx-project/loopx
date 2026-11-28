@@ -406,6 +406,48 @@ def test_completed_event_compaction_marker_is_invalidated_by_a_new_event(
     assert ("session", "turn") not in restarted._event_cache._entries
 
 
+@pytest.mark.parametrize("damage", [
+    "malformed_row", "non_object", "invalid_kind", "nonmonotonic_sequence", "torn_tail_with_buffer",
+])
+def test_replay_compaction_preserves_damaged_journal_and_retries_after_repair(tmp_path: Path, damage: str) -> None:
+    store = ChatSessionStore(tmp_path, startup_maintenance=False)
+    turn_path, event_path = _write_completed_turn(tmp_path, with_events=False)
+    key = ("session", "turn")
+    store.append_event(*key, kind="answer.delta", payload={"text": "increment"})
+    store.append_event(*key, kind="manager.context", payload={"note": "retained observation"})
+    store.append_event(*key, kind="turn.completed", payload={})
+    intact = event_path.read_bytes()
+    parts = intact.splitlines(keepends=True)
+    if damage == "torn_tail_with_buffer":
+        damaged = intact + parts[1][:-2]
+    else:
+        invalid_row = {
+            "malformed_row": parts[1][:-2] + b"\n",
+            "non_object": b"[]\n",
+            "invalid_kind": json.dumps({**json.loads(parts[1]), "kind": []}).encode() + b"\n",
+            "nonmonotonic_sequence": json.dumps({**json.loads(parts[1]), "sequence": 1}).encode() + b"\n",
+        }[damage]
+        damaged = parts[0] + invalid_row + parts[2]
+    event_path.write_bytes(damaged)
+    # A tolerant replay may already have cached the remaining readable rows.
+    store.events_after(*key, None)
+    if damage == "torn_tail_with_buffer":
+        store.append_event(*key, kind="manager.context", payload={"note": "buffered observation"}, buffered=True)
+    original_turn = turn_path.read_bytes()
+
+    assert store.compact_completed_events() == 0
+    assert event_path.read_bytes() == damaged
+    assert turn_path.read_bytes() == original_turn
+
+    event_path.write_bytes(intact)
+    assert store.compact_completed_events() == 1
+    expected = ["manager.context", "turn.completed"]
+    if damage == "torn_tail_with_buffer":
+        expected.append("manager.context")
+    assert [row["kind"] for row in store.events_after(*key, None)] == expected
+    assert "event_compaction_revision" in json.loads(turn_path.read_bytes())
+
+
 def test_missing_event_stream_is_marked_without_retaining_empty_state(
     tmp_path: Path,
 ) -> None:

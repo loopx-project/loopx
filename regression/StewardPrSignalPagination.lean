@@ -2471,6 +2471,57 @@ theorem a_previously_compacted_gap_is_still_unproven :
     authorizeTypedMonitorRestart true
       (some (originalMonitorJournalComplete (compactMonitorJournal false events))) false = false := by decide
 
+structure ChatCompactionRow where
+  sequence : Nat
+  replayOnly : Bool
+  deriving DecidableEq
+
+def orderedChatCompactionRows (previous : Nat) : List ChatCompactionRow → Bool
+  | [] => true
+  | row :: rest => decide (previous < row.sequence) && orderedChatCompactionRows row.sequence rest
+
+structure ChatCompactionWrites where
+  flushBuffered : Bool
+  replacement : Option (List ChatCompactionRow)
+  markRevision : Bool
+  deriving DecidableEq
+
+/- Each observation comes from the lock-protected source immediately before
+   the corresponding mutation. Malformed JSON or an invalid kind has no
+   decoded rows. An absent journal reads as an empty list. -/
+def planChatReplayCompaction (buffered : Bool)
+    (beforeFlush beforeTrim : Option (List ChatCompactionRow)) : ChatCompactionWrites :=
+  if buffered && !(beforeFlush.any (orderedChatCompactionRows 0)) then ⟨false, none, false⟩
+  else match beforeTrim.filter (orderedChatCompactionRows 0) with
+    | none => ⟨buffered, none, false⟩
+    | some rows =>
+      let retained := rows.filter (fun row => !row.replayOnly)
+      ⟨buffered, if retained.length == rows.length then none else some retained, true⟩
+
+theorem invalid_source_before_buffered_flush_preserves_all_persisted_bytes
+    (beforeTrim : Option (List ChatCompactionRow)) :
+    planChatReplayCompaction true none beforeTrim = ⟨false, none, false⟩ := rfl
+
+theorem malformed_source_at_trim_withholds_replacement_and_marker
+    (buffered : Bool) (beforeFlush : Option (List ChatCompactionRow)) :
+    (planChatReplayCompaction buffered beforeFlush none).replacement = none ∧
+    (planChatReplayCompaction buffered beforeFlush none).markRevision = false := by
+  unfold planChatReplayCompaction
+  split <;> simp
+
+theorem duplicate_sequence_blocks_compaction_even_when_a_replay_row_exists :
+    planChatReplayCompaction false none (some [⟨1, true⟩, ⟨1, false⟩]) =
+      ⟨false, none, false⟩ := by decide
+
+theorem valid_compaction_preserves_durable_rows_and_existing_sequence_gaps :
+    planChatReplayCompaction true (some [⟨1, true⟩, ⟨3, false⟩])
+      (some [⟨1, true⟩, ⟨3, false⟩, ⟨4, false⟩]) =
+      ⟨true, some [⟨3, false⟩, ⟨4, false⟩], true⟩ := by decide
+
+theorem valid_journal_without_replay_rows_only_marks_the_revision :
+    planChatReplayCompaction false none (some [⟨3, false⟩, ⟨4, false⟩]) =
+      ⟨false, none, true⟩ := by decide
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2751,5 +2802,10 @@ theorem a_previously_compacted_gap_is_still_unproven :
 #print axioms monitor_compaction_retains_failed_native_evidence
 #print axioms an_aged_unpolled_watch_stays_recoverable_after_compaction
 #print axioms a_previously_compacted_gap_is_still_unproven
+#print axioms invalid_source_before_buffered_flush_preserves_all_persisted_bytes
+#print axioms malformed_source_at_trim_withholds_replacement_and_marker
+#print axioms duplicate_sequence_blocks_compaction_even_when_a_replay_row_exists
+#print axioms valid_compaction_preserves_durable_rows_and_existing_sequence_gaps
+#print axioms valid_journal_without_replay_rows_only_marks_the_revision
 
 end StewardPrSignalPagination

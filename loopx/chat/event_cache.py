@@ -23,6 +23,20 @@ TERMINAL_CACHE_MAX_ROWS = 4096
 TERMINAL_CACHE_MAX_ENCODED_BYTES = 2 * 1024 * 1024
 
 
+def _read_compactable_event_rows(path: Path) -> EventRows:
+    from ..chat_store import _read_jsonl
+
+    rows = _read_jsonl(path, raise_on_error=True, strict=True)
+    previous_sequence = 0
+    for row in rows:
+        sequence = row.get("sequence")
+        kind = row.get("kind")
+        if type(sequence) is not int or sequence <= previous_sequence or not isinstance(kind, str) or not kind:
+            raise ValueError("invalid Chat event order or kind")
+        previous_sequence = sequence
+    return rows
+
+
 def _durable_by_append_id(rows: EventRows) -> dict[str, dict[str, Any]]:
     return {
         row["_append_id"]: row
@@ -123,7 +137,7 @@ class ChatEventStreamMixin:
             self.flush_events(session_id, turn_id)
         return event
 
-    def flush_events(self, session_id: str, turn_id: str) -> int:
+    def flush_events(self, session_id: str, turn_id: str, *, require_clean_source: bool = False) -> int:
         """Persist queued events in one ordered append and one data fsync."""
         from .. import chat_store as _store
 
@@ -142,11 +156,12 @@ class ChatEventStreamMixin:
                         append_started = False
                         try:
                             uncertain = any("sequence" in event for event, _ in pending)
-                            rows = (
-                                _store._read_jsonl(path, raise_on_error=True)
-                                if uncertain
-                                else self._event_rows_locked(session_id, turn_id)
-                            )
+                            if require_clean_source:
+                                rows = _read_compactable_event_rows(path)
+                            elif uncertain:
+                                rows = _store._read_jsonl(path, raise_on_error=True)
+                            else:
+                                rows = self._event_rows_locked(session_id, turn_id)
                             # A failed append may already have persisted all or part of
                             # its batch. Match only this store's stable append ids; two
                             # otherwise identical events are still separate writes.
@@ -288,14 +303,21 @@ class ChatEventStreamMixin:
                 ):
                     # Monitor recovery needs the original sequence and phase evidence.
                     continue
-                self.flush_events(session_id, turn_id)
+                try:
+                    # Maintenance must not repair a damaged append tail.
+                    self.flush_events(session_id, turn_id, require_clean_source=True)
+                except (OSError, ValueError):
+                    continue
                 event_path = turn_path.with_name(f"{turn_id}.events.jsonl")
                 revision = self._event_revision(event_path)
                 if turn.get("event_compaction_revision") == list(revision or ()):
                     continue
                 with exclusive_file_lock(event_path, agent_id="loopx-chat", operation="compact_chat_events"):
-                    rows = self._event_rows_locked(session_id, turn_id)
-                    retained = [row for row in rows if row.get("kind") not in _store.REPLAY_ONLY_EVENT_KINDS]
+                    try:
+                        rows = _read_compactable_event_rows(event_path)
+                    except (OSError, ValueError):
+                        continue
+                    retained = [row for row in rows if row["kind"] not in _store.REPLAY_ONLY_EVENT_KINDS]
                     if len(retained) != len(rows):
                         _store._replace_jsonl(event_path, retained)
                         compacted += 1
