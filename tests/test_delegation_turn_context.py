@@ -87,7 +87,8 @@ def test_outgoing_request_and_return_require_explicit_consumption(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix", reason="native context delivery requires POSIX")
 @pytest.mark.parametrize("provider", ["file", "sqlite"])
-def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("location", ["default", "root", "directory"])
+def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path, monkeypatch, provider, location):
     from loopx.control_plane.turn_driver.codex_context import codex_context_directory, codex_context_hook
     from tests.control_plane.canonical_authority_fixture import isolate_sqlite_runtime
     from tests.control_plane.codex_checkpoint_fixture import selected_context_values
@@ -132,16 +133,22 @@ def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path,
     rid = deliver_review("fixture-independent-review")
     capture = runtime / "context-delivery"
     capture.mkdir(mode=0o700)
-    context = codex_context_directory(root=str(capture), create=True)
+    location_args = ()
+    if location == "directory":
+        directory = tmp_path / "native session"
+        directory.mkdir(mode=0o700)
+        context = str(directory)
+        location_args = ("--codex-context-dir", context)
+    else:
+        root = capture
+        if location == "root":
+            root = tmp_path / "native sessions"
+            root.mkdir(mode=0o700)
+            location_args = ("--codex-context-root", str(root))
+        context = codex_context_directory(root=str(root), create=True)
     codex_context_hook(context, {"session_id": session, "cwd": str(project),
         "hook_event_name": "SessionStart", "source": "startup"})
     args = ("--goal-id", GOAL_ID, "--agent-id", AGENT_ID)
-
-    def inbox(*extra, cwd=workspace, request_id=rid):
-        code, result = _run_cli(registry, runtime, "manager-inbox", "read", "--attention-only",
-            *args, *extra, cwd=cwd)
-        assert code == 0 and result["ok"], result
-        return next(row for row in result["peer_returns"]["items"] if row["request_id"] == request_id)
 
     def lease(action, *extra):
         code, result = _run_cli(registry, runtime, "task-lease", action,
@@ -149,34 +156,37 @@ def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path,
         assert code == 0 and result["ok"], result
         return result["lease"]
 
-    def run_generated(command):
-        result = subprocess.run(shlex.split(command), cwd=workspace, text=True, capture_output=True, timeout=60)
+    def run_generated(command, *, cwd=workspace):
+        result = subprocess.run(shlex.split(command), cwd=cwd, text=True, capture_output=True, timeout=60)
         assert result.returncode == 0, (result.stdout, result.stderr)
         return result.stdout
 
-    def read_generated(command):
-        payload = json.loads(run_generated(command))
+    def read_generated(command, *, cwd=workspace):
+        payload = json.loads(run_generated(command, cwd=cwd))
         assert payload["ok"], payload
         return payload
 
-    def read_capture(command):
+    def read_capture(command, *, cwd=workspace):
         content = []
         offset = 0
         while command:
-            page = read_generated(command)
+            page = read_generated(command, cwd=cwd)
             assert page["offset"] == offset
             content.append(page["content"])
             offset = page["next_offset"]
             command = None if page["eof"] else page["next_command"]
         return "".join(content)
 
-    assert "acknowledge_command" not in inbox("--turn-instance-id", TURN_ID)
+    code, preview = _run_cli(registry, runtime, "manager-inbox", "read", "--attention-only",
+        *args, "--turn-instance-id", TURN_ID, cwd=workspace)
+    assert code == 0 and preview["ok"], preview
+    assert "acknowledge_command" not in preview["peer_returns"]["items"][0]
     code, claim = _run_cli(registry, runtime, "todo", "claim", *args, "--todo-id", TODO_ID,
         "--claimed-by", AGENT_ID, cwd=workspace)
     assert code == 0 and claim["ok"], claim
     code, decision = _run_cli(registry, runtime, "quota", "should-run", *args, "--todo-id", TODO_ID,
         "--codex-app", "--turn-instance-id", TURN_ID, "--context-delivery", "on",
-        "--decision-output-root", str(capture), "--codex-context-root", str(capture), cwd=workspace)
+        "--decision-output-root", str(capture), *location_args, cwd=workspace)
     assert code == 0 and decision["ok"], decision
     assert decision["schema_version"] == "context_capture_navigation_v1"
     opening = selected_context_values(read_capture(decision["first_read_command"]))
@@ -184,8 +194,26 @@ def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path,
     if "remaining_read_command" in decision:
         read_capture(decision["remaining_read_command"])
 
+    inbox_read = next(row for row in opening["/interaction_contract/agent_channel/required_reads"]
+        if row["kind"] == "operator_inbox")
+    inbox_argv = shlex.split(inbox_read["command"])
+
+    def inbox_items(*extra, cwd=workspace):
+        markdown = run_generated(shlex.join([*inbox_argv, *extra]), cwd=cwd)
+        delivery = json.loads(markdown.split("```json\n", 1)[1].split("\n```", 1)[0])
+        if delivery.get("read_complete") is False:
+            delivery = json.loads(read_capture(delivery["command"], cwd=cwd))
+        return delivery.get("peer_returns", {}).get("items", [])
+
+    def inbox(*extra, cwd=workspace, request_id=rid):
+        return next(row for row in inbox_items(*extra, cwd=cwd) if row["request_id"] == request_id)
+
     assert "acknowledge_command" not in inbox(cwd=project)
     assert "acknowledge_command" not in inbox("--turn-instance-id", "another-turn")
+    different_location = tmp_path / "unregistered native location"
+    different_location.mkdir(mode=0o700)
+    location_flag = location_args[0] if location_args else "--codex-context-dir"
+    assert "acknowledge_command" not in inbox(location_flag, str(different_location))
     with monkeypatch.context() as other:
         other.setenv("CODEX_THREAD_ID", "5f7143c7-0187-48ae-843c-a4434c545eef")
         assert "acknowledge_command" not in inbox("--turn-instance-id", TURN_ID)
@@ -197,14 +225,9 @@ def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path,
     registry.write_text(json.dumps(configured))
     assert "acknowledge_command" not in inbox()
     registry.write_bytes(original_registry)
-    inbox_read = next(row for row in opening["/interaction_contract/agent_channel/required_reads"]
-        if row["kind"] == "operator_inbox")
-    markdown = run_generated(inbox_read["command"])
-    delivery = json.loads(markdown.split("```json\n", 1)[1].split("\n```", 1)[0])
-    if delivery.get("read_complete") is False:
-        delivery = json.loads(read_capture(delivery["command"]))
-    item = next(row for row in delivery["peer_returns"]["items"] if row["request_id"] == rid)
+    item = inbox()
     assert item["text"] == "The candidate passed."
+    assert "acknowledge_command" in item
     current = lease("inspect")
     owner = ("--owner", AGENT_ID, "--idempotency-key", current["idempotency_key"])
     renewed = lease("renew", *owner, "--expected-version", str(current["version"]))
@@ -221,10 +244,7 @@ def test_codex_app_peer_return_acknowledges_only_current_prepared_turn(tmp_path,
     for replay in (False, True):
         receipt = read_generated(shlex.join(ack))
         assert receipt["status"] == "consumed" and receipt.get("replay", False) is replay, receipt
-    code, after = _run_cli(registry, runtime, "manager-inbox", "read", "--attention-only", *args,
-        cwd=workspace)
-    assert code == 0 and after["ok"], after
-    assert not any(row["request_id"] == rid for row in after.get("peer_returns", {}).get("items", []))
+    assert not any(row["request_id"] == rid for row in inbox_items())
 
     lease("release", *owner, "--expected-version", str(renewed["version"]))
     second = deliver_review("fixture-review-after-release")

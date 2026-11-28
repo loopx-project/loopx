@@ -289,6 +289,8 @@ def native_inbox_read_turn(
     goal_id: str,
     agent_id: str,
     requested_turn_id: str | None,
+    context_directory: str | None = None,
+    context_root: str | None = None,
 ) -> str | None:
     """Resolve the live Codex App work Turn for an ordinary Inbox read."""
     session = os.environ.get("CODEX_THREAD_ID")
@@ -299,8 +301,10 @@ def native_inbox_read_turn(
     from ..quota.execution_preparation import active_task_lease_matches_prepared_receipt
     from ..quota.settlement import read_heartbeat_settlement
 
+    if context_directory is None and context_root is None:
+        context_root = str(runtime_root / "context-delivery")
     try:
-        directory = codex_context_directory(root=str(runtime_root / "context-delivery"), session=session)
+        directory = codex_context_directory(directory=context_directory, root=context_root, session=session)
         if directory is None:
             return None
         state = _state(_private_root(directory))

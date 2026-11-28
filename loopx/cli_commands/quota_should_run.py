@@ -118,6 +118,18 @@ def dispatch_quota_turn_start_hooks(
             # A preview still needs the current local Inbox and preferences. These
             # hooks observe existing context without recording reads or delivery.
             model_read = not getattr(args, "scheduler_observation", False)
+            native_location: tuple[str, str] | None = None
+            context_dir: str | None = getattr(args, "codex_context_dir", None)
+            context_root: str | None = getattr(args, "codex_context_root", None)
+            if context_dir:
+                native_location = ("--codex-context-dir", context_dir)
+            elif context_root and context_root != str(root / "context-delivery"):
+                native_location = ("--codex-context-root", context_root)
+            if (
+                native_location is not None
+                and (preview or not model_read or context_delivery_for_arguments(args)["scenario"] != "codex_app_heartbeat")
+            ):
+                native_location = None
             context_dispatch = dispatch_turn_start_hooks(
                 (
                     turn_start_hook(
@@ -126,6 +138,7 @@ def dispatch_quota_turn_start_hooks(
                         args.goal_id,
                         args.agent_id,
                         model_read=model_read,
+                        native_location=native_location,
                     ),
                 )
             )

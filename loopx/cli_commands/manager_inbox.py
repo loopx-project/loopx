@@ -257,6 +257,9 @@ def register_manager_inbox(subparsers, add_format):
     parser.add_argument("--turn-instance-id", help=(
         "For read: restrict a verified native read to this Turn. For acknowledge-return: identify the "
         "work Turn that already received the peer result."))
+    native_location = parser.add_mutually_exclusive_group()
+    native_location.add_argument("--codex-context-dir", help="For read: native session directory supplied by the guard.")
+    native_location.add_argument("--codex-context-root", help="For read: native session root supplied by the guard.")
     parser.add_argument("--disposition", choices=("accepted", "deferred", "rejected"),
                         help="For acknowledge-return: whether this Turn used, deferred, or rejected the peer result.")
     parser.add_argument("--related-todo-id", action="append", default=[])
@@ -271,6 +274,10 @@ def register_manager_inbox(subparsers, add_format):
 
 def handle_manager_inbox(args, registry_path, runtime_root):
     try:
+        context_directory = getattr(args, "codex_context_dir", None)
+        context_root = getattr(args, "codex_context_root", None)
+        if args.manager_inbox_action != "read" and (context_directory is not None or context_root is not None):
+            raise ValueError("Codex context location is only supported for read")
         remainder = getattr(args, "remaining_work", None)
         resume = getattr(args, "resume_when", None)
         attention_only = getattr(args, "attention_only", False)
@@ -488,6 +495,7 @@ def handle_manager_inbox(args, registry_path, runtime_root):
                 registry_path=registry_path, runtime_root=runtime_root,
                 goal_id=args.goal_id, agent_id=args.agent_id,
                 requested_turn_id=getattr(args, "turn_instance_id", None),
+                context_directory=context_directory, context_root=context_root,
             )
             result = read_inbox(runtime_root, registry_path, args.goal_id, args.agent_id,
                                 workspace=Path.cwd(), cursor=cursor, operation_cursor=operation_cursor,

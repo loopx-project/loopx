@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 
 def turn_start_hook(
-    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str, *, model_read: bool = False
+    runtime_root: Path, registry_path: Path, goal_id: str, agent_id: str, *, model_read: bool = False,
+    native_location: tuple[str, str] | None = None,
 ) -> TurnStartHookRegistration:
     """Observe scoped pending work using the original Inbox operation and route."""
     from ..capability_hooks import TURN_START_HOOK_RESULT_SCHEMA_VERSION, TurnStartHookRegistration
@@ -81,6 +82,7 @@ def turn_start_hook(
             goal_id,
             "--agent-id",
             agent_id,
+            *(native_location or ()),
         ]
     )
     return TurnStartHookRegistration(
