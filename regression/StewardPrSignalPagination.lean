@@ -2024,6 +2024,63 @@ theorem repository_joint_readback_accounts_for_terminal_rows
     terminalReviews ≤ 400 ∧ checks + aliases + windows ≤ 3400 - (supplementReviews + terminalReviews + comments) := by
   omega
 
+inductive OlderReplySource where
+  | reviews
+  | comments
+
+def recentReplyClock (source : OlderReplySource) (anchor reply : Nat) : Nat :=
+  match source with
+  | .reviews => reply
+  | .comments => anchor
+
+/- Equality represents matching the other recent window in the same response
+   that verifies the older pages. Independent verdict evidence has its own
+   provenance: the verified review supplement or the original complete reviews. -/
+def observeOlderReplyWithRecentWindow (prior : List Nat) (source : OlderReplySource)
+    (olderVerified : Bool) (anchor reply : Nat) (recentReadback : Option Nat) :
+    (List Nat × Bool) × Bool :=
+  let replyCertified := olderVerified && (recentReadback == some (recentReplyClock source anchor reply))
+  let verdictCertified := match source with
+    | .reviews => olderVerified
+    | .comments => true
+  let replyItems := if replyCertified then singlePrReplyScope ⟨some [anchor], some [reply]⟩ else none
+  (observe prior replyItems, verdictCertified)
+
+theorem changed_recent_window_keeps_prior_and_independent_verdict (prior : List Nat)
+    (source : OlderReplySource) (anchor reply : Nat) (readback : Option Nat)
+    (changed : readback ≠ some (recentReplyClock source anchor reply)) :
+    observeOlderReplyWithRecentWindow prior source true anchor reply readback = ((prior, false), true) := by
+  cases source <;> simp [observeOlderReplyWithRecentWindow, recentReplyClock, observe] at changed ⊢
+  all_goals simp [changed]
+
+theorem missing_recent_window_keeps_prior_in_both_directions (prior : List Nat)
+    (source : OlderReplySource) (anchor reply : Nat) :
+    observeOlderReplyWithRecentWindow prior source true anchor reply none = ((prior, false), true) := by
+  apply changed_recent_window_keeps_prior_and_independent_verdict
+  simp
+
+theorem coherent_older_and_recent_reply_evidence_publishes (source : OlderReplySource) :
+    observeOlderReplyWithRecentWindow [] source true 480 510 (some (recentReplyClock source 480 510)) =
+      (([1], true), true) ∧
+    observeOlderReplyWithRecentWindow [] source true 600 630 (some (recentReplyClock source 600 630)) =
+      (([1], true), true) := by
+  cases source <;> decide
+
+theorem mixing_older_review_with_stale_recent_reply_can_false_remove :
+    observe [1] (singlePrReplyScope ⟨some [600], some [510]⟩) = ([], true) ∧
+    observeOlderReplyWithRecentWindow [1] .reviews true 600 510 (some 630) = (([1], false), true) := by
+  decide
+
+theorem mixing_older_reply_with_stale_recent_review_can_false_remove :
+    observe [1] (singlePrReplyScope ⟨some [600], some [510]⟩) = ([], true) ∧
+    observeOlderReplyWithRecentWindow [1] .comments true 600 510 (some 480) = (([1], false), true) := by
+  decide
+
+theorem supplemental_request_includes_both_recent_windows_with_bounded_rows (olderPages : Nat)
+    (bounded : olderPages ≤ 3) :
+    20 + 20 + 20 * olderPages ≤ 100 ∧ 20 + 20 + 50 * olderPages ≤ 190 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2249,5 +2306,11 @@ theorem repository_joint_readback_accounts_for_terminal_rows
 #print axioms mixing_one_pr_older_review_and_comment_can_false_remove
 #print axioms matching_older_comment_cannot_use_a_different_review_anchor
 #print axioms repository_joint_readback_accounts_for_terminal_rows
+#print axioms changed_recent_window_keeps_prior_and_independent_verdict
+#print axioms missing_recent_window_keeps_prior_in_both_directions
+#print axioms coherent_older_and_recent_reply_evidence_publishes
+#print axioms mixing_older_review_with_stale_recent_reply_can_false_remove
+#print axioms mixing_older_reply_with_stale_recent_review_can_false_remove
+#print axioms supplemental_request_includes_both_recent_windows_with_bounded_rows
 
 end StewardPrSignalPagination

@@ -252,7 +252,7 @@ def _older_comment_row(initial: dict[str, Any], comments: dict[str, Any]) -> dic
     return {
         "number": initial["number"], "headRefOid": initial["headRefOid"],
         "updatedAt": initial["updatedAt"], "reviewDecision": initial["reviewDecision"],
-        "latestComments": initial["comments"], "comments": comments,
+        "latestComments": initial["comments"], "latestReviews": initial["reviews"], "comments": comments,
     }
 
 
@@ -905,6 +905,7 @@ def test_steward_terminal_list_readback_corroborates_earlier_reviews(case: str) 
             review_reads.append("joint" if joint else "review-cursor")
             pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
             pr_data["latestReviews"] = earlier["reviews"]
+            pr_data["latestComments"] = earlier["comments"]
             pr_data["page0" if joint else "reviews"] = _graphql_reviews([approval("older", gemini)], totalCount=2)
             repository = _joint_terminal_readback(history) if joint else {}
             repository["reviewPr1" if joint else "pullRequest"] = pr_data
@@ -1001,6 +1002,7 @@ def test_steward_terminal_list_readback_corroborates_earlier_reply_evidence(case
             comment_reads.append("joint" if joint else "comment-cursor")
             pr_data = {key: earlier[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
             pr_data["latestComments"] = earlier["comments"]
+            pr_data["latestReviews"] = earlier["reviews"]
             pr_data["page0" if joint else "comments"] = {"nodes": [reply], "pageInfo": {"hasPreviousPage": False}}
             repository = _joint_terminal_readback(history) if joint else {}
             repository["commentPr1" if joint else "pullRequest"] = pr_data
@@ -1395,6 +1397,7 @@ def test_steward_publishes_multi_pr_comment_supplements_only_after_joint_corrobo
         row = watched_rows[number]
         payload = {key: row[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
         payload["latestComments"] = row["comments"]
+        payload["latestReviews"] = row["reviews"]
         payload[field] = {"nodes": [reply] if replied else [], "pageInfo": {"hasPreviousPage": False}}
         return payload
 
@@ -1486,6 +1489,7 @@ def test_steward_publishes_multi_pr_review_supplements_only_after_joint_corrobor
         row = watched[number]
         payload = {key: row[key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
         payload["latestReviews"] = row["reviews"]
+        payload["latestComments"] = row["comments"]
         payload[field] = _graphql_reviews(
             [{"id": f"older-{number}", "state": "APPROVED", "author": {"login": "reviewer"},
               "commit": {"oid": head}, "submittedAt": "2030-01-01T08:00:00Z",
@@ -1577,11 +1581,11 @@ def test_steward_corroborates_review_and_comment_supplements_together(monkeypatc
         return {key: rows[number][key] for key in ("number", "headRefOid", "updatedAt", "reviewDecision")}
 
     def comment_payload(number: int, field: str, replied: bool = True) -> dict[str, Any]:
-        return {**pr_revision(number), "latestComments": rows[number]["comments"],
+        return {**pr_revision(number), "latestComments": rows[number]["comments"], "latestReviews": rows[number]["reviews"],
                 field: {"nodes": [reply] if replied else [], "pageInfo": {"hasPreviousPage": False}}}
 
     def review_payload(field: str, body: str = "") -> dict[str, Any]:
-        return {**pr_revision(1), "latestReviews": rows[1]["reviews"],
+        return {**pr_revision(1), "latestReviews": rows[1]["reviews"], "latestComments": rows[1]["comments"],
                 field: _graphql_reviews([{**older_review, "body": body}], totalCount=2)}
 
     def runner(cmd, **_kwargs):
@@ -1664,10 +1668,12 @@ def test_steward_binds_older_reviews_and_comments_for_one_pr(monkeypatch, case: 
         if "before=older-review" in command:
             requests.append("review")
             repository = {"pullRequest": {**revision, "latestReviews": row["reviews"],
+                                           "latestComments": row["comments"],
                                            "reviews": _graphql_reviews([anchor(review_hour)], totalCount=2)}}
         elif "before=older-comment" in command:
             requests.append("comment")
-            repository = {"pullRequest": {**revision, "latestComments": row["comments"], "comments": reply_page(reply_hour)}}
+            repository = {"pullRequest": {**revision, "latestComments": row["comments"], "latestReviews": row["reviews"],
+                                           "comments": reply_page(reply_hour)}}
         elif "terminalWindow0:" in query:
             requests.append("joint")
             assert {"reviewBefore1_0=older-review", "before1_0=older-comment"}.issubset(command)
@@ -1709,6 +1715,88 @@ def test_steward_binds_older_reviews_and_comments_for_one_pr(monkeypatch, case: 
         assert requests == ["list", "review", "comment"] + ([] if case == "no-budget" else ["joint"])
 
 
+@pytest.mark.parametrize("older_source", ["reviews", "comments"])
+@pytest.mark.parametrize("case", ["stable-earlier", "stable-later", "drift", "missing", "malformed"])
+def test_steward_binds_one_older_source_to_the_other_recent_window(older_source: str, case: str) -> None:
+    head = "a" * 40
+    reviews_are_older = older_source == "reviews"
+
+    def anchor(hour: str) -> dict[str, Any]:
+        return {"id": f"anchor-{hour}", "state": "CHANGES_REQUESTED", "author": {"login": "maintainer"},
+                "commit": {"oid": head}, "submittedAt": f"2030-01-01T{hour}:00:00Z", "body": ""}
+
+    def reply_page(hour: str) -> dict[str, Any]:
+        return {"nodes": [{"createdAt": f"2030-01-01T{hour}:30:00Z", "author": {"login": "contributor"}}],
+                "pageInfo": {"hasPreviousPage": False}}
+
+    if case == "drift":
+        review_hour, reply_hour = "10", "08"
+    else:
+        review_hour = reply_hour = "08" if case == "stable-earlier" else "10"
+    row = _graphql_node(_sample_pr(number=1, head_oid=head, author="contributor", review_decision="CHANGES_REQUESTED"))
+    if reviews_are_older:
+        recent = {**anchor("11"), "id": "recent", "state": "COMMENTED", "author": {"login": "observer"}}
+        row["reviews"] = _graphql_reviews(
+            [recent], totalCount=2, pageInfo={"hasPreviousPage": True, "startCursor": "older"},
+        )
+        row["comments"] = reply_page(reply_hour)
+    else:
+        row["reviews"] = _graphql_reviews([anchor(review_hour)])
+        row["comments"] = {
+            "nodes": [{"createdAt": "2030-01-01T11:30:00Z", "author": {"login": "ci[bot]"}}],
+            "pageInfo": {"hasPreviousPage": True, "startCursor": "older"},
+        }
+
+    older_queries = []
+
+    def runner(command, **_kwargs):
+        if "before=older" in command:
+            older_queries.append(next(arg for arg in command if arg.startswith("query=")))
+            revision = {field: row[field] for field in ("number", "headRefOid", "updatedAt", "reviewDecision")}
+            if reviews_are_older:
+                response = {**revision, "latestReviews": row["reviews"], "latestComments": reply_page(review_hour),
+                            "reviews": _graphql_reviews([anchor(review_hour)], totalCount=2)}
+                counterpart = "latestComments"
+            else:
+                response = {**revision, "latestComments": row["comments"], "comments": reply_page(reply_hour),
+                            "latestReviews": _graphql_reviews([anchor(reply_hour)])}
+                counterpart = "latestReviews"
+            if case == "missing":
+                del response[counterpart]
+            if case == "malformed":
+                response[counterpart] = {"nodes": [None]}
+            repository = {"pullRequest": response}
+        else:
+            repository = _graphql_page([row])["data"]["repository"]
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"data": {"repository": repository}}))
+
+    snapshot = observe_github_repository_prs(
+        "org/repo", runner=runner, backfill_comments=True,
+        select_review_backfill=lambda candidates, _: {item["number"] for item in candidates},
+    )
+    assert snapshot["status"] == "ok"
+    scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False, "include_inbox": False}
+    request = {"repository_snapshot": snapshot, "previous_hash": "sha256:last-trusted", "observed_at": "2030-01-01T12:00:00Z"}
+    age_observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        **request, "signal_scope": {**scope, "pr_filter": {"min_stalled_hours": 24, "author_mode": "exclude",
+                                                           "authors": ["maintainer"]}},
+    })
+    if case.startswith("stable-"):
+        assert age_observation["observation_incomplete"] is False
+        assert [item["number"] for item in age_observation["scoped_repository_items"]] == [1]
+    else:
+        assert age_observation["observation_incomplete"] is True
+        assert age_observation["result_hash"] == "sha256:last-trusted" and not age_observation["material_change"]
+    verdict_observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        **request, "signal_scope": {**scope, "pr_filter": {"effective_verdicts": ["REQUEST_CHANGES"]}},
+    })
+    assert verdict_observation["observation_incomplete"] is False
+    assert [item["number"] for item in verdict_observation["scoped_repository_items"]] == [1]
+    assert len(older_queries) == 1
+    assert "latestReviews: reviews(last: 20)" in older_queries[0]
+    assert "latestComments: comments(last: 20)" in older_queries[0]
+
+
 @pytest.mark.parametrize("case", [
     "stable", "old-generation", "terminal-review-changed", "terminal-check-changed", "terminal-window-changed",
     "terminal-row-missing", "terminal-review-cap",
@@ -1743,7 +1831,8 @@ def test_steward_binds_older_review_to_terminal_only_prs(monkeypatch, case: str)
         query = next(arg for arg in command if arg.startswith("query="))
         revision = {field: first[field] for field in ("number", "headRefOid", "updatedAt", "reviewDecision")}
         if "before=older-pr-1" in command:
-            repository = {"pullRequest": {**revision, "latestReviews": first["reviews"], "reviews": older}}
+            repository = {"pullRequest": {**revision, "latestReviews": first["reviews"], "latestComments": first["comments"],
+                                           "reviews": older}}
         elif "terminalWindow0:" in query:
             joint_requests += 1
             assert "terminalWindow1: pullRequests" in query and "terminalCursor1=tail" in command
@@ -2152,6 +2241,7 @@ def test_steward_recovers_older_reviews_within_the_scan_budget(
                 "number": 42, "headRefOid": "b" * 40 if case == "head_changed" else head,
                 "updatedAt": node.get("updatedAt"), "reviewDecision": node["reviewDecision"],
                 "latestReviews": node["reviews"],
+                "latestComments": node["comments"],
                 "reviews": _graphql_reviews(page_nodes, totalCount=count + (case == "count_drift"), pageInfo=page_info),
             }
             if case == "decision_drift" or (case == "last_page_drift" and cursor == "earlier"):

@@ -647,10 +647,11 @@ def _older_reviews_page_query(readbacks: Mapping[str, str]) -> str:
       updatedAt
       reviewDecision
       latestReviews: reviews(last: 20) {{ ...StewardReviewPage }}
+      latestComments: comments(last: 20) {{ ...StewardCommentPage }}
       reviews(last: 20, before: $before) {{ ...StewardReviewPage }}
 {fields}    }}
   }}
-}}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
+}}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
 
 
 _GITHUB_PR_COMMENT_PAGE_FRAGMENT = """
@@ -678,10 +679,11 @@ def _older_comments_page_query(readbacks: Mapping[str, str]) -> str:
       updatedAt
       reviewDecision
       latestComments: comments(last: 20) {{ ...StewardCommentPage }}
+      latestReviews: reviews(last: 20) {{ ...StewardReviewPage }}
       comments(last: 50, before: $before) {{ ...StewardCommentPage }}
 {fields}    }}
   }}
-}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+}}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT + _GITHUB_PR_REVIEW_PAGE_FRAGMENT
 
 
 _GITHUB_OPEN_PR_FIELDS = """
@@ -1199,18 +1201,25 @@ class _SupplementEvidence(NamedTuple, Generic[_SupplementPage]):
     pages: dict[str, _SupplementPage]
 
 
+class _BackfilledReviews(NamedTuple):
+    rows: list[Mapping[str, Any]]
+    evidence: _SupplementEvidence[_ReviewPage]
+    recent_comments_match: bool
+
+
 def _backfill_pr_reviews(
     number: int,
     head_oid: str,
     first_page: _ReviewPage,
     *,
     revision: tuple[str, str | None],
+    recent_comments: _CommentPage | None,
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
-) -> tuple[list[Mapping[str, Any]] | None, int, _SupplementEvidence[_ReviewPage] | None]:
+) -> tuple[_BackfilledReviews | None, int]:
     if first_page.total_count > len(first_page.rows) + remaining_pages * _GITHUB_PR_REVIEW_PAGE_SIZE:
-        return None, remaining_pages, None
+        return None, remaining_pages
     rows = first_page.rows
     ids = set(first_page.ids)
     cursor = first_page.previous_cursor
@@ -1242,11 +1251,16 @@ def _backfill_pr_reviews(
         cursor = page.previous_cursor
         if cursor is None:
             if len(ids) == first_page.total_count:
-                return rows, remaining_pages, _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
+                comments_readback = _read_graphql_comment_page(
+                    pr_data.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE,
+                )
+                evidence = _SupplementEvidence(head_oid, revision, first_page, consumed_pages)
+                comments_match = recent_comments is not None and comments_readback == recent_comments
+                return _BackfilledReviews(rows, evidence, comments_match), remaining_pages
             break
         if len(ids) >= first_page.total_count:
             break
-    return None, remaining_pages, None
+    return None, remaining_pages
 
 
 def _joint_supplement_query(
@@ -1390,6 +1404,7 @@ def _backfill_pr_comments_if_needed(
     *,
     number: int,
     revision: tuple[str, str | None] | None,
+    recent_reviews: _ReviewPage,
     remaining_pages: int,
     deadline: float,
     read_older_page: _ReadOlderPage,
@@ -1415,6 +1430,8 @@ def _backfill_pr_comments_if_needed(
         if pr_data is None or _read_pr_signal_revision(pr_data) != revision:
             break
         if _read_graphql_comment_page(pr_data.get("latestComments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE) != first_page:
+            break
+        if _read_graphql_review_page(pr_data.get("latestReviews")) != recent_reviews:
             break
         if any(
             _read_graphql_comment_page(pr_data.get(alias), max_rows=_GITHUB_PR_OLDER_COMMENT_PAGE_SIZE)
@@ -1601,22 +1618,28 @@ def observe_github_repository_prs(
                         continue
                     limit = min(_GITHUB_PR_MAX_BACKFILL_PAGES, remaining_backfill_pages)
                     node = normalized_nodes[number]
-                    reviews, remaining, evidence = _backfill_pr_reviews(
+                    recent_comments = _read_graphql_comment_page(
+                        raw_nodes_by_number[number].get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE,
+                    )
+                    backfilled, remaining = _backfill_pr_reviews(
                         number, node["headRefOid"], first_page, remaining_pages=limit,
-                        revision=revision, deadline=deadline, read_older_page=read_older_page,
+                        revision=revision, recent_comments=recent_comments, deadline=deadline,
+                        read_older_page=read_older_page,
                     )
                     review_pages_read[number] = limit - remaining
                     remaining_backfill_pages -= review_pages_read[number]
-                    if reviews is not None and evidence is not None:
+                    if backfilled is not None:
                         initial_review_items[number] = items[number]
-                        review_supplements[number] = evidence
-                        node["reviews"] = reviews
+                        review_supplements[number] = backfilled.evidence
+                        node["reviews"] = backfilled.rows
                         node["review_coverage_incomplete"] = False
+                        if not backfilled.recent_comments_match:
+                            node["_comment_readback_incomplete"] = True
                         items[number] = summarize_github_pr_signal(node)
         if backfill_comments:
             candidates = [
                 number for number, item in items.items()
-                if number not in unverified_comments
+                if not normalized_nodes[number].get("_comment_readback_incomplete")
                 and item["comments_coverage_incomplete"] and not item.get("review_coverage_incomplete")
             ]
             remaining_seconds = deadline - monotonic()
@@ -1626,6 +1649,9 @@ def observe_github_repository_prs(
             for number in candidates:
                 if remaining_backfill_pages <= 0 or monotonic() >= deadline:
                     break
+                recent_reviews = _read_graphql_review_page(raw_nodes_by_number[number].get("reviews"))
+                if recent_reviews is None:
+                    continue
                 limit = min(
                     remaining_backfill_pages, _GITHUB_PR_MAX_BACKFILL_PAGES - review_pages_read.get(number, 0),
                 )
@@ -1634,6 +1660,7 @@ def observe_github_repository_prs(
                     items[number],
                     number=number,
                     revision=_read_pr_signal_revision(raw_nodes_by_number[number]),
+                    recent_reviews=recent_reviews,
                     remaining_pages=limit,
                     deadline=deadline,
                     read_older_page=read_older_page,
