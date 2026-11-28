@@ -279,6 +279,7 @@ export function createEffectRuntimeHandlers(
     ["turn_journal.find_settlement", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalBySettlement}) => findTurnJournalBySettlement)],
     ["turn_journal.find_instance", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({findTurnJournalByInstance}) => findTurnJournalByInstance)],
     ["turn_journal.observed_capabilities", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalCapabilities}) => readTurnJournalCapabilities)],
+    ["turn_journal.evidence_chain", lazyHandler(() => import("./turn_driver/turn_journal_query.ts"), ({readTurnJournalEvidenceChain}) => readTurnJournalEvidenceChain)],
     ["todo.priority.plan", lazyHandler(() => import("./todos/priority.ts"), ({evaluateTodoPriority}) => evaluateTodoPriority)],
     ["todo.read", lazyHandler(() => import("./todos/read_transport.ts"), ({readTodoRuntime}) => readTodoRuntime)],
     ["todo.authority_head.verify", lazyHandler(() => import("./todos/read_transaction.ts"), ({verifyCanonicalTodoAuthorityWitness}) => verifyCanonicalTodoAuthorityWitness)],
