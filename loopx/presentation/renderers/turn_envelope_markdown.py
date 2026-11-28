@@ -82,6 +82,14 @@ def render_turn_envelope_markdown(payload: dict[str, Any]) -> str:
         f"- within_budget: `{compaction.get('within_budget')}`",
         *turn_envelope_budget_warning_lines(payload),
     ]
+    if isinstance(payload.get("peer_coordination_digest"), dict):
+        digest = payload["peer_coordination_digest"]
+        items = digest.get("items") or []
+        lines.append(
+            f"- peer_coordination_digest: items={len(items)}"
+            + (f" omitted={digest.get('omitted')}" if digest.get("omitted") else "")
+            + f" read_only={digest.get('read_only')}"
+        )
     if isinstance(payload.get("work_context"), dict):
         lines.extend(work_context_lines(payload["work_context"]))
     return "\n".join(lines)

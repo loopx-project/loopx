@@ -518,6 +518,8 @@ function actionProjection(payload: JsonObject, deferSettlement = true, precision
   }
   const orchestration = object(payload.task_orchestration_contract);
   if (Object.keys(orchestration).length > 0) projection.task_orchestration_contract = orchestration;
+  const peerDigest = object(payload.peer_coordination_digest);
+  if (Object.keys(peerDigest).length > 0) projection.peer_coordination_digest = peerDigest;
   const plan = responsePlan(interaction);
   if (plan) projection.response_plan = plan;
   return projection;
@@ -743,6 +745,7 @@ export function turnEnvelopeActionSignatureDocument(value: unknown): JsonObject 
   }
   if (Object.keys(object(envelope.agent_context)).length > 0) signature.agent_context = object(envelope.agent_context);
   if (Object.keys(object(envelope.work_context)).length > 0) signature.work_context = object(envelope.work_context);
+  if (Object.keys(object(envelope.peer_coordination_digest)).length > 0) signature.peer_coordination_digest = object(envelope.peer_coordination_digest);
   if (Object.keys(object(responsePlanValue)).length > 0) signature.response_plan = { ...object(responsePlanValue) };
   return signature;
 }
@@ -1584,6 +1587,8 @@ function readyWorkOpening(context: JsonObject): JsonObject | undefined {
     work_lane_contract: context.work_lane_contract, goal_boundary: context.goal_boundary,
     goal_acceptance: context.goal_acceptance, task_scope: context.task_scope,
     latest_run_recommended_action: context.latest_run_recommended_action,
+    ...(context.peer_coordination_digest !== undefined
+      ? { peer_coordination_digest: context.peer_coordination_digest } : {}),
   });
 }
 

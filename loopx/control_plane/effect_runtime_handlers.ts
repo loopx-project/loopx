@@ -362,6 +362,7 @@ export function createEffectRuntimeHandlers(
     ["goal.checkpoint_read_context.inspect_replay", lazyHandler(() => import("./goals/checkpoint_commit.ts"), ({inspectCheckpointReplay}) => inspectCheckpointReplay)],
     ["goal.vision_wait.project", lazyHandler(() => import("./goals/vision_wait_coverage.ts"), ({projectGoalVisionWaitState}) => projectGoalVisionWaitState)],
     ["goal.shared_goal_alignment.project", lazyHandler(() => import("./goals/shared_goal_alignment.ts"), ({projectSharedGoalAlignment}) => projectSharedGoalAlignment)],
+    ["goal.peer_coordination_digest.project", lazyHandler(() => import("./goals/peer_coordination_digest.ts"), ({projectPeerCoordinationDigest}) => projectPeerCoordinationDigest)],
     ["goal.operator_actions.project", lazyHandler(() => import("./goals/operator_actions.ts"), ({projectGoalOperatorActions}) => projectGoalOperatorActions)],
     ["goal.activation.migrate", lazyHandler(() => import("./goals/activation_migration.ts"), ({migrateGoalActivationMetadata}) => migrateGoalActivationMetadata)],
     ["goal.amendment.execute", lazyHandler(() => import("./goals/goal_amendment_authority.ts"), ({goalAmendmentLocal}) => goalAmendmentLocal)],

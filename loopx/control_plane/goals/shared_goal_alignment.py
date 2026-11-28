@@ -203,6 +203,8 @@ def _project_shared_goal_alignment(
         or result.get("agent_id") != normalized_agent_id
         or not isinstance(result.get("drift_facts"), list)
         or not isinstance(result.get("conflict_facts"), list)
+        or not isinstance(result.get("peer_frontiers"), list)
+        or not isinstance(result.get("collaboration_opportunities"), list)
     ):
         raise RuntimeError("TypeScript shared goal alignment shape mismatch")
     return dict(result)
