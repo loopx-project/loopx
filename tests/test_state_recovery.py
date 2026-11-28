@@ -223,7 +223,9 @@ def test_global_backup_inspects_the_canonical_source_not_a_same_alias_shared_sto
     assert expected["wrong"] not in files
     roots = backup["registry_discovery"]["goal_runtime_roots"]
     assert roots["goal-a"] != "runtime-root"
-    assert (destination / "data" / roots["goal-a"]).is_dir()
+    from loopx.paths import RESTORED_RUNTIME_MARKER
+    assert (destination / "data" / roots["goal-a"] / RESTORED_RUNTIME_MARKER).is_file()
+    assert (destination / "data" / "runtime-root" / RESTORED_RUNTIME_MARKER).is_file()
     assert not (destination / "registry.global.json").exists()
 
 

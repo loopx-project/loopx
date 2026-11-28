@@ -264,8 +264,14 @@ jobs:
           python -m pytest -q --no-cov
           tests/test_stage2c_dependency_lock.py
           tests/architecture/test_top_level_module_budget.py
+          tests/architecture/test_external_request_lint.py
           tests/test_repository_instruction_delivery.py
           tests/test_contributing_guide.py
+
+      - name: Lint external request dispatch boundaries
+        run: |
+          python -m ruff check --ignore-noqa --config scripts/ci/external-request-lint.toml loopx packages scripts apps
+          python -m ruff check --ignore-noqa --config scripts/ci/external-transport-lint.toml loopx packages/*/src
 
       - name: Lint test suite
         run: >-
@@ -307,6 +313,9 @@ jobs:
 
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -e ".[test]"
+
+      - name: Check external provider recovery
+        run: python -m pytest -q --no-cov tests/extensions/test_governed_capability_execution.py
 
       - name: Verify file authority on the core runtime
         run: >-
@@ -371,6 +380,12 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check -e ".[test]"
           npm ci --ignore-scripts
+
+      - name: Lint external JS and TS transports
+        if: matrix.shard == 1
+        run: |
+          node --test scripts/ci/lint-external-transports.test.mjs
+          node scripts/ci/lint-external-transports.mjs
 
       - name: Type-check the TypeScript Effect core
         if: matrix.shard == 1

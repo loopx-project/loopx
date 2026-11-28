@@ -1,0 +1,55 @@
+# Existing Python transport owners. New service clients must use a reviewed
+# adapter or add their owner explicitly in the same change as its recovery policy.
+namespace-packages = ["loopx"]
+[lint]
+select = ["TID251"]
+
+[lint.flake8-tidy-imports.banned-api]
+"urllib.request.urlopen".msg = "Route external requests through a reviewed transport owner."
+"urllib.request.urlretrieve".msg = "Route external requests through a reviewed transport owner."
+"urllib.request.build_opener".msg = "Route external requests through a reviewed transport owner."
+"urllib.request.OpenerDirector".msg = "Route external requests through a reviewed transport owner."
+"http.client.HTTPConnection".msg = "Route external requests through a reviewed transport owner."
+"http.client.HTTPSConnection".msg = "Route external requests through a reviewed transport owner."
+"httpx".msg = "Route external requests through a reviewed transport owner."
+"requests".msg = "Route external requests through a reviewed transport owner."
+"aiohttp".msg = "Route external requests through a reviewed transport owner."
+"urllib3".msg = "Route external requests through a reviewed transport owner."
+"loopx.extensions.runtime.execute_extension_runtime_binding".msg = "Route external requests through a reviewed transport owner."
+
+[lint.per-file-ignores]
+"loopx/capabilities/benchmark_toolkit/provider_gateway.py" = ["TID251"]
+"loopx/capabilities/content_ops/generation.py" = ["TID251"]
+"loopx/capabilities/content_ops/images.py" = ["TID251"]
+"loopx/capabilities/content_ops/media.py" = ["TID251"]
+"loopx/capabilities/content_ops/surface.py" = ["TID251"]
+"loopx/capabilities/decision_context/extension_provider.py" = ["TID251"]
+"loopx/capabilities/issue_fix/github_public.py" = ["TID251"]
+"loopx/capabilities/native_chat/antigravity_discovery.py" = ["TID251"]
+"loopx/capabilities/periodic_report/cli.py" = ["TID251"]
+"loopx/chat/providers.py" = ["TID251"]
+"loopx/cli_commands/update_artifact.py" = ["TID251"]
+"loopx/control_plane/collaboration/peers.py" = ["TID251"]
+"loopx/control_plane/goals/botmux_transport.py" = ["TID251"]
+"loopx/control_plane/status/goal_source.py" = ["TID251"]
+"loopx/control_plane/status/ssh_tunnel.py" = ["TID251"]
+"loopx/control_plane/testing/doubao_model_behavior_actor.py" = ["TID251"]
+"loopx/dashboard_launcher.py" = ["TID251"]
+"loopx/extensions/lark/goal_channel_operation.py" = ["TID251"]
+"loopx/extensions/public_github_research.py" = ["TID251"]
+"loopx/extensions/public_source_reader.py" = ["TID251"]
+"loopx/hosts/managed_service_runtime.py" = ["TID251"]
+"loopx/presentation/static_site.py" = ["TID251"]
+"loopx/self_update.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/native_host.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/openai_keys.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/openai_relay.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/operator_catalog.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/operator_runtime.py" = ["TID251"]
+"packages/loopx-codex-provider-routing/src/loopx_codex_provider_routing/relay_lifecycle.py" = ["TID251"]
+"packages/loopx-community-discussion/src/loopx_community_discussion/sources/github.py" = ["TID251"]
+"packages/loopx-community-discussion/src/loopx_community_discussion/sources/hn.py" = ["TID251"]
+"packages/loopx-jev/src/loopx_jev/http_worker.py" = ["TID251"]
+"packages/loopx-media/src/loopx_media/generation.py" = ["TID251"]
+"packages/loopx-media/src/loopx_media/images.py" = ["TID251"]
+"packages/loopx-repo-health/src/loopx_repo_health/github.py" = ["TID251"]

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import stat
 import sys
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -52,6 +56,7 @@ def test_default_governed_run_dir_follows_single_runtime_route(
 def _provider(path: Path, *, call_log: Path) -> Path:
     path.write_text(
         f"""#!{sys.executable}
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -61,6 +66,21 @@ if "--doctor" in sys.argv:
 
 request = json.load(sys.stdin)
 phase = request["lifecycle"]["phase"]
+run_ref = request["invocation_id"]
+service = Path({str(call_log.parent)!r})
+if phase == "start" and (service / "reject-before-delivery").exists():
+    (service / "reject-before-delivery").unlink()
+    (service / "closed-without-delivery.json").write_text(json.dumps(request["input"]))
+    print(json.dumps({{"ok": False}}))
+    raise SystemExit(0)
+permit = request["lifecycle"].pop("restored_start_reservation", None)
+canonical = json.dumps(request, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+wire_digest = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+if permit is not None:
+    pending = service / "provider-reservation.json"
+    if json.loads(pending.read_text()) != permit or permit["request_digest"] != wire_digest:
+        raise ValueError("service refused stale reservation")
+    pending.rename(service / "consumed-reservation.json")
 with Path({str(call_log)!r}).open("a", encoding="utf-8") as output:
     output.write(phase + "\\n")
 result = {{
@@ -79,17 +99,17 @@ result = {{
         "schema_version": "loopx_continuous_monitor_proposal_v0",
         "proposal_id": "fixture_monitor_upsert_1",
         "kind": "continuous_monitor_upsert",
-        "monitor_key": "fixture:material-run",
+        "monitor_key": "fixture:" + run_ref,
         "text": "Poll the synthetic material run.",
         "action_kind": "poll_material_delivery",
-        "target_key": "fixture-run:synthetic-run-1",
+        "target_key": "fixture-run:" + run_ref,
         "cadence": "5m",
         "next_due_at": "2099-01-01T00:05:00+00:00",
         "expires_at": "2099-01-02T00:00:00+00:00",
         "required_capabilities": ["network"],
     }}],
     "effect_receipt": None,
-    "follow_up": {{"kind": "poll", "ref": "synthetic-run-1"}},
+    "follow_up": {{"kind": "poll", "ref": run_ref}},
 }}
 if phase == "reconcile":
     result["domain_state_mutations"] = [{{"kind": "synthetic-update"}}]
@@ -99,16 +119,20 @@ if phase == "reconcile":
         "invocation_id": request["invocation_id"],
         "idempotency_key": request["lifecycle"]["idempotency_key"],
         "status": "committed",
-        "external_ref": "synthetic-run-1",
+        "external_ref": run_ref,
         "evidence_digest": "sha256:synthetic-evidence",
     }}
     result["transition_proposals"] = [{{
         "schema_version": "loopx_continuous_monitor_proposal_v0",
         "proposal_id": "fixture_monitor_complete_1",
         "kind": "continuous_monitor_complete",
-        "monitor_key": "fixture:material-run",
+        "monitor_key": "fixture:" + run_ref,
         "evidence": "Synthetic provider reached its terminal state.",
     }}]
+if phase == "start":
+    (service / (run_ref + ".digest")).write_text(wire_digest)
+# Provider-owned lookup state persists separately from the LoopX journal.
+Path({str(call_log.parent)!r}, request["invocation_id"] + ".remote.json").write_text(json.dumps(result))
 json.dump(result, sys.stdout)
 """,
         encoding="utf-8",
@@ -205,7 +229,7 @@ integration_profile = "profile.json"
                         "repo": str(tmp_path),
                         "state_file": "ACTIVE_GOAL_STATE.md",
                         "coordination": {
-                            "registered_agents": ["fixture-agent"],
+                            "registered_agents": ["fixture-agent", "receiving-agent"],
                         },
                     }
                 ],
@@ -344,7 +368,7 @@ def test_material_start_is_previewable_and_provider_idempotent(
         role="agent",
     )["todos"]
     assert len(monitors) == 1
-    assert monitors[0]["capability_binding_ref"] == "fixture:material-run"
+    assert monitors[0]["capability_binding_ref"] == "fixture:" + started["invocation_id"]
     assert monitors[0]["status"] == "open"
     journal = Path(arguments["run_dir"]) / f"{started['invocation_id']}.json"
     assert stat.S_IMODE(journal.stat().st_mode) == 0o600
@@ -352,6 +376,370 @@ def test_material_start_is_previewable_and_provider_idempotent(
     assert started["provider_result_digest"] == governed_execution._canonical_digest(
         journal_value["provider_result"]
     )
+
+
+def test_lost_external_start_result_cannot_dispatch_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = _start_arguments(tmp_path)
+    write_journal = governed_execution._write_journal
+
+    def lose_result(path: Path, journal: Mapping[str, object]) -> None:
+        if journal.get("provider_result") is not None:
+            raise OSError("result checkpoint unavailable")
+        write_journal(path, journal)
+
+    monkeypatch.setattr(governed_execution, "_write_journal", lose_result)
+    with pytest.raises(OSError, match="result checkpoint unavailable"):
+        start_governed_external_capability(**arguments, execute=True)
+    monkeypatch.setattr(governed_execution, "_write_journal", write_journal)
+
+    with pytest.raises(ValueError, match="external write outcome unknown"):
+        start_governed_external_capability(**arguments, execute=True)
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+    journal, = Path(arguments["run_dir"]).glob("*.json")
+    saved = json.loads(journal.read_text())
+    assert saved["status"] == "starting"
+    assert saved["writeback"] is None and saved["quota_spend"] is None
+    next_turn = _identity(turn_instance_id="later-turn")
+    with pytest.raises(ValueError, match=saved["invocation_id"]):
+        start_governed_external_capability(
+            **{**arguments, "turn_instance_id": next_turn.turn_instance_id, "admission": _admission(next_turn)},
+            execute=True,
+        )
+
+    external_record = tmp_path / (saved["invocation_id"] + ".remote.json")
+    remote = json.loads(external_record.read_text())
+    with pytest.raises(ValueError, match="unknown after provider readback"):
+        start_governed_external_capability(**arguments, execute=True, read_start_result=lambda _: None)
+    with pytest.raises(EffectRuntimeRejected, match="invocation_id"):
+        start_governed_external_capability(
+            **arguments, execute=True,
+            read_start_result=lambda _: {**remote, "invocation_id": "another-operation"},
+        )
+    assert json.loads(journal.read_text()) == saved
+
+    def read_original(identity):
+        assert identity["idempotency_key"] == saved["effect_id"]
+        assert identity["request_digest"] == saved["request_digest"]
+        assert identity["provider"] == saved["request"]["provider"]
+        return json.loads((tmp_path / (identity["invocation_id"] + ".remote.json")).read_text())
+
+    with pytest.raises(ValueError, match="should_run=true"):
+        start_governed_external_capability(
+            **{**arguments, "admission": {**arguments["admission"], "should_run": False}},
+            execute=True, read_start_result=read_original,
+        )
+    receiver = SettlementIdentity(goal_id=arguments["goal_id"], agent_id="receiving-agent",
+                                  todo_id=arguments["todo_id"], turn_instance_id="successor")
+    current = _admission(receiver)
+    with pytest.raises(ValueError, match="current Todo target"):
+        start_governed_external_capability(**{**arguments, "admission": {
+            **current, "selected_todo": {**current["selected_todo"], "target_key": "fixture-material:other"},
+        }}, execute=True, read_start_result=read_original)
+    recovered = start_governed_external_capability(
+        **{**arguments, "admission": current}, execute=True, read_start_result=read_original,
+    )
+    assert recovered["status"] == "running"
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+@pytest.mark.parametrize("legacy_journal", [False, True])
+def test_handoff_cannot_start_an_unsettled_external_write_on_another_turn(
+    tmp_path: Path, legacy_journal: bool,
+) -> None:
+    args = _start_arguments(tmp_path)
+    original = start_governed_external_capability(**args, execute=True)
+    if legacy_journal:
+        # Older versions persisted the journal without a cross-Turn reservation.
+        runs = Path(args["run_dir"])
+        shutil.rmtree(runs / ".start-reservations-v1")
+        (runs / (original["invocation_id"] + ".json.lock.holder.json")).write_text("{}")
+    next_owner = SettlementIdentity(
+        goal_id=args["goal_id"], agent_id="receiving-agent", todo_id=args["todo_id"],
+        turn_instance_id="receiving-agent-turn",
+    )
+    with pytest.raises(ValueError, match=original["invocation_id"]):
+        start_governed_external_capability(
+            **{**args, "agent_id": next_owner.agent_id, "turn_instance_id": next_owner.turn_instance_id,
+               "admission": _admission(next_owner)}, execute=True,
+        )
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+def test_competing_handoffs_dispatch_at_most_one_provider_start(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    barrier = Barrier(2)
+
+    def attempt(turn: str) -> str:
+        identity = _identity(turn_instance_id=turn)
+        barrier.wait(timeout=10)
+        try:
+            response = start_governed_external_capability(
+                **{**args, "turn_instance_id": turn, "admission": _admission(identity)}, execute=True,
+            )
+        except ValueError as exc:
+            assert "reconcile original invocation" in str(exc)
+            return "held"
+        return response["status"]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ["concurrent-one", "concurrent-two"]))
+    assert sorted(results) == ["held", "running"]
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+@pytest.mark.parametrize(("binding", "provider_request"), [
+    ({"operation": {"effect_class": "external_write"}}, {}),
+    ({"integration_profile_digest": "stored-profile"}, {}),
+    ({}, {"provider": {"profile_digest": "stored-profile"}}),
+])
+def test_generic_transport_refuses_profiled_operations_before_dispatch(binding, provider_request):
+    from loopx.extensions.runtime import execute_extension_runtime_binding
+
+    with pytest.raises(ValueError, match="require capability admission"):
+        execute_extension_runtime_binding(binding, request=provider_request)
+
+
+def test_readback_only_request_cannot_create_a_new_invocation(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    with pytest.raises(ValueError, match="no original external write invocation"):
+        start_governed_external_capability(**args, execute=True, read_start_result=lambda _: None)
+    assert not (tmp_path / "provider-calls.txt").exists()
+
+
+@pytest.mark.parametrize("crash_at", ["before_journal", "before_arm"])
+def test_process_exit_before_dispatch_allows_one_handoff(tmp_path, crash_at):
+    args = _start_arguments(tmp_path)
+    child = """
+import json, os, sys
+import loopx.extensions.governed_capability_execution as g
+write = g._write_journal
+def crash(path, journal):
+    if sys.argv[1] == "before_journal" or journal.get("dispatch_armed") is True:
+        os._exit(73)
+    write(path, journal)
+g._write_journal = crash
+g.start_governed_external_capability(**json.load(sys.stdin), execute=True)
+"""
+    child_result = subprocess.run([sys.executable, "-c", child, crash_at], input=json.dumps(args, default=str),
+                                  text=True, timeout=30, check=False)
+    assert child_result.returncode == 73
+    assert not (tmp_path / "provider-calls.txt").exists()
+    next_owner = _identity(turn_instance_id="handoff") if crash_at == "before_journal" else _identity()
+    result = start_governed_external_capability(
+        **{**args, "turn_instance_id": next_owner.turn_instance_id, "admission": _admission(next_owner)}, execute=True,
+    )
+    assert result["status"] == "running"
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start"]
+
+
+def _service_reservation(query):
+    fields = ("challenge", "operation_key", "intent_digest", "request_digest", "invocation_id")
+    return {**{field: query[field] for field in fields},
+            "status": "reserved_after_terminal_no_effect", "reservation_ref": "service-grant-1"}
+
+
+@pytest.mark.parametrize("receiver", ["original", "successor"])
+@pytest.mark.parametrize("crash_at", ["before_lookup", "grant_reply_lost", "after_delivery"])
+def test_restored_process_exit_preserves_safe_retry_boundary(tmp_path, receiver, crash_at):
+    args = _start_arguments(tmp_path)
+    (tmp_path / "runtime" / paths.RESTORED_RUNTIME_MARKER).touch()
+    child = """
+import json, os, sys
+from pathlib import Path
+from loopx.extensions import governed_capability_execution as governed
+from tests.extensions.test_governed_capability_execution import _service_reservation
+
+checkpoint, service = sys.argv[1], Path(sys.argv[2])
+def reserve(query):
+    if checkpoint == "before_lookup":
+        os._exit(73)
+    proof = _service_reservation(query)
+    (service / "provider-reservation.json").write_text(json.dumps(proof))
+    if checkpoint == "grant_reply_lost":
+        os._exit(73)
+    return proof
+
+persist = governed._write_journal
+def write(path, journal):
+    if checkpoint == "after_delivery" and journal.get("provider_result") is not None:
+        os._exit(73)
+    persist(path, journal)
+
+governed._write_journal = write
+governed.start_governed_external_capability(**json.load(sys.stdin), execute=True, reserve_restored_start=reserve)
+"""
+    exited = subprocess.run([sys.executable, "-c", child, crash_at, str(tmp_path)],
+                            input=json.dumps(args, default=str), text=True, timeout=30, check=False)
+    assert exited.returncode == 73
+    pending = tmp_path / "provider-reservation.json"
+    calls = tmp_path / "provider-calls.txt"
+    assert calls.exists() == (crash_at == "after_delivery")
+    assert pending.exists() == (crash_at == "grant_reply_lost")
+    journal_path, = Path(args["run_dir"]).glob("capability-*.json")
+    checkpoint = json.loads(journal_path.read_text())
+    assert checkpoint["dispatch_armed"] is (crash_at == "after_delivery")
+    if crash_at == "after_delivery":
+        consumed = json.loads((tmp_path / "consumed-reservation.json").read_text())
+        assert checkpoint["restored_start_reservation"] == consumed
+    else:
+        assert "restored_start_reservation" not in checkpoint
+    retry = args
+    if receiver == "successor":
+        identity = SettlementIdentity(goal_id=args["goal_id"], todo_id=args["todo_id"],
+                                      agent_id="receiving-agent", turn_instance_id="successor")
+        retry = {**args, "agent_id": identity.agent_id, "turn_instance_id": identity.turn_instance_id,
+                 "admission": _admission(identity)}
+
+    if crash_at == "after_delivery":
+        def forbidden(_query):
+            pytest.fail("an attempt that may have delivered must use original-result readback")
+        with pytest.raises(ValueError, match="unknown|unsettled"):
+            start_governed_external_capability(**retry, execute=True, reserve_restored_start=forbidden)
+        def read_effect(query):
+            ref = query["invocation_id"]
+            return {"request_digest": (tmp_path / f"{ref}.digest").read_text(), "target_key": query["target_key"],
+                    "result": json.loads((tmp_path / f"{ref}.remote.json").read_text())}
+        received = start_governed_external_capability(**{**args, "admission": retry["admission"]},
+                                                      execute=True, read_start_result=read_effect)
+    else:
+        if pending.exists():
+            # Until the service accounts for its unconsumed grant, no second grant is available.
+            with pytest.raises(ValueError, match="lacks a current provider reservation"):
+                start_governed_external_capability(**retry, execute=True, reserve_restored_start=lambda _: None)
+            assert not calls.exists()
+        def reserve_again(query):
+            if pending.exists():
+                old = json.loads(pending.read_text())
+                assert old["operation_key"] == query["operation_key"] and old["intent_digest"] == query["intent_digest"]
+                assert old["challenge"] != query["challenge"]
+                pending.rename(tmp_path / "revoked-unconsumed-grant.json")
+            proof = _service_reservation(query)
+            with pending.open("x") as grant:
+                json.dump(proof, grant)
+            return proof
+        received = start_governed_external_capability(**retry, execute=True, reserve_restored_start=reserve_again)
+    assert received["status"] == "running"
+    assert calls.read_text().splitlines() == ["start"]
+
+
+def test_restored_grant_lookup_does_not_hold_unrelated_todos(tmp_path):
+    args = _start_arguments(tmp_path)
+    (tmp_path / "runtime" / paths.RESTORED_RUNTIME_MARKER).touch()
+    both_at_service = Barrier(2)
+
+    def unavailable(_query):
+        both_at_service.wait(timeout=10)
+        return None
+
+    def attempt(todo_id):
+        owner = SettlementIdentity(goal_id=args["goal_id"], todo_id=todo_id, agent_id=args["agent_id"],
+                                   turn_instance_id=todo_id)
+        admission = _admission(owner)
+        admission["selected_todo"]["target_key"] = f"fixture-material:{todo_id}"
+        with pytest.raises(ValueError, match="lacks a current provider reservation"):
+            start_governed_external_capability(
+                **{**args, "todo_id": todo_id, "turn_instance_id": owner.turn_instance_id, "admission": admission},
+                execute=True, reserve_restored_start=unavailable,
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(attempt, ("todo_first", "todo_second")))
+    assert not (tmp_path / "provider-calls.txt").exists()
+
+
+@pytest.mark.parametrize("original_delivered", [True, False])
+def test_verified_pre_request_restore_requires_external_delivery_evidence(tmp_path, original_delivered):
+    from loopx.control_plane.state_recovery_io import verify_state_backup
+    from loopx.state_backup import build_state_backup_plan, execute_state_backup_plan
+
+    args = _start_arguments(tmp_path)
+    runtime = tmp_path / "runtime"
+    args["run_dir"] = runtime / "extensions" / "governed-capability-runs"
+    backup = execute_state_backup_plan(build_state_backup_plan(project=tmp_path, runtime_root=runtime,
+        registry_path=args["registry_path"], output_dir=tmp_path / "backup", include_registry_projects=False,
+        include_skills=False, include_automations=False))
+    calls = tmp_path / "provider-calls.txt"
+    if original_delivered:
+        original = start_governed_external_capability(**args, execute=True)
+    else:
+        (tmp_path / "reject-before-delivery").touch()
+        with pytest.raises(RuntimeError, match="provider reported failure"):
+            start_governed_external_capability(**args, execute=True)
+    # The independent service remains live when the control plane returns to its earlier snapshot.
+    inert = tmp_path / "inert"
+    audit = verify_state_backup(archive=Path(backup["archive_path"]), manifest=Path(backup["manifest_path"]),
+                                destination=inert, execute=True)
+    assert audit["execution_authority_granted"] is False
+    assert not (runtime / paths.RESTORED_RUNTIME_MARKER).exists()
+    runtime.rename(tmp_path / "retired-runtime")
+    shutil.copytree(inert / "data" / "runtime-root", runtime)
+    receiving = SettlementIdentity(goal_id=args["goal_id"], agent_id="receiving-agent", todo_id=args["todo_id"],
+                                  turn_instance_id="restore-turn")
+    handoff = {**args, "agent_id": receiving.agent_id, "turn_instance_id": receiving.turn_instance_id,
+               "admission": _admission(receiving), "run_dir": tmp_path / "another-journal-dir"}
+    for execute in (False, True):
+        with pytest.raises(ValueError, match="restored runtime requires provider reconciliation"):
+            start_governed_external_capability(**handoff, execute=execute)
+    saved_challenge = {}
+    def unavailable(query):
+        saved_challenge.update(query)
+        return None
+    with pytest.raises(ValueError, match="lacks a current provider reservation"):
+        start_governed_external_capability(**handoff, reserve_restored_start=unavailable, execute=True)
+    with pytest.raises(ValueError, match="lacks a current provider reservation"):
+        start_governed_external_capability(**handoff, reserve_restored_start=lambda _: _service_reservation(saved_challenge),
+                                           execute=True)
+    if original_delivered:
+        invocation = original["invocation_id"]
+        stored_result = json.loads((tmp_path / f"{invocation}.remote.json").read_text())
+        digest = (tmp_path / f"{invocation}.digest").read_text()
+        original_args = {**args, "admission": _admission(receiving)}
+        with pytest.raises(ValueError, match="does not attest"):
+            start_governed_external_capability(**original_args, execute=True,
+                read_start_result=lambda _: {"request_digest": "wrong", "result": stored_result})
+        recovered = start_governed_external_capability(**original_args, execute=True,
+            read_start_result=lambda _: {"request_digest": digest, "target_key": "fixture-material:delivery-1", "result": stored_result})
+        assert recovered["invocation_id"] == invocation
+        assert recovered["effect_id"] == original["effect_id"]
+        with pytest.raises(ValueError, match="requires provider readback"):
+            reconcile_governed_external_capability(run_dir=args["run_dir"], invocation_id=invocation,
+                                                   writeback=lambda _: {}, spend=lambda _: {})
+        terminal = {**stored_result, "status": "succeeded", "transition_proposals": [],
+                    "effect_receipt": {"schema_version": "loopx_external_effect_receipt_v0",
+                    "invocation_id": invocation, "idempotency_key": original["effect_id"], "status": "committed",
+                    "external_ref": "provider-delivery-1", "evidence_digest": digest}}
+        settlements = []
+        def settle(context):
+            settlements.append(context["settlement_identity"]["effect_id"])
+            return {"ok": True, "appended": True, "settlement_identity": context["settlement_identity"],
+                    "effect_receipt_digest": context["effect_receipt_digest"]}
+        for _ in range(2):
+            committed = reconcile_governed_external_capability(run_dir=args["run_dir"], invocation_id=invocation,
+                writeback=settle, spend=settle, read_running_result=lambda _: terminal)
+            assert committed["status"] == "committed"
+        assert settlements == [original["effect_id"], original["effect_id"]]
+    else:
+        # A fenced synchronous service issues one exclusive grant, and its actual dispatch consumes it.
+        def reserve(query):
+            closed_input = json.loads((tmp_path / "closed-without-delivery.json").read_text())
+            if closed_input != query["request"]["input"]:
+                return None
+            if calls.exists() or (tmp_path / "consumed-reservation.json").exists():
+                return None
+            permit = _service_reservation(query)
+            with (tmp_path / "provider-reservation.json").open("x") as file:
+                json.dump(permit, file)
+            return permit
+        recovered = start_governed_external_capability(**handoff, execute=True, reserve_restored_start=reserve)
+        assert (tmp_path / "consumed-reservation.json").is_file()
+        # A second cold copy with no local journal still cannot obtain another service grant.
+        second = {**args, "run_dir": tmp_path / "second-cold-copy"}
+        with pytest.raises(ValueError, match="lacks a current provider reservation"):
+            start_governed_external_capability(**second, execute=True, reserve_restored_start=reserve)
+    assert recovered["status"] == "running"
+    assert calls.read_text().splitlines() == ["start"]
 
 
 def test_legacy_provider_result_adapter_remains_available() -> None:
@@ -394,15 +782,12 @@ def test_material_start_recovers_monitor_after_pre_receipt_crash(
 ) -> None:
     arguments = _start_arguments(tmp_path)
     original_write_journal = governed_execution._write_journal
-    write_count = 0
 
     def crash_before_transition_receipt(
         path: Path,
         payload: Mapping[str, object],
     ) -> None:
-        nonlocal write_count
-        write_count += 1
-        if write_count == 3:
+        if payload.get("transition_receipts"):
             raise RuntimeError("synthetic checkpoint crash")
         original_write_journal(path, payload)
 
@@ -528,6 +913,24 @@ def test_material_reconcile_writes_receipt_before_spending_and_replays(
     )["todos"]
     assert len(monitors) == 1
     assert monitors[0]["status"] == "done"
+
+
+def test_new_admitted_turn_can_start_after_previous_operation_settles(tmp_path: Path) -> None:
+    args = _start_arguments(tmp_path)
+    original = start_governed_external_capability(**args, execute=True)
+    committed = reconcile_governed_external_capability(
+        run_dir=args["run_dir"], invocation_id=original["invocation_id"],
+        writeback=lambda ctx: {"ok": True, "appended": True, "settlement_identity": ctx["settlement_identity"],
+                               "effect_receipt_digest": ctx["effect_receipt_digest"]},
+        spend=lambda ctx: {"ok": True, "appended": True, "settlement_identity": ctx["settlement_identity"]},
+    )
+    assert committed["status"] == "committed"
+    another = _identity(turn_instance_id="separately-admitted-turn")
+    started = start_governed_external_capability(
+        **{**args, "turn_instance_id": another.turn_instance_id, "admission": _admission(another)}, execute=True,
+    )
+    assert started["invocation_id"] != original["invocation_id"]
+    assert (tmp_path / "provider-calls.txt").read_text().splitlines() == ["start", "reconcile", "start"]
 
 
 def test_material_start_rejects_a_different_selected_turn(tmp_path: Path) -> None:
@@ -984,7 +1387,7 @@ def test_an_operation_that_may_propose_a_team_plan_binds_the_basis_before_its_pr
 
     before = basis()
     active_state = tmp_path / "ACTIVE_GOAL_STATE.md"
-    run_provider = governed_execution.execute_extension_runtime_binding
+    run_provider = governed_execution._execute_extension_runtime_binding
 
     def provider_while_state_moves(*args, **kwargs):
         active_state.write_text(
@@ -997,7 +1400,7 @@ def test_an_operation_that_may_propose_a_team_plan_binds_the_basis_before_its_pr
 
     monkeypatch.setattr(
         governed_execution,
-        "execute_extension_runtime_binding",
+        "_execute_extension_runtime_binding",
         provider_while_state_moves,
     )
 

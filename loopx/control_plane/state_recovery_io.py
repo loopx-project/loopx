@@ -23,7 +23,9 @@ import unicodedata
 import zlib
 from typing import Any, BinaryIO, Iterator, NoReturn
 
+from ..paths import RESTORED_RUNTIME_MARKER
 from .effect_runtime import _node_executable, effect_runtime_result, effect_runtime_request_scope
+from .runtime.document_io import fsync_state_directory
 from .runtime.node_probe import node_typescript_flags
 
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
@@ -419,6 +421,27 @@ def _scan(handle: BinaryIO, archive_size: int, output: Path | None = None) -> di
             "entry_count": len(names)}
 
 
+def _mark_restored_runtimes(data: Path) -> None:
+    # This interlock travels with a copied runtime. Never traverse an archived link
+    # or replace a member of the verified archive.
+    roots = [data / "runtime-root"]
+    sources = data / "source-runtimes"
+    if sources.is_symlink():
+        raise StateRecoveryError("recovery_runtime_not_physical")
+    if sources.is_dir():
+        roots.extend(sources.iterdir())
+    for root in roots:
+        if root.is_symlink():
+            raise StateRecoveryError("recovery_runtime_not_physical")
+        if root.is_dir():
+            marker = root / RESTORED_RUNTIME_MARKER
+            try:
+                marker.touch(mode=0o600, exist_ok=False)
+            except FileExistsError:
+                pass  # Any entry, including a dangling link, already holds dispatch.
+            fsync_state_directory(marker)
+
+
 @effect_runtime_request_scope()
 def verify_state_backup(
     *, archive: Path, manifest: Path, destination: Path, execute: bool = False,
@@ -473,6 +496,7 @@ def verify_state_backup(
                 with (data / member["archive_path"]).open("rb") as handle:
                     digest = hashlib.file_digest(handle, "sha256").hexdigest()
                 _require(digest == member["sha256"], "recovery_owner_mutated_source")
+            _mark_restored_runtimes(data)
             audit_path = staging / "recovery-audit.json"
             with audit_path.open("x", encoding="utf-8") as handle:
                 os.chmod(audit_path, 0o600)
