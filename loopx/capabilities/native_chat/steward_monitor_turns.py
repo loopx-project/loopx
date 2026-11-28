@@ -468,8 +468,12 @@ def _is_zero_effect_pre_dispatch_failed_advancement_turn(
         and turn.get("origin") == "native_loopx"
         and turn.get("loopx_execution") is True
         and turn.get("error_code") in _PRE_DISPATCH_ADVANCEMENT_ERROR_CODES
-        and all(turn.get(k) is None for k in ("response", "upstream_turn_id", "started_at", "first_event_at"))
-        and turn.get("delta_count") == 0
+        # Chat persists explicit nulls for these fields before worker launch.
+        and all(k in turn and turn[k] is None for k in ("response", "upstream_turn_id", "started_at", "first_event_at"))
+        and turn.get("host_claim_id") is None
+        and turn.get("execution_dispatch") is None
+        and type(turn.get("delta_count")) is int
+        and turn["delta_count"] == 0
         and _past_precommit_cooldown(turn, now)
     )
 

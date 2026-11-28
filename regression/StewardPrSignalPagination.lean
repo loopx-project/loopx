@@ -2354,6 +2354,44 @@ theorem merging_two_proven_zero_governance_results_preserves_retry :
     let zero := mergeEffectFact (some false) (some false)
     authorizeAdvancementRetry ⟨zero, zero, zero⟩ false false none = true := rfl
 
+/- The outer Chat Turn persists four null markers before launch. An absent
+   field is modeled as none and a persisted null as some none. A missing or
+   malformed delta count is none. The caller establishes failure eligibility
+   and cooldown separately. -/
+structure PreDispatchEvidence where
+  response : Option (Option Nat)
+  upstreamTurn : Option (Option Nat)
+  startedAt : Option (Option Nat)
+  firstEventAt : Option (Option Nat)
+  deltaCount : Option Nat
+  claimed : Bool
+  dispatchRecorded : Bool
+
+def authorizePreDispatchRetry (facts : PreDispatchEvidence) (eligibleFailure cooldownElapsed : Bool) : Bool :=
+  eligibleFailure && facts.response == some none && facts.upstreamTurn == some none &&
+    facts.startedAt == some none && facts.firstEventAt == some none &&
+    !facts.claimed && !facts.dispatchRecorded && facts.deltaCount == some 0 && cooldownElapsed
+
+theorem pre_dispatch_retry_requires_exact_evidence
+    (facts : PreDispatchEvidence) (eligibleFailure cooldownElapsed : Bool) :
+    authorizePreDispatchRetry facts eligibleFailure cooldownElapsed = true ↔
+      eligibleFailure = true ∧ facts.response = some none ∧ facts.upstreamTurn = some none ∧
+      facts.startedAt = some none ∧ facts.firstEventAt = some none ∧ facts.claimed = false ∧
+      facts.dispatchRecorded = false ∧ facts.deltaCount = some 0 ∧ cooldownElapsed = true := by
+  simp [authorizePreDispatchRetry, and_assoc]
+
+theorem pre_dispatch_missing_start_holds_even_when_other_fields_are_complete :
+    authorizePreDispatchRetry ⟨some none, some none, none, some none, some 0, false, false⟩ true true =
+      false := rfl
+
+theorem pre_dispatch_known_start_holds_even_when_other_fields_are_complete (start : Nat) :
+    authorizePreDispatchRetry ⟨some none, some none, some (some start), some none, some 0, false, false⟩
+      true true = false := rfl
+
+theorem pre_dispatch_persisted_unstarted_failure_waits_for_cooldown (cooldownElapsed : Bool) :
+    authorizePreDispatchRetry ⟨some none, some none, some none, some none, some 0, false, false⟩
+      true cooldownElapsed = cooldownElapsed := rfl
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -2618,5 +2656,9 @@ theorem merging_two_proven_zero_governance_results_preserves_retry :
 #print axioms durable_spend_overrides_current_and_original_zero_flags
 #print axioms merging_unknown_governance_spend_cannot_authorize_retry
 #print axioms merging_two_proven_zero_governance_results_preserves_retry
+#print axioms pre_dispatch_retry_requires_exact_evidence
+#print axioms pre_dispatch_missing_start_holds_even_when_other_fields_are_complete
+#print axioms pre_dispatch_known_start_holds_even_when_other_fields_are_complete
+#print axioms pre_dispatch_persisted_unstarted_failure_waits_for_cooldown
 
 end StewardPrSignalPagination
