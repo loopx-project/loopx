@@ -19,6 +19,8 @@ from loopx.capabilities.native_chat.github_pr_evidence import (
     summarize_github_pr_signal,
 )
 from loopx.capabilities.native_chat.steward_monitor import _observe_github_repository_prs
+from loopx.capabilities.native_chat.steward_pr_merge import pr_merge_preview
+from loopx.chat_actions import _digest
 from test_chat_team_plan_action import _fixture
 from test_native_steward_private import finish, steward  # noqa: F811,F401
 
@@ -390,7 +392,7 @@ def test_steward_attributes_graphql_checks_to_the_observed_head(case: str, failu
     if failure_count is None:
         assert item["checks_coverage_incomplete"] is True
         assert item["checks_summary"] is None
-        assert "FAILING_CHECKS" not in item["bypassed_gates"]
+        assert ("FAILING_CHECKS" in item["bypassed_gates"]) is (case == "failure_and_unclassified_check")
     else:
         assert item.get("checks_coverage_incomplete") is None
         summary = item["checks_summary"]
@@ -758,7 +760,7 @@ def test_steward_list_revalidates_all_consumed_windows_before_publishing(drift: 
 
 
 @pytest.mark.parametrize("case", [
-    "changed", "missing", "foreign", "unclassified", "truncated", "excluded", "trusted-direct",
+    "changed", "cleared-failure", "missing", "foreign", "unclassified", "truncated", "excluded", "trusted-direct",
     "fresh-overlap", "same-tally",
 ])
 def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: str) -> None:
@@ -773,6 +775,8 @@ def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: s
     old_pr = first_page[0]
     if case == "excluded":
         old_pr["isDraft"] = True
+    elif case == "cleared-failure":
+        first_page[0] = _graphql_node(_sample_pr(number=1), contexts=[failure])
     elif case == "trusted-direct":
         old_pr["statusCheckRollup"] = [success]
     elif case == "fresh-overlap":
@@ -813,6 +817,8 @@ def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: s
             elif case == "same-tally":
                 contexts["nodes"][0]["id"] = "replacement-check"
                 contexts["nodes"][0]["conclusion"] = "NEUTRAL"
+            elif case == "cleared-failure":
+                contexts["nodes"][0]["conclusion"] = "SUCCESS"
             else:
                 contexts["nodes"][0]["conclusion"] = "FAILURE"
             repository["previousPrs0"] = readback
@@ -825,8 +831,9 @@ def test_steward_terminal_list_readback_corroborates_earlier_head_checks(case: s
         "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
                          "include_inbox": False, "pr_filter": {"exclude_drafts": True}},
     })
-    if case in {"changed", "missing", "foreign", "unclassified", "truncated"}:
+    if case in {"changed", "cleared-failure", "missing", "foreign", "unclassified", "truncated"}:
         assert snapshot["items"][0]["checks_coverage_incomplete"] is True
+        assert "FAILING_CHECKS" not in snapshot["items"][0]["bypassed_gates"]
         assert observation["observation_incomplete"] is True
         assert observation["result_hash"] == "sha256:verified-prior"
         assert observation["material_change"] is False
@@ -1301,6 +1308,26 @@ def test_steward_unreadable_fresh_native_metadata_holds_without_reinterpreting_l
     })
     assert native_result["observation_incomplete"] is True
     assert native_result["result_hash"] == previous_hash and native_result["material_change"] is False
+
+    verified_repo = {"status": "ok", "items": [summarize_github_pr_signal(_sample_pr())]}
+    portfolio_scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": True,
+                       "include_inbox": False, "pr_filter": {}}
+    prior = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        "repository_snapshot": verified_repo, "signal_scope": portfolio_scope,
+        "portfolio_observation": {"result_hash": "portfolio-before"},
+    })
+    changed_portfolio = {"signal_scope": portfolio_scope, "previous_hash": prior["result_hash"],
+                         "portfolio_observation": {"result_hash": "portfolio-after"}}
+    expected = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        **changed_portfolio, "repository_snapshot": verified_repo,
+    })
+    independent = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+        **changed_portfolio, "repository_snapshot": native, "previous_repository_snapshot": verified_repo,
+    })
+    assert independent["repository_observation_incomplete"] is True
+    assert independent["material_change"] is True and independent["observation_incomplete"] is False
+    assert independent["result_hash"] == expected["result_hash"]
+    assert "scoped_repository_items" not in independent
 
     legacy = summarize_github_pr_signal(row)
     assert "pr_metadata_coverage_incomplete" not in legacy
@@ -1953,7 +1980,7 @@ def test_steward_comment_backfill_never_reuses_a_cursor(monkeypatch, pages, expe
         pytest.param("initial", {"hasPreviousPage": False}, "same-role-undated", True, id="initial-compatible-timestamp"),
         pytest.param("older", {"hasPreviousPage": False}, "same-role-undated", True, id="older-compatible-timestamp"),
         pytest.param("initial", {"hasPreviousPage": False}, "missing-connection", False, id="missing-connection"),
-        pytest.param("initial", {"hasPreviousPage": False}, None, True, id="initial-verified-empty"),
+        pytest.param("initial", {"hasPreviousPage": False, "startCursor": None}, None, True, id="initial-verified-empty"),
         pytest.param("initial", {"hasPreviousPage": True, "startCursor": "recent"}, "author", True, id="verified-reply"),
     ],
 )
@@ -2167,6 +2194,65 @@ def test_inspect_github_pull_request_attaches_rest_html_url() -> None:
     assert inspected is not None
     exact = inspected["review_summary"]["exact_head_reviews"][0]
     assert exact["url"] == "https://github.com/org/repo/pull/42#pullrequestreview-998877"
+
+
+def test_bare_graphql_comments_cannot_replace_an_observed_author_reply() -> None:
+    head = "a" * 40
+    node = _graphql_node(_sample_pr(head_oid=head, author="member", reviews=[{
+        "id": "PRR_review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
+        "author": {"login": "maintainer"}, "commit": {"oid": head},
+    }]))
+    reply = {"createdAt": "2030-01-01T09:00:00Z", "author": {"__typename": "User", "login": "member"}}
+    scope = {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+             "include_inbox": False, "pr_filter": {"min_stalled_hours": 24}}
+
+    def observe(comments, previous_hash=None):
+        def runner(cmd, **_kwargs):
+            response = _graphql_page([{**node, "comments": comments}])
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
+
+        snapshot = observe_github_repository_prs("org/repo", runner=runner)
+        observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            "repository_snapshot": snapshot, "previous_hash": previous_hash, "signal_scope": scope,
+            "observed_at": "2030-01-02T09:00:00Z",
+        })
+        return snapshot["items"][0], observation
+
+    verified, baseline = observe({"nodes": [reply], "pageInfo": {"hasPreviousPage": False, "startCursor": "reply"}})
+    assert verified["author_replied_after_request_changes"] is True
+    assert baseline["observation_incomplete"] is False
+
+    malformed, observation = observe([], baseline["result_hash"])
+    assert malformed["comments_coverage_incomplete"] is True
+    assert observation["observation_incomplete"] is True
+    assert observation["material_change"] is False
+    assert observation["result_hash"] == baseline["result_hash"]
+
+
+@pytest.mark.parametrize("unclassified_conclusion", ["STALE", None], ids=["stale", "missing-conclusion"])
+def test_incomplete_checks_keep_confirmed_gates_in_protected_merge_preview(unclassified_conclusion) -> None:
+    head = "a" * 40
+    row = _sample_pr(head_oid=head, review_decision="APPROVED", merge_state="CLEAN", reviews=[{
+        "id": "PRR_approve", "author": {"login": "reviewer"}, "state": "APPROVED", "commit": {"oid": head},
+        "url": "https://github.com/org/repo/pull/42#pullrequestreview-1",
+    }], checks=[
+        {"status": "COMPLETED", "conclusion": unclassified_conclusion},
+        {"status": "COMPLETED", "conclusion": "FAILURE"},
+        {"status": "IN_PROGRESS"},
+    ])
+
+    def runner(cmd, **_kwargs):
+        assert cmd[:3] == ["gh", "pr", "view"]
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(row))
+
+    inspected = inspect_github_pull_request("org/repo", 42, runner=runner)
+    assert inspected is not None and inspected["checks_summary"] is None
+    assert inspected["checks_coverage_incomplete"] is True
+    assert set(inspected["bypassed_gates"]) == {"FAILING_CHECKS", "PENDING_CHECKS"}
+
+    frozen, _, _ = pr_merge_preview({"repository": "org/repo", "pr_number": 42}, digest_fn=_digest, runner=runner)
+    assert set(frozen["bypassed_gates"]) == {"FAILING_CHECKS", "PENDING_CHECKS"}
+    assert frozen["admin_bypass"] is True
 
 
 def _steward_with_repo(steward_comp, tmp_path):

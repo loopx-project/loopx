@@ -329,11 +329,22 @@ test("custom steward signal monitors admit model-free probes while excluding loc
     portfolio_observation: {result_hash: "sha256:portfolio1"},
     inbox_items: [{request_id: "req_1", source_id: "peer"}],
     repository_snapshot: {status: "unavailable", repository: "acme/widgets"},
+    previous_repository_snapshot: {status: "ok", items: [prItem]},
     previous_hash: first.result_hash,
   });
   assert.equal(unavailable.observation_incomplete, true);
   assert.equal(unavailable.material_change, false);
   assert.equal(unavailable.result_hash, first.result_hash);
+
+  const unreadableInbox = observeStewardSignalMonitor({
+    portfolio_observation: {result_hash: "sha256:portfolio1"},
+    inbox_items: null,
+    repository_snapshot: {status: "unavailable"},
+    previous_repository_snapshot: {status: "ok", items: [prItem]},
+    previous_hash: first.result_hash,
+  });
+  assert.equal(unreadableInbox.observation_incomplete, true);
+  assert.equal(unreadableInbox.result_hash, first.result_hash);
 });
 
 test("observeStewardNativeExecutor admits qualified codex-to-antigravity fallback while rejecting unallocated antigravity", () => {
@@ -1374,12 +1385,13 @@ test("repository observation distinguishes invalid items, verified emptiness and
   const scoped = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: false,
     include_inbox: true, pr_filter: {exclude_drafts: true}};
   for (const signalScope of [null, scoped]) {
+    const previous_repository_snapshot = {status: "ok", items: [{number: 42, isDraft: false}]};
     const observe = (repositorySnapshot: unknown, previousHash?: unknown, inboxItems: unknown[] = []) =>
       observeStewardSignalMonitor({
         signal_scope: signalScope, repository_snapshot: repositorySnapshot,
-        previous_hash: previousHash, inbox_items: inboxItems,
+        previous_hash: previousHash, previous_repository_snapshot, inbox_items: inboxItems,
       });
-    const previous = observe({status: "ok", items: [{number: 42, isDraft: false}]});
+    const previous = observe(previous_repository_snapshot);
     for (const malformed of [
       {status: "ok"},
       {status: "ok", items: null},
@@ -1405,6 +1417,39 @@ test("repository observation distinguishes invalid items, verified emptiness and
     assert.equal(inboxChange.observation_incomplete, false);
     assert.equal(inboxChange.material_change, true);
   }
+});
+
+test("incomplete repository observations keep the last scoped age and admit portfolio changes", () => {
+  const signal_scope = {schema_version: "steward_signal_monitor_scope_v0", include_portfolio: true,
+    include_inbox: false, pr_filter: {min_stalled_hours: 24}};
+  const repository_snapshot = {status: "ok", items: [{number: 42, stalled_since: "2030-01-01T00:00:00Z"}]};
+  const params = {signal_scope, repository_snapshot, observed_at: "2030-01-02T00:00:00Z",
+    portfolio_observation: {result_hash: "portfolio-before"}};
+  const baseline = observeStewardSignalMonitor(params);
+  const unavailable = {...params,
+    previous_hash: baseline.result_hash,
+    previous_repository_snapshot: {...repository_snapshot, items: baseline.scoped_repository_items},
+    repository_snapshot: {status: "unavailable", items: []},
+    observed_at: "2030-01-05T00:00:00Z",
+  };
+  const unchanged = observeStewardSignalMonitor(unavailable);
+  assert.equal(unchanged.result_hash, baseline.result_hash);
+  assert.equal(unchanged.observation_incomplete, true);
+
+  const portfolio_observation = {result_hash: "portfolio-after"};
+  const changed = observeStewardSignalMonitor({...unavailable, portfolio_observation});
+  const expected = observeStewardSignalMonitor({...params, portfolio_observation});
+  assert.equal(changed.result_hash, expected.result_hash);
+  assert.equal(changed.material_change, true);
+  assert.equal(changed.observation_incomplete, false);
+  assert.equal(changed.repository_observation_incomplete, true);
+
+  const withoutPriorRepository = observeStewardSignalMonitor({...params, repository_snapshot: null});
+  const firstOutage = observeStewardSignalMonitor({...unavailable, previous_repository_snapshot: null,
+    previous_hash: withoutPriorRepository.result_hash, portfolio_observation});
+  assert.equal(firstOutage.result_hash,
+    observeStewardSignalMonitor({...params, repository_snapshot: null, portfolio_observation}).result_hash);
+  assert.equal(firstOutage.material_change, true);
 });
 
 test("repository observations and backfill require distinct readable PR numbers", () => {
