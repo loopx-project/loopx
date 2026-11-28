@@ -437,34 +437,82 @@ def test_installed_prompt_reconciliation_passes_no_console_creationflags(
     assert captured.kwargs["creationflags"] == no_console_creationflags()
 
 
+
+class HandleCarryingBridgeProcess:
+    """A Popen stand-in that survives WindowsHostJob.assign's handle read."""
+
+    pid = 8484
+    _handle = 0x2468  # what Popen retains on Windows; assign() reads it.
+
+    def __init__(self, captured: "Captured") -> None:
+        self._captured = captured
+
+    def __call__(self, *_args: object, **kwargs: object) -> "HandleCarryingBridgeProcess":
+        self._captured.record(*_args, **kwargs)
+        self.stdin = io.StringIO()
+        self.stdout = (line for line in ('{"kind": "result", "outcome": "exited"}\n',))
+        self.returncode = 0
+        return self
+
+    def poll(self) -> int:
+        return 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+
+def install_windows_job_stand_in(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Replace the WindowsHostJob boundary with a recording stand-in.
+
+    The real module cannot load off Windows (module-level ctypes.WinDLL), so
+    tests that may take the Windows launch branch inject this instead. On a
+    POSIX host the branch is not selected and the stand-in stays dormant.
+    Returns the list the assign calls are recorded in.
+    """
+    assigned: list[object] = []
+
+    class RecordingJob:
+        name = "Local\\LoopXHost-test"
+
+        def __enter__(self):
+            return self
+
+        def assign(self, process) -> None:
+            # The real assign reads process._handle before any Win32 call; a
+            # process without one cannot be supervised.
+            assert process._handle is not None
+            assigned.append(process)
+
+        def finish(self) -> None:
+            return None
+
+        def __exit__(self, *_exc):
+            self.finish()
+
+    fake_job_module = types.ModuleType("loopx.control_plane.turn_driver.windows_host_job")
+    fake_job_module.WindowsHostJob = RecordingJob
+    monkeypatch.setitem(
+        sys.modules, "loopx.control_plane.turn_driver.windows_host_job", fake_job_module)
+    return assigned
+
+
 def test_run_host_process_bridge_passes_no_console_creationflags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = Captured()
-
-    class BridgeProcess:
-        pid = 8484
-
-        def __init__(self, *_args: object, **kwargs: object) -> None:
-            captured.record(*_args, **kwargs)
-            self.stdin = io.StringIO()
-            self.stdout = (line for line in ('{"kind": "result", "outcome": "exited"}\n',))
-            self.returncode = 0
-
-        def poll(self) -> int:
-            return 0
-
-        def wait(self, timeout: float | None = None) -> int:
-            return 0
-
-        def terminate(self) -> None:
-            return None
-
-        def kill(self) -> None:
-            return None
-
+    # The stand-in keeps this test correct wherever it runs: dormant on POSIX
+    # (the branch is not selected), and on Windows the launch assigns the
+    # spawned process through the recording boundary instead of a real Job.
+    install_windows_job_stand_in(monkeypatch)
     monkeypatch.setattr(host_transport_module, "_node_executable", lambda: sys.executable)
-    monkeypatch.setattr(host_transport_module.subprocess, "Popen", BridgeProcess)
+    monkeypatch.setattr(
+        host_transport_module.subprocess, "Popen", HandleCarryingBridgeProcess(captured))
     observation = host_transport_module.run_host_process(
         [sys.executable, "-c", "pass"], project=tmp_path, input_text="", timeout_seconds=1.0,
     )
@@ -594,64 +642,20 @@ def test_run_host_process_bridge_windows_branch_assigns_job_and_passes_flag(
     """The Windows spawn path supervises the child through its Host Job.
 
     The production branch imports ``WindowsHostJob`` lazily and assigns the
-    spawned process before any request is written, so the spawn-options test
-    must cover that branch too: the Job boundary is replaced here (the real
-    module cannot even load off Windows) and the fixture's process carries the
-    handle ``assign`` reads. Asserts the assignment happened for THIS process
-    and that the console-less flag reached the spawn options.
+    spawned process before any request is written. This test selects that
+    branch on any host (``sys.platform`` patched to ``win32``), replaces the
+    Job boundary with the shared recording stand-in, and drives the same
+    handle-carrying process fixture as the POSIX-branch test. Asserts the
+    assignment happened for THIS process and that the console-less creation
+    flags reached the spawn options.
     """
     captured = Captured()
-
-    class BridgeProcess:
-        pid = 8484
-        _handle = 0x2468  # what Popen retains on Windows; assign() reads it.
-
-        def __init__(self, *_args: object, **kwargs: object) -> None:
-            captured.record(*_args, **kwargs)
-            self.stdin = io.StringIO()
-            self.stdout = (line for line in ('{"kind": "result", "outcome": "exited"}\n',))
-            self.returncode = 0
-
-        def poll(self) -> int:
-            return 0
-
-        def wait(self, timeout: float | None = None) -> int:
-            return 0
-
-        def terminate(self) -> None:
-            return None
-
-        def kill(self) -> None:
-            return None
-
-    assigned: list[object] = []
-
-    class RecordingJob:
-        name = "Local\\LoopXHost-test"
-
-        def __enter__(self):
-            return self
-
-        def assign(self, process) -> None:
-            # The real assign reads process._handle before any Win32 call; a
-            # process without one cannot be supervised.
-            assert process._handle is not None
-            assigned.append(process)
-
-        def finish(self) -> None:
-            return None
-
-        def __exit__(self, *_exc):
-            self.finish()
-
-    fake_job_module = types.ModuleType("loopx.control_plane.turn_driver.windows_host_job")
-    fake_job_module.WindowsHostJob = RecordingJob
-    monkeypatch.setitem(
-        sys.modules, "loopx.control_plane.turn_driver.windows_host_job", fake_job_module)
+    assigned = install_windows_job_stand_in(monkeypatch)
     monkeypatch.setattr(sys, "platform", "win32")
     emulate_windows_spawn(monkeypatch, host_transport_module)
     monkeypatch.setattr(host_transport_module, "_node_executable", lambda: sys.executable)
-    monkeypatch.setattr(host_transport_module.subprocess, "Popen", BridgeProcess)
+    monkeypatch.setattr(
+        host_transport_module.subprocess, "Popen", HandleCarryingBridgeProcess(captured))
     observation = host_transport_module.run_host_process(
         [sys.executable, "-c", "pass"], project=tmp_path, input_text="", timeout_seconds=1.0,
     )
@@ -659,4 +663,4 @@ def test_run_host_process_bridge_windows_branch_assigns_job_and_passes_flag(
     assert captured.kwargs is not None
     assert captured.kwargs["creationflags"] == WINDOWS_CREATE_NO_WINDOW
     assert len(assigned) == 1
-    assert isinstance(assigned[0], BridgeProcess)
+    assert isinstance(assigned[0], HandleCarryingBridgeProcess)
