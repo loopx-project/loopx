@@ -23,6 +23,7 @@ from loopx.capabilities.native_chat import (
     steward_monitor_signals,
     steward_monitor_turns,
 )
+from loopx.capabilities.native_chat.conversation_bindings import ChatConversationBindings
 from loopx.capabilities.native_chat.steward_monitor import (
     ADVANCEMENT_ADMISSION_RETRY_SUFFIX,
     ADVANCEMENT_PRECOMMIT_RETRY_COOLDOWN_SECONDS,
@@ -64,6 +65,7 @@ from loopx.capabilities.native_chat.steward_monitor_turns import (
 )
 from loopx.capabilities.native_chat.steward_turn import native_steward_client_id
 from loopx.chat_store import ChatSessionStore
+from loopx.control_plane.collaboration.inbox import ENTRY_SCHEMA, _hash, _root, _write, plan_request_publication
 from loopx.control_plane.runtime.effect_client_errors import EffectRuntimeRejected
 
 
@@ -529,6 +531,74 @@ def test_collect_signal_monitor_key_presence_and_quiet_zero_todo_reads(
     }
     assert monitor._rearm_exhausted_followup_if_needed(actor, todo, "poll-seam-1") is True
     assert any("--note" in cmd and "rearm-followup:poll-seam-1" in cmd for cmd in seen_rearm_cmds)
+
+
+@pytest.mark.parametrize("incomplete_repository", [
+    pytest.param({"status": "unavailable"}, id="unavailable"),
+    pytest.param({"status": "ok", "items": [{"number": 43, "checks_coverage_incomplete": True}]}, id="checks"),
+    pytest.param({"status": "ok", "items": [{"number": 43, "review_readback_incomplete": True}]}, id="review-readback"),
+])
+@pytest.mark.parametrize("include_inbox", [True, False], ids=["combined", "repository-only"])
+def test_incomplete_repository_retains_snapshot_and_allows_new_inbox_followup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    incomplete_repository: dict[str, object], include_inbox: bool,
+) -> None:
+    bindings = _StubBindings(tmp_path / "bindings.json")
+    monkeypatch.setattr(bindings, "_core", ChatConversationBindings._core)
+    controller = _StubController(tmp_path, bindings=bindings)
+    runtime_root = controller.coordination_runtime_root
+    actor = {"goal_id": "sample-goal", "agent_id": "steward"}
+    todo: dict[str, object] = {"todo_id": "watch-1", "target_key": "watch-repo", "text": "Watch repo PRs",
+            "task_repository": "git:github.com/org/repo"}
+    write_steward_monitor_scope(runtime_root, actor["goal_id"], "watch-repo", {
+        "schema_version": "steward_signal_monitor_scope_v0", "include_inbox": include_inbox,
+        "include_portfolio": False, "pr_filter": {"exclude_drafts": True},
+    })
+    verified_repository: dict[str, object] = {"status": "ok", "repository": "org/repo", "items": [{"number": 42}]}
+    repository = verified_repository
+
+    def collect() -> tuple[dict[str, object], list[str]]:
+        return steward_monitor_signals.collect_signal_monitor(
+            _as_controller(controller), actor=actor, context={}, todo=todo,
+            session_scope_for_actor=lambda _: [], read_todos=lambda _: [], observe_github_prs=lambda _: repository,
+        )
+
+    baseline, _ = collect()
+    todo["result_hash"] = baseline["result_hash"]
+    snapshot_path = steward_monitor_snapshot_path(runtime_root, actor["goal_id"], "watch-1")
+    baseline_snapshot = snapshot_path.read_bytes()
+
+    source_id = "synthetic-source"
+    request_id = _hash([source_id, actor])
+    request = {"schema_version": ENTRY_SCHEMA, "request_id": request_id, "source_id": source_id,
+               **actor, "message": "Inspect the review findings"}
+    entry = plan_request_publication(request, entry=None)["entry"]
+    _write(_root(runtime_root) / "entries" / _hash(actor) / f"{request_id}.json", entry)
+    repository = {"repository": "org/repo", **incomplete_repository}
+
+    before_retry = baseline_snapshot
+    if include_inbox:
+        observation, successor_args = collect()
+        assert observation["observation_incomplete"] is False
+        assert observation["repository_observation_incomplete"] is True
+        assert observation["material_change"] is True
+        assert f"{FOLLOWUP_TARGET_PREFIX}watch-1" in successor_args
+        before_retry = snapshot_path.read_bytes()
+        snapshot = json.loads(before_retry)
+        assert snapshot["repository_snapshot"] == json.loads(baseline_snapshot)["repository_snapshot"]
+        assert snapshot["repository_observation_incomplete"] is True
+        assert snapshot["inbox_items"] == [{"request_id": request_id, "source_id": source_id}]
+        assert snapshot["result_hash"] == observation["result_hash"] != baseline["result_hash"]
+        todo["result_hash"] = observation["result_hash"]
+
+    with pytest.raises(RuntimeError, match="external signal source temporarily unavailable"):
+        collect()
+    assert snapshot_path.read_bytes() == before_retry
+
+    repository = verified_repository
+    recovered, successor_args = collect()
+    assert recovered["observation_incomplete"] is False
+    assert recovered["material_change"] is False and successor_args == []
 
 
 def test_steward_monitor_failure_modes_and_negative_paths(

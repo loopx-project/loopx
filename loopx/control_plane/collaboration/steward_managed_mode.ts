@@ -1344,8 +1344,7 @@ function projectRepositoryItemForMaterialHash(item: RepositoryItem, usesStalledA
 
 /** Combine authorized local portfolio, inbox and optional repository signal
  * snapshots into one deterministic change gate for custom Steward monitors.
- * Unavailable external signal reads fail closed so transient provider errors
- * never overwrite the last verified hash or trigger spurious model wakeups. */
+ * Incomplete repository reads can only wake the monitor on independent changes. */
 export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const previousHash = typeof params.previous_hash === "string" && params.previous_hash
     ? params.previous_hash : null;
@@ -1358,14 +1357,8 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
   const signalScope = normalizeStewardSignalMonitorScope(params.signal_scope);
   const repo = params.repository_snapshot == null ? null : requireJsonObject(params.repository_snapshot, "repository signal");
   const rawItems = repo?.items;
-  const repoItems = Array.isArray(rawItems) && hasReadableRepositoryItems(rawItems) ? rawItems : null;
-  // An unreadable list must not report that PRs were removed.
-  if (repo !== null && (repo.status === "unavailable" || repoItems === null)) {
-    return incompleteObservation;
-  }
-  const portfolio = params.portfolio_observation == null ? null
-    : requireJsonObject(params.portfolio_observation, "portfolio observation");
-  const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : [];
+  const repoItems = repo?.status !== "unavailable" && Array.isArray(rawItems)
+    && hasReadableRepositoryItems(rawItems) ? rawItems : null;
   const prFilter = signalScope === null ? null : jsonObject(signalScope.pr_filter);
   const rawMinStalledHours = prFilter?.min_stalled_hours;
   const usesStalledAgeFilter = typeof rawMinStalledHours === "number"
@@ -1378,30 +1371,40 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
       params.observed_at ?? repo?.observed_at,
     )
     : null;
-  if (scopedResult?.observationIncomplete) {
-    return incompleteObservation;
-  }
   const scopedRepoItems = scopedResult === null ? null : scopedResult.items;
-  const baseRepoItems = scopedRepoItems ?? repoItems;
-  if (baseRepoItems?.some((item) => item.checks_coverage_incomplete === true
-    || item.review_readback_incomplete === true || item.merge_state_coverage_incomplete === true)) {
-    return incompleteObservation;
-  }
-  const hashedRepoItems = baseRepoItems === null
-    ? null
-    : baseRepoItems.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter));
+  const currentRepoItems = scopedRepoItems ?? repoItems;
+  const repoIncomplete = repo !== null && (repoItems === null || scopedResult?.observationIncomplete === true
+    || currentRepoItems?.some((item) => item.checks_coverage_incomplete === true
+      || item.review_readback_incomplete === true
+      || item.merge_state_coverage_incomplete === true) === true);
   const includePortfolio = signalScope === null ? true : signalScope.include_portfolio === true;
   const includeInbox = signalScope === null ? true : signalScope.include_inbox === true;
+  if (repoIncomplete && !includePortfolio && !includeInbox) return incompleteObservation;
+  const portfolio = params.portfolio_observation == null ? null
+    : requireJsonObject(params.portfolio_observation, "portfolio observation");
+  const inboxItems = Array.isArray(params.inbox_items) ? params.inbox_items : null;
+  const repositoryCoverage = repoIncomplete ? {repository_observation_incomplete: true} : {};
+  const independentSignalsReadable = (!includePortfolio || portfolio !== null) && (!includeInbox || inboxItems !== null);
+  if (repoIncomplete && !independentSignalsReadable) {
+    return {...incompleteObservation, ...repositoryCoverage};
+  }
+  // Saved items already passed the scope filter at their last verified observation time.
+  const previousRepo = jsonObject(params.previous_repository_snapshot);
+  const previousItems = previousRepo?.status !== "unavailable" ? previousRepo?.items : null;
+  const baseRepoItems = repoIncomplete
+    ? (Array.isArray(previousItems) && hasReadableRepositoryItems(previousItems) ? previousItems : null)
+    : currentRepoItems;
+  const hashedRepoItems = baseRepoItems?.map((item) => projectRepositoryItemForMaterialHash(item, usesStalledAgeFilter)) ?? null;
   const facts = signalScope === null
     ? {
       portfolio_hash: portfolio?.result_hash ?? null,
-      inbox_items: inboxItems,
+      inbox_items: inboxItems ?? [],
       repository_items: hashedRepoItems,
     }
     : {
       signal_scope: signalScope,
       portfolio_hash: includePortfolio ? (portfolio?.result_hash ?? null) : null,
-      inbox_items: includeInbox ? inboxItems : [],
+      inbox_items: includeInbox ? (inboxItems ?? []) : [],
       repository_items: hashedRepoItems,
     };
   const clocks = new Set(["snapshot_id", "portfolio_snapshot_id", "collected_at",
@@ -1414,12 +1417,16 @@ export function observeStewardSignalMonitor(params: JsonObject): JsonObject {
     return value;
   }
   const resultHash = "sha256:" + createHash("sha256").update(JSON.stringify(canonical(facts))).digest("hex");
+  if (repoIncomplete && previousHash === resultHash) {
+    return {...incompleteObservation, ...repositoryCoverage};
+  }
   return {
     result_hash: resultHash,
     material_change: previousHash !== resultHash,
     observation_incomplete: false,
     own_monitor_bookkeeping_excluded: true,
-    ...(scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
+    ...repositoryCoverage,
+    ...(!repoIncomplete && scopedRepoItems !== null ? { scoped_repository_items: scopedRepoItems } : {}),
   };
 }
 

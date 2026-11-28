@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import timedelta
 from functools import partial
 import inspect
+import json
 import math
 from pathlib import Path
 from typing import Protocol
@@ -73,20 +74,20 @@ def _read_pending_inbox_items(
     goal_id: str,
     agent_id: str,
     include_inbox: bool,
-) -> list[dict[str, object]]:
+) -> list[dict[str, object]] | None:
     if not include_inbox:
         return []
     from ...control_plane.collaboration.inbox import pending as inbox_pending
 
     try:
-        inbox_raw = inbox_pending(runtime_root, goal_id=goal_id, agent_id=agent_id)
+        inbox_page = inbox_pending(runtime_root, goal_id=goal_id, agent_id=agent_id)
         return [
             {"request_id": row["request_id"], "source_id": row.get("source_id")}
-            for row in inbox_raw
+            for row in inbox_page["items"]
             if isinstance(row, dict) and row.get("request_id")
         ]
     except (OSError, ValueError):
-        return []
+        return None
 
 
 def _read_repository_snapshot(
@@ -123,9 +124,33 @@ def _read_repository_snapshot(
     return observe_github_prs(repo_slug, **options)
 
 
+def _read_previous_repository_snapshot(
+    snapshot_path: Path, todo: Mapping[str, object], signal_scope: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    try:
+        snapshot = _coerce_dict(json.loads(snapshot_path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return None
+    if (
+        snapshot.get("schema_version") != "steward_signal_monitor_snapshot_v0"
+        or snapshot.get("todo_id") != todo["todo_id"]
+        or snapshot.get("task_repository") != todo.get("task_repository")
+        or snapshot.get("signal_scope") != signal_scope
+    ):
+        return None
+    repository = _coerce_dict(snapshot.get("repository_snapshot"))
+    items = repository.get("items")
+    if repository.get("status") == "unavailable" or not isinstance(items, list):
+        return None
+    numbers = [_coerce_dict(row).get("number") for row in items]
+    if any(type(number) is not int or not 0 < number < 2**53 for number in numbers):
+        return None
+    return repository if len(set(numbers)) == len(numbers) else None
+
+
 def _persist_signal_snapshot(
     *,
-    runtime_root: Path,
+    snapshot_path: Path,
     goal_id: str,
     todo: Mapping[str, object],
     signal_scope: Mapping[str, object] | None,
@@ -140,9 +165,6 @@ def _persist_signal_snapshot(
         if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes)):
             raise TypeError("scoped_repository_items must be a sequence")
         persisted_repo_snapshot = {**repo_snapshot, "items": list(raw_items)}
-    snapshot_path = steward_monitor_snapshot_path(
-        runtime_root, goal_id, str(todo["todo_id"])
-    )
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(
         snapshot_path,
@@ -157,6 +179,8 @@ def _persist_signal_snapshot(
             "result_hash": observation["result_hash"],
             "material_change": observation["material_change"],
             "observed_at": observed_at,
+            **({"repository_observation_incomplete": True}
+               if observation.get("repository_observation_incomplete") is True else {}),
             "repository_snapshot": persisted_repo_snapshot,
             "inbox_items": inbox_items,
         },
@@ -235,6 +259,12 @@ def collect_signal_monitor(
         runtime_root, goal_id=goal_id, agent_id=agent_id, include_inbox=include_inbox
     )
     repo_snapshot = _read_repository_snapshot(todo, signal_scope, observe_github_prs, bindings._core)
+    snapshot_path = steward_monitor_snapshot_path(runtime_root, goal_id, str(todo["todo_id"]))
+    previous_repository_snapshot = (
+        _read_previous_repository_snapshot(snapshot_path, todo, signal_scope)
+        if repo_snapshot is not None and (include_portfolio or include_inbox)
+        else None
+    )
     observed_at = now_utc().isoformat()
     signal_request: dict[str, object] = {
         "portfolio_observation": portfolio,
@@ -242,6 +272,8 @@ def collect_signal_monitor(
         "repository_snapshot": repo_snapshot,
         "previous_hash": todo.get("result_hash"),
     }
+    if previous_repository_snapshot is not None:
+        signal_request["previous_repository_snapshot"] = previous_repository_snapshot
     if signal_scope is not None:
         signal_request["signal_scope"] = signal_scope
         signal_request["observed_at"] = observed_at
@@ -250,15 +282,17 @@ def collect_signal_monitor(
     )
     if observation.get("observation_incomplete") is True:
         raise RuntimeError("steward monitor external signal source temporarily unavailable")
+    if observation.get("repository_observation_incomplete") is True:
+        repo_snapshot = previous_repository_snapshot
     _persist_signal_snapshot(
-        runtime_root=runtime_root,
+        snapshot_path=snapshot_path,
         goal_id=goal_id,
         todo=todo,
         signal_scope=signal_scope,
         observed_at=observed_at,
         observation=observation,
         repo_snapshot=repo_snapshot,
-        inbox_items=inbox_items,
+        inbox_items=inbox_items or [],
     )
     successor_args = (
         _build_followup_successor_args(

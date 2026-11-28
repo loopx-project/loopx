@@ -225,33 +225,33 @@ def is_steward_repository_authorized(
     return repository.casefold() in {slug.casefold() for slug in allowed}
 
 
-def _summarize_checks(rollup: Any) -> dict[str, int] | None:
+def _tally_checks(rollup: object) -> tuple[dict[str, int], bool]:
     items = [] if rollup is None else rollup
     if not isinstance(items, (list, tuple)):
-        return None
+        items = ()
     pass_count = fail_count = pending_count = 0
     for item in items:
         if not isinstance(item, Mapping):
-            return None
+            continue
         conclusion = str(item.get("conclusion") or "").strip().upper()
         status = str(item.get("status") or "").strip().upper()
         state = str(item.get("state") or "").strip().upper()
         if conclusion == "STALE" or (status and status != "COMPLETED" and status not in _CHECK_ACTIVE_STATUSES):
-            return None
+            continue
         if conclusion in _CHECK_FAIL_CONCLUSIONS or state in {"FAILURE", "ERROR"}:
             fail_count += 1
         elif status in _CHECK_ACTIVE_STATUSES or (not conclusion and state in {"PENDING", "EXPECTED"}):
             pending_count += 1
         elif conclusion in _CHECK_PASS_CONCLUSIONS or state == "SUCCESS":
             pass_count += 1
-        else:
-            return None
-    return {
+    counts = {
         "total": len(items),
         "pass_count": pass_count,
         "fail_count": fail_count,
         "pending_count": pending_count,
     }
+    complete = (rollup is None or isinstance(rollup, (list, tuple))) and len(items) == pass_count + fail_count + pending_count
+    return counts, complete
 
 
 def _extract_review_record(
@@ -532,20 +532,18 @@ def summarize_github_pr_signal(row: Mapping[str, Any]) -> dict[str, Any]:
     else:
         effective_verdict = "NONE"
 
-    checks_summary = (
-        None if row.get("checks_coverage_incomplete") is True else _summarize_checks(row.get("statusCheckRollup"))
-    )
+    check_counts, checks_complete = _tally_checks(row.get("statusCheckRollup"))
+    checks_summary = check_counts if checks_complete and row.get("checks_coverage_incomplete") is not True else None
     merge_state = str(row.get("mergeStateStatus") or "").strip().upper()
     bypassed_gates: list[str] = []
     if review_decision == "REVIEW_REQUIRED":
         bypassed_gates.append("REVIEW_REQUIRED")
     if merge_state == "BLOCKED":
         bypassed_gates.append("BLOCKED_MERGE_STATE")
-    if checks_summary is not None:
-        if checks_summary["fail_count"] > 0:
-            bypassed_gates.append("FAILING_CHECKS")
-        if checks_summary["pending_count"] > 0:
-            bypassed_gates.append("PENDING_CHECKS")
+    if check_counts["fail_count"] > 0:
+        bypassed_gates.append("FAILING_CHECKS")
+    if check_counts["pending_count"] > 0:
+        bypassed_gates.append("PENDING_CHECKS")
     if merge_state == "UNSTABLE":
         bypassed_gates.append("UNSTABLE_MERGE_STATE")
 
@@ -1035,8 +1033,11 @@ def _earlier_pr_checks_agree(original: Mapping[str, Any], readback: Mapping[str,
         return True
     original_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(original).verified)
     current_checks = _read_graphql_head_check_rollup(_graphql_commit_binding(readback).verified)
-    original_summary = _summarize_checks(original_checks) if original_checks is not None else None
-    return original_summary is not None and current_checks is not None and original_summary == _summarize_checks(current_checks)
+    if original_checks is None or current_checks is None:
+        return False
+    original_counts, original_complete = _tally_checks(original_checks)
+    current_counts, current_complete = _tally_checks(current_checks)
+    return original_complete and current_complete and original_counts == current_counts
 
 
 def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
@@ -1049,18 +1050,8 @@ def _normalize_graphql_pr_node(node: Mapping[str, Any]) -> dict[str, Any]:
         and len(review_page.rows) == review_page.total_count
     )
 
-    raw_comments = node.get("comments")
-    raw_comment_nodes = raw_comments.get("nodes") if isinstance(raw_comments, Mapping) else raw_comments
-    comments = _read_graphql_comment_nodes(raw_comment_nodes)
-    if comments is None:
-        comments = []
-        comments_has_previous_page, comments_start_cursor = True, None
-    elif isinstance(raw_comments, Mapping):
-        comments_has_previous_page, comments_start_cursor = _graphql_comment_page_info(
-            raw_comments.get("pageInfo")
-        )
-    else:
-        comments_has_previous_page, comments_start_cursor = False, None
+    comment_page = _read_graphql_comment_page(node.get("comments"), max_rows=_GITHUB_PR_LATEST_COMMENT_PAGE_SIZE)
+    comments, comments_has_previous_page, comments_start_cursor = comment_page or _CommentPage([], True, None)
 
     head_oid, first_commit, commit_oid, verified_head_commit = _graphql_commit_binding(node)
     head_clocks: dict[str, Any] = {}
@@ -1393,6 +1384,7 @@ def observe_github_repository_prs(
         }
         for number in unverified_checks:
             normalized_nodes[number]["checks_coverage_incomplete"] = True
+            normalized_nodes[number]["statusCheckRollup"] = None
         for number in unverified_reviews:
             normalized_nodes[number]["review_readback_incomplete"] = True
             normalized_nodes[number]["review_coverage_incomplete"] = True
