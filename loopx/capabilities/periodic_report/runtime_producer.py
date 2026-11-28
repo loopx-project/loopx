@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from ...rollout_event_log import ROLLOUT_EVENT_SCHEMA_VERSION
@@ -196,8 +196,8 @@ def build_periodic_report_runtime_trigger_decision(
         raise ValueError("segment.start_at must be earlier than segment.end_at")
     if end_at != evaluated_at:
         raise ValueError("segment.end_at must match evaluated_at")
-    duration = int((window_end - window_start).total_seconds())
-    if duration > int(aggregation["window_seconds"]):
+    window_limit = timedelta(seconds=int(aggregation["window_seconds"]))
+    if window_end - window_start > window_limit:
         raise ValueError("segment window exceeds trigger_policy.aggregation.window_seconds")
     remaining_todo_count = _integer(
         segment.get("remaining_todo_count"),
