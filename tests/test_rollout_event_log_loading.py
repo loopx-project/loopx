@@ -406,3 +406,93 @@ def test_strict_read_reports_a_mid_utf8_torn_record(tmp_path: Path) -> None:
         match="rollout event log line 2 must contain valid UTF-8",
     ):
         list(iter_rollout_events(log_path, strict=True))
+
+
+def test_iter_reverse_rollout_events_by_kind_chunk_skipping_preserves_boundaries_and_escapes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    log_path = tmp_path / "events.jsonl"
+    padding = "x" * 95
+    rows = [
+        {
+            "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+            "event_kind": "pr_review_ack",
+            "id": "first-plain",
+            "pad": padding,
+        },
+        {
+            "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+            "event_kind": "quota_should_run",
+            "id": "noise-1",
+            "pad": padding * 3,
+        },
+        {
+            "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+            "event_kind": "pr_review_ack",
+            "id": "mid-plain",
+            "pad": "p" * 41,
+        },
+        {
+            "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+            "event_kind": "quota_spend",
+            "id": "noise-2",
+            "pad": padding * 3,
+        },
+        {
+            "schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION,
+            "event_kind": "pr_review_ack",
+            "id": "tail-escaped",
+            "pad": "y" * 29,
+        },
+    ]
+    escaped_line = (
+        json.dumps(rows[4], sort_keys=True)
+        .replace('"pr_review_ack"', '"\\u0070r_review_ack"')
+        .encode("utf-8")
+    )
+    payload = (
+        json.dumps(rows[0], sort_keys=True).encode("utf-8") + b"\n"
+        + json.dumps(rows[1], sort_keys=True).encode("utf-8") + b"\n"
+        + b"\xff\n\n"
+        + json.dumps(rows[2], sort_keys=True).encode("utf-8") + b"\n"
+        + json.dumps(rows[3], sort_keys=True).encode("utf-8") + b"\n"
+        + escaped_line
+    )
+    log_path.write_bytes(payload)
+
+    expected = [
+        {"schema_version": rollout_event_log.ROLLOUT_EVENT_SCHEMA_VERSION, "event_kind": "pr_review_ack", "id": "tail-escaped", "pad": "y" * 29},
+        rows[2],
+        rows[0],
+    ]
+    for size in (64, 128, 256, 1024 * 1024):
+        got = list(
+            rollout_event_log.iter_reverse_rollout_events_by_kind(
+                log_path,
+                event_kind="pr_review_ack",
+                chunk_size=size,
+            )
+        )
+        assert got == expected
+
+    original_open = Path.open
+
+    class NonseekableRead(io.BytesIO):
+        def seekable(self):
+            return False
+
+    def opened(path, mode="r", *args, **kwargs):
+        return NonseekableRead(payload) if path == log_path else original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    assert (
+        list(
+            rollout_event_log.iter_reverse_rollout_events_by_kind(
+                log_path,
+                event_kind="pr_review_ack",
+                chunk_size=64,
+            )
+        )
+        == expected
+    )

@@ -72,28 +72,32 @@ def _timestamp(value: Any) -> float | None:
     return parsed.timestamp() if parsed is not None else None
 
 
-def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict[str, Any]:
-    # Lazy imports keep the existing public codecs callable without an import cycle.
-    from .autonomous_replan_obligation import run_history_agent_id, run_history_monitor_target
-    from .progress_observation import _progress_turn_instance_id, progress_observation_from_run
-
+def _assemble_run_fact(
+    run: Mapping[str, Any],
+    ack_recorded: Callable[..., bool],
+    *,
+    run_history_agent_id: Callable[[Mapping[str, Any]], str],
+    run_history_monitor_target: Callable[[Mapping[str, Any]], dict[str, Any] | None],
+    progress_turn_instance_id: Callable[[Mapping[str, Any]], str | None],
+    progress_observation_from_run: Callable[[Mapping[str, Any]], Any],
+    normalize_agent_fn: Callable[[object], str | None],
+    timestamp_fn: Callable[[Any], float | None],
+) -> dict[str, Any]:
     target = run_history_monitor_target(run) or {}
     event = run.get("monitor_event")
     event = event if isinstance(event, dict) else {}
-    return {
-        **({"goal_ref": run["goal_ref"]} if "goal_ref" in run else {}),
-        "agent_id": run_history_agent_id(run),
-        "monitor_agent_id": normalize_todo_claimed_by(run_history_agent_id(run)),
+    resolved_agent_id = run_history_agent_id(run)
+    raw_generated_at = run.get("generated_at")
+    fact: dict[str, Any] = {
+        "agent_id": resolved_agent_id,
+        "monitor_agent_id": normalize_agent_fn(resolved_agent_id),
         "public_agent_id": str(run.get("agent_id") or "").strip() or None,
         "classification": str(run.get("classification") or "").strip(),
-        "generated_at": str(run.get("generated_at") or ""),
-        "observed_at": _timestamp(run.get("generated_at")),
-        "turn_id": _progress_turn_instance_id(run),
+        "generated_at": str(raw_generated_at or ""),
+        "observed_at": timestamp_fn(raw_generated_at),
+        "turn_id": progress_turn_instance_id(run),
         "accepted_ack": ack_recorded(run),
         "progress": progress_observation_from_run(run),
-        **({"todo_id": run.get("todo_id"), "blocked_retry": run["blocked_retry"],
-            "delivery_outcome": run.get("delivery_outcome")}
-           if isinstance(run.get("blocked_retry"), dict) else {}),
         "monitor": {
             "target_id": str(target.get("target_id") or "").strip() or None,
             "target_schema": target.get("schema_version"),
@@ -107,6 +111,76 @@ def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict
             "target_key": str(run.get("target_key") or event.get("target_key") or "").strip() or None,
         },
     }
+    if "goal_ref" in run:
+        fact["goal_ref"] = run["goal_ref"]
+    if isinstance(run.get("blocked_retry"), dict):
+        fact["todo_id"] = run.get("todo_id")
+        fact["blocked_retry"] = run["blocked_retry"]
+        fact["delivery_outcome"] = run.get("delivery_outcome")
+    return fact
+
+
+def _run_fact(run: Mapping[str, Any], ack_recorded: Callable[..., bool]) -> dict[str, Any]:
+    # Lazy imports keep the existing public codecs callable without an import cycle.
+    from .autonomous_replan_obligation import run_history_agent_id, run_history_monitor_target
+    from .progress_observation import _progress_turn_instance_id, progress_observation_from_run
+
+    return _assemble_run_fact(
+        run,
+        ack_recorded,
+        run_history_agent_id=run_history_agent_id,
+        run_history_monitor_target=run_history_monitor_target,
+        progress_turn_instance_id=_progress_turn_instance_id,
+        progress_observation_from_run=progress_observation_from_run,
+        normalize_agent_fn=normalize_todo_claimed_by,
+        timestamp_fn=_timestamp,
+    )
+
+
+def _build_run_facts(
+    runs: Iterable[Mapping[str, Any]],
+    ack_recorded: Callable[..., bool],
+) -> list[dict[str, Any]]:
+    from .autonomous_replan_obligation import run_history_agent_id, run_history_monitor_target
+    from .progress_observation import _progress_turn_instance_id, progress_observation_from_run
+
+    claimed_cache: dict[str, str | None] = {}
+    ts_cache: dict[str | None, float | None] = {}
+
+    def cached_agent(value: object) -> str | None:
+        if isinstance(value, str):
+            cached = claimed_cache.get(value)
+            if cached is not None or value in claimed_cache:
+                return cached
+            normalized = normalize_todo_claimed_by(value)
+            claimed_cache[value] = normalized
+            return normalized
+        return normalize_todo_claimed_by(value)
+
+    def cached_timestamp(value: Any) -> float | None:
+        if value is None or isinstance(value, str):
+            cached = ts_cache.get(value)
+            if cached is not None or value in ts_cache:
+                return cached
+            parsed = _timestamp(value)
+            ts_cache[value] = parsed
+            return parsed
+        return _timestamp(value)
+
+    return [
+        _assemble_run_fact(
+            row,
+            ack_recorded,
+            run_history_agent_id=run_history_agent_id,
+            run_history_monitor_target=run_history_monitor_target,
+            progress_turn_instance_id=_progress_turn_instance_id,
+            progress_observation_from_run=progress_observation_from_run,
+            normalize_agent_fn=cached_agent,
+            timestamp_fn=cached_timestamp,
+        )
+        for row in runs
+        if isinstance(row, Mapping)
+    ]
 
 
 def _todo_facts(value: Any, *, include_resume: bool, frontier: bool = False) -> dict[str, Any]:
@@ -180,7 +254,7 @@ def project_replan_history(
     if ack_recorded is None:
         from .autonomous_replan_ack import autonomous_replan_ack_recorded
         ack_recorded = autonomous_replan_ack_recorded
-    facts = [_run_fact(row, ack_recorded) for row in runs if isinstance(row, Mapping)]
+    facts = _build_run_facts(runs, ack_recorded)
     needs_resume = operation == "all" and any(
         row["monitor"]["mode"] == "blocked_successor_wait_without_material_transition"
         for row in facts)

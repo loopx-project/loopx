@@ -10,7 +10,7 @@ from ..effect_runtime import EffectRuntimeRejected, effect_runtime_result
 from ..todos.contract import normalize_todo_id
 from ...feedback import validate_local_control_text
 from ...state_projection import active_state_next_action_entries
-from ...rollout_event_log import load_rollout_events, rollout_event_log_path
+from ..todos.resume_condition import TodoResumeRolloutEvents
 
 REFRESH_RECOMMENDATION_REQUEST_SCHEMA_VERSION = "refresh_recommendation_request_v0"
 REFRESH_RECOMMENDATION_SCHEMA_VERSION = "refresh_recommendation_v0"
@@ -49,7 +49,7 @@ def load_refresh_planning_source(
     Canonical Todos remain available without a Markdown display; steps bind to
     that task snapshot. Provider failures propagate rather than using prose.
     """
-    events = [dict(row) for row in load_rollout_events(rollout_event_log_path(runtime_root, goal_id))]
+    events = TodoResumeRolloutEvents([], runtime_root=runtime_root, goal_id=goal_id)
     canonical = dict(
         read_canonical_todos_if_promoted(
             runtime_root=runtime_root,
