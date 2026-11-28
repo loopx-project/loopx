@@ -23,6 +23,11 @@ from ..summary_all import (
     render_global_gates_markdown,
     render_summary_all_markdown,
 )
+from .global_lifecycle import (
+    build_global_lifecycle,
+    build_global_lifecycle_error,
+    render_global_lifecycle_markdown,
+)
 
 from .summary_all_registration import register_summary_all_command as register_summary_all_command
 
@@ -48,6 +53,7 @@ def handle_summary_all_command(
         "global-gates",
         "global-todos",
         "global-risks",
+        "global-lifecycle",
     }:
         return None
     if args.command == "goal-portfolio":
@@ -78,6 +84,22 @@ def handle_summary_all_command(
                 "goals": [],
             }
         print_payload(payload, output_format(args), render_goal_portfolio)
+        return 0 if payload.get("ok") else 1
+    if args.command == "global-lifecycle":
+        phases = list(getattr(args, "lifecycle_phases", None) or [])
+        try:
+            payload = build_global_lifecycle(
+                registry_path=registry_path,
+                runtime_root_override=runtime_root_arg,
+                limit=max(1, args.limit),
+                phases=phases,
+                agent_id=args.agent_id,
+            )
+        except Exception as exc:
+            payload = build_global_lifecycle_error(
+                exc, limit=max(1, args.limit), phases=phases
+            )
+        print_payload(payload, output_format(args), render_global_lifecycle_markdown)
         return 0 if payload.get("ok") else 1
     if args.command == "global-risks":
         try:

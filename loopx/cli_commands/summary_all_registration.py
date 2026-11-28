@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 GLOBAL_READ_COMMANDS = frozenset({
     "goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
+    "global-lifecycle",
 })
 
 
@@ -113,4 +114,25 @@ def register_summary_all_command(
             "Risk request window for protocol compatibility, e.g. 24h or 7d; "
             "current risks remain visible."
         ),
+    )
+
+    lifecycle_parser = subparsers.add_parser(
+        "global-lifecycle",
+        help=(
+            "Read a public-safe cross-Goal lifecycle board (phases, milestones, "
+            "blocking guards, next transition) from existing status projections."
+        ),
+    )
+    add_subcommand_format(lifecycle_parser)
+    _add_current_manager_flags(
+        lifecycle_parser,
+        agent_help="Registered agent id used to narrow the status read.",
+        limit_help="Maximum returned Goal rows; rollups still cover every Goal.",
+    )
+    lifecycle_parser.add_argument(
+        "--phase",
+        action="append",
+        dest="lifecycle_phases",
+        choices=("starting", "qualifying", "waiting_owner", "closing", "closed"),
+        help="Exact lifecycle phase to include; repeat to widen scope.",
     )

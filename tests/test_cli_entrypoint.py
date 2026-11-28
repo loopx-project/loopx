@@ -526,6 +526,7 @@ assert payload["groups"]
 		(["global-gates", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-todos", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["global-risks", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
+		(["global-lifecycle", "--help"], "loopx.cli_commands.summary_all_registration", "loopx.cli_commands.summary_all"),
 		(["turn", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		(["turn", "run-once", "--help"], "loopx.cli_commands.turn_registration", "loopx.cli_commands.turn"),
 		*[( [command, "--help"], "loopx.cli_commands.project_lifecycle", "loopx.cli_commands.project_lifecycle")
@@ -990,7 +991,10 @@ def test_selected_parser_matches_full_help_and_diagnostics() -> None:
 		["quota", "unknown-command"],
 		["--format", "unknown", "status"],
 	]
-	for command in ("goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks"):
+	for command in (
+		"goal-portfolio", "global-summary", "global-gates", "global-todos",
+		"global-risks", "global-lifecycle",
+	):
 		argv_cases.extend([[command, "--help"], [command, "--unknown-option"], [command, "--limit", "invalid"]])
 	argv_cases.append(["goal-portfolio", "--manager-view", "unknown"])
 	for command in ("agent-context", "agent-directory", "agent-capabilities"):
@@ -2035,6 +2039,7 @@ def test_console_native_scheduler_followup_fails_closed_without_node(
 
 @pytest.mark.parametrize("command", [
 	"goal-portfolio", "global-summary", "global-gates", "global-todos", "global-risks",
+	"global-lifecycle",
 ])
 def test_global_read_preserves_empty_coverage_without_loading_full_cli(tmp_path, command):
 	registry, runtime = tmp_path / "registry.json", tmp_path / "runtime"

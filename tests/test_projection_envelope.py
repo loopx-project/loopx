@@ -1084,6 +1084,91 @@ def test_receipt_case_collection_does_not_depend_on_the_collecting_process_clock
     assert collections[0] == collections[1], "independent worker clocks changed collection identity"
 
 
+def test_real_cli_lifecycle_board_drops_a_goal_outside_global_membership(tmp_path):
+    """History retained for a retired Goal must not appear as current work."""
+    import os
+    import subprocess
+    import sys
+
+    registry = _registry(tmp_path, ("goal-a",))
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(exist_ok=True)
+    states = {}
+    for goal_id in ("goal-a", "goal-b", "goal-retired"):
+        state = tmp_path / f"{goal_id}_STATE.md"
+        state.write_text(
+            "# Goal\n\n## User Todo\n\n## Agent Todo\n\n## Next Action\n\n- Inspect current evidence.\n",
+            encoding="utf-8",
+        )
+        states[goal_id] = state
+        if goal_id != "goal-a":
+            # `_registry` already initialized goal-a's canonical source.
+            initialize_canonical_source_fixture(runtime, goal_id, state_path=state)
+    base_goal = json.loads(registry.read_text())["goals"][0]
+    global_path = runtime / "registry.global.json"
+    # All three Goals left history in the runtime; only two remain registered.
+    global_path.write_text(
+        json.dumps(
+            {
+                "common_runtime_root": str(runtime),
+                "goals": [
+                    {
+                        **base_goal,
+                        "id": goal_id,
+                        "state_file": str(states[goal_id]),
+                    }
+                    for goal_id in ("goal-a", "goal-b")
+                ],
+            }
+        )
+    )
+
+    def cli(command, registry_path=global_path):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from loopx.cli_runtime import main; raise SystemExit(main())",
+                "--registry",
+                str(registry_path),
+                "--format",
+                "json",
+                command,
+                "--limit",
+                "8",
+            ],
+            text=True,
+            capture_output=True,
+            timeout=60,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join((
+                str(Path(__file__).resolve().parents[1]),
+                os.environ.get("PYTHONPATH", ""),
+            ))},
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    # Ordinary status keeps its bounded registry facts; only the board asks
+    # for the complete membership it must bind rows to.
+    default_status = cli("status")
+    assert "global_goal_ids" not in default_status["global_registry"]
+    assert default_status["global_registry"]["current_registry_excluded_goal_ids"] == []
+
+    payload = cli("global-lifecycle")
+    goal_ids = sorted(row["goal_id"] for row in payload["goals"])
+    assert goal_ids == ["goal-a", "goal-b"]
+    rolled_up = sorted(
+        goal_id for row in payload["phases"] for goal_id in row["goal_ids"]
+    )
+    assert rolled_up == ["goal-a", "goal-b"]
+    coverage = payload["projection_envelope"]["coverage"]
+    assert coverage["expected_count"] == 2
+    assert coverage["included_count"] == 2
+    assert coverage["shown_count"] == 2
+    assert payload["complete"] is True
+    assert payload["projection_envelope"]["complete"] is True
+
+
 def test_real_cli_global_membership_failure_and_recovery(tmp_path):
     """Global scope must never use local membership as its denominator."""
     import subprocess
@@ -1123,6 +1208,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             "global-gates",
             "global-todos",
             "global-risks",
+            "global-lifecycle",
         ):
             envelope = cli(command)["projection_envelope"]
             assert envelope["coverage"]["expected_count"] is None
@@ -1138,6 +1224,7 @@ def test_real_cli_global_membership_failure_and_recovery(tmp_path):
             "global-gates",
             "global-todos",
             "global-risks",
+            "global-lifecycle",
         ):
             local = cli(command)["projection_envelope"]
             assert (local["coverage"]["included_count"], local["coverage"]["expected_count"]) == (1, 2)

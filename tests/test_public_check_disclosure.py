@@ -108,6 +108,7 @@ def test_invalid_utf8_is_unexamined_and_never_clean(tmp_path):
     ["turn", "run-once", "--goal-id", "fixture", "--agent-id", "fixture", "--project", "."],
     ["ready-score"], ["agent-directory", "--goal-id", "fixture"],
     ["global-summary"], ["global-gates"], ["global-todos"], ["global-risks"],
+    ["global-lifecycle"],
 ])
 @pytest.mark.parametrize("option", ["--scan-root", "--scan-path"])
 def test_operational_commands_reject_retired_scan_options(command, option):
