@@ -1457,6 +1457,64 @@ theorem older_comment_request_bounds_rows_including_readbacks
     firstRows + olderRows + readbackRows ≤ 170 := by
   omega
 
+/- One row token carries its PR number, HEAD, update time and review decision.
+   A window also carries the total and its verified continuation. Cursor keys
+   represent the original query positions. This models observable agreement
+   with the final response, conditional on consistent aliases in that response. -/
+structure OpenPrWindowEvidence where
+  rows : List (Nat × Nat × ReviewRevision)
+  total : Nat
+  continuation : Nat
+  deriving DecidableEq
+
+def useOpenPrReadbacks (earlier : List (Option Nat × OpenPrWindowEvidence))
+    (readbacks : List (Option Nat × Option OpenPrWindowEvidence)) (covered : Option (List Nat)) :
+    Option (List Nat) :=
+  if readbacks = earlier.map (fun entry => (entry.1, some entry.2)) then covered else none
+
+theorem published_open_pr_list_requires_all_consumed_windows
+    (earlier : List (Option Nat × OpenPrWindowEvidence))
+    (readbacks : List (Option Nat × Option OpenPrWindowEvidence)) (rows : List Nat) :
+    useOpenPrReadbacks earlier readbacks (some rows) = some rows ↔
+      readbacks = earlier.map (fun entry => (entry.1, some entry.2)) := by
+  by_cases agreement : readbacks = earlier.map (fun entry => (entry.1, some entry.2)) <;>
+    simp [useOpenPrReadbacks, agreement]
+
+theorem changed_open_pr_window_keeps_the_previous_observation
+    (earlier : List (Option Nat × OpenPrWindowEvidence))
+    (readbacks : List (Option Nat × Option OpenPrWindowEvidence)) (prior : List Nat)
+    (covered : Option (List Nat))
+    (changed : readbacks ≠ earlier.map (fun entry => (entry.1, some entry.2))) :
+    observe prior (useOpenPrReadbacks earlier readbacks covered) = (prior, false) := by
+  simp [useOpenPrReadbacks, changed, observe]
+
+theorem one_page_open_pr_list_needs_no_readbacks (rows : List Nat) :
+    useOpenPrReadbacks [] [] (some rows) = some rows := by
+  simp [useOpenPrReadbacks]
+
+theorem complete_distinct_count_can_hide_an_open_pr_generation_change :
+    let earlier : OpenPrWindowEvidence := ⟨[(1, 7, ⟨11, none⟩)], 2, 5⟩
+    let current : OpenPrWindowEvidence := ⟨[(3, 8, ⟨12, none⟩)], 2, 5⟩
+    observe [1, 2] (some [1, 4]) = ([1, 4], true) ∧
+    observe [1, 2] (useOpenPrReadbacks [(none, earlier)] [(none, some current)] (some [1, 4])) =
+      ([1, 2], false) := by
+  decide
+
+theorem matching_latest_readback_cannot_hide_a_changed_first_open_pr_window :
+    let first : OpenPrWindowEvidence := ⟨[(1, 7, ⟨11, none⟩)], 3, 5⟩
+    let middle : OpenPrWindowEvidence := ⟨[(2, 9, ⟨10, none⟩)], 3, 6⟩
+    let changed := {first with rows := [(1, 8, ⟨11, none⟩)]}
+    useOpenPrReadbacks [(none, first), (some 5, middle)] [(none, some changed), (some 5, some middle)]
+      (some [1, 2, 3]) = none := by
+  decide
+
+theorem open_pr_request_bounds_rows_including_readbacks
+    (priorOverflowPages firstRows previousRows currentRows : Nat)
+    (earlier : priorOverflowPages ≤ 3) (firstCap : firstRows ≤ 20)
+    (previousCap : previousRows ≤ 25 * priorOverflowPages) (currentCap : currentRows ≤ 25) :
+    firstRows + previousRows ≤ 95 ∧ firstRows + previousRows + currentRows ≤ 120 := by
+  omega
+
 #print axioms complete_has_bounded_terminal
 #print axioms incomplete_keeps_previous
 #print axioms repeated_cursor_is_unavailable
@@ -1613,5 +1671,11 @@ theorem older_comment_request_bounds_rows_including_readbacks
 #print axioms equal_comment_revision_can_hide_a_changed_latest_window
 #print axioms missing_first_consumed_comment_page_is_detected_with_a_matching_second
 #print axioms older_comment_request_bounds_rows_including_readbacks
+#print axioms published_open_pr_list_requires_all_consumed_windows
+#print axioms changed_open_pr_window_keeps_the_previous_observation
+#print axioms one_page_open_pr_list_needs_no_readbacks
+#print axioms complete_distinct_count_can_hide_an_open_pr_generation_change
+#print axioms matching_latest_readback_cannot_hide_a_changed_first_open_pr_window
+#print axioms open_pr_request_bounds_rows_including_readbacks
 
 end StewardPrSignalPagination

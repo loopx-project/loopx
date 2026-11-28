@@ -674,8 +674,7 @@ def _older_comments_page_query(readbacks: Mapping[str, str]) -> str:
 }}""" + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
 
 
-_GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!) {
-  repository(owner: $owner, name: $name) {
+_GITHUB_OPEN_PR_FIELDS = """
     pullRequests(
       states: OPEN,
       first: $pageSize,
@@ -688,17 +687,14 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
         endCursor
       }
       nodes {
-        number
+        ...StewardPrWindowRow
         title
         url
-        headRefOid
         headRefName
         baseRefName
         isDraft
-        reviewDecision
         mergeStateStatus
         mergeable
-        updatedAt
         author {
           login
         }
@@ -738,9 +734,86 @@ _GITHUB_OPEN_PRS_GRAPHQL_QUERY = """query($owner: String!, $name: String!, $curs
           }
         }
       }
-    }
-  }
-}""" + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+    }"""
+
+_GITHUB_OPEN_PR_WINDOW_FRAGMENT = """
+fragment StewardPrWindowRow on PullRequest {
+  number
+  headRefOid
+  updatedAt
+  reviewDecision
+}"""
+
+
+def _open_prs_graphql_query(previous_sizes: Sequence[int]) -> str:
+    variables = "".join(f", $previousCursor{index}: String" for index in range(len(previous_sizes)))
+    readbacks = "".join(
+        f"""
+    previousPrs{index}: pullRequests(
+      states: OPEN, first: {size}, after: $previousCursor{index},
+      orderBy: {{field: UPDATED_AT, direction: DESC}}
+    ) {{
+      totalCount
+      pageInfo {{ hasNextPage endCursor }}
+      nodes {{ ...StewardPrWindowRow }}
+    }}"""
+        for index, size in enumerate(previous_sizes)
+    )
+    return (
+        f"""query($owner: String!, $name: String!, $cursor: String, $pageSize: Int!{variables}) {{
+  repository(owner: $owner, name: $name) {{
+{_GITHUB_OPEN_PR_FIELDS}{readbacks}
+  }}
+}}"""
+        + _GITHUB_OPEN_PR_WINDOW_FRAGMENT + _GITHUB_PR_REVIEW_PAGE_FRAGMENT + _GITHUB_PR_COMMENT_PAGE_FRAGMENT
+    )
+
+
+class _OpenPrPage(NamedTuple):
+    total_count: int
+    rows: list[Mapping[str, Any]]
+    next_cursor: str | None
+
+
+def _read_open_pr_page(connection: object, page_size: int) -> _OpenPrPage | None:
+    if not isinstance(connection, Mapping):
+        return None
+    total = connection.get("totalCount")
+    rows = connection.get("nodes")
+    if type(total) is not int or not 0 <= total <= _GITHUB_PR_LIST_MAX_CAPACITY:
+        return None
+    if not isinstance(rows, list) or len(rows) > page_size or any(
+        not isinstance(row, Mapping) or type(row.get("number")) is not int or row["number"] <= 0
+        for row in rows
+    ):
+        return None
+    page_info = connection.get("pageInfo")
+    has_next = page_info.get("hasNextPage") if isinstance(page_info, Mapping) else None
+    if has_next is False:
+        return _OpenPrPage(total, rows, None)
+    if has_next is not True:
+        return None
+    cursor = page_info.get("endCursor")
+    return _OpenPrPage(total, rows, cursor) if isinstance(cursor, str) and cursor.strip() else None
+
+
+class _OpenPrWindow(NamedTuple):
+    total_count: int
+    next_cursor: str | None
+    revisions: list[tuple[int, str, str, str | None]]
+
+
+def _read_open_pr_window(page: _OpenPrPage | None) -> _OpenPrWindow | None:
+    if page is None:
+        return None
+    revisions = []
+    for row in page.rows:
+        head = row.get("headRefOid")
+        revision = _read_pr_signal_revision(row)
+        if not isinstance(head, str) or not head.strip() or revision is None:
+            return None
+        revisions.append((row["number"], head, *revision))
+    return _OpenPrWindow(page.total_count, page.next_cursor, revisions)
 
 
 def _graphql_comment_page_info(page_info: object) -> tuple[bool, str | None]:
@@ -1113,7 +1186,7 @@ def observe_github_repository_prs(
     raw_nodes_by_number: dict[int, Mapping[str, Any]] = {}
     expected_total: int | None = None
     cursor: str | None = None
-    seen_cursors: set[str] = set()
+    previous_pages: dict[str | None, tuple[int, _OpenPrWindow]] = {}
     page_size = _GITHUB_PR_LIST_PAGE_SIZE
     deadline = monotonic() + _GITHUB_PR_SCAN_TIMEOUT_SECONDS
     try:
@@ -1123,7 +1196,7 @@ def observe_github_repository_prs(
                 "api",
                 "graphql",
                 "-f",
-                f"query={_GITHUB_OPEN_PRS_GRAPHQL_QUERY}",
+                f"query={_open_prs_graphql_query([size for size, _window in previous_pages.values()])}",
                 "-f",
                 f"owner={owner}",
                 "-f",
@@ -1133,6 +1206,9 @@ def observe_github_repository_prs(
             ]
             if cursor is not None:
                 cmd.extend(["-f", f"cursor={cursor}"])
+            for index, previous_cursor in enumerate(previous_pages):
+                if previous_cursor is not None:
+                    cmd.extend(["-f", f"previousCursor{index}={previous_cursor}"])
             remaining_seconds = deadline - monotonic()
             if remaining_seconds <= 0:
                 return {"status": "unavailable", "repository": repo_slug}
@@ -1150,37 +1226,25 @@ def observe_github_repository_prs(
                 return {"status": "unavailable", "repository": repo_slug}
             data = payload.get("data")
             repo = data.get("repository") if isinstance(data, Mapping) else None
-            pull_requests = repo.get("pullRequests") if isinstance(repo, Mapping) else None
-            if not isinstance(pull_requests, Mapping):
+            if not isinstance(repo, Mapping):
                 return {"status": "unavailable", "repository": repo_slug}
-            page_total = pull_requests.get("totalCount")
-            if type(page_total) is not int or not 0 <= page_total <= _GITHUB_PR_LIST_MAX_CAPACITY:
+            page = _read_open_pr_page(repo.get("pullRequests"), page_size)
+            if page is None or (expected_total is not None and page.total_count != expected_total):
                 return {"status": "unavailable", "repository": repo_slug}
-            if expected_total is not None and page_total != expected_total:
+            if any(
+                _read_open_pr_window(_read_open_pr_page(repo.get(f"previousPrs{index}"), size)) != expected_window
+                for index, (size, expected_window) in enumerate(previous_pages.values())
+            ):
                 return {"status": "unavailable", "repository": repo_slug}
-            expected_total = page_total
-            nodes = pull_requests.get("nodes")
-            if not isinstance(nodes, list) or len(nodes) > page_size:
-                return {"status": "unavailable", "repository": repo_slug}
-            for node in nodes:
-                # Dropping an unidentified row can make an open PR look removed.
-                if not isinstance(node, Mapping):
-                    return {"status": "unavailable", "repository": repo_slug}
-                number = node.get("number")
-                if type(number) is not int or number <= 0:
-                    return {"status": "unavailable", "repository": repo_slug}
-                raw_nodes_by_number[number] = node
-            page_info = pull_requests.get("pageInfo")
-            has_next_page = page_info.get("hasNextPage") if isinstance(page_info, Mapping) else None
-            if has_next_page is False:
+            expected_total = page.total_count
+            raw_nodes_by_number.update((row["number"], row) for row in page.rows)
+            if page.next_cursor is None:
                 break
-            if has_next_page is not True:
+            window = _read_open_pr_window(page)
+            if window is None or page.next_cursor == cursor or page.next_cursor in previous_pages:
                 return {"status": "unavailable", "repository": repo_slug}
-            next_cursor = page_info.get("endCursor")
-            if not isinstance(next_cursor, str) or not next_cursor.strip() or next_cursor in seen_cursors:
-                return {"status": "unavailable", "repository": repo_slug}
-            seen_cursors.add(next_cursor)
-            cursor = next_cursor
+            previous_pages[cursor] = (page_size, window)
+            cursor = page.next_cursor
             if expected_total > _GITHUB_PR_LIST_STANDARD_CAPACITY:
                 page_size = _GITHUB_PR_LIST_OVERFLOW_PAGE_SIZE
         else:

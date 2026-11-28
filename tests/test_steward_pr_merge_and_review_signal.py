@@ -213,18 +213,18 @@ def _graphql_page(
     has_next_page: bool = False,
     end_cursor: str | None = None,
     total_count: int | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    return {
-        "data": {
-            "repository": {
-                "pullRequests": {
-                    "totalCount": len(nodes) if total_count is None else total_count,
-                    "pageInfo": {"hasNextPage": has_next_page, "endCursor": end_cursor},
-                    "nodes": nodes,
-                }
-            }
-        }
+    page = {
+        "totalCount": len(nodes) if total_count is None else total_count,
+        "pageInfo": {"hasNextPage": has_next_page, "endCursor": end_cursor},
+        "nodes": nodes,
     }
+    repository = {"pullRequests": page}
+    if history is not None:
+        repository.update({f"previousPrs{index}": previous for index, previous in enumerate(history)})
+        history.append(page)
+    return {"data": {"repository": repository}}
 
 
 def _graphql_reviews(nodes: list[Any], **metadata: Any) -> dict[str, Any]:
@@ -519,6 +519,7 @@ def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> N
         ],
     )
     seen_cursors: list[str | None] = []
+    history = []
 
     def fake_run(cmd, **_kwargs):
         assert cmd[:3] == ["gh", "api", "graphql"]
@@ -526,11 +527,11 @@ def test_observe_github_repository_prs_enriches_signal_summary(monkeypatch) -> N
         cursor = cursor_args[0].split("=", 1)[1] if cursor_args else None
         seen_cursors.append(cursor)
         if cursor is None:
-            body = _graphql_page([pr_101], has_next_page=True, end_cursor="cursor-page-2", total_count=2)
+            body = _graphql_page([pr_101], has_next_page=True, end_cursor="cursor-page-2", total_count=2, history=history)
         else:
             assert cursor == "cursor-page-2"
             # Include duplicate PR 101 across page shift + new PR 99 to test deduplication & sorting.
-            body = _graphql_page([pr_101, pr_99], has_next_page=False, end_cursor="cursor-end")
+            body = _graphql_page([pr_101, pr_99], has_next_page=False, end_cursor="cursor-end", history=history)
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body), stderr="")
 
     monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
@@ -572,6 +573,7 @@ def test_observe_github_repository_prs_fails_closed_on_page_error(monkeypatch) -
 @pytest.mark.parametrize("terminal_page", [True, False])
 def test_observe_github_repository_prs_requires_completion_at_page_cap(monkeypatch, terminal_page) -> None:
     requested_cursors = []
+    history = []
 
     def fake_run(cmd, **kwargs):
         assert cmd[:3] == ["gh", "api", "graphql"]
@@ -583,7 +585,7 @@ def test_observe_github_repository_prs_requires_completion_at_page_cap(monkeypat
             [_graphql_node(_sample_pr(number=page_number))],
             has_next_page=page_number < 5 or not terminal_page,
             end_cursor=f"page-{page_number}",
-            total_count=5 if terminal_page else 6,
+            total_count=5 if terminal_page else 6, history=history,
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
 
@@ -613,10 +615,11 @@ def test_observe_github_repository_prs_rejects_unverified_page_info(monkeypatch,
 
 def test_observe_github_repository_prs_rejects_a_cursor_cycle(monkeypatch) -> None:
     remaining_cursors = iter(["cursor-a", "cursor-b", "cursor-a"])
+    history = []
 
     def fake_run(cmd, **_kwargs):
         cursor = next(remaining_cursors)
-        body = _graphql_page([_graphql_node(_sample_pr())], has_next_page=True, end_cursor=cursor)
+        body = _graphql_page([_graphql_node(_sample_pr())], has_next_page=True, end_cursor=cursor, history=history)
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(body))
 
     monkeypatch.setattr("loopx.capabilities.native_chat.steward_monitor.subprocess.run", fake_run)
@@ -678,12 +681,13 @@ def test_observe_github_repository_prs_accepts_a_verified_empty_list(monkeypatch
 def test_observe_github_repository_prs_requires_stable_distinct_coverage(
     monkeypatch, first_count, last_count, last_numbers, expected_numbers,
 ) -> None:
+    history = []
     first = _graphql_page(
         [_graphql_node(_sample_pr(number=1)), _graphql_node(_sample_pr(number=2))],
-        has_next_page=True, end_cursor="p2", total_count=first_count,
+        has_next_page=True, end_cursor="p2", total_count=first_count, history=history,
     )
     terminal = _graphql_page(
-        [_graphql_node(_sample_pr(number=number)) for number in last_numbers], total_count=last_count,
+        [_graphql_node(_sample_pr(number=number)) for number in last_numbers], total_count=last_count, history=history,
     )
 
     def fake_run(cmd, **_kwargs):
@@ -698,6 +702,59 @@ def test_observe_github_repository_prs_requires_stable_distinct_coverage(
     else:
         assert observed["status"] == "ok"
         assert [item["number"] for item in observed["items"]] == expected_numbers
+
+
+@pytest.mark.parametrize("drift", [
+    "number", "order", "headRefOid", "updatedAt", "reviewDecision", "cursor", "missing", "unchanged",
+])
+def test_steward_list_revalidates_all_consumed_windows_before_publishing(drift: str) -> None:
+    requests = []
+    history = []
+
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == 20
+        cursor = next((arg.removeprefix("cursor=") for arg in cmd if arg.startswith("cursor=")), None)
+        requests.append(cursor)
+        first = (len(requests) - 1) * 20 + 1
+        last = min(first + 20, 42)
+        rows = [_graphql_node(_sample_pr(number=number)) for number in range(first, last)]
+        payload = _graphql_page(rows, has_next_page=last < 42, end_cursor=f"end-{last - 1}",
+                                total_count=41, history=history)
+        if cursor == "end-40" and drift != "unchanged":
+            repository = payload["data"]["repository"]
+            original = repository["previousPrs0"]
+            readback = {**original, "nodes": [dict(row) for row in original["nodes"]]}
+            value_at_drift = {
+                "number": 42, "headRefOid": "b" * 40, "updatedAt": "2030-01-01T10:00:00Z",
+                "reviewDecision": "APPROVED",
+            }
+            if drift in value_at_drift:
+                readback["nodes"][0][drift] = value_at_drift[drift]
+            elif drift == "order":
+                readback["nodes"].reverse()
+            elif drift == "cursor":
+                readback["pageInfo"] = {**original["pageInfo"], "endCursor": "another-window"}
+            if drift == "missing":
+                del repository["previousPrs0"]
+            else:
+                repository["previousPrs0"] = readback
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
+
+    snapshot = observe_github_repository_prs("org/repo", runner=runner, backfill_comments=True)
+    assert requests == [None, "end-20", "end-40"]
+    if drift == "unchanged":
+        assert snapshot["status"] == "ok"
+        assert [row["number"] for row in snapshot["items"]] == list(range(1, 42))
+    else:
+        assert snapshot == {"status": "unavailable", "repository": "org/repo"}
+        observation = ChatConversationBindings._core("collaboration.steward.monitor.signal_observation", {
+            "repository_snapshot": snapshot, "previous_hash": "sha256:verified-prior",
+            "signal_scope": {"schema_version": "steward_signal_monitor_scope_v0", "include_portfolio": False,
+                             "include_inbox": False, "pr_filter": {"exclude_drafts": True}},
+        })
+        assert observation["observation_incomplete"] is True
+        assert observation["result_hash"] == "sha256:verified-prior"
+        assert observation["material_change"] is False
 
 
 @pytest.mark.parametrize("invalid_count", [None, -1, True, "1", 1.0])
@@ -730,17 +787,24 @@ def test_observe_github_repository_prs_covers_overflow_within_five_pages(
 ) -> None:
     requests: list[int] = []
     read_count = 0
+    history = []
 
     def fake_run(cmd, **kwargs):
         nonlocal read_count
         assert kwargs["timeout"] == 20
         size = int(next((arg.split("=", 1)[1] for arg in cmd if arg.startswith("pageSize=")), "20"))
+        query = next(arg for arg in cmd if arg.startswith("query="))
+        for index, previous_size in enumerate(requests):
+            alias = query.split(f"previousPrs{index}: pullRequests(", 1)[1].split("nodes {", 1)[0]
+            assert f"first: {previous_size}, after: $previousCursor{index}" in alias
+            if index > 0:
+                assert f"previousCursor{index}=cursor-{sum(requests[:index])}" in cmd
         requests.append(size)
         limit = min(read_count + size, total)
         nodes = [_graphql_node(_sample_pr(number=number)) for number in range(read_count + 1, limit + 1)]
         read_count = limit
         page = _graphql_page(
-            nodes, has_next_page=limit < total, end_cursor=f"cursor-{limit}", total_count=total,
+            nodes, has_next_page=limit < total, end_cursor=f"cursor-{limit}", total_count=total, history=history,
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(page))
 
@@ -768,6 +832,7 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
     read_count = 0
     initial_nodes = {}
     comment_pages = {}
+    history = []
 
     def fake_run(cmd, **_kwargs):
         nonlocal read_count
@@ -793,7 +858,7 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
                 nodes.append(node)
             read_count = limit
             payload = _graphql_page(
-                nodes, has_next_page=limit < 101, end_cursor=f"cursor-{limit}", total_count=101,
+                nodes, has_next_page=limit < 101, end_cursor=f"cursor-{limit}", total_count=101, history=history,
             )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload))
 
@@ -811,6 +876,7 @@ def test_observe_github_repository_prs_caps_comment_backfill_across_overflow_sca
 def test_observe_github_repository_prs_rejects_late_terminal_page(monkeypatch, last_page_seconds) -> None:
     elapsed = 0
     requested_timeouts = []
+    history = []
     monkeypatch.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed, raising=False)
 
     def fake_run(cmd, **kwargs):
@@ -820,7 +886,7 @@ def test_observe_github_repository_prs_rejects_late_terminal_page(monkeypatch, l
         elapsed += last_page_seconds if page == 5 else 20
         response = _graphql_page(
             [_graphql_node(_sample_pr(number=page))],
-            has_next_page=page < 5, end_cursor=f"cursor-{page}", total_count=5,
+            has_next_page=page < 5, end_cursor=f"cursor-{page}", total_count=5, history=history,
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
@@ -843,6 +909,7 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
     list_pages = 0
     comment_timeouts = []
     initial_nodes = {}
+    history = []
     head = "9" * 40
     review = {
         "id": "PRR_review", "state": "CHANGES_REQUESTED", "submittedAt": "2030-01-01T08:00:00Z",
@@ -867,7 +934,7 @@ def test_observe_github_repository_prs_shares_elapsed_budget_with_comment_reads(
             node["comments"] = {"pageInfo": {"hasPreviousPage": True, "startCursor": "recent"}, "nodes": []}
             initial_nodes[list_pages] = node
             response = _graphql_page(
-                [node], has_next_page=list_pages < 5, end_cursor=f"cursor-{list_pages}", total_count=5,
+                [node], has_next_page=list_pages < 5, end_cursor=f"cursor-{list_pages}", total_count=5, history=history,
             )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(response))
 
@@ -2650,6 +2717,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
         *({**complete_node, "number": number, "isDraft": True} for number in (502, 503, 504)),
     ]
     pr_pages = iter(pr_nodes)
+    history = []
 
     def _age_backfill_runner(cmd, **_kw):
         nonlocal elapsed
@@ -2665,7 +2733,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
             )
         elapsed += 19
         page = _graphql_page(
-            [next(pr_pages)], has_next_page=elapsed < 95, end_cursor=f"page-{elapsed}", total_count=5,
+            [next(pr_pages)], has_next_page=elapsed < 95, end_cursor=f"page-{elapsed}", total_count=5, history=history,
         )
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(page), stderr="")
 
@@ -2689,6 +2757,7 @@ def test_steward_monitor_gates_backfill_and_preserves_non_age_hashes(
     started_at = datetime(2030, 1, 2, 7, 58, 20, tzinfo=timezone.utc)
     elapsed = 0
     pr_pages = iter(pr_nodes)
+    history.clear()
     with monkeypatch.context() as clock:
         clock.setattr("loopx.capabilities.native_chat.github_pr_evidence.monotonic", lambda: elapsed)
         clock.setattr(
