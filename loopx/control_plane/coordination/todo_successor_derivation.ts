@@ -452,7 +452,7 @@ function materializeSuccessorProposals(predecessorId: string, proposals: readonl
 function successorCandidate(
   todo: JsonObject,
   actor: string | null,
-  now: Date,
+  timestamps: {readonly created_at: string; readonly updated_at: string},
   domainReadModel: boolean,
   completionPolicy: JsonObject | null,
 ): JsonObject {
@@ -466,7 +466,7 @@ function successorCandidate(
     schema_version: TODO_DOMAIN_ITEM_SCHEMA,
     created_by: todo.created_by ?? actor,
     last_actor_agent_id: actor,
-    updated_at: now.toISOString().replace(/\.\d{3}Z$/u, "Z"),
+    ...timestamps,
   };
   if (todo.role === "agent" && completionPolicy !== null && completionPolicy.effective_next_claimed_by === null) {
     delete candidate.claimed_by;
@@ -519,11 +519,12 @@ export function prepareCoordinationTodoTerminalSuccessors(params: {
   readonly completionPolicy: JsonObject | null;
   readonly completionPolicyRequest: JsonObject | null;
   readonly domainReadModel: boolean;
+  readonly createdAt: string;
   readonly now: Date;
 }): TerminalSuccessorsPreparation {
   const {
     command, todoId, todo, todos, registeredAgents, actorAgentId, linkedSuccessorTodoIds,
-    successorIntents, completionPolicy, completionPolicyRequest, domainReadModel, now,
+    successorIntents, completionPolicy, completionPolicyRequest, domainReadModel, createdAt, now,
   } = params;
   const fail = (
     reasonCode: string,
@@ -592,6 +593,7 @@ export function prepareCoordinationTodoTerminalSuccessors(params: {
       );
     }
   }
+  const timestamps = {created_at: createdAt, updated_at: now.toISOString().replace(/\.\d{3}Z$/u, "Z")};
   const successorCandidates: JsonObject[] = [];
   for (const successor of successors) {
     const successorId = String(successor.todo_id);
@@ -606,7 +608,7 @@ export function prepareCoordinationTodoTerminalSuccessors(params: {
         {todo_id: duplicate.todo_id},
       );
     }
-    successorCandidates.push(successorCandidate(successor, actorAgentId, now, domainReadModel, completionPolicy));
+    successorCandidates.push(successorCandidate(successor, actorAgentId, timestamps, domainReadModel, completionPolicy));
   }
   return {status: "ready", successorCandidates, successorIds, generatedSuccessorIds};
 }

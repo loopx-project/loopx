@@ -1210,6 +1210,7 @@ export async function createLocalCoordinationTodo(
         dry_run: input.dry_run === true,
         ...(expectedRevision === undefined ? {} : {expected_provider_revision: expectedRevision}),
         now: claimObservedAt(input.observed_at),
+        observed_at: input.observed_at as string,
       }, authoritySourcesCurrent);
       return {
         ...result,
@@ -1461,6 +1462,7 @@ export async function terminalLifecycleLocalCoordinationTodo(
           ? true : Boolean(input.auto_archive_completed),
         dry_run: input.dry_run as boolean,
         now: claimObservedAt(input.observed_at),
+        observed_at: input.observed_at as string,
       }, async () => await authoritySourcesCurrent() && researchEvidence.current(),
         researchEvidence.qualify, request => verifyReentrySettlement(root, request), observeWorkspace), ...providerEvidence};
       } finally {await researchEvidence.close();}

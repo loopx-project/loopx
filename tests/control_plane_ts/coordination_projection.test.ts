@@ -555,17 +555,28 @@ for (const native of [false, true]) {
     const observed = reduceCoordinationProjection(edited, head.goal_id, [{kind: "todo_upsert", todo: observation}]);
     const model = validateCoordinationTodoReadModel(observed, head.goal_id);
     assert.deepEqual(observed.todos, [observation]);
-    assert.deepEqual(model.contract_fields, [
+    const scopedFields = [
       ...fields.slice(0, fields.indexOf("material_change_generation") + 1),
       "material_change_scope", "material_change_scope_generations",
       ...fields.slice(fields.indexOf("material_change_generation") + 1),
-    ]);
+    ];
+    const currentFields = [...scopedFields];
+    currentFields.splice(currentFields.indexOf("completed_at"), 0, "created_at");
+    assert.deepEqual(model.contract_fields, currentFields);
     const cleared = reduceCoordinationProjection(observed, head.goal_id, [{
       kind: "todo_upsert", todo: noteEdit,
       clear_fields: ["material_change_scope", "material_change_scope_generations"],
     }]);
     assert.deepEqual(validateCoordinationTodoReadModel(cleared, head.goal_id).contract_fields, model.contract_fields,
       "once committed, a newer field declaration does not downgrade implicitly");
+
+    const beforeCreationTime = {...observed, todo_read_model: {...model, contract_fields: scopedFields}};
+    const timestamped = {...observation, created_at: "2026-09-08T04:00:00.123456Z"};
+    const withCreationTime = reduceCoordinationProjection(beforeCreationTime, head.goal_id, [
+      {kind: "todo_upsert", todo: timestamped},
+    ]);
+    assert.deepEqual(validateCoordinationTodoReadModel(withCreationTime, head.goal_id).contract_fields, currentFields);
+    assert.deepEqual(withCreationTime.todos, [timestamped]);
   });
 }
 

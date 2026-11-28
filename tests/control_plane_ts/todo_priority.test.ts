@@ -60,10 +60,12 @@ test("canonical create defaults omission to P1, normalizes duplicates and respec
   assert.equal(first.status, "planned");
   const created = first.todo as JsonObject;
   assert.equal(created.priority, "P4"); assert.equal(created.text, "[P4] A task");
-  const duplicate = planCoordinationTodoCreate({...input, todo: {...input.todo, todo_id: "other-todo"}},
+  const duplicate = planCoordinationTodoCreate({...input, now: new Date("2026-09-20T01:00:00Z"),
+    todo: {...input.todo, todo_id: "other-todo"}},
     new Map([["new-todo", created]]), TODO_DOMAIN_READ_RECORD_SCHEMA);
   assert.equal(duplicate.changed, false);
   assert.equal(duplicate.todo_id, "new-todo");
+  assert.equal((duplicate.todo as JsonObject).created_at, created.created_at);
   const unranked = planCoordinationTodoCreate({...input, todo: {...input.todo, priority: null}},
     new Map(), TODO_DOMAIN_READ_RECORD_SCHEMA).todo as JsonObject;
   assert.equal(unranked.priority, undefined); assert.equal(unranked.text, "A task");

@@ -136,6 +136,7 @@ interface CoordinationTodoTerminalLifecycleBaseInput {
   readonly completion_policy_request: JsonObject | null;
   readonly auto_archive_completed?: boolean;
   readonly dry_run: boolean;
+  readonly observed_at?: string;
   readonly now: Date;
 }
 
@@ -1412,6 +1413,7 @@ export async function executeCoordinationTodoTerminalLifecycle(
     completionPolicy,
     completionPolicyRequest: input.completion_policy_request,
     domainReadModel,
+    createdAt: input.observed_at ?? input.now.toISOString(),
     now: input.now,
   });
   if (successorPrep.status === "failed") {
