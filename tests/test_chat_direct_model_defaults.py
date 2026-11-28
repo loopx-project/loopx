@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from loopx.chat import providers
 from loopx.chat_agent import CodexChatAgentError
 from loopx.chat.providers import DirectModelAdapter, direct_model_from_environment
 from loopx.chat_runtime import ChatRuntimeController
@@ -137,6 +138,47 @@ def test_anthropic_partial_text_output_limit_raises(
         adapter.start_turn("hello", lambda _kind, _payload: None)
 
 
+def test_anthropic_tool_use_output_limit_stops_before_tool_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    adapter = _anthropic_adapter(tmp_path)
+    posts: list[dict[str, Any]] = []
+    tool_calls: list[tuple[Any, ...]] = []
+
+    def fake_post(
+        _url: str,
+        body: dict[str, Any],
+        _headers: dict[str, str],
+    ) -> dict[str, Any]:
+        posts.append(body)
+        return {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "list_files",
+                    "input": {"pattern": ["incomplete"]},
+                }
+            ],
+            "stop_reason": "max_tokens",
+        }
+
+    monkeypatch.setattr(adapter, "_post", fake_post)
+    monkeypatch.setattr(
+        providers,
+        "_execute_read_only_tool",
+        lambda *args: tool_calls.append(args),
+    )
+
+    with pytest.raises(CodexChatAgentError, match="Anthropic is unavailable") as caught:
+        adapter.start_turn("hello", lambda _kind, _payload: None)
+
+    assert "output limit" in caught.value.gate["next_action"]
+    assert len(posts) == 1
+    assert tool_calls == []
+
+
 def test_anthropic_end_turn_returns_text(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -199,9 +241,32 @@ def test_anthropic_tool_use_continues_to_end_turn(
     assert bodies[1]["messages"][-1]["content"][0]["type"] == "tool_result"
 
 
-def test_anthropic_thinking_only_output_limit_persists_failed_turn(
+@pytest.mark.parametrize(
+    ("content", "client_turn_id"),
+    [
+        (
+            [{"type": "thinking", "thinking": "Working..."}],
+            "thinking-only-limit",
+        ),
+        (
+            [
+                {
+                    "type": "tool_use",
+                    "id": "tool-1",
+                    "name": "list_files",
+                    "input": {"pattern": ["incomplete"]},
+                }
+            ],
+            "tool-use-limit",
+        ),
+    ],
+    ids=("thinking-only", "tool-use"),
+)
+def test_anthropic_output_limit_persists_failed_turn(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    content: list[dict[str, Any]],
+    client_turn_id: str,
 ) -> None:
     from loopx import chat_runtime
     from loopx.chat import session_open
@@ -245,14 +310,22 @@ def test_anthropic_thinking_only_output_limit_persists_failed_turn(
     )
     store = ChatSessionStore(tmp_path / "runtime")
     adapter = _anthropic_adapter(tmp_path)
-    monkeypatch.setattr(
-        adapter,
-        "_post",
-        lambda *_args: {
-            "content": [{"type": "thinking", "thinking": "Working..."}],
-            "stop_reason": "max_tokens",
-        },
-    )
+    posts: list[dict[str, Any]] = []
+
+    def fake_post(
+        _url: str,
+        body: dict[str, Any],
+        _headers: dict[str, str],
+    ) -> dict[str, Any]:
+        posts.append(body)
+        if len(posts) == 1:
+            return {"content": content, "stop_reason": "max_tokens"}
+        return {
+            "content": [{"type": "text", "text": "Should not complete"}],
+            "stop_reason": "end_turn",
+        }
+
+    monkeypatch.setattr(adapter, "_post", fake_post)
     session = store.create_session(
         goal_id="fixture",
         agent_id="anthropic-api",
@@ -266,7 +339,7 @@ def test_anthropic_thinking_only_output_limit_persists_failed_turn(
     try:
         turn, created = runtime.submit_turn(
             session_id=session["session_id"],
-            client_turn_id="thinking-only-limit",
+            client_turn_id=client_turn_id,
             message="Use the full output budget.",
             work_dir=tmp_path,
             objective="Exercise the direct Anthropic Chat path.",
@@ -285,6 +358,7 @@ def test_anthropic_thinking_only_output_limit_persists_failed_turn(
     events = reopened.events_after(session["session_id"], turn["turn_id"], None)
 
     assert ended["status"] == "failed"
+    assert len(posts) == 1
     assert persisted is not None
     assert persisted["status"] == "failed"
     assert persisted["error_code"] == "provider_unavailable"
